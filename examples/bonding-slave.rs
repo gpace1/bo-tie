@@ -63,15 +63,38 @@ async fn advertise_setup<'a>(
 async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display>
 {
+    use bo_tie::hci::events::LEMeta;
+
+    bo_tie::hci::le::mandatory::set_event_mask::send(
+        hi,
+        &[
+            LEMeta::ConnectionComplete,
+            //LEMeta::RemoteConnectionParameterRequest,
+        ]
+    ).await
+    .unwrap();
+    
     println!("Waiting for a connection (timeout is 60 seconds)");
 
     let evt_rsl = hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)).await;
 
+    println!("Connection made");
+
     match evt_rsl {
         Ok(event) => {
             use bo_tie::hci::events::{EventsData,LEMetaData};
+                use bo_tie::hci::le::con_pram_req::remote_connection_parameter_request_reply;
+                use bo_tie::hci::common::{
+                    ConnectionInterval,
+                    ConnectionLatency,
+                    SupervisionTimeout,
+                };
+                use bo_tie::hci::le::common::ConnectionEventLength;
 
             if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
+
+                set_advertising_enable::send(&hi, false).await.unwrap();
+                
                 Ok(event_data)
             }
             else {
@@ -146,16 +169,7 @@ where C: bo_tie::l2cap::ConnectionChannel
                                 Ok(None) => (),
                                 Err(e) => println!("Cannot process acl data for SM, '{:?}'", e),
                                 Ok(Some(lazy)) => {
-                                    let encrypt_rslt = lazy.le_start_encryption_with_hci(
-                                        hi, 
-                                        ch, 
-                                        Duration::from_secs(1)
-                                    ).await;
-
-                                    match encrypt_rslt {
-                                        Err(e) => println!("Failed to start encryption: '{:?}", e),
-                                        _ => println!("Encryption Enabled!"),
-                                    }
+                                    // TODO    
                                 }
                             }
                         _ => (),
@@ -249,8 +263,6 @@ fn main() {
                 server_loop(&interface_clone, &connection_channel, event_data.connection_handle, server, slave_sm);
             });
 
-            executor::block_on(set_advertising_enable::send(&interface, false)).unwrap();
-
             println!("Device Connected! (use ctrl-c to disconnect and exit)");
 
             executor::block_on(interface.wait_for_event(events::Events::DisconnectionComplete, None)).ok();
@@ -258,3 +270,4 @@ fn main() {
         Err(err) => println!("Error: {}", err),
     };
 }
+

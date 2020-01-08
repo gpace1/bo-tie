@@ -1,8 +1,9 @@
 //! Bluetooth Security Manager
 //!
 //! The Security Manager is used to manage the pairing process and key distribution between two
-//! connected devices. A [`SecurityManager`] is used to contain the keys generated and used for
-//! encrypting messages between this device and the devices it is currently or was connected to.
+//! connected devices. A [`SecurityManager`](crate::hci::sm::SecurityManager) is used to contain 
+//! the keys generated and used for encrypting messages between this device and the devices it is 
+//! currently or was connected to.
 //!
 //! For each connection either a ['MasterSecurityManager'] or a ['SlaveSecurityManager'] is created
 //! based on the role of this device in the connection. The `MasterSecurityManager` can be used for

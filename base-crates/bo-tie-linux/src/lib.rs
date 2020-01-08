@@ -490,8 +490,8 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
 
         let oc_pair = D::COMMAND.as_opcode_pair();
 
-        log::trace!("ogf: {}", oc_pair.get_ogf());
-        log::trace!("ocf: {}", oc_pair.get_ocf());
+        log::trace!("ogf: {:x}", oc_pair.get_ogf());
+        log::trace!("ocf: {:x}", oc_pair.get_ocf());
         log::trace!("parameter size: {}", size_of::<D::Parameter>());
         log::trace!("parameter: {:x?}", unsafe { std::slice::from_raw_parts(&cmd_data.get_parameter() as *const D::Parameter as *mut u8, size_of::<D::Parameter>()) });
 

@@ -314,6 +314,8 @@ impl LEController {
             0x1d => Ok(LEController::ReceiverTest),
             0x1e => Ok(LEController::TransmitterTest),
             0x1f => Ok(LEController::TestEnd),
+            0x20 => Ok(LEController::ReadConnectionParameterRequestReply),
+            0x21 => Ok(LEController::ReadConnectionParameterRequestNegativeReply),
             _ => Err(alloc::format!(ocf_error!(), "LE Controller", ocf)),
         }
     }

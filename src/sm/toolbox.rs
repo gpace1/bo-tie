@@ -12,7 +12,10 @@
 //! Host Volume of the Bluetooth Specification (V 5.0 | Vol 3, Part H, Section 2.2). Unfortunately
 //! these names are shortened, making them obtuse to understand going by their name.
 //!
-//! The security function *e* is built using the functions [`ah`], [`c1`], and [`s1`].
+//! The security function *e* is built using the functions 
+//! [`ah`](crate::sm::toolbox::ah), 
+//! [`c1`](crate::sm::toolbox::c1), and 
+//! [`s1`](crate::sm::toolbox::s1).
 //!
 //! The security function AES-CMAC is built using the functions ['f4'], ['f5'], ['f6'], and ['g2']
 //!
