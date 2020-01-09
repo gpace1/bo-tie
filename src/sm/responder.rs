@@ -1,10 +1,7 @@
 
 use super::*;
 
-type LazyEncrypt<'a, C> = super::LazyEncrypt<'a, super::Slave, C>;
-
 pub struct SlaveSecurityManagerBuilder<'a, C> {
-    sm: &'a SecurityManager,
     connection_channel: &'a C,
     io_capabilities: pairing::IOCapability,
     oob_data: Option<u128>,
@@ -20,7 +17,6 @@ impl<'a,C> SlaveSecurityManagerBuilder<'a,C>
 where C: ConnectionChannel
 {
     pub(super) fn new(
-        sm: &'a SecurityManager,
         connection_channel: &'a C,
         connected_device_address: &'a crate::BluetoothDeviceAddress,
         this_device_address: &'a crate::BluetoothDeviceAddress,
@@ -28,7 +24,6 @@ where C: ConnectionChannel
         is_this_device_address_random: bool,
     ) -> Self {
         Self {
-            sm,
             connection_channel,
             io_capabilities: pairing::IOCapability::NoInputNoOutput,
             oob_data: None,
@@ -74,7 +69,6 @@ where C: ConnectionChannel
         ];
 
         SlaveSecurityManager {
-            sm: self.sm,
             connection_channel: self.connection_channel,
             io_capability: self.io_capabilities,
             oob_data: self.oob_data,
@@ -123,12 +117,11 @@ struct PairingData {
     /// This will change multiple times for passkey, but is static for just works or number
     /// comparison
     remote_nonce: Option<u128>,
-    /// The generated LTK
-    ltk: Option<u128>,
+    /// The database key
+    db_key: Option<super::KeyDBEntry>,
 }
 
 pub struct SlaveSecurityManager<'a,  C> {
-    sm: &'a SecurityManager,
     connection_channel: &'a C,
     io_capability: pairing::IOCapability,
     oob_data: Option<u128>,
@@ -141,13 +134,105 @@ pub struct SlaveSecurityManager<'a,  C> {
     responder_address: &'a crate::BluetoothDeviceAddress,
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
-    pairing_data: Option<PairingData>
+    pairing_data: Option<PairingData>,
+    link_encrypted: bool,
 }
 
 impl<'a, C> SlaveSecurityManager<'a, C>
 where C: ConnectionChannel,
 {
     pub fn set_oob_data(&mut self, val: u128) { self.oob_data = Some(val) }
+
+    /// Indicate if the connection is encrypted
+    ///
+    /// This is used to indicate to the `SlaveSecurityManager` that it is safe to send a Key to the
+    /// peer device. This is a deliberate extra step to ensure that the functions
+    pub fn con_encrypt(&mut self, is_encrypted: bool) { self.link_encrypted = is_encrypted }
+
+    /// Send the Identity Resolving Key to the Master Device
+    ///
+    /// This function will send the IRK to the master device if the internal encryption flag is set
+    /// to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt)
+    /// and an IRK has been generated. An IRK is generated once
+    /// [`process_command`](SlaveSecurityManager::process_command)
+    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry), however, since the return is a
+    /// mutable, you can replace the IRK with `None` which would also cause this function to
+    /// return false. If the function returns false then the IRK isn't sent to the Master Device.
+    pub fn send_irk(&self) -> bool {
+        if self.link_encrypted {
+            if let Some(irk) = self.pairing_data.as_ref()
+                .and_then(|pd| pd.key_db)
+                .and_then(|key_db| key_db.irk )
+            {
+                self.send(encrypt_info::IdentityInformation::new(irk));
+
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Send the Connection Signature Resolving Key to the Master Device
+    ///
+    /// This function will send the CSRK to the master device if the internal encryption flag is set
+    /// to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt)
+    /// and an CSRK has been generated. An CSRK is generated once
+    /// [`process_command`](SlaveSecurityManager::process_command)
+    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry), however, since the return is a
+    /// mutable, you can replace the CSRK with `None` which would also cause this function to
+    /// return false. If the function returns false then the CSRK isn't sent to the Master Device.
+    pub fn send_csrk(&self) -> bool {
+        if self.link_encrypted {
+            if let Some(csrk) = self.pairing_data.as_ref()
+                .and_then(|pd| pd.key_db)
+                .and_then(|key_db| key_db.csrk )
+            {
+                self.send(encrypt_info::SigningInformation::new(csrk));
+
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Send the public address to the Master Device.
+    ///
+    /// This will send `addr` as a Public Device Address to the Master Device if the internal
+    /// encryption flag is set to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt).
+    /// If the function returns false then `addr` isn't sent to the Master Device.
+    pub fn send_pub_addr(&self, addr: crate::BluetoothDeviceAddress) -> bool {
+        if self.link_encrypted {
+            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Send the static random address to the Master Device.
+    ///
+    /// This will send `addr` as a Static Random Device Address to the Master Device if the internal
+    /// encryption flag is set to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt).
+    /// If the function returns false then `addr` isn't sent to the Master Device.
+    ///
+    /// # Warning
+    /// This function doesn't validate that `address` is a valid static device address. The format
+    /// of a static random device address can be found in the Bluetooth Specification (v5.0 | Vol 6,
+    /// Part B, section 1.3.2.1).
+    pub fn send_static_rand_addr(&self, addr: crate::BluetoothDeviceAddress) -> bool {
+        if self.link_encrypted {
+            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr));
+            true
+        } else {
+            false
+        }
+    }
 
     /// Process a request from a MasterSecurityManager
     ///
@@ -162,7 +247,7 @@ where C: ConnectionChannel,
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub fn process_command(&mut self, received_data: &[u8] ) -> Result<Option<LazyEncrypt<'a, C>>, Error>
+    pub fn process_command<'s>(&'s mut self, received_data: &'s [u8] ) -> Result<Option<&'s mut super::KeyDBEntry>, Error>
     {
         if received_data.len() > SecurityManager::SMALLEST_PACKET_SIZE {
 
@@ -178,7 +263,7 @@ where C: ConnectionChannel,
 //                Ok( CommandType::IdentityInformation ) => ,
 //                Ok( CommandType::IdentityAddressInformation ) => ,
 //                Ok( CommandType::SigningInformation ) => ,
-                Ok( cmd @ CommandType::MasterIdentification ) |
+                Ok( cmd @ CommandType::MasterIdentification ) | // Legacy SM, not supported
                 Ok( cmd @ CommandType::EncryptionInformation ) | // Legacy SM, not supported
                 Ok( cmd ) => self.p_command_not_supported(cmd),
                 Err( cmd ) => self.p_unknown_command(cmd),
@@ -206,25 +291,25 @@ where C: ConnectionChannel,
         self.send(pairing::PairingFailed::new(fail_reason));
     }
 
-    fn p_bad_data_len(&mut self) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_bad_data_len(&mut self) -> Result<Option<&mut super::KeyDBEntry>, Error> {
         self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
 
         Err( Error::Size )
     }
 
-    fn p_unknown_command(&mut self, err: Error) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_unknown_command(&mut self, err: Error) -> Result<Option<&mut super::KeyDBEntry>, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported);
 
         Err(err)
     }
 
-    fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<Option<&mut super::KeyDBEntry>, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported);
 
         Err(Error::IncorrectCommand(cmd))
     }
 
-    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
 
         log::trace!("(SM) Processing pairing request");
 
@@ -283,13 +368,14 @@ where C: ConnectionChannel,
                 secret_key: None,
                 remote_nonce: None,
                 ltk: None,
+                db_key: None,
             });
 
             Ok(None)
         }
     }
 
-    fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
 
         log::trace!("(SM) Processing pairing public Key");
 
@@ -365,7 +451,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
 
         log::trace!("(SM) Processing pairing confirm");
 
@@ -418,7 +504,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_random(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_pairing_random(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
 
         log::trace!("(SM) Processing pairing random");
 
@@ -446,7 +532,7 @@ where C: ConnectionChannel,
         }
     }
 
-    fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
         log::trace!("(SM) Processing pairing failed");
 
         let initiator_fail = match pairing::PairingFailed::try_from_icd(payload) {
@@ -463,7 +549,7 @@ where C: ConnectionChannel,
         Err(Error::PairingFailed(initiator_fail.get_reason()))
     }
 
-    fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<Option<LazyEncrypt<'a,C>>, Error> {
+    fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
 
         log::trace!("(SM) Processing pairing dh key check");
 
@@ -483,6 +569,7 @@ where C: ConnectionChannel,
                 remote_nonce: Some( remote_nonce ),
                 master_io_cap,
                 this_io_cap,
+                ref mut db_key,
                 ..
             }) => {
 
@@ -531,8 +618,6 @@ where C: ConnectionChannel,
 
                 if received_ea == ea {
 
-                    self.pairing_data.as_mut().unwrap().ltk = Some(ltk);
-
                     log::trace!("this_io_cap: {:x?}", this_io_cap);
 
                     let eb = toolbox::f6(
@@ -547,19 +632,16 @@ where C: ConnectionChannel,
 
                     self.send(pairing::PairingDHKeyCheck::new(eb));
 
-                    // TODO send these to the initiator (along with the device address)
-                    let irk = toolbox::rand_u128();
-                    let csrk = toolbox::rand_u128();
-
-                    Ok( Some( super::LazyEncrypt {
-                        ltk,
-                        irk,
-                        csrk,
+                    *db_key = super::KeyDBEntry{
+                        ltk: ltk.into(),
+                        irk: toolbox::rand_u128().into(),
+                        csrk: (toolbox::rand_u128(), 0).into(),
                         peer_irk: None,
+                        peer_addr: None,
                         peer_csrk: None,
-                        connection_channel: self.connection_channel,
-                        role: super::Slave,
-                    }))
+                    }.into();
+
+                    Ok( db_key.as_mut() )
                     
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);

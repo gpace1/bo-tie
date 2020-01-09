@@ -65,14 +65,7 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 {
     use bo_tie::hci::events::LEMeta;
 
-    bo_tie::hci::le::mandatory::set_event_mask::send(
-        hi,
-        &[
-            LEMeta::ConnectionComplete,
-            //LEMeta::RemoteConnectionParameterRequest,
-        ]
-    ).await
-    .unwrap();
+    bo_tie::hci::le::mandatory::set_event_mask::send( hi, &[LEMeta::ConnectionComplete]).await.unwrap();
     
     println!("Waiting for a connection (timeout is 60 seconds)");
 
@@ -114,7 +107,7 @@ async fn disconnect(
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {
-        connection_handle: connection_handle,
+        connection_handle,
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
@@ -140,6 +133,87 @@ where C: bo_tie::l2cap::ConnectionChannel
     server
 }
 
+async fn enable_encrypt_events(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
+    use bo_tie::hci::cb::set_event_mask;
+    use bo_tie::hci::le::manditory::set_event_mask as le_set_event_mask;
+    use bo_tie::events::LEMeta;
+
+    set_event_mask::send(
+        hi,
+        &[
+            EventMask::EncryptionChange,
+            EventMask::EncryptionKeyRefreshComplete,
+            EventMask::LEMeta,
+        ]
+    ).await.unwrap();
+
+    le_set_event_mask::send(
+        hi,
+        &[
+            LEMeta::LongTermKeyRequest,
+        ]
+    ).await.unwrap();
+}
+
+async fn process_acl_data(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    connection_channel: &C,
+    ch: hci::common::ConnectionHandle,
+    att_server: &mut gatt::Server<C>,
+    slave_security_manager: &mut SlaveSecurityManager<'_,C>
+) -> Option<u128>
+{
+    let acl_data_vec = connection_channel.future_receiver().await.unwrap();
+
+    for acl_data in acl_data_vec {
+        match acl_data.get_channel_id() {
+            ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) =>
+                match att_server.process_acl_data(&acl_data) {
+                    Ok(_) => None,
+                    Err(e) => {log::error!("Cannot process acl data for ATT, '{}'", e); None},
+                }
+            ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
+                match slave_security_manager.process_command(acl_data.get_payload()) {
+                    Ok(None) => None,
+                    Err(e) => {log::error!("Cannot process acl data for SM, '{:?}'", e); None},
+                    Ok(Some(db_entry)) => db_entry.ltk
+                }
+            _ => None,
+        }
+    }
+}
+
+async fn ltk_request(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    ch: hci::common::ConnectionHandle,
+    ltk: Option<u128>,
+) {
+    use bo_tie::hci::le::encryption::long_term_key_request_reply;
+    use bo_tie::hci::le::encryption::long_term_key_request_negative_reply;
+    use events::{EventsData, LEMeta, LEMetaData};
+
+    let event = hi.wait_for_event(LEMeta::LongTermKeyRequest.into(), None).await.unwrap();
+
+    match (event, ltk) {
+        (EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req)), None) =>
+            long_term_key_request_negative_reply::send(hi, ltk_req.connection_handle).await.unwrap(),
+        (EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req)), Some(ltk)) => {
+            if ltk_req.connection_handle == ch {
+                long_term_key_request_reply::send(hi, ch, ltk).await.unwrap();
+                println!("Sending Long Term Key master");
+            }
+        },
+        (e, _) => panic!("Received incorrect event {:?}", e)
+    }
+}
+
+async fn await_encryption(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    ch: hci::common::ConnectionHandle,
+) {
+
+}
+
 fn server_loop<C>(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     connection_channel: &C,
@@ -151,32 +225,19 @@ where C: bo_tie::l2cap::ConnectionChannel
 {
     use bo_tie::l2cap::ChannelIdentifier;
     use bo_tie::l2cap::LeUserChannelIdentifier;
+    use futures::future::{FutureExt};
+
+    let mut ltk = None;
+
+    futures::executor::block_on( enable_encrypt_events(hi) );
 
     loop {
-        futures::executor::block_on(
-            async {
-                let acl_data_vec = connection_channel.future_receiver().await.unwrap();
-    
-                for acl_data in acl_data_vec {
-                    match acl_data.get_channel_id() {
-                        ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) =>
-                            match att_server.process_acl_data(&acl_data) {
-                                Ok(_) => (),
-                                Err(e) => println!("Cannot process acl data for ATT, '{}'", e),
-                            }
-                        ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
-                            match slave_security_manager.process_command(acl_data.get_payload()) {
-                                Ok(None) => (),
-                                Err(e) => println!("Cannot process acl data for SM, '{:?}'", e),
-                                Ok(Some(lazy)) => {
-                                    // TODO    
-                                }
-                            }
-                        _ => (),
-                    }
-                }
-            }
-        );
+        let a = process_acl_data(hi, connection_channel, ch, &mut att_server, &mut slave_security_manager);
+        let b = ltk_request(hi, ch, ltk);
+
+        futures::executor::block_on( async {
+            futures::future::select()
+        });
     }
 }
 

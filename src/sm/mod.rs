@@ -300,13 +300,17 @@ impl KeyDB {
     ///
     /// Inserts the KeyDBEntry into the database if there is no other entry with the same peer IRK
     /// and peer Address. The entry is not inserted if both the peer IRK and peer Address are `None`
-    pub fn insert(&mut self, entry: KeyDBEntry) -> bool {
+    ///
+    /// Returns a reference to the inserted KeyDBEntry or `None` if `entry` didn't have the
+    /// required keys or an entry with the same `peer_irk` and `peer_addr` is already in the
+    /// database.
+    pub fn insert_and_get(&mut self, entry: KeyDBEntry) -> Option<&mut KeyDBEntry> {
         if entry.peer_addr == None && entry.peer_irk == None {
-            return false
+            return None
         } else {
             self.entries.binary_search_by(|in_entry| in_entry.cmp_entry(&entry) )
                 .err()
-                .map_or( false, |idx| { self.entries.insert(idx, entry); true } )
+                .and_then( move |idx| { self.entries.insert(idx, entry); self.entries.get_mut(idx) } )
         }
     }
 
@@ -404,6 +408,50 @@ impl KeyDBEntry {
     fn cmp_entry(&self, other: &Self) -> core::cmp::Ordering {
         self.cmp_entry_by_keys(other.peer_irk.as_ref(), other.peer_addr.as_ref())
     }
+
+    /// Get the peer devices Identity Resolving Key
+    pub fn get_peer_irk(&self) -> Option<u128> { self.peer_irk }
+
+    /// Get the peer devices Connection Signature Resolving Key
+    pub fn get_peer_csrk(&self) -> Option<u128> { self.peer_csrk.map(|(c,_)| c) }
+
+    /// Get the saved Connection Signature Resolving Key Sign Counter
+    pub fn get_peer_csrk_cnt(&self) -> Option<u32> { self.csrk.map(|(_,c)| c) }
+
+    /// Get the peer devices address
+    ///
+    /// Returns a bluetooth device address along with a flag to indicate if the address is a public.
+    /// If the flag is false then the address is a static random address.
+    pub fn get_peer_addr(&self) -> Option<(bool, crate::BluetoothDeviceAddress)> {
+        self.peer_addr.clone().map(|addr| {
+            match addr {
+                BluAddr::Public(addr) => (true, addr),
+                BluAddr::StaticRandom(addr) => (true, addr),
+            }
+        })
+    }
+
+    /// Get the Identity Resolving Key
+    ///
+    /// If this is `None` then this connection uses the static IRK of the `SecurityManager`.
+    pub fn get_irk(&self) -> Option<u128> { self.irk }
+
+    /// Get the Connection Signature Resolving Key
+    ///
+    /// If this is `None` then the connection uses the static CSRK of the `SecurityManager`.
+    pub fn get_csrk(&self) -> Option<u128> { self.csrk.map(|(c,_)| c) }
+
+    /// Get the saved Connection Signature Resolving Key Sign Counter
+    pub fn get_csrk_cnt(&self) -> Option<u32> { self.csrk.map(|(_,c)| c)}
+
+    /// Get the Long Term Key
+    ///
+    /// This is the secret key used to establish (or reestablish) an encryption between this device
+    /// and the peer device.
+    ///
+    /// If this is `None` then encryption cannot be established. This may happen when encryption
+    /// cannot be established to the peer device, but the peer's IRK or CSRK is known.
+    pub fn get_ltk(&self) -> Option<u128> { self.ltk }
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

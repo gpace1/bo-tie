@@ -167,7 +167,7 @@ impl From<IdentityInformation> for Command<IdentityInformation> {
 
 enum AddressType {
     Public,
-    Random,
+    StaticRandom,
 }
 
 pub struct IdentityAddressInformation {
@@ -180,7 +180,7 @@ impl CommandData for IdentityAddressInformation {
     fn into_icd(self) -> Vec<u8> {
         let addr_type_val = match self.addr_type {
             AddressType::Public => 0,
-            AddressType::Random => 1,
+            AddressType::StaticRandom => 1,
         };
 
         let mut v = alloc::vec![ addr_type_val ];
@@ -194,7 +194,7 @@ impl CommandData for IdentityAddressInformation {
         if icd.len() == 7 {
             let addr_type = match icd[0] {
                 0 => AddressType::Public,
-                1 => AddressType::Random,
+                1 => AddressType::StaticRandom,
                 _ => return Err( Error::IncorrectValue )
             };
 
@@ -211,14 +211,25 @@ impl CommandData for IdentityAddressInformation {
 }
 
 impl IdentityAddressInformation {
-    pub fn set_address_as_random(&mut self, addr: crate::BluetoothDeviceAddress ) {
-        self.addr_type = AddressType::Random;
-        self.address = addr;
+
+    /// Create a new `IdentityAddressInformation` containing a public address
+    fn new_pub(address: crate::BluetoothDeviceAddress) -> Self {
+        Self {
+            addr_type: AddressType::Public,
+            address,
+        }
     }
 
-    pub fn set_address_as_public(&mut self, addr: crate::BluetoothDeviceAddress ) {
-        self.addr_type = AddressType::Public;
-        self.address = addr
+    /// Create a new `IdentityAddressInformation` containing a static random device address
+    ///
+    /// This function doesn't validate that `address` is a valid static device address. The format
+    /// of a static random device address can be found in the Bluetooth Specification (v5.0 | Vol 6,
+    /// Part B, section 1.3.2.1).
+    fn new_static(address: crate::BluetoothDeviceAddress) -> Self {
+        Self {
+            addr_type: AddressType::StaticRandom,
+            address
+        }
     }
 }
 
@@ -255,6 +266,8 @@ impl CommandData for SigningInformation {
 }
 
 impl SigningInformation {
+    pub fn new(csrk: u128) -> Self { Self { signature_key: csrk } }
+
     pub fn set_signature_key(&mut self, key: u128) {
         self.signature_key = key
     }
