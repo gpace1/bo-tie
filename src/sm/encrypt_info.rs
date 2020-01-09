@@ -213,7 +213,7 @@ impl CommandData for IdentityAddressInformation {
 impl IdentityAddressInformation {
 
     /// Create a new `IdentityAddressInformation` containing a public address
-    fn new_pub(address: crate::BluetoothDeviceAddress) -> Self {
+    pub fn new_pub(address: crate::BluetoothDeviceAddress) -> Self {
         Self {
             addr_type: AddressType::Public,
             address,
@@ -225,7 +225,7 @@ impl IdentityAddressInformation {
     /// This function doesn't validate that `address` is a valid static device address. The format
     /// of a static random device address can be found in the Bluetooth Specification (v5.0 | Vol 6,
     /// Part B, section 1.3.2.1).
-    fn new_static(address: crate::BluetoothDeviceAddress) -> Self {
+    pub fn new_static(address: crate::BluetoothDeviceAddress) -> Self {
         Self {
             addr_type: AddressType::StaticRandom,
             address

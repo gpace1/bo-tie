@@ -571,7 +571,6 @@ impl SecurityManager {
     where C: ConnectionChannel
     {
         responder::SlaveSecurityManagerBuilder::new(
-            self,
             channel,
             master_address,
             this_address,

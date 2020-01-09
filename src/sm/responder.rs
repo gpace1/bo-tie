@@ -83,6 +83,7 @@ where C: ConnectionChannel
             initiator_address_is_random: self.remote_address_is_random,
             responder_address_is_random: self.this_address_is_random,
             pairing_data: None,
+            link_encrypted: false
         }
     }
 }
@@ -161,8 +162,8 @@ where C: ConnectionChannel,
     pub fn send_irk(&self) -> bool {
         if self.link_encrypted {
             if let Some(irk) = self.pairing_data.as_ref()
-                .and_then(|pd| pd.key_db)
-                .and_then(|key_db| key_db.irk )
+                .and_then(|pd| pd.db_key.as_ref() )
+                .and_then(|db_key| db_key.irk.clone() )
             {
                 self.send(encrypt_info::IdentityInformation::new(irk));
 
@@ -187,10 +188,10 @@ where C: ConnectionChannel,
     pub fn send_csrk(&self) -> bool {
         if self.link_encrypted {
             if let Some(csrk) = self.pairing_data.as_ref()
-                .and_then(|pd| pd.key_db)
-                .and_then(|key_db| key_db.csrk )
+                .and_then(|pd| pd.db_key.as_ref() )
+                .and_then(|db_key| db_key.csrk.clone() )
             {
-                self.send(encrypt_info::SigningInformation::new(csrk));
+                self.send(encrypt_info::SigningInformation::new(csrk.0));
 
                 true
             } else {
@@ -367,7 +368,6 @@ where C: ConnectionChannel,
                 peer_public_key: None,
                 secret_key: None,
                 remote_nonce: None,
-                ltk: None,
                 db_key: None,
             });
 
@@ -562,14 +562,15 @@ where C: ConnectionChannel,
             }
         };
 
-        match self.pairing_data {
+        let pd = self.pairing_data.as_ref();
+
+        match pd {
             Some( PairingData {
                 secret_key: Some( dh_key ),
                 nonce,
                 remote_nonce: Some( remote_nonce ),
                 master_io_cap,
                 this_io_cap,
-                ref mut db_key,
                 ..
             }) => {
 
@@ -593,9 +594,9 @@ where C: ConnectionChannel,
                 log::trace!("this addr: {:x?}", b_addr);
 
                 let (mac_key, ltk) = toolbox::f5(
-                    dh_key,
-                    remote_nonce,
-                    nonce,
+                    *dh_key,
+                    *remote_nonce,
+                    *nonce,
                     a_addr.clone(),
                     b_addr.clone(),
                 );
@@ -606,10 +607,10 @@ where C: ConnectionChannel,
 
                 let ea = toolbox::f6(
                     mac_key,
-                    remote_nonce,
-                    nonce,
+                    *remote_nonce,
+                    *nonce,
                     0,
-                    master_io_cap,
+                    *master_io_cap,
                     a_addr,
                     b_addr,
                 );
@@ -622,15 +623,17 @@ where C: ConnectionChannel,
 
                     let eb = toolbox::f6(
                         mac_key,
-                        nonce,
-                        remote_nonce,
+                        *nonce,
+                        *remote_nonce,
                         0,
-                        this_io_cap,
+                        *this_io_cap,
                         b_addr,
                         a_addr,
                     );
 
                     self.send(pairing::PairingDHKeyCheck::new(eb));
+
+                    let db_key = &mut self.pairing_data.as_mut().unwrap().db_key;
 
                     *db_key = super::KeyDBEntry{
                         ltk: ltk.into(),
