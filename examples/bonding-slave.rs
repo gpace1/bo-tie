@@ -58,20 +58,61 @@ async fn advertise_setup<'a>(
     set_advertising_enable::send(&hi, true).await.unwrap();
 }
 
+async fn connection_update_request(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
+    use bo_tie::hci::le::con_pram_req::remote_connection_parameter_request_reply::{
+        send,
+        CommandParameters
+    };
+    use bo_tie::hci::common::{
+        ConnectionInterval,
+        ConnectionLatency,
+        SupervisionTimeout,
+    };
+    use bo_tie::hci::le::common::ConnectionEventLength;
+
+    loop {
+        let e = hi.wait_for_event(events::LEMeta::RemoteConnectionParameterRequest.into(), None).await;
+
+        match e {
+            Ok(events::EventsData::LEMeta(events::LEMetaData::RemoteConnectionParameterRequest(e))) => {
+                let cp = CommandParameters {
+                    handle: e.connection_handle,
+                    interval_min: ConnectionInterval::try_from(400).unwrap(),
+                    interval_max: ConnectionInterval::try_from(400).unwrap(),
+                    latency: ConnectionLatency::try_from(0).unwrap(),
+                    timeout: SupervisionTimeout::try_from_duration(Duration::from_secs(5)).unwrap(),
+                    ce_len: ConnectionEventLength { minimum: 0, maximum: 0xFFFF },
+                };
+
+                send(hi, cp).await.err()
+                    .map(|e| log::error!("LE Connection Parameter Request Reply failed: {:?}", e) );
+            }
+            e => log::error!("Received unexpected event or error: {:?}", e)
+        }
+
+    }
+}
+
 // For simplicity, I've left the race condition in here. There could be a case where the connection
 // is made and the ConnectionComplete event isn't propicated & processed
-async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
+async fn wait_for_connection(hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>)
 -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display>
 {
     use bo_tie::hci::events::LEMeta;
 
-    bo_tie::hci::le::mandatory::set_event_mask::send( hi, &[LEMeta::ConnectionComplete]).await.unwrap();
-    
+    let hi_cln = hi.clone();
+
+    std::thread::spawn(move || {
+        futures::executor::block_on(connection_update_request(&hi_cln))
+    });
+
+    let le_events_mask = &[LEMeta::ConnectionComplete, LEMeta::RemoteConnectionParameterRequest];
+
+    bo_tie::hci::le::mandatory::set_event_mask::send( &hi, le_events_mask).await.unwrap();
+
     println!("Waiting for a connection (timeout is 60 seconds)");
 
     let evt_rsl = hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)).await;
-
-    println!("Connection made");
 
     match evt_rsl {
         Ok(event) => {
@@ -87,7 +128,7 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
             if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
 
                 set_advertising_enable::send(&hi, false).await.unwrap();
-                
+
                 Ok(event_data)
             }
             else {
@@ -111,7 +152,7 @@ async fn disconnect(
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
-    disconnect::send(&hi, prams).await.expect("Failed to disconnect");
+    disconnect::send(&hi, prams).await.err().map(|e| log::error!("Failed to disconnect: {:?}", e));
 }
 
 /// Initialize the Attribute Server
@@ -134,15 +175,15 @@ where C: bo_tie::l2cap::ConnectionChannel
 }
 
 async fn enable_encrypt_events(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
-    use bo_tie::hci::cb::set_event_mask;
-    use bo_tie::hci::le::manditory::set_event_mask as le_set_event_mask;
-    use bo_tie::events::LEMeta;
+    use bo_tie::hci::cb::set_event_mask::{self, EventMask};
+    use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
+    use bo_tie::hci::events::LEMeta;
 
     set_event_mask::send(
         hi,
         &[
+            EventMask::DisconnectionComplete,
             EventMask::EncryptionChange,
-            EventMask::EncryptionKeyRefreshComplete,
             EventMask::LEMeta,
         ]
     ).await.unwrap();
@@ -150,94 +191,162 @@ async fn enable_encrypt_events(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>
     le_set_event_mask::send(
         hi,
         &[
+            LEMeta::RemoteConnectionParameterRequest,
             LEMeta::LongTermKeyRequest,
         ]
     ).await.unwrap();
 }
 
-async fn process_acl_data(
+async fn process_acl_data<C>(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     connection_channel: &C,
     ch: hci::common::ConnectionHandle,
-    att_server: &mut gatt::Server<C>,
+    att_server: &mut gatt::Server<'_,C>,
     slave_security_manager: &mut SlaveSecurityManager<'_,C>
 ) -> Option<u128>
+where C: bo_tie::l2cap::ConnectionChannel
 {
+    use bo_tie::l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
+
     let acl_data_vec = connection_channel.future_receiver().await.unwrap();
+    let mut ret = None;
 
     for acl_data in acl_data_vec {
         match acl_data.get_channel_id() {
             ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) =>
                 match att_server.process_acl_data(&acl_data) {
-                    Ok(_) => None,
-                    Err(e) => {log::error!("Cannot process acl data for ATT, '{}'", e); None},
+                    Ok(_) => (),
+                    Err(e) => log::error!("Cannot process acl data for ATT, '{}'", e),
                 }
             ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
                 match slave_security_manager.process_command(acl_data.get_payload()) {
-                    Ok(None) => None,
-                    Err(e) => {log::error!("Cannot process acl data for SM, '{:?}'", e); None},
-                    Ok(Some(db_entry)) => db_entry.ltk
+                    Ok(None) => (),
+                    Err(e) => log::error!("Cannot process acl data for SM, '{:?}'", e),
+                    Ok(Some(db_entry)) => ret = db_entry.get_ltk()
                 }
-            _ => None,
+            _ => (),
         }
     }
+
+    ret
 }
 
-async fn ltk_request(
+async fn await_ltk_request(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     ch: hci::common::ConnectionHandle,
-    ltk: Option<u128>,
-) {
-    use bo_tie::hci::le::encryption::long_term_key_request_reply;
+) -> bool {
     use bo_tie::hci::le::encryption::long_term_key_request_negative_reply;
     use events::{EventsData, LEMeta, LEMetaData};
 
-    let event = hi.wait_for_event(LEMeta::LongTermKeyRequest.into(), None).await.unwrap();
+    let event = hi.wait_for_event(LEMeta::LongTermKeyRequest.into(), None).await;
 
-    match (event, ltk) {
-        (EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req)), None) =>
-            long_term_key_request_negative_reply::send(hi, ltk_req.connection_handle).await.unwrap(),
-        (EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req)), Some(ltk)) => {
-            if ltk_req.connection_handle == ch {
-                long_term_key_request_reply::send(hi, ch, ltk).await.unwrap();
-                println!("Sending Long Term Key master");
-            }
+    log::trace!("Received Long Term Key Request");
+
+    match event {
+        Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) if ltk_req.connection_handle == ch => {
+            true
         },
-        (e, _) => panic!("Received incorrect event {:?}", e)
+        Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) => {
+            long_term_key_request_negative_reply::send(hi, ltk_req.connection_handle).await.unwrap();
+            false
+        },
+        Ok(e) => {
+            log::error!("Received incorrect event {:?}", e);
+            false
+        },
+        Err(e) => panic!("Event error: {:?}", e),
+    }
+}
+
+async fn send_ltk(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    ch: hci::common::ConnectionHandle,
+    ltk: Option<u128>,
+){
+    use bo_tie::hci::le::encryption::long_term_key_request_reply;
+    use bo_tie::hci::le::encryption::long_term_key_request_negative_reply;
+
+    match ltk {
+        Some(ltk) => { long_term_key_request_reply::send(hi, ch, ltk).await.unwrap(); },
+        None => { long_term_key_request_negative_reply::send(hi, ch).await.unwrap(); }
     }
 }
 
 async fn await_encryption(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     ch: hci::common::ConnectionHandle,
-) {
+) -> bool
+{
+    use events::Events::{EncryptionChange, EncryptionKeyRefreshComplete};
+    use events::EventsData::EncryptionChange as EC;
+    use bo_tie::hci::common::EncryptionLevel::{AESCCM, Off};
+    use futures::{select, future::FutureExt};
 
+    let evnt = hi.wait_for_event(EncryptionChange, None).await;
+
+    match evnt {
+        Ok(EC(e_data)) =>
+            match (e_data.encryption_enabled.get_for_le(), e_data.connection_handle) {
+                (AESCCM, handle) if ch == handle => true,
+                (Off, _) => (false),
+                (e, h) => {
+                    log::error!("Using encrypt {:?} for handle {:?}, expected {:?}", e, h, ch);
+                    false
+                },
+            },
+        _ => {
+            log::error!("Expected EncryptinoChange event");
+            false
+        }
+    }
 }
 
 fn server_loop<C>(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     connection_channel: &C,
     ch: hci::common::ConnectionHandle,
-    mut att_server: gatt::Server<C>,
+    mut att_server: gatt::Server<'_,C>,
     mut slave_security_manager: SlaveSecurityManager<'_,C>
 )
 where C: bo_tie::l2cap::ConnectionChannel
 {
     use bo_tie::l2cap::ChannelIdentifier;
     use bo_tie::l2cap::LeUserChannelIdentifier;
-    use futures::future::{FutureExt};
+    use futures::{select, future::FutureExt};
 
     let mut ltk = None;
+    let mut encrypted = false;
+    let mut irk_sent = false;
 
     futures::executor::block_on( enable_encrypt_events(hi) );
 
+    let mut e = Box::pin(await_encryption(hi, ch).fuse());
+    let mut l = Box::pin(await_ltk_request(hi, ch).fuse());
+
     loop {
         let a = process_acl_data(hi, connection_channel, ch, &mut att_server, &mut slave_security_manager);
-        let b = ltk_request(hi, ch, ltk);
 
         futures::executor::block_on( async {
-            futures::future::select()
+            select!{
+                a_res = Box::pin(a.fuse()) => ltk = a_res,
+
+                e_res = e => encrypted = e_res,
+
+                l_res = l => if l_res { send_ltk(hi, ch, ltk).await },
+            }
         });
+
+        slave_security_manager.set_encrypted(encrypted);
+
+        if encrypted && irk_sent == false {
+            println!("Sending IRK to Master");
+
+            if slave_security_manager.send_irk() {
+                irk_sent = true;
+            } else {
+                log::error!("Failed to send IRK");
+            }
+        }
     }
 }
 
@@ -248,7 +357,9 @@ fn handle_sig(
     simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term],
         move |_| {
             // Cancel advertising if advertising (there is no consequence if not advertising)
-            futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
+            if let Err(e) = futures::executor::block_on(set_advertising_enable::send(&hi, false)) {
+                log::error!("Failed to stop advertising: {:?}", e);
+            }
 
             // todo fix the race condition where a connection is made but the handle hasn't been
             // stored here yet
@@ -283,18 +394,18 @@ fn main() {
     let interface = Arc::new(hci::HostInterface::default());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
-    
+
     let this_address = [0x70, 0x92, 0x07, 0x23, 0xac, 0xc3];
- 
+
     println!("This public address: {:x?}", this_address);
 
     executor::block_on(advertise_setup(&interface, this_address.clone(), local_name));
 
     // Waiting for some bluetooth device to connect is slow, so the waiting for the future is done
     // on a different thread.
-    match executor::block_on(wait_for_connection(&interface)) {
+    match executor::block_on(wait_for_connection(interface.clone())) {
         Ok(event_data) => {
-            
+
             raw_connection_handle.store(event_data.connection_handle.get_raw_handle(), Ordering::SeqCst);
 
             let interface_clone = interface.clone();
@@ -316,7 +427,7 @@ fn main() {
                     &master_address,
                     master_address_type == bo_tie::hci::events::LEConnectionAddressType::RandomDeviceAddress,
                     &this_address,
-                    true // using a random address 
+                    true // using a random address
                 )
                 .set_min_and_max_encryption_key_size(16,16).unwrap()
                 .create_security_manager();
@@ -331,4 +442,3 @@ fn main() {
         Err(err) => println!("Error: {}", err),
     };
 }
-

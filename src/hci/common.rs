@@ -264,6 +264,7 @@ impl SupervisionTimeout {
     }
 }
 
+#[derive(Debug,PartialEq, Eq)]
 pub enum EncryptionLevel {
     Off,
     E0,

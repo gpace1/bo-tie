@@ -56,10 +56,10 @@ pub mod encrypt {
 
     /// Send the command to start encrypting the `plain_text`
     ///
-    /// Both the `key` and `plain-text` should be in native endian.
+    /// The input 'key' should be in native byte order.
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, key: u128, plain_text: [u8;16])
-                                 -> impl Future<Output=Result<Cypher, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<Cypher, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         let parameter = Parameter {
             key: key.to_be_bytes(),
@@ -104,8 +104,8 @@ pub mod long_term_key_request_reply {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
-                handle: self.handle.get_raw_handle(),
-                ltk: self.ltk
+                handle: self.handle.get_raw_handle().to_le(),
+                ltk: self.ltk.to_le()
             }
         }
     }
@@ -136,6 +136,10 @@ pub mod long_term_key_request_reply {
 
     impl_command_data_future!(Return, error::Error);
 
+    /// Send the command to Long Term Key
+    ///
+    /// The input `long_term_key` is the encryption (cypher) secret key and it is in native byte
+    /// order
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,

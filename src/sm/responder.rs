@@ -148,7 +148,7 @@ where C: ConnectionChannel,
     ///
     /// This is used to indicate to the `SlaveSecurityManager` that it is safe to send a Key to the
     /// peer device. This is a deliberate extra step to ensure that the functions
-    pub fn con_encrypt(&mut self, is_encrypted: bool) { self.link_encrypted = is_encrypted }
+    pub fn set_encrypted(&mut self, is_encrypted: bool) { self.link_encrypted = is_encrypted }
 
     /// Send the Identity Resolving Key to the Master Device
     ///
@@ -645,7 +645,7 @@ where C: ConnectionChannel,
                     }.into();
 
                     Ok( db_key.as_mut() )
-                    
+
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);
 
@@ -669,19 +669,19 @@ where C: ConnectionChannel,
 //     hci: &'a HostInterface<HCI>,
 //     connection_channel: &'a C,
 // }
-// 
+//
 // impl<'a, HCI, C> AsyncMasterSecurityManager<'a, HCI, C> {
 //     fn new( sm: &'a SecurityManager, hci: &'a HostInterface<HCI>, connection_channel: &'a C ) -> Self {
 //         Self { sm, hci, connection_channel }
 //     }
 // }
-// 
+//
 // pub struct AsyncSlaveSecurityManager<'a, HCI, C> {
 //     sm: &'a SecurityManager,
 //     hci: &'a HostInterface<HCI>,
 //     connection_channel: &'a C,
 // }
-// 
+//
 // impl<'a, HCI, C> AsyncSlaveSecurityManager<'a, HCI, C> {
 //     fn new( sm: &'a SecurityManager, hci: &'a HostInterface<HCI>, connection_channel: &'a C ) -> Self {
 //         Self { sm, hci, connection_channel }

@@ -134,7 +134,7 @@ impl EventExpecter {
         match gaurd.expected.get(&event).and_then(|map| map.get(&pat_key) )
         {
             None => {
-                log::debug!("Seting up expectation for event {:?}", event);
+                log::debug!("Setting up expectation for event {:?}", event);
 
                 let waker_token = WakerToken::from(waker.clone());
 
@@ -177,9 +177,9 @@ impl EventExpecter {
                 None
             }
             Some(ref val) => {
-                log::debug!("Retreiving data for event {:?}", event);
 
                 if val.waker_token.triggered() {
+                    log::debug!("Retrieving data for event {:?}", event);
 
                     let expected = gaurd.remove_expected_event(event, &pat_key).unwrap();
 

@@ -3492,13 +3492,17 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct AuthenticatedPayloadTimeoutExpiredData { }
+pub struct AuthenticatedPayloadTimeoutExpiredData {
+    connection_handle: ConnectionHandle
+}
 
 impl_try_from_for_raw_packet! {
     AuthenticatedPayloadTimeoutExpiredData,
-    _packet_placeholder,
+    packet,
     {
-        unimplemented!()
+        Ok(AuthenticatedPayloadTimeoutExpiredData {
+            connection_handle: chew_handle!(packet)
+        })
     }
 }
 
