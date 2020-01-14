@@ -250,7 +250,7 @@ impl<'a> CharacteristicAdder<'a>
         value: Box<V>,
         value_permissions: Vec<att::AttributePermissions> )
     -> characteristic::CharacteristicBuilder<'a, V>
-    where Box<V>: att::TransferFormat + Unpin + 'static,
+    where Box<V>: att::TransferFormat + Unpin + Send + 'static,
               V: ?Sized
     {
         characteristic::CharacteristicBuilder::new(

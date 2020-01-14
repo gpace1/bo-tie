@@ -183,7 +183,6 @@ pub mod flags {
 
     use core::cell::Cell;
     use alloc::collections::BTreeSet;
-    use alloc::rc::Rc;
     use super::*;
 
     pub enum CoreFlags {
@@ -251,7 +250,7 @@ pub mod flags {
     /// // enable a use r specific flag
     /// flags.get(0).enable();
     /// ```
-    #[derive(Eq,Debug)]
+    #[derive(Eq,Debug,Clone)]
     pub struct Flag {
         position: usize,
         val: Cell<bool>,
@@ -267,18 +266,18 @@ pub mod flags {
         }
 
         /// Set the state of the flag to enabled
-        pub fn enable(self: Rc<Self>) where { self.val.set(true); }
+        pub fn enable(&self) where { self.val.set(true); }
 
         /// Set the state of the flag to disabled
-        pub fn disable(self: Rc<Self>) where { self.val.set(false); }
+        pub fn disable(&self) where { self.val.set(false); }
 
         /// Set the state of the flag to `state`
-        pub fn set(self: Rc<Self>, state: bool) where { self.val.set(state) }
+        pub fn set(&self, state: bool) where { self.val.set(state) }
 
         /// Get the state of the flag
-        pub fn get(self: Rc<Self>) -> bool where { self.val.get() }
+        pub fn get(&self) -> bool where { self.val.get() }
 
-        pub fn pos(self: Rc<Self>) -> FlagType {
+        pub fn pos(&self) -> FlagType {
             if self.position < CoreFlags::get_bit_cnt() {
                 FlagType::Core(CoreFlags::from_position(self.position))
             }
@@ -308,7 +307,7 @@ pub mod flags {
 
     #[derive(Debug)]
     pub struct Flags {
-        set: BTreeSet<Rc<Flag>>,
+        set: BTreeSet<Flag>,
     }
 
     impl Flags {
@@ -321,44 +320,41 @@ pub mod flags {
             }
         }
 
-        fn get(&mut self, flag: Rc<Flag>) -> Rc<Flag> {
-            if self.set.contains(&flag) {
-                self.set.get(&flag).unwrap().clone()
-            }
-            else {
+        fn get(&mut self, flag: Flag) -> &Flag{
+            if ! self.set.contains(&flag) {
                 self.set.insert(flag.clone());
-
-                flag
             }
+
+            self.set.get(&flag).unwrap()
         }
 
-        /// Get a use r flag for a given position
+        /// Get a user flag for a given position
         ///
-        /// Get a flag in the use r defined region after the core flags. A value of zero is the
-        /// first use r defined flag. Positions are the relative bit position in the flags data
+        /// Get a flag in the user defined region after the core flags. A value of zero is the
+        /// first user defined flag. Positions are the relative bit position in the flags data
         /// type after the Bluetooth Supplement specifed flags (and reserved flags). Try to
         /// keep the flag positions stacked towards zero as `pos` / 8 is the number of
-        /// bytes for the use r flags that will need to be allocated for this flags data when
+        /// bytes for the user flags that will need to be allocated for this flags data when
         /// transmitting.
-        pub fn get_user(&mut self, pos: usize) -> Rc<Flag> {
-            self.get(Rc::new(Flag {
+        pub fn get_user(&mut self, pos: usize) -> &Flag {
+            self.get(Flag {
                 position: pos + CoreFlags::get_bit_cnt(),
                 val: Cell::new(false),
-            }))
+            })
         }
 
         /// Get a core flag for a given position
         ///
         /// Get a flag in the core defined region before the use r flags.
-        pub fn get_core(&mut self, core: CoreFlags) -> Rc<Flag> {
-            self.get(Rc::new(Flag {
+        pub fn get_core(&mut self, core: CoreFlags) -> &Flag {
+            self.get(Flag {
                 position: core.get_position(),
                 val: Cell::new(false),
-            }))
+            })
         }
 
         /// Get an iterator over the flags in Flags
-        pub fn iter(&self) -> ::alloc::collections::btree_set::Iter<Rc<Flag>> {
+        pub fn iter(&self) -> ::alloc::collections::btree_set::Iter<Flag> {
             self.set.iter()
         }
     }
@@ -403,7 +399,7 @@ pub mod flags {
                 for octet in 0..data.len() {
                     for bit in 0..8 {
                         if 0 != data[octet] & (1 << bit) {
-                            set.insert(Rc::new(Flag::new( octet * 8 + (bit as usize), true )));
+                            set.insert(Flag::new( octet * 8 + (bit as usize), true ));
                         }
                     }
                 }

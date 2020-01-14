@@ -185,7 +185,7 @@ where C: l2cap::ConnectionChannel
     /// value as defined in the connection channel will be used.
     set_mtu: Option<u16>,
     connection: &'c C,
-    attributes: Vec<Box<dyn super::AnyAttribute + Unpin>>,
+    attributes: Vec<Box<dyn super::AnyAttribute + Unpin + Send>>,
     /// The permissions the client currently has
     given_permissions: Vec<super::AttributePermissions>,
 }
@@ -214,7 +214,7 @@ where C: l2cap::ConnectionChannel
             super::MIN_ATT_MTU_LE
         };
 
-        let attributes: Vec<Box<dyn super::AnyAttribute + Unpin>> = match server_attributes.into()
+        let attributes: Vec<Box<dyn super::AnyAttribute + Unpin + Send>> = match server_attributes.into()
         {
             Some(a) => a.attributes,
             None => ServerAttributes::new().attributes,
@@ -244,7 +244,7 @@ where C: l2cap::ConnectionChannel
     /// If you manage to push 65535 attributes onto this server, the next pushed attribute will
     /// cause this function to panic.
     pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
-    where V: TransferFormat + Sized + Unpin + 'static
+    where V: TransferFormat + Sized + Unpin + Send + 'static
     {
         use core::convert::TryInto;
 
@@ -1032,7 +1032,7 @@ impl super::AnyAttribute for ReservedHandle {
 ///
 /// `ServerAttributes` construsts a list of attributes.
 pub struct ServerAttributes {
-    attributes: Vec<Box<dyn super::AnyAttribute + Unpin>>
+    attributes: Vec<Box<dyn super::AnyAttribute + Unpin + Send>>
 }
 
 impl ServerAttributes {
@@ -1048,7 +1048,7 @@ impl ServerAttributes {
     /// This will push the attribute onto the list of server attributes and return the handle of
     /// the pushed attribute.
     pub fn push<V>(&mut self, mut attribute: super::Attribute<V>) -> u16
-    where V: TransferFormat + Sized + Unpin + 'static
+    where V: TransferFormat + Sized + Unpin + Send +'static
     {
         use core::convert::TryInto;
 

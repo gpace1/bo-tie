@@ -34,9 +34,10 @@ pub mod set_event_mask {
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::SetEventMask);
 
+    #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
     pub enum EventMask {
-        #[doc(hidden)]
         /// A marker for the default enabled (upon controller reset) list of events
+        #[doc(hidden)]
         _Default,
         InquiryComplete,
         InquiryResult,

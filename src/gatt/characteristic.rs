@@ -280,7 +280,7 @@ pub struct CharacteristicBuilder<'a, V> where V: ?Sized {
 }
 
 impl<'a, V> CharacteristicBuilder<'a, V>
-where Box<V>: att::TransferFormat + Unpin + 'static,
+where Box<V>: att::TransferFormat + Unpin + Send + 'static,
            V: ?Sized
 {
     pub(super) fn new(
