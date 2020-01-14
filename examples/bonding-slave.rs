@@ -75,6 +75,10 @@ impl Bonder {
         ).await;
     }
 
+    /// Starting advertising
+    ///
+    /// This advertising is for connecting with a bluetooth device that has not been bonded with
+    /// this device (or lost bonding information).
     async fn start_advertising<'a>(
         self,
         advertised_address: bo_tie::BluetoothDeviceAddress,
@@ -119,6 +123,9 @@ impl Bonder {
 
         set_advertising_enable::send(&self.hi, true).await.unwrap();
     }
+
+    ///
+    async fn resolvable_advertising
 
     async fn connection_update_request(self) {
 
