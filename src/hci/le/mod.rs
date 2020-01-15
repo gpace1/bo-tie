@@ -11,6 +11,7 @@ pub mod receiver;
 pub mod connection;
 pub mod encryption;
 pub mod con_pram_req;
+pub mod privacy;
 
 // LE implementation that is currently TODO
 // pub mod br_edr {

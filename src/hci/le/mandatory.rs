@@ -66,9 +66,9 @@ pub mod clear_white_list {
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ClearWhiteList);
 
     #[derive(Clone, Copy)]
-    struct Prameter;
+    struct Parameter;
 
-    impl CommandParameter for Prameter {
+    impl CommandParameter for Parameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter { *self }
@@ -78,7 +78,7 @@ pub mod clear_white_list {
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Prameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
 }
 

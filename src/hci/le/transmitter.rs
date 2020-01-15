@@ -263,6 +263,7 @@ pub mod set_advertising_enable {
     impl_status_return!(COMMAND);
 
     #[derive(Clone,Copy)]
+    #[repr(packed)]
     struct Parameter{
         enable: bool
     }
@@ -509,7 +510,6 @@ pub mod set_advertising_parameters {
 pub mod set_random_address {
 
     use crate::hci::*;
-
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetRandomAddress);
 

@@ -381,7 +381,74 @@ impl Bonder {
         }
     }
 
-    /// This is for handeling signals to the example
+    async fn advertising_with_privacy(
+        &self,
+        peer_address: crate::BluetoothDeviceAddress,
+        peer_address_is_public: bool,
+        peer_irk: Option<u128>,
+        local_irk: u128,
+    ) {
+        use hci::le::{
+            common::{
+                OwnAddressType
+            },
+            transmitter::{
+                set_advertising_enable,
+                set_advertising_parameters::{self, PeerAddressType},
+            },
+            privacy::{
+                PeerIdentityAddressType,
+                add_device_to_resolving_list,
+                set_address_resolution_enable
+            }
+        };
+        use hci::events::LEMeta::EnhancedConnectionComplete;
+        use hci::events::EventsData;
+        use hci::events::LEMetaData::EnhancedConnectionComplete;
+
+        self.le_event_mask( &[EnhancedConnectionComplete], true );
+
+        set_advertising_enable::send(&self.hi, false).await.unwrap();
+
+        let resolve_list_param = add_device_to_resolving_list::Parameter {
+            identity_address_type: if peer_address_is_public {
+                    PeerIdentityAddressType::PublicIdentityAddress
+                } else {
+                    PeerIdentityAddressType::RandomStaticIdentityAddress
+                },
+            peer_identity_address: peer_address,
+            peer_irk: peer_irk.unwrap_or_default(),
+            local_irk,
+        };
+
+        add_device_to_resolving_list::send(&self.hi, param).await.unwrap();
+
+        let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
+
+        advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKRA;
+        advertise_param.peer_address_type = if peer_address_is_public {
+                PeerAddressType::PublicAddress
+            } else {
+                PeerAddressType::RandomAddress
+            };
+        advertise_param.peer_address = peer_address;
+
+        set_advertising_parameters::send(&self.hi, advertise_param);
+
+        set_advertising_enable::send(&self.hi, true);
+
+        match self.hi.wait_for_event(EnhancedConnectionComplete.into(), Duration::from_secs(10)).await {
+            Err(e) => log::error!("Failed to receive EnhancedConnectionComplete: {:?}", e);
+            Ok(EventsData(EnhancedConnectionComplete(event_data))) => {
+                if event_data.status = hci::error::Error::NoError {
+                    *self.handle.lock().await = Some(event_data.connection_handle);
+                } else {
+                    log::error!("Received bad enhanced connection: {}", event_data.status)
+                }
+            }
+        }
+    }
+
     fn setup_signal_handle(self)
     {
         use hci::le::transmitter::set_advertising_enable;

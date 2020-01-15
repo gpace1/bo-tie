@@ -234,6 +234,12 @@ pub enum LEController {
     TestEnd,
     ReadConnectionParameterRequestReply,
     ReadConnectionParameterRequestNegativeReply,
+    SetResolvablePrivateAddressTimeout,
+    SetAddressResolutionEnable,
+    AddDeviceToResolvingList,
+    RemoveDeviceFromResolvingList,
+    ClearResolvingList,
+    SetPrivacyMode,
 }
 
 impl LEController {
@@ -278,7 +284,13 @@ impl LEController {
                 TestEnd => 0x1f,
                 ReadConnectionParameterRequestReply => 0x20,
                 ReadConnectionParameterRequestNegativeReply => 0x21,
-            }
+                SetResolvablePrivateAddressTimeout => 0x2e,
+                SetAddressResolutionEnable => 0x2d,
+                AddDeviceToResolvingList => 0x27,
+                RemoveDeviceFromResolvingList => 0x28,
+                ClearResolvingList => 0x29,
+                SetPrivacyMode => 0x4e,
+            },
         }
     }
 
@@ -316,6 +328,12 @@ impl LEController {
             0x1f => Ok(LEController::TestEnd),
             0x20 => Ok(LEController::ReadConnectionParameterRequestReply),
             0x21 => Ok(LEController::ReadConnectionParameterRequestNegativeReply),
+            0x2e => Ok(LEController::SetResolvablePrivateAddressTimeout),
+            0x2d => Ok(LEController::SetAddressResolutionEnable),
+            0x27 => Ok(LEController::AddDeviceToResolvingList),
+            0x28 => Ok(LEController::RemoveDeviceFromResolvingList),
+            0x29 => Ok(LEController::ClearResolvingList),
+            0x4e => Ok(LEController::SetPrivacyMode),
             _ => Err(alloc::format!(ocf_error!(), "LE Controller", ocf)),
         }
     }
