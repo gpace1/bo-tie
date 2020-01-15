@@ -9,7 +9,8 @@ struct Bonder {
     hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>,
     event_mask: Arc<Mutex<HashSet<hci::cb::set_event_mask::EventMask>>>,
     le_event_mask: Arc<Mutex<HashSet<hci::events::LEMeta>>>,
-    handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>
+    handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
+    abort_server_handle: Arc<Mutex<Option<futures::future::AbortHandle>>>,
 }
 
 impl Bonder {
@@ -124,9 +125,6 @@ impl Bonder {
         set_advertising_enable::send(&self.hi, true).await.unwrap();
     }
 
-    ///
-    async fn resolvable_advertising
-
     async fn connection_update_request(self) {
 
         use hci::le::con_pram_req::remote_connection_parameter_request_reply::{
@@ -204,7 +202,11 @@ impl Bonder {
     {
         use hci::le::connection::disconnect;
 
-        if let Some(connection_handle) = self.handle.try_lock().and_then(|g| (*g).clone() ) {
+        if let Some(abort_handle) = self.abort_server_handle.try_lock().and_then(|mut g| g.take()) {
+            abort_handle.abort()
+        }
+
+        if let Some(connection_handle) = self.handle.try_lock().and_then(|mut g| g.take()) {
             let prams = disconnect::DisconnectParameters {
                 connection_handle,
                 disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
@@ -332,7 +334,7 @@ impl Bonder {
 
         let connection_channel = self.hi.new_le_acl_connection_channel(&connect_complete_data);
 
-        let mut server = gatt_server_init(&connection_channel, local_name);
+        let mut gatt_server = gatt_server_init(&connection_channel, local_name);
 
         let sm = bo_tie::sm::SecurityManager::new(Vec::new());
 
@@ -357,7 +359,7 @@ impl Bonder {
         let mut l = Box::pin( self.await_ltk_request(ch).fuse() );
 
         loop {
-            let a = self.process_acl_data(&connection_channel, &mut server, &mut slave_sm).fuse();
+            let a = self.process_acl_data(&connection_channel, &mut gatt_server, &mut slave_sm).fuse();
 
             futures::select!{
                 a_res = Box::pin(a) => ltk = a_res,
@@ -381,9 +383,25 @@ impl Bonder {
         }
     }
 
+    async fn abortable_server_loop(
+        self,
+        this_address: bo_tie::BluetoothDeviceAddress,
+        local_name: &'static str,
+        connect_complete_data: hci::events::LEConnectionCompleteData,
+    ) {
+        use futures::future::{Abortable, AbortHandle, Aborted};
+
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+
+        *self.abort_server_handle.lock().await = Some(abort_handle);
+
+        Abortable::new( self.server_loop(this_addres, local_name, connect_complete_data) ).await
+            .ok();
+    }
+
     async fn advertising_with_privacy(
         &self,
-        peer_address: crate::BluetoothDeviceAddress,
+        peer_address: bo_tie::BluetoothDeviceAddress,
         peer_address_is_public: bool,
         peer_irk: Option<u128>,
         local_irk: u128,
@@ -404,9 +422,9 @@ impl Bonder {
         };
         use hci::events::LEMeta::EnhancedConnectionComplete;
         use hci::events::EventsData;
-        use hci::events::LEMetaData::EnhancedConnectionComplete;
+        use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
 
-        self.le_event_mask( &[EnhancedConnectionComplete], true );
+        self.set_le_events( &[EnhancedConnectionComplete], true ).await;
 
         set_advertising_enable::send(&self.hi, false).await.unwrap();
 
@@ -421,7 +439,9 @@ impl Bonder {
             local_irk,
         };
 
-        add_device_to_resolving_list::send(&self.hi, param).await.unwrap();
+        add_device_to_resolving_list::send(&self.hi, resolve_list_param).await.unwrap();
+
+        set_address_resolution_enable::send(&self.hi, true).await.unwrap();
 
         let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
 
@@ -433,20 +453,27 @@ impl Bonder {
             };
         advertise_param.peer_address = peer_address;
 
-        set_advertising_parameters::send(&self.hi, advertise_param);
+        set_advertising_parameters::send(&self.hi, advertise_param).await.unwrap();
 
-        set_advertising_enable::send(&self.hi, true);
+        set_advertising_enable::send(&self.hi, true).await.unwrap();
 
         match self.hi.wait_for_event(EnhancedConnectionComplete.into(), Duration::from_secs(10)).await {
-            Err(e) => log::error!("Failed to receive EnhancedConnectionComplete: {:?}", e);
-            Ok(EventsData(EnhancedConnectionComplete(event_data))) => {
-                if event_data.status = hci::error::Error::NoError {
+            Err(e) => log::error!("Failed to receive EnhancedConnectionComplete: {:?}", e),
+            Ok(EventsData::LEMeta(ECCData(event_data))) => {
+                if event_data.status == hci::error::Error::NoError {
                     *self.handle.lock().await = Some(event_data.connection_handle);
                 } else {
-                    log::error!("Received bad enhanced connection: {}", event_data.status)
+                    log::error!("Received bad enhanced connection: {}", event_data.status);
                 }
-            }
+            },
+            Ok(e) => log::error!("Received unexpected event: {:?}", e),
         }
+
+        set_advertising_enable::send(&self.hi, false).await.unwrap();
+
+        self.set_le_events( &[EnhancedConnectionComplete], false ).await;
+
+        set_address_resolution_enable::send(&self.hi, false).await.unwrap();
     }
 
     fn setup_signal_handle(self)
@@ -521,12 +548,24 @@ fn main() {
     // will disable advertising also when a connection is made.
     match thread_pool.run( bonder.wait_for_connection() ) {
         Ok(event_data) => {
+            loop {
+                use hci::events::Events::DisconnectionComplete;
 
-            thread_pool.spawn( bonder.clone().server_loop(advertise_address,local_name,event_data) ).unwrap();
+                let server_loop_fut = bonder.clone()
+                    .abortable_server_loop(
+                        advertise_address,
+                        local_name,
+                        event_data
+                    );
 
-            println!("Device Connected! (use ctrl-c to disconnect and exit)");
+                thread_pool.spawn( server_loop_fut ).unwrap();
 
-            thread_pool.run(bonder.hi.wait_for_event(hci::events::Events::DisconnectionComplete, None)).ok();
+                println!("Device Connected! (use ctrl-c to disconnect and exit)");
+
+                thread_pool.run(bonder.hi.wait_for_event(DisconnectionComplete, None)).unwrap();
+
+                thread_pool.run(advertising_with_privacy())
+            }
         },
         Err(err) => println!("Error: {}", err),
     };
