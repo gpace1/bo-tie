@@ -1,3 +1,12 @@
+//! Bonding in the Slave Role
+//!
+//! This example demonstrates the code required to connect and bond to a device. After this device
+//! is bonded the master can re-connect to the slave using through the *LE Privacy* reconnection
+//! process.
+//!
+//! # Note
+//! In order to exit this example, a signal (ctrl-c) needs to be sent.
+
 use bo_tie::hci;
 use futures::lock::Mutex;
 use std::collections::HashSet;
@@ -11,7 +20,7 @@ struct Bonder {
     le_event_mask: Arc<Mutex<HashSet<hci::events::LEMeta>>>,
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
     abort_server_handle: Arc<Mutex<Option<futures::future::AbortHandle>>>,
-    irks: Arc<Mutex<(Option<u128>, Option<u128>)>>
+    privacy_info: Arc<Mutex<(Option<u128>, Option<u128>, Option<(bool, bo_tie::BluetoothDeviceAddress)>)>>
 }
 
 impl Bonder {
@@ -22,7 +31,7 @@ impl Bonder {
             event_mask: Arc::new(Mutex::new(HashSet::new())),
             le_event_mask: Arc::new(Mutex::new(HashSet::new())),
             abort_server_handle: Arc::new(Mutex::new(None)),
-            irks: Arc::new(Mutex::new((None, None))),
+            privacy_info: Arc::new(Mutex::new((None, None, None))),
         }
     }
 }
@@ -243,8 +252,6 @@ impl Bonder {
 
         let acl_data_vec = connection_channel.future_receiver().await.unwrap();
 
-        let mut local_irk = None;
-        let mut peer_irk = None;
         let mut ret = None;
 
         for acl_data in acl_data_vec {
@@ -260,15 +267,17 @@ impl Bonder {
                         Err(e) => log::error!("Cannot process acl data for SM, '{:?}'", e),
                         Ok(Some(db_entry)) => {
                             ret = db_entry.get_ltk();
-                            local_irk = db_entry.get_irk();
-                            peer_irk = db_entry.get_peer_irk();
+
+                            let local_irk = db_entry.get_irk();
+                            let peer_irk = db_entry.get_peer_irk();
+                            let peer_addr = db_entry.get_peer_addr();
+
+                            *self.privacy_info.lock().await = (local_irk, peer_irk, peer_addr)
                         }
                     }
                 _ => (),
             }
         }
-
-        *self.irks.lock().await = (local_irk, peer_irk);
 
         ret
     }
@@ -412,7 +421,9 @@ impl Bonder {
                 }
             }
 
-            match self.advertising_and_connect_with_privacy(peer_address, peer_address_is_random).await {
+            println!("Starting LE Private Advertising");
+
+            match self.advertising_and_connect_with_privacy().await {
                 None => break 'outer,
                 Some(event_data) => {
                     handle = event_data.connection_handle;
@@ -450,11 +461,12 @@ impl Bonder {
         Abortable::new( server_loop, abort_registration ).await.ok();
     }
 
-    async fn advertising_and_connect_with_privacy(
-        &self,
-        peer_address: bo_tie::BluetoothDeviceAddress,
-        peer_address_is_random: bool,
-    ) -> Option<hci::events::LEEnhancedConnectionCompleteData>
+    /// Continuing advertising
+    ///
+    /// This advertising will be used after the master disconnects. Only the master that previously
+    /// connected *and bonded* to this device will be able to reestablish a connection.
+    async fn advertising_and_connect_with_privacy(&self)
+    -> Option<hci::events::LEEnhancedConnectionCompleteData>
     {
         use hci::le::{
             common::{
@@ -476,20 +488,22 @@ impl Bonder {
 
         println!("Starting Advertising and Conneciton with privacy");
 
-        if let (Some(local_irk), peer_irk) = self.irks.lock().await.clone() {
+        let keys = self.privacy_info.lock().await.clone();
+
+        if let (Some(local_irk), Some(peer_irk), Some((peer_addr_is_pub, peer_addr))) = keys {
 
             self.set_le_events( &[EnhancedConnectionComplete], true ).await;
 
             set_advertising_enable::send(&self.hi, false).await.unwrap();
 
             let resolve_list_param = add_device_to_resolving_list::Parameter {
-                identity_address_type: if peer_address_is_random {
-                        PeerIdentityAddressType::RandomStaticIdentityAddress
-                    } else {
+                identity_address_type: if peer_addr_is_pub {
                         PeerIdentityAddressType::PublicIdentityAddress
+                    } else {
+                        PeerIdentityAddressType::RandomStaticIdentityAddress
                     },
-                peer_identity_address: peer_address,
-                peer_irk: peer_irk.unwrap_or_default(),
+                peer_identity_address: peer_addr,
+                peer_irk: peer_irk,
                 local_irk,
             };
 
@@ -500,21 +514,20 @@ impl Bonder {
             let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
 
             advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKRA;
-            advertise_param.peer_address_type = if peer_address_is_random {
-                    PeerAddressType::PublicAddress
-                } else {
-                    PeerAddressType::RandomAddress
-                };
-            advertise_param.peer_address = peer_address;
+
+            advertise_param.peer_address = peer_addr;
+
+            advertise_param.peer_address_type = if peer_addr_is_pub {
+                PeerAddressType::PublicAddress
+            } else {
+                PeerAddressType::RandomAddress
+            };
 
             set_advertising_parameters::send(&self.hi, advertise_param).await.unwrap();
 
             set_advertising_enable::send(&self.hi, true).await.unwrap();
 
-            let event_rslt = self.hi.wait_for_event(
-                EnhancedConnectionComplete.into(),
-                Duration::from_secs(10)
-            ).await;
+            let event_rslt = self.hi.wait_for_event(EnhancedConnectionComplete.into(), None).await;
 
             let event_data_opt = match event_rslt
             {
@@ -545,6 +558,8 @@ impl Bonder {
 
             event_data_opt
         } else {
+            log::error!("Bonding Information wasn't supplied, make sure to have the master initate bonding");
+
             None
         }
     }
