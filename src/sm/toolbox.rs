@@ -619,17 +619,6 @@ pub fn rand_u128() -> u128 {
     <u128>::from_ne_bytes(bytes)
 }
 
-/// Generate a random 24 bit value
-pub(crate) fn rand_u24() -> [u8; 3] {
-    use rand_core::{OsRng, RngCore};
-
-    let mut bytes = [0u8;3];
-
-    OsRng.fill_bytes(&mut bytes);
-
-    bytes
-}
-
 /// Generate the nonce u128 values
 pub fn nonce() -> u128 {
     rand_u128()

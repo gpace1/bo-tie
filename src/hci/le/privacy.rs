@@ -90,10 +90,10 @@ pub mod add_device_to_resolving_list {
     #[repr(packed)]
     #[doc(hidden)]
     pub struct CmdParameter {
-        ident_type: u8,
-        peer_ident_addr: crate::BluetoothDeviceAddress,
-        peer_irk: u128,
-        local_irk: u128,
+        _ident_type: u8,
+        _peer_ident_addr: crate::BluetoothDeviceAddress,
+        _peer_irk: u128,
+        _local_irk: u128,
     }
 
     pub struct Parameter {
@@ -108,10 +108,10 @@ pub mod add_device_to_resolving_list {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
-                ident_type: self.identity_address_type.val(),
-                peer_ident_addr: self.peer_identity_address.clone(),
-                peer_irk: self.peer_irk.to_le(),
-                local_irk: self.local_irk.to_le(),
+                _ident_type: self.identity_address_type.val(),
+                _peer_ident_addr: self.peer_identity_address.clone(),
+                _peer_irk: self.peer_irk.to_le(),
+                _local_irk: self.local_irk.to_le(),
             }
         }
     }
@@ -139,8 +139,8 @@ pub mod remove_device_from_resolving_list {
     #[repr(packed)]
     #[doc(hidden)]
     pub struct CmdParameter {
-        ident_type: u8,
-        address: crate::BluetoothDeviceAddress,
+        _ident_type: u8,
+        _address: crate::BluetoothDeviceAddress,
     }
 
     pub struct Parameter {
@@ -152,8 +152,8 @@ pub mod remove_device_from_resolving_list {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
-                ident_type: self.identity_address_type.val(),
-                address: self.peer_identity_address.clone(),
+                _ident_type: self.identity_address_type.val(),
+                _address: self.peer_identity_address.clone(),
             }
         }
     }
@@ -223,9 +223,9 @@ pub mod set_privacy_mode {
     #[derive(Clone, Copy)]
     #[doc(hidden)]
     pub struct CmdParameter {
-        ty: u8,
-        addr: crate::BluetoothDeviceAddress,
-        mode: u8,
+        _ty: u8,
+        _addr: crate::BluetoothDeviceAddress,
+        _mode: u8,
     }
 
     pub struct Parameter {
@@ -239,9 +239,9 @@ pub mod set_privacy_mode {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
-                ty: self.peer_identity_address_type.val(),
-                addr: self.peer_identity_address.clone(),
-                mode: self.privacy_mode.val(),
+                _ty: self.peer_identity_address_type.val(),
+                _addr: self.peer_identity_address.clone(),
+                _mode: self.privacy_mode.val(),
             }
         }
     }

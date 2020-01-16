@@ -50,7 +50,7 @@ impl IOCapability {
             0x2 => Ok( IOCapability::KeyboardOnly ),
             0x3 => Ok( IOCapability::NoInputNoOutput ),
             0x4 => Ok( IOCapability::KeyboardDisplay ),
-            _   => Err( Error::IncorrectValue )
+            _   => Err( Error::Value)
         }
     }
 }
@@ -73,7 +73,7 @@ impl OOBDataFlag {
         match val {
             0x0 => Ok( OOBDataFlag::AuthenticationDataNotPresent ),
             0x1 => Ok( OOBDataFlag::AuthenticationDataFromRemoteDevicePresent ),
-            _   => Err( Error::IncorrectValue )
+            _   => Err( Error::Value)
         }
     }
 }
@@ -150,7 +150,7 @@ impl CommandData for PairingRequest {
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
                     icd[3] as usize
                 } else {
-                    return Err(Error::IncorrectValue)
+                    return Err(Error::Value)
                 },
                 initiator_key_distribution: KeyDistributions::vec_from_val(icd[4]),
                 responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
@@ -264,7 +264,7 @@ impl CommandData for PairingResponse {
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
                     icd[3] as usize
                 } else {
-                    return Err(Error::IncorrectValue)
+                    return Err(Error::Value)
                 },
                 initiator_key_distribution: KeyDistributions::vec_from_val(icd[4]),
                 responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
@@ -505,7 +505,7 @@ impl PairingFailedReason {
             0xc => Ok( PairingFailedReason::NumericComparisonFailed ),
             0xd => Ok( PairingFailedReason::BrEdrPairingInProgress ),
             0xe => Ok( PairingFailedReason::CrossTransportKeyDerivationGenerationNotAllowed ),
-            _   => Err( Error::IncorrectValue )
+            _   => Err( Error::Value)
         }
     }
 }
@@ -677,7 +677,7 @@ impl KeyPressNotification {
             0x2 => Ok( KeyPressNotification::PasskeyDigitErased ),
             0x3 => Ok( KeyPressNotification::PasskeyCleared ),
             0x4 => Ok( KeyPressNotification::PasskeyEntryCompleted ),
-            _   => Err( Error::IncorrectValue )
+            _   => Err( Error::Value)
         }
     }
 }

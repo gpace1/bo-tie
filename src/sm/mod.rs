@@ -38,7 +38,6 @@
 //! For now passkey pairing is not supported. Only Numeric Comparison and Out Of Band are supported
 
 use alloc::vec::Vec;
-use core::future::Future;
 use serde::{Serialize, Deserialize};
 
 use crate::l2cap::ConnectionChannel;
@@ -61,13 +60,22 @@ const SECURITY_MANAGER_L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
 
 #[derive(Debug)]
 pub enum Error {
+    /// Incorrect Size
     Size,
+    /// Incorrect Format
     Format,
-    IncorrectValue,
+    /// Incorrect Value
+    Value,
+    /// Incorrect Security Manager Command
     IncorrectCommand(CommandType),
+    /// Feature is unsupported
     UnsupportedFeature,
+    /// Pairing Failed
     PairingFailed(pairing::PairingFailedReason),
+    /// Encryption Failed
     EncryptionFailed(alloc::boxed::Box<dyn core::fmt::Debug>),
+    /// The operation required encryption, but it is unknown if the connection is encrypted
+    UnknownIfLinkIsEncrypted,
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
@@ -124,7 +132,7 @@ impl CommandType {
             0xc => Ok( CommandType::PairingPublicKey ),
             0xd => Ok( CommandType::PairingDHKeyCheck ),
             0xe => Ok( CommandType::PairingKeyPressNotification ),
-            _   => Err( Error::IncorrectValue )
+            _   => Err( Error::Value)
         }
     }
 }
@@ -600,219 +608,3 @@ impl GetXOfP256Key for [u8;64] {
         x
     }
 }
-
-/// Lazy Encryption
-///
-/// This can be used to encrypt a connection between a master and slave.
-pub struct LazyEncrypt<'a, R, C> {
-    ltk: u128,
-    irk: u128,
-    csrk: u128,
-    peer_irk: Option<u128>,
-    peer_csrk: Option<u128>,
-    connection_channel: &'a C,
-    role: R,
-}
-
-impl<'a, R, C> LazyEncrypt<'a, R, C> where C: ConnectionChannel {
-
-    fn send<Cmd,P>(&self, command: Cmd)
-        where Cmd: Into<Command<P>>,
-              P: CommandData
-    {
-        use crate::l2cap::AclData;
-
-        let acl_data = AclData::new( command.into().into_icd(), SECURITY_MANAGER_L2CAP_CHANNEL_ID);
-
-        self.connection_channel.send((acl_data, L2CAP_LEGACY_MTU));
-    }
-
-    /// Get the Long Term Key
-    ///
-    /// This is the secret key shared between the Master and Slave device use by the cypher for
-    /// encrypting data. If this key is leaked to an unintended party, they will be able to access
-    /// the
-    pub fn get_ltk(&self) -> u128 {
-        self.ltk
-    }
-
-    /// Get the Identity Resolving Key
-    ///
-    /// The Identity Resolving Key is a way to re-connect to a device using a semi-anonymous random
-    /// address.
-    ///
-    /// # Note
-    /// If you wish to send this key to the other party without the help of `LazyEncrypt`, make sure
-    /// the connection is encrypted.
-    pub fn get_irk(&self) -> u128 {
-        self.irk
-    }
-
-    /// Create a new resolvable private address
-    ///
-    /// This will create a new resolvable private address from the generated irk value.
-    pub fn new_rpa(&self) -> crate::BluetoothDeviceAddress {
-
-        let mut addr = crate::BluetoothDeviceAddress::default();
-
-        let mut prand = toolbox::rand_u24();
-
-        // required nonrandom bits of prand see the specification (V. 5.0 | Vol 6, Part B, Section
-        // 1.3.2.2)
-        prand[2] = 0b_0100_0000;
-
-        let hash = toolbox::ah(self.irk, prand);
-
-        addr[..3].copy_from_slice(&hash);
-        addr[3..].copy_from_slice(&prand);
-
-        addr
-    }
-
-    /// Get the Identity Resolving Key of the Peer Device or `None` if the peer has not sent an IRK.
-    pub fn get_peer_irk(&self) -> Option<u128> {
-        self.peer_irk
-    }
-
-    /// Get the Connection Signature Resolving Key
-    ///
-    /// The Connection Signature Resolving Key is used for authentication of data
-    ///
-    /// # Note
-    /// If you wish to send this key to the other party without the help of `LazyEncrypt`, make sure
-    /// the connection is encrypted.
-    pub fn get_csrk(&self) -> u128 {
-        self.csrk
-    }
-
-    /// Get the Connection Signature Resolving Key of the Peer Device or `None` if the peer has not
-    /// sent an CSRK.
-    pub fn get_peer_csrk(&self) -> Option<u128> {
-        self.peer_csrk
-    }
-
-    /// Get the role of the device in the security manager
-    pub fn get_role(&self) -> R where R: Copy {
-        self.role
-    }
-}
-
-impl<'a, C> LazyEncrypt<'a, Master, C> {
-
-    /// Use the Host Controller Interface to start encrypting the Bluetooth LE connection
-    ///
-    /// This returns a future that will setup encryption of the connection channel associated with
-    /// the provided `connection_handle` once it is polled to completion.
-    ///
-    /// Only the AES cypher is considered "encrypted" by this procedure. An error will be returned
-    /// if the controller decides to use the E0 cypher for encryption. A timeout can also be
-    /// provided for waiting on the encryption events to be sent from the controller to the host.
-    ///
-    /// # Note
-    /// This will set the event mask for the Host Controller Interface to the events
-    /// ['DisconnectionComplete'](crate::hci::events::Events::DisconnectionComplete),
-    /// ['EncryptionChange'](crate::hci::events::Events::EncryptionChange),
-    /// and
-    /// ['EncryptionKeyRefreshComplete'](crate::hci::events::Events::EncryptionKeyRefreshComplete),
-    /// These events are needed by the returned future, and can only be masked away once it is
-    /// polled to completion.
-    pub fn hci_le_start_encryption<'z, HCI, D>(
-        self,
-        hci: &'z crate::hci::HostInterface<HCI>,
-        connection_handle: crate::hci::common::ConnectionHandle,
-        encryption_timeout: D,
-    ) -> impl Future<Output=Result<(), Error>> + 'z
-    where HCI: crate::hci::HostControllerInterface + 'static,
-            D: Into<Option<core::time::Duration>> + 'z,
-         <HCI as crate::hci::HostControllerInterface>::ReceiveEventError:  Unpin,
-    {
-        use crate::hci::cb::set_event_mask::EventMask;
-
-        let event_mask = [
-            EventMask::DisconnectionComplete,
-            EventMask::EncryptionChange,
-            EventMask::EncryptionKeyRefreshComplete,
-        ];
-
-        lazy_encrypt::new_lazy_encrypt_master_future(event_mask, self.ltk, hci, connection_handle, encryption_timeout)
-    }
-
-    /// Switch the roll form `Master` to `Slave`
-    ///
-    /// This switches the role flag in `LazyEncrypt`, no actual connection role is change by this
-    /// function. This function should be called when the device changes from the Master to the
-    /// Slave.
-    ///
-    /// # Note
-    /// This is not an inexpensive operation, equivalent (or worse) in performance to a clone
-    /// operation.
-    pub fn switch_role(self) -> LazyEncrypt<'a, Slave, C> {
-        LazyEncrypt {
-            ltk: self.ltk,
-            irk: self.irk,
-            csrk: self.csrk,
-            peer_irk: self.peer_irk,
-            peer_csrk: self.peer_csrk,
-            connection_channel: self.connection_channel,
-            role: Slave,
-        }
-    }
-}
-
-impl<'a, C> LazyEncrypt<'a, Slave, C> {
-
-    /// Switch the roll form `Slave` to `Master`
-    ///
-    /// This switches the role flag in `LazyEncrypt`, no actual connection role is change by this
-    /// function. This function should be called when the device changes from the Slave to the
-    /// Master.
-    ///
-    /// # Note
-    /// This is not an inexpensive operation, equivalent (or worse) in performance to a clone
-    /// operation.
-    pub fn switch_role(self) -> LazyEncrypt<'a, Master, C> {
-        LazyEncrypt {
-            ltk: self.ltk,
-            irk: self.irk,
-            csrk: self.csrk,
-            peer_irk: self.peer_irk,
-            peer_csrk: self.peer_csrk,
-            connection_channel: self.connection_channel,
-            role: Master,
-        }
-    }
-
-    /// Await encryption from the `Master` using the Host Controller Interface
-    ///
-    /// Encryption is started (and changed) by the Master device. The slave device must await for
-    /// the event ['LongTermKeyRequest'](crate::hci::events::LEMeta::LongTermKeyRequest) that is
-    /// sent from the controller to request the LE LTK.
-    pub fn hci_await_encrypt<'z, HCI, D>(
-        &self,
-        hci: &'z crate::hci::HostInterface<HCI>,
-        connection_handle: crate::hci::common::ConnectionHandle,
-        await_timeout: D,
-    ) -> impl Future<Output=Result<(), Error>> + 'z
-    where HCI: crate::hci::HostControllerInterface + 'static,
-            D: Into<Option<core::time::Duration>> + 'z,
-         <HCI as crate::hci::HostControllerInterface>::ReceiveEventError: 'static + Unpin
-    {
-        use crate::hci::cb::set_event_mask::EventMask;
-        use crate::hci::events::LEMeta;
-
-        let event_mask = [ EventMask::LEMeta ];
-        let le_event_mask = [LEMeta::LongTermKeyRequest];
-
-        let mask = (event_mask, le_event_mask);
-
-        lazy_encrypt::new_await_encrypt_slave_future(self.ltk, mask, hci, connection_handle, await_timeout)
-    }
-}
-
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct Master;
-
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct Slave;

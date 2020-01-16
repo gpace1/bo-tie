@@ -136,6 +136,8 @@ impl IdentityInformation {
     pub fn new(irk: u128) -> Self {
         IdentityInformation { irk }
     }
+
+    pub fn get_irk(&self) -> u128 { self.irk }
 }
 
 impl CommandData for IdentityInformation {
@@ -195,7 +197,7 @@ impl CommandData for IdentityAddressInformation {
             let addr_type = match icd[0] {
                 0 => AddressType::Public,
                 1 => AddressType::StaticRandom,
-                _ => return Err( Error::IncorrectValue )
+                _ => return Err( Error::Value)
             };
 
             let mut address = crate::BluetoothDeviceAddress::default();
@@ -229,6 +231,15 @@ impl IdentityAddressInformation {
         Self {
             addr_type: AddressType::StaticRandom,
             address
+        }
+    }
+}
+
+impl From<IdentityAddressInformation> for BluAddr {
+    fn from( iai: IdentityAddressInformation) -> Self {
+        match iai.addr_type {
+            AddressType::Public => BluAddr::Public(iai.address),
+            AddressType::StaticRandom => BluAddr::StaticRandom(iai.address),
         }
     }
 }
@@ -268,8 +279,8 @@ impl CommandData for SigningInformation {
 impl SigningInformation {
     pub fn new(csrk: u128) -> Self { Self { signature_key: csrk } }
 
-    pub fn set_signature_key(&mut self, key: u128) {
-        self.signature_key = key
+    pub fn get_signature_key(&self) -> u128 {
+        self.signature_key
     }
 }
 

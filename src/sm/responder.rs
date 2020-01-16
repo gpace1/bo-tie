@@ -261,9 +261,9 @@ where C: ConnectionChannel,
                 Ok( CommandType::PairingRandom ) => self.p_pairing_random(payload),
                 Ok( CommandType::PairingFailed ) => self.p_pairing_failed(payload),
                 Ok( CommandType::PairingDHKeyCheck ) => self.p_pairing_dh_key_check(payload),
-//                Ok( CommandType::IdentityInformation ) => ,
-//                Ok( CommandType::IdentityAddressInformation ) => ,
-//                Ok( CommandType::SigningInformation ) => ,
+                Ok( CommandType::IdentityInformation ) => self.p_identity_info(payload),
+                Ok( CommandType::IdentityAddressInformation ) => self.p_identity_address_info(payload),
+                Ok( CommandType::SigningInformation ) => self.p_signing_info(payload),
                 Ok( cmd @ CommandType::MasterIdentification ) | // Legacy SM, not supported
                 Ok( cmd @ CommandType::EncryptionInformation ) | // Legacy SM, not supported
                 Ok( cmd ) => self.p_command_not_supported(cmd),
@@ -408,7 +408,7 @@ where C: ConnectionChannel,
             log::trace!("remote public key: {:x?}", remote_public_key.as_ref());
 
             let peer_key = toolbox::PeerKey::try_from_icd(&remote_public_key)
-                .or(Err(super::Error::IncorrectValue))?;
+                .or(Err(super::Error::Value))?;
 
             let secret_key = pairing_data.private_key.take().expect("Secret key must exist");
 
@@ -440,7 +440,7 @@ where C: ConnectionChannel,
                     log::error!("(SM) Secret Key failed, '{:?}'", e);
 
                     self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-                    Err(Error::IncorrectValue)
+                    Err(Error::Value)
                 }
             }
 
@@ -660,6 +660,111 @@ where C: ConnectionChannel,
 
                 Err(Error::UnsupportedFeature)
             }
+        }
+    }
+
+    fn p_identity_info(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
+        log::trace!("(SM) Processing peer IRK");
+
+        let identity_info = match encrypt_info::IdentityInformation::try_from_icd(payload) {
+            Ok(ii) => ii,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(e)
+            }
+        };
+
+        if self.link_encrypted {
+            match self.pairing_data {
+                Some(PairingData {
+                    db_key: Some(ref mut db_key),
+                    ..
+                }) => {
+                    db_key.peer_irk = Some(identity_info.get_irk());
+
+                    Ok(Some(db_key))
+                },
+                _ => {
+                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                }
+            }
+        } else {
+            self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+            return Err(Error::UnknownIfLinkIsEncrypted)
+        }
+    }
+
+    fn p_identity_address_info(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
+        log::trace!("(SM) Processing peer IRK");
+
+        let identity_addr_info = match encrypt_info::IdentityAddressInformation::try_from_icd(payload) {
+            Ok(iai) => iai,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(e)
+            }
+        };
+
+        if self.link_encrypted {
+            match self.pairing_data {
+                Some(PairingData {
+                    db_key: Some(ref mut db_key),
+                    ..
+                }) => {
+                    db_key.peer_addr = Some(identity_addr_info.into());
+
+                    Ok(Some(db_key))
+                }
+                _ => {
+                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                }
+            }
+        } else {
+            self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+            return Err(Error::UnknownIfLinkIsEncrypted)
+        }
+    }
+
+    fn p_signing_info(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
+        log::trace!("(SM) Processing peer IRK");
+
+        let signing_info = match encrypt_info::SigningInformation::try_from_icd(payload) {
+            Ok(si) => si,
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                return Err(e)
+            }
+        };
+
+        if self.link_encrypted {
+            match self.pairing_data {
+                Some(PairingData {
+                    db_key: Some(ref mut db_key),
+                    ..
+                }) => {
+                    db_key.peer_csrk = Some((signing_info.get_signature_key(), 0));
+
+                    Ok(Some(db_key))
+                }
+                _ => {
+                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                }
+            }
+        } else {
+            self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+            return Err(Error::UnknownIfLinkIsEncrypted)
         }
     }
 }
