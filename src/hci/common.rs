@@ -139,12 +139,12 @@ impl ConnectionInterval {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LEAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
     PublicIdentityAddress,
-    RandomdIdentityAddress,
+    RandomIdentityAddress,
 }
 
 impl LEAddressType {
@@ -153,7 +153,7 @@ impl LEAddressType {
             0x00 => LEAddressType::PublicDeviceAddress,
             0x01 => LEAddressType::RandomDeviceAddress,
             0x02 => LEAddressType::PublicIdentityAddress,
-            0x03 => LEAddressType::RandomdIdentityAddress,
+            0x03 => LEAddressType::RandomIdentityAddress,
             _    => panic!("Unknown {}"),
         }
     }
@@ -163,7 +163,7 @@ impl LEAddressType {
             LEAddressType::PublicDeviceAddress => 0x0,
             LEAddressType::RandomDeviceAddress => 0x1,
             LEAddressType::PublicIdentityAddress => 0x2,
-            LEAddressType::RandomdIdentityAddress => 0x3,
+            LEAddressType::RandomIdentityAddress => 0x3,
         }
     }
 }

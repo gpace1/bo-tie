@@ -2722,7 +2722,7 @@ impl LEEnhancedConnectionCompleteData {
             () => {{
                 let bdaddr = chew_baddr!(packet);
                 if match peer_address_type {
-                    LEAddressType::PublicIdentityAddress | LEAddressType::RandomdIdentityAddress => true,
+                    LEAddressType::PublicIdentityAddress | LEAddressType::RandomIdentityAddress => true,
                     _ => false
                 } {
                     Some(bdaddr)
