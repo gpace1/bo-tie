@@ -539,13 +539,6 @@ impl<T> ::core::default::Default for HostInterface<T> where T: Default {
 impl<I> HostInterface<I>
 where I: HostControllerInterface
 {
-    /// Get the native interface to the Bluetooth HCI
-    ///
-    /// This is the same interface that was used to create this HostInterface instance.
-    pub fn get_native_interface(&self) -> &I {
-        &self.interface
-    }
-
     /// Send a command to the controller
     ///
     /// The command data will be used in the command packet to determine what HCI command is sent
@@ -756,13 +749,13 @@ impl<'a,I> core::ops::Drop for LeAclHciChannel<'a,I> where I: HciAclDataInterfac
 
 impl<I> HostInterface<I> where I: HciAclDataInterface {
 
-    /// Make an ACL data connection channel
+    /// Create a new connection-oriented data channel
     ///
     /// Make a connection channel for the provided connection handle.
-    pub fn new_le_acl_connection_channel<'a>(&'a self, connection_event_data: &events::LEConnectionCompleteData)
-        -> impl crate::l2cap::ConnectionChannel + 'a
+    pub fn new_connection_channel<'a>(&'a self, connection_handle: common::ConnectionHandle)
+    -> impl crate::l2cap::ConnectionChannel + 'a
     {
-        LeAclHciChannel::new(self, connection_event_data.connection_handle.clone())
+        LeAclHciChannel::new(self, connection_handle)
     }
 }
 
