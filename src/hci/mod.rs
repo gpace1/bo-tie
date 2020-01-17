@@ -762,6 +762,7 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
 /// For commands that only return a status
 macro_rules! impl_status_return {
     ($command:expr) => {
+        #[doc(hidden)]
         pub struct Return;
 
         impl Return {

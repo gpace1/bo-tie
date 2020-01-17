@@ -5,7 +5,7 @@
 //! process.
 //!
 //! # Note
-//! In order to exit this example, a signal (ctrl-c) needs to be sent.
+//! In order to exit this example, a signal (ctrl-c) needs to be sent. Also
 
 use bo_tie::hci;
 use futures::lock::Mutex;
@@ -564,6 +564,26 @@ impl Bonder {
         }
     }
 
+    async fn remove_bonding_info(&self) {
+        use hci::le::privacy::remove_device_from_resolving_list::{send, Parameter};
+        use hci::le::privacy::PeerIdentityAddressType;
+
+        if let ( _, _, Some((peer_addr_is_pub, peer_addr)) ) = self.privacy_info.lock().await.clone() {
+            let pram = Parameter {
+                identity_address_type: if peer_addr_is_pub {
+                        PeerIdentityAddressType::PublicIdentityAddress
+                    } else {
+                        PeerIdentityAddressType::RandomStaticIdentityAddress
+                    },
+                peer_identity_address: peer_addr
+            };
+
+            if let Err(e) = send(&self.hi, pram).await {
+                log::debug!("Failed to remove bonding info: {:?}", e);
+            }
+        }
+    }
+
     fn setup_signal_handle(self)
     {
         use hci::le::transmitter::set_advertising_enable;
@@ -577,6 +597,8 @@ impl Bonder {
                 }
 
                 futures::executor::block_on(self.disconnect());
+
+                futures::executor::block_on(self.remove_bonding_info());
 
                 println!("Exiting example");
 
