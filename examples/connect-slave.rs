@@ -209,7 +209,7 @@ fn main() {
 
             std::thread::spawn( move || {
 
-                let connection_channel = interface_clone.new_le_acl_connection_channel(&event_data);
+                let connection_channel = interface_clone.new_connection_channel(event_data.connection_handle);
 
                 att_server_loop(connection_channel, local_name);
             });
