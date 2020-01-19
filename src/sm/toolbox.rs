@@ -216,7 +216,7 @@ pub fn s1(k: u128, r1: u128, r2: u128) -> u128 {
 ///   arbitrary bit of the passkey for device A. The value of rai can be either 0x80 or 0x81.
 /// * rbi (see rai)
 ///
-/// # Models Numeric Comparison or Just Works
+/// # Models **Numeric Comparison** or **Just Works**
 ///
 /// ## Calculation of *Ca*
 /// * u = PKax
@@ -230,7 +230,7 @@ pub fn s1(k: u128, r1: u128, r2: u128) -> u128 {
 /// * x = Nb
 /// * z = 0
 ///
-/// # Model Out-Of-Band
+/// # Model **Out-Of-Band**
 ///
 /// ## Calculation of *Ca*
 /// * u = PKax
@@ -244,7 +244,7 @@ pub fn s1(k: u128, r1: u128, r2: u128) -> u128 {
 /// * x = rb
 /// * z = 0
 ///
-/// # Model Passkey Entry
+/// # Model **Passkey Entry**
 ///
 /// ## Calculation of *Cai*
 /// * u = PKax
@@ -252,7 +252,7 @@ pub fn s1(k: u128, r1: u128, r2: u128) -> u128 {
 /// * x = Nai
 /// * z = rai
 ///
-/// ## Caluclation of *Cbi*
+/// ## Calculation of *Cbi*
 /// * u = PKbx
 /// * v = PKax
 /// * x = Nbi
@@ -288,7 +288,7 @@ pub fn f4(u: [u8; 32], v: [u8; 32], x: u128, z: u8) -> u128 {
 ///       random address.
 ///
 /// The returned value is ( MacKey , LTK )
-pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: [u8; 7], a2: [u8; 7]) -> (u128, u128) {
+pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddress) -> (u128, u128) {
 
     const SALT: u128 = 0x6C888391_AAF5A538_60370BDB_5A6083BE;
 
@@ -317,9 +317,9 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: [u8; 7], a2: [u8; 7]) -> (u128, u
 
         m[21..37].copy_from_slice(&n2_bytes_be);
 
-        m[37..44].copy_from_slice(&a1);
+        m[37..44].copy_from_slice(&a1.0);
 
-        m[44..51].copy_from_slice(&a2);
+        m[44..51].copy_from_slice(&a2.0);
 
         m[51..53].copy_from_slice(&length);
 
@@ -417,7 +417,7 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: [u8; 7], a2: [u8; 7]) -> (u128, u
 /// * io_cap = IOcapB
 /// * a1 = B
 /// * a2 = A
-pub fn f6(w: u128, n1: u128, n2: u128, r: u128, io_cap: [u8; 3], a1: [u8; 7], a2: [u8; 7]) -> u128 {
+pub fn f6(w: u128, n1: u128, n2: u128, r: u128, io_cap: [u8; 3], a1: PairingAddress, a2: PairingAddress) -> u128 {
 
     let mut m = [0u8; 65];
 
@@ -425,8 +425,8 @@ pub fn f6(w: u128, n1: u128, n2: u128, r: u128, io_cap: [u8; 3], a1: [u8; 7], a2
     m[16..32].copy_from_slice(&n2.to_be_bytes());
     m[32..48].copy_from_slice(&r.to_be_bytes());
     m[48..51].copy_from_slice(&io_cap);
-    m[51..58].copy_from_slice(&a1);
-    m[58..65].copy_from_slice(&a2);
+    m[51..58].copy_from_slice(&a1.0);
+    m[58..65].copy_from_slice(&a2.0);
 
     aes_cmac_generate(w, &m)
 }
@@ -622,6 +622,25 @@ pub fn rand_u128() -> u128 {
 /// Generate the nonce u128 values
 pub fn nonce() -> u128 {
     rand_u128()
+}
+
+/// A structure used to create the address structures used in pairing function [`f5`] and [`f6`]
+#[derive(Clone, Debug)]
+pub struct PairingAddress([u8;7]);
+
+impl PairingAddress {
+    pub fn new(addr: &crate::BluetoothDeviceAddress, is_pub_address: bool) -> Self {
+        let init_byte: u8 = if is_pub_address {0} else {1};
+
+        let mut p_addr = [0, 0, 0, 0, 0, 0, init_byte];
+
+        p_addr[..6].copy_from_slice(addr);
+
+        // Reverse to put the two address information in the correct byte order
+        p_addr.reverse();
+
+        PairingAddress(p_addr)
+    }
 }
 
 /// Tests

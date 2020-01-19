@@ -117,6 +117,7 @@ impl KeyDistributions {
 
 const MAX_ENCRYPTION_SIZE_RANGE: core::ops::RangeInclusive<usize> = 7..=16;
 
+#[derive(Clone)]
 pub struct PairingRequest {
     io_capability: IOCapability,
     oob_data_flag: OOBDataFlag,
@@ -165,6 +166,25 @@ impl CommandData for PairingRequest {
 }
 
 impl PairingRequest {
+
+    pub fn new(
+        io_capability: IOCapability,
+        oob_data_flag: OOBDataFlag,
+        auth_req: Vec<AuthRequirements>,
+        max_encryption_size: usize,
+        initiator_key_distribution: Vec<KeyDistributions>,
+        responder_key_distribution: Vec<KeyDistributions>
+    ) -> Self {
+        Self {
+            io_cap_f6: convert_io_cap(&auth_req, oob_data_flag, io_capability),
+            io_capability,
+            oob_data_flag,
+            auth_req,
+            max_encryption_size,
+            initiator_key_distribution,
+            responder_key_distribution,
+        }
+    }
 
     pub fn get_io_capability(&self) -> IOCapability { self.io_capability }
 
