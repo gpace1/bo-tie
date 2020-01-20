@@ -171,15 +171,15 @@ pub struct Multiple<T: ?Sized> {
 }
 
 #[derive(Clone)]
-pub enum PageScanRepitionMode {
+pub enum PageScanRepetitionMode {
     R0,
     R1,
     R2,
 }
 
-impl PageScanRepitionMode {
+impl PageScanRepetitionMode {
     fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
-        use self::PageScanRepitionMode::*;
+        use self::PageScanRepetitionMode::*;
 
         match raw {
             0x00 => Ok(R0),
@@ -340,7 +340,7 @@ impl_try_from_for_raw_packet!{
 #[derive(Clone)]
 pub struct InquiryResultData {
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub page_scan_repition_mode: PageScanRepitionMode,
+    pub page_scan_repition_mode: PageScanRepetitionMode,
     pub class_of_device: ClassOfDevice,
     pub clock_offset: u16,
 }
@@ -359,7 +359,7 @@ impl_try_from_for_raw_packet!{
                         Ok(InquiryResultData {
                             bluetooth_address: chew_baddr!(chunk),
 
-                            page_scan_repition_mode: PageScanRepitionMode::try_from(chew!(chunk))?,
+                            page_scan_repition_mode: PageScanRepetitionMode::try_from(chew!(chunk))?,
 
                             class_of_device: ClassOfDevice::from({
                                 let mut class_of_device = [0u8;3];
@@ -1373,18 +1373,18 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct PageScanRepitionModeChangeData {
+pub struct PageScanRepetitionModeChangeData {
     bluetooth_address: BluetoothDeviceAddress,
-    page_scan_repition_mode: PageScanRepitionMode,
+    page_scan_repition_mode: PageScanRepetitionMode,
 }
 
 impl_try_from_for_raw_packet! {
-    PageScanRepitionModeChangeData,
+    PageScanRepetitionModeChangeData,
     packet,
     {
-        Ok(PageScanRepitionModeChangeData {
+        Ok(PageScanRepetitionModeChangeData {
             bluetooth_address: chew_baddr!(packet,0),
-            page_scan_repition_mode: PageScanRepitionMode::try_from(chew!(packet))?,
+            page_scan_repition_mode: PageScanRepetitionMode::try_from(chew!(packet))?,
         })
     }
 }
@@ -1439,7 +1439,7 @@ impl_try_from_for_raw_packet! {
 #[derive(Clone)]
 pub struct InquiryResultWithRSSIData {
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub page_scan_repition_mode: PageScanRepitionMode,
+    pub page_scan_repition_mode: PageScanRepetitionMode,
     pub class_of_device: ClassOfDevice,
     pub clock_offset: u32,
     pub rssi: i8,
@@ -1456,7 +1456,7 @@ impl_try_from_for_raw_packet! {
                 .map( |mut chunk| {
                     Ok(InquiryResultWithRSSIData {
                         bluetooth_address: chew_baddr!(chunk),
-                        page_scan_repition_mode: PageScanRepitionMode::try_from(chew!(chunk))?,
+                        page_scan_repition_mode: PageScanRepetitionMode::try_from(chew!(chunk))?,
                         class_of_device: ClassOfDevice::from({
                             let mut class = [0u8;3];
                             class.copy_from_slice(chew!(chunk,3));
@@ -1616,7 +1616,7 @@ impl_try_from_for_raw_packet! {
 #[derive(Clone)]
 pub struct ExtendedInquiryResultData {
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub page_scan_repition_mode: PageScanRepitionMode,
+    pub page_scan_repition_mode: PageScanRepetitionMode,
     pub class_of_device: ClassOfDevice,
     pub clock_offset: u32,
     pub rssi: i8,
@@ -1629,7 +1629,7 @@ impl_try_from_for_raw_packet! {
     {
         Ok(ExtendedInquiryResultData {
             bluetooth_address: chew_baddr!(packet),
-            page_scan_repition_mode: PageScanRepitionMode::try_from(chew!(packet))?,
+            page_scan_repition_mode: PageScanRepetitionMode::try_from(chew!(packet))?,
             class_of_device: ClassOfDevice::from({
                 let mut class = [0u8;3];
                 class.copy_from_slice(chew!(packet,3));
@@ -2372,7 +2372,7 @@ impl LEConnectionCompleteData {
 }
 
 #[derive(Clone)]
-pub enum LEEventType {
+pub enum LEAdvEventType {
     ConnectableAndScannableUndirectedAdvertising,
     ConnectableDirectedAdvertising,
     ScannableUndirectedAdvertising,
@@ -2380,14 +2380,14 @@ pub enum LEEventType {
     ScanResponse,
 }
 
-impl LEEventType {
+impl LEAdvEventType {
     fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(LEEventType::ConnectableAndScannableUndirectedAdvertising),
-            0x01 => Ok(LEEventType::ConnectableDirectedAdvertising),
-            0x02 => Ok(LEEventType::ScannableUndirectedAdvertising),
-            0x03 => Ok(LEEventType::NonConnectableUndirectedAdvertising),
-            0x04 => Ok(LEEventType::ScanResponse),
+            0x00 => Ok(LEAdvEventType::ConnectableAndScannableUndirectedAdvertising),
+            0x01 => Ok(LEAdvEventType::ConnectableDirectedAdvertising),
+            0x02 => Ok(LEAdvEventType::ScannableUndirectedAdvertising),
+            0x03 => Ok(LEAdvEventType::NonConnectableUndirectedAdvertising),
+            0x04 => Ok(LEAdvEventType::ScanResponse),
             _    => Err(alloc::format!("Unknown LE Event Type: {}", raw)),
         }
     }
@@ -2433,7 +2433,7 @@ impl<'a> core::iter::Iterator for ReportDataIter<'a> {
 
 #[derive(Clone)]
 pub struct LEAdvertisingReportData {
-    pub event_type: LEEventType,
+    pub event_type: LEAdvEventType,
     pub address_type: LEAddressType,
     pub address: BluetoothDeviceAddress,
     pub data: BufferType<[u8]>,
@@ -2460,7 +2460,7 @@ impl LEAdvertisingReportData {
         for _ in 0..reports.capacity() {
             // packet[index + 8] is the data length value as given by the controller
             reports.push(
-                match LEEventType::try_from(chew!(packet)) {
+                match LEAdvEventType::try_from(chew!(packet)) {
                     Ok(e_type) => Ok(LEAdvertisingReportData {
                             event_type: e_type,
                             address_type: LEAddressType::from(chew!(packet)),
@@ -3640,7 +3640,7 @@ events_markup! {
         ReadClockOffsetComplete{ReadClockOffsetCompleteData} -> 0x1C,
         ConnectionPacketTypeChanged{ConnectionPacketTypeChangedData} -> 0x1D,
         QoSViolation{QoSViolationData} -> 0x1E,
-        PageScanRepitionModeChange{PageScanRepitionModeChangeData} -> 0x20,
+        PageScanRepetitionModeChange{PageScanRepetitionModeChangeData} -> 0x20,
         FlowSpecificationComplete{FlowSpecificationCompleteData} -> 0x21,
         InquiryResultWithRSSI{Multiple<[Result<InquiryResultWithRSSIData,alloc::string::String>]>} -> 0x22,
         ReadRemoteExtendedFeaturesComplete{ReadRemoteExtendedFeaturesCompleteData} -> 0x23,
