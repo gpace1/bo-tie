@@ -66,6 +66,23 @@ macro_rules! make_handle {
         ConnectionHandle::try_from(make_u16!($packet,$start)).unwrap()
     }
 }
+
+struct RawData<'a> {
+    raw_data: &'a [u8]
+}
+
+impl<'a> From<&'a [u8]> for RawData<'a> {
+    fn from(raw_data: &'a [u8]) -> Self {
+        Self { raw_data }
+    }
+}
+
+impl core::convert::AsRef<[u8]> for RawData<'_> {
+    fn as_ref(&self) -> &[u8] {
+        self.raw_data
+    }
+}
+
 /// Create from implementation for $name
 ///
 /// The parameter name for the from method is "raw" and its type is &[u8].
@@ -75,10 +92,10 @@ macro_rules! impl_try_from_for_raw_packet {
 
         #[allow(unused_assignments)]
         #[allow(unused_mut)]
-        impl<'a> core::convert::TryFrom<&'a [u8]> for $name {
+        impl core::convert::TryFrom<RawData<'_>> for $name {
             type Error = alloc::string::String;
-            fn try_from( param: &'a [u8] ) -> Result<Self, Self::Error> {
-                let mut $param = param;
+            fn try_from( param: RawData<'_> ) -> Result<Self, Self::Error> {
+                let mut $param = param.as_ref();
                 $inner
             }
         }
@@ -163,11 +180,17 @@ macro_rules! chew_handle {
     ($packet:ident) => { chew_handle!($packet,0)};
 }
 
-type BufferType<T> = ::alloc::boxed::Box<T>;
+type BufferType<T> = alloc::vec::Vec<T>;
 
 #[derive(Clone)]
-pub struct Multiple<T: ?Sized> {
+pub struct Multiple<T>{
     data: BufferType<T>
+}
+
+impl<T,C> From<C> for Multiple<T> where C: Into<BufferType<T>>{
+    fn from(c: C) -> Self {
+        Multiple { data: c.into() }
+    }
 }
 
 #[derive(Clone)]
@@ -282,7 +305,7 @@ impl EncryptionEnabled {
 impl From<u8> for EncryptionEnabled {
     fn from(raw: u8) -> Self {
         EncryptionEnabled {
-            raw: raw,
+            raw,
         }
     }
 }
@@ -340,26 +363,27 @@ impl_try_from_for_raw_packet!{
 #[derive(Clone)]
 pub struct InquiryResultData {
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub page_scan_repition_mode: PageScanRepetitionMode,
+    pub page_scan_repetition_mode: PageScanRepetitionMode,
     pub class_of_device: ClassOfDevice,
     pub clock_offset: u16,
 }
 
 impl_try_from_for_raw_packet!{
-    Multiple<[Result<InquiryResultData, alloc::string::String>]>,
+    Multiple<Result<InquiryResultData, alloc::string::String>>,
     packet,
     {
         Ok(Multiple {
             data: {
-                // The size of a single Inquiry Result in the event packet is 14 bytes
-                // Also the first byte (which would give the total )
+                // The size of a each Inquiry Result in the event packet is 14 bytes.
+                // Inquiry results start after the first byte (which would give the total number of
+                // inquiry results).
                 let mut vec = packet[1..].chunks_exact( 14 )
                     .map(|mut chunk| {
 
                         Ok(InquiryResultData {
                             bluetooth_address: chew_baddr!(chunk),
 
-                            page_scan_repition_mode: PageScanRepetitionMode::try_from(chew!(chunk))?,
+                            page_scan_repetition_mode: PageScanRepetitionMode::try_from(chew!(chunk))?,
 
                             class_of_device: ClassOfDevice::from({
                                 let mut class_of_device = [0u8;3];
@@ -374,7 +398,7 @@ impl_try_from_for_raw_packet!{
 
                 vec.truncate(packet[0] as usize);
 
-                vec.into_boxed_slice()
+                vec
             },
         })
     }
@@ -712,7 +736,7 @@ pub struct CommandCompleteData {
     pub number_of_hci_command_packets: u8,
     pub command_opcode: Option<u16>,
     /// only public for hci
-    pub(super) raw_data: BufferType<[u8]>,
+    pub(super) raw_data: BufferType<u8>,
 }
 
 /// Implement GetDataForCommand
@@ -837,10 +861,10 @@ impl_try_from_for_raw_packet! {
                 if opcode_exists { Some(opcode) } else { None }
             },
             raw_data: if opcode_exists {
-                packet.to_vec().into_boxed_slice()
+                packet.to_vec()
             }
             else {
-                BufferType::new([])
+                BufferType::new()
             },
         })
     }
@@ -943,7 +967,7 @@ pub struct NumberOfCompletedPacketsData {
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<[NumberOfCompletedPacketsData]>,
+    Multiple<NumberOfCompletedPacketsData>,
     packet,
     {
         Ok(Multiple {
@@ -959,7 +983,7 @@ impl_try_from_for_raw_packet! {
                 })
                 .collect::<alloc::vec::Vec<NumberOfCompletedPacketsData>>();
                 vec.truncate(packet[0] as usize);
-                vec.into_boxed_slice()
+                vec
             },
         })
     }
@@ -1046,7 +1070,7 @@ pub struct ReturnLinkKeysData {
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<[ReturnLinkKeysData]>,
+    Multiple<ReturnLinkKeysData>,
     packet,
     {
         Ok(Multiple {
@@ -1062,7 +1086,7 @@ impl_try_from_for_raw_packet! {
                 })
                 .collect::<alloc::vec::Vec<ReturnLinkKeysData>>();
                 vec.truncate(packet[0] as usize);
-                vec.into_boxed_slice()
+                vec
             },
         })
     }
@@ -1156,7 +1180,7 @@ impl_try_from_for_raw_packet! {
 #[derive(Clone)]
 pub struct LoopbackCommandData {
     opcode: u16,
-    hci_command_packet: BufferType<[u8]>,
+    hci_command_packet: BufferType<u8>,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1165,7 +1189,7 @@ impl_try_from_for_raw_packet! {
     {
         Ok(LoopbackCommandData {
             opcode: chew_u16!(packet),
-            hci_command_packet: packet.to_vec().into_boxed_slice(),
+            hci_command_packet: packet.to_vec(),
         })
     }
 }
@@ -1446,7 +1470,7 @@ pub struct InquiryResultWithRSSIData {
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<[Result<InquiryResultWithRSSIData, alloc::string::String>]>,
+    Multiple<Result<InquiryResultWithRSSIData, alloc::string::String>>,
     packet,
     {
         Ok(Multiple {
@@ -1468,7 +1492,7 @@ impl_try_from_for_raw_packet! {
                 })
                 .collect::<alloc::vec::Vec<Result<InquiryResultWithRSSIData, alloc::string::String>>>();
                 vec.truncate(packet[0] as usize);
-                vec.into_boxed_slice()
+                vec
             }
         })
     }
@@ -2123,7 +2147,7 @@ pub struct CompletedDataPacketsAndBlocks {
 #[derive(Clone)]
 pub struct NumberOfCompletedDataBlocksData {
     pub total_data_blocks: ControllerBlocks,
-    pub completed_packets_and_blocks: BufferType<[CompletedDataPacketsAndBlocks]>,
+    pub completed_packets_and_blocks: BufferType<CompletedDataPacketsAndBlocks>,
 }
 
 impl_try_from_for_raw_packet! {
@@ -2144,7 +2168,7 @@ impl_try_from_for_raw_packet! {
                 })
                 .collect::<alloc::vec::Vec<CompletedDataPacketsAndBlocks>>();
                 vec.truncate(handle_cnt);
-                vec.into_boxed_slice()
+                vec
             }
         })
     }
@@ -2436,20 +2460,20 @@ pub struct LEAdvertisingReportData {
     pub event_type: LEAdvEventType,
     pub address_type: LEAddressType,
     pub address: BluetoothDeviceAddress,
-    pub data: BufferType<[u8]>,
+    pub data: alloc::vec::Vec<u8>,
     /// If rssi is None, the the value isn't available
     pub rssi: Option<i8>,
 }
 
 impl LEAdvertisingReportData {
 
-    pub fn data_iter<'a>(&'a self) -> ReportDataIter<'a> {
+    pub fn data_iter(&self) -> ReportDataIter<'_> {
         ReportDataIter {
             data: &self.data,
         }
     }
 
-    fn buf_from(data: &[u8]) -> BufferType<[Result<Self, alloc::string::String>]> {
+    fn buf_from(data: &[u8]) -> BufferType<Result<Self, alloc::string::String>> {
         let mut packet = data;
 
         // The value of 127 indicates no rssi functionality
@@ -2467,7 +2491,7 @@ impl LEAdvertisingReportData {
                             address: chew_baddr!(packet),
                             data: {
                                 let size = chew!(packet);
-                                chew!(packet, size).to_vec().into_boxed_slice()
+                                chew!(packet, size).to_vec()
                             },
                             rssi: get_rssi(chew!(packet)),
                         }),
@@ -2476,7 +2500,7 @@ impl LEAdvertisingReportData {
             );
         }
 
-        reports.into_boxed_slice()
+        reports
     }
 }
 
@@ -2800,7 +2824,7 @@ pub struct LEDirectedAdvertisingReportData {
 
 impl LEDirectedAdvertisingReportData {
     #[allow(unused_assignments)]
-    fn buf_from( data: &[u8] ) -> BufferType<[Result<Self, alloc::string::String>]> {
+    fn buf_from( data: &[u8] ) -> BufferType<Result<Self, alloc::string::String>> {
         let mut packet = data;
 
         let report_count = chew!(packet) as usize;
@@ -2824,7 +2848,7 @@ impl LEDirectedAdvertisingReportData {
 
         vec.truncate(report_count);
 
-        vec.into_boxed_slice()
+        vec
     }
 }
 
@@ -3005,7 +3029,7 @@ pub struct LEExtendedAdvertisingReportData {
 }
 
 impl LEExtendedAdvertisingReportData {
-    fn buf_from( data: &[u8] ) -> BufferType<[Result<LEExtendedAdvertisingReportData, alloc::string::String>]> {
+    fn buf_from( data: &[u8] ) -> BufferType<Result<LEExtendedAdvertisingReportData, alloc::string::String>> {
         let mut packet = data;
 
         let mut reports =alloc::vec::Vec::with_capacity(chew!(packet) as usize);
@@ -3090,7 +3114,7 @@ impl LEExtendedAdvertisingReportData {
             reports.push( process_packet() );
         }
 
-        reports.into_boxed_slice()
+        reports
     }
 }
 
@@ -3130,7 +3154,7 @@ pub struct LEPeriodicAdvertisingReportData {
     pub tx_power: Option<i8>,
     pub rssi: Option<i8>,
     pub data_status: LEDataStatus,
-    pub data: BufferType<[u8]>,
+    pub data: BufferType<u8>,
 }
 
 impl LEPeriodicAdvertisingReportData {
@@ -3158,7 +3182,7 @@ impl LEPeriodicAdvertisingReportData {
             data_status: LEDataStatus::try_from(chew!(packet,1,1)[0])?,
             data: {
                 let len = chew!(packet) as usize;
-                packet[..len].to_vec().into_boxed_slice()
+                packet[..len].to_vec()
             }
         })
     }
@@ -3278,7 +3302,7 @@ enumerate_split! {
     #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
     pub enum LEMeta ( #[derive(Clone)] enum LEMetaData ) {
         ConnectionComplete{LEConnectionCompleteData},
-        AdvertisingReport{BufferType<[Result<LEAdvertisingReportData, alloc::string::String>]>},
+        AdvertisingReport{BufferType<Result<LEAdvertisingReportData, alloc::string::String>>},
         ConnectionUpdateComplete{LEConnectionUpdateCompleteData},
         ReadRemoteFeaturesComplete{LEReadRemoteFeaturesCompleteData},
         LongTermKeyRequest{LELongTermKeyRequestData},
@@ -3287,9 +3311,9 @@ enumerate_split! {
         ReadLocalP256PublicKeyComplete{LEReadLocalP256PublicKeyCompleteData},
         GenerateDHKeyComplete{LEGenerateDHKeyCompleteData},
         EnhancedConnectionComplete{LEEnhancedConnectionCompleteData},
-        DirectedAdvertisingReport{BufferType<[Result<LEDirectedAdvertisingReportData, alloc::string::String>]>},
+        DirectedAdvertisingReport{BufferType<Result<LEDirectedAdvertisingReportData, alloc::string::String>>},
         PHYUpdateComplete{LEPHYUpdateCompleteData},
-        ExtendedAdvertisingReport{BufferType<[Result<LEExtendedAdvertisingReportData, alloc::string::String>]>},
+        ExtendedAdvertisingReport{BufferType<Result<LEExtendedAdvertisingReportData, alloc::string::String>>},
         PeriodicAdvertisingSyncEstablished{LEPeriodicAdvertisingSyncEstablishedData},
         PeriodicAdvertisingReport{LEPeriodicAdvertisingReportData},
         PeriodicAdvertisingSyncLost{LEPeriodicAdvertisingSyncLostData},
@@ -3591,7 +3615,7 @@ macro_rules! events_markup {
                 match event_code {
                     $( Ok(crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )*) =>
                         Ok(crate::hci::events::$EnumDataName::$name(
-                            crate::hci::events::$data::<$( $type ),*>::try_from(&packet[..event_len])?)),
+                            crate::hci::events::$data::<$( $type ),*>::try_from( RawData::from(&packet[..event_len]) )?)),
                     )*
                     Err(err) => Err(err),
                 }
@@ -3611,7 +3635,7 @@ macro_rules! events_markup {
 events_markup! {
     pub enum Events(EventsData) {
         InquiryComplete{InquiryCompleteData} -> 0x01,
-        InquiryResult{Multiple<[Result<InquiryResultData,alloc::string::String>]>} -> 0x02,
+        InquiryResult{Multiple<Result<InquiryResultData,alloc::string::String>>} -> 0x02,
         ConnectionComplete{ConnectionCompleteData} -> 0x03,
         ConnectionRequest{ConnectionRequestData} -> 0x04,
         DisconnectionComplete{DisconnectionCompleteData} -> 0x05,
@@ -3628,9 +3652,9 @@ events_markup! {
         HardwareError{HardwareErrorData} -> 0x10,
         FlushOccured{FlushOccuredData} -> 0x11,
         RoleChange{RoleChangeData} -> 0x12,
-        NumberOfCompletedPackets{Multiple<[NumberOfCompletedPacketsData]>} -> 0x13,
+        NumberOfCompletedPackets{Multiple<NumberOfCompletedPacketsData>} -> 0x13,
         ModeChange{ModeChangeData} -> 0x14,
-        ReturnLinkKeys{Multiple<[ReturnLinkKeysData]>} -> 0x15,
+        ReturnLinkKeys{Multiple<ReturnLinkKeysData>} -> 0x15,
         PINCodeRequest{PINCodeRequestData} -> 0x16,
         LinkKeyRequest{LinkKeyRequestData} -> 0x17,
         LinkKeyNotification{LinkKeyNotificationData} -> 0x18,
@@ -3642,7 +3666,7 @@ events_markup! {
         QoSViolation{QoSViolationData} -> 0x1E,
         PageScanRepetitionModeChange{PageScanRepetitionModeChangeData} -> 0x20,
         FlowSpecificationComplete{FlowSpecificationCompleteData} -> 0x21,
-        InquiryResultWithRSSI{Multiple<[Result<InquiryResultWithRSSIData,alloc::string::String>]>} -> 0x22,
+        InquiryResultWithRSSI{Multiple<Result<InquiryResultWithRSSIData,alloc::string::String>>} -> 0x22,
         ReadRemoteExtendedFeaturesComplete{ReadRemoteExtendedFeaturesCompleteData} -> 0x23,
         SynchronousConnectionComplete{SynchronousConnectionCompleteData} -> 0x2C,
         SynchronousConnectionChanged{SynchronousConnectionChangedData} -> 0x2D,
