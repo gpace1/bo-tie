@@ -2371,7 +2371,7 @@ impl LEConnectionCompleteData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LEAdvEventType {
     ConnectableAndScannableUndirectedAdvertising,
     ConnectableDirectedAdvertising,

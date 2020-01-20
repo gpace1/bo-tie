@@ -7,10 +7,9 @@ async fn start_scanning_for_addr(
     addr: &bo_tie::BluetoothDeviceAddress,
 ) {
     use bo_tie::hci::cb::set_event_mask::{self,EventMask};
-    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData};
+    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData, LEAdvEventType};
     use bo_tie::hci::le::receiver::{set_scan_parameters,set_scan_enable};
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
-    use bo_tie::hci::events::LEEventType;
 
     set_scan_enable::send(hi, false, false).await.unwrap();
 
