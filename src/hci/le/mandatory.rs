@@ -6,11 +6,11 @@
 //! Vol2 Part E 3.1 of the Bluetooth spec
 
 pub use super::super::info_params::read_bd_addr;
-pub use super::super::info_params::read_local_supported_features as br_edr_read_local_supported_features;
+pub use super::super::info_params::read_local_supported_features as info_params_read_local_supported_features;
 pub use super::super::info_params::read_local_version_information;
 pub use super::super::info_params::read_local_supported_commands;
 pub use super::super::cb::reset;
-pub use super::super::cb::set_event_mask as blu_set_event_mask;
+pub use super::super::cb::set_event_mask as cb_set_event_mask;
 
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
