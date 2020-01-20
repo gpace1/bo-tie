@@ -44,9 +44,9 @@ use std::time::Duration;
 const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 
 /// This sets up the advertising and waits for the connection complete event
-async fn advertise_setup<'a>(
-    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    local_name: &'a str )
+async fn advertise_setup(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    local_name: &str )
 {
     let adv_name = advertise::local_name::LocalName::new(local_name, false);
 
@@ -79,7 +79,7 @@ async fn advertise_setup<'a>(
 
 // For simplicity, I've left the race condition in here. There could be a case where the connection
 // is made and the ConnectionComplete event isn't propicated & processed
-async fn wait_for_connection<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>)
+async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display>
 {
     println!("Waiting for a connection (timeout is 60 seconds)");
@@ -111,7 +111,7 @@ async fn disconnect(
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {
-        connection_handle: connection_handle,
+        connection_handle,
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
