@@ -503,7 +503,7 @@ impl Bonder {
                         PeerIdentityAddressType::RandomStaticIdentityAddress
                     },
                 peer_identity_address: peer_addr,
-                peer_irk: peer_irk,
+                peer_irk,
                 local_irk,
             };
 

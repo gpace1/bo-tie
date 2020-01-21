@@ -158,13 +158,12 @@ fn handle_sig(
     hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>,
     raw_handle: Arc<AtomicU16> )
 {
-    simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term],
+    simple_signal::set_handler(
+        &[simple_signal::Signal::Int, simple_signal::Signal::Term],
         move |_| {
             // Cancel advertising if advertising (there is no consequence if not advertising)
             futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
 
-            // todo fix the race condition where a connection is made but the handle hasn't been
-            // stored here yet
             let handle_val = raw_handle.load(Ordering::SeqCst);
 
             if handle_val != INVALID_CONNECTION_HANDLE {
