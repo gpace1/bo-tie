@@ -12,9 +12,9 @@
 //! Host Volume of the Bluetooth Specification (V 5.0 | Vol 3, Part H, Section 2.2). Unfortunately
 //! these names are shortened, making them obtuse to understand going by their name.
 //!
-//! The security function *e* is built using the functions 
-//! [`ah`](crate::sm::toolbox::ah), 
-//! [`c1`](crate::sm::toolbox::c1), and 
+//! The security function *e* is built using the functions
+//! [`ah`](crate::sm::toolbox::ah),
+//! [`c1`](crate::sm::toolbox::c1), and
 //! [`s1`](crate::sm::toolbox::s1).
 //!
 //! The security function AES-CMAC is built using the functions ['f4'], ['f5'], ['f6'], and ['g2']
@@ -629,14 +629,14 @@ pub fn nonce() -> u128 {
 pub struct PairingAddress([u8;7]);
 
 impl PairingAddress {
-    pub fn new(addr: &crate::BluetoothDeviceAddress, is_pub_address: bool) -> Self {
-        let init_byte: u8 = if is_pub_address {0} else {1};
+    pub fn new(addr: &crate::BluetoothDeviceAddress, is_random_address: bool) -> Self {
+        let init_byte: u8 = if is_random_address {1} else {0};
 
         let mut p_addr = [0, 0, 0, 0, 0, 0, init_byte];
 
         p_addr[..6].copy_from_slice(addr);
 
-        // Reverse to put the two address information in the correct byte order
+        // Reverse to put the address information into the correct byte order
         p_addr.reverse();
 
         PairingAddress(p_addr)

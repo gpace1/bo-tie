@@ -372,22 +372,19 @@ impl Bonder {
 
         let mut gatt_server = gatt_server_init(&connection_channel, local_name);
 
-        let sm = bo_tie::sm::SecurityManager::new(Vec::new());
-
         let mut ltk = None;
         let mut encrypted = false;
         let mut irk_sent = false;
 
         'outer: loop {
-            let mut slave_sm = sm.new_slave_builder(
+            let mut slave_sm = bo_tie::sm::responder::SlaveSecurityManagerBuilder::new(
                 &connection_channel,
                 &peer_address,
-                peer_address_is_random,
                 &this_address,
+                peer_address_is_random,
                 true // this example used a random address for advertising
             )
-            .set_min_and_max_encryption_key_size(16,16).unwrap()
-            .create_security_manager();
+            .build();
 
             let mut e = Box::pin( self.await_encryption(handle).fuse() );
 
@@ -601,6 +598,15 @@ impl Bonder {
                 futures::executor::block_on(self.remove_bonding_info());
 
                 println!("Exiting example");
+
+                // Force dropping the `HostInterface`. Not doing this may cause problems with your
+                // bluetooth controller if the HCI is not closed cleanly, espically when running
+                // with a superuser.
+                unsafe {
+                    let b = Box::from_raw(Arc::into_raw(self.hi.clone()) as *mut hci::HostInterface<bo_tie_linux::HCIAdapter>);
+
+                    std::mem::drop( b )
+                };
 
                 std::process::exit(0);
             }

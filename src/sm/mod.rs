@@ -52,7 +52,7 @@ const L2CAP_SECURE_CONNECTIONS_MTU: usize = 65;
 //const ENCRYPTION_KEY_MIN_SIZE: usize = 7;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
-const SECURITY_MANAGER_L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
+pub const L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
     crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
 
 #[derive(Debug, Clone)]
@@ -186,6 +186,7 @@ impl<D> CommandData for Command<D> where D: CommandData {
     }
 }
 
+#[derive(Debug)]
 enum KeyGenerationMethod {
     /// Out of Bound
     Oob,

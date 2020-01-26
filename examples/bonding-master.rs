@@ -1,22 +1,19 @@
 //! Bonding Master test
 //!
-//! This will bond with a connectible device advertising with the name "Bonding Test".
+//! This will bond with a connectible device advertising with the name provided for .
 //!
 //! # Notes
 //! The advertising device must be advertising in connectible undirected and the address must not
 //! be a resolvable private address.
 //!
-//! You will need to delete the bonding information on the peer device unless it doesn't save
-//! bonding information.
+//! You will need to delete the bonding information on the peer device after the example has run
+//! unless it doesn't save bonding information.
 
-use std::time::Duration;
 use bo_tie::hci;
-use core::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
+use std::time::Duration;
 
 type Base = bo_tie_linux::HCIAdapter;
-
-/// Looked for advertising name
-const ADV_NAME: &'static str = "Bonding Test";
 
 /// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
 /// from the controller to the user.
@@ -25,27 +22,36 @@ const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 /// Scan for a specific address
 async fn start_scanning_for_addr(
     hi: &hci::HostInterface<Base>,
+    local_name: &str,
 ) -> bo_tie::hci::events::LEAdvertisingReportData {
     use bo_tie::hci::cb::set_event_mask::{self,EventMask};
-    use bo_tie::hci::common::LEAddressType;
-    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData, LEAdvEventType};
+    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData};
     use bo_tie::hci::le::receiver::{set_scan_parameters,set_scan_enable};
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
 
-    set_scan_enable::send(hi, false, false).await.unwrap();
+    let scan_params = set_scan_parameters::ScanningParameters::default();
+
+    // Some systems you cannot disable scanning through the host controller interface, if at all,
+    // so the result is just converted into an option.
+    set_scan_enable::send(hi, false, false).await.ok();
 
     set_event_mask::send(hi, &[EventMask::LEMeta]).await.unwrap();
 
-    set_event_mask::send(hi, &[LEMeta::AdvertisingReport]).await.unwrap();
+    le_set_event_mask::send(hi, &[LEMeta::AdvertisingReport.into()]).await.unwrap();
 
-    set_scan_parameters::send(hi, set_scan_parameters::ScanningParameters::default()).await.unwrap();
+    set_scan_parameters::send(hi, scan_params).await.unwrap();
 
     set_scan_enable::send(hi, true, true).await.unwrap();
 
-    let ret = loop {
+    let ret = 'outer: loop {
         match hi.wait_for_event(LEMeta::AdvertisingReport.into(), None).await.unwrap() {
-            EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) => for report in reports {
-                if let Some(report) = process_adv_reports(&reports) { break report }
+            EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) => {
+                if let Some(report) = reports.iter()
+                    .filter_map(|r| r.as_ref().ok() )
+                    .find( |r| match_report(r, local_name) )
+                {
+                    break 'outer report.clone()
+                }
             },
             e => panic!("Received unexpected event data: {:?}", e),
         }
@@ -56,120 +62,130 @@ async fn start_scanning_for_addr(
     ret
 }
 
-fn process_adv_reports( reports: &[hci::le::events::LEAdvertisingReportData] )
--> Option<&hci::le::events::LEAdvertisingReportData>
+fn match_report( report: &&hci::events::LEAdvertisingReportData, name: &str ) -> bool
 {
     use bo_tie::gap::advertise::local_name::LocalName;
     use bo_tie::gap::advertise::TryFromRaw;
 
-    for report in reports {
-        let mut data = &report.data;
+    let mut data: &[u8] = &report.data;
 
-        while data.len() > 0 {
-            let (len, rest) = data.split_first();
+    // In a AD type, the first byte gives the length of the data part of the type
+    while let Some((len, rest)) = data.split_first() {
 
-            let (first, rest) = rest.split_at(len as usize);
+        let (first, rest) = rest.split_at(*len as usize);
 
-            data = rest;
+        data = rest;
 
-            if let Ok(_) = LocalName.try_from_raw(first) { return report.into() }
-        }
-    }
-
-    None
-}
-
-async fn connect_to<'a>(
-    hi: &'a hci::HostInterface<Base>,
-    peer_address: bo_tie::BluetoothDeviceAddress,
-    peer_address_type: bo_tie::hci::common::LEAddressType,
-    raw_handle: Arc<AtomicU16>,
-) -> impl bo_tie::l2cap::ConnectionChannel + 'a
-{
-    use bo_tie::hci::cb::set_event_mask::{self,EventMask};
-    use bo_tie::hci::common::LEAddressType;
-    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData};
-    use bo_tie::hci::le::connection::create_connection::{
-        self,
-        ConnectionParameters,
-        ScanningInterval,
-        ScanningWindow
-    };
-    use bo_tie::hci::common::{
-        LEAddressType,
-        OwnAddressType,
-        ConnectionIntervalBounds,
-        ConnectionLatency,
-        SupervisionTimeout,
-        ConnectionEventLength,
-        ConnectionInterval
-    };
-
-    set_event_mask::send(hi, &[EventMask::DisconnectionComplete, EventMask::LEMeta]).await.unwrap();
-
-    set_event_mask::send(hi, &[LEMeta::ConnectionComplete]).await.unwrap();
-
-    let parameters = ConnectionParameters {
-        scan_interval: ScanningInterval::default(),
-        scan_window: ScanningWindow::default(),
-        peer_address_type,
-        peer_address,
-        own_address_type: OwnAddressType::RandomDeviceAddress,
-        connection_interval: ConnectionIntervalBounds {
-                min: ConnectionInterval::default(),
-                max: ConnectionInterval::default()
-            },
-        connection_latency: ConnectionLatency::try_from(0).unwrap(),
-        supervision_timeout: SupervisionTimeout::try_from(0x10).unwrap(),
-        connection_event_len: ConnectionEventLength {
-            min: 0,
-            max: 0xFFFF,
-        }
-    };
-
-    set_event_mask::send(hi, parameters).await.unwrap();
-
-    match hi.wait_for_event(LEMeta::ConnectionComplete.into(), None).await.unwrap() {
-        EventsData::LEMeta(LEMetaData::ConnectionComplete(data)) => {
-            raw_handle.store(data.connection_channel.get_raw_handle, Ordering::Relaxed);
-
-            hi.new_connection_channel(data.connection_handle)
-        },
-        e => panic!("Received Unexpected event: {:?}"),
-    }
-}
-
-/// Start pairing
-///
-/// Returns the long term key (LTK) if the pairing process succeeded.
-async fn pair<C>( cc: C, msm: &mut bo_tie::sm::initiator::MasterSecurityManager<'_, C> )
--> Option<u128>
-where C: bo_tie::l2cap::ConnectionChannel
-{
-    for pairing_step in msm.start_pairing() {
-        match cc.future_receiver().await {
-            Ok(data) => {
-                match pairing_step.process(data) {
-                    Ok(Some(keys)) => keys.ltk.clone(),
-                    Err(e) => panic!("Pairing Error Occured: {:?}", e),
-                    Ok(None) => {},
-                }
-            },
-            Err(e) => panic!("Error when await for received packets"),
+        if LocalName::try_from_raw(first).map(|ln| &*ln == name).unwrap_or_default() {
+            return true
         }
     }
 
     false
 }
 
-/// Start encryption
-async fn encrypt(hi: &HostInterface<Base>, connection_handle: hci::common::ConnectionHandle, ltk: u128) {
+async fn connect_to<'a>(
+    hi: &'a hci::HostInterface<Base>,
+    peer_address: &bo_tie::BluetoothDeviceAddress,
+    peer_address_type: bo_tie::hci::common::LEAddressType,
+    raw_handle: Arc<AtomicU16>,
+) -> impl bo_tie::l2cap::ConnectionChannel + 'a
+{
     use bo_tie::hci::cb::set_event_mask::{self,EventMask};
-    use bo_tie::hci::le::encryption::start_encryption::{self, Parameter};
+    use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
+    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData};
+    use bo_tie::hci::le::connection::{
+        ConnectionIntervalBounds,
+        ConnectionInterval,
+        create_connection::{
+            self,
+            ConnectionParameters,
+            ScanningInterval,
+            ScanningWindow
+        }
+    };
+    use bo_tie::hci::le::common:: {
+        OwnAddressType,
+        ConnectionEventLength,
+    };
+    use bo_tie::hci::common::{
+        ConnectionLatency,
+        SupervisionTimeout,
+    };
+
+    set_event_mask::send(hi, &[EventMask::DisconnectionComplete, EventMask::LEMeta]).await.unwrap();
+
+    le_set_event_mask::send(hi, &[LEMeta::ConnectionComplete]).await.unwrap();
+
+    let parameters = ConnectionParameters::new_without_whitelist(
+        ScanningInterval::default(),
+        ScanningWindow::default(),
+        peer_address_type,
+        peer_address.clone(),
+        OwnAddressType::PublicDeviceAddress,
+        ConnectionIntervalBounds::try_from(
+            ConnectionInterval::try_from_raw(0x10).unwrap(),
+            ConnectionInterval::try_from_raw(0x10).unwrap(),
+        ).unwrap(),
+        ConnectionLatency::try_from(0).unwrap(),
+        SupervisionTimeout::try_from_raw(0x10).unwrap(),
+        ConnectionEventLength {
+            minimum: 0,
+            maximum: 0xFFFF,
+        }
+    );
+
+    create_connection::send(hi, parameters).await.unwrap();
+
+    match hi.wait_for_event(LEMeta::ConnectionComplete.into(), None).await.unwrap() {
+        EventsData::LEMeta(LEMetaData::ConnectionComplete(data)) => {
+            raw_handle.store(data.connection_handle.get_raw_handle(), Ordering::Relaxed);
+
+            hi.new_connection_channel(data.connection_handle)
+        },
+        e => panic!("Received Unexpected event: {:?}", e),
+    }
+}
+
+/// Start pairing
+///
+/// Returns the long term key (LTK) if the pairing process succeeded.
+async fn pair<C>( cc: &C, msm: &mut bo_tie::sm::initiator::MasterSecurityManager<'_,C> ) -> Option<u128>
+where C: bo_tie::l2cap::ConnectionChannel
+{
+    msm.start_pairing();
+
+    'outer: loop {
+        match cc.future_receiver().await {
+            Ok(vec_data) => for data in vec_data {
+                // All data that is not Security Manager related is ignored for this example
+                if data.get_channel_id() == bo_tie::sm::L2CAP_CHANNEL_ID {
+                    match msm.continue_pairing(data) {
+                        Ok(true)  => break 'outer msm.get_keys().and_then( |keys| keys.get_ltk() ),
+                        Err(e)    => panic!("Pairing Error Occured: {:?}", e),
+                        Ok(false) => {},
+                    }
+                }
+            },
+            Err(e) => panic!("Error when receiving ACL data: {:?}", e),
+        }
+    }
+}
+
+/// Start encryption
+async fn encrypt(
+    hi: &hci::HostInterface<Base>,
+    connection_handle: hci::common::ConnectionHandle,
+    ltk: u128
+) {
+    use hci::cb::set_event_mask::{self,EventMask};
+    use hci::le::encryption::start_encryption::{self, Parameter};
+    use hci::events::{Events, EventsData};
+    use hci::common::EncryptionLevel;
 
     set_event_mask::send(hi, &[EventMask::DisconnectionComplete, EventMask::EncryptionChange]).await.unwrap();
 
-    // Because the security manager implementation only supports LE secure connections
+    // Because the security manager implementation only supports a LE secure connections
     // implementation, both the `random_number` and `encrypted_diversifier` are zero as per the
     // specification (v5.0 | Vol 3, Part H, Section 2.4.4).
     let parameter = Parameter {
@@ -181,51 +197,124 @@ async fn encrypt(hi: &HostInterface<Base>, connection_handle: hci::common::Conne
 
     start_encryption::send(hi, parameter).await.unwrap();
 
-    match hi.await_for_event(EventMask::EncryptionChange, Duration::from_secs(5) ).await.unwrap() {
-        Ok(EventsData::EncryptionChange(data)) => println!("Encryption started!"),
-        OK(e) => panic!("Received incorrect event: {:?}", e),
-        Err(e) => panic!("Encryption failed: {:?}"),
+    match hi.wait_for_event(Events::EncryptionChange, Duration::from_secs(5) ).await {
+        Ok( EventsData::EncryptionChange(data) ) =>
+            if (data.encryption_enabled.get_for_le() == EncryptionLevel::AESCCM) ||
+               (data.encryption_enabled.get_for_le() == EncryptionLevel::E0)
+            {
+                println!("Encryption started!")
+            } else {
+                panic!("Encryption did not start")
+            },
+        Ok(e) => panic!("Received incorrect event: {:?}", e),
+        Err(e) => panic!("Encryption failed: {:?}", e),
     }
 }
 
+async fn disconnect(
+    hi: &hci::HostInterface<Base>,
+    connection_handle: hci::common::ConnectionHandle
+) {
+    use hci::link_control::disconnect::{self, DisconnectReason, DisconnectParameters};
+
+    let dp = DisconnectParameters {
+        connection_handle,
+        disconnect_reason: DisconnectReason::RemoteUserTerminatedConnection
+    };
+
+    disconnect::send(hi, dp).await.ok();
+}
+
 fn handle_sig(
-    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>,
+    hi: Arc<hci::HostInterface<Base>>,
     raw_handle: Arc<AtomicU16>
 ) {
     use hci::le::connection::create_connection_cancel;
     use hci::common::ConnectionHandle;
-    use hci::link_control::disconnect::{self, DisconnectReason, DisconnectParameters};
 
     simple_signal::set_handler(
         &[simple_signal::Signal::Int, simple_signal::Signal::Term],
         move |_| {
             // Cancel connecting (if in process of connecting, there is no consequence if not
-            // connecting)
+            // connecting, but an error is returned so all errors are ignored as a result)
             futures::executor::block_on(create_connection_cancel::send(&hi)).ok();
 
             let handle = ConnectionHandle::try_from(raw_handle.load(Ordering::Relaxed));
 
             if let Ok(connection_handle) = handle {
-                let dp = DisconnectParameters {
-                    connection_handle,
-                    disconnect_reason: DisconnectReason::RemoteUserTerminatedConnection
-                };
-
-                disconnect::send(&hi, dp)
+                futures::executor::block_on(disconnect(&hi, connection_handle));
             }
 
             println!("Exiting example");
+
+            // Force dropping the `HostInterface`. Not doing this may cause problems with your
+            // bluetooth controller if the HCI is not closed cleanly, espically when running
+            // with a superuser.
+            unsafe {
+                let b = Box::from_raw(Arc::into_raw(hi.clone()) as *mut hci::HostInterface<Base>);
+
+                std::mem::drop( b )
+            };
 
             std::process::exit(0);
         }
     );
 }
 
+async fn bonding(
+    interface: Arc<hci::HostInterface<Base>>,
+    raw_ch: Arc<AtomicU16>,
+    adv_local_name: &str,
+) {
+    use bo_tie::sm::initiator::MasterSecurityManagerBuilder;
+
+    let this_addr = hci::info_params::read_bd_addr::send(&interface).await.unwrap();
+
+    let adv_info = start_scanning_for_addr(&interface, &adv_local_name).await;
+
+    let peer_addr = adv_info.address;
+
+    let peer_addr_type = adv_info.address_type;
+
+    let cc = connect_to(&interface, &peer_addr, peer_addr_type, raw_ch.clone()).await;
+
+    let connection_handle = hci::common::ConnectionHandle::try_from(raw_ch.load(Ordering::Relaxed)).unwrap();
+
+    let mut msm = MasterSecurityManagerBuilder::new(
+            &cc,
+            &peer_addr,
+            &this_addr,
+            peer_addr_type == hci::common::LEAddressType::RandomDeviceAddress,
+            false
+        )
+        .build();
+
+    let ltk = pair(&cc, &mut msm).await.expect("Pairing Failed");
+
+    encrypt(&interface, connection_handle, ltk).await;
+
+    msm.set_encrypted(true);
+
+    println!("Bonding Complete");
+}
+
+#[derive(structopt::StructOpt)]
+struct Opts {
+    #[structopt(short = "n", long="local-name", default_value = "Bonding Test")]
+    /// The complete local name in the advertising data
+    ///
+    /// The is the name that will appear as part of the advertising data of the device to run this
+    /// example with. The advertising packet for this test requires a complete local name so that
+    /// this example can determine what advertiser to connect to.
+    local_name: String
+}
+
 fn main() {
     use futures::executor;
     use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
+    use structopt::StructOpt;
 
-    let local_name = "Connection Test";
+    let args = Opts::from_args();
 
     TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
 
@@ -235,8 +324,13 @@ fn main() {
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 
-    let adv_info = executor::block_on(start_scanning_for_addr(&interface, )
-    executor::block_on( connect_to(&interface, peer_addr, peer_addr_type, raw_connection_handle) );
+    executor::block_on( bonding(interface.clone(), raw_connection_handle.clone(), &args.local_name) );
 
-    executor::block_ok( pair(&interface, ) )
+    std::thread::sleep(Duration::from_secs(5));
+
+    if let Ok(handle) = hci::common::ConnectionHandle::try_from( raw_connection_handle.load(Ordering::Relaxed) ) {
+        executor::block_on( disconnect(&interface, handle) );
+    }
+
+    println!("Exiting example");
 }

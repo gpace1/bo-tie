@@ -971,6 +971,14 @@ pub mod local_name {
         }
     }
 
+    impl core::ops::Deref for LocalName {
+        type Target = str;
+
+        fn deref(&self) -> &Self::Target {
+            &self.name
+        }
+    }
+
     impl From<LocalName> for alloc::string::String {
         fn from( ln: LocalName) -> alloc::string::String {
             ln.name

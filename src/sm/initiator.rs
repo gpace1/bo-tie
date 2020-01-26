@@ -82,72 +82,10 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             initiator_address_is_random: self.this_address_is_random,
             responder_address_is_random: self.remote_address_is_random,
             pairing_data: None,
-            link_encrypted: false
+            link_encrypted: false,
+            pairing_expected_cmd: None,
         }
     }
-}
-
-pub trait ResponseProcessor {
-    type Output;
-
-    fn process(self, l2cap_data: crate::l2cap::AclData) -> Result<Self::Output, super::Error>;
-
-    fn expected(&self) -> super::CommandType;
-}
-
-struct Processor<'i, J, C> {
-    msm: &'i mut MasterSecurityManager<'i, C>,
-    expected: super::CommandType,
-    job: J
-}
-
-impl<'i, J, C, O> Processor<'i, J, C>
-where J: for<'d> core::ops::FnOnce(&'i mut MasterSecurityManager<'i, C>, &'d [u8]) -> Result<O, super::Error>,
-      C: ConnectionChannel,
-{
-    fn proc_data(mut self, received_data: &[u8]) -> Result<O, super::Error> {
-
-        let (d_type, payload) = received_data.split_at(1);
-
-        match CommandType::try_from_val(d_type[0]) {
-            Err(e) => {
-                self.msm.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-
-                Err(e)
-            },
-
-            Ok(cmd) if cmd == self.expected => (self.job)(self.msm, payload),
-
-            Ok(cmd) if cmd == CommandType::PairingFailed => {
-                self.msm.pairing_data = None;
-
-                Err(Error::PairingFailed( pairing::PairingFailed::try_from_icd(payload)?.get_reason() ))
-            },
-
-            Ok(cmd) => {
-                self.msm.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-
-                Err(Error::IncorrectCommand(cmd))
-            },
-        }
-    }
-}
-
-impl<'i, J, C, O> ResponseProcessor for Processor<'i, J, C>
-where J: for<'d> core::ops::FnOnce(&'i mut MasterSecurityManager<'i, C>, &'d [u8]) -> Result<O, super::Error>,
-      C: ConnectionChannel,
-{
-    type Output = O;
-
-    fn process(self, l2cap_data: crate::l2cap::AclData) -> Result<Self::Output, super::Error> {
-        if l2cap_data.get_channel_id() == super::SECURITY_MANAGER_L2CAP_CHANNEL_ID {
-            self.proc_data(l2cap_data.get_payload())
-        } else {
-            Err(Error::IncorrectL2capChannelId)
-        }
-    }
-
-    fn expected(&self) -> super::CommandType { self.expected }
 }
 
 pub struct MasterSecurityManager<'a, C> {
@@ -161,10 +99,11 @@ pub struct MasterSecurityManager<'a, C> {
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
     pairing_data: Option<PairingData>,
-    link_encrypted: bool
+    link_encrypted: bool,
+    pairing_expected_cmd: Option<super::CommandType>,
 }
 
-impl<'a, C> MasterSecurityManager<'a, C>
+impl<C> MasterSecurityManager<'_, C>
 where C: ConnectionChannel
 {
     fn send<Cmd,P>(&self, command: Cmd)
@@ -173,7 +112,7 @@ where C: ConnectionChannel
     {
         use crate::l2cap::AclData;
 
-        let acl_data = AclData::new( command.into().into_icd(), super::SECURITY_MANAGER_L2CAP_CHANNEL_ID);
+        let acl_data = AclData::new( command.into().into_icd(), super::L2CAP_CHANNEL_ID);
 
         self.connection_channel.send((acl_data, super::L2CAP_LEGACY_MTU));
     }
@@ -184,21 +123,18 @@ where C: ConnectionChannel
         self.send(pairing::PairingFailed::new(fail_reason));
     }
 
-    fn send_pairing_request(&'a mut self)
-    -> Processor<'a, fn(&'a mut MasterSecurityManager<'a, C>, &[u8]) -> Result<Option<&'a mut super::KeyDBEntry>, Error>, C>
-    {
-        self.send(self.pairing_request.clone());
+    /// Send the Pairing Request to the slave device
+    ///
+    /// This sends the pairing request security manage PDU to the slave which will initiate the
+    /// pairing process
+    fn send_pairing_request(&mut self) {
+        self.pairing_data = None;
 
-        Processor {
-            msm: self,
-            expected: CommandType::PairingResponse,
-            job: Self::process_pairing_response,
-        }
+        self.send(self.pairing_request.clone());
     }
 
-    fn process_pairing_response(&'a mut self, payload: &[u8])
-    -> Result<Option<&'a mut super::KeyDBEntry>, Error>
-    {
+    fn process_pairing_response(&mut self, payload: &[u8]) -> Result<(), Error> {
+
         let response = pairing::PairingResponse::try_from_icd(payload)?;
 
         if response.get_max_encryption_size() < self.encryption_key_size_min {
@@ -235,7 +171,7 @@ where C: ConnectionChannel
                 db_keys: None,
             });
 
-            Ok(None)
+            Ok(())
         }
     }
 
@@ -243,9 +179,7 @@ where C: ConnectionChannel
     ///
     /// After the pairing pub key PDU is sent to the slave, a `ResponseProcessor` is returned that
     /// can be used to process the acl data returned by the server.
-    fn send_pairing_pub_key(&'a mut self)
-    -> Result<Processor<'a, fn(&'a mut MasterSecurityManager<'a, C>, &[u8]) -> Result<Option<&'a mut super::KeyDBEntry>, Error>, C>, Error>
-    {
+    fn send_pairing_pub_key(&mut self) -> Result<(), Error>{
         match self.pairing_data {
             Some( PairingData {
                 ref public_key,
@@ -263,11 +197,7 @@ where C: ConnectionChannel
 
                 self.send(pairing::PairingPubKey::new(raw_pub_key));
 
-                Ok( Processor {
-                    msm: self,
-                    expected: CommandType::PairingPublicKey,
-                    job: Self::process_responder_pub_key
-                } )
+                Ok( () )
             }
             _ => {
                 Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
@@ -275,9 +205,7 @@ where C: ConnectionChannel
         }
     }
 
-    fn process_responder_pub_key(&'a mut self, payload: &[u8])
-    -> Result<Option<&'a mut super::KeyDBEntry>, Error>
-    {
+    fn process_responder_pub_key(&mut self, payload: &[u8])-> Result<(), Error> {
         let pub_key = pairing::PairingPubKey::try_from_icd(payload);
 
         match (&pub_key, &mut self.pairing_data) {
@@ -306,7 +234,7 @@ where C: ConnectionChannel
 
                 *peer_public_key = remote_pub_key.into();
 
-                Ok(None)
+                Ok(())
             }
             _ => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
@@ -316,20 +244,8 @@ where C: ConnectionChannel
         }
     }
 
-    fn get_responder_commitment(&'a mut self)
-    -> Processor<'a, fn(&'a mut MasterSecurityManager<'a, C>, &[u8]) -> Result<Option<&'a mut super::KeyDBEntry>, Error>, C>
-    {
-        Processor {
-            msm: self,
-            expected: CommandType::PairingConfirm,
-            job: Self::process_responder_commitment,
-        }
-    }
-
     /// Wait for responder check
-    fn process_responder_commitment(&'a mut self, payload: &[u8])
-    -> Result<Option<&'a mut super::KeyDBEntry>, Error>
-    {
+    fn process_responder_commitment(&mut self, payload: &[u8]) -> Result<(), Error> {
         match (&pairing::PairingConfirm::try_from_icd(payload), &mut self.pairing_data) {
             (
                 Ok(responder_confirm),
@@ -349,7 +265,9 @@ where C: ConnectionChannel
             ) => {
                 *responder_pairing_confirm = responder_confirm.get_value().into();
 
-                Ok(None)
+                log::trace!("Responder Commitment: {:?}", responder_confirm.get_value());
+
+                Ok(())
             },
             (Err(_), _) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
@@ -368,9 +286,7 @@ where C: ConnectionChannel
     ///
     /// # Panics
     /// This will panic if the pairing response has not been received yet
-    fn send_pairing_random(&'a mut self)
-    -> Result<Processor<'a, fn(&'a mut MasterSecurityManager<'a, C>, &[u8]) -> Result<Option<&'a mut super::KeyDBEntry>, Error>, C>, Error>
-    {
+    fn send_pairing_random(&mut self) -> Result<(), Error>{
         match self.pairing_data {
             Some( PairingData {
                 key_gen_method: KeyGenerationMethod::JustWorks,
@@ -382,13 +298,11 @@ where C: ConnectionChannel
                 nonce,
                 ..
             }) => {
+                log::trace!("Initiator nonce: {:?}", nonce);
+
                 self.send(pairing::PairingRandom::new(nonce));
 
-                Ok(Processor{
-                    msm: self,
-                    expected: CommandType::PairingRandom,
-                    job: Self::process_responder_random,
-                })
+                Ok( () )
             }
             _ => {
                 return Err(Error::UnsupportedFeature)
@@ -396,9 +310,7 @@ where C: ConnectionChannel
         }
     }
 
-    fn process_responder_random(&'a mut self, payload: &[u8])
-    -> Result<Option<&'a mut super::KeyDBEntry>, Error>
-    {
+    fn process_responder_random(&mut self, payload: &[u8]) -> Result<(), Error> {
         use super::GetXOfP256Key;
 
         let responder_random = pairing::PairingRandom::try_from_icd(payload);
@@ -409,7 +321,6 @@ where C: ConnectionChannel
                     Ok(random_pdu),
                     Some( PairingData {
                         key_gen_method: KeyGenerationMethod::JustWorks,
-                        nonce,
                         peer_nonce,
                         peer_public_key: Some(peer_public_key),
                         public_key,
@@ -420,7 +331,6 @@ where C: ConnectionChannel
                     Ok(random_pdu),
                     Some( PairingData {
                         key_gen_method: KeyGenerationMethod::NumbComp,
-                        nonce,
                         peer_nonce,
                         peer_public_key: Some(peer_public_key),
                         public_key,
@@ -430,10 +340,12 @@ where C: ConnectionChannel
                 ) => {
                     let responder_nonce = random_pdu.get_value();
 
+                    log::trace!("Responder Nonce: {:?}", random_pdu.get_value());
+
                     let initiator_confirm = toolbox::f4(
-                        public_key.x(),
                         peer_public_key.x(),
-                        *nonce,
+                        public_key.x(),
+                        responder_nonce,
                         0
                     );
 
@@ -456,7 +368,7 @@ where C: ConnectionChannel
             };
 
         if check_result {
-            Ok(None)
+            Ok(())
         } else {
             let reason = pairing::PairingFailedReason::ConfirmValueFailed;
 
@@ -466,9 +378,7 @@ where C: ConnectionChannel
         }
     }
 
-    fn send_initiator_dh_key_check(&'a mut self)
-    -> Result<Processor<'a, fn(&'a mut MasterSecurityManager<'a, C>, &[u8]) -> Result<Option<&'a mut super::KeyDBEntry>, Error>, C>, Error>
-    {
+    fn send_initiator_dh_key_check(&mut self) -> Result<(), Error> {
         let ltk = match self.pairing_data {
             Some( PairingData{
                 key_gen_method: KeyGenerationMethod::JustWorks,
@@ -536,16 +446,10 @@ where C: ConnectionChannel
             peer_addr: None,
         });
 
-        Ok( Processor {
-            msm: self,
-            expected: CommandType::PairingDHKeyCheck,
-            job: Self::process_responder_dh_key_check,
-        } )
+        Ok(())
     }
-    
-    fn process_responder_dh_key_check(&'a mut self, payload: &[u8])
-    -> Result<Option<&'a mut super::KeyDBEntry>, Error> {
 
+    fn process_responder_dh_key_check(&mut self, payload: &[u8]) -> Result<(), Error> {
         let eb = match pairing::PairingDHKeyCheck::try_from_icd(payload) {
             Ok(responder_confirm) => responder_confirm,
             Err(e) => {
@@ -602,28 +506,12 @@ where C: ConnectionChannel
         };
 
         if check {
-            Ok( self.pairing_data.as_mut().unwrap().db_keys.as_mut() )
+            Ok(())
         } else {
             self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed);
 
             Err(Error::PairingFailed(pairing::PairingFailedReason::DHKeyCheckFailed))
         }
-    }
-
-    /// Start Pairing
-    ///
-    /// This creates an pairing stepper that acts much like an iterator to go through the process of
-    /// pairing with the slave device. When the iteration is complete, pairing is complete. However,
-    /// this doesn't complete the process of bonding, the link needs to first be encrypted
-    /// (initiated by this device if it stays as the master) and the IRK, address, and CSRK can be
-    /// exchanged with the other device.
-    ///
-    /// The `Item` returned implements [`ResponseProcessor`] which is used to process the next
-    /// pairing PDU from the responder.
-    pub fn start_pairing(&'a mut self)
-    -> impl PairingStep<Item = impl ResponseProcessor<Output=Option<&'a mut super::KeyDBEntry>> + 'a>
-    {
-        PairingProcess::new(self)
     }
 
     /// Indicate if the connection is encrypted
@@ -715,105 +603,130 @@ where C: ConnectionChannel
             false
         }
     }
-}
 
-/// An iterator-like pairing process
-///
-/// This trait is designed to step through the pairing process with the responder. When the process
-/// is done, the function `next` will return `None` just like `Iterator`.
-pub trait PairingStep<'a> {
-    type Item;
-
-    fn next(&'a mut self) -> Option<Self::Item>;
-
-    /// Pairing process fail reason
+    /// Get the pairing keys
     ///
-    /// If the pairing process fails due to... well you or my implementation... this will return the
-    /// reason for the error. This will not return an error caused by the responder or some
-    /// initiator-responder process such as the pairing confirm check failing.
-    ///
-    /// This returns `None` if there was no initiator caused pairing error.
-    fn initiator_fail_reason(&self) -> Option<&Error>;
-}
-
-enum PairingStage {
-    Start,
-    WaitPairingResponse,
-    WaitPairingPubKey,
-    WaitPairingConfirm,
-    WaitPairingRandom,
-    WaitDhKeyCheck,
-}
-
-struct PairingProcess<'a, C> {
-    stage: PairingStage,
-    msm: &'a mut MasterSecurityManager<'a, C>,
-    ifr: Option<Error>,
-}
-
-impl<'a,C> PairingProcess<'a,C> {
-    fn new(msm: &'a mut  MasterSecurityManager<'a, C>) -> Self {
-        Self {
-            stage: PairingStage::Start,
-            msm,
-            ifr: None,
-        }
+    /// Pairing must be completed before these keys are generated
+    pub fn get_keys(&mut self) -> Option<&mut super::KeyDBEntry> {
+        self.pairing_data.as_mut().and_then( |pd| pd.db_keys.as_mut() )
     }
-}
 
-impl <'a, C> PairingStep<'a> for PairingProcess<'a, C> where C: crate::l2cap::ConnectionChannel {
-    type Item = Processor<'a, fn(&'a mut MasterSecurityManager<'a, C>, &[u8]) -> Result<Option<&'a mut super::KeyDBEntry>, Error>, C>;
+    /// Start pairing
+    ///
+    /// Initiate the pairing process and sends the request for the slave's pairing information.
+    /// This function is required to be called before `continue_pairing` can be used to process
+    /// and send further Security Manager PDU's to the slave.
+    pub fn start_pairing(&mut self) {
+        self.pairing_expected_cmd = super::CommandType::PairingResponse.into();
 
-    fn next(&'a mut self) -> Option<Self::Item> {
-        match self.stage {
-            PairingStage::Start => {
-                self.stage = PairingStage::WaitPairingResponse;
+        self.send_pairing_request();
+    }
 
-                Some(self.msm.send_pairing_request())
-            },
-            PairingStage::WaitPairingResponse => {
-                self.stage = PairingStage::WaitPairingPubKey;
-
-                match self.msm.send_pairing_pub_key() {
-                    Ok(job) => Some(job),
-                    Err(e) => {
-                        self.ifr = e.into();
-                        None
-                    }
-                }
-            },
-            PairingStage::WaitPairingPubKey => {
-                self.stage = PairingStage::WaitPairingConfirm;
-
-                Some(self.msm.get_responder_commitment())
-            },
-            PairingStage::WaitPairingConfirm => {
-                self.stage = PairingStage::WaitPairingRandom;
-
-                match self.msm.send_pairing_random() {
-                    Ok(job) => Some(job),
-                    Err(e) => {
-                        self.ifr = e.into();
-                        None
-                    }
-                }
-            },
-            PairingStage::WaitPairingRandom => {
-                self.stage = PairingStage::WaitDhKeyCheck;
-                
-                match self.msm.send_initiator_dh_key_check() {
-                    Ok(job) => Some(job),
-                    Err(e) => {
-                        self.ifr = e.into();
-                        None
-                    }
-                }
-            },
-            PairingStage::WaitDhKeyCheck => {
-                None
-            }
+    /// Continue Pairing
+    ///
+    /// To continue pairing, the slaves next received security manager PDU needs to be received
+    /// and then processed through `continue_pairing`. Pairing is completed when this function
+    /// returns true.
+    pub fn continue_pairing(&mut self, l2cap_data: crate::l2cap::AclData)-> Result<bool, super::Error>
+    where C: ConnectionChannel
+    {
+        if l2cap_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
+            self.proc_data(l2cap_data.get_payload())
+        } else {
+            Err(Error::IncorrectL2capChannelId)
         }
     }
 
-    fn initiator_fail_reason(&self) -> Option<&Error> { self.ifr.as_ref() }
+    fn proc_data(&mut self, received_data: &[u8])
+    -> Result<bool, super::Error>
+    where C: ConnectionChannel
+    {
+
+        let (d_type, payload) = received_data.split_at(1);
+
+        match CommandType::try_from_val(d_type[0]) {
+            Ok(cmd) if cmd == CommandType::PairingFailed => {
+                self.pairing_expected_cmd = super::CommandType::PairingFailed.into();
+
+                Err(Error::PairingFailed( pairing::PairingFailed::try_from_icd(payload)?.get_reason() ))
+            },
+            Ok(cmd) if Some(cmd) == self.pairing_expected_cmd => self.next_step(payload),
+            Ok(cmd) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                Err(Error::IncorrectCommand(cmd))
+            },
+            Err(e) => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
+
+                Err(e)
+            },
+        }
+    }
+
+    fn next_step(&mut self, payload: &[u8]) -> Result<bool, Error>
+    where C: ConnectionChannel
+    {
+        match self.pairing_expected_cmd {
+            Some( super::CommandType::PairingResponse ) =>
+                match self.process_pairing_response(payload) {
+                    Ok(_) => {
+                        self.pairing_expected_cmd = super::CommandType::PairingPublicKey.into();
+
+                        match self.send_pairing_pub_key() {
+                            Ok(_)  => Ok(false),
+                            Err(e) => Err(e),
+                        }
+                    },
+                    Err(e) => self.step_err(e),
+                },
+            Some( super::CommandType::PairingPublicKey ) =>
+                match self.process_responder_pub_key(payload) {
+                    Ok(_) => {
+                        self.pairing_expected_cmd = super::CommandType::PairingConfirm.into();
+
+                        Ok(false)
+                    },
+                    Err(e) => self.step_err(e),
+                },
+            Some( super::CommandType::PairingConfirm ) =>
+                match self.process_responder_commitment(payload) {
+                    Ok(_) => {
+                        self.pairing_expected_cmd = super::CommandType::PairingRandom.into();
+
+                        match self.send_pairing_random() {
+                            Ok(_)  => Ok(false),
+                            Err(e) => Err(e),
+                        }
+                    },
+                    Err(e) => self.step_err(e),
+                },
+            Some( super::CommandType::PairingRandom ) =>
+                match self.process_responder_random(payload) {
+                    Ok(_) => {
+                        self.pairing_expected_cmd = super::CommandType::PairingDHKeyCheck.into();
+
+                        match self.send_initiator_dh_key_check() {
+                            Ok(_)  => Ok(false),
+                            Err(e) => Err(e),
+                        }
+                    },
+                    Err(e) => self.step_err(e),
+                },
+            Some( super::CommandType::PairingDHKeyCheck ) => {
+                    self.pairing_expected_cmd = None;
+
+                    self.process_responder_dh_key_check(payload).map(|_| true)
+                },
+            _ => {
+                Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+            },
+        }
+    }
+
+    fn step_err(&mut self, e: Error) -> Result<bool, Error> {
+        self.pairing_expected_cmd = None;
+
+        Err(e)
+    }
 }

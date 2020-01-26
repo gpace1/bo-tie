@@ -257,7 +257,7 @@ where C: ConnectionChannel,
     {
         use crate::l2cap::AclData;
 
-        let acl_data = AclData::new( command.into().into_icd(), super::SECURITY_MANAGER_L2CAP_CHANNEL_ID);
+        let acl_data = AclData::new( command.into().into_icd(), super::L2CAP_CHANNEL_ID);
 
         self.connection_channel.send((acl_data, super::L2CAP_LEGACY_MTU));
     }
@@ -333,6 +333,8 @@ where C: ConnectionChannel,
 
             let (private_key, public_key) = toolbox::ecc_gen()
                 .expect("Failed to fill bytes for generated random");
+
+            log::info!("Pairing Method: {:?}", pairing_method);
 
             self.pairing_data = Some(PairingData {
                 key_gen_method: pairing_method,
@@ -500,17 +502,17 @@ where C: ConnectionChannel,
         match self.pairing_data {
             Some( PairingData {
                 key_gen_method: KeyGenerationMethod::JustWorks,
-                peer_nonce: Some(ref mut peer_nonce),
+                ref mut peer_nonce,
                 nonce,
                 ..
             } ) |
             Some( PairingData {
                 key_gen_method: KeyGenerationMethod::NumbComp,
-                peer_nonce: Some(ref mut peer_nonce),
+                ref mut peer_nonce,
                 nonce,
                 ..
             } ) => {
-                *peer_nonce = initiator_random.get_value();
+                *peer_nonce = initiator_random.get_value().into();
 
                 self.send( pairing::PairingRandom::new(nonce) );
 

@@ -694,13 +694,13 @@ impl ConnectionRecvInfo {
     /// Regardless of the operation, the packet buffer is upgraded to `Unlimited`
     fn get_data_or_set_waker(&mut self, waker: &task::Waker ) -> Option<Vec<HciAclData>> {
 
-        let recv_packs = match core::mem::replace( 
-            &mut self.received_packets, 
-            PacketBuffer::Unlimited(Vec::new()) ) 
+        let recv_packs = match core::mem::replace(
+            &mut self.received_packets,
+            PacketBuffer::Unlimited(Vec::new()) )
             .into_unlimited()
         {
             PacketBuffer::Unlimited(v) => v,
-            _ => panic!("Received unexpected Liimited"), 
+            _ => panic!("Received unexpected Liimited"),
         };
 
         match recv_packs.len() {
@@ -747,7 +747,7 @@ impl RcvHciAclData {
     /// Any previously set waker is dropped.
     ///
     /// If an unlimited buffer already exists for the privided handle it cannot be downgraded
-    /// into a limited buffer. The buffer must be removed (with `remove_connection_handle`) 
+    /// into a limited buffer. The buffer must be removed (with `remove_connection_handle`)
     /// and then a *new* limited buffer can be made with this funciton.
     fn add_connection_handle(&self, handle: ConnectionHandle, flag: StayAround) {
         self.receive_channels.lock().as_mut()

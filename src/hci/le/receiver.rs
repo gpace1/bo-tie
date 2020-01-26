@@ -17,8 +17,8 @@ pub mod receiver_test {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, frequency: Frequency )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(frequency, events::Events::CommandComplete , Duration::from_secs(1) ) )
     }

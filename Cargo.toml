@@ -31,11 +31,11 @@ futures-preview = { version = "0.3.0-alpha.19", features = ["async-await"] }
 simplelog = "0.6"
 rand = "0.7"
 async-timer = "0.6"
+structopt = "0.3.8"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 bo-tie-linux = { path = "base-crates/bo-tie-linux" }
 simple-signal= "1.1.1"
-getopts = "0.2"
 
 [workspace]
 members = [
