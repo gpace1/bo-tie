@@ -496,17 +496,9 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
         log::trace!("parameter: {:x?}", unsafe { std::slice::from_raw_parts(&cmd_data.get_parameter() as *const D::Parameter as *mut u8, size_of::<D::Parameter>()) });
 
         // send the command
-        if let Err(err) = Errno::result( unsafe { bluez::hci_send_cmd(
-            self.adapter_fd.raw_fd(),
-            oc_pair.get_ogf(),
-            oc_pair.get_ocf(),
-            size_of::<D::Parameter>() as u8,
-            &mut cmd_data.get_parameter() as *mut D::Parameter as *mut ::std::os::raw::c_void
-        )}){
-            Err(Error::from(err))
-        } else {
-            Ok(true)
-        }
+        bluez::hci::send_command(&self.adapter_fd.0, cmd_data)
+            .map(|_| true)
+            .map_err(|e| Error::from(e))
     }
 
     fn receive_event<P>(&self,

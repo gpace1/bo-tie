@@ -23,17 +23,17 @@ pub const HCI_CHANNEL_USER: i32 = 1; // User channel gives total control, but re
 #[link(name = "bluetooth")]
 extern "C" {
     pub fn hci_get_route(bt_dev_addr: *mut bo_tie::BluetoothDeviceAddress) -> i32;
-    pub fn hci_send_cmd(dev: i32, ogf: u16, ocf: u16, parameter_len: u8, parameter: *mut c_void) -> i32;
+    // pub fn hci_send_cmd(dev: i32, ogf: u16, ocf: u16, parameter_len: u8, parameter: *mut c_void) -> i32;
 }
 
 pub mod hci {
 
-    pub fn get_route() -> nix::Error { unimplemented!() }
+    // pub fn get_route() -> nix::Error { unimplemented!() }
 
     /// Send a command to the bluetooth controller
     ///
     /// The implementation of `send_command` is based of the `hci_send_cmd` function in bluez
-    pub fn send_command<P>(dev: &super::FileDescriptor, parameter: P) -> nix::Result<usize>
+    pub fn send_command<P>(dev: &crate::FileDescriptor, parameter: &P) -> nix::Result<usize>
         where P: bo_tie::hci::CommandParameter
     {
         use nix::Error;
@@ -48,7 +48,7 @@ pub mod hci {
         command_packet.insert(0, packet_indicator);
 
         loop {
-            match nix::unistd::write(dev.raw_fd(), &command_packet) {
+            match nix::unistd::write(dev.0, &command_packet) {
                 Err(Error::Sys(Errno::EAGAIN)) | Err(Error::Sys(Errno::EINTR)) => continue,
                 result => break result,
             }
