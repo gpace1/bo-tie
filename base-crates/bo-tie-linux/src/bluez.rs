@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 // Linux Bluetooth socket constants
 // pub const SOL_HCI: u32 = 0;
 // pub const HCI_FILTER: u32 = 2;
-// pub const HCI_COMMAND_PKT: u32 = 1;
+const HCI_COMMAND_PKT: u32 = 1;
 // pub const HCI_ACLDATA_PKT: u32 = 2;
 // pub const HCI_SCODATA_PKT: u32 = 3;
 // pub const HCI_EVENT_PKT: u32 = 4;
@@ -24,6 +24,33 @@ pub const HCI_CHANNEL_USER: i32 = 1; // User channel gives total control, but re
 extern "C" {
     pub fn hci_get_route(bt_dev_addr: *mut bo_tie::BluetoothDeviceAddress) -> i32;
     pub fn hci_send_cmd(dev: i32, ogf: u16, ocf: u16, parameter_len: u8, parameter: *mut c_void) -> i32;
+}
+
+pub mod hci {
+    trait Interface {
+        fn into_hci_packet(self) -> Vec<u8>;
+    }
+
+    struct CommandPacket<P> where P: bo_tie::hci::CommandParameter {
+        parameter: P,
+    }
+
+    impl Interface for P where P: bo_tie::hci::CommandParameter {
+        fn into_hci_packet(self) -> Vec<u8> {
+
+            let packet_indicator = bo_tie::
+        }
+    }
+
+    pub fn get_route() -> nix::Error { unimplemented!() }
+
+    pub fn send_command<P>(fdev: &super::FileDescriptor, parameter: P) -> nix::Error
+        where P: bo_tie::hci::CommandParameter
+    {
+        let set_io = [0;nix::sys::uio::IoVec];
+
+
+    }
 }
 
 #[repr(C)]
