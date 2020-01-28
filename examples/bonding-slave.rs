@@ -103,10 +103,10 @@ impl Bonder {
     ///
     /// This advertising is for connecting with a bluetooth device that has not been bonded with
     /// this device (or lost bonding information).
-    async fn start_advertising<'a>(
+    async fn start_advertising(
         self,
         advertised_address: bo_tie::BluetoothDeviceAddress,
-        advertised_name: &'a str )
+        advertised_name: &str )
     {
         use hci::le::transmitter:: {
             set_advertising_data,
@@ -483,7 +483,7 @@ impl Bonder {
         use hci::events::EventsData;
         use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
 
-        println!("Starting Advertising and Conneciton with privacy");
+        println!("Starting Advertising and Connection with privacy");
 
         let keys = self.privacy_info.lock().await.clone();
 

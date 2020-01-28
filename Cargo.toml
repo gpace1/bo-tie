@@ -13,7 +13,7 @@ log = "0.4.6"
 uuid = "0.8"
 aes = "0.3.2"
 crossbeam-utils = "0.7.0"
-rand_core = "0.5.1"
+rand_core = { version = "0.5.1", features = ['getrandom'] }
 ring = "0.16.9"
 
 [features]
