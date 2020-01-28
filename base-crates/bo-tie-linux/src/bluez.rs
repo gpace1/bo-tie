@@ -3,7 +3,7 @@ use std::os::raw::c_void;
 // Linux Bluetooth socket constants
 // pub const SOL_HCI: u32 = 0;
 // pub const HCI_FILTER: u32 = 2;
-const HCI_COMMAND_PKT: u32 = 1;
+// const HCI_COMMAND_PKT: u32 = 1;
 // pub const HCI_ACLDATA_PKT: u32 = 2;
 // pub const HCI_SCODATA_PKT: u32 = 3;
 // pub const HCI_EVENT_PKT: u32 = 4;
@@ -27,29 +27,32 @@ extern "C" {
 }
 
 pub mod hci {
-    trait Interface {
-        fn into_hci_packet(self) -> Vec<u8>;
-    }
-
-    struct CommandPacket<P> where P: bo_tie::hci::CommandParameter {
-        parameter: P,
-    }
-
-    impl Interface for P where P: bo_tie::hci::CommandParameter {
-        fn into_hci_packet(self) -> Vec<u8> {
-
-            let packet_indicator = bo_tie::
-        }
-    }
 
     pub fn get_route() -> nix::Error { unimplemented!() }
 
-    pub fn send_command<P>(fdev: &super::FileDescriptor, parameter: P) -> nix::Error
+    /// Send a command to the bluetooth controller
+    ///
+    /// The implementation of `send_command` is based of the `hci_send_cmd` function in bluez
+    pub fn send_command<P>(dev: &super::FileDescriptor, parameter: P) -> nix::Result<usize>
         where P: bo_tie::hci::CommandParameter
     {
-        let set_io = [0;nix::sys::uio::IoVec];
+        use nix::Error;
+        use nix::errno::Errno;
 
+        let mut command_packet = parameter.as_command_packet();
 
+        // Insert the packet indicator for linux (maybe for alerting the kernel to the hci packet
+        // type or used for just UART communication).
+        let packet_indicator = bo_tie::hci_transport::uart::HciPacketIndicator::Command.val();
+
+        command_packet.insert(0, packet_indicator);
+
+        loop {
+            match nix::unistd::write(dev.raw_fd(), &command_packet) {
+                Err(Error::Sys(Errno::EAGAIN)) | Err(Error::Sys(Errno::EINTR)) => continue,
+                result => break result,
+            }
+        }
     }
 }
 

@@ -36,17 +36,22 @@ pub trait CommandParameter {
 
     /// Get the command packet to be sent to the controller
     ///
+    /// The format of the command packet is to send the command opcode, followed by the length of
+    /// the parameter, and then finally the parameter. The packet is a fully packed structure tyus
+    /// the parameter is of the type `Self::Parameter`.
+    ///
     /// # Note
     /// This is not the entire packet sent to the interface as there may be additional information
-    /// that needs to be sent for the HCI transport layer (such as the HCI packet indicator).
-    fn as_command_packet<'a>(&self) -> alloc::boxed::Box<[u8]> {
+    /// that needs to be sent for the HCI transport layer (such as the
+    /// [HciPacketIndicator](crate::hci_transport::uart::HciPacketIndicator) used for UART).
+    fn as_command_packet<'a>(&self) -> Vec<u8> {
         use core::mem::size_of;
 
         let parameter_size = size_of::<Self::Parameter>();
 
         // Allocating a vector to the exact size of the packet. The 3 bytes come from the opcode
         // field (2 bytes) and the length field (1 byte)
-        let mut buffer:alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity( parameter_size + 3);
+        let mut buffer: Vec<u8> =  Vec::with_capacity( parameter_size + 3);
 
         let parameter = self.get_parameter();
 
@@ -54,15 +59,16 @@ pub trait CommandParameter {
 
         let parm_bytes = unsafe { core::slice::from_raw_parts( p_bytes_p, parameter_size ) };
 
-        let opcode_bytes = Self::COMMAND.as_opcode_pair().as_opcode().to_le();
+        // Add opcode to packet
+        buffer.extend_from_slice( &Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes() );
 
-        buffer.extend_from_slice(&opcode_bytes.to_le_bytes());
-
+        // Add the length of the parameter
         buffer.push(parm_bytes.len() as u8);
 
+        // Add the parameter
         buffer.extend_from_slice(parm_bytes);
 
-        buffer.into_boxed_slice()
+        buffer
     }
 }
 
