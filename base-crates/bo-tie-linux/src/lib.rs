@@ -29,7 +29,7 @@ macro_rules! log_error_and_panic {
     ($($arg:tt)+) => {{ log::error!( $($arg)+ ); panic!( $($arg)+ ); }}
 }
 
-mod bluez;
+mod device;
 mod timeout;
 
 #[derive(Debug,PartialEq,Eq,Clone)]
@@ -363,29 +363,29 @@ impl From<i32> for HCIAdapter {
 
         if adapter_id < 0 { panic!("Invalid adapter id, cannot be a negative number") }
 
-        let device_fd = unsafe{ libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, bluez::BTPROTO_HCI) };
+        let device_fd = unsafe{ libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, device::BTPROTO_HCI) };
 
         if device_fd < 0 {
             panic!("No Bluetooth Adapter with device id {} exists", adapter_id);
         }
 
-        let sa_p = &bluez::sockaddr_hci {
+        let sa_p = &device::sockaddr_hci {
             hci_family: libc::AF_BLUETOOTH as u16,
             hci_dev: adapter_id as u16,
-            hci_channel: bluez::HCI_CHANNEL_USER as u16,
-        } as *const bluez::sockaddr_hci as *const libc::sockaddr;
+            hci_channel: device::HCI_CHANNEL_USER as u16,
+        } as *const device::sockaddr_hci as *const libc::sockaddr;
 
-        let sa_len = std::mem::size_of::<bluez::sockaddr_hci>() as libc::socklen_t;
+        let sa_len = std::mem::size_of::<device::sockaddr_hci>() as libc::socklen_t;
 
-        if let Err(e) = unsafe{ bluez::hci_dev_down(device_fd, adapter_id.try_into().unwrap() ) } {
+        if let Err(e) = unsafe{ device::hci_dev_down(device_fd, adapter_id.try_into().unwrap() ) } {
             panic!("Failed to close hci device '{}', {}", adapter_id, e );
         }
 
-        if let Err(e) = unsafe{ bluez::hci_dev_up(device_fd, adapter_id.try_into().unwrap() ) } {
+        if let Err(e) = unsafe{ device::hci_dev_up(device_fd, adapter_id.try_into().unwrap() ) } {
             panic!("Failed to open hci device '{}', {}", adapter_id, e );
         }
 
-        if let Err(e) = unsafe{ bluez::hci_dev_down(device_fd, adapter_id.try_into().unwrap() ) } {
+        if let Err(e) = unsafe{ device::hci_dev_down(device_fd, adapter_id.try_into().unwrap() ) } {
             panic!("Failed to close hci device '{}', {}", adapter_id, e );
         }
 
@@ -451,7 +451,7 @@ impl default::Default for HCIAdapter {
 
     fn default() -> Self {
 
-        let adapter_id = unsafe { bluez::hci_get_route(ptr::null_mut()) };
+        let adapter_id = device::hci::get_dev_id(None);
 
         if adapter_id < 0 {
             panic!("No bluetooth adapter on this system");
@@ -496,7 +496,7 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
         log::trace!("parameter: {:x?}", unsafe { std::slice::from_raw_parts(&cmd_data.get_parameter() as *const D::Parameter as *mut u8, size_of::<D::Parameter>()) });
 
         // send the command
-        bluez::hci::send_command(&self.adapter_fd.0, cmd_data)
+        device::hci::send_command(&self.adapter_fd.0, cmd_data)
             .map(|_| true)
             .map_err(|e| Error::from(e))
     }
