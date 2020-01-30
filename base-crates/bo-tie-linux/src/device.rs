@@ -13,12 +13,6 @@ const BLU_DEV_LIST_DEFAULT_CNT: usize = 16;
 // pub const HCI_CHANNEL_RAW: i32 = 0; // A raw channel works with the linux hci implementation
 pub const HCI_CHANNEL_USER: i32 = 1; // User channel gives total control, but requires hci
 
-// #[link(name = "bluetooth")]
-// extern "C" {
-//     pub fn hci_get_route(bt_dev_addr: *mut bo_tie::BluetoothDeviceAddress) -> i32;
-//     pub fn hci_send_cmd(dev: i32, ogf: u16, ocf: u16, parameter_len: u8, parameter: *mut c_void) -> i32;
-// }
-
 pub mod hci {
 
     const HCI_RAW: usize = 6;
