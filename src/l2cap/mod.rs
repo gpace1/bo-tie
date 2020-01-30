@@ -137,15 +137,19 @@ pub enum AclDataError {
     PayloadLengthIncorrect,
     /// Invalid Channel Id
     InvalidChannelId,
+    /// Expected A start Fragment
+    ExpectedStartFragment
 }
 
 impl core::fmt::Display for AclDataError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             AclDataError::RawDataTooSmall => write!(f, "Raw data is too small for an ACL frame"),
-            AclDataError::PayloadLengthIncorrect =>
-                write!(f, "Specified payload length didn't match the actual payload length"),
+            AclDataError::PayloadLengthIncorrect => write!(f, "Specified payload length didn't \
+                match the actual payload length"),
             AclDataError::InvalidChannelId => write!(f, "Invalid Channel Id"),
+            AclDataError::ExpectedStartFragment => write!(f, "Expected start fragment, received a \
+                continuation fragment"),
         }
     }
 }
@@ -234,7 +238,7 @@ impl AclDataFragment {
 
     /// Get the length of the payload as specified in the ACL data
     ///
-    /// This returns None if this packet doesn't contain the length parameter
+    /// This returns None if this packet doesn't contain the full length field
     pub fn get_acl_len(&self) -> Option<usize> {
         if self.start_fragment && self.data.len() > 2 {
             Some( <u16>::from_le_bytes([ self.data[0], self.data[1] ]) as usize )
@@ -339,9 +343,27 @@ impl<'a, C> ConChanFutureRx<'a, C> where C: ?Sized {
     /// Get the complete, de-fragmented, received ACL Data
     ///
     /// This is useful when resulting `poll` may contain many complete packets, but still returns
-    /// `Poll::Pending` because there were also incomplete fragments received.
+    /// `Poll::Pending` because there were also incomplete fragments received. This should be used
+    /// when
     pub fn get_received_packets(&mut self) -> Vec<AclData> {
         core::mem::replace(&mut self.full_acl_data, Vec::new() )
+    }
+
+    /// Drop all fragments
+    ///
+    /// **This will drop all fragments**. This should only be used when polling returns an error
+    /// (with exceptions, see the [Note](#Note)). All assembled L2CAP packets are untouched by this
+    /// function and can be retrieved with `get_received_packets`.
+    ///
+    /// Once this is called, it is likely that polling will return multiple
+    /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment)
+    /// errors before complete L2CAP packets are returned again.
+    ///
+    /// # Note
+    /// This function doesn't need to be called if polling returns the error
+    /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment).
+    pub fn drop_fragments(&mut self) {
+        core::mem::replace(&mut self.carryover_fragments, Vec::new() );
     }
 }
 
@@ -365,13 +387,16 @@ where C: ConnectionChannel
                 Some(fragments) => {
                     match fragments.into_iter().try_for_each( |mut f| {
         
-                        // Continue if f is just an empty fragment, there is nothing to do
+                        // Continue `try_for_each` if f is an empty fragment
                         if f.data.len() == 0 { return Ok(()) }
         
                         if this.carryover_fragments.is_empty()
                         {
+                            if !f.is_start_fragment() {
+                                return Err(AclDataError::ExpectedStartFragment)
+                            }
                             match f.get_acl_len() {
-                                Some(l) if (l + HEADER_SIZE) <= f.data.len()  => {
+                                Some(l) if (l + HEADER_SIZE) <= f.data.len() => {
                                     match AclData::from_raw_data(&f.data) {
                                         Ok(data) => this.full_acl_data.push(data),
                                         Err(e) => return Err(e)
@@ -413,7 +438,7 @@ where C: ConnectionChannel
                                         this.full_acl_data.push(data);
                                         this.carryover_fragments.clear();
                                     },
-                                    Err(e) => return Err(e)
+                                    Err(e) => return Err(e),
                                 }
                             }
                         }
@@ -435,7 +460,7 @@ where C: ConnectionChannel
                     }
                 }
             } { 
-                // Body of "if Some(ret) = ... "
+                // Block of `if Some(ret) = match ...`
                 return Poll::Ready(ret);
 
                 // Loop continues if None is returned by match statement
