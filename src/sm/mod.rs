@@ -291,7 +291,7 @@ struct PairingData {
     /// comparison
     peer_nonce: Option<u128>,
     /// The public key received from the remote device
-    peer_public_key: Option<toolbox::PeerKey>,
+    peer_public_key: Option<toolbox::PeerPubKey>,
     /// The Diffie-Hellman secret key generated via Elliptic Curve Crypto
     secret_key: Option<toolbox::DHSecret>,
     /// Responder pairing confirm

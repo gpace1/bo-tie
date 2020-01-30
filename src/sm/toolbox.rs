@@ -9,24 +9,23 @@
 //!
 //! # The Algorithms
 //! The names of each algorithm match the names as stated in the Security Manager section of the
-//! Host Volume of the Bluetooth Specification (V 5.0 | Vol 3, Part H, Section 2.2). Unfortunately
-//! these names are shortened, making them obtuse to understand going by their name.
-//!
-//! The security function *e* is built using the functions
-//! [`ah`](crate::sm::toolbox::ah),
-//! [`c1`](crate::sm::toolbox::c1), and
-//! [`s1`](crate::sm::toolbox::s1).
-//!
-//! The security function AES-CMAC is built using the functions ['f4'], ['f5'], ['f6'], and ['g2']
+//! Host Volume of the Bluetooth Specification (V 5.0 | Vol 3, Part H, Section 2.2).
 //!
 //! # Note
 //! For the the functions defined in the specification, all array inputs need to be in big-endian
 //! order.
 
-/// The OpenSSL identifier for NIST P-256
-///
-/// This uses the ANSI x9.62 format
-static ECC_NAME: &ring::agreement::Algorithm = &ring::agreement::ECDH_P256;
+/// The Identifier for NIST P-256 curve
+static ECC_NAME: openssl::nid::Nid = openssl::nid::Nid::X9_62_PRIME256V1;
+
+/// The public key type for the P-256 curve
+pub(super) type PubKey = openssl::pkey::PKey<openssl::pkey::Public>;
+
+/// The private key type for the P-256 curve
+pub(super) type PriKey = openssl::pkey::PKey<openssl::pkey::Private>;
+
+/// The peer public key type for the P-256 curve
+pub(super) type PeerPubKey = openssl::pkey::PKey<openssl::pkey::Public>;
 
 /// The identifier for an uncompressed public key
 const UNCOMPRESSED_PUB_KEY_TYPE: u8 = 0x4;
@@ -42,63 +41,52 @@ const PUB_KEY_X_RANGE: core::ops::Range<usize> = 1..33;
 /// The range in the public key bytes of the y part of the coordinate
 const PUB_KEY_Y_RANGE: core::ops::Range<usize> = 33..65;
 
-/// The public key type
-pub(super) type PubKey = ring::agreement::PublicKey;
-
-/// The private key type
-pub(super) type PriKey = ring::agreement::EphemeralPrivateKey;
-
-pub(super) type PeerKey = ring::agreement::UnparsedPublicKey<alloc::vec::Vec<u8>>;
-
 /// The Diffie-Hellman shared secret
 pub(super) type DHSecret = [u8;32];
 
 impl super::GetXOfP256Key for PubKey {
     fn x(&self) -> [u8;32] {
+        use openssl::bn::BigNumContext;
+        use openssl::ec::EcGroup;
+        use openssl::ec::PointConversionForm;
+
+        let ec_key = self.ec_key().unwrap();
+        let ec_group = EcGroup::from_curve_name(ECC_NAME).unwrap();
+        let mut bg_num = BigNumContext::new().unwrap();
+
         let mut ret = [0u8;32];
 
-        ret.copy_from_slice(&self.as_ref()[PUB_KEY_X_RANGE]);
+        let bytes = ec_key
+            .public_key()
+            .to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut bg_num).unwrap();
+
+        ret.copy_from_slice(&bytes[PUB_KEY_X_RANGE]);
 
         ret
     }
 }
 
-impl super::GetXOfP256Key for PeerKey {
-    fn x(&self) -> [u8;32] {
-        let mut ret = [0u8;32];
-
-        ret.copy_from_slice(&self.bytes()[PUB_KEY_X_RANGE]);
-
-        ret
-    }
-}
-
-impl super::CommandData for PubKey {
+impl super::CommandData for PeerPubKey {
     fn into_icd(self) -> alloc::vec::Vec<u8> {
-        let mut pub_key = self.as_ref()[PUB_KEY_RANGE].to_vec();
+        use openssl::ec::EcGroup;
+        use openssl::ec::PointConversionForm;
+        use openssl::bn::BigNumContext;
 
-        // Reverse the keys so that they are in little endian order
-        pub_key[..32].reverse();
-        pub_key[32..].reverse();
+        let ec_key = self.ec_key().unwrap();
+        let ec_group = EcGroup::from_curve_name(ECC_NAME).unwrap();
+        let mut bg_num = BigNumContext::new().unwrap();
 
-        pub_key
-    }
-
-    /// Private keys cannot be created from raw bytes
-    ///
-    /// This will always return [`Error::UnsupportedFeature'](super::Error::UnsupportedFeature)
-    fn try_from_icd(_: &[u8]) -> Result<Self, super::Error> {
-        Err( super::Error::UnsupportedFeature )
-    }
-}
-
-impl super::CommandData for PeerKey {
-    fn into_icd(self) -> alloc::vec::Vec<u8> {
-        self.bytes()[PUB_KEY_RANGE].to_vec()
+        ec_key.public_key()
+            .to_bytes(&ec_group,PointConversionForm::UNCOMPRESSED, &mut bg_num)
+            .unwrap()[PUB_KEY_RANGE]
+            .to_vec()
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
         use alloc::vec::Vec;
+        use openssl::ec::{ EcPoint, EcGroup, EcKey};
+            use openssl::pkey::PKey;
+        use openssl::bn::BigNumContext;
 
         // The icd doesn't contain the compression byte indicator
         if icd.len() == PUB_KEY_BYTE_LEN - 1 {
@@ -112,7 +100,15 @@ impl super::CommandData for PeerKey {
             pub_key[PUB_KEY_X_RANGE].reverse();
             pub_key[PUB_KEY_Y_RANGE].reverse();
 
-            Ok(ring::agreement::UnparsedPublicKey::new(ECC_NAME, pub_key))
+            let group = EcGroup::from_curve_name(ECC_NAME).unwrap();
+
+            let mut bg_num = BigNumContext::new().unwrap();
+
+            let ec_point = EcPoint::from_bytes(&group, &pub_key, &mut bg_num).unwrap();
+
+            let ec_key = EcKey::from_public_key(&group, &ec_point).unwrap();
+
+            Ok( PKey::from_ec_key(ec_key).unwrap() )
         } else {
             Err( super::Error::Size )
         }
@@ -460,9 +456,7 @@ pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
 /// This is the encrypted data generator for LE legacy. It generates 128-bit data from a 128-bit key
 /// using the AES-128 bit block cypher (see [FIPS-197](https://en.wikipedia.org/wiki/FIPS_197)).
 ///
-/// This function uses the [aes](https://crates.io/crates/aes) to generate the Ciphertext. As of
-/// writing this function description, this crate has
-/// ["not yet received any formal cryptographic and security reviews"](https://github.com/RustCrypto/block-ciphers/blob/master/README.md#warnings)
+/// This function uses OpenSSL's [`aes`]( implementation to generate the Ciphertext.
 ///
 /// This is the synchronous version of this function and doesn't rely on the HCI to encrypt the
 /// payload. Whether or not this function is faster then the asynchronous version
@@ -471,18 +465,23 @@ pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
 /// [AES Instruction Set](https://en.wikipedia.org/wiki/AES_instruction_set).
 pub fn e(key: u128, plain_text: u128 ) -> u128 {
 
-    use aes::block_cipher_trait::generic_array::GenericArray;
-    use aes::block_cipher_trait::BlockCipher;
+    use openssl::symm::{Cipher, Mode, Crypter};
 
-    let key_bytes = key.to_be_bytes();
+    let cipher = Cipher::aes_128_ecb();
 
-    let cipher = aes::Aes128::new( GenericArray::from_slice(&key_bytes) );
+    let mut cypher_block = [0u8;32];
 
-    let mut block = plain_text.to_be_bytes();
+    let mut crypter = Crypter::new(cipher, Mode::Encrypt, &key.to_be_bytes(), None).unwrap();
 
-    cipher.encrypt_block( GenericArray::from_mut_slice(&mut block) ) ;
+    crypter.update(&plain_text.to_be_bytes(), &mut cypher_block).unwrap();
 
-    <u128>::from_be_bytes(block)
+    crypter.finalize(&mut cypher_block[16..]).unwrap();
+
+    let mut cypher_value = [0u8;16];
+
+    cypher_value.copy_from_slice(&cypher_block[..16]);
+
+    <u128>::from_be_bytes(cypher_value)
 }
 
 /// AES-CMAC subkey generation algorithm
@@ -565,17 +564,19 @@ pub fn aes_cmac_verify(key: u128, msg: &[u8], auth_code: u128) -> bool {
 /// This will return an error if the random number generation failed.
 pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 
-    use ring::{agreement, rand};
+    use openssl::ec::{EcKey, EcGroup};
+    use openssl::pkey::PKey;
 
-    let rng = rand::SystemRandom::new();
-
-    let private_key = match agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng) {
-        Ok(pk) => pk,
-        Err(_) => return Err("Failed to generate keys")
+    let group = match EcGroup::from_curve_name(ECC_NAME) {
+        Err(e) => return Err(e),
+        Ok(g) => g
     };
 
-    let public_key = private_key.compute_public_key()
-        .or(Err("Failed to compute public key"))?;
+    let ec_pri_key = EcKey::generate( &group )?;
+    let ec_pub_key = EcKey::from_public_key( &group, ec_pri_key.public_key() )?;
+
+    let private_key = PKey::from_ec_key(ec_pri_key)?;
+    let public_key  = PKey::from_ec_key(ec_pub_key)?;
 
     Ok( (private_key, public_key) )
 }
@@ -587,25 +588,23 @@ pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 ///
 /// The `raw_remote_public_key` needs to be in the byte order as shown in the Security Manager's
 /// 'Pairing Public Key' PDU.
-pub fn ecdh(this_private_key: PriKey, peer_public_key: &PeerKey) -> Result<DHSecret, impl core::fmt::Debug>
+pub fn ecdh(this_private_key: PriKey, peer_public_key: &PeerPubKey) -> Result<DHSecret, impl core::fmt::Debug>
 {
-    use ring::{agreement, error};
+    use openssl::derive::Deriver;
+    use super::CommandData;
 
-    let secret = match agreement::agree_ephemeral (
-        this_private_key,
-        peer_public_key,
-        error::Unspecified,
-        |secret| Ok(secret.to_vec()) )
-    {
-        Ok(s) => s,
-        Err(_) => return Err("Failed to create secret key")
+    let mut deriver = match Deriver::new(&this_private_key) {
+        Err(e) => return Err(e),
+        Ok(d) => d,
     };
 
-    let mut secret_key = [0u8;32];
+    let mut secret = DHSecret::default();
 
-    secret_key.copy_from_slice(&secret);
+    deriver.set_peer(peer_public_key)?;
 
-    Ok(secret_key)
+    secret.copy_from_slice( &deriver.derive_to_vec()? );
+
+    Ok(secret)
 }
 
 /// Generate a random u128 value
@@ -803,13 +802,17 @@ mod tests {
 
         let n2 = 0xa6e8e7cc_25a75f6e_216583f7_ff3dc4cf;
 
-        let mut a1 = [0u8; 7];
+        let mut a1_raw = [0u8; 7];
 
-        a1.copy_from_slice(&parse_spec_test_data("A1             00561237 37bfce"));
+        a1_raw.copy_from_slice(&parse_spec_test_data("A1             00561237 37bfce"));
 
-        let mut a2 = [0u8; 7];
+        let mut a2_raw = [0u8; 7];
 
-        a2.copy_from_slice(&parse_spec_test_data("A2             00a71370 2dcfc1"));
+        a2_raw.copy_from_slice(&parse_spec_test_data("A2             00a71370 2dcfc1"));
+
+        let a1 = PairingAddress(a1_raw);
+
+        let a2 = PairingAddress(a2_raw);
 
         let mac_key = 0x2965f176_a1084a02_fd3f6a20_ce636e20;
 
@@ -836,13 +839,17 @@ mod tests {
 
         io_cap.copy_from_slice( &parse_spec_test_data("IOcap          010102"));
 
-        let mut a1 = [0u8; 7];
+        let mut a1_raw = [0u8; 7];
 
-        a1.copy_from_slice( &parse_spec_test_data("A1             00561237 37bfce"));
+        a1_raw.copy_from_slice( &parse_spec_test_data("A1             00561237 37bfce"));
 
-        let mut a2= [0u8; 7];
+        let mut a2_raw= [0u8; 7];
 
-        a2.copy_from_slice( &parse_spec_test_data("A2             00a71370 2dcfc1"));
+        a2_raw.copy_from_slice( &parse_spec_test_data("A2             00a71370 2dcfc1"));
+
+        let a1 = PairingAddress(a1_raw);
+
+        let a2 = PairingAddress(a2_raw);
 
         assert_eq!(0xe3c47398_9cd0e8c5_d26c0b09_da958f61, f6(mac_key, n1, n2, r, io_cap, a1, a2));
     }
@@ -889,7 +896,7 @@ mod tests {
         raw_peer_key[..32].reverse();
         raw_peer_key[32..].reverse();
 
-        let peer_key = PeerKey::try_from_icd(&raw_peer_key).expect("Failed to make PeerKey");
+        let peer_key = PeerPubKey::try_from_icd(&raw_peer_key).expect("Failed to make PeerKey");
 
         let _secret = ecdh(pri_key, &peer_key).expect("Failed to generate secret");
     }

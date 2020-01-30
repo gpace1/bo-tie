@@ -32,7 +32,7 @@ macro_rules! log_error_and_panic {
 mod device;
 mod timeout;
 
-#[derive(Debug,PartialEq,Eq,Clone)]
+#[derive(Debug,PartialEq,Eq)]
 pub struct FileDescriptor(RawFd);
 
 impl Drop for FileDescriptor {

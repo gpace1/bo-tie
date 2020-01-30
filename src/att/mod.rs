@@ -693,7 +693,6 @@ mod test {
             server.push(attribute_3); // has handle value of 3
 
             if let Err(e) = 'server_loop: loop {
-                use async_timer::Timed;
 
                 match futures::executor::block_on(c2.future_receiver()) {
                     Ok(l2cap_data_vec) => for l2cap_pdu in l2cap_data_vec {

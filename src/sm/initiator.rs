@@ -218,7 +218,7 @@ where C: ConnectionChannel
                     ..
                 })
             ) => {
-                let remote_pub_key = match toolbox::PeerKey::try_from_icd( &peer_pub_key_pdu.get_key() )
+                let remote_pub_key = match toolbox::PeerPubKey::try_from_icd( &peer_pub_key_pdu.get_key() )
                     {
                         Ok(k) => k,
                         Err(e) => {

@@ -393,7 +393,7 @@ where C: ConnectionChannel,
 
                 log::trace!("remote public key: {:x?}", remote_public_key.as_ref());
 
-                let peer_pub_key = match toolbox::PeerKey::try_from_icd(&remote_public_key)
+                let peer_pub_key = match toolbox::PeerPubKey::try_from_icd(&remote_public_key)
                 {
                     Ok(k) => k,
                     Err(e) => {
