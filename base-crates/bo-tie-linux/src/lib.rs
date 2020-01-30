@@ -12,7 +12,6 @@ use std::fmt;
 use std::ops::Drop;
 use std::option::Option;
 use std::pin::Pin;
-use std::ptr;
 use std::sync::{Arc,Mutex};
 use std::task;
 use std::thread;
@@ -338,7 +337,7 @@ pub struct HCIAdapter {
     hci_data_recv: RcvHciAclData,
 }
 
-impl From<i32> for HCIAdapter {
+impl From<usize> for HCIAdapter {
 
     /// Create a HCIAdapter with the given bluetooth adapter id if an adapter exists
     ///
@@ -346,7 +345,7 @@ impl From<i32> for HCIAdapter {
     ///
     /// # Panics
     /// There is no Bluetooth Adapter with the given device id
-    fn from( adapter_id: i32 ) -> Self {
+    fn from( adapter_id: usize ) -> Self {
 
         use nix::sys::eventfd::{EfdFlags, eventfd};
         use nix::libc;
@@ -360,8 +359,6 @@ impl From<i32> for HCIAdapter {
         };
 
         use std::convert::TryInto;
-
-        if adapter_id < 0 { panic!("Invalid adapter id, cannot be a negative number") }
 
         let device_fd = unsafe{ libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, device::BTPROTO_HCI) };
 
@@ -451,11 +448,8 @@ impl default::Default for HCIAdapter {
 
     fn default() -> Self {
 
-        let adapter_id = device::hci::get_dev_id(None);
-
-        if adapter_id < 0 {
-            panic!("No bluetooth adapter on this system");
-        }
+        let adapter_id = device::hci::get_dev_id(None)
+            .expect("No Bluetooth adapter found on this system");
 
         HCIAdapter::from(adapter_id)
     }
@@ -483,7 +477,6 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
     where D: bo_tie::hci::CommandParameter,
           W: Into<Option<std::task::Waker>>
     {
-        use nix::errno::Errno;
         use std::mem::size_of;
 
         log::debug!("Sending command {:?}", D::COMMAND);
@@ -631,19 +624,6 @@ impl PacketBuffer {
             }
         }
     }
-
-    /// Get the data
-    fn get(&mut self) -> Vec<HciAclData> {
-        use std::mem::replace;
-
-        match self {
-            Self::Unlimited(v) => replace(v, Vec::new()),
-            Self::Limited(v, size) => {
-                *size = 0;
-                replace(v, Vec::with_capacity(v.capacity()))
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -692,7 +672,7 @@ impl ConnectionRecvInfo {
             .into_unlimited()
         {
             PacketBuffer::Unlimited(v) => v,
-            _ => panic!("Received unexpected Liimited"),
+            _ => panic!("Received unexpected Limited"),
         };
 
         match recv_packs.len() {
