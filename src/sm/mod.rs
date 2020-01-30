@@ -348,6 +348,11 @@ enum BluAddr {
 
 impl KeyDBEntry {
 
+    /// Construct a new `KeyDBEntry` with no keys
+    pub fn new() -> Self {
+        KeyDBEntry { ltk: None, csrk: None, irk: None, peer_csrk: None, peer_irk: None, peer_addr: None }
+    }
+
     /// Returns a boolean indicating if the key entry can be added to a [`KeyDB`]
     #[inline]
     pub fn is_databaseable(&self) -> bool {
