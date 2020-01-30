@@ -591,7 +591,6 @@ pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 pub fn ecdh(this_private_key: PriKey, peer_public_key: &PeerPubKey) -> Result<DHSecret, impl core::fmt::Debug>
 {
     use openssl::derive::Deriver;
-    use super::CommandData;
 
     let mut deriver = match Deriver::new(&this_private_key) {
         Err(e) => return Err(e),
