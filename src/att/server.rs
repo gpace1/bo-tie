@@ -1030,6 +1030,7 @@ impl super::AnyAttribute for ReservedHandle {
 /// The constructor of attributes on an Attribute Server
 ///
 /// `ServerAttributes` construsts a list of attributes.
+#[derive(Default)]
 pub struct ServerAttributes {
     attributes: Vec<Box<dyn super::AnyAttribute + Unpin + Send>>
 }
