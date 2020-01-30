@@ -175,7 +175,6 @@ impl ServerPduName {
 /// For now a server can only handle one client. It will be updated to handle multiple clients
 /// as soon as possible.
 pub struct Server<'c, C>
-where C: l2cap::ConnectionChannel
 {
     /// The maximum mtu that this server can handle. This is also the mtu sent in a MTU response
     /// PDU. This is not the mtu that is decided as the maximum transmit size between the server

@@ -412,7 +412,6 @@ impl ServerBuilder
 }
 
 pub struct Server<'c, C>
-where C: l2cap::ConnectionChannel
 {
     primary_services: Vec<Service>,
     server: att::server::Server<'c, C>
