@@ -224,8 +224,15 @@ where C: ConnectionChannel,
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub fn process_command<'s>(&'s mut self, received_data: &'s [u8] ) -> Result<Option<&'s mut super::KeyDBEntry>, Error>
+    pub fn process_command<'s>(&'s mut self, acl_data: &'s crate::l2cap::AclData )
+    -> Result<Option<&'s mut super::KeyDBEntry>, Error>
     {
+        if acl_data.get_channel_id() != super::L2CAP_CHANNEL_ID {
+            return Err(Error::IncorrectL2capChannelId)
+        }
+
+        let received_data = acl_data.get_payload();
+
         if received_data.len() > SecurityManager::SMALLEST_PACKET_SIZE {
 
             let (d_type, payload) = received_data.split_at(1);
