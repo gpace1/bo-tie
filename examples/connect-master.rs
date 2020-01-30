@@ -44,7 +44,7 @@ async fn scan_for_local_name<'a>(
 
     set_scan_enable::send(&hi, false, false).await.unwrap();
 
-    set_event_mask::send(&hi, vec![le_event]).await.unwrap();
+    set_event_mask::send(&hi, &[le_event]).await.unwrap();
 
     set_scan_parameters::send(&hi, scan_prms).await.unwrap();
 
@@ -86,7 +86,7 @@ async fn connect(
 {
     use bo_tie::hci::common;
     use bo_tie::hci::events::LEMeta;
-    use bo_tie::hci::le::common::OwnAddressType;
+    use bo_tie::hci::le::common::{OwnAddressType, ConnectionEventLength};
     use bo_tie::hci::le::connection;
     use bo_tie::hci::le::connection::create_connection;
     use bo_tie::hci::le::mandatory::set_event_mask;
@@ -110,11 +110,11 @@ async fn connect(
         ).unwrap(),
         common::ConnectionLatency::try_from(slave_latency).unwrap(),
         common::SupervisionTimeout::try_from_duration(supervision_timeout).unwrap(),
-        connection::ConnectionEventLength::new(0x0, 0x1000),
+        ConnectionEventLength::default(),
     );
 
     // enable the LEConnectionComplete event
-    set_event_mask::send(&hi, vec![connect_event]).await.unwrap();
+    set_event_mask::send(&hi, &[connect_event]).await.unwrap();
 
     // create the connection
     create_connection::send(&hi, parameters).await.unwrap();

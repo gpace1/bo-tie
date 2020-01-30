@@ -1,5 +1,3 @@
-#![feature(gen_future)]
-
 use bo_tie::gap::advertise;
 use bo_tie::hci;
 use bo_tie::hci::{
@@ -23,7 +21,6 @@ const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 /// own module is to differentiate the GATT server portion from the normal lE bluetooth setup.
 mod heart_rate_service
 {
-    use bo_tie::att;
     use bo_tie::gatt;
     use bo_tie::l2cap;
 
@@ -335,7 +332,7 @@ fn main() {
 
                 let hrm = heart_rate_service::characteristics::HeartRateMeasurement::new(heart_rate.clone());
 
-                let connection_channel = interface.new_le_acl_connection_channel(&connection_complete_event);
+                let connection_channel = interface.new_connection_channel(connection_complete_event.connection_handle);
 
                 let server = heart_rate_service::build_server(hrm, &connection_channel, None);
 

@@ -262,7 +262,7 @@ impl Bonder {
                         Err(e) => log::error!("Cannot process acl data for ATT, '{}'", e),
                     }
                 ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
-                    match slave_security_manager.process_command(acl_data.get_payload()) {
+                    match slave_security_manager.process_command(&acl_data) {
                         Ok(None) => (),
                         Err(e) => log::error!("Cannot process acl data for SM, '{:?}'", e),
                         Ok(Some(db_entry)) => {
