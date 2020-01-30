@@ -1,5 +1,3 @@
-#![feature(arbitrary_self_types)]
-
 use bo_tie::hci::{
     events,
     common::ConnectionHandle,

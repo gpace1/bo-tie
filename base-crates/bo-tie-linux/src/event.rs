@@ -79,7 +79,7 @@ pub struct EventExpecter {
 impl EventExpecter {
 
     fn get_stop_timer(
-        self: &mut std::sync::MutexGuard<Self>,
+        &mut self,
         mut timeout_builder: timeout::TimeoutBuilder,
         callback: Box<dyn Fn() + Send + Sync>)
     -> Result<timeout::StopTimeout, crate::Error>
@@ -99,7 +99,7 @@ impl EventExpecter {
     }
 
     fn remove_expected_event(
-        self: &mut std::sync::MutexGuard<Self>,
+        &mut self,
         event: events::Events,
         pattern: &DynEventMatcher)
     -> Option<ExpEventInfo>
