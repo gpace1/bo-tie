@@ -317,7 +317,7 @@ struct PairingData {
 /// IRK and CSRK per `SecurityManager`, but any number of `KeyDBEntry`s can use them. If a static
 /// CSRK is used, the sign counter for this `KeyDBEntry` can only be used through the connection to
 /// the peer device.
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone,Serialize,Deserialize,Default)]
 pub struct KeyDBEntry {
     /// The Long Term Key (private key)
     ///
@@ -350,10 +350,14 @@ impl KeyDBEntry {
 
     /// Construct a new `KeyDBEntry` with no keys
     pub fn new() -> Self {
-        KeyDBEntry { ltk: None, csrk: None, irk: None, peer_csrk: None, peer_irk: None, peer_addr: None }
+        KeyDBEntry::default()
     }
 
-    /// Returns a boolean indicating if the key entry can be added to a [`KeyDB`]
+    /// Returns a boolean indicating if the key entry can be added to a keys database
+    ///
+    /// For a `KeyDBEntry` to be databaseable, it needs to have either a peer address or a peer irk.
+    /// If neither is available, then there would be no way to associate any of the rest of the keys
+    /// in a `KeyDBEntry` to a device when the `KeyDBEntry` is retrieved from a database.
     #[inline]
     pub fn is_databaseable(&self) -> bool {
         self.peer_addr != None || self.peer_irk != None
