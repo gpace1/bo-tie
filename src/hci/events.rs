@@ -3228,9 +3228,9 @@ impl LEAdvertisingSetTerminatedData {
 
 #[derive(Clone)]
 pub struct LEScanRequestReceivedData {
-    advertising_handle: u8,
-    scanner_address_type: LEAddressType,
-    scanner_address: BluetoothDeviceAddress,
+    pub advertising_handle: u8,
+    pub scanner_address_type: LEAddressType,
+    pub scanner_address: BluetoothDeviceAddress,
 }
 
 impl LEScanRequestReceivedData {
