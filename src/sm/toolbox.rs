@@ -83,14 +83,13 @@ impl super::CommandData for PeerPubKey {
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
-        use alloc::vec::Vec;
         use openssl::ec::{ EcPoint, EcGroup, EcKey};
             use openssl::pkey::PKey;
         use openssl::bn::BigNumContext;
 
         // The icd doesn't contain the compression byte indicator
         if icd.len() == PUB_KEY_BYTE_LEN - 1 {
-            let mut pub_key = Vec::with_capacity(PUB_KEY_BYTE_LEN);
+            let mut pub_key = alloc::vec::Vec::with_capacity(PUB_KEY_BYTE_LEN);
 
             pub_key.push(UNCOMPRESSED_PUB_KEY_TYPE);
 
@@ -880,7 +879,7 @@ mod tests {
     fn ec_dh_test() {
         use super::super::CommandData;
 
-        let (pri_key, pub_key) = ecc_gen().expect("Failed to generate pri-pub key");
+        let (pri_key, _) = ecc_gen().expect("Failed to generate pri-pub key");
 
         // This is the x and y of the public key specified in the Bluetooth Specification v5.0 | Vol
         // 3, Part H, Section 2.3.5.6.1

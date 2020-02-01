@@ -10,8 +10,7 @@ pub enum AuthRequirements {
     ManInTheMiddleProtection,
     Sc,
     KeyPress,
-    // Waiting for BR/EDR support
-    // CT2
+    // CT2 /* Waiting for BR/EDR support */
 }
 
 impl AuthRequirements {

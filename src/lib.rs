@@ -18,7 +18,6 @@ extern crate bincode as serializer;
 // test related
 #[cfg(test)]
 extern crate test;
-
 pub mod att;
 pub mod gap;
 pub mod gatt;
@@ -53,6 +52,82 @@ pub fn bluetooth_address_from_string( addr: &str ) -> Result<BluetoothDeviceAddr
 
 pub fn bluetooth_address_into_string( addr: BluetoothDeviceAddress ) -> alloc::string::String {
     alloc::format!("{}:{}:{}:{}:{}:{}", addr[5], addr[4], addr[3], addr[2], addr[1], addr[0])
+}
+
+/// Create a static random address
+pub fn new_static_random_bluetooth_address() -> BluetoothDeviceAddress {
+    use rand_core::RngCore;
+
+    let mut a = BluetoothDeviceAddress::default();
+
+    rand_core::OsRng.fill_bytes(&mut a);
+
+    // tag for static random in address 11 in last 2 bits
+    a[5] |= 0b1100;
+
+    a
+}
+
+/// Create a non-resolvable private address
+pub fn new_non_resolvable_private_address() -> BluetoothDeviceAddress {
+    use rand_core::RngCore;
+
+    let mut a = BluetoothDeviceAddress::default();
+
+    loop {
+        rand_core::OsRng.fill_bytes(&mut a);
+
+        // Practically unnecessary, necessary check to validate the address not being all 0 or 1.
+        // For a good rng there is only a 2 in 2^48 chance of this happening
+        if ([0u8;6] != a) && ([0xFF;6] != a) { break; }
+    }
+
+    // tag for static random in address is 00 in last 2 bits
+    a[5] &= 0b0011;
+
+    a
+}
+
+/// Create a resolvable private address
+///
+/// This requires an identity resolving key (`irk`) to generate the address from. Most controllers
+/// will be able to handle both the generation and resolving of a resolvable private address (RPA).
+/// However it can be setup for both the generation and resolving to be done in the host.
+///
+/// For more information on generating an IRK see the [security manager](crate::sm).
+pub fn new_resolvable_private_address(irk: u128) -> BluetoothDeviceAddress {
+    use rand_core::RngCore;
+
+    let mut address = BluetoothDeviceAddress::default();
+
+    let (hash, prand) = address.split_at_mut(3);
+
+    loop {
+        rand_core::OsRng.fill_bytes(prand);
+
+        // Practically unnecessary, necessary check to validate the address not being all 0 or 1.
+        // For a good rng there is only a 2 in 2^24 chance of this happening
+        if (&[0u8;3] != prand) && (&[0xFF,3] != prand) { break; }
+    }
+
+    // tag for static random in address is 01 in last 2 bits
+    prand[2] = prand[2] & 0b0111 | 0b0100;
+
+    hash.copy_from_slice( &sm::toolbox::ah(irk, [prand[0], prand[1], prand[2]]) );
+
+    address
+}
+
+/// Resolve a resolvable private address with `irk`
+///
+/// This function returns true if `address` is resolved with the provided `irk`
+pub fn resolve_resolvable_private_address(irk: u128, address: BluetoothDeviceAddress) -> bool {
+    let (peer_hash, prand) = address.split_at(3);
+
+    // Short circuit if the prand doesn't have the correct signature for a RPA (last 2 bits must be
+    // 01)
+    (prand[2] & 0b1100 == 0b0100) &&
+        ( peer_hash == sm::toolbox::ah(irk, [prand[0], prand[1], prand[2]]) )
 }
 
 /// Universally Unique Identifier
@@ -304,5 +379,23 @@ impl core::fmt::Display for UUIDVersion {
             UUIDVersion::NameSHA1 =>
                 write!(f, "Name-based (with SHA-1 hash) version"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rpa_test() {
+        use rand_core::RngCore;
+
+        let mut rand = [0u8;16];
+
+        rand_core::OsRng.fill_bytes(&mut rand);
+
+        let irk = <u128>::from_le_bytes(rand);
+
+        let rpa = super::new_resolvable_private_address(irk);
+
+        assert!( super::resolve_resolvable_private_address(irk, rpa) );
     }
 }
