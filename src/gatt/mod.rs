@@ -223,9 +223,9 @@ impl<'a> IncludesAdder<'a>
 /// constructing with ServiceBuilder.
 ///
 /// This is created by the
-/// `[ServiceBuilder::into_characteristics_adder](../ServiceBuilder/index.html#into_includes_adder)`
+/// [`ServiceBuilder::into_characteristics_adder`](bo_tie::gatt::ServiceBuilder::into_characteristics_adder)
 /// or
-/// `[IncludesAdder::into_characteristics_adder](../ServiceBuilder/index.html#into_includes_adder)`
+/// [`IncludesAdder::into_characteristics_adder`](bo_tie::gatt::IncludesAdder::into_characteristics_adder)
 /// functions.
 pub struct CharacteristicAdder<'a>
 {
@@ -250,7 +250,7 @@ impl<'a> CharacteristicAdder<'a>
         value: Box<V>,
         value_permissions: Vec<att::AttributePermissions> )
     -> characteristic::CharacteristicBuilder<'a, V>
-    where Box<V>: att::TransferFormat + Unpin + Send + Sync + 'static,
+    where Box<V>: att::TransferFormat + Send + Sync + 'static,
               V: ?Sized
     {
         characteristic::CharacteristicBuilder::new(

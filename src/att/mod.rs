@@ -128,7 +128,7 @@ pub struct Attribute<V> {
     handle: Option<u16>,
 
     /// Access Permissions
-    permissions: Box<[AttributePermissions]>,
+    permissions: Vec<AttributePermissions>,
 
     /// Attribute value
     value: V
@@ -153,8 +153,8 @@ impl<V> Attribute<V> {
         Attribute {
             ty: attribute_type,
             handle: None,
-            permissions: permissions.into_boxed_slice(),
-            value: value,
+            permissions,
+            value,
         }
     }
 }
@@ -525,7 +525,7 @@ trait AnyAttribute {
     fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat;
 }
 
-impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized + Unpin {
+impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized  {
 
     fn get_type(&self) -> crate::UUID { self.ty }
 

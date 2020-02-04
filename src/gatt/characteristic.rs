@@ -292,15 +292,15 @@ where Box<V>: att::TransferFormat + Unpin + Send + Sync + 'static,
     ) -> CharacteristicBuilder<V>
     {
         CharacteristicBuilder {
-            characteristic_adder: characteristic_adder,
+            characteristic_adder,
             declaration: Declaration {
                 properties: properties.into_boxed_slice(),
                 value_handle: 0,
-                uuid: uuid
+                uuid
             },
             value_decl: ValueDeclaration {
                 att_type: uuid,
-                value: value,
+                value,
                 permissions: value_permissions,
             },
             ext_prop: None,
