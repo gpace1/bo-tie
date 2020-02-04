@@ -1014,8 +1014,8 @@ struct ReservedHandle;
 impl super::AnyAttribute for ReservedHandle {
     fn get_type(&self) -> crate::UUID { Into::<crate::UUID>::into(0u128) }
 
-    fn get_permissions(&self) -> Box<[super::AttributePermissions]> {
-        alloc::vec!(super::AttributePermissions::Read).into_boxed_slice()
+    fn get_permissions(&self) -> Vec<super::AttributePermissions> {
+        alloc::vec!(super::AttributePermissions::Read)
     }
 
     fn get_handle(&self) -> u16 { 0 }

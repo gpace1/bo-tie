@@ -516,7 +516,7 @@ trait AnyAttribute {
 
     fn get_type(&self) -> crate::UUID;
 
-    fn get_permissions(&self) -> Box<[AttributePermissions]>;
+    fn get_permissions(&self) -> Vec<AttributePermissions>;
 
     fn get_handle(&self) -> u16;
 
@@ -529,7 +529,7 @@ impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized  {
 
     fn get_type(&self) -> crate::UUID { self.ty }
 
-    fn get_permissions(&self) -> Box<[AttributePermissions]> { self.permissions.clone() }
+    fn get_permissions(&self) -> Vec<AttributePermissions> { self.permissions.clone() }
 
     /// This will panic if the handle value hasn't been set yet
     fn get_handle(&self) -> u16 { self.handle.expect("Handle value not set") }
