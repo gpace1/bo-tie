@@ -65,7 +65,7 @@ impl Properties {
 }
 
 impl att::TransferFormat for Box<[Properties]> {
-    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 1 {
             Ok( Properties::from_bit_field(raw[0]) )
         } else {
@@ -73,7 +73,7 @@ impl att::TransferFormat for Box<[Properties]> {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let cp: &[u8] = &[Properties::into_bit_field(self)];
 
         cp.into()
@@ -91,28 +91,28 @@ struct Declaration {
 }
 
 impl att::TransferFormat for Declaration {
-    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         // The implementation of TransferFormat for UUID will check if the length is good for
         // a 128 bit UUID
         if raw.len() >= 6 {
             Ok( Declaration {
-                properties: att::TransferFormat::from( &raw[..1] )?,
-                value_handle: att::TransferFormat::from( &raw[1..3] )?,
-                uuid: att::TransferFormat::from( &raw[3..])?,
+                properties: att::TransferFormat::try_from( &raw[..1] )?,
+                value_handle: att::TransferFormat::try_from( &raw[1..3] )?,
+                uuid: att::TransferFormat::try_from( &raw[3..])?,
             })
         } else {
             Err( att::TransferFormatError::bad_min_size(stringify!(Declaration), 6, raw.len()) )
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = Vec::new();
 
         v.extend_from_slice( &att::TransferFormat::into(&self.properties) );
         v.extend_from_slice( &att::TransferFormat::into(&self.value_handle) );
         v.extend_from_slice( &att::TransferFormat::into(&self.uuid) );
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -135,7 +135,7 @@ pub enum ExtendedProperties {
 }
 
 impl att::TransferFormat for ExtendedProperties {
-    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
                 0x1 => Ok( ExtendedProperties::ReliableWrite ),
@@ -148,13 +148,13 @@ impl att::TransferFormat for ExtendedProperties {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let val = match *self {
             ExtendedProperties::ReliableWrite => 0x1,
             ExtendedProperties::WritableAuxiliaries => 0x2,
         };
 
-        From::<&[u8]>::from( &[val] )
+        alloc::vec!(val)
     }
 }
 
@@ -192,7 +192,7 @@ pub enum ClientConfiguration {
 }
 
 impl att::TransferFormat for ClientConfiguration {
-    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
                 0x1 => Ok( ClientConfiguration::Notification ),
@@ -205,7 +205,7 @@ impl att::TransferFormat for ClientConfiguration {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let val = match *self {
             ClientConfiguration::Notification => 0x1,
             ClientConfiguration::Indication => 0x2,
@@ -234,7 +234,7 @@ pub enum ServerConfiguration {
 }
 
 impl att::TransferFormat for ServerConfiguration {
-    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
                 0x1 => Ok( ServerConfiguration::Broadcast ),
@@ -246,12 +246,12 @@ impl att::TransferFormat for ServerConfiguration {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let val = match *self {
             ServerConfiguration::Broadcast => 0x1,
         };
 
-        From::<&[u8]>::from( &[val] )
+        alloc::vec!(val)
     }
 }
 

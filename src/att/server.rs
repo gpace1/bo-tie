@@ -466,22 +466,22 @@ where C: l2cap::ConnectionChannel
 
         match pdu_type {
             super::client::ClientPduName::ExchangeMtuRequest =>
-                self.process_exchange_mtu_request( TransferFormat::from( &payload)? ),
+                self.process_exchange_mtu_request( TransferFormat::try_from( &payload)? ),
 
             super::client::ClientPduName::WriteRequest =>
                 self.process_write_request( &payload ),
 
             super::client::ClientPduName::ReadRequest =>
-                self.process_read_request( TransferFormat::from(&payload)? ),
+                self.process_read_request( TransferFormat::try_from(&payload)? ),
 
             super::client::ClientPduName::FindInformationRequest =>
-                self.process_find_information_request( TransferFormat::from(&payload)? ),
+                self.process_find_information_request( TransferFormat::try_from(&payload)? ),
 
             super::client::ClientPduName::FindByTypeValueRequest =>
                 self.process_find_by_type_value_request( &payload ),
 
             super::client::ClientPduName::ReadByTypeRequest =>
-                self.process_read_by_type_request( TransferFormat::from(&payload)? ),
+                self.process_read_by_type_request( TransferFormat::try_from(&payload)? ),
 
             pdu @ super::client::ClientPduName::ReadBlobRequest |
             pdu @ super::client::ClientPduName::ReadMultipleRequest |
@@ -589,7 +589,7 @@ where C: l2cap::ConnectionChannel
             let raw_handle = &payload[..2];
             let raw_data = &payload[2..];
 
-            let handle = TransferFormat::from( &raw_handle ).unwrap();
+            let handle = TransferFormat::try_from( &raw_handle ).unwrap();
 
             if let Some(data) = self.attributes.get_mut( handle as usize ) {
                 match data.set_val_from_raw( raw_data ) {
@@ -778,11 +778,11 @@ where C: l2cap::ConnectionChannel
 
         if payload.len() >= 6 {
 
-            let starting_handle: u16 = TransferFormat::from( &payload[..2] ).unwrap();
+            let starting_handle: u16 = TransferFormat::try_from( &payload[..2] ).unwrap();
 
-            let ending_handle: u16 = TransferFormat::from( &payload[2..4] ).unwrap();
+            let ending_handle: u16 = TransferFormat::try_from( &payload[2..4] ).unwrap();
 
-            let att_type: crate::UUID = TransferFormat::from( &payload[4..6] ).unwrap();
+            let att_type: crate::UUID = TransferFormat::try_from( &payload[4..6] ).unwrap();
 
             let raw_value = &payload[6..];
 
@@ -817,7 +817,7 @@ where C: l2cap::ConnectionChannel
                 .iter()
                 .filter(|attribute| {
                     (attribute.get_type() == att_type) &&
-                    (attribute.get_val_as_transfer_format().into().as_ref() == raw_value)
+                    (attribute.get_val_as_transfer_format().into() == raw_value)
                 })
                 .try_for_each(|a| {
 

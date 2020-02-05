@@ -158,7 +158,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             // Check for a ExchangeMTUResponse PDU
             if ServerPduName::ExchangeMTUResponse.is_convertible_from(bytes)
             {
-                match TransferFormat::from( &bytes[1..] ) {
+                match TransferFormat::try_from( &bytes[1..] ) {
                     Ok( received_mtu ) => {
                         let v: u16 = received_mtu;
 
@@ -232,7 +232,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             Err(super::Error::Empty)
 
         } else if expected_response.is_convertible_from(bytes) {
-            let pdu: Result<pdu::Pdu<P>, super::TransferFormatError> = TransferFormat::from(&bytes);
+            let pdu: Result<pdu::Pdu<P>, super::TransferFormatError> = TransferFormat::try_from(&bytes);
 
             match pdu {
                 Ok(pdu) => Ok(pdu.into_parameters()),
@@ -241,7 +241,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
             type ErrPdu = pdu::Pdu<pdu::ErrorAttributeParameter>;
 
-            let err_pdu: Result<ErrPdu, _> = TransferFormat::from(&bytes);
+            let err_pdu: Result<ErrPdu, _> = TransferFormat::try_from(&bytes);
 
             match err_pdu {
                 Ok(err_pdu) => Err(err_pdu.into()),

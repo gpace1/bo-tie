@@ -26,17 +26,17 @@ struct ServiceInclude {
 }
 
 impl att::TransferFormat for ServiceInclude {
-    fn from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         // The implementation of TransferFormat for UUID will check if the length is good for
         // a 128 bit UUID
         if raw.len() >= 6 {
             Ok( ServiceInclude {
-                service_handle: att::TransferFormat::from( &raw[..2] )?,
-                end_group_handle: att::TransferFormat::from( &raw[2..4] )?,
+                service_handle: att::TransferFormat::try_from( &raw[..2] )?,
+                end_group_handle: att::TransferFormat::try_from( &raw[2..4] )?,
                 short_service_type: if raw[4..].len() == 2 {
                     // Only 16 Bluetooth UUIDs are included with a Include Definition
 
-                    Some( att::TransferFormat::from( &raw[4..])? )
+                    Some( att::TransferFormat::try_from( &raw[4..])? )
                 } else if raw[4..].len() == 0 {
                     None
                 } else {
@@ -50,7 +50,7 @@ impl att::TransferFormat for ServiceInclude {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = Vec::new();
 
         v.extend_from_slice( &att::TransferFormat::into(&self.service_handle) );
@@ -60,7 +60,7 @@ impl att::TransferFormat for ServiceInclude {
             v.extend_from_slice( &att::TransferFormat::into(uuid_ref) );
         }
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -435,7 +435,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
     fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
 
-        let type_request: att::pdu::TypeRequest = att::TransferFormat::from(payload)?;
+        let type_request: att::pdu::TypeRequest = att::TransferFormat::try_from(payload)?;
 
         let handle_range = type_request.handle_range;
 

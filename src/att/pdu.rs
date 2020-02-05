@@ -114,7 +114,7 @@ impl<P> Pdu<P> where P: TransferFormat {
 }
 
 impl<P> TransferFormat for Pdu<P> where P: TransferFormat {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() > 0 {
             let opcode = PduOpCode::from(raw[0]);
 
@@ -122,12 +122,12 @@ impl<P> TransferFormat for Pdu<P> where P: TransferFormat {
                 Pdu {
                     opcode,
                     parameters: if opcode.sig {
-                            TransferFormat::from(&raw[1..(raw.len() - 12)])
+                            TransferFormat::try_from(&raw[1..(raw.len() - 12)])
                                 .or_else(|e|
                                     Err(TransferFormatError::from(format!("PDU parameter: {}", e)))
                                 )?
                         } else {
-                            TransferFormat::from(&raw[1..])?
+                            TransferFormat::try_from(&raw[1..])?
                         },
                     signature: None
                 }
@@ -137,18 +137,13 @@ impl<P> TransferFormat for Pdu<P> where P: TransferFormat {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
-        let mut v = Vec::new();
-
-        v.push(self.opcode.into_raw());
-
-        v.extend_from_slice( &TransferFormat::into(&self.parameters) );
-
-        if let Some(ref sig) = self.signature {
-            v.extend_from_slice( &TransferFormat::into(sig) )
-        }
-
-        v.into_boxed_slice()
+    fn into(&self) -> Vec<u8> {
+        [
+            alloc::vec!(self.opcode.into_raw()),
+            TransferFormat::into(&self.parameters),
+            if let Some(ref sig) = self.signature { TransferFormat::into(sig) } else { Vec::new() }
+        ]
+        .iter().flatten().copied().collect()
     }
 }
 
@@ -369,7 +364,7 @@ pub struct ErrorAttributeParameter {
 impl TransferFormat for ErrorAttributeParameter {
 
     /// Returns self if the length of the parameters is correct
-    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() == 4 {
             Ok( Self {
                 request_opcode: raw[0],
@@ -381,7 +376,7 @@ impl TransferFormat for ErrorAttributeParameter {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = alloc::vec::Vec::new();
 
         v.push(self.request_opcode);
@@ -390,7 +385,7 @@ impl TransferFormat for ErrorAttributeParameter {
 
         v.push(self.error.get_raw());
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -477,7 +472,7 @@ impl HandleRange {
 }
 
 impl TransferFormat for HandleRange {
-    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if 4 == raw.len() {
             Ok(Self {
                 starting_handle: <u16>::from_le_bytes( [raw[0], raw[1]] ),
@@ -488,14 +483,14 @@ impl TransferFormat for HandleRange {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = Vec::new();
 
         self.starting_handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
 
         self.ending_handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -552,7 +547,7 @@ impl FormattedHandlesWithType {
 }
 
 impl TransferFormat for FormattedHandlesWithType {
-    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         match raw[0] {
             Self::UUID_16_BIT => {
                 let chunks = raw[1..].chunks_exact(4);
@@ -606,7 +601,7 @@ impl TransferFormat for FormattedHandlesWithType {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
 
         let mut ret_v = Vec::new();
 
@@ -624,7 +619,7 @@ impl TransferFormat for FormattedHandlesWithType {
             Ok(v) => {
                 ret_v.push(Self::UUID_16_BIT);
                 ret_v.extend_from_slice(v.as_slice());
-                ret_v.into_boxed_slice()
+                ret_v
             },
             Err(_) => {
                 ret_v.push(Self::UUID_128_BIT);
@@ -636,7 +631,7 @@ impl TransferFormat for FormattedHandlesWithType {
                     Into::<u128>::into(hwu.1).to_le_bytes().iter().for_each( |b| ret_v.push(*b) );
                 });
 
-                ret_v.into_boxed_slice()
+                ret_v
             }
         }
     }
@@ -666,19 +661,19 @@ pub struct TypeValueRequest<D> where D: TransferFormat {
 }
 
 impl<D> TransferFormat for TypeValueRequest<D> where D: TransferFormat {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() >= 6 {
             Ok( TypeValueRequest {
-                handle_range: TransferFormat::from( &raw[..4] )?,
+                handle_range: TransferFormat::try_from( &raw[..4] )?,
                 attr_type: <u16>::from_le_bytes( [ raw[4], raw[5] ] ),
-                value: TransferFormat::from( &raw[6..] )?,
+                value: TransferFormat::try_from( &raw[6..] )?,
             })
         } else {
             Err( TransferFormatError::bad_min_size(stringify!(TypeValueRequest), 6, raw.len()) )
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
 
         let mut v = Vec::new();
 
@@ -688,7 +683,7 @@ impl<D> TransferFormat for TypeValueRequest<D> where D: TransferFormat {
 
         v.extend_from_slice( &TransferFormat::into(&self.value) );
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -703,16 +698,14 @@ pub fn find_by_type_value_request<R,D>(handle_range: R, uuid: crate::UUID, value
 where R: Into<HandleRange>,
       D: TransferFormat,
 {
-    use core::convert::TryFrom;
-
-    if let Ok(uuid) = <u16>::try_from(uuid) {
+    if let Ok(uuid) = core::convert::TryFrom::try_from(uuid) {
         Ok(
             Pdu {
                 opcode: From::from(ClientPduName::FindByTypeValueRequest),
                 parameters: TypeValueRequest{
                     handle_range: handle_range.into(),
                     attr_type: uuid,
-                    value: value,
+                    value,
                 },
                 signature: None,
             }
@@ -728,7 +721,7 @@ pub struct TypeValueResponse {
 }
 
 impl TransferFormat for TypeValueResponse {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() != 4 {
             Ok(
                 TypeValueResponse {
@@ -741,14 +734,14 @@ impl TransferFormat for TypeValueResponse {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = Vec::new();
 
         self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
 
         self.group.to_le_bytes().iter().for_each( |b| v.push(*b) );
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -774,15 +767,15 @@ pub struct TypeRequest {
 }
 
 impl TransferFormat for TypeRequest {
-    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() == 6 {
             Ok(Self {
-                handle_range: TransferFormat::from(&raw[..4])?,
+                handle_range: TransferFormat::try_from(&raw[..4])?,
                 attr_type: Into::<crate::UUID>::into(<u16>::from_le_bytes( [raw[4], raw[5]] )),
             })
         } else if raw.len() == 20 {
             Ok(Self {
-                handle_range: TransferFormat::from(&raw[..4])?,
+                handle_range: TransferFormat::try_from(&raw[..4])?,
                 attr_type: Into::<crate::UUID>::into(<u128>::from_le_bytes(
                     {
                         let mut bytes = [0;16];
@@ -796,7 +789,7 @@ impl TransferFormat for TypeRequest {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
 
         let mut v = Vec::new();
 
@@ -807,13 +800,11 @@ impl TransferFormat for TypeRequest {
         match core::convert::TryInto::<u16>::try_into(self.attr_type) {
             Ok(val) => val.to_le_bytes()
                         .iter()
-                        .fold( v, |mut v,b| { v.push(*b); v } )
-                        .into_boxed_slice(),
+                        .fold( v, |mut v,b| { v.push(*b); v } ),
             Err(_) => Into::<u128>::into(self.attr_type)
                         .to_le_bytes()
                         .iter()
                         .fold(v, |mut v,b| { v.push(*b); v } )
-                        .into_boxed_slice(),
         }
     }
 }
@@ -829,7 +820,7 @@ where R: Into<HandleRange>
         opcode: From::from(ClientPduName::ReadByTypeRequest),
         parameters: TypeRequest {
             handle_range: handle_range.into(),
-            attr_type: attr_type
+            attr_type
         },
         signature: None,
     }
@@ -845,11 +836,11 @@ pub struct ReadTypeResponse<D> where D: TransferFormat {
 
 impl<D> TransferFormat for ReadTypeResponse<D> where D: TransferFormat {
 
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized {
         if raw.len() == 2 + core::mem::size_of::<D>() {
             Ok( Self{
                 handle: <u16>::from_le_bytes( [ raw[0], raw[1] ]),
-                data: TransferFormat::from( &raw[2..] )?,
+                data: TransferFormat::try_from( &raw[2..] )?,
             })
         } else {
             Err( TransferFormatError::bad_size(stringify!("ReadTypeResponse"),
@@ -857,7 +848,7 @@ impl<D> TransferFormat for ReadTypeResponse<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Box<[u8]> where Self: Sized {
+    fn into(&self) -> Vec<u8> where Self: Sized {
 
         let mut v = Vec::new();
 
@@ -865,7 +856,7 @@ impl<D> TransferFormat for ReadTypeResponse<D> where D: TransferFormat {
 
         v.extend_from_slice(TransferFormat::into(&self.data).as_ref());
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -881,7 +872,7 @@ impl<D> TransferFormatSize for ReadTypeResponse<D> where D: TransferFormatSize +
 /// This generates a PDU, but that PDU isn't checked if it is larger then the ATT MTU or if the
 /// size of type D is greater then 255. Its the responsibility of the caller to make sure that
 /// the size of the data sent to the controller is correct.
-pub fn read_by_type_response<D>( responses: Box<[ReadTypeResponse<D>]>) -> Pdu<Box<[ReadTypeResponse<D>]>>
+pub fn read_by_type_response<D>( responses: Vec<ReadTypeResponse<D>>) -> Pdu<Vec<ReadTypeResponse<D>>>
 where D: TransferFormat + TransferFormatSize
 {
     Pdu {
@@ -914,7 +905,7 @@ pub struct BlobRequest {
 }
 
 impl TransferFormat for BlobRequest {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized {
         if raw.len() == 4 {
             Ok( Self {
                 handle: <u16>::from_le_bytes( [ raw[0], raw[1] ]),
@@ -925,13 +916,13 @@ impl TransferFormat for BlobRequest {
         }
     }
 
-    fn into(&self) -> Box<[u8]> where Self: Sized {
+    fn into(&self) -> Vec<u8> where Self: Sized {
         let mut v = Vec::new();
 
         self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
         self.offset.to_le_bytes().iter().for_each( |b| v.push(*b) );
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -1021,19 +1012,19 @@ impl<D> ReadGroupTypeData<D> where D: TransferFormat {
 
 impl<D> TransferFormat for ReadGroupTypeData<D> where D: TransferFormat {
 
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() >= 4 {
             Ok( Self{
                 handle: <u16>::from_le_bytes( [ raw[0], raw[1] ]),
                 end_group_handle: <u16>::from_le_bytes( [ raw[2], raw[3] ] ),
-                data: TransferFormat::from( &raw[4..] )?,
+                data: TransferFormat::try_from( &raw[4..] )?,
             })
         } else {
             Err( TransferFormatError::bad_min_size(stringify!(ReadGroupTypeData), 4, raw.len()) )
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
 
         let mut v = Vec::new();
 
@@ -1043,7 +1034,7 @@ impl<D> TransferFormat for ReadGroupTypeData<D> where D: TransferFormat {
 
         v.extend_from_slice(TransferFormat::into(&self.data).as_ref());
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -1068,7 +1059,7 @@ impl<D> ReadByGroupTypeResponse<D> where D: TransferFormat {
 }
 
 impl<D> TransferFormat for ReadByGroupTypeResponse<D> where D: TransferFormat {
-    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() >= 5 {
             let item_len = raw[0] as usize;
 
@@ -1077,7 +1068,7 @@ impl<D> TransferFormat for ReadByGroupTypeResponse<D> where D: TransferFormat {
             if exact_chunks.remainder().len() == 0 {
 
                 exact_chunks
-                .map( |raw| TransferFormat::from(raw) )
+                .map( |raw| TransferFormat::try_from(raw) )
                 .try_fold( Vec::new(), |mut v, rslt| { v.push(rslt?); Ok(v) } )
                 .and_then( |v| Ok(ReadByGroupTypeResponse { data: v }) )
                 .or_else( |e: TransferFormatError| Err(e.into()) )
@@ -1091,9 +1082,7 @@ impl<D> TransferFormat for ReadByGroupTypeResponse<D> where D: TransferFormat {
         }
     }
 
-    /// # Panic
-    /// This can panic if
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
 
         let first = self.data.first().unwrap();
 
@@ -1106,7 +1095,6 @@ impl<D> TransferFormat for ReadByGroupTypeResponse<D> where D: TransferFormat {
         self.data[1..].iter()
         .map( |d| TransferFormat::into(d) )
         .fold(v, |mut v,rd| { v.extend_from_slice(&rd); v } )
-        .into_boxed_slice()
     }
 }
 
@@ -1129,12 +1117,12 @@ pub struct HandleWithData<D> {
 
 impl<D> TransferFormat for HandleWithData<D> where D: TransferFormat {
 
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() >= 2 {
             Ok(
                 HandleWithData {
                     handle: <u16>::from_le_bytes( [ raw[0], raw[1] ]),
-                    data: TransferFormat::from( &raw[2..] )?,
+                    data: TransferFormat::try_from( &raw[2..] )?,
                 }
             )
         } else {
@@ -1142,14 +1130,14 @@ impl<D> TransferFormat for HandleWithData<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = Vec::new();
 
         self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
 
         v.extend_from_slice(&TransferFormat::into(&self.data));
 
-        v.into_boxed_slice()
+        v
     }
 }
 
@@ -1203,13 +1191,13 @@ pub struct PrepareWriteRequest<D> where D: TransferFormat {
 }
 
 impl<D> TransferFormat for PrepareWriteRequest<D> where D: TransferFormat {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() >= 4 {
             Ok(
                 PrepareWriteRequest {
                     handle: <u16>::from_le_bytes( [ raw[0], raw[1] ] ),
                     offset: <u16>::from_le_bytes( [ raw[2], raw[3] ] ),
-                    data: TransferFormat::from( &raw[4..] )?,
+                    data: TransferFormat::try_from( &raw[4..] )?,
                 }
             )
         } else {
@@ -1217,7 +1205,7 @@ impl<D> TransferFormat for PrepareWriteRequest<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = Vec::new();
 
         self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
@@ -1226,7 +1214,7 @@ impl<D> TransferFormat for PrepareWriteRequest<D> where D: TransferFormat {
 
         v.extend_from_slice( &TransferFormat::into( &self.data ) );
 
-        v.into_boxed_slice()
+        v
     }
 }
 

@@ -317,10 +317,10 @@ pub trait TransferFormat {
     /// This will attempt to take the passed byte slice and convert it into Self. The byte slice
     /// needs to only be the attribute parameter, it cannot contain either the attribute opcode
     /// or the attribute signature.
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized;
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized;
 
     /// Convert Self into the attribute parameter
-    fn into(&self) -> Box<[u8]>;
+    fn into(&self) -> Vec<u8>;
 }
 
 /// The size of Formatted Transfer
@@ -335,7 +335,7 @@ pub trait TransferFormatSize {
 macro_rules! impl_transfer_format_for_number {
     ( $num: ty ) => {
         impl TransferFormat for $num {
-            fn from( raw: &[u8]) -> Result<Self, TransferFormatError> {
+            fn try_from( raw: &[u8]) -> Result<Self, TransferFormatError> {
                 if raw.len() == core::mem::size_of::<$num>() {
                     let mut bytes = <[u8;core::mem::size_of::<$num>()]>::default();
 
@@ -347,8 +347,8 @@ macro_rules! impl_transfer_format_for_number {
                 }
             }
 
-            fn into(&self) -> Box<[u8]> {
-                From::<&'_ [u8]>::from(&self.to_le_bytes())
+            fn into(&self) -> Vec<u8> {
+                self.to_le_bytes().to_vec()
             }
         }
 
@@ -372,31 +372,31 @@ impl_transfer_format_for_number!{i128}
 impl_transfer_format_for_number!{u128}
 
 impl TransferFormat for alloc::string::String {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         alloc::string::String::from_utf8(raw.to_vec())
             .map_err( |e| TransferFormatError::from(format!("{:?}", e)) )
     }
 
-    fn into( &self ) -> Box<[u8]> {
-        From::from(self.as_bytes())
+    fn into( &self ) -> Vec<u8> {
+        self.as_bytes().into()
     }
 }
 
 impl TransferFormat for crate::UUID {
-    fn from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         use core::mem::size_of;
 
         macro_rules! err_fmt { () =>  { "Failed to create UUID, {}" } }
 
         if raw.len() == size_of::<u16>() {
 
-            TransferFormat::from(raw)
+            TransferFormat::try_from(raw)
             .and_then( |uuid_16: u16| Ok(crate::UUID::from_u16(uuid_16)) )
             .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
 
         } else if raw.len() == size_of::<u128>() {
 
-            TransferFormat::from(raw)
+            TransferFormat::try_from(raw)
             .and_then( |uuid_128: u128| Ok(crate::UUID::from_u128(uuid_128)) )
             .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
 
@@ -405,7 +405,7 @@ impl TransferFormat for crate::UUID {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         match core::convert::TryInto::<u16>::try_into( *self ) {
             Ok(raw) => TransferFormat::into( &raw ),
             Err(_) => TransferFormat::into( &Into::<u128>::into(*self) ),
@@ -415,31 +415,31 @@ impl TransferFormat for crate::UUID {
 
 impl<T> TransferFormat for Box<[T]> where T: TransferFormat + TransferFormatSize {
 
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
-        <alloc::vec::Vec<T> as TransferFormat>::from(raw).map(|v| v.into_boxed_slice() )
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
+        <alloc::vec::Vec<T> as TransferFormat>::try_from(raw).map(|v| v.into_boxed_slice() )
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         let mut v = alloc::vec::Vec::new();
 
         self.iter().for_each(|t| v.extend_from_slice(&TransferFormat::into(t)) );
 
-        v.into_boxed_slice()
+        v
     }
 }
 
 impl<T> TransferFormat for Box<T> where T: TransferFormat {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
-        <T as TransferFormat>::from(raw).and_then( |v| Ok(Box::new(v)) )
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
+        <T as TransferFormat>::try_from(raw).and_then( |v| Ok(Box::new(v)) )
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         TransferFormat::into( self.as_ref() )
     }
 }
 
 impl TransferFormat for Box<str> {
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         core::str::from_utf8(raw)
             .and_then( |s| Ok( s.into() ) )
             .or_else( |e| {
@@ -447,14 +447,14 @@ impl TransferFormat for Box<str> {
             })
     }
 
-    fn into(&self) -> Box<[u8]> {
-        self.clone().into_boxed_bytes()
+    fn into(&self) -> Vec<u8> {
+        self.clone().as_bytes().to_vec()
     }
 }
 
 impl TransferFormat for () {
 
-    fn from( raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() == 0 {
             Ok(())
         } else {
@@ -462,31 +462,31 @@ impl TransferFormat for () {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
-        From::<&[u8]>::from(&[])
+    fn into(&self) -> Vec<u8> {
+        Vec::new()
     }
 }
 
 impl TransferFormat for Box<dyn TransferFormat> {
     /// It is impossible to convert data from its raw form into a Box<dyn TransferFormat>. This
     /// will always return `Err(..)`
-    fn from( _: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(_: &[u8]) -> Result<Self, TransferFormatError> {
         Err(TransferFormatError::from("Impossible to convert raw data to a 'Box<dyn TransferFormat>'"))
     }
 
-    fn into(&self) -> Box<[u8]> {
+    fn into(&self) -> Vec<u8> {
         TransferFormat::into(self.as_ref())
     }
 }
 
 impl<T> TransferFormat for Vec<T> where T: TransferFormat + TransferFormatSize {
 
-    fn from( raw: &[u8]) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         let mut chunks = raw.chunks_exact(T::SIZE);
 
         if chunks.remainder().len() == 0 {
             Ok( chunks.try_fold( Vec::new(), |mut v,c| {
-                v.push(TransferFormat::from(&c)?);
+                v.push(TransferFormat::try_from(&c)?);
                 Ok(v)
             })
                 .or_else(|e: TransferFormatError| Err(TransferFormatError::from(
@@ -497,18 +497,15 @@ impl<T> TransferFormat for Vec<T> where T: TransferFormat + TransferFormatSize {
         }
     }
 
-    fn into(&self) -> Box<[u8]> {
-        self.iter()
-            // todo when return of `into` 
-            .map(|t| TransferFormat::into(t).to_vec() )
-            .flatten()
-            .collect::<Vec<u8>>()
-            .into_boxed_slice()
+    fn into(&self) -> Vec<u8> {
+        self.iter().map(|t| TransferFormat::into(t) ).flatten().collect()
     }
 }
 
 impl TransferFormatSize for Box<dyn TransferFormat> {
-    /// This is not the actual size, but because the size is unknown this is set to zero
+    /// This is not the actual size, but because the size is unknown this is set to zero. This is
+    /// really a hack so that `dyn TransferFormat` can work within slice/vectored since it is
+    /// impossible for anything to access this implementation of SIZE.
     const SIZE: usize = 0;
 }
 
@@ -536,7 +533,7 @@ impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized  {
 
     fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), TransferFormatError> {
 
-        self.value = TransferFormat::from(raw)?;
+        self.value = TransferFormat::try_from(raw)?;
 
         Ok(())
     }

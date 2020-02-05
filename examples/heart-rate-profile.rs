@@ -86,18 +86,18 @@ mod heart_rate_service
 
         impl att::TransferFormat for HrsFlags {
 
-            fn from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
+            fn try_from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
                 panic!("Tried to make Heart Rate Monitor data from raw data")
             }
 
-            fn into(&self) -> Box<[u8]> {
+            fn into(&self) -> Vec<u8> {
                 let flag = self.set_heart_rate_value_format(
                     self.set_skin_contact(
                         self.set_energy_expended_status(
                             self.set_include_rr_interval_field(0)
                 )));
 
-                vec!(flag).into_boxed_slice()
+                vec!(flag)
             }
         }
 
@@ -135,7 +135,7 @@ mod heart_rate_service
         }
 
         impl att::TransferFormat for HeartRateMeasurement {
-            fn from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
+            fn try_from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
 
                 // This is a heart rate monitor, it sends out data. The from function is only used for
                 // receiving raw data.
@@ -143,13 +143,13 @@ mod heart_rate_service
                 panic!("Tried to make Heart Rate Monitor data from raw data");
             }
 
-            fn into(&self) -> Box<[u8]> {
+            fn into(&self) -> Vec<u8> {
                 let mut v = Vec::new();
 
                 v.extend_from_slice( &att::TransferFormat::into( &self.flags ));
                 v.extend_from_slice( &att::TransferFormat::into( &self.val.load(atomic::Ordering::SeqCst) ));
 
-                v.into_boxed_slice()
+                v
             }
         }
     }
