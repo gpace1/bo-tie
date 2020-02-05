@@ -665,15 +665,19 @@ where I: HostControllerInterface
     }
 }
 
-
-struct LeAclHciChannel<'a, I> where I: HciAclDataInterface {
+struct LeAclHciChannel<I,HI>
+where HI: core::ops::Deref<Target = HostInterface<I>>,
+      I: HciAclDataInterface
+{
     handle: common::ConnectionHandle,
-    hi: &'a HostInterface<I>
+    hi: HI
 }
 
-impl<'a, I> LeAclHciChannel<'a, I> where I: HciAclDataInterface {
-
-    fn new(hi: &'a HostInterface<I>, handle: common::ConnectionHandle) -> Self {
+impl<I,HI> LeAclHciChannel<I,HI>
+where HI: core::ops::Deref<Target = HostInterface<I>>,
+      I: HciAclDataInterface
+{
+    fn new(hi: HI, handle: common::ConnectionHandle) -> Self {
 
         hi.interface.start_receiver(handle);
 
@@ -681,8 +685,9 @@ impl<'a, I> LeAclHciChannel<'a, I> where I: HciAclDataInterface {
     }
 }
 
-impl<'a,I> crate::l2cap::ConnectionChannel for LeAclHciChannel<'a, I>
-where I: HciAclDataInterface
+impl<I,HI> crate::l2cap::ConnectionChannel for LeAclHciChannel<I,HI>
+where HI: core::ops::Deref<Target = HostInterface<I>>,
+       I: HciAclDataInterface
 {
     fn send<Pdu>(&self, data: Pdu ) where Pdu: Into<crate::l2cap::L2capPdu> {
 
@@ -747,7 +752,10 @@ where I: HciAclDataInterface
 
 
 
-impl<'a,I> core::ops::Drop for LeAclHciChannel<'a,I> where I: HciAclDataInterface {
+impl<I, HI> core::ops::Drop for LeAclHciChannel<I,HI>
+where HI: core::ops::Deref<Target = HostInterface<I>>,
+       I: HciAclDataInterface
+{
     fn drop(&mut self) {
         self.hi.interface.stop_receiver(&self.handle)
     }
@@ -760,6 +768,17 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     /// Make a connection channel for the provided connection handle.
     pub fn new_connection_channel<'a>(&'a self, connection_handle: common::ConnectionHandle)
     -> impl crate::l2cap::ConnectionChannel + 'a
+    {
+        LeAclHciChannel::new(self, connection_handle)
+    }
+
+    /// Create a new connection-oriented data channel with a `HostInterface` wrapped within an `Arc`
+    ///
+    /// This is an alternative to `new_connection_channel` for situations where the lifetime of
+    /// `self` may not outlive the generated `ConnectionChannel`. This can be really useful for
+    /// thread pools or other synchronization related executors where it may be required to have a
+    pub fn new_sync_connection_channel(self: Arc<Self>, connection_handle: common::ConnectionHandle)
+    -> impl crate::l2cap::ConnectionChannel
     {
         LeAclHciChannel::new(self, connection_handle)
     }
