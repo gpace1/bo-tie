@@ -50,17 +50,18 @@ impl att::TransferFormat for ServiceInclude {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = Vec::new();
+    fn len_of_into(&self) -> usize {
+        4 + if self.short_service_type.is_some() { 2 } else { 0 }
+    }
 
-        v.extend_from_slice( &att::TransferFormat::into(&self.service_handle) );
-        v.extend_from_slice( &att::TransferFormat::into(&self.end_group_handle) );
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[..2].copy_from_slice( &self.service_handle.to_le_bytes() );
 
-        if let Some(uuid_ref) = &self.short_service_type {
-            v.extend_from_slice( &att::TransferFormat::into(uuid_ref) );
+        into_ret[2..4].copy_from_slice( &self.end_group_handle.to_le_bytes() );
+
+        if let Some(ty) = self.short_service_type {
+            into_ret[4..].copy_from_slice( &ty.to_le_bytes() );
         }
-
-        v
     }
 }
 
@@ -82,7 +83,6 @@ pub struct ServiceBuilder<'a>
 
 impl<'a> ServiceBuilder<'a>
 {
-
     fn new(
         server_builder: &'a mut ServerBuilder,
         service_type: UUID,

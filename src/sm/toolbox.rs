@@ -532,7 +532,8 @@ fn to_u128_be(chunk_16_bytes: &[u8]) -> u128 {
 /// code for the message.
 ///
 /// # Note
-/// Derived from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
+/// Derived from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493) and the Tlen
+/// is 16.
 pub fn aes_cmac_generate( key: u128, msg: &[u8] ) -> u128 {
 
     let (k1, k2) = aes_cmac_subkey_gen(key);

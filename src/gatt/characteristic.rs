@@ -39,7 +39,7 @@ impl Properties {
         properties.iter().fold( 0u8, |u, p| u | p.into_val() )
     }
 
-    fn from_bit_field(field: u8) -> Box<[Self]> {
+    fn from_bit_field(field: u8) -> Vec<Self> {
         let from_raw = |raw| {
             match raw {
                 0x01 => Properties::Broadcast,
@@ -60,11 +60,11 @@ impl Properties {
             vec.push(from_raw( field & (1 << shift)))
         }
 
-        vec.into_boxed_slice()
+        vec
     }
 }
 
-impl att::TransferFormat for Box<[Properties]> {
+impl att::TransferFormat for Vec<Properties> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 1 {
             Ok( Properties::from_bit_field(raw[0]) )
@@ -73,19 +73,19 @@ impl att::TransferFormat for Box<[Properties]> {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let cp: &[u8] = &[Properties::into_bit_field(self)];
+    fn len_of_into(&self) -> usize { <Self as att::TransferFormatSize>::SIZE }
 
-        cp.into()
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[0] = Properties::into_bit_field(self);
     }
 }
 
-impl att::TransferFormatSize for Box<[Properties]> {
+impl att::TransferFormatSize for Vec<Properties> {
     const SIZE: usize = 1;
 }
 
 struct Declaration {
-    properties: Box<[Properties]>,
+    properties: Vec<Properties>,
     value_handle: u16,
     uuid: UUID,
 }
@@ -105,14 +105,16 @@ impl att::TransferFormat for Declaration {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = Vec::new();
+    fn len_of_into(&self) -> usize {
+        3 + self.uuid.len_of_into()
+    }
 
-        v.extend_from_slice( &att::TransferFormat::into(&self.properties) );
-        v.extend_from_slice( &att::TransferFormat::into(&self.value_handle) );
-        v.extend_from_slice( &att::TransferFormat::into(&self.uuid) );
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[0] = Properties::into_bit_field( &self.properties );
 
-        v
+        into_ret[1..3].copy_from_slice( &self.value_handle.to_le_bytes() );
+
+        self.uuid.build_into_ret( &mut into_ret[3..] )
     }
 }
 
@@ -124,8 +126,11 @@ impl Declaration {
 }
 
 struct ValueDeclaration<V> where V: ?Sized {
+    /// The attribute type
     att_type: UUID,
+    /// The attribute value
     value: Box<V>,
+    /// The attribute permissions
     permissions: Vec<att::AttributePermissions>,
 }
 
@@ -134,27 +139,43 @@ pub enum ExtendedProperties {
     WritableAuxiliaries
 }
 
-impl att::TransferFormat for ExtendedProperties {
+impl ExtendedProperties {
+    const BIT_FIELD_CNT: usize = 2;
+}
+
+impl att::TransferFormat for Vec<ExtendedProperties> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
+
         if raw.len() == 2 {
-            match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
-                0x1 => Ok( ExtendedProperties::ReliableWrite ),
-                0x2 => Ok( ExtendedProperties::WritableAuxiliaries ),
-                e @ _ => Err( att::TransferFormatError::from(
-                    format!("Unknown extended property '{}'", e)) )
+            let val = <u16>::from_le_bytes( [ raw[0], raw[1] ] );
+
+            let mut ext_prop = Vec::new();
+
+            for mask in 0..ExtendedProperties::BIT_FIELD_CNT {
+                ext_prop.push( match val & (1 << mask) {
+                    0   => continue,
+                    0x1 => ExtendedProperties::ReliableWrite ,
+                    0x2 => ExtendedProperties::WritableAuxiliaries,
+                    _ => unreachable!()
+                } );
             }
+
+            Ok( ext_prop )
+
         } else {
             Err( att::TransferFormatError::bad_size(stringify!(ExtendedProperties), 2, raw.len()) )
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let val = match *self {
-            ExtendedProperties::ReliableWrite => 0x1,
-            ExtendedProperties::WritableAuxiliaries => 0x2,
-        };
+    fn len_of_into(&self) -> usize { 2 }
 
-        alloc::vec!(val)
+    fn build_into_ret(&self, len_ret: &mut [u8] ) {
+        len_ret[0] = self.iter().fold(0u8, |field, ep| {
+            field | match ep {
+                ExtendedProperties::ReliableWrite => 0x1,
+                ExtendedProperties::WritableAuxiliaries => 0x2,
+            }
+        } );
     }
 }
 
@@ -181,7 +202,7 @@ impl UserDescription {
     {
         UserDescription {
             value: description.into(),
-            permissions: permissions
+            permissions
         }
     }
 }
@@ -205,13 +226,15 @@ impl att::TransferFormat for ClientConfiguration {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let val = match *self {
+    fn len_of_into(&self) -> usize { 2 }
+
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        let val: u16 = match *self {
             ClientConfiguration::Notification => 0x1,
             ClientConfiguration::Indication => 0x2,
         };
 
-        From::<&[u8]>::from( &[val] )
+        into_ret.copy_from_slice( &val.to_le_bytes() )
     }
 }
 
@@ -246,12 +269,14 @@ impl att::TransferFormat for ServerConfiguration {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let val = match *self {
+    fn len_of_into(&self) -> usize { 2 }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        let val: u16 = match *self {
             ServerConfiguration::Broadcast => 0x1,
         };
 
-        alloc::vec!(val)
+        into_ret.copy_from_slice( &val.to_le_bytes() )
     }
 }
 
@@ -294,7 +319,7 @@ where Box<V>: att::TransferFormat + Unpin + Send + Sync + 'static,
         CharacteristicBuilder {
             characteristic_adder,
             declaration: Declaration {
-                properties: properties.into_boxed_slice(),
+                properties,
                 value_handle: 0,
                 uuid
             },
@@ -385,7 +410,7 @@ where Box<V>: att::TransferFormat + Unpin + Send + Sync + 'static,
                 Attribute::new(
                     ExtendedProperties::TYPE,
                     ExtendedProperties::PERMISSIONS.into(),
-                    ext.into_boxed_slice(),
+                    ext,
                 )
             );
         }
@@ -405,7 +430,7 @@ where Box<V>: att::TransferFormat + Unpin + Send + Sync + 'static,
                 Attribute::new(
                     ClientConfiguration::TYPE,
                     ClientConfiguration::PERMISSIONS.into(),
-                    client_cfg.into_boxed_slice()
+                    client_cfg
                 )
             );
         }
@@ -415,7 +440,7 @@ where Box<V>: att::TransferFormat + Unpin + Send + Sync + 'static,
                 Attribute::new(
                     ServerConfiguration::TYPE,
                     ServerConfiguration::PERMISSIONS.into(),
-                    server_cfg.into_boxed_slice()
+                    server_cfg
                 )
             );
         }

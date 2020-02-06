@@ -311,6 +311,18 @@ impl core::fmt::Display for TransferFormatError {
 ///
 /// Structures that implement `TransferFormat` can be converted into the transmitted format
 /// (between the server and client) or be constructed from the raw transmitted data.
+///
+/// The functions `try_from`, `len_of_into`, and `build_into_ret` must be implemented for each type.
+/// The default implementation of function `into` uses `len_of_into` and `build_into_ret` to
+/// generate data that can be sent between a Server and Client.
+///
+/// Many things that implement `TransferFormat` act like a container type for other types that
+/// implement `TransferFormat`. The combination of `len_of_into` and `build_into_ret` is used so
+/// that only one buffer is created when `into` is called (usually only called on the
+/// [`pdu`](crate::att::pdu) structures). Both `len_of_into` and `build_into_ret` act like pseudo
+/// recursion around the containing generic type. If `TransferFormat` is implemented for something
+/// that is generic, these functions will be implemented based on the generic types implementation
+/// of `TransferFormat`.
 pub trait TransferFormat {
     /// Make Self from the attribute parameter
     ///
@@ -319,8 +331,29 @@ pub trait TransferFormat {
     /// or the attribute signature.
     fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized;
 
-    /// Convert Self into the attribute parameter
-    fn into(&self) -> Vec<u8>;
+    /// Get the length of the return of function `into`
+    ///
+    /// This is mainly used for `build_into` and things that call `build_into` to generate a vector
+    /// for use as the parameter of `build_into`
+    fn len_of_into(&self) -> usize;
+
+    /// Build the return of into
+    ///
+    /// This takes a buffer that is used to construct the return of function `into`.
+    ///
+    /// # Panic
+    /// This should panic if the size of slice referenced by `into_ret` is not the same as
+    /// the return of `len_of_into`.
+    fn build_into_ret(&self, into_ret: &mut [u8]);
+
+    /// Convert Self into the transferred bytes
+    fn into(&self) -> Vec<u8> {
+        let mut buff = Vec::with_capacity( self.len_of_into() );
+
+        self.build_into_ret(&mut buff);
+
+        buff
+    }
 }
 
 /// The size of Formatted Transfer
@@ -347,8 +380,10 @@ macro_rules! impl_transfer_format_for_number {
                 }
             }
 
-            fn into(&self) -> Vec<u8> {
-                self.to_le_bytes().to_vec()
+            fn len_of_into(&self) -> usize { Self::SIZE }
+
+            fn build_into_ret(&self, into_ret: &mut [u8]) {
+                into_ret.copy_from_slice( &self.to_le_bytes() )
             }
         }
 
@@ -377,8 +412,10 @@ impl TransferFormat for alloc::string::String {
             .map_err( |e| TransferFormatError::from(format!("{:?}", e)) )
     }
 
-    fn into( &self ) -> Vec<u8> {
-        self.as_bytes().into()
+    fn len_of_into(&self) -> usize { self.len() }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret.copy_from_slice(self.as_bytes())
     }
 }
 
@@ -405,10 +442,19 @@ impl TransferFormat for crate::UUID {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
+    fn len_of_into(&self) -> usize {
+        if self.is_16_bit() {
+            core::mem::size_of::<u16>()
+        } else {
+            core::mem::size_of::<u128>()
+        }
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
         match core::convert::TryInto::<u16>::try_into( *self ) {
-            Ok(raw) => TransferFormat::into( &raw ),
-            Err(_) => TransferFormat::into( &Into::<u128>::into(*self) ),
+            Ok(raw) => raw.build_into_ret(&mut into_ret[..2]),
+
+            Err(_) => <u128>::from(*self).build_into_ret(&mut into_ret[..16]),
         }
     }
 }
@@ -419,12 +465,18 @@ impl<T> TransferFormat for Box<[T]> where T: TransferFormat + TransferFormatSize
         <alloc::vec::Vec<T> as TransferFormat>::try_from(raw).map(|v| v.into_boxed_slice() )
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = alloc::vec::Vec::new();
+    fn len_of_into(&self) -> usize {
+        self.iter().fold(0usize, |v, t| v + t.len_of_into() )
+    }
 
-        self.iter().for_each(|t| v.extend_from_slice(&TransferFormat::into(t)) );
+    fn build_into_ret(&self, into_ret: &mut [u8] ){
+        let mut start = 0;
 
-        v
+        self.iter().for_each(|t| {
+            t.build_into_ret(&mut into_ret[start..t.len_of_into()]);
+
+            start += t.len_of_into();
+        } )
     }
 }
 
@@ -433,8 +485,12 @@ impl<T> TransferFormat for Box<T> where T: TransferFormat {
         <T as TransferFormat>::try_from(raw).and_then( |v| Ok(Box::new(v)) )
     }
 
-    fn into(&self) -> Vec<u8> {
-        TransferFormat::into( self.as_ref() )
+    fn len_of_into(&self) -> usize {
+        self.as_ref().len_of_into()
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        self.as_ref().build_into_ret(into_ret)
     }
 }
 
@@ -447,8 +503,12 @@ impl TransferFormat for Box<str> {
             })
     }
 
-    fn into(&self) -> Vec<u8> {
-        self.clone().as_bytes().to_vec()
+    fn len_of_into(&self) -> usize {
+        self.len()
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret.copy_from_slice( self.as_bytes() )
     }
 }
 
@@ -462,9 +522,9 @@ impl TransferFormat for () {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        Vec::new()
-    }
+    fn len_of_into(&self) -> usize { 0 }
+
+    fn build_into_ret(&self, _: &mut [u8] ) {}
 }
 
 impl TransferFormat for Box<dyn TransferFormat> {
@@ -474,8 +534,10 @@ impl TransferFormat for Box<dyn TransferFormat> {
         Err(TransferFormatError::from("Impossible to convert raw data to a 'Box<dyn TransferFormat>'"))
     }
 
-    fn into(&self) -> Vec<u8> {
-        TransferFormat::into(self.as_ref())
+    fn len_of_into(&self) -> usize { self.as_ref().len_of_into() }
+
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        self.as_ref().build_into_ret(into_ret);
     }
 }
 
@@ -485,7 +547,7 @@ impl<T> TransferFormat for Vec<T> where T: TransferFormat + TransferFormatSize {
         let mut chunks = raw.chunks_exact(T::SIZE);
 
         if chunks.remainder().len() == 0 {
-            Ok( chunks.try_fold( Vec::new(), |mut v,c| {
+            Ok( chunks.try_fold( Vec::with_capacity(chunks.len()), |mut v,c| {
                 v.push(TransferFormat::try_from(&c)?);
                 Ok(v)
             })
@@ -497,8 +559,19 @@ impl<T> TransferFormat for Vec<T> where T: TransferFormat + TransferFormatSize {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        self.iter().map(|t| TransferFormat::into(t) ).flatten().collect()
+    fn len_of_into(&self) -> usize {
+        self.iter().fold(0usize, |v, t| v + t.len_of_into() )
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+
+        let mut start = 0;
+
+        self.iter().for_each(|t| {
+            t.build_into_ret(&mut into_ret[start..t.len_of_into()]);
+
+            start += t.len_of_into();
+        } )
     }
 }
 

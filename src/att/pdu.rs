@@ -93,8 +93,8 @@ pub struct Pdu<P> where P: TransferFormat {
     opcode: PduOpCode,
     /// The Attribute(s) sent with the Pdu
     parameters: P,
-    /// TODO Optional authentication signature, this is not implemented yet
-    signature: Option<()>
+    /// The signature portion of the pdu
+    signature: Option<[u8;12]>
 }
 
 impl<P> Pdu<P> where P: TransferFormat {
@@ -103,13 +103,13 @@ impl<P> Pdu<P> where P: TransferFormat {
     ///
     /// # TODO
     /// The signature has not been implemented yet
-    pub fn new( opcode: PduOpCode, parameters: P, signature: Option<()> ) -> Self {
+    pub fn new( opcode: PduOpCode, parameters: P, signature: Option<[u8;12]> ) -> Self {
         Pdu { opcode, parameters, signature}
     }
 
     pub fn get_opcode(&self) -> PduOpCode { self.opcode }
     pub fn get_parameters(&self) -> &P { &self.parameters }
-    pub fn get_signature(&self) -> Option<()> { self.signature }
+    pub fn get_signature(&self) -> Option<[u8;12]> { self.signature }
     pub fn into_parameters(self) -> P { self.parameters }
 }
 
@@ -137,13 +137,18 @@ impl<P> TransferFormat for Pdu<P> where P: TransferFormat {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        [
-            alloc::vec!(self.opcode.into_raw()),
-            TransferFormat::into(&self.parameters),
-            if let Some(ref sig) = self.signature { TransferFormat::into(sig) } else { Vec::new() }
-        ]
-        .iter().flatten().copied().collect()
+    fn len_of_into(&self) -> usize {
+        2 + self.parameters.len_of_into() + if self.signature.is_some() { 12 } else { 0 }
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[0] = self.opcode.into_raw();
+
+        self.parameters.build_into_ret( &mut into_ret[1..self.parameters.len_of_into()] );
+
+        self.signature.as_ref().map(|s|
+            into_ret[(1 + self.parameters.len_of_into())..].copy_from_slice(s)
+        );
     }
 }
 
@@ -376,16 +381,12 @@ impl TransferFormat for ErrorAttributeParameter {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = alloc::vec::Vec::new();
+    fn len_of_into(&self) -> usize { 4 }
 
-        v.push(self.request_opcode);
-
-        self.requested_handle.to_le_bytes().iter().for_each(|b| v.push(*b) );
-
-        v.push(self.error.get_raw());
-
-        v
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[0] = self.request_opcode;
+        into_ret[1..3].copy_from_slice( &self.request_opcode.to_le_bytes() );
+        into_ret[3] = self.error.get_raw();
     }
 }
 
@@ -483,14 +484,12 @@ impl TransferFormat for HandleRange {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = Vec::new();
+    fn len_of_into(&self) -> usize { 4 }
 
-        self.starting_handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.starting_handle.to_le_bytes());
 
-        self.ending_handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        v
+        into_ret[2..].copy_from_slice(&self.ending_handle.to_le_bytes());
     }
 }
 
@@ -534,11 +533,11 @@ pub struct HandleWithType( u16, crate::UUID);
 
 /// Formatted handle with type
 ///
-/// This struct, when created with determine if all the UUID's are 16 bit or 128 bit, and
-/// is used to create the find information response attribute PDU.
+/// This struct, when created, will determine if all the UUID's are 16 bit or 128 bit. It is used to
+/// create the find information response attribute PDU.
 #[derive(Clone)]
 pub struct FormattedHandlesWithType {
-    handles_with_uuids: Box<[HandleWithType]>,
+    handles_with_uuids: Vec<HandleWithType>,
 }
 
 impl FormattedHandlesWithType {
@@ -565,7 +564,7 @@ impl TransferFormat for FormattedHandlesWithType {
                         v.push( HandleWithType(handle, uuid))
                     }
 
-                    Ok(FormattedHandlesWithType { handles_with_uuids: v.into_boxed_slice() })
+                    Ok(FormattedHandlesWithType { handles_with_uuids: v })
                 } else {
                     Err(TransferFormatError::bad_exact_chunks(stringify!(FormattedHandlesWithType),
                         4, raw[1..].len() ))
@@ -589,7 +588,7 @@ impl TransferFormat for FormattedHandlesWithType {
                         v.push( HandleWithType(handle, uuid) );
                     }
 
-                    Ok(FormattedHandlesWithType { handles_with_uuids: v.into_boxed_slice() })
+                    Ok(FormattedHandlesWithType { handles_with_uuids: v })
 
                 } else {
                     Err(TransferFormatError::bad_exact_chunks(stringify!(FormattedHandlesWithType),
@@ -601,39 +600,38 @@ impl TransferFormat for FormattedHandlesWithType {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
+    fn len_of_into(&self) -> usize {
 
-        let mut ret_v = Vec::new();
+        let len = self.handles_with_uuids.len();
 
-        let vec16: Result<Vec<u8>, ()> = self.handles_with_uuids.iter().try_fold( Vec::new(), | mut v, hwu| {
-            use core::convert::TryInto;
+        self.handles_with_uuids
+            .first()
+            .map(|f| if f.1.is_16_bit() { 2 } else { 16 } * len )
+            .unwrap_or_default()
+    }
 
-            hwu.0.to_le_bytes().iter().for_each(|b| v.push(*b) );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
 
-            TryInto::<u16>::try_into(hwu.1)?.to_le_bytes().iter().for_each( |b| v.push(*b) );
+        let mut offset = 0;
 
-            Ok(v)
-        });
+        self.handles_with_uuids.iter().for_each( |hwu| {
 
-        match vec16 {
-            Ok(v) => {
-                ret_v.push(Self::UUID_16_BIT);
-                ret_v.extend_from_slice(v.as_slice());
-                ret_v
-            },
-            Err(_) => {
-                ret_v.push(Self::UUID_128_BIT);
+            into_ret[offset..(offset + 2)].copy_from_slice( &hwu.0.to_le_bytes() );
 
-                self.handles_with_uuids.iter().for_each( |hwu| {
+            match core::convert::TryInto::<u16>::try_into(hwu.1) {
+                Ok(short) => {
+                    into_ret[(offset + 2)..(offset + 4)].copy_from_slice( &short.to_le_bytes() );
 
-                    hwu.0.to_le_bytes().iter().for_each(|b| ret_v.push(*b) );
+                    offset += 4;
+                },
+                Err(_) => {
+                    into_ret[(offset + 2)..(offset + 18)]
+                        .copy_from_slice( &<u128>::from(hwu.1).to_le_bytes() );
 
-                    Into::<u128>::into(hwu.1).to_le_bytes().iter().for_each( |b| ret_v.push(*b) );
-                });
-
-                ret_v
+                    offset += 18;
+                }
             }
-        }
+        });
     }
 }
 
@@ -673,17 +671,19 @@ impl<D> TransferFormat for TypeValueRequest<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
+    fn len_of_into(&self) -> usize {
+        self.handle_range.len_of_into() + 2 + self.value.len_of_into()
+    }
 
-        let mut v = Vec::new();
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
 
-        v.extend_from_slice( &TransferFormat::into(&self.handle_range) );
+        let hr_size = self.handle_range.len_of_into();
 
-        self.attr_type.to_le_bytes().iter().for_each(|b| v.push(*b));
+        self.handle_range.build_into_ret( &mut into_ret[..hr_size] );
 
-        v.extend_from_slice( &TransferFormat::into(&self.value) );
+        into_ret[hr_size..(hr_size + 2)].copy_from_slice(&self.attr_type.to_le_bytes());
 
-        v
+        self.value.build_into_ret( &mut into_ret[(hr_size + 2)..] );
     }
 }
 
@@ -734,14 +734,11 @@ impl TransferFormat for TypeValueResponse {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = Vec::new();
+    fn len_of_into(&self) -> usize { 4 }
 
-        self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        self.group.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        v
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
+        into_ret[2..].copy_from_slice( &self.group.to_le_bytes() );
     }
 }
 
@@ -789,23 +786,16 @@ impl TransferFormat for TypeRequest {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
+    fn len_of_into(&self) -> usize {
+        self.handle_range.len_of_into() + self.attr_type.len_of_into()
+    }
 
-        let mut v = Vec::new();
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        let hr_size = self.handle_range.len_of_into();
 
-        self.handle_range.starting_handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
+        self.handle_range.build_into_ret( &mut into_ret[..hr_size] );
 
-        self.handle_range.starting_handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        match core::convert::TryInto::<u16>::try_into(self.attr_type) {
-            Ok(val) => val.to_le_bytes()
-                        .iter()
-                        .fold( v, |mut v,b| { v.push(*b); v } ),
-            Err(_) => Into::<u128>::into(self.attr_type)
-                        .to_le_bytes()
-                        .iter()
-                        .fold(v, |mut v,b| { v.push(*b); v } )
-        }
+        self.attr_type.build_into_ret( &mut into_ret[hr_size..] );
     }
 }
 
@@ -848,15 +838,12 @@ impl<D> TransferFormat for ReadTypeResponse<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Vec<u8> where Self: Sized {
+    fn len_of_into(&self) -> usize { 2 + self.data.len_of_into() }
 
-        let mut v = Vec::new();
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
 
-        self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        v.extend_from_slice(TransferFormat::into(&self.data).as_ref());
-
-        v
+        self.data.build_into_ret( &mut into_ret[2..] );
     }
 }
 
@@ -916,13 +903,11 @@ impl TransferFormat for BlobRequest {
         }
     }
 
-    fn into(&self) -> Vec<u8> where Self: Sized {
-        let mut v = Vec::new();
+    fn len_of_into(&self) -> usize { 4 }
 
-        self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
-        self.offset.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        v
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
+        into_ret[2..].copy_from_slice(&self.offset.to_le_bytes());
     }
 }
 
@@ -1024,17 +1009,14 @@ impl<D> TransferFormat for ReadGroupTypeData<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
+    fn len_of_into(&self) -> usize {
+        4 + self.data.len_of_into()
+    }
 
-        let mut v = Vec::new();
-
-        self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        self.end_group_handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
-
-        v.extend_from_slice(TransferFormat::into(&self.data).as_ref());
-
-        v
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
+        into_ret[2..4].copy_from_slice( &self.end_group_handle.to_le_bytes() );
+        self.data.build_into_ret(&mut into_ret[4..]);
     }
 }
 
@@ -1082,19 +1064,20 @@ impl<D> TransferFormat for ReadByGroupTypeResponse<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
+    fn len_of_into(&self) -> usize {
+        self.data.iter().fold(0usize, |len, d| d.len_of_into() + len )
+    }
 
-        let first = self.data.first().unwrap();
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        let mut piter = self.data.iter().peekable();
 
-        let first_raw = TransferFormat::into( first );
+        let data_size = piter.peek().map(|d| d.len_of_into() ).unwrap_or_default();
 
-        let mut v = alloc::vec!( first_raw.len() as u8 );
+        into_ret[0] = data_size as u8;
 
-        v.extend_from_slice( &first_raw );
-
-        self.data[1..].iter()
-        .map( |d| TransferFormat::into(d) )
-        .fold(v, |mut v,rd| { v.extend_from_slice(&rd); v } )
+        piter.enumerate().for_each(|(c,d)|
+            d.build_into_ret( &mut into_ret[(1 + c * data_size)..(1 + (1 + c) * data_size)] )
+        );
     }
 }
 
@@ -1130,14 +1113,14 @@ impl<D> TransferFormat for HandleWithData<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = Vec::new();
+    fn len_of_into(&self) -> usize {
+        2 + self.data.len_of_into()
+    }
 
-        self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
 
-        v.extend_from_slice(&TransferFormat::into(&self.data));
-
-        v
+        self.data.build_into_ret( &mut into_ret[2..] );
     }
 }
 
@@ -1205,16 +1188,16 @@ impl<D> TransferFormat for PrepareWriteRequest<D> where D: TransferFormat {
         }
     }
 
-    fn into(&self) -> Vec<u8> {
-        let mut v = Vec::new();
+    fn len_of_into(&self) -> usize {
+        4 + self.data.len_of_into()
+    }
 
-        self.handle.to_le_bytes().iter().for_each( |b| v.push(*b) );
+    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
 
-        self.offset.to_le_bytes().iter().for_each( |b| v.push(*b) );
+        into_ret[2..4].copy_from_slice( &self.offset.to_le_bytes() );
 
-        v.extend_from_slice( &TransferFormat::into( &self.data ) );
-
-        v
+        self.data.build_into_ret( &mut into_ret[4..] );
     }
 }
 

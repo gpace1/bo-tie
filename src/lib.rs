@@ -166,6 +166,16 @@ impl UUID {
         }
     }
 
+    /// Returns true if the UUID can be a 16 bit shortened UUID
+    pub fn is_16_bit(&self) -> bool {
+        ( !(((!0u16) as u128) << 96) & self.base_uuid ) == UUID::BLUETOOTH_BASE_UUID
+    }
+
+    /// Returns true if the UUID can be a 32 bit shortened UUID
+    pub fn is_32_bit(&self) -> bool {
+        ( !(((!0u32) as u128) << 96) & self.base_uuid ) == UUID::BLUETOOTH_BASE_UUID
+    }
+
     /// Get the UUID version
     ///
     /// Returns the UUID version if the version field is valid, otherwise returns an error to
@@ -323,10 +333,8 @@ impl core::convert::TryFrom<UUID> for u32 {
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is
     /// pre-allocated (assigned number).
     fn try_from(uuid: UUID) -> Result<u32, ()> {
-        match !(((!0u32) as u128) << 96) & uuid.base_uuid {
-            UUID::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u32),
-            _ => Err(())
-        }
+        if uuid.is_32_bit() { Ok((uuid.base_uuid >> 96) as u32) }
+        else { Err(()) }
     }
 }
 
@@ -336,10 +344,8 @@ impl core::convert::TryFrom<UUID> for u16 {
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is
     /// pre-allocated (assigned number).
     fn try_from(uuid: UUID) -> Result<u16, ()> {
-        match !(((!0u16) as u128) << 96) & uuid.base_uuid {
-            UUID::BLUETOOTH_BASE_UUID => Ok((uuid.base_uuid >> 96) as u16),
-            _ => Err(())
-        }
+        if uuid.is_16_bit() { Ok((uuid.base_uuid >> 96) as u16) }
+        else { Err(()) }
     }
 }
 
