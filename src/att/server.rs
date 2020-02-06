@@ -1030,7 +1030,6 @@ impl super::AnyAttribute for ReservedHandle {
 /// The constructor of attributes on an Attribute Server
 ///
 /// `ServerAttributes` construsts a list of attributes.
-#[derive(Default)]
 pub struct ServerAttributes {
     attributes: Vec<Box<dyn super::AnyAttribute + Send + Sync>>
 }
@@ -1083,5 +1082,11 @@ impl ServerAttributes {
     /// assert_eq!( first_handle, pushed_handle );
     pub fn next_handle(&self) -> u16 {
         self.attributes.len() as u16
+    }
+}
+
+impl Default for ServerAttributes {
+    fn default() -> Self {
+        Self::new()
     }
 }
