@@ -90,14 +90,14 @@ mod heart_rate_service
                 panic!("Tried to make Heart Rate Monitor data from raw data")
             }
 
-            fn into(&self) -> Vec<u8> {
-                let flag = self.set_heart_rate_value_format(
+            fn len_of_into(&self) -> usize { 1 }
+
+            fn build_into_ret(&self, into_ret: &mut [u8] ) {
+                into_ret[0] = self.set_heart_rate_value_format(
                     self.set_skin_contact(
                         self.set_energy_expended_status(
                             self.set_include_rr_interval_field(0)
-                )));
-
-                vec!(flag)
+                        )));
             }
         }
 
@@ -107,6 +107,9 @@ mod heart_rate_service
         /// the client. In this example, the server runs in a different thread from the thread that
         /// generates the random heart rate data. Thus, the heart rate value is an atomic so that the
         /// threads can run in sync.
+        ///
+        /// # Note
+        /// This size of this heart rate is only 1 byte
         pub struct HeartRateMeasurement {
             flags: HrsFlags,
             val: Arc<atomic::AtomicU8>,
@@ -137,19 +140,22 @@ mod heart_rate_service
         impl att::TransferFormat for HeartRateMeasurement {
             fn try_from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
 
-                // This is a heart rate monitor, it sends out data. The from function is only used for
-                // receiving raw data.
+                // This is a heart rate monitor, it sends out data. The try_from function is only
+                // used when receiving raw data.
 
                 panic!("Tried to make Heart Rate Monitor data from raw data");
             }
 
-            fn into(&self) -> Vec<u8> {
-                let mut v = Vec::new();
+            fn len_of_into(&self) -> usize { if self.flags.value_is_16_bit {2} else {1} }
 
-                v.extend_from_slice( &att::TransferFormat::into( &self.flags ));
-                v.extend_from_slice( &att::TransferFormat::into( &self.val.load(atomic::Ordering::SeqCst) ));
+            fn build_into_ret(&self, into_ret: &mut [u8] ) {
+                self.flags.build_into_ret( &mut into_ret[..1] );
 
-                v
+                if self.flags.value_is_16_bit {
+                    unreachable!("16 bit heart rate value is not implemented")
+                } else {
+                    into_ret[1] = self.val.load(atomic::Ordering::SeqCst);
+                }
             }
         }
     }
