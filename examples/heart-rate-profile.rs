@@ -84,11 +84,13 @@ mod heart_rate_service
             }
         }
 
-        impl att::TransferFormat for HrsFlags {
-
+        impl att::TransferFormatTryFrom for HrsFlags {
             fn try_from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
                 panic!("Tried to make Heart Rate Monitor data from raw data")
             }
+        }
+
+        impl att::TransferFormatInto for HrsFlags {
 
             fn len_of_into(&self) -> usize { 1 }
 
@@ -137,15 +139,7 @@ mod heart_rate_service
             }
         }
 
-        impl att::TransferFormat for HeartRateMeasurement {
-            fn try_from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
-
-                // This is a heart rate monitor, it sends out data. The try_from function is only
-                // used when receiving raw data.
-
-                panic!("Tried to make Heart Rate Monitor data from raw data");
-            }
-
+        impl att::TransferFormatTryInto for HeartRateMeasurement{
             fn len_of_into(&self) -> usize { if self.flags.value_is_16_bit {2} else {1} }
 
             fn build_into_ret(&self, into_ret: &mut [u8] ) {

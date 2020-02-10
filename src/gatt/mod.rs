@@ -19,24 +19,25 @@ impl ServiceDefinition {
     const SECONDARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2801);
 }
 
+#[derive(PartialEq)]
 struct ServiceInclude {
     service_handle: u16,
     end_group_handle: u16,
     short_service_type: Option<u16>,
 }
 
-impl att::TransferFormat for ServiceInclude {
+impl att::TransferFormatTryFrom for ServiceInclude {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
-        // The implementation of TransferFormat for UUID will check if the length is good for
+        // The implementation of TransferFormatTryFrom for UUID will check if the length is good for
         // a 128 bit UUID
         if raw.len() >= 6 {
-            Ok( ServiceInclude {
-                service_handle: att::TransferFormat::try_from( &raw[..2] )?,
-                end_group_handle: att::TransferFormat::try_from( &raw[2..4] )?,
+            Ok(ServiceInclude {
+                service_handle: att::TransferFormatTryFrom::try_from(&raw[..2])?,
+                end_group_handle: att::TransferFormatTryFrom::try_from(&raw[2..4])?,
                 short_service_type: if raw[4..].len() == 2 {
                     // Only 16 Bluetooth UUIDs are included with a Include Definition
 
-                    Some( att::TransferFormat::try_from( &raw[4..])? )
+                    Some(att::TransferFormatTryFrom::try_from(&raw[4..])?)
                 } else if raw[4..].len() == 0 {
                     None
                 } else {
@@ -45,11 +46,13 @@ impl att::TransferFormat for ServiceInclude {
                 },
             })
         } else {
-            Err( att::TransferFormatError::bad_min_size(stringify!(ServiceInclude),
-                6, raw.len()) )
+            Err(att::TransferFormatError::bad_min_size(stringify!(ServiceInclude),
+                                                       6, raw.len()))
         }
     }
+}
 
+impl att::TransferFormatInto for ServiceInclude {
     fn len_of_into(&self) -> usize {
         4 + if self.short_service_type.is_some() { 2 } else { 0 }
     }
@@ -250,8 +253,8 @@ impl<'a> CharacteristicAdder<'a>
         value: Box<V>,
         value_permissions: Vec<att::AttributePermissions> )
     -> characteristic::CharacteristicBuilder<'a, V>
-    where Box<V>: att::TransferFormat + Send + Sync + 'static,
-              V: ?Sized
+    where Box<V>: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
+              V: ?Sized + PartialEq
     {
         characteristic::CharacteristicBuilder::new(
             self,
@@ -435,7 +438,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
     fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
 
-        let type_request: att::pdu::TypeRequest = att::TransferFormat::try_from(payload)?;
+        let type_request: att::pdu::TypeRequest = att::TransferFormatTryFrom::try_from(payload)?;
 
         let handle_range = type_request.handle_range;
 
@@ -513,7 +516,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                         None => {
                             let max_data = core::cmp::min(
                                 core::u8::MAX as u16,
-                                self.server.get_mtu()
+                                self.server.get_mtu() as u16
                             ) as usize;
 
                             let data_response = self.primary_services
@@ -535,7 +538,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
                             let pdu = att::pdu::read_by_group_type_response(response_data);
 
-                            let tx_data = att::TransferFormat::into( &pdu );
+                            let tx_data = att::TransferFormatInto::into( &pdu );
 
                             let acl_data = l2cap::AclData::new(tx_data.to_vec(), att::L2CAP_CHANNEL_ID );
 

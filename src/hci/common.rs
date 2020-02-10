@@ -114,11 +114,6 @@ impl ConnectionInterval {
     ///
     /// The parameter must be between the constants MIN and MAX
     ///
-    /// ``` rust
-    /// # use bo_tie_linux::hci::common::ConnectionInterval;
-    /// let ci = ConnectionInterval::try_from(0x0077).unwrap();
-    /// ```
-    ///
     /// # Errors
     /// Will return a ConnectionIntervalErr with the violated bound as above or below the maximum
     /// or minimum interval value

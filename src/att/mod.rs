@@ -106,12 +106,12 @@ pub enum AttributePermissions {
 ///
 /// # Handle
 /// A reference to the attribute on the server. The client can access specific attributes through
-/// the handle value as all handle values on a server are gaurenteed to be unique. This can be
+/// the handle value as all handle values on a server are guaranteed to be unique. This can be
 /// handy or required to refer to different attributes (e.g. multiple attributes with the same
 /// types ).
 ///
 /// # Permissions
-/// Permissions define the accessability and requirements for accessability of the Attribute. The
+/// Permissions define the accessibility and requirements for accessibility of the Attribute. The
 /// permissions `Read` and `Write` define how the user can access the data, where as the
 /// permissions `Encryption`, `Authentication`, and `Authorization` define the conditions where
 /// `Read` and `Write` permissions are available to the client.
@@ -131,7 +131,7 @@ pub struct Attribute<V> {
     permissions: Vec<AttributePermissions>,
 
     /// Attribute value
-    value: V
+    value: V,
 }
 
 impl<V> Attribute<V> {
@@ -157,6 +157,26 @@ impl<V> Attribute<V> {
             value,
         }
     }
+
+    pub fn get_uuid(&self) -> &crate::UUID {
+        &self.ty
+    }
+
+    pub fn get_permissions(&self) -> &[AttributePermissions] {
+        &self.permissions
+    }
+
+    pub fn get_value(&self) -> &V {
+        &self.value
+    }
+
+    /// Get the handle
+    ///
+    /// This will only return a handle if the attribute was retrieved from an attribute server. A
+    /// free attribute will not have an associated handle.
+    pub fn get_handle(&self) -> Option<u16> {
+        self.handle.clone()
+    }
 }
 
 pub enum Error {
@@ -174,7 +194,7 @@ pub enum Error {
     /// This contains the opcode value of the unexpectedly received pdu
     UnexpectedPdu(u8),
     /// A Transfer format error
-    TransferFormat(TransferFormatError),
+    TransferFormatTryFrom(TransferFormatError),
     /// An empty PDU
     Empty,
     /// Unknown opcode
@@ -199,7 +219,7 @@ impl core::fmt::Display for Error{
             Error::TooSmallMtu => write!( f, "Minimum Transmission Unit larger then specified" ),
             Error::Pdu(pdu) => write!( f, "Received Error PDU: {}", pdu ),
             Error::UnexpectedPdu(val) => write!( f, "{}", val ),
-            Error::TransferFormat(t_e) => write!( f, "{}", t_e ),
+            Error::TransferFormatTryFrom(t_e) => write!( f, "{}", t_e ),
             Error::Empty => write!( f, "Received an empty PDU" ),
             Error::UnknownOpcode(op) =>
                 write!( f, "Opcode not known to the attribute protocol ({:#x})", op),
@@ -228,7 +248,7 @@ impl From<pdu::Pdu<pdu::ErrorAttributeParameter>> for Error {
 
 impl From<TransferFormatError> for Error {
     fn from(err: TransferFormatError) -> Self {
-        Error::TransferFormat(err)
+        Error::TransferFormatTryFrom(err)
     }
 }
 
@@ -307,30 +327,36 @@ impl core::fmt::Display for TransferFormatError {
         write!(f, "{}, {}", self.pdu_err, self.message)
     }
 }
-/// ATT Protocol Transmission format
+/// ATT Protocol try from transmission format
 ///
-/// Structures that implement `TransferFormat` can be converted into the transmitted format
-/// (between the server and client) or be constructed from the raw transmitted data.
-///
-/// The functions `try_from`, `len_of_into`, and `build_into_ret` must be implemented for each type.
-/// The default implementation of function `into` uses `len_of_into` and `build_into_ret` to
-/// generate data that can be sent between a Server and Client.
-///
-/// Many things that implement `TransferFormat` act like a container type for other types that
-/// implement `TransferFormat`. The combination of `len_of_into` and `build_into_ret` is used so
-/// that only one buffer is created when `into` is called (usually only called on the
-/// [`pdu`](crate::att::pdu) structures). Both `len_of_into` and `build_into_ret` act like pseudo
-/// recursion around the containing generic type. If `TransferFormat` is implemented for something
-/// that is generic, these functions will be implemented based on the generic types implementation
-/// of `TransferFormat`.
-pub trait TransferFormat {
+/// Structures that implement `TransferFormatTryFrom` can be constructed from the attribute protocol raw
+/// transmitted data.
+pub trait TransferFormatTryFrom {
     /// Make Self from the attribute parameter
     ///
     /// This will attempt to take the passed byte slice and convert it into Self. The byte slice
     /// needs to only be the attribute parameter, it cannot contain either the attribute opcode
     /// or the attribute signature.
-    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> where Self: Sized;
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized;
+}
 
+/// ATT Protocol Into transmission format
+///
+/// Structures that implement `TransferFormatInto` can be converted into the attribute protocol's
+/// transmitted format.
+///
+/// The functions `len_of_into`, and `build_into_ret` must be implemented. The default
+/// implementation of function `into` uses `len_of_into` and `build_into_ret` to generate data that
+/// can be sent between a Server and Client.
+///
+/// Many things that implement `TransferFormatTryFrom` act like a container type for other types that
+/// implement `TransferFormatTryFrom`. The combination of `len_of_into` and `build_into_ret` is used so
+/// that only one buffer is created when `into` is called (usually only called on the
+/// [`pdu`](crate::att::pdu) structures). Both `len_of_into` and `build_into_ret` act like pseudo
+/// recursion around the containing generic type. If `TransferFormatTryFrom` is implemented for something
+/// that is generic, these functions will be implemented based on the generic types implementation
+/// of `TransferFormatTryFrom`.
+pub trait TransferFormatInto {
     /// Get the length of the return of function `into`
     ///
     /// This is mainly used for `build_into` and things that call `build_into` to generate a vector
@@ -348,7 +374,11 @@ pub trait TransferFormat {
 
     /// Convert Self into the transferred bytes
     fn into(&self) -> Vec<u8> {
-        let mut buff = Vec::with_capacity( self.len_of_into() );
+        let len = self.len_of_into();
+
+        let mut buff = Vec::with_capacity( len );
+
+        buff.resize(len, 0);
 
         self.build_into_ret(&mut buff);
 
@@ -356,18 +386,9 @@ pub trait TransferFormat {
     }
 }
 
-/// The size of Formatted Transfer
-///
-/// This is required for vectors or slices of transfered data.
-pub trait TransferFormatSize {
-
-    /// The size of the data in its transferred format
-    const SIZE: usize;
-}
-
 macro_rules! impl_transfer_format_for_number {
     ( $num: ty ) => {
-        impl TransferFormat for $num {
+        impl TransferFormatTryFrom for $num {
             fn try_from( raw: &[u8]) -> Result<Self, TransferFormatError> {
                 if raw.len() == core::mem::size_of::<$num>() {
                     let mut bytes = <[u8;core::mem::size_of::<$num>()]>::default();
@@ -376,19 +397,32 @@ macro_rules! impl_transfer_format_for_number {
 
                     Ok(Self::from_le_bytes(bytes))
                 } else {
-                    Err(TransferFormatError::from(concat!("Invalid length for ", stringify!($ty))))
+                    Err(TransferFormatError::bad_size(stringify!($num), core::mem::size_of::<$num>(), raw.len()))
                 }
             }
+        }
 
-            fn len_of_into(&self) -> usize { Self::SIZE }
+        impl TransferFormatInto for $num {
+
+            fn len_of_into(&self) -> usize { core::mem::size_of::<$num>() }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
                 into_ret.copy_from_slice( &self.to_le_bytes() )
             }
         }
 
-        impl TransferFormatSize for $num {
-            const SIZE: usize = core::mem::size_of::<$num>();
+        impl TransferFormatCollectible for $num {
+            fn chunk(raw: &[u8]) -> Option<Result<(Self, &[u8]), TransferFormatError>> {
+                if raw.len() == 0 { None }
+                else if raw.len() > core::mem::size_of::<$num>() {
+                    let self_ret  = TransferFormatTryFrom::try_from(&raw[..core::mem::size_of::<$num>()]);
+                    let slice_ret = &raw[core::mem::size_of::<$num>()..];
+
+                    Some( self_ret.map(|s| (s, slice_ret) ) )
+                } else {
+                    Some(Err(TransferFormatError::bad_size(stringify!($num), core::mem::size_of::<$num>(), raw.len())))
+                }
+            }
         }
     }
 }
@@ -406,12 +440,14 @@ impl_transfer_format_for_number!{usize}
 impl_transfer_format_for_number!{i128}
 impl_transfer_format_for_number!{u128}
 
-impl TransferFormat for alloc::string::String {
-    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
+impl TransferFormatTryFrom for alloc::string::String {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         alloc::string::String::from_utf8(raw.to_vec())
-            .map_err( |e| TransferFormatError::from(format!("{:?}", e)) )
+            .map_err(|e| TransferFormatError::from(format!("{:?}", e)))
     }
+}
 
+impl TransferFormatInto for alloc::string::String {
     fn len_of_into(&self) -> usize { self.len() }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
@@ -419,7 +455,7 @@ impl TransferFormat for alloc::string::String {
     }
 }
 
-impl TransferFormat for crate::UUID {
+impl TransferFormatTryFrom for crate::UUID {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         use core::mem::size_of;
 
@@ -427,13 +463,13 @@ impl TransferFormat for crate::UUID {
 
         if raw.len() == size_of::<u16>() {
 
-            TransferFormat::try_from(raw)
+            TransferFormatTryFrom::try_from(raw)
             .and_then( |uuid_16: u16| Ok(crate::UUID::from_u16(uuid_16)) )
             .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
 
         } else if raw.len() == size_of::<u128>() {
 
-            TransferFormat::try_from(raw)
+            TransferFormatTryFrom::try_from(raw)
             .and_then( |uuid_128: u128| Ok(crate::UUID::from_u128(uuid_128)) )
             .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
 
@@ -441,6 +477,9 @@ impl TransferFormat for crate::UUID {
             Err(TransferFormatError::from(format!(err_fmt!(), "raw data is not 16 or 128 bits")))
         }
     }
+}
+
+impl TransferFormatInto for crate::UUID {
 
     fn len_of_into(&self) -> usize {
         if self.is_16_bit() {
@@ -459,11 +498,14 @@ impl TransferFormat for crate::UUID {
     }
 }
 
-impl<T> TransferFormat for Box<[T]> where T: TransferFormat + TransferFormatSize {
+impl<T> TransferFormatTryFrom for Box<[T]> where T: TransferFormatTryFrom + TransferFormatCollectible {
 
     fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
-        <alloc::vec::Vec<T> as TransferFormat>::try_from(raw).map(|v| v.into_boxed_slice() )
+        <alloc::vec::Vec<T> as TransferFormatTryFrom>::try_from(raw).map(|v| v.into_boxed_slice() )
     }
+}
+
+impl<T> TransferFormatInto for Box<[T]> where T: TransferFormatInto {
 
     fn len_of_into(&self) -> usize {
         self.iter().fold(0usize, |v, t| v + t.len_of_into() )
@@ -480,10 +522,13 @@ impl<T> TransferFormat for Box<[T]> where T: TransferFormat + TransferFormatSize
     }
 }
 
-impl<T> TransferFormat for Box<T> where T: TransferFormat {
+impl<T> TransferFormatTryFrom for Box<T> where T: TransferFormatTryFrom {
     fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
-        <T as TransferFormat>::try_from(raw).and_then( |v| Ok(Box::new(v)) )
+        <T as TransferFormatTryFrom>::try_from(raw).and_then( |v| Ok(Box::new(v)) )
     }
+}
+
+impl<T> TransferFormatInto for Box<T> where T: TransferFormatInto {
 
     fn len_of_into(&self) -> usize {
         self.as_ref().len_of_into()
@@ -494,7 +539,7 @@ impl<T> TransferFormat for Box<T> where T: TransferFormat {
     }
 }
 
-impl TransferFormat for Box<str> {
+impl TransferFormatTryFrom for Box<str> {
     fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         core::str::from_utf8(raw)
             .and_then( |s| Ok( s.into() ) )
@@ -502,6 +547,9 @@ impl TransferFormat for Box<str> {
                 Err( TransferFormatError::from(format!("{}", e)))
             })
     }
+}
+
+impl TransferFormatInto for Box<str> {
 
     fn len_of_into(&self) -> usize {
         self.len()
@@ -512,7 +560,7 @@ impl TransferFormat for Box<str> {
     }
 }
 
-impl TransferFormat for () {
+impl TransferFormatTryFrom for () {
 
     fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
         if raw.len() == 0 {
@@ -521,18 +569,16 @@ impl TransferFormat for () {
             Err(TransferFormatError::from("length must be zero for type '()'"))
         }
     }
+}
+
+impl TransferFormatInto for () {
 
     fn len_of_into(&self) -> usize { 0 }
 
     fn build_into_ret(&self, _: &mut [u8] ) {}
 }
 
-impl TransferFormat for Box<dyn TransferFormat> {
-    /// It is impossible to convert data from its raw form into a Box<dyn TransferFormat>. This
-    /// will always return `Err(..)`
-    fn try_from(_: &[u8]) -> Result<Self, TransferFormatError> {
-        Err(TransferFormatError::from("Impossible to convert raw data to a 'Box<dyn TransferFormat>'"))
-    }
+impl TransferFormatInto for Box<dyn TransferFormatInto> {
 
     fn len_of_into(&self) -> usize { self.as_ref().len_of_into() }
 
@@ -541,23 +587,24 @@ impl TransferFormat for Box<dyn TransferFormat> {
     }
 }
 
-impl<T> TransferFormat for Vec<T> where T: TransferFormat + TransferFormatSize {
+impl TransferFormatInto for &dyn TransferFormatInto {
+
+    fn len_of_into(&self) -> usize { unimplemented!() }
+
+    fn build_into_ret(&self, _: &mut [u8] ) { unimplemented!() }
+}
+
+impl<T> TransferFormatTryFrom for Vec<T> where T: TransferFormatTryFrom + TransferFormatCollectible {
 
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
-        let mut chunks = raw.chunks_exact(T::SIZE);
-
-        if chunks.remainder().len() == 0 {
-            Ok( chunks.try_fold( Vec::with_capacity(chunks.len()), |mut v,c| {
-                v.push(TransferFormat::try_from(&c)?);
-                Ok(v)
-            })
-                .or_else(|e: TransferFormatError| Err(TransferFormatError::from(
-                    format!("Failed to make boxed slice, {}", e))))?
-            )
-        } else {
-            Err(TransferFormatError::bad_exact_chunks("{generic}", T::SIZE, raw.len()))
-        }
+        T::chunks(raw).try_fold( Vec::new(), |mut v,r| {
+            v.push(r?);
+            Ok(v)
+        })
     }
+}
+
+impl<T> TransferFormatInto for Vec<T> where T: TransferFormatInto {
 
     fn len_of_into(&self) -> usize {
         self.iter().fold(0usize, |v, t| v + t.len_of_into() )
@@ -575,44 +622,43 @@ impl<T> TransferFormat for Vec<T> where T: TransferFormat + TransferFormatSize {
     }
 }
 
-impl TransferFormatSize for Box<dyn TransferFormat> {
-    /// This is not the actual size, but because the size is unknown this is set to zero. This is
-    /// really a hack so that `dyn TransferFormat` can work within slice/vectored since it is
-    /// impossible for anything to access this implementation of SIZE.
-    const SIZE: usize = 0;
-}
+/// Transfer Format collections
+///
+/// Collections can have multiple `?Sized` entries and as a result it can be unknown how many raw
+/// interface bytes are required to convert into a data type. This trait provides methods to help
+/// `TransferInterface` implementations on collections so they can translate raw interface data
+/// into a complete collection
+pub trait TransferFormatCollectible {
 
-trait AnyAttribute {
+    /// Cut, translate to `Self`, and return the rest of a full slice of interface data
+    ///
+    /// Chunk should be implemented to take a slice of any number of bytes and try to translate the
+    /// raw data, starting from the first byte, to as many bytes required of `raw`. If the data can
+    /// be successfully transformed into `Self` then `Self` is returned along with the remaining
+    /// untranslated bytes. If anything goes wrong, say the data in the wrong format or `raw` is
+    /// not large enough, then an error is returned.
+    ///
+    /// For flexibility, the return is optional. `None` should be returned if there is no error
+    /// trying to convert the raw data into `Self` but `Self` cannot be created from the raw
+    /// data. The typical return of `None` occurs when input `raw` is a reference to an empty slice.
+    fn chunk(raw: &[u8]) -> Option<Result<(Self, &[u8]), TransferFormatError>> where Self: Sized;
 
-    fn get_type(&self) -> crate::UUID;
-
-    fn get_permissions(&self) -> Vec<AttributePermissions>;
-
-    fn get_handle(&self) -> u16;
-
-    fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), TransferFormatError>;
-
-    fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat;
-}
-
-impl<V> AnyAttribute for Attribute<V> where V: TransferFormat + Sized  {
-
-    fn get_type(&self) -> crate::UUID { self.ty }
-
-    fn get_permissions(&self) -> Vec<AttributePermissions> { self.permissions.clone() }
-
-    /// This will panic if the handle value hasn't been set yet
-    fn get_handle(&self) -> u16 { self.handle.expect("Handle value not set") }
-
-    fn set_val_from_raw(&mut self, raw: &[u8]) -> Result<(), TransferFormatError> {
-
-        self.value = TransferFormat::try_from(raw)?;
-
-        Ok(())
+    /// Chunk the data, iteratively, using function `chunk`
+    ///
+    /// Unfortunately, because the size of `Self` can be `?Sized`, the return `TransferFormatChunks`
+    /// does not have a function to give the remaining bytes.
+    fn chunks(raw: &[u8]) -> TransferFormatChunks<'_,Self> where Self: Sized{
+        TransferFormatChunks(raw, core::marker::PhantomData)
     }
+}
 
-    fn get_val_as_transfer_format<'a>(&'a self) -> &'a dyn TransferFormat {
-        &self.value
+pub struct TransferFormatChunks<'a,T>(&'a [u8], core::marker::PhantomData<T>);
+
+impl<T> core::iter::Iterator for TransferFormatChunks<'_, T> where T: TransferFormatCollectible {
+    type Item = Result<T, TransferFormatError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        T::chunk(self.0).map(|rslt| rslt.map(|(ret, self_0)| { self.0 = self_0; ret }))
     }
 }
 

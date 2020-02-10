@@ -4,10 +4,11 @@ use alloc::{
 };
 use super::{
     pdu,
-    TransferFormat,
-    TransferFormatError
+    TransferFormatError,
+    client::ClientPduName
 };
 use crate::l2cap;
+use crate::att::{TransferFormatTryFrom, TransferFormatInto};
 
 macro_rules! log_debug {
     ( $arg1:expr $(, $args:expr)* ) => { log::debug!(concat!("(ATT) ", $arg1) $(, $args)*) }
@@ -35,7 +36,7 @@ impl core::convert::TryFrom<super::pdu::PduOpCode> for ServerPduName {
     type Error = ();
 
     fn try_from(opcode: super::pdu::PduOpCode) -> Result<Self, Self::Error> {
-        Self::try_from(opcode.into_raw())
+        Self::try_from(opcode.as_raw())
     }
 }
 
@@ -184,7 +185,7 @@ pub struct Server<'c, C>
     /// value as defined in the connection channel will be used.
     set_mtu: Option<u16>,
     connection: &'c C,
-    attributes: Vec<Box<dyn super::AnyAttribute + Send + Sync >>,
+    attributes: Vec<Box<dyn ServerAttribute + Send + Sync >>,
     /// The permissions the client currently has
     given_permissions: Vec<super::AttributePermissions>,
 }
@@ -213,7 +214,7 @@ where C: l2cap::ConnectionChannel
             super::MIN_ATT_MTU_LE
         };
 
-        let attributes: Vec<Box<dyn super::AnyAttribute + Send + Sync>> = match server_attributes.into()
+        let attributes = match server_attributes.into()
         {
             Some(a) => a.attributes,
             None => ServerAttributes::new().attributes,
@@ -231,8 +232,8 @@ where C: l2cap::ConnectionChannel
     /// Get the maximum transfer unit of the connection
     ///
     /// The is the current mtu as agreed upon by the client and server
-    pub fn get_mtu(&self) -> u16 {
-        match self.set_mtu { Some(mtu) => mtu, None => super::MIN_ATT_MTU_LE }
+    pub fn get_mtu(&self) -> usize {
+        ( match self.set_mtu { Some(mtu) => mtu, None => super::MIN_ATT_MTU_LE } ) as usize
     }
 
     /// Push an attribute onto the handle stack
@@ -242,14 +243,15 @@ where C: l2cap::ConnectionChannel
     /// # Panic
     /// If you manage to push 65535 attributes onto this server, the next pushed attribute will
     /// cause this function to panic.
-    pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
-    where V: TransferFormat + Sized + Send + Sync + 'static
+    pub fn push<X,V>(&mut self, attribute: super::Attribute<X>) -> u16
+    where X: ServerAttributeValue<V> + Sized + Send + Sync + 'static,
+          V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq + 'static,
     {
         use core::convert::TryInto;
 
         let ret = self.attributes.len().try_into().expect("Exceeded attribute handle limit");
 
-        self.attributes.push( Box::new(attribute) );
+        self.attributes.push( Box::new( ServerAttEntry::from(attribute) ) );
 
         ret
     }
@@ -321,7 +323,7 @@ where C: l2cap::ConnectionChannel
     /// `Encryption`(`Read`, `Bits256`).
     ///
     /// # Errors
-    /// If a permisson is not satisfied, this function will return a corresponding error to the
+    /// If a permission is not satisfied, this function will return a corresponding error to the
     /// permission
     /// - [`Read`](super::AttributePermissions::Read) ->
     /// [`ReadNotPermitted`](super::pdu::Error::ReadNotPermitted)
@@ -359,20 +361,20 @@ where C: l2cap::ConnectionChannel
     ///
     /// There are two types of permissions that are checked for
     /// * `required` - permissions that *both* the attribute and client must have
-    /// * `restricted` - each permission that the client must have if *and only if* the the
-    ///   attribute has it.
+    /// * `restricted` - permissions that the client must have if the the attribute has it.
     ///
-    /// If there is an offending permision, that permission is returned, otherwise 'None' is
-    /// returned by this function.
+    /// If there is an offending permission, that permission is returned. If 'None' is returned the
+    /// client has the required permissions to proceed with the operation.
     fn validate_permissions(&self,
-        att: &dyn super::AnyAttribute,
+        att: &dyn ServerAttribute,
         required: &[super::AttributePermissions],
         restricted: &[super::AttributePermissions])
     -> Option<pdu::Error>
     {
         let attribute_permissions = att.get_permissions();
 
-        // Both filter closures return true when a permission is not valid
+        // Both closures for the `filter` functions return true when a permission is not valid. The
+        // the closure provided to `map` is only invoked when a permission check fails.
         required.iter()
         .filter(|&&p| {
             attribute_permissions.iter().find(|&&x| x == p).is_none() ||
@@ -386,6 +388,7 @@ where C: l2cap::ConnectionChannel
             })
         )
         .map(|p| {
+            // Map the invalid permission to it's corresponding error
             match p {
                 super::AttributePermissions::Read => pdu::Error::ReadNotPermitted,
                 super::AttributePermissions::Write => pdu::Error::WriteNotPermitted,
@@ -405,6 +408,45 @@ where C: l2cap::ConnectionChannel
             }
         })
         .nth(0) // return the first offending permission, if any.
+    }
+
+    /// Check if a client can read the given attribute
+    ///
+    /// Returns the error as to why the client couldn't read the attribute
+    fn client_can_read_attribute(&self, att: &dyn ServerAttribute ) -> Option<pdu::Error> {
+        const REQUIRED: &'static [super::AttributePermissions] = &[
+            super::AttributePermissions::Read
+        ];
+
+        const RESTRICTED: &'static [super::AttributePermissions] = &[
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits128),
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits192),
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits256),
+            super::AttributePermissions::Authentication(super::AttributeRestriction::Read),
+            super::AttributePermissions::Authorization(super::AttributeRestriction::Read),
+        ];
+
+        self.validate_permissions(att, REQUIRED, RESTRICTED)
+    }
+
+    /// Check if a client can write the given attribute
+    ///
+    /// Returns the error as to why the client couldn't read the attribute
+    fn client_can_write_attribute(&self, att: &dyn ServerAttribute ) -> Option<pdu::Error>
+    {
+        const REQUIRED: &'static [super::AttributePermissions] = &[
+            super::AttributePermissions::Write
+        ];
+
+        const RESTRICTED: &'static [super::AttributePermissions] = &[
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Write, super::EncryptionKeySize::Bits128),
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Write, super::EncryptionKeySize::Bits192),
+            super::AttributePermissions::Encryption(super::AttributeRestriction::Write, super::EncryptionKeySize::Bits256),
+            super::AttributePermissions::Authentication(super::AttributeRestriction::Write),
+            super::AttributePermissions::Authorization(super::AttributeRestriction::Write),
+        ];
+
+        self.validate_permissions(att, REQUIRED, RESTRICTED)
     }
 
     /// Process a received Acl Data packet form the Bluetooth Controller
@@ -466,22 +508,22 @@ where C: l2cap::ConnectionChannel
 
         match pdu_type {
             super::client::ClientPduName::ExchangeMtuRequest =>
-                self.process_exchange_mtu_request( TransferFormat::try_from( &payload)? ),
+                self.process_exchange_mtu_request( TransferFormatTryFrom::try_from( &payload)? ),
 
             super::client::ClientPduName::WriteRequest =>
                 self.process_write_request( &payload ),
 
             super::client::ClientPduName::ReadRequest =>
-                self.process_read_request( TransferFormat::try_from(&payload)? ),
+                self.process_read_request( TransferFormatTryFrom::try_from(&payload)? ),
 
             super::client::ClientPduName::FindInformationRequest =>
-                self.process_find_information_request( TransferFormat::try_from(&payload)? ),
+                self.process_find_information_request( TransferFormatTryFrom::try_from(&payload)? ),
 
             super::client::ClientPduName::FindByTypeValueRequest =>
                 self.process_find_by_type_value_request( &payload ),
 
             super::client::ClientPduName::ReadByTypeRequest =>
-                self.process_read_by_type_request( TransferFormat::try_from(&payload)? ),
+                self.process_read_by_type_request( TransferFormatTryFrom::try_from(&payload)? ),
 
             pdu @ super::client::ClientPduName::ReadBlobRequest |
             pdu @ super::client::ClientPduName::ReadMultipleRequest |
@@ -497,53 +539,100 @@ where C: l2cap::ConnectionChannel
         Ok(())
     }
 
-    /// Send out notification
+    /// Send out a notification
     ///
     /// The attribute at the given handle will be sent out in the notification.
     ///
     /// If the handle doesn't exist, then the notification isn't sent and false is returned
     pub fn send_notification(&self, handle: u16) -> bool {
-        self.attributes.get(handle as usize).and_then( | attribute | {
-
-            let val = attribute.get_val_as_transfer_format().into();
-
-            let pdu = pdu::handle_value_notification( handle, val );
-
-            let data = TransferFormat::into(&pdu);
-
-            self.connection.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
-
-            Some(())
+        self.attributes.get(handle as usize).map( | attribute | {
+            self.send( pdu::handle_value_notification( handle, attribute.as_ref() ) );
         } )
         .is_some()
     }
 
-    /// Deref the handle, and if the handle is valid, do F, otherwise return an error.
-    ///
-    /// If the handle is invalid, then this function sends the error PDU with the error InvalidHandle
-    #[inline]
-    pub fn send_invalid_handle_error(&self, handle: u16, received_opcode: u8) {
-        log_debug!("Sending error response. Received Op Code: '{:#x}', Handle: '{:#x}', error: '{}'",
-            received_opcode, handle, pdu::Error::InvalidHandle);
+    fn send_raw(&self, intf_data: Vec<u8>) {
+        let acl_data = l2cap::AclData::new( intf_data, super::L2CAP_CHANNEL_ID );
 
-        self.send_error(handle, received_opcode, pdu::Error::InvalidHandle);
+        self.connection.send(acl_data);
     }
 
-    #[inline]
-    pub fn send_error(&self, handle: u16, received_opcode: u8, pdu_error: pdu::Error) {
+    fn send<D>(&self, data: D) where D: TransferFormatInto {
+        self.send_raw( TransferFormatInto::into(&data) );
+    }
 
-        let err_pdu = pdu::error_response(
-            received_opcode,
-            handle,
-            pdu_error
-        );
+    /// Send an attribute PDU to the client
+    pub fn send_pdu<D>(&self, pdu: pdu::Pdu<D> ) where D: TransferFormatInto {
+        self.send(pdu);
+    }
 
-        let data = TransferFormat::into(&err_pdu);
+    /// Send an error the the client
+    pub fn send_error(&self, handle: u16, received_opcode: ClientPduName, pdu_error: pdu::Error) {
 
-        log_debug!("Sending error response. Received Op Code: '{:#x}', Handle: '{:#x}', error: '{}'",
-            received_opcode, handle, pdu_error);
+        log_debug!("Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
+            Into::<u8>::into(received_opcode), handle, pdu_error);
 
-        self.connection.send( l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID) );
+        self.send( pdu::error_response(received_opcode.into(),handle,pdu_error) );
+    }
+
+    /// Get a reference to an attribute
+    fn get_att(&self, handle: u16) -> Result<& (dyn ServerAttribute + Send + Sync), pdu::Error> {
+        if pdu::is_valid_handle(handle) {
+            Err(pdu::Error::InvalidHandle)
+        }
+        else {
+            self.attributes.get(handle as usize)
+                .ok_or(pdu::Error::InvalidHandle)
+                .map(|a| a.as_ref() )
+        }
+    }
+
+    /// Get a reference to a mutable attribute
+    fn get_att_mut(&mut self, handle: u16) -> Result<&mut (dyn ServerAttribute + Send + Sync + 'static), pdu::Error> {
+        if pdu::is_valid_handle(handle) {
+            Err(pdu::Error::InvalidHandle)
+        }
+        else {
+            self.attributes.get_mut(handle as usize)
+                .ok_or(pdu::Error::InvalidHandle)
+                .map(|a| a.as_mut() )
+        }
+    }
+
+    /// Get a readable reference to the attribute value
+    ///
+    /// Returns an error if the client doesn't have the adequate permissions or the handle is
+    /// invalid.
+    fn read_att_and<F>(&self, handle: u16, transform: F) -> Result<(), pdu::Error>
+    where F: Fn(&dyn TransferFormatInto) -> ()
+    {
+        let attribute = self.get_att(handle)?;
+
+        if let Some(err) = self.client_can_read_attribute(attribute) {
+            Err(err)
+        } else {
+            attribute.value_to_transfer_format(&mut |a| transform(a) );
+
+            Ok(())
+        }
+    }
+
+    /// Write the interface data to the attribute
+    ///
+    /// Returns an error if the client doesn't have the adequate permissions or the handle is
+    /// invalid.
+    fn write_att(&mut self, handle: u16, intf_data: &[u8]) -> Result<(), pdu::Error> {
+
+        let attribute = self.get_att(handle)?;
+
+        if let Some(err) = self.client_can_write_attribute(attribute) {
+            Err(err)
+        } else {
+            match self.get_att_mut(handle).map(|att| att.value_from_transfer_format(intf_data) ){
+                Ok(_) => Ok(()),
+                Err(_) => Err(pdu::Error::InvalidPDU)
+            }
+        }
     }
 
     fn process_exchange_mtu_request(&mut self, client_mtu: u16) {
@@ -552,449 +641,264 @@ where C: l2cap::ConnectionChannel
             self.set_mtu = Some(client_mtu.into());
         }
 
-        let response_pdu = pdu::exchange_mtu_response(self.get_mtu());
-
-        let data = TransferFormat::into(&response_pdu);
-
         log_debug!("Sending exchange mtu response");
 
-        self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID) );
+        self.send(pdu::exchange_mtu_response(self.get_mtu() as u16));
     }
 
+    /// Process a Read Request from the client
     fn process_read_request(&mut self, handle: u16) {
+        log::trace!("Read Request");
 
-        if let Some(attribute) = self.attributes.get( handle as usize) {
-
-            let mut data = alloc::vec!( super::server::ServerPduName::ReadResponse.into() );
-
-            data.extend_from_slice( &attribute.get_val_as_transfer_format().into() );
-
-            let acl_data = l2cap::AclData::new( data, super::L2CAP_CHANNEL_ID );
-
-            log_debug!("Sending read response");
-
-            self.connection.send( acl_data );
-        } else {
-            self.send_invalid_handle_error(handle, super::client::ClientPduName::ReadRequest.into());
-        }
+        self.read_att_and(handle, |att_tf| self.send( pdu::read_response(att_tf) ) )
+            .unwrap_or_else(|e| self.send_error(handle, ClientPduName::ReadRequest, e) );
     }
 
-    /// # Note
-    /// This cannot accept a PDU because the data size isn't know at compile time, thus the method
-    /// determines the data type based on the handle.
+    /// Process a Write Request from the client
     fn process_write_request(&mut self, payload: &[u8]) {
-        let received_opcode = super::client::ClientPduName::WriteRequest.into();
+        log::trace!("Write Request");
 
-        if payload.len() >= 2 {
-            let raw_handle = &payload[..2];
-            let raw_data = &payload[2..];
+        let handle = TransferFormatTryFrom::try_from( &payload[..2] ).expect("Failed to convert 2 bytes to u16");
 
-            let handle = TransferFormat::try_from( &raw_handle ).unwrap();
+        self.write_att( handle, &payload[2..])
+            .unwrap_or_else(|e| self.send_error(handle, ClientPduName::WriteRequest, e) );
+    }
 
-            if let Some(data) = self.attributes.get_mut( handle as usize ) {
-                match data.set_val_from_raw( raw_data ) {
-                    Ok(_) => {
-                        let data = TransferFormat::into(&pdu::write_response());
+    /// Process a Find Information Request form the client
+    fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) {
 
-                        log_debug!("Sending write response");
+        log::trace!("Find Information Request");
 
-                        self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ) );
-                    },
-                    Err(pdu_err) =>
-                        self.send_error(handle, received_opcode, pdu_err.pdu_err),
-                };
+        /// Handle with UUID iterator
+        ///
+        /// The boolean is used to indicate whether or not the iterator is over short or long UUIDs.
+        struct HandleUuidItr<I: Iterator<Item=(u16,crate::UUID)> + Clone>(bool, I);
+
+        impl<I: Iterator<Item=(u16,crate::UUID)> + Clone> TransferFormatInto for HandleUuidItr<I>
+        {
+            fn len_of_into(&self) -> usize {
+                1 + self.1.clone().fold(0usize, |acc, (h,u)| acc + h.len_of_into() + u.len_of_into() )
+            }
+
+            fn build_into_ret(&self, into_ret: &mut [u8] ) {
+
+                const SHORT_FORMAT: u8 = 1;
+                const LONG_FORMAT: u8 = 2;
+
+                let mut offset = 1;
+
+                into_ret[0] = if self.0 {SHORT_FORMAT} else {LONG_FORMAT};
+
+                self.1.clone().for_each( |(h,u)| {
+                    let h_len = h.len_of_into();
+                    let u_len = u.len_of_into();
+
+                    h.build_into_ret(&mut into_ret[offset..(offset + h_len)] );
+
+                    offset += h_len;
+
+                    u.build_into_ret(&mut into_ret[offset..(offset + u_len)] );
+
+                    offset += u_len;
+                })
+            }
+        }
+
+        if handle_range.is_valid() {
+            use core::cmp::min;
+
+            // Both the start and ending handles cannot be past the actual length of the attributes
+            let start = min( handle_range.starting_handle as usize, self.attributes.len() );
+            let stop  = min( handle_range.ending_handle   as usize, self.attributes.len() );
+
+            let payload_max = self.get_mtu() - 2;
+
+            // Try to build response_payload full of 16 bit attribute types. This will stop at the first
+            // attribute type cannot be converted into a shortened 16 bit UUID.
+            let mut handle_uuids_16_bit_itr = HandleUuidItr(false, self.attributes[start..stop]
+                .iter()
+                .filter(|att| att.get_type().is_16_bit() )
+                .take_while(|att| self.client_can_write_attribute(att.as_ref()).is_none() )
+                .enumerate()
+                .take_while(|(cnt, att)| (cnt * 4 < payload_max) && att.get_type().is_16_bit() )
+                .map(|(_,att)| (att.get_handle(), att.get_type()) )
+                .peekable()
+            );
+
+            if let None = handle_uuids_16_bit_itr.1.peek() {
+
+                // If there is no 16 bit UUIDs then the UUIDs must be sent in the full 128 bit form.
+
+                // Collect all UUIDs until the PDU is full or the first unreadable attribute is
+                // found.
+                let mut handle_uuids_128_bit_itr = HandleUuidItr(true, self.attributes[start..start]
+                    .iter()
+                    .take_while(|att| self.client_can_read_attribute(att.as_ref()).is_none() )
+                    .enumerate()
+                    .take_while(|(cnt, _)| cnt * 18 < payload_max )
+                    .map(|(_,att)| (att.get_handle(), att.get_type()) )
+                    .peekable()
+                );
+
+                if let None = handle_uuids_128_bit_itr.1.peek() {
+
+                    // If there are still no UUIDs then there are no UUIDs within the given range (or
+                    // permissions were not granted)
+
+                    self.send_error(start as u16, ClientPduName::FindInformationRequest, pdu::Error::AttributeNotFound)
+                } else {
+                    let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_128_bit_itr, None);
+
+                    self.send( pdu );
+                }
             } else {
-                self.send_invalid_handle_error(handle, received_opcode);
+
+                // Send the 16 bit UUIDs
+
+                let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_16_bit_itr, None);
+
+                self.send( pdu );
             }
         } else {
-            self.send_error(0, received_opcode, pdu::Error::InvalidPDU);
+            self.send_error(handle_range.starting_handle, ClientPduName::FindInformationRequest, pdu::Error::InvalidHandle);
         }
     }
 
-    fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) {
-        use pdu::HandleRange;
+    /// Process find by type value request
+    fn process_find_by_type_value_request(&mut self, payload: &[u8] ) {
 
-        log::debug!("HandleRange: starting_handle: {}, ending_handle: {}",
-            handle_range.starting_handle, handle_range.ending_handle );
+        /// Handles iterator
+        struct HandleGroupItr<I: Iterator<Item=(u16,u16)> + Clone >(I);
 
-        match handle_range{
-            HandleRange { starting_handle: 0, .. } => {
-                let oc = super::client::ClientPduName::FindInformationRequest.into();
+        impl<I: Iterator<Item=(u16,u16)> + Clone> TransferFormatInto for HandleGroupItr<I>
+        {
+            fn len_of_into(&self) -> usize { self.0.clone().fold(0usize, |acc,_| acc + 4) }
 
-                log::error!("Received 'find information request' with a handle range starting \
-                    at 0");
+            fn build_into_ret(&self, into_ret: &mut [u8] ) {
 
-                self.send_invalid_handle_error(0, oc);
-            },
-            HandleRange { starting_handle: sh @ _, ending_handle: eh @ _ } if sh <= eh => {
-                use core::cmp::min;
-                use core::convert::TryInto;
-                use core::mem::size_of;
-
-                enum Format {
-                    Uuid16Bit,
-                    Uuid128Bit,
-                }
-
-                let start = min( sh as usize, self.attributes.len() );
-                let stop  = min( eh as usize, self.attributes.len() );
-
-                let attributes = &self.attributes[start..stop];
-
-                attributes
-                .first()
-                .and_then(|first| {
-
-                    // See if the first attribute's type can be made into a 16 bit UUID
-                    TryInto::<u16>::try_into(first.get_type()).and_then( | uuid | {
-
-                        let handle = first.get_handle();
-
-                        Ok( (handle, uuid) )
-                    })
-                    .and_then( | (first_handle, first_uuid) | {
-
-                        // The type of the starting attribute is convertable to a 16 bit UUID.
-                        //
-                        // The find information response PDU will contain the the attributes after
-                        // the starting attribute until:
-                        // * an attribute's type cannot be converted to a 16 bit uuid
-                        // * the end of `attributes`
-                        // * the packet MTU was reached
-
-                        let mtu = self.get_mtu() as usize;
-
-                        let vec_cap = min( (stop - start) * (2 + size_of::<u16>()), mtu - 2 );
-
-                        let mut v = Vec::with_capacity( vec_cap );
-
-                        v.extend_from_slice( &TransferFormat::into(&first_handle) );
-                        v.extend_from_slice( &TransferFormat::into(&first_uuid) );
-
-                        for attribute in attributes[1..].iter() {
-                            if (v.len() + 2 + size_of::<u16>()) < v.capacity() {
-                                if let Ok(uuid_16) = TryInto::<u16>::try_into(attribute.get_type()) {
-                                    let handle =  attribute.get_handle();
-
-                                    v.extend_from_slice( &TransferFormat::into(&handle) );
-                                    v.extend_from_slice( &TransferFormat::into(&uuid_16) );
-
-                                } else {
-                                    break;
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-
-                        log_debug!("Sending a 'find information response' with 16 bit UUIDs");
-
-                        Ok( (Format::Uuid16Bit, v) )
-                    })
-                    .or_else( |_| -> Result<(Format,Vec<u8>), ()> {
-
-                        // The type of the first attribute cannot be made into a 16 bit UUID.
-                        //
-                        // The find information response PDU will contain the the attributes after
-                        // the starting attribute until:
-                        // * the end of `attributes`
-                        // * the packet MTU was reached
-                        //
-                        // This is greedy, attributes that have a type that can be converted into a
-                        // 16 bit UUID are included.
-
-                        let mtu = self.get_mtu() as usize;
-
-                        let vec_cap = min( (stop - start) * (2 + size_of::<u128>()), mtu - 2 );
-
-                        let mut v = Vec::with_capacity( vec_cap );
-
-                        for attribute in attributes[1..].iter() {
-                            if (v.len() + 2 + size_of::<u128>()) < v.capacity() {
-                                if let Ok(uuid_128) = TryInto::<u128>::try_into(attribute.get_type()) {
-                                    let handle =  attribute.get_handle();
-
-                                    v.extend_from_slice( &TransferFormat::into(&handle) );
-                                    v.extend_from_slice( &TransferFormat::into(&uuid_128) );
-
-                                } else {
-                                    break;
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-
-                        log_debug!("Sending a 'find information response' with 128 bit UUIDs");
-
-                        Ok( (Format::Uuid128Bit, v) )
-                    })
-                    .and_then( | (format, information_data) | {
-
-                        let mut vec = Vec::new();
-
-                        vec.push( ServerPduName::FindInformationResponse.into() );
-
-                        vec.push( match format { Format::Uuid16Bit => 0x1, Format::Uuid128Bit => 0x2 } );
-
-                        vec.extend_from_slice(&information_data);
-
-                        let data = vec.into_boxed_slice();
-
-                        self.connection.send( l2cap::AclData::new( data.into(), super::L2CAP_CHANNEL_ID ));
-
-                        Ok(())
-                    })
-                    .ok()
+                self.0.clone().enumerate().for_each( |(cnt, (h,g))| {
+                    into_ret[      (cnt * 2)..((cnt + 1) * 2)].copy_from_slice(&h.to_le_bytes());
+                    into_ret[((cnt + 1) * 2)..((cnt + 2) * 2)].copy_from_slice(&g.to_le_bytes());
                 })
-                .or_else( || {
-
-                    // When there is no first attribute, that means there is no attributes
-                    // within the specified range
-
-                    let starting_handle = sh;
-
-                    let oc = super::client::ClientPduName::FindInformationRequest.into();
-
-                    self.send_error(starting_handle, oc, pdu::Error::AttributeNotFound);
-
-                    None
-                });
-            },
-            HandleRange { starting_handle: h @ _, ..} => {
-
-                let oc = super::client::ClientPduName::FindInformationRequest.into();
-
-                log::error!("Received invalid handle range in 'find information request'");
-
-                self.send_invalid_handle_error(h, oc);
             }
         }
-
-
-    }
-
-    fn process_find_by_type_value_request(&mut self, payload: &[u8] ) {
 
         if payload.len() >= 6 {
 
-            let starting_handle: u16 = TransferFormat::try_from( &payload[..2] ).unwrap();
+            let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from( &payload[..4] ).unwrap();
 
-            let ending_handle: u16 = TransferFormat::try_from( &payload[2..4] ).unwrap();
-
-            let att_type: crate::UUID = TransferFormat::try_from( &payload[4..6] ).unwrap();
+            let att_type: crate::UUID = TransferFormatTryFrom::try_from( &payload[4..6] ).unwrap();
 
             let raw_value = &payload[6..];
 
-            if starting_handle == 0u16 {
-                let oc = super::client::ClientPduName::FindByTypeValueRequest.into();
-
-                log::error!("Received 'find type by value request' with a handle range starting \
-                    at 0");
-
-                self.send_invalid_handle_error(0, oc);
-
-            } else if starting_handle <= ending_handle {
+            if handle_range.is_valid() {
                 use core::cmp::min;
-                use core::mem::size_of;
 
-                let start = min( starting_handle as usize, self.attributes.len() );
-                let end   = min( ending_handle   as usize, self.attributes.len() );
+                let start = min( handle_range.starting_handle as usize, self.attributes.len() );
+                let end   = min( handle_range.ending_handle   as usize, self.attributes.len() );
 
-                let mtu = self.get_mtu() as usize;
+                let payload_max = self.get_mtu() - 1;
 
-                let attributes = &self.attributes[start..end];
+                let mut handles = HandleGroupItr( self.attributes[start..end].iter()
+                    .filter(|att| att.get_type().is_16_bit() )
+                    .filter(|att| att.get_type() == att_type)
+                    .filter(|att| att.cmp_value_to_raw_transfer_format(raw_value) )
+                    .enumerate()
+                    .take_while(|(cnt, _)| cnt * 4 < payload_max )
+                    .map(|(_,att)| (att.get_handle(), att.get_handle()) )
+                );
 
-                let vec_cap = min( (end - start) * (2 + size_of::<u16>()), mtu - 1 );
+                if let None = handles.0.by_ref().peekable().peek() {
 
-                let mut size_counter = 0;
-
-                let mut handles_information_list = Vec::with_capacity(vec_cap + 1);
-
-                handles_information_list.push( ServerPduName::FindByTypeValueResponse.into() );
-
-                attributes
-                .iter()
-                .filter(|attribute| {
-                    (attribute.get_type() == att_type) &&
-                    (attribute.get_val_as_transfer_format().into() == raw_value)
-                })
-                .try_for_each(|a| {
-
-                    handles_information_list.extend_from_slice( &TransferFormat::into( &a.get_handle() ));
-                    handles_information_list.extend_from_slice( &TransferFormat::into( &a.get_type() ));
-
-                    size_counter += 2 + size_of::<u16>();
-
-                    if size_counter < vec_cap { Ok(()) } else { Err(()) }
-                })
-                .ok();
-
-                if handles_information_list.len() > 1 {
-
-                    log_debug!("Sending 'find by type value response'");
-
-                    self.connection.send(
-                        l2cap::AclData::new(
-                            handles_information_list,
-                            super::L2CAP_CHANNEL_ID
-                        )
+                    self.send_error(
+                        handle_range.starting_handle,
+                        ClientPduName::FindByTypeValueRequest,
+                        pdu::Error::AttributeNotFound
                     );
 
                 } else {
-                    let oc = super::client::ClientPduName::FindByTypeValueRequest.into();
-
-                    self.send_error(starting_handle, oc, pdu::Error::AttributeNotFound);
+                    self.send(pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), handles, None));
                 }
-
             } else {
-                let oc = super::client::ClientPduName::FindByTypeValueRequest.into();
-
-                log::error!("Sending Error response to 'find by type value request', invalid
-                    handles receive");
-
-                self.send_invalid_handle_error(starting_handle, oc);
+                self.send_error(
+                    handle_range.starting_handle,
+                    ClientPduName::FindByTypeValueRequest,
+                    pdu::Error::AttributeNotFound
+                );
             }
         } else {
-
-            log::error!("Invalid 'find by type value request' received");
-
-            self.send_error(0, 0, pdu::Error::InvalidPDU);
+            self.send_error(0, ClientPduName::FindInformationRequest, pdu::Error::InvalidPDU);
         }
     }
 
+    /// Process Read By Type Request
     fn process_read_by_type_request(&self, type_request: pdu::TypeRequest ) {
-
-        use pdu::HandleRange;
+        use core::cmp::min;
 
         let handle_range = type_request.handle_range;
 
         let desired_att_type = type_request.attr_type;
 
-        // required permissions
-        let required = &[
-            super::AttributePermissions::Read
-        ];
+        /// Handles iterator
+        struct HandleValItr<I>(usize,I);
 
-        let restricted = &[
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits128),
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits192),
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits256),
-            super::AttributePermissions::Authentication(super::AttributeRestriction::Read),
-            super::AttributePermissions::Authorization(super::AttributeRestriction::Read),
-        ];
-
-        match handle_range {
-            HandleRange{ starting_handle: 0, .. } => {
-                let oc = super::client::ClientPduName::ReadByTypeRequest.into();
-
-                log::error!("Received 'read by type request' with a handle range starting with 0");
-
-                self.send_invalid_handle_error(0, oc);
-            },
-            HandleRange{ starting_handle: sh @ _, ending_handle: eh @ _ } if eh >= sh => {
-                use core::cmp::min;
-
-                let start = min( sh as usize, self.attributes.len() );
-                let end   = min( eh as usize, self.attributes.len() );
-
-                let vec_cap = min(self.get_mtu() as usize, 256);
-
-                let mut read_by_type_response = Vec::with_capacity(vec_cap);
-
-                read_by_type_response.push( ServerPduName::ReadByTypeResponse.into() );
-
-                log::trace!("(ATT) searching for attributes with type {:#x}", desired_att_type);
-
-                let first_match = self.attributes[start..end].iter()
-                    .enumerate()
-                    .filter( |(_,att)| att.get_type() == desired_att_type )
-                    .next();
-
-                first_match.and_then( |(cnt, att)| {
-
-                    if let Some(permission) = self.validate_permissions(att.as_ref(), required, restricted) {
-
-                        let oc = super::client::ClientPduName::ReadByTypeRequest.into();
-
-                        self.send_error(sh, oc, permission.into());
-
-                        None
-
-                    } else {
-
-                        let transfer_value = att.get_val_as_transfer_format().into();
-
-                        let handle = att.get_handle();
-
-                        let length = min(transfer_value.len() + 2, vec_cap - 2);
-
-                        // Add the length of each handle value pair
-                        read_by_type_response.push( length as u8 );
-
-                        // Add the first handle
-                        read_by_type_response.extend_from_slice( &TransferFormat::into(&handle) );
-
-                        // Add the first value
-                        read_by_type_response.extend_from_slice( &transfer_value );
-
-                        // Return the next attribute to be check and the length of the matched
-                        // attribute
-                        Some( (start + cnt + 1, length) )
-                    }
-                })
-                .and_then( | (next_attr, handle_value_len) | {
-
-                    let mut remaining = vec_cap - (2 + handle_value_len);
-
-                    let attr_iter = self.attributes[next_attr..end].iter()
-                        .filter(|att| att.get_type() == desired_att_type);
-
-                    // Scour the rest of the attributes for any more values that can be added
-                    for attribute in attr_iter {
-                        let transfer_value = attribute.get_val_as_transfer_format().into();
-
-                        if (2 + transfer_value.len()) <= remaining &&
-                           None == self.validate_permissions(attribute.as_ref(), required, restricted)
-                        {
-                            remaining -= transfer_value.len();
-
-                            let handle = attribute.get_handle();
-
-                            read_by_type_response.extend_from_slice( &TransferFormat::into(&handle) );
-
-                            read_by_type_response.extend_from_slice( &transfer_value );
-
-                        } else {
-                            break;
-                        }
-                    }
-
-                    Some(())
-                });
-
-                // Check that at least one handle-value was added to the response otherwise return
-                // the error that no attributes were found.
-                if read_by_type_response.len() > 1 {
-
-                    log_debug!("Sending 'read by type response'");
-
-                    self.connection.send( l2cap::AclData::new(
-                        read_by_type_response,
-                        super::L2CAP_CHANNEL_ID
-                    ));
-
-                } else {
-                    let oc = super::client::ClientPduName::ReadByTypeRequest.into();
-
-                    self.send_error(sh, oc, super::pdu::Error::AttributeNotFound);
-                }
-            },
-            HandleRange{ starting_handle: sh @ _, .. } => {
-                let oc = super::client::ClientPduName::ReadByTypeRequest.into();
-
-                self.send_invalid_handle_error(sh, oc);
+        impl<'a, I> TransferFormatInto for HandleValItr<I>
+        where I: Iterator<Item=&'a (dyn ServerAttribute + Send + Sync)> + Clone
+        {
+            fn len_of_into(&self) -> usize {
+                self.0 * self.1.clone().fold(0usize, |acc,att| acc + att.value_transfer_format_size() )
             }
+
+            fn build_into_ret(&self, into_ret: &mut [u8] ) {
+
+                into_ret[0] = (self.0 & (core::u8::MAX as usize)) as u8;
+
+                self.1.clone().enumerate().for_each( |(cnt, att)| {
+                    let offset = &mut into_ret[cnt * (2 + self.0)..(cnt + 1) * (2 + self.0)];
+
+                    att.get_type().build_into_ret(&mut offset[..2]);
+
+                    att.value_to_transfer_format(&mut |v| v.build_into_ret(&mut offset[2..]) );
+                })
+            }
+        }
+
+        if handle_range.is_valid() {
+            let start = min( handle_range.starting_handle as usize, self.attributes.len() );
+            let end   = min( handle_range.ending_handle   as usize, self.attributes.len() );
+
+            let payload_max = self.get_mtu() - 2;
+
+            let mut init_iter = self.attributes[start..end].iter()
+                .filter(|att| att.get_type() == desired_att_type)
+                .peekable();
+
+            match init_iter.peek() {
+                None =>
+                    self.send_error(handle_range.starting_handle, ClientPduName::ReadByTypeRequest, pdu::Error::InvalidHandle),
+
+                Some(first_match) => {
+                    if let Some(e) = self.client_can_read_attribute(first_match.as_ref()) {
+                        self.send_error(handle_range.starting_handle, ClientPduName::ReadByTypeRequest, e)
+                    } else {
+                        let first_size = first_match.value_transfer_format_size();
+
+                        let iterator = init_iter
+                            .filter(|att| att.value_transfer_format_size() == first_size )
+                            .enumerate()
+                            .take_while(|(cnt, _)| cnt * first_size < payload_max )
+                            .map(|(_,att)| att.as_ref());
+
+                        let parameter = HandleValItr(first_size, iterator);
+
+                        let pdu = pdu::Pdu::new(ServerPduName::ReadByTypeResponse.into(), parameter, None);
+
+                        self.send(pdu);
+                    }
+                }
+            }
+        } else {
+            self.send_error(handle_range.starting_handle, ClientPduName::ReadByTypeRequest, pdu::Error::InvalidHandle);
         }
     }
 }
@@ -1005,33 +909,8 @@ impl<'c, C> AsRef<C> for Server<'c, C> where C: l2cap::ConnectionChannel {
     }
 }
 
-/// The Reserved Handle
-///
-/// The first handle (value of '0') is reserved for future use. This is used to represent that
-/// handle when creating a new Attribute Bearer
-struct ReservedHandle;
-
-impl super::AnyAttribute for ReservedHandle {
-    fn get_type(&self) -> crate::UUID { Into::<crate::UUID>::into(0u128) }
-
-    fn get_permissions(&self) -> Vec<super::AttributePermissions> {
-        alloc::vec!(super::AttributePermissions::Read)
-    }
-
-    fn get_handle(&self) -> u16 { 0 }
-
-    fn set_val_from_raw(&mut self, _: &[u8]) -> Result<(), TransferFormatError> {
-        Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
-    }
-
-    fn get_val_as_transfer_format(&self) -> &dyn TransferFormat { &() }
-}
-
-/// The constructor of attributes on an Attribute Server
-///
-/// `ServerAttributes` construsts a list of attributes.
 pub struct ServerAttributes {
-    attributes: Vec<Box<dyn super::AnyAttribute + Send + Sync>>
+    attributes: Vec<Box<dyn ServerAttribute + Send + Sync>>
 }
 
 impl ServerAttributes {
@@ -1039,26 +918,28 @@ impl ServerAttributes {
     /// Create a new `ServiceAttributes`
     pub fn new() -> Self {
 
-        Self { attributes: alloc::vec![ Box::new(ReservedHandle) ] }
+        Self { attributes: alloc::vec![ Box::new( ReservedHandle ) ] }
     }
 
     /// Push an attribute to `ServiceAttributes`
     ///
     /// This will push the attribute onto the list of server attributes and return the handle of
     /// the pushed attribute.
-    pub fn push<V>(&mut self, mut attribute: super::Attribute<V>) -> u16
-    where V: TransferFormat + Sized + Send + Sync + 'static
+    ///
+    /// # Panic
+    /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
+    pub fn push<C,V>(&mut self, mut attribute: super::Attribute<C>) -> u16
+        where C: ServerAttributeValue<V> + Sized + Send + Sync + 'static,
+              V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq + 'static,
     {
         use core::convert::TryInto;
 
         let ret = self.attributes.len().try_into().expect("Exceeded attribute handle limit");
 
-        // Set the handle now that the attribute is part of the list
+        // Set the handle now that the attribute is part of a list
         attribute.handle = Some(ret);
 
-        log::trace!("Adding attribute with type '{:#x}' to server attributes", attribute.ty );
-
-        self.attributes.push( Box::new(attribute) );
+        self.attributes.push( Box::new( ServerAttEntry::from(attribute) ) );
 
         ret
     }
@@ -1069,17 +950,18 @@ impl ServerAttributes {
     /// [`push`](#method.push)ed to the `ServerAttributes`. This is generally used to get the
     /// handle of the attribute that is about to be pushed to `ServerAttributes`
     ///
-    /// ```rust
+    /// ```
     /// # use bo_tie::att::server::ServerAttributes;
-    /// # let attribute = bo_tie::att::Attribute::new( bo_tie::UUID::default(), Box::new(), () );
+    /// # let attribute = bo_tie::att::Attribute::new( bo_tie::UUID::default(), Vec::new(), () );
     ///
-    /// let server_attributes = ServerAttributes::new();
+    /// let mut server_attributes = ServerAttributes::new();
     ///
     /// let first_handle = server_attributes.next_handle();
     ///
     /// let pushed_handle = server_attributes.push(attribute);
     ///
     /// assert_eq!( first_handle, pushed_handle );
+    /// ```
     pub fn next_handle(&self) -> u16 {
         self.attributes.len() as u16
     }
@@ -1089,4 +971,211 @@ impl Default for ServerAttributes {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Server Attributes
+///
+/// Attributes on the server must be implemented with `ServerAttribute` so that the server can
+/// facilitate both concurrent and non-concurrent access of an attribute.
+///
+/// All operations to an attribute by the server revolve around either reading or writing to the
+/// value. `read_and` will be called for a read operation, and `write_val` will be used for a write.
+/// It is recommended that reading and writing only modify the value of the attribute, but you're
+/// the boss of your own implementations.
+///
+/// Trait [`ServerAttributeValue`](ServerAttributeValue)
+/// is implemented for any type that also implements
+/// [`TransferFormatTryFrom`](crate::att::TransferFormatTryFrom) and
+/// ['TransferFormatInto`](crate::att:TransferFormatInto). However if you want to implement
+/// locking or reference counting of the value, you will need to implmenent `ServerAttributeValue`.
+/// ```
+/// use std::sync::{Arc, Mutex};
+/// use std::borrow::Borrow;
+/// use bo_tie::att::{Attribute, server::ServerAttributeValue};
+/// use bo_tie::att::server::ServerAttributes;
+///
+/// #[derive(Default)]
+/// struct SyncAttVal<V> {
+///     value: Arc<Mutex<V>>
+/// };
+///
+/// impl<V> ServerAttributeValue<V> for SyncAttVal<V> {
+///
+///     fn read_and<T,F>(&self, f: F) -> T where F: FnOnce(&V) -> T {
+///         f( self.value.lock.unwrap() )
+///     }
+///
+///     fn write_val(&mut self, val: MyAttVal) {
+///         *self.value.lock().unwrap() = val
+///     }
+/// }
+///
+/// // Create a couple of SyncAttVal
+/// let val_usize = SyncAttVal::<usize>::default();
+/// let val_msg   = SyncAttVal { value: Arc::new(Mutex::new(String::from("Hello World"))) };
+///
+/// # let uuid_usize = bo_tie::UUID::from_u128(0);
+/// # let uuid_msg   = bo_tie::UUID::from_u128(0);
+///
+/// # let permissions_usize = Vec::new();
+/// # let permissions_msg   = Vec::new();
+///
+/// // Create attributes from them
+/// let att_usize = Attribute::new( uuid_usize, permissions_usize, val_usize);
+/// let att_msg   = Attribute::new( uuid_msg  , permissions_msg  , val_msg  );
+///
+/// // Add them to a server attributes to generate a server from
+/// let mut server_attributes = ServerAttributes::new();
+/// server_attributes.push(att_usize);
+/// server_attributes.push(att_msg);
+/// ```
+pub trait ServerAttributeValue<V> {
+
+    fn read_and<F,T>(&self, f: F ) -> T where F: FnMut(&V) -> T;
+
+    fn write_val(&mut self, val: V);
+}
+
+/// The trivial implementation for ServerAttributeValue
+impl<V> ServerAttributeValue<V> for V where V: TransferFormatInto {
+    fn read_and<F,T>(&self, mut f: F ) -> T where F: FnMut(&V) -> T { f( self ) }
+
+    fn write_val(&mut self, val: V) { *self = val }
+}
+
+/// A server attribute
+///
+/// A `ServerAttribute` is an attribute that has been added to the `ServerAttributes`. These
+/// functions are designed to abstract away from the type of the attribute value so a
+/// `ServerAttributes` can have a list of boxed `dyn ServerAttribute`.
+trait ServerAttribute: Send + Sync {
+
+    /// Get the attribute type
+    fn get_type(&self) -> crate::UUID;
+
+    /// Get the attribute permissions
+    fn get_permissions(&self) -> &[super::AttributePermissions];
+
+    /// Get the attribute handle
+    ///
+    /// # Panic
+    /// This function will panic if the attribute handle has not be set. A handle is set once it is
+    /// added to a `ServerAttributes` (except for the `ReservedHandle`).
+    fn get_handle(&self) -> u16;
+
+    /// Read the attribute value and convert the data into the raw interface form
+    ///
+    /// The `transform` input is used to convert the attribute value into the full PDU sent to the
+    /// interface, usually by just wrapping the data in a PDU. The input to `transform` is the value
+    /// of the attribute as a [`TransferFormatInto`](crate::att::TransferFormatInto) trait object.
+    fn value_to_transfer_format(&self, transform: &mut dyn FnMut(&dyn TransferFormatInto) );
+
+    /// Try to convert raw data from the interface and write to the attribute value
+    fn value_from_transfer_format(&mut self, tf_data: &[u8]) -> Result<(), super::TransferFormatError>;
+
+    /// The number of bytes in the interface format
+    fn value_transfer_format_size(&self) -> usize;
+
+    /// Compare the value with the data received from the interface
+    fn cmp_value_to_raw_transfer_format(&self, raw: &[u8] ) -> bool;
+}
+
+/// An entry in an attribute server
+///
+/// This is required so that generic argument `V` is not an unbound lifetime in the implementation
+/// for `ServerAttribute` for this. Otherwise it would just be implemented for
+/// `super::Attribute<C>`.
+struct ServerAttEntry<C,V> {
+    attribute: super::Attribute<C>,
+    p: core::marker::PhantomData<V>,
+}
+
+impl<C,V> From<super::Attribute<C>> for ServerAttEntry<C,V> {
+    fn from(attribute: super::Attribute<C> ) -> Self {
+        Self { attribute, p: core::marker::PhantomData }
+    }
+}
+
+impl<C, V> ServerAttribute for ServerAttEntry<C,V>
+where C: ServerAttributeValue<V> + Send + Sync,
+      V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq,
+{
+    fn get_type(&self) -> crate::UUID {
+        self.attribute.ty
+    }
+
+    fn get_permissions(&self) -> &[super::AttributePermissions] {
+        &self.attribute.permissions
+    }
+
+    fn get_handle(&self) -> u16 {
+        self.attribute.get_handle().expect("Handle value not set")
+    }
+
+    fn value_to_transfer_format(&self, transform: &mut dyn FnMut(&dyn TransferFormatInto) )
+    {
+        self.attribute.value.read_and(|v| transform(v) )
+    }
+
+    fn value_from_transfer_format(&mut self, raw: &[u8] ) -> Result<(), super::TransferFormatError>
+    {
+        self.attribute.value.write_val( TransferFormatTryFrom::try_from(raw)? );
+        Ok(())
+    }
+
+    fn value_transfer_format_size(&self) -> usize {
+        let mut size = 0;
+
+        self.attribute.value.read_and(|v: &V| size = v.len_of_into() );
+
+        size
+    }
+
+    fn cmp_value_to_raw_transfer_format(&self, raw: &[u8] ) -> bool {
+        <V as TransferFormatTryFrom>::try_from(raw)
+            .map( |ref cmp_val| self.attribute.value.read_and( |v| v == cmp_val ) )
+            .unwrap_or_default()
+    }
+}
+
+impl TransferFormatInto for &(dyn ServerAttribute + Send + Sync) {
+    fn len_of_into(&self) -> usize { self.value_transfer_format_size() }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        self.value_to_transfer_format(  &mut |a| a.build_into_ret(into_ret) )
+    }
+}
+
+/// The Reserved Handle
+///
+/// The first handle (value of '0') is reserved for future use. This is used to represent that
+/// handle when creating a new Attribute Bearer
+struct ReservedHandle;
+
+impl ServerAttribute for ReservedHandle
+{
+    fn get_type(&self) -> crate::UUID { crate::UUID::from_u128(0u128) }
+
+    fn get_permissions(&self) -> &[super::AttributePermissions] {
+        &[ super::AttributePermissions::Read ]
+    }
+
+    fn get_handle(&self) -> u16 { 0 }
+
+    fn value_to_transfer_format(&self, _: &mut dyn FnMut(&dyn TransferFormatInto) )
+    {
+        log::error!("Tried to read from reserved attribute handle");
+    }
+
+    fn value_from_transfer_format(&mut self, _: &[u8] )
+    -> Result<(), super::TransferFormatError>
+    {
+        log::error!("Tried to write to reserved attribute handle");
+
+        Err( TransferFormatError::from("ReservedHandle cannot be set from raw data") )
+    }
+
+    fn value_transfer_format_size(&self) -> usize { 0 }
+
+    fn cmp_value_to_raw_transfer_format(&self, _: &[u8] ) -> bool { false }
 }

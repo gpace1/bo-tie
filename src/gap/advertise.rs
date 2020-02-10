@@ -242,13 +242,13 @@ pub mod flags {
     ///
     /// ```rust
     /// # use bo_tie::gap::advertise::flags;
-    /// let flags = Flags::new();
+    /// let mut flags = flags::Flags::new();
     ///
-    /// // enable the bluetooth specified flag *LE limited discoverable mode*
-    /// flags.get(CoreFlags::LELimitedDiscoverableMode).enable();
+    /// // enable the bluetooth specified flag 'LE limited discoverable mode'
+    /// flags.get_core(flags::CoreFlags::LELimitedDiscoverableMode).enable();
     ///
-    /// // enable a use r specific flag
-    /// flags.get(0).enable();
+    /// // enable a user specific flag
+    /// flags.get_user(0).enable();
     /// ```
     #[derive(Eq,Debug,Clone)]
     pub struct Flag {
@@ -260,7 +260,7 @@ pub mod flags {
 
         fn new( position: usize, state: bool ) -> Flag {
             Flag {
-                position: position,
+                position,
                 val: Cell::new(state),
             }
         }

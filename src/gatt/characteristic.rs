@@ -64,47 +64,48 @@ impl Properties {
     }
 }
 
-impl att::TransferFormat for Vec<Properties> {
+impl att::TransferFormatTryFrom for Vec<Properties> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 1 {
-            Ok( Properties::from_bit_field(raw[0]) )
+            Ok(Properties::from_bit_field(raw[0]))
         } else {
-            Err( att::TransferFormatError::bad_size(stringify!(Box<[Properties]>), 1, raw.len()) )
+            Err(att::TransferFormatError::bad_size(stringify!(Box<[Properties]>), 1, raw.len()))
         }
     }
+}
 
-    fn len_of_into(&self) -> usize { <Self as att::TransferFormatSize>::SIZE }
+impl att::TransferFormatInto for Vec<Properties> {
+    fn len_of_into(&self) -> usize { 1 }
 
     fn build_into_ret(&self, into_ret: &mut [u8] ) {
         into_ret[0] = Properties::into_bit_field(self);
     }
 }
 
-impl att::TransferFormatSize for Vec<Properties> {
-    const SIZE: usize = 1;
-}
-
+#[derive(PartialEq)]
 struct Declaration {
     properties: Vec<Properties>,
     value_handle: u16,
     uuid: UUID,
 }
 
-impl att::TransferFormat for Declaration {
+impl att::TransferFormatTryFrom for Declaration {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
-        // The implementation of TransferFormat for UUID will check if the length is good for
+        // The implementation of TransferFormatTryFrom for UUID will check if the length is good for
         // a 128 bit UUID
         if raw.len() >= 6 {
-            Ok( Declaration {
-                properties: att::TransferFormat::try_from( &raw[..1] )?,
-                value_handle: att::TransferFormat::try_from( &raw[1..3] )?,
-                uuid: att::TransferFormat::try_from( &raw[3..])?,
+            Ok(Declaration {
+                properties: att::TransferFormatTryFrom::try_from(&raw[..1])?,
+                value_handle: att::TransferFormatTryFrom::try_from(&raw[1..3])?,
+                uuid: att::TransferFormatTryFrom::try_from(&raw[3..])?,
             })
         } else {
-            Err( att::TransferFormatError::bad_min_size(stringify!(Declaration), 6, raw.len()) )
+            Err(att::TransferFormatError::bad_min_size(stringify!(Declaration), 6, raw.len()))
         }
     }
+}
 
+impl att::TransferFormatInto for Declaration {
     fn len_of_into(&self) -> usize {
         3 + self.uuid.len_of_into()
     }
@@ -134,6 +135,7 @@ struct ValueDeclaration<V> where V: ?Sized {
     permissions: Vec<att::AttributePermissions>,
 }
 
+#[derive(PartialEq)]
 pub enum ExtendedProperties {
     ReliableWrite,
     WritableAuxiliaries
@@ -143,29 +145,29 @@ impl ExtendedProperties {
     const BIT_FIELD_CNT: usize = 2;
 }
 
-impl att::TransferFormat for Vec<ExtendedProperties> {
+impl att::TransferFormatTryFrom for Vec<ExtendedProperties> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
-
         if raw.len() == 2 {
-            let val = <u16>::from_le_bytes( [ raw[0], raw[1] ] );
+            let flags = <u16>::from_le_bytes([raw[0], raw[1]]);
 
-            let mut ext_prop = Vec::new();
-
-            for mask in 0..ExtendedProperties::BIT_FIELD_CNT {
-                ext_prop.push( match val & (1 << mask) {
-                    0   => continue,
-                    0x1 => ExtendedProperties::ReliableWrite ,
-                    0x2 => ExtendedProperties::WritableAuxiliaries,
-                    _ => unreachable!()
-                } );
-            }
-
-            Ok( ext_prop )
-
+            (0..ExtendedProperties::BIT_FIELD_CNT)
+                .map(|shift| flags & (1 << shift) )
+                .filter(|flag| flag != &0)
+                .try_fold(Vec::new(), |mut v, flag| {
+                    v.push( match flag {
+                        0x1 => ExtendedProperties::ReliableWrite,
+                        0x2 => ExtendedProperties::WritableAuxiliaries,
+                        e => return Err(att::TransferFormatError::from(format!("Unknown Client Configuration '{}'", e)))
+                    } );
+                    Ok(v)
+                })
         } else {
-            Err( att::TransferFormatError::bad_size(stringify!(ExtendedProperties), 2, raw.len()) )
+            Err(att::TransferFormatError::bad_size(stringify!(ExtendedProperties), 2, raw.len()))
         }
     }
+}
+
+impl att::TransferFormatInto for Vec<ExtendedProperties> {
 
     fn len_of_into(&self) -> usize { 2 }
 
@@ -177,10 +179,6 @@ impl att::TransferFormat for Vec<ExtendedProperties> {
             }
         } );
     }
-}
-
-impl att::TransferFormatSize for ExtendedProperties {
-    const SIZE: usize = 1;
 }
 
 impl ExtendedProperties {
@@ -207,25 +205,35 @@ impl UserDescription {
     }
 }
 
+#[derive(PartialEq)]
 pub enum ClientConfiguration {
     Notification,
     Indication
 }
 
-impl att::TransferFormat for ClientConfiguration {
+impl att::TransferFormatTryFrom for Vec<ClientConfiguration> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
-            match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
-                0x1 => Ok( ClientConfiguration::Notification ),
-                0x2 => Ok( ClientConfiguration::Indication ),
-                e @ _ => Err( att::TransferFormatError::from(
-                    format!("Unknown Client Configuration '{}'", e)))
-            }
+            let flags = <u16>::from_le_bytes([raw[0], raw[1]]);
+
+            (0..2).map(|shift| flags & (1 << shift) )
+                .filter(|flag| flag != &0)
+                .try_fold(Vec::new(), |mut v, flag| {
+                    v.push( match flag {
+                        0x1 => ClientConfiguration::Notification,
+                        0x2 => ClientConfiguration::Indication,
+                        e => return Err(att::TransferFormatError::from(format!("Unknown Client Configuration '{}'", e)))
+                    } );
+                    Ok(v)
+                })
+
         } else {
-            Err( att::TransferFormatError::bad_size(stringify!(ClientConfiguration), 2, raw.len()) )
+            Err(att::TransferFormatError::bad_size(stringify!(ClientConfiguration), 2, raw.len()))
         }
     }
+}
 
+impl att::TransferFormatInto for ClientConfiguration {
     fn len_of_into(&self) -> usize { 2 }
 
     fn build_into_ret(&self, into_ret: &mut [u8] ) {
@@ -238,10 +246,6 @@ impl att::TransferFormat for ClientConfiguration {
     }
 }
 
-impl att::TransferFormatSize for ClientConfiguration {
-    const SIZE: usize = 1;
-}
-
 impl ClientConfiguration {
     const TYPE: UUID = UUID::from_u16(2903);
 
@@ -252,23 +256,26 @@ impl ClientConfiguration {
     ];
 }
 
+#[derive(PartialEq)]
 pub enum ServerConfiguration {
     Broadcast
 }
 
-impl att::TransferFormat for ServerConfiguration {
+impl att::TransferFormatTryFrom for Vec<ServerConfiguration> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
-            match <u16>::from_le_bytes( [ raw[0], raw[1] ] ) {
-                0x1 => Ok( ServerConfiguration::Broadcast ),
-                e @ _ => Err( att::TransferFormatError::from(
+            match <u16>::from_le_bytes([raw[0], raw[1]]) {
+                0x1 => Ok(alloc::vec![ ServerConfiguration::Broadcast ] ),
+                e @ _ => Err(att::TransferFormatError::from(
                     format!("Unknown server configuration: '{}'", e)))
             }
         } else {
-            Err( att::TransferFormatError::bad_size(stringify!(ServerConfiguration), 2, raw.len()) )
+            Err(att::TransferFormatError::bad_size(stringify!(ServerConfiguration), 2, raw.len()))
         }
     }
+}
 
+impl att::TransferFormatInto for ServerConfiguration {
     fn len_of_into(&self) -> usize { 2 }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
@@ -278,10 +285,6 @@ impl att::TransferFormat for ServerConfiguration {
 
         into_ret.copy_from_slice( &val.to_le_bytes() )
     }
-}
-
-impl att::TransferFormatSize for ServerConfiguration {
-    const SIZE: usize = 1;
 }
 
 impl ServerConfiguration {
@@ -305,8 +308,8 @@ pub struct CharacteristicBuilder<'a, V> where V: ?Sized {
 }
 
 impl<'a, V> CharacteristicBuilder<'a, V>
-where Box<V>: att::TransferFormat + Send + Sync + 'static,
-           V: ?Sized
+where Box<V>: att::TransferFormatInto + att::TransferFormatTryFrom + Send + Sync + 'static,
+           V: ?Sized + PartialEq
 {
     pub(super) fn new(
         characteristic_adder: super::CharacteristicAdder<'a>,

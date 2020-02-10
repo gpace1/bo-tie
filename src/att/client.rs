@@ -1,15 +1,16 @@
 use super::{
     pdu,
-    TransferFormat,
-    TransferFormatSize,
+    TransferFormatTryFrom,
+    TransferFormatInto,
     TransferFormatError
 };
 use alloc::{
-    boxed::Box,
+    vec::Vec,
     format,
 };
 use crate::l2cap;
 use super::server::ServerPduName;
+use crate::att::TransferFormatCollectible;
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ClientPduName {
@@ -158,7 +159,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             // Check for a ExchangeMTUResponse PDU
             if ServerPduName::ExchangeMTUResponse.is_convertible_from(bytes)
             {
-                match TransferFormat::try_from( &bytes[1..] ) {
+                match TransferFormatTryFrom::try_from( &bytes[1..] ) {
                     Ok( received_mtu ) => {
                         let v: u16 = received_mtu;
 
@@ -223,7 +224,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         expected_response: super::server::ServerPduName,
         bytes: &[u8]
     ) -> Result<P, super::Error>
-    where P: TransferFormat
+    where P: TransferFormatTryFrom
     {
         use core::convert::TryFrom;
 
@@ -232,7 +233,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             Err(super::Error::Empty)
 
         } else if expected_response.is_convertible_from(bytes) {
-            let pdu: Result<pdu::Pdu<P>, super::TransferFormatError> = TransferFormat::try_from(&bytes);
+            let pdu: Result<pdu::Pdu<P>, super::TransferFormatError> = TransferFormatTryFrom::try_from(&bytes);
 
             match pdu {
                 Ok(pdu) => Ok(pdu.into_parameters()),
@@ -241,7 +242,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
             type ErrPdu = pdu::Pdu<pdu::ErrorAttributeParameter>;
 
-            let err_pdu: Result<ErrPdu, _> = TransferFormat::try_from(&bytes);
+            let err_pdu: Result<ErrPdu, _> = TransferFormatTryFrom::try_from(&bytes);
 
             match err_pdu {
                 Ok(err_pdu) => Err(err_pdu.into()),
@@ -263,8 +264,8 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         }
     }
 
-    fn send<P>(&self, pdu: &pdu::Pdu<P>) -> Result<(), super::Error> where P: TransferFormat {
-        let payload = TransferFormat::into(pdu);
+    fn send<P>(&self, pdu: &pdu::Pdu<P>) -> Result<(), super::Error> where P: TransferFormatInto {
+        let payload = TransferFormatInto::into(pdu);
 
         if payload.len() > self.mtu {
             Err( super::Error::MtuExceeded )
@@ -338,7 +339,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         >,
         super::Error>
     where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
-          D: TransferFormat ,
+          D: TransferFormatTryFrom + TransferFormatInto,
     {
         if !pdu::is_valid_handle_range(&handle_range) {
             panic!("Invalid handle range")
@@ -385,7 +386,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// A handle cannot be the reserved handle 0x0000
     pub fn read_request<D>(&self, handle: u16 )
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
-    where D: TransferFormat
+    where D: TransferFormatTryFrom
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
 
@@ -400,7 +401,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// A handle cannot be the reserved handle 0x0000
     pub fn read_blob_request<D>(&self, handle: u16, offset: u16)
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
-    where D: TransferFormat
+    where D: TransferFormatTryFrom
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
 
@@ -415,14 +416,9 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// 
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
-    pub fn read_multiple_request(&self, handles: alloc::vec::Vec<u16> )
-    -> Result<
-        ResponseProcessor<
-            impl FnOnce(&[u8]) -> Result<Box<[Box<dyn TransferFormat>]>, super::Error>,
-            Box<[Box<dyn TransferFormat>]>
-        >,
-        super::Error
-    >
+    pub fn read_multiple_request<D>(&self, handles: alloc::vec::Vec<u16> )
+    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<Vec<D>, super::Error>,Vec<D>>,super::Error>
+    where D: TransferFormatTryFrom + TransferFormatCollectible
     {
         handles.iter().for_each(|h| if !pdu::is_valid_handle(*h) {
             panic!("Handle 0 is reserved for future use by the spec.") 
@@ -445,7 +441,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         super::Error
     >
     where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
-          D: TransferFormat + TransferFormatSize
+          D: TransferFormatTryFrom
     {
         if !pdu::is_valid_handle_range(&handle_range) {
             panic!("Invalid handle range")
@@ -465,7 +461,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// The handle cannot be the reserved handle 0x0000
     pub fn write_request<D>(&self, handle: u16, data: D)
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error>, ()>, super::Error>
-    where D: TransferFormat
+    where D: TransferFormatTryFrom + TransferFormatInto
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
         
@@ -482,7 +478,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
     pub fn write_command<D>(&self, handle: u16, data: D) -> Result<(), super::Error>
-    where D: TransferFormat
+    where D: TransferFormatInto
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
         
@@ -500,7 +496,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         >,
         super::Error
     >
-    where D: TransferFormat
+    where D: TransferFormatTryFrom + TransferFormatInto
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
         
@@ -523,15 +519,15 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// implemented at the ATT protocol level. However, if the provided pdu contains an opcode
     /// already used by the ATT protocol, then an error is returned.
     pub fn custom_command<D>(&self, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
-    where D: TransferFormat
+    where D: TransferFormatInto
     {
         use core::convert::TryFrom;
 
-        let op: u8 = pdu.get_opcode().into_raw();
+        let op: u8 = pdu.get_opcode().as_raw();
 
         if ClientPduName::try_from(op).is_err() && super::server::ServerPduName::try_from(op).is_err()
         {
-            let data = TransferFormat::into(&pdu);
+            let data = TransferFormatInto::into(&pdu);
             if self.mtu > data.len() {
                 self.channel.send(l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID));
 

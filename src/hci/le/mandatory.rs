@@ -543,13 +543,45 @@ pub mod set_event_mask {
     /// Set the enabled events on a device
     ///
     /// ```rust
-    /// # use bo_tie_linux::hci::le::mandatory::set_event_mask::*;
-    /// # let host_interface = bo_tie_linux::hci::crate::hci::test_util::get_adapter();
+    /// # use bo_tie::hci::{HostControllerInterface, CommandParameter, events, EventMatcher};
+    /// # use std::task::Waker;
+    /// # use std::time::Duration;
+    /// # use std::pin::Pin;
+    /// # use std::sync::Arc;
+    /// #
+    /// # #[derive(Default)]
+    /// # pub struct StubHi;
+    /// #
+    /// # impl HostControllerInterface for StubHi {
+    /// #     type SendCommandError = &'static str;
+    /// #     type ReceiveEventError = &'static str;
+    /// #
+    /// #     fn send_command<D, W>(&self, _: &D, _: W)
+    /// #     -> Result<bool, Self::SendCommandError>
+    /// #     where D: CommandParameter,
+    /// #           W: Into<Option<Waker>>,
+    /// #     {
+    /// #         Ok(true)
+    /// #     }
+    /// #
+    /// #     fn receive_event<P>(&self, _: events::Events, _: &Waker, _: Pin<Arc<P>>, _: Option<Duration>)
+    /// #     -> Option<Result<events::EventsData, Self::ReceiveEventError>>
+    /// #     where P: EventMatcher + Send + Sync + 'static,
+    /// #     {
+    /// #         None
+    /// #     }
+    /// # }
+    /// #
+    /// # let host_interface = bo_tie::hci::HostInterface::<StubHi>::default();
     ///
-    /// let events = alloc::vec!(Events::LEConnectionComplete,Events::LEAdvertisingReport);
+    /// use bo_tie::hci::le::mandatory::set_event_mask::{self, send};
+    /// use bo_tie::hci::events::LEMeta;
+    ///
+    ///
+    /// let events = vec!(LEMeta::ConnectionComplete,LEMeta::AdvertisingReport);
     ///
     /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
-    /// send(&host_interface, events);
+    /// send(&host_interface, &events);
     /// ```
     pub fn send<'a, T: 'static>( hi: &'a HostInterface<T>, enabled_events: &[LEMeta] )
     -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
