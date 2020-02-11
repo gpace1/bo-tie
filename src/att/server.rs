@@ -1001,11 +1001,11 @@ impl Default for ServerAttributes {
 ///
 /// impl<V> ServerAttributeValue<V> for SyncAttVal<V> {
 ///
-///     fn read_and<T,F>(&self, f: F) -> T where F: FnOnce(&V) -> T {
+///     fn read_and<F,T>(&self, f: F ) -> T where F: FnMut(&V) -> T {
 ///         f( self.value.lock.unwrap() )
 ///     }
 ///
-///     fn write_val(&mut self, val: MyAttVal) {
+///     fn write_val(&mut self, val: V) {
 ///         *self.value.lock().unwrap() = val
 ///     }
 /// }

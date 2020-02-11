@@ -1,5 +1,4 @@
 use alloc::{
-    boxed::Box,
     vec::Vec,
     string::String,
     format,
@@ -126,11 +125,11 @@ impl Declaration {
     const PERMISSIONS: &'static [att::AttributePermissions] = &[att::AttributePermissions::Read];
 }
 
-struct ValueDeclaration<V> where V: ?Sized {
+struct ValueDeclaration<V> {
     /// The attribute type
     att_type: UUID,
     /// The attribute value
-    value: Box<V>,
+    value: V,
     /// The attribute permissions
     permissions: Vec<att::AttributePermissions>,
 }
@@ -297,27 +296,28 @@ impl ServerConfiguration {
     ];
 }
 
-pub struct CharacteristicBuilder<'a, V> where V: ?Sized {
+pub struct CharacteristicBuilder<'a, C, V> {
     characteristic_adder: super::CharacteristicAdder<'a>,
     declaration: Declaration,
-    value_decl: ValueDeclaration<V>,
+    value_decl: ValueDeclaration<C>,
     ext_prop: Option<Vec<ExtendedProperties>>,
     user_desc: Option<UserDescription>,
     client_cfg: Option<Vec<ClientConfiguration>>,
     server_cfg: Option<Vec<ServerConfiguration>>,
+    pd: core::marker::PhantomData<V>,
 }
 
-impl<'a, V> CharacteristicBuilder<'a, V>
-where Box<V>: att::TransferFormatInto + att::TransferFormatTryFrom + Send + Sync + 'static,
-           V: ?Sized + PartialEq
+impl<'a, C, V> CharacteristicBuilder<'a, C, V>
+where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
+      V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + PartialEq + 'static,
 {
     pub(super) fn new(
         characteristic_adder: super::CharacteristicAdder<'a>,
         properties: Vec<Properties>,
         uuid: UUID,
-        value: Box<V>,
+        value: C,
         value_permissions: Vec<att::AttributePermissions>
-    ) -> CharacteristicBuilder<V>
+    ) -> Self
     {
         CharacteristicBuilder {
             characteristic_adder,
@@ -335,6 +335,7 @@ where Box<V>: att::TransferFormatInto + att::TransferFormatTryFrom + Send + Sync
             user_desc: None,
             client_cfg: None,
             server_cfg: None,
+            pd: core::marker::PhantomData
         }
     }
 
@@ -361,8 +362,8 @@ where Box<V>: att::TransferFormatInto + att::TransferFormatTryFrom + Send + Sync
     /// Instruct the builder to create a `Client Configuration` characteristic descriptor
     /// upon building the characteristic unless the value of `client_cfg` is `None`.
     #[inline]
-    pub fn set_client_configuration<C>( mut self, client_cfg: C) -> Self
-    where C: Into<Option<Vec<ClientConfiguration>>>
+    pub fn set_client_configuration<Cfg>( mut self, client_cfg: Cfg) -> Self
+    where Cfg: Into<Option<Vec<ClientConfiguration>>>
     {
         self.client_cfg = client_cfg.into();
         self
@@ -371,8 +372,8 @@ where Box<V>: att::TransferFormatInto + att::TransferFormatTryFrom + Send + Sync
     /// Instruct the builder to create a `Server Configuration` characteristic descriptor
     /// upon building the characteristic unless the value of `server_cfg` is `None`.
     #[inline]
-    pub fn set_server_configuration<C>( mut self, server_cfg: C) -> Self
-    where C: Into<Option<Vec<ServerConfiguration>>>
+    pub fn set_server_configuration<Cfg>( mut self, server_cfg: Cfg) -> Self
+    where Cfg: Into<Option<Vec<ServerConfiguration>>>
     {
         self.server_cfg = server_cfg.into();
         self

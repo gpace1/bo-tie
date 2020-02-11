@@ -35,6 +35,7 @@ mod heart_rate_service
         /// This is the UUID for the Heart Rate Measurement Characteristic
         pub const HEART_RATE_MEASUREMENT_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0x2A37);
 
+        #[derive(PartialEq,Clone,Copy)]
         pub struct HrsFlags {
             value_is_16_bit: bool,
             in_skin_contact: Option<bool>, // `None` if skin contact is not supported
@@ -139,16 +140,36 @@ mod heart_rate_service
             }
         }
 
-        impl att::TransferFormatTryInto for HeartRateMeasurement{
-            fn len_of_into(&self) -> usize { if self.flags.value_is_16_bit {2} else {1} }
+        #[derive(PartialEq)]
+        pub struct HrsData(HrsFlags,u8);
+
+        impl att::server::ServerAttributeValue<HrsData> for HeartRateMeasurement {
+            fn read_and<F,T>(&self, mut f: F ) -> T where F: FnMut(&HrsData) -> T {
+                f( &HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed)) )
+            }
+
+            fn write_val(&mut self, _: HrsData) {
+                /*The user cannot write bluetooth to the server*/
+            }
+        }
+
+        impl att::TransferFormatTryFrom for HrsData {
+            fn try_from(_: &[u8]) -> Result<Self, att::TransferFormatError> {
+                /* Return an error since writing cannot be done */
+                Err( att::TransferFormatError::from("Cannot write Heart Rate Data".to_string()) )
+            }
+        }
+
+        impl att::TransferFormatInto for HrsData {
+            fn len_of_into(&self) -> usize { if self.0.value_is_16_bit {2} else {1} }
 
             fn build_into_ret(&self, into_ret: &mut [u8] ) {
-                self.flags.build_into_ret( &mut into_ret[..1] );
+                self.0.build_into_ret( &mut into_ret[..1] );
 
-                if self.flags.value_is_16_bit {
+                if self.0.value_is_16_bit {
                     unreachable!("16 bit heart rate value is not implemented")
                 } else {
-                    into_ret[1] = self.val.load(atomic::Ordering::SeqCst);
+                    into_ret[1] = self.1;
                 }
             }
         }
@@ -161,13 +182,13 @@ mod heart_rate_service
     ///
     /// To build a server, a connection channel (`connection_channel`) and the maximum transfer
     /// unit (`mtu`, the maximum size of the data to be transferred) is required to create an
-    /// attribute server. The connection channel is created when a centeral is connected to a
+    /// attribute server. The connection channel is created when a central is connected to a
     /// peripheral; this example is the peripheral because it's a heart rate monitor.
-    pub fn build_server<'a, C>(
+    pub fn build_server<C>(
         measurement: characteristics::HeartRateMeasurement,
-        connection_chanel: &'a C,
+        connection_chanel: &C,
         mtu: Option<u16>
-    ) -> gatt::Server<'a, C>
+    ) -> gatt::Server<'_, C>
     where C: l2cap::ConnectionChannel
     {
         let mut server_builder = gatt::ServerBuilder::new();
@@ -177,7 +198,7 @@ mod heart_rate_service
             .build_characteristic(
                 Vec::from(characteristics::HeartRateMeasurement::GATT_PERMISSIONS),
                 characteristics::HEART_RATE_MEASUREMENT_UUID,
-                Box::new(measurement),
+                measurement,
                 Vec::from(characteristics::HeartRateMeasurement::ATT_PERMISSIONS)
             )
             .set_client_configuration( vec![gatt::characteristic::ClientConfiguration::Notification] )
@@ -228,8 +249,8 @@ async fn advertise_setup<'a>(
 }
 
 // For simplicity, I've left the a race condition in here. There could be a case where the
-// connection is made and the ConnectionComplete event isn't propicated & processed
-async fn wait_for_connection<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>)
+// connection is made and the ConnectionComplete event isn't propagated & processed
+async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display>
 {
     println!("Waiting for a connection (timeout is 60 seconds)");
@@ -264,7 +285,7 @@ async fn disconnect(
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {
-        connection_handle: connection_handle,
+        connection_handle,
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 

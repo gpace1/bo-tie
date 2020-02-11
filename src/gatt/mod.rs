@@ -3,6 +3,7 @@ use alloc::{
     vec::Vec,
 };
 use crate::{ att, l2cap, UUID};
+use crate::att::TransferFormatInto;
 
 pub mod characteristic;
 
@@ -176,7 +177,7 @@ impl<'a> IncludesAdder<'a>
         let handle = service_builder.handle;
 
         IncludesAdder {
-            service_builder: service_builder,
+            service_builder,
             end_group_handle: handle,
         }
     }
@@ -246,15 +247,15 @@ impl<'a> CharacteristicAdder<'a>
         CharacteristicAdder { service_builder, end_group_handle }
     }
 
-    pub fn build_characteristic<V>(
+    pub fn build_characteristic<C,V>(
         self,
         properties: Vec<characteristic::Properties>,
         uuid: UUID,
-        value: Box<V>,
+        value: C,
         value_permissions: Vec<att::AttributePermissions> )
-    -> characteristic::CharacteristicBuilder<'a, V>
-    where Box<V>: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
-              V: ?Sized + PartialEq
+    -> characteristic::CharacteristicBuilder<'a, C, V>
+        where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
+              V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + PartialEq + 'static,
     {
         characteristic::CharacteristicBuilder::new(
             self,
@@ -436,123 +437,150 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
         }
     }
 
+    /// Read by group type permission check
+    fn rbgt_permission_check(&self, service: &Service) -> Result<(), att::pdu::Error> {
+        const REQUIRED_PERMS: &[att::AttributePermissions] = &[
+            att::AttributePermissions::Read
+        ];
+
+        const RESTRICTED_PERMS: &[att::AttributePermissions] = &[
+            att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits128),
+            att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits192),
+            att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits256),
+            att::AttributePermissions::Authentication(att::AttributeRestriction::Read),
+            att::AttributePermissions::Authorization(att::AttributeRestriction::Read),
+        ];
+
+        self.server.check_permission(service.service_handle, REQUIRED_PERMS, RESTRICTED_PERMS)
+    }
+
     fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
 
-        let type_request: att::pdu::TypeRequest = att::TransferFormatTryFrom::try_from(payload)?;
-
-        let handle_range = type_request.handle_range;
-
-        let err_rsp = | pdu_err | {
-
-            let handle = handle_range.starting_handle;
-            let opcode = att::client::ClientPduName::ReadByGroupTypeRequest.into();
-
-            self.server.send_error(handle, opcode, pdu_err);
-
-            Err(pdu_err.into())
-        };
-
-        if ! handle_range.is_valid() {
-
-            err_rsp( att::pdu::Error::InvalidHandle )
-
-        } else if type_request.attr_type == ServiceDefinition::PRIMARY_SERVICE_TYPE {
-
-            use core::convert::TryInto;
-
-            const REQUIRED_PERMS: &[att::AttributePermissions] = &[
-                att::AttributePermissions::Read
-            ];
-
-            const RESTRICTED_PERMS: &[att::AttributePermissions] = &[
-                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits128),
-                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits192),
-                att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits256),
-                att::AttributePermissions::Authentication(att::AttributeRestriction::Read),
-                att::AttributePermissions::Authorization(att::AttributeRestriction::Write),
-            ];
-
-            let permissions_error = | service: &Service | -> Option<att::pdu::Error> {
-                self.server.check_permission(service.service_handle, REQUIRED_PERMS, RESTRICTED_PERMS)
-                    .err()
-            };
-
-            // Process the first attribute to determine whether or not the UUIDs returned will be
-            // 16 bits or 128 bits.
-            match self.primary_services.iter()
-                .filter(|s| s.service_handle >= handle_range.starting_handle)
-                .next() {
-                None => err_rsp( att::pdu::Error::AttributeNotFound),
-                Some(first_service) => {
-
-                    let predicate_short_uuid = |service: &&Service| {
-                        service.service_handle <= handle_range.ending_handle &&
-                            TryInto::<u16>::try_into(service.service_type).is_ok() &&
-                            permissions_error(service).is_none()
-                    };
-
-                    let predicate_normal_uuid = |service: &&Service| {
-                        service.service_handle <= handle_range.ending_handle &&
-                            permissions_error(service).is_none()
-                    };
-
-                    // Determine if the size of the first packet UUID is convertible to a 16 bit
-                    // shortened form.
-                    let ( size, predicate ): (usize, &dyn Fn(&&Service) -> bool) =
-                        if TryInto::<u16>::try_into(first_service.service_type).is_ok() {
-                            (2, &predicate_short_uuid)
-                        } else {
-                            (16, &predicate_normal_uuid)
-                        };
-
-                    // Check the permissions of the first service and determine if the client can
-                    // access the service UUID. If no error is returned by `permissions_error` then
-                    // the next UUIDs of the same type (16 bits or 128 bits) and permissible to the
-                    // client are added to the response packet until the max size of the packet is
-                    // reached. The first packet processed that is not of the same type or is not
-                    // permissible to the client stops the addition of UUIDs and the response packet
-                    // is then sent to the client.
-                    match permissions_error(first_service) {
-                        None => {
-                            let max_data = core::cmp::min(
-                                core::u8::MAX as u16,
-                                self.server.get_mtu() as u16
-                            ) as usize;
-
-                            let data_response = self.primary_services
-                                .iter()
-                                .take_while(predicate)
-                                .map( |service|
-                                    att::pdu::ReadGroupTypeData::new(
-                                        service.service_handle,
-                                        service.end_group_handle,
-                                        service.service_type,
-                                    )
-                                )
-                                .enumerate()
-                                .take_while( |(cnt,_)| (cnt * (4 + size)) <= max_data )
-                                .fold( Vec::new(), |mut v, (_,rgtd)| { v.push(rgtd); v } );
-
-                            let response_data = att::pdu::ReadByGroupTypeResponse::new(data_response)
-                                .expect("data_response is empty"); // this cannot never panic
-
-                            let pdu = att::pdu::read_by_group_type_response(response_data);
-
-                            let tx_data = att::TransferFormatInto::into( &pdu );
-
-                            let acl_data = l2cap::AclData::new(tx_data.to_vec(), att::L2CAP_CHANNEL_ID );
-
-                            self.server.as_ref().send(acl_data);
-
-                            Ok(())
-                        },
-                        Some(e) => { err_rsp(e) },
-                    }
-                }
-            }
-        } else {
-            err_rsp( att::pdu::Error::UnsupportedGroupType )
+        /// Response Item
+        #[derive(Clone,Copy)]
+        struct ResponseItem<U> {
+            service_handle: u16,
+            end_group_handle: u16,
+            uuid: U
         }
+
+        struct ServiceGroupResponse<I>(I);
+
+        impl<I,U> att::TransferFormatInto for ServiceGroupResponse<I>
+        where I: Iterator<Item=ResponseItem<U>> + Clone,
+              U: TransferFormatInto,
+        {
+            fn len_of_into(&self) -> usize {
+                1 + self.0.clone().fold(0usize, |acc,ri| acc + 4 + ri.uuid.len_of_into() )
+            }
+
+            fn build_into_ret(&self, into_ret: &mut [u8]) {
+                into_ret[0] = core::mem::size_of::<I::Item>() as u8;
+
+                self.0.clone().fold(&mut into_ret[1..], | into_ret, response_item | {
+
+                    let uuid_len = response_item.uuid.len_of_into();
+
+                    into_ret[..2].copy_from_slice( &response_item.service_handle.to_le_bytes() );
+
+                    into_ret[2..4].copy_from_slice( &response_item.service_handle.to_le_bytes() );
+
+                    response_item.uuid.build_into_ret( &mut into_ret[4..(4 + uuid_len)] );
+
+                    &mut into_ret[(4 + uuid_len)..]
+                });
+            }
+        }
+
+        match att::TransferFormatTryFrom::try_from(payload) {
+            Ok(att::pdu::TypeRequest {
+                   handle_range,
+                   attr_type: ServiceDefinition::PRIMARY_SERVICE_TYPE,
+               }) =>
+            {
+                let mut service_iter = self.primary_services.iter()
+                    .filter(|s| s.service_handle >= handle_range.starting_handle &&
+                        s.service_handle <= handle_range.ending_handle)
+                    .map(|s| self.rbgt_permission_check(s).map(|_| s))
+                    .peekable();
+
+                // Check the permissions of the first service and determine if the client can
+                // access the service UUID. If no error is returned by `permissions_error` then
+                // the next UUIDs of the same type (16 bits or 128 bits) and permissible to the
+                // client are added to the response packet until the max size of the packet is
+                // reached. The first packet processed that is not of the same type or is not
+                // permissible to the client stops the addition of UUIDs and the response packet
+                // is then sent to the client.
+                match service_iter.peek() {
+                    Some(Ok(first_service)) => {
+                        let payload_size = self.server.get_mtu() - 2; // pdu header size is 2 bytes
+
+                        // Each data_size is 4 bytes for the attribute handle + the end group handle and
+                        // either 2 bytes for short UUIDs or 16 bytes for full UUIDs
+                        if first_service.service_type.is_16_bit() {
+                            let service_iter = service_iter
+                                .take_while(|rslt| rslt.is_ok())
+                                .map(|rslt| rslt.unwrap())
+                                .take_while(|s| s.service_type.is_16_bit())
+                                .enumerate()
+                                .take_while(|(cnt, _)| payload_size > cnt * (4 + 2))
+                                .map(|(_, s)| ResponseItem {
+                                    service_handle: s.service_handle,
+                                    end_group_handle: s.end_group_handle,
+                                    uuid: core::convert::TryInto::<u16>::try_into(s.service_type).unwrap(),
+                                });
+
+                            self.server.send_pdu( att::pdu::Pdu::new(
+                                att::server::ServerPduName::ReadByGroupTypeResponse.into(),
+                                ServiceGroupResponse(service_iter),
+                                None
+                            ));
+                        } else {
+                            let service_iter = service_iter
+                                .take_while(|rslt| rslt.is_ok())
+                                .map(|rslt| rslt.unwrap())
+                                .enumerate()
+                                .take_while(|(cnt, _)| payload_size > cnt * (4 + 16))
+                                .map(|(_, s)| ResponseItem {
+                                    service_handle: s.service_handle,
+                                    end_group_handle: s.end_group_handle,
+                                    uuid: <u128>::from(s.service_type),
+                                });
+
+                            self.server.send_pdu( att::pdu::Pdu::new(
+                                att::server::ServerPduName::ReadByGroupTypeResponse.into(),
+                                ServiceGroupResponse(service_iter),
+                                None
+                            ));
+                        };
+                    },
+
+                    // Client didn't have adequate permissions to access the first service
+                    Some(Err(e)) => self.server.send_error(
+                        handle_range.starting_handle,
+                        att::client::ClientPduName::ReadByGroupTypeRequest,
+                        (*e).into()),
+
+                    // No service attributes found within the requested range
+                    None => self.server.send_error(
+                        handle_range.starting_handle,
+                        att::client::ClientPduName::ReadByGroupTypeRequest,
+                        att::pdu::Error::InvalidHandle),
+                }
+            },
+            Ok(att::pdu::TypeRequest { handle_range, .. } ) =>
+                self.server.send_error(
+                    handle_range.starting_handle,
+                    att::client::ClientPduName::ReadByGroupTypeRequest,
+                    att::pdu::Error::UnsupportedGroupType),
+            _ =>
+                self.server.send_error(
+                    0,
+                    att::client::ClientPduName::ReadByGroupTypeRequest,
+                    att::pdu::Error::UnlikelyError),
+        }
+
+        Ok(())
     }
 }
 
