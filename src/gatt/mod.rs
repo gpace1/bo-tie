@@ -475,6 +475,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
             }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
+
                 into_ret[0] = core::mem::size_of::<I::Item>() as u8;
 
                 self.0.clone().fold(&mut into_ret[1..], | into_ret, response_item | {

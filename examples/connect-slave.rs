@@ -43,6 +43,20 @@ use std::time::Duration;
 /// from the controller to the user.
 const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 
+async fn events_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
+    use bo_tie::hci::cb::set_event_mask::{self, EventMask};
+    use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
+    use events::LEMeta;
+
+    let enabled_events = &[EventMask::LEMeta, EventMask::DisconnectionComplete];
+    
+    let enabled_le_events = &[LEMeta::ConnectionComplete];
+
+    set_event_mask::send(hi, enabled_events).await.unwrap();
+
+    le_set_event_mask::send(hi, enabled_le_events).await.unwrap();
+}
+
 /// This sets up the advertising and waits for the connection complete event
 async fn advertise_setup(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
@@ -115,7 +129,9 @@ async fn disconnect(
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
-    disconnect::send(&hi, prams).await.expect("Failed to disconnect");
+    if let Err(e) = disconnect::send(&hi, prams).await { 
+        println!("Failed to disconnect: {}", e) 
+    }
 }
 
 /// Initialize the Attribute Server
@@ -195,6 +211,8 @@ fn main() {
     let interface = Arc::new(hci::HostInterface::default());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
+
+    executor::block_on(events_setup(&interface));
 
     executor::block_on(advertise_setup(&interface, local_name));
 

@@ -143,13 +143,13 @@ impl<P> TransferFormatTryFrom for Pdu<P> where P: TransferFormatTryFrom {
 impl<P> TransferFormatInto for Pdu<P> where P: TransferFormatInto {
 
     fn len_of_into(&self) -> usize {
-        2 + self.parameters.len_of_into() + if self.signature.is_some() { 12 } else { 0 }
+        1 + self.parameters.len_of_into() + if self.signature.is_some() { 12 } else { 0 }
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8] ) {
         into_ret[0] = self.opcode.as_raw();
 
-        self.parameters.build_into_ret( &mut into_ret[1..self.parameters.len_of_into()] );
+        self.parameters.build_into_ret( &mut into_ret[1..(1 + self.parameters.len_of_into())] );
 
         self.signature.as_ref().map(|s|
             into_ret[(1 + self.parameters.len_of_into())..].copy_from_slice(s)
@@ -391,7 +391,7 @@ impl TransferFormatInto for ErrorAttributeParameter {
 
     fn build_into_ret(&self, into_ret: &mut [u8] ) {
         into_ret[0] = self.request_opcode;
-        into_ret[1..3].copy_from_slice( &self.request_opcode.to_le_bytes() );
+        into_ret[1..3].copy_from_slice( &self.requested_handle.to_le_bytes() );
         into_ret[3] = self.error.get_raw();
     }
 }
