@@ -965,12 +965,40 @@ impl ServerAttributes {
     pub fn next_handle(&self) -> u16 {
         self.attributes.len() as u16
     }
+
+    /// Get an iterator over the attribute informational data
+    ///
+    /// This will return an iterator to get the type, permissions, and handle for each attribute
+    pub fn iter(&self) -> impl Iterator<Item = &dyn AttributeInfo > {
+        ServerAttributesIter(self.attributes.iter())
+    }
 }
 
 impl Default for ServerAttributes {
     fn default() -> Self {
         Self::new()
     }
+}
+
+struct ServerAttributesIter<'a>(core::slice::Iter<'a, Box<dyn ServerAttribute + Send + Sync >>);
+
+impl<'a> Iterator for ServerAttributesIter<'a> {
+    type Item = &'a dyn AttributeInfo;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|b| b.as_att_info() )
+    }
+}
+
+pub trait AttributeInfo {
+    /// Get the attribute type
+    fn get_type(&self) -> crate::UUID;
+
+    /// Get the attribute permissions
+    fn get_permissions(&self) -> &[super::AttributePermissions];
+
+    /// Get the attribute handle
+    fn get_handle(&self) -> u16;
 }
 
 /// Server Attributes
@@ -1048,20 +1076,9 @@ impl<V> ServerAttributeValue<V> for V where V: TransferFormatInto {
 /// A `ServerAttribute` is an attribute that has been added to the `ServerAttributes`. These
 /// functions are designed to abstract away from the type of the attribute value so a
 /// `ServerAttributes` can have a list of boxed `dyn ServerAttribute`.
-trait ServerAttribute: Send + Sync {
+trait ServerAttribute: AttributeInfo {
 
-    /// Get the attribute type
-    fn get_type(&self) -> crate::UUID;
-
-    /// Get the attribute permissions
-    fn get_permissions(&self) -> &[super::AttributePermissions];
-
-    /// Get the attribute handle
-    ///
-    /// # Panic
-    /// This function will panic if the attribute handle has not be set. A handle is set once it is
-    /// added to a `ServerAttributes` (except for the `ReservedHandle`).
-    fn get_handle(&self) -> u16;
+    fn as_att_info(&self) -> &dyn AttributeInfo;
 
     /// Read the attribute value and convert the data into the raw interface form
     ///
@@ -1096,10 +1113,7 @@ impl<C,V> From<super::Attribute<C>> for ServerAttEntry<C,V> {
     }
 }
 
-impl<C, V> ServerAttribute for ServerAttEntry<C,V>
-where C: ServerAttributeValue<V> + Send + Sync,
-      V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq,
-{
+impl<C,V> AttributeInfo for ServerAttEntry<C,V> {
     fn get_type(&self) -> crate::UUID {
         self.attribute.ty
     }
@@ -1109,8 +1123,15 @@ where C: ServerAttributeValue<V> + Send + Sync,
     }
 
     fn get_handle(&self) -> u16 {
-        self.attribute.get_handle().expect("Handle value not set")
+        self.attribute.get_handle().expect("Handle does not exist for server attribute")
     }
+}
+
+impl<C, V> ServerAttribute for ServerAttEntry<C,V>
+where C: ServerAttributeValue<V> + Send + Sync,
+      V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq,
+{
+    fn as_att_info(&self) -> &dyn AttributeInfo { self }
 
     fn value_to_transfer_format(&self, transform: &mut dyn FnMut(&dyn TransferFormatInto) )
     {
@@ -1152,8 +1173,7 @@ impl TransferFormatInto for &(dyn ServerAttribute + Send + Sync) {
 /// handle when creating a new Attribute Bearer
 struct ReservedHandle;
 
-impl ServerAttribute for ReservedHandle
-{
+impl AttributeInfo for ReservedHandle {
     fn get_type(&self) -> crate::UUID { crate::UUID::from_u128(0u128) }
 
     fn get_permissions(&self) -> &[super::AttributePermissions] {
@@ -1161,6 +1181,11 @@ impl ServerAttribute for ReservedHandle
     }
 
     fn get_handle(&self) -> u16 { 0 }
+}
+
+impl ServerAttribute for ReservedHandle
+{
+    fn as_att_info(&self) -> &dyn AttributeInfo { self }
 
     fn value_to_transfer_format(&self, _: &mut dyn FnMut(&dyn TransferFormatInto) )
     {

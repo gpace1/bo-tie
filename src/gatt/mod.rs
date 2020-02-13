@@ -396,6 +396,11 @@ impl ServerBuilder
         ServiceBuilder::new(self, service_type, is_primary)
     }
 
+    /// Get all the attributes of the server
+    pub fn get_attributes(&self) -> &att::server::ServerAttributes {
+        &self.attributes
+    }
+
     /// Make an server
     ///
     /// Construct an server from the server builder.
