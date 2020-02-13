@@ -1065,7 +1065,7 @@ pub trait ServerAttributeValue<V> {
 }
 
 /// The trivial implementation for ServerAttributeValue
-impl<V> ServerAttributeValue<V> for V where V: TransferFormatInto {
+impl<V> ServerAttributeValue<V> for V {
     fn read_and<F,T>(&self, mut f: F ) -> T where F: FnMut(&V) -> T { f( self ) }
 
     fn write_val(&mut self, val: V) { *self = val }
