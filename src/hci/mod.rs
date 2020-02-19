@@ -174,6 +174,11 @@ impl Display for HciAclPacketConvertError {
     }
 }
 
+pub trait Timeout: Display + Debug {
+    /// If a timeout `occurred` this will return true
+    fn timeout_occurred(&self) -> bool;
+}
+
 #[derive(Debug)]
 pub struct HciAclData {
     connection_handle: common::ConnectionHandle,
@@ -324,7 +329,7 @@ impl HciAclData {
 pub trait HostControllerInterface
 {
     type SendCommandError: Debug + Display;
-    type ReceiveEventError: Debug + Display;
+    type ReceiveEventError: Debug + Display + Timeout;
 
     /// Send a command from the Host to the Bluetooth Controller
     ///
@@ -346,9 +351,11 @@ pub trait HostControllerInterface
     /// return the data associated with the event (or an error if it occurs) if the event has been
     /// received or it will return None.
     ///
+    /// If event is 'None' then the next event received by the host should be returned.
+    ///
     /// If None is returned, the waker will be used to indicate that the event was received. But to
     /// get the events data, the exact same event and matcher reference (the matcher may be cloned)
-    /// must be used to gaurentee that the event data is returned.
+    /// must be used to guarantee that the event data is returned.
     ///
     /// The function requires a
     /// [`Waker`](https://doc.rust-lang.org/core/task/struct.Waker.html) object because
@@ -357,7 +364,7 @@ pub trait HostControllerInterface
     /// EventData.
     fn receive_event<P>(
         &self,
-        event: events::Events,
+        event: Option<events::Events>,
         waker: &Waker,
         matcher: Pin<Arc<P>>,
         timeout: Option<Duration>
@@ -471,7 +478,7 @@ where I: HostControllerInterface,
             }
         }
 
-        match self.interface.receive_event(self.event, cx.waker(), self.matcher.clone(), self.timeout) {
+        match self.interface.receive_event(self.event.into(), cx.waker(), self.matcher.clone(), self.timeout) {
             None => Poll::Pending,
             Some(result) => Poll::Ready(result.map_err(|e| SendCommandError::Recv(e)))
         }
@@ -483,7 +490,7 @@ where I: HostControllerInterface,
       P: EventMatcher + Sync + Send + 'static
 {
     interface: &'a I,
-    event: events::Events,
+    event: Option<events::Events>,
     matcher: Pin<Arc<P>>,
     timeout: Option<Duration>,
 }
@@ -607,25 +614,27 @@ where I: HostControllerInterface
     /// Get a future for a Bluetooth Event
     ///
     /// The event provided to the method will be the event to waited upon, and an optional timeout
-    /// can be provided for the case were the event isn't gaurenteed to be returned to the Host.
+    /// can be provided for the case were the event isn't guaranteed to be returned to the Host.
+    ///
+    /// If event is `None` then every event is matched.
     ///
     /// # Limitations
-    /// Calling this multiple times with the same event is OK only when the returned future is
-    /// polled to completion before the next call to this method *with the same event* is made.
-    /// Not doing this with multiple events results in undefined behavior.
+    /// Having multiple threads use 'wait_for_event' with either the same `event` (regardless if
+    /// `event` is specified or `none`) will create undefined behaviour of which
     ///
     /// If multiple of the same event need to be made, use
-    /// [`wait_for_event_with_matcher`](#method.wait_for_event_with_matcher)
+    /// [`wait_for_event_with_matcher`](crate::hci::HostInterface::wait_for_event_with_matcher)
     /// to match the data returned with the event.
-    pub fn wait_for_event<'a,D>(&'a self, event: events::Events, timeout: D)
+    pub fn wait_for_event<'a,E,D>(&'a self, event: E, timeout: D)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
-    where D: Into<Option<Duration>>,
+    where E: Into<Option<events::Events>>,
+          D: Into<Option<Duration>>,
     {
         fn default_matcher(_: &events::EventsData) -> bool { true }
 
         EventReturnFuture {
             interface: &self.interface,
-            event,
+            event: event.into(),
             matcher: Arc::pin(default_matcher),
             timeout: timeout.into(),
         }
@@ -634,11 +643,12 @@ where I: HostControllerInterface
     /// Get a future for a *more* specific Bluetooth Event
     ///
     /// This is the same as the function
-    /// `[wait_for_event](#wait_for_event)` except an additional matcher is used to filter same
-    /// events based on the data sent with the event. See
-    /// `[EventMatcher](../EventMatcher/index.html)`
+    /// [`wait_for_event`](crate::hci::HostInterface::wait_for_event)
+    /// except an additional matcher is used to filter same events based on the data sent with the
+    /// event. See
+    /// [`EventMatcher`](crate::hci::EventMatcher)
     /// for information on implementing a matcher, but you can use a closure that borrows
-    /// `[EventsData](/hci/events/EventsData)`
+    /// [`EventsData`](crate::hci::events::EventsData)
     /// as an input and returns a `bool` as a matcher.
     ///
     /// # Limitations
@@ -651,14 +661,15 @@ where I: HostControllerInterface
     /// Using a matcher that always returns true results in `wait_for_event_with_matcher`
     /// functioning the same way as
     /// `[wait_for_event](wait_for_event)`
-    pub fn wait_for_event_with_matcher<'a,P,D>(&'a self, event: events::Events, timeout: D, matcher: P)
+    pub fn wait_for_event_with_matcher<'a,E,P,D>(&'a self, event: E, timeout: D, matcher: P)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
-    where P: EventMatcher + Send + Sync + 'static,
+    where E: Into<Option<events::Events>>,
+          P: EventMatcher + Send + Sync + 'static,
           D: Into<Option<Duration>>,
     {
         EventReturnFuture {
             interface: &self.interface,
-            event,
+            event: event.into(),
             matcher: Arc::pin(matcher),
             timeout: timeout.into(),
         }

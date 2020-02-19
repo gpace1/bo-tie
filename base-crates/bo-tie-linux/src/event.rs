@@ -73,7 +73,7 @@ struct ExpEventInfo {
 /// Expected event manager
 #[derive(Debug)]
 pub struct EventExpecter {
-    expected: BTreeMap<events::Events, BTreeMap<DynEventMatcher, ExpEventInfo>>,
+    expected: BTreeMap<Option<events::Events>, BTreeMap<DynEventMatcher, ExpEventInfo>>,
 }
 
 impl EventExpecter {
@@ -100,7 +100,7 @@ impl EventExpecter {
 
     fn remove_expected_event(
         &mut self,
-        event: events::Events,
+        event: Option<events::Events>,
         pattern: &DynEventMatcher)
     -> Option<ExpEventInfo>
     {
@@ -120,7 +120,7 @@ impl EventExpecter {
 
     pub fn expect_event<P>(
         mutex: Arc<Mutex<Self>>,
-        event: events::Events,
+        event: Option<events::Events>,
         waker: &core::task::Waker,
         matcher: Pin<Arc<P>>,
         timeout_builder: Option<timeout::TimeoutBuilder>)
@@ -168,8 +168,8 @@ impl EventExpecter {
 
                 let val = ExpEventInfo {
                     data: None,
-                    waker_token: waker_token,
-                    stop_timer: stop_timer,
+                    waker_token,
+                    stop_timer,
                 };
 
                 gaurd.expected.entry(event).or_insert(BTreeMap::new()).insert(pat_key, val);
@@ -212,10 +212,7 @@ impl EventProcessor {
             Ok(event_data) => {
                 let received_event = event_data.get_enum_name();
 
-                if let Some(ref mut patterns_map) = self.expected_events.lock()
-                    .expect("Couldn't acquire mutex")
-                    .expected.get_mut(&received_event)
-                {
+                let process_expected = |patterns_map: &mut BTreeMap<DynEventMatcher, ExpEventInfo>| {
                     for (dyn_matcher, ref mut exp_event_info) in patterns_map.iter_mut() {
                         if dyn_matcher.matcher.match_event(&event_data) {
 
@@ -227,9 +224,17 @@ impl EventProcessor {
                             break;
                         }
                     }
+                };
 
-                    // Any events not matched are ignored
+                let expected = &mut self.expected_events.lock().expect("Couldn't acquire mutex").expected;
+
+                if let Some(ref mut patterns_map) = expected.get_mut(&Some(received_event)) {
+                    process_expected(patterns_map)
+                } else if let Some(ref mut patterns_map) = expected.get_mut(&None) {
+                    process_expected(patterns_map)
                 }
+
+                // Any events not matched are ignored
             },
             Err(e) => log::error!("HCI Event Error: {}", e),
         }
@@ -242,7 +247,7 @@ impl EventSetup {
 
     pub fn setup() -> (Arc<Mutex<EventExpecter>>, EventProcessor) {
 
-        let expecter = Arc::new(Mutex::new(EventExpecter {
+        let expector = Arc::new(Mutex::new(EventExpecter {
             expected: BTreeMap::new(),
         }));
 

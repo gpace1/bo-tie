@@ -105,6 +105,10 @@ pub enum Error {
     Other(String),
 }
 
+impl bo_tie::hci::Timeout for Error {
+    fn timeout_occurred(&self) -> bool { if let Self::Timeout = self { true } else { false } }
+}
+
 impl fmt::Display for Error  {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 
@@ -493,7 +497,7 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
     }
 
     fn receive_event<P>(&self,
-        event: events::Events,
+        event: Option<events::Events>,
         waker: &task::Waker,
         matcher: Pin<Arc<P>>,
         timeout: Option<Duration>)
