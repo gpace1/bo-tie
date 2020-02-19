@@ -247,7 +247,7 @@ impl EventSetup {
 
     pub fn setup() -> (Arc<Mutex<EventExpecter>>, EventProcessor) {
 
-        let expector = Arc::new(Mutex::new(EventExpecter {
+        let expecter = Arc::new(Mutex::new(EventExpecter {
             expected: BTreeMap::new(),
         }));
 
