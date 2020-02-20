@@ -613,14 +613,17 @@ where I: HostControllerInterface
 
     /// Get a future for a Bluetooth Event
     ///
-    /// The event provided to the method will be the event to waited upon, and an optional timeout
-    /// can be provided for the case were the event isn't guaranteed to be returned to the Host.
-    ///
-    /// If event is `None` then every event is matched.
+    /// This will create a future for awaiting events from the controller. A specific event can
+    /// be awaited for or `None` can be provided to match all events except for 'CommandComplete`
+    /// and `CommandStatus` are matched. This library incorporates the matching of either
+    /// `CommandComplete` or `CommandStatus` in the futures returned by HCI command calls. This
+    /// function should not be called with these events if you are purely using this library for
+    /// your HCI.
     ///
     /// # Limitations
-    /// Having multiple threads use 'wait_for_event' with either the same `event` (regardless if
-    /// `event` is specified or `none`) will create undefined behaviour of which
+    /// If multiple contexts call this function with either the same event or any of them call this
+    /// function with `event` as `None` it is undefined which returned future will be given the
+    /// matched event.
     ///
     /// If multiple of the same event need to be made, use
     /// [`wait_for_event_with_matcher`](crate::hci::HostInterface::wait_for_event_with_matcher)
@@ -632,10 +635,20 @@ where I: HostControllerInterface
     {
         fn default_matcher(_: &events::EventsData) -> bool { true }
 
+        fn most_matcher(e: &events::EventsData) -> bool {
+            let event_name = e.get_event_name();
+
+            event_name != events::Events::CommandComplete && event_name != events::Events::CommandStatus
+        }
+
+        let opt_event: Option<events::Events> = event.into();
+
+        let matcher = if opt_event.is_none() { most_matcher } else { default_matcher };
+
         EventReturnFuture {
             interface: &self.interface,
-            event: event.into(),
-            matcher: Arc::pin(default_matcher),
+            event: opt_event,
+            matcher: Arc::pin(matcher),
             timeout: timeout.into(),
         }
     }
@@ -653,18 +666,16 @@ where I: HostControllerInterface
     ///
     /// # Limitations
     /// While this can be used to further specify what event data gets returned by a future, its
-    /// really just further filters the event data. The same exact limitation scenerio happens when
-    /// muliple futures are created to wait upon the same event with matchers that *possibly* have
-    /// the same functionality. **Two matchers will have the same functionality if for a given
-    /// event data, the method `match_event` returns true.**
+    /// really just further filters the event data. The same exact limitation of `wait_for_event`
+    /// can happen when multiple futures are created to wait upon the same event with the same
+    /// matcher functionality
     ///
     /// Using a matcher that always returns true results in `wait_for_event_with_matcher`
     /// functioning the same way as
     /// `[wait_for_event](wait_for_event)`
-    pub fn wait_for_event_with_matcher<'a,E,P,D>(&'a self, event: E, timeout: D, matcher: P)
+    pub fn wait_for_event_with_matcher<'a,P,D>(&'a self, event: events::Events, timeout: D, matcher: P)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
-    where E: Into<Option<events::Events>>,
-          P: EventMatcher + Send + Sync + 'static,
+    where P: EventMatcher + Send + Sync + 'static,
           D: Into<Option<Duration>>,
     {
         EventReturnFuture {
@@ -893,7 +904,7 @@ macro_rules! impl_returned_future {
                     match result {
                         Ok( event_pattern_creator!($event, $data) ) => $to_do,
                         Ok(event @ _) => {
-                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(event.get_enum_name()));
+                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(event.get_event_name()));
 
                             core::task::Poll::Ready(ret)
                         },

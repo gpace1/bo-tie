@@ -3577,7 +3577,7 @@ macro_rules! events_markup {
 
         impl crate::hci::events::$EnumDataName {
 
-            pub fn get_enum_name(&self) -> $EnumName {
+            pub fn get_event_name(&self) -> $EnumName {
                 #[cfg(not(test))]
                 match *self {
                     $( crate::hci::events::$EnumDataName::$name(ref _data) =>
