@@ -210,7 +210,7 @@ impl EventProcessor {
 
         match events::EventsData::from_packet(raw_event_packet) {
             Ok(event_data) => {
-                let received_event = event_data.get_enum_name();
+                let received_event = event_data.get_event_name();
 
                 let process_expected = |patterns_map: &mut BTreeMap<DynEventMatcher, ExpEventInfo>| {
                     for (dyn_matcher, ref mut exp_event_info) in patterns_map.iter_mut() {
