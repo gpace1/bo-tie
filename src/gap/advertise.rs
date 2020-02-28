@@ -466,18 +466,18 @@ pub mod service_uuids {
     }
 
     impl DataType for Services<u16> {
-        const COMPLETE: AssignedTypes = AssignedTypes::CompleteListOf16bitServiceClassUUIDs;
         const INCOMPLETE: AssignedTypes = AssignedTypes::IncompleteListOf16bitServiceClassUUIDs;
+        const COMPLETE: AssignedTypes = AssignedTypes::CompleteListOf16bitServiceClassUUIDs;
     }
 
     impl DataType for Services<u32> {
-        const COMPLETE: AssignedTypes = AssignedTypes::CompleteListOf32bitServiceClassUUIDs;
         const INCOMPLETE: AssignedTypes = AssignedTypes::IncompleteListOf32bitServiceClassUUIDs;
+        const COMPLETE: AssignedTypes = AssignedTypes::CompleteListOf32bitServiceClassUUIDs;
     }
 
     impl DataType for Services<u128> {
-        const COMPLETE: AssignedTypes = AssignedTypes::CompleteListOf128bitServiceClassUUIDs;
         const INCOMPLETE: AssignedTypes = AssignedTypes::IncompleteListOf128bitServiceClassUUIDs;
+        const COMPLETE: AssignedTypes = AssignedTypes::CompleteListOf128bitServiceClassUUIDs;
     }
 
     /// Create a Services data type for 16-bit UUIDs
@@ -714,7 +714,7 @@ pub mod service_uuids {
                             // from_raw does the check to see if the data is Self::COMPLETE or
                             // Self::INCOMPLETE. All that needs to be done here is to check
                             // if this is the complete one or not.
-                            complete: Self::COMPLETE.val() == raw[1],
+                            complete: Self::COMPLETE.val() == raw[0],
                         }
                     }}
                 }
