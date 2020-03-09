@@ -3609,7 +3609,7 @@ macro_rules! events_markup {
                 // packet[0] is the LEMeta specific event code if the event is LEMeta
                 let event_code = crate::hci::events::$EnumName::from_raw((chew!(packet), packet[1]));
 
-                /// The length of the packet and convert it into a usize
+                // The length of the packet and convert it into a usize
                 let event_len  = chew!(packet).into();
 
                 match event_code {
