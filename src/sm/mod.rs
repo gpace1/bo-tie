@@ -471,9 +471,8 @@ impl KeyDBEntry {
 
 /// The Encryption Key "database"
 ///
-/// This contains the keys that were previously generated. `entries` is sorted by the `peer_irk`
-/// and `peer_addr` members of each `KeyDBEntry`. The sort is designed to have all the `KeyDBEntry`s
-/// with a peer IRK to be less then all the `KeyDBEntry`s without a peer IRK.
+/// This contains a sorted list of `KeyDBEntry` sorted by the peer irk and peer address values.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct KeyDB {
     entries: Vec<KeyDBEntry>,
 }
@@ -551,8 +550,9 @@ impl Default for KeyDB {
 
 /// The Security Manager
 ///
-/// The security manager is the top level container of keys
-#[derive(Default)]
+/// The security manager contains a database for peer specific keys as well as general purpose keys
+/// to distribute to peers. It also contains functions for resolving an Identity address
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct SecurityManager {
     keys_db: KeyDB,
     static_irk: Option<u128>,
@@ -622,10 +622,10 @@ impl SecurityManager {
     /// Returns an iterator to resolve a resolvable private address from all peer devices'
     /// Identity Resolving Key (IRK) in the keys database.
     ///
-    /// The return is an iterator that will try to resolve `addr` with a peer IRK on each iteration.
-    /// If the address is resolved by a peer's IRK, the `KeyDBEntry` that contains the matching IRK
-    /// is returned. The easiest way to use this function is to just combine it with the
-    /// [`find_map`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find_map)
+    /// The return is an iterator that will try to resolve `addr` with a known peer IRK on each
+    /// iteration. If the address is resolved by a peer's IRK, the `KeyDBEntry` that contains the
+    /// matching IRK is returned. The easiest way to use this function is to just combine it with
+    /// the [`find_map`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find_map)
     /// iterator method.
     ///
     /// ```
