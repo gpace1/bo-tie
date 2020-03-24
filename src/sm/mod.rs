@@ -548,10 +548,17 @@ impl Default for KeyDB {
     }
 }
 
-/// The Security Manager
+/// A simple Security Manager
 ///
-/// The security manager contains a database for peer specific keys as well as general purpose keys
-/// to distribute to peers. It also contains functions for resolving an Identity address
+/// The `SecurityManager` contains a database of encryption keys for with previously bonded
+/// devices. Its main purpose is for saving bonding information and to retrieve the correct
+/// encryption keys upon successful identification of the peer device.
+///
+/// This 'database' is nothing more than a glorified list of `KeyDBEntry`
+/// sorted by the
+/// [compare_entry](crate::sm::KeyDBEntry::compare_entry)
+/// function. The database is mainly used for either retrieving keys by the peer device's Identity
+/// Resolving Key and/or the Identity Address.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct SecurityManager {
     keys_db: KeyDB,
@@ -571,9 +578,9 @@ impl SecurityManager {
         }
     }
 
-    /// Get all peer Identity Resolving Keys stored in the Key Database
-    pub fn get_peer_irks(&self) -> impl core::iter::Iterator<Item = u128> + '_{
-        self.keys_db.iter().filter_map(|entry| entry.peer_irk )
+    /// Get an iterator over the keys
+    pub fn iter(&self) -> impl Iterator<Item = &KeyDBEntry> {
+       self.keys_db.iter()
     }
 
     /// Assign a static Identity Resolving Key (IRK)
@@ -627,7 +634,6 @@ impl SecurityManager {
     /// matching IRK is returned. The easiest way to use this function is to just combine it with
     /// the [`find_map`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find_map)
     /// iterator method.
-    ///
     /// ```
     /// # let security_manager = bo_tie::sm::SecurityManager::default();
     /// # let resolvable_private_address = [0u8;6];
@@ -672,6 +678,7 @@ impl SecurityManager {
         self.keys_db.remove(keys.peer_irk.as_ref(), keys.peer_addr.as_ref())
     }
 
+    /// Get a specific `KeyDBEntry` from its peer IRK and peer Address
     pub fn get_keys<I,A>(&self, peer_irk: I, peer_addr: A, peer_addr_is_pub: bool)
     -> Option<&KeyDBEntry>
     where I: Into<Option<u128>>,
