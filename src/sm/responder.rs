@@ -638,7 +638,11 @@ where C: ConnectionChannel,
                         irk: toolbox::rand_u128().into(),
                         csrk: (toolbox::rand_u128(), 0).into(),
                         peer_irk: None,
-                        peer_addr: None,
+                        peer_addr: if self.initiator_address_is_random {
+                                super::BluAddr::StaticRandom(*self.initiator_address)
+                            } else {
+                                super::BluAddr::Public(*self.initiator_address)
+                            }.into(),
                         peer_csrk: None,
                     }.into();
 
