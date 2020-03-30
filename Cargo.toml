@@ -20,7 +20,7 @@ default = ["v5_0"]
 v4_2 = [] # bluetooth v4.2
 v5_0 = [] # bluetooth v5.0
 
-# vendored buidls
+# vendored builds
 vendored = ["openssl/vendored"]
 
 [dev-dependencies]

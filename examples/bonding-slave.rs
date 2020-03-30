@@ -161,11 +161,11 @@ impl Bonder {
         };
         use hci::le::common::ConnectionEventLength;
         use hci::events::EventsData::LEMeta;
-        use hci::events::LEMeta::RemoteConnectionParameterRequest;
+        use hci::events::LEMeta::RemoteConnectionParameterRequest as RCPReq;
         use hci::events::LEMetaData::RemoteConnectionParameterRequest as RCPReqData;
 
         loop {
-            let event = self.hi.wait_for_event(RemoteConnectionParameterRequest.into(), None).await;
+            let event = self.hi.wait_for_event(Some(RCPReq.into()), None).await;
 
             match event {
                 Ok(LEMeta(RCPReqData(e))) => {
@@ -199,7 +199,7 @@ impl Bonder {
 
         println!("Waiting for a connection (timeout is 60 seconds)");
 
-        let evt_rsl = self.hi.wait_for_event(ConnectionComplete.into(), Duration::from_secs(60)).await;
+        let evt_rsl = self.hi.wait_for_event(Some(ConnectionComplete.into()), Duration::from_secs(60)).await;
 
         match evt_rsl {
             Ok(event) => {
@@ -286,7 +286,7 @@ impl Bonder {
         use hci::le::encryption::long_term_key_request_negative_reply;
         use hci::events::{EventsData, LEMeta, LEMetaData};
 
-        let event = self.hi.wait_for_event(LEMeta::LongTermKeyRequest.into(), None).await;
+        let event = self.hi.wait_for_event(Some(LEMeta::LongTermKeyRequest.into()), None).await;
 
         log::trace!("Received Long Term Key Request");
 
@@ -524,7 +524,7 @@ impl Bonder {
 
             set_advertising_enable::send(&self.hi, true).await.unwrap();
 
-            let event_rslt = self.hi.wait_for_event(EnhancedConnectionComplete.into(), None).await;
+            let event_rslt = self.hi.wait_for_event(Some(EnhancedConnectionComplete.into()), None).await;
 
             let event_data_opt = match event_rslt
             {
