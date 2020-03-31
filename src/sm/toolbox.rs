@@ -82,8 +82,8 @@ impl super::CommandData for PeerPubKey {
             .to_vec();
 
         // Reverse the keys from little endian to big endian
-        key[PUB_KEY_X_RANGE].reverse();
-        key[PUB_KEY_Y_RANGE].reverse();
+        key[..32].reverse(); // x
+        key[32..].reverse(); // y
 
         key
     }
