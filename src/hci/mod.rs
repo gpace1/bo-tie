@@ -614,20 +614,29 @@ where I: HostControllerInterface
     /// Get a future for a Bluetooth Event
     ///
     /// This will create a future for awaiting events from the controller. A specific event can
-    /// be awaited for or `None` can be provided to match all events except for 'CommandComplete`
-    /// and `CommandStatus` are matched. This library incorporates the matching of either
-    /// `CommandComplete` or `CommandStatus` in the futures returned by HCI command calls. This
-    /// function should not be called with these events if you are purely using this library for
-    /// your HCI.
+    /// be awaited for or `None` can be provided to match all *maskable* events.
+    ///
+    /// [`CommandComplete`](crate::hci::events::Events::CommandComplete),
+    /// [`CommandStatus`](crate::hci::events::Events::CommandStatus), and
+    /// [`NumberOfCompletedPackets`](crate::hci::events::Events::NumberOfCompletedPackets) are the
+    /// non-maskable events and they will not be returned by the future
+    ///
+    /// # Note
+    /// This library incorporates the matching of either `CommandComplete` or `CommandStatus` in
+    /// the implemented HCI commands. This function should not be called with these events after
+    /// invoking an HCI command in this library.
     ///
     /// # Limitations
-    /// If multiple contexts call this function with either the same event or any of them call this
-    /// function with `event` as `None` it is undefined which returned future will be given the
-    /// matched event.
+    /// This function will produce undefined behavior (a race condition) if this is awaited
+    /// concurrently and input `event` cannot be differentiated to wake the correct context. This
+    /// can occur when input `event` is the same or when input `event` is `None` and any other call
+    /// to `wait_for_event` uses a *maskable* event. It is safe to use this concurrently if these
+    /// conditions are not met.
     ///
-    /// If multiple of the same event need to be made, use
+    /// The function
     /// [`wait_for_event_with_matcher`](crate::hci::HostInterface::wait_for_event_with_matcher)
-    /// to match the data returned with the event.
+    /// can be used to further refine the matching event to get around the limitation of this
+    /// function.
     pub fn wait_for_event<'a,E,D>(&'a self, event: E, timeout: D)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
     where E: Into<Option<events::Events>>,
@@ -636,9 +645,7 @@ where I: HostControllerInterface
         fn default_matcher(_: &events::EventsData) -> bool { true }
 
         fn most_matcher(e: &events::EventsData) -> bool {
-            let event_name = e.get_event_name();
-
-            event_name != events::Events::CommandComplete && event_name != events::Events::CommandStatus
+            e.get_event_name().is_maskable()
         }
 
         let opt_event: Option<events::Events> = event.into();
@@ -666,13 +673,13 @@ where I: HostControllerInterface
     ///
     /// # Limitations
     /// While this can be used to further specify what event data gets returned by a future, its
-    /// really just further filters the event data. The same exact limitation of `wait_for_event`
-    /// can happen when multiple futures are created to wait upon the same event with the same
-    /// matcher functionality
-    ///
-    /// Using a matcher that always returns true results in `wait_for_event_with_matcher`
-    /// functioning the same way as
-    /// `[wait_for_event](wait_for_event)`
+    /// really just further filters the event data. The same exact undefined behaviour mentioned in
+    /// the `Limitations` section of
+    /// [`wait_for_event`](crate::hci::HostInterface::wait_for_event)
+    /// will occur when the return of `wait_for_event_with_matcher` is awaited concurrently
+    /// with matchers that return `true` given the same
+    /// [`EventData`](crate::hci::events::EventsData) (the conditions for undefined behaviour
+    /// for `wait_for_event` still apply).
     pub fn wait_for_event_with_matcher<'a,P,D>(&'a self, event: events::Events, timeout: D, matcher: P)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
     where P: EventMatcher + Send + Sync + 'static,

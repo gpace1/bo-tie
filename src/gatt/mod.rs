@@ -227,9 +227,9 @@ impl<'a> IncludesAdder<'a>
 /// constructing with ServiceBuilder.
 ///
 /// This is created by the
-/// [`ServiceBuilder::into_characteristics_adder`](bo_tie::gatt::ServiceBuilder::into_characteristics_adder)
+/// [`ServiceBuilder::into_characteristics_adder`](crate::gatt::ServiceBuilder::into_characteristics_adder)
 /// or
-/// [`IncludesAdder::into_characteristics_adder`](bo_tie::gatt::IncludesAdder::into_characteristics_adder)
+/// [`IncludesAdder::into_characteristics_adder`](crate::gatt::IncludesAdder::into_characteristics_adder)
 /// functions.
 pub struct CharacteristicAdder<'a>
 {

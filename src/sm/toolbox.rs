@@ -455,7 +455,7 @@ pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
 /// This is the encrypted data generator for LE legacy. It generates 128-bit data from a 128-bit key
 /// using the AES-128 bit block cypher (see [FIPS-197](https://en.wikipedia.org/wiki/FIPS_197)).
 ///
-/// This function uses OpenSSL's [`aes`]( implementation to generate the Ciphertext.
+/// This function uses OpenSSL's aes implementation to generate the Ciphertext.
 ///
 /// This is the synchronous version of this function and doesn't rely on the HCI to encrypt the
 /// payload. Whether or not this function is faster then the asynchronous version

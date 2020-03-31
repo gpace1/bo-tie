@@ -3712,3 +3712,25 @@ events_markup! {
         SAMStatusChange{SAMStatusChangeData} -> 0x58,
     }
 }
+
+impl Events {
+    /// Check if an event can be masked
+    ///
+    /// This function checks that an event is maskable by the
+    /// [set event mask](crate::hci::cb::set_event_mask),
+    /// [set event mask page 2](crate::hci::cb::set_event_mask_page_2), or
+    /// [LE set event mask](crate::hci::le::mandatory::set_event_mask) HCI commands.
+    ///
+    /// The events
+    /// [`CommandComplete`](Events::CommandComplete),
+    /// [`CommandStatus`](Events::CommandStatus), and
+    /// [`NumberOfCompletedPackets`](Events::NumberOfCompletedPackets) are not maskable.
+    pub fn is_maskable(&self) -> bool {
+        match self {
+            Events::CommandComplete => false,
+            Events::CommandStatus => false,
+            Events::NumberOfCompletedPackets => false,
+            _ => true
+        }
+    }
+}

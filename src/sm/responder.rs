@@ -129,7 +129,7 @@ where C: ConnectionChannel,
     /// Send the Identity Resolving Key to the Master Device
     ///
     /// This function will send the IRK to the master device if the internal encryption flag is set
-    /// to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt)
+    /// to true by [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)
     /// and an IRK has been generated. An IRK is generated once
     /// [`process_command`](SlaveSecurityManager::process_command)
     /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry), however, since the return is a
@@ -155,7 +155,7 @@ where C: ConnectionChannel,
     /// Send the Connection Signature Resolving Key to the Master Device
     ///
     /// This function will send the CSRK to the master device if the internal encryption flag is set
-    /// to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt)
+    /// to true by [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)
     /// and an CSRK has been generated. An CSRK is generated once
     /// [`process_command`](SlaveSecurityManager::process_command)
     /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry), however, since the return is a
@@ -181,7 +181,8 @@ where C: ConnectionChannel,
     /// Send the public address to the Master Device.
     ///
     /// This will send `addr` as a Public Device Address to the Master Device if the internal
-    /// encryption flag is set to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt).
+    /// encryption flag is set to true by
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
     /// If the function returns false then `addr` isn't sent to the Master Device.
     pub fn send_pub_addr(&self, addr: crate::BluetoothDeviceAddress) -> bool {
         if self.link_encrypted {
@@ -195,7 +196,8 @@ where C: ConnectionChannel,
     /// Send the static random address to the Master Device.
     ///
     /// This will send `addr` as a Static Random Device Address to the Master Device if the internal
-    /// encryption flag is set to true by [`con_encrypt`](SlaveSecurityManager::con_encrypt).
+    /// encryption flag is set to true by
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
     /// If the function returns false then `addr` isn't sent to the Master Device.
     ///
     /// # Warning
@@ -217,9 +219,9 @@ where C: ConnectionChannel,
     /// Errors will be returned if the request is not something that can be processed by the slave
     /// or there was something wrong with the request message.
     ///
-    /// This function will return a [`LazyEncrypt`](super::LazyEncrypt) which can be used to handle
-    /// an encryption request from the master device. In order to distribute the IRK, CSRK, and
-    /// public or static random address, the link must be encrypted first.
+    /// This function will return a ['KeyDBEntry'](crate::sm::KeyDBEntry) with the newly generated
+    /// Long Term Key (LTK). **This key information will only last as long as the master does not
+    /// retry pairing or the master causes this responder to return a pairing error to the master**.
     ///
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
