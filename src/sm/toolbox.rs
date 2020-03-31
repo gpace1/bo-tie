@@ -76,10 +76,16 @@ impl super::CommandData for PeerPubKey {
         let ec_group = EcGroup::from_curve_name(ECC_NAME).unwrap();
         let mut bg_num = BigNumContext::new().unwrap();
 
-        ec_key.public_key()
+        let mut key = ec_key.public_key()
             .to_bytes(&ec_group,PointConversionForm::UNCOMPRESSED, &mut bg_num)
             .unwrap()[PUB_KEY_RANGE]
-            .to_vec()
+            .to_vec();
+
+        // Reverse the keys from little endian to big endian
+        key[..32].reverse(); // x
+        key[32..].reverse(); // y
+
+        key
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
@@ -127,8 +133,7 @@ pub fn ah(k: u128, r: [u8;3]) -> [u8; 3]{
     let cypher_text = e(k,r_padded ) ;
 
     [ cypher_text as u8 , (cypher_text >> 8) as u8 , (cypher_text >> 16) as u8 ]
-}
-
+} 
 /// Phase 2 (LE legacy) confirm value function
 ///
 /// # Inputs
