@@ -637,8 +637,8 @@ where C: ConnectionChannel,
 
                     *db_keys = super::KeyDBEntry{
                         ltk: ltk.into(),
-                        irk: toolbox::rand_u128().into(),
-                        csrk: (toolbox::rand_u128(), 0).into(),
+                        irk: None,
+                        csrk: None,
                         peer_irk: None,
                         peer_addr: if self.initiator_address_is_random {
                                 super::BluAddr::StaticRandom(*self.initiator_address)
