@@ -125,7 +125,7 @@ where C: ConnectionChannel,
     /// peer device. This is a deliberate extra step to ensure that the functions `send_irk`,
     /// `send_csrk`, `send_pub_addr`, and `send_rand_addr` are only used when the link is encrypted.
     pub fn set_encrypted(&mut self, is_encrypted: bool) { self.link_encrypted = is_encrypted }
-
+o
     /// Send the Identity Resolving Key to the Master Device
     ///
     /// This function will send the IRK to the master device if the internal encryption flag is set
@@ -222,6 +222,10 @@ where C: ConnectionChannel,
     /// This function will return a ['KeyDBEntry'](crate::sm::KeyDBEntry) with the newly generated
     /// Long Term Key (LTK). **This key information will only last as long as the master does not
     /// retry pairing or the master causes this responder to return a pairing error to the master**.
+    /// *After pairing is complete*, the returned `KeyDBEntry` will only contain the LTK and the
+    /// peer address used during pairing as the peer identity address. The return will be updated
+    /// further with peer keys only when `set_encryption` is used to indicate that the connection
+    /// is encrypted.
     ///
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
