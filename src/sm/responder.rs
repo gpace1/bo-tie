@@ -125,7 +125,7 @@ where C: ConnectionChannel,
     /// peer device. This is a deliberate extra step to ensure that the functions `send_irk`,
     /// `send_csrk`, `send_pub_addr`, and `send_rand_addr` are only used when the link is encrypted.
     pub fn set_encrypted(&mut self, is_encrypted: bool) { self.link_encrypted = is_encrypted }
-o
+
     /// Send the Identity Resolving Key to the Master Device
     ///
     /// This function will send the IRK to the master device if the internal encryption flag is set
