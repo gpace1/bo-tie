@@ -70,8 +70,8 @@ where C: ConnectionChannel
             auth_req,
             initiator_key_distribution: key_dist.clone(),
             responder_key_distribution: key_dist,
-            initiator_address: self.remote_address,
-            responder_address: self.this_address,
+            initiator_address: *self.remote_address,
+            responder_address: *self.this_address,
             initiator_address_is_random: self.remote_address_is_random,
             responder_address_is_random: self.this_address_is_random,
             pairing_data: None,
@@ -89,8 +89,8 @@ pub struct SlaveSecurityManager<'a,  C> {
     encryption_key_size_max: usize,
     initiator_key_distribution: Vec<pairing::KeyDistributions>,
     responder_key_distribution: Vec<pairing::KeyDistributions>,
-    initiator_address: &'a crate::BluetoothDeviceAddress,
-    responder_address: &'a crate::BluetoothDeviceAddress,
+    initiator_address: crate::BluetoothDeviceAddress,
+    responder_address: crate::BluetoothDeviceAddress,
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
     pairing_data: Option<PairingData>,
@@ -633,12 +633,12 @@ where C: ConnectionChannel,
             }) => {
 
                 let a_addr = toolbox::PairingAddress::new(
-                    self.initiator_address,
+                    &self.initiator_address,
                     self.initiator_address_is_random
                 );
 
                 let b_addr = toolbox::PairingAddress::new(
-                    self.responder_address,
+                    &self.responder_address,
                     self.responder_address_is_random
                 );
 
@@ -696,9 +696,9 @@ where C: ConnectionChannel,
                         csrk: None,
                         peer_irk: None,
                         peer_addr: if self.initiator_address_is_random {
-                                super::BluAddr::StaticRandom(*self.initiator_address)
+                                super::BluAddr::StaticRandom(self.initiator_address)
                             } else {
-                                super::BluAddr::Public(*self.initiator_address)
+                                super::BluAddr::Public(self.initiator_address)
                             }.into(),
                         peer_csrk: None,
                     }.into();
