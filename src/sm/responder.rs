@@ -126,7 +126,58 @@ where C: ConnectionChannel,
     /// `send_csrk`, `send_pub_addr`, and `send_rand_addr` are only used when the link is encrypted.
     pub fn set_encrypted(&mut self, is_encrypted: bool) { self.link_encrypted = is_encrypted }
 
-    /// Send the Identity Resolving Key to the Master Device
+    /// Send a new Identity Resolving Key to the Master Device
+    ///
+    /// This function will generate and send a new CSRK to the master device if the internal
+    /// encryption flag is set to true by
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
+    ///
+    /// An IRK is generated if input `irk` is `None`.
+    ///
+    /// If the encryption flag is true, the return value is either input `irk` or the generated IRK.
+    pub fn send_new_irk<Irk>(&mut self, irk: Irk) -> Option<u128> where Irk: Into<Option<u128>>{
+        if self.link_encrypted {
+
+            // using or_else because it will only generate a random number if needed
+            let irk_opt = irk.into().or_else(|| Some(toolbox::rand_u128()) );
+
+            if let Some( PairingData { db_keys: Some( super::KeyDBEntry { ref mut irk, ..}), .. }) = self.pairing_data {
+                *irk = irk_opt
+            }
+
+            irk_opt
+        } else {
+            None
+        }
+    }
+
+    /// Send a new Connection Signature Resolving Key to the Master Device
+    ///
+    /// This function will generate and send a new CSRK to the master device if the internal
+    /// encryption flag is set to true by
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
+    ///
+    /// A CSRK is generated if input `csrk` is `None`. There is no input for the sign counter as
+    /// the CSRK is considered a new value, thus the sign counter is 0.
+    ///
+    /// If the encryption flag is true, the return value is either input 'csrk' the generated CSRK.
+    pub fn send_new_csrk<Csrk>(&mut self, csrk: Csrk) -> Option<u128> where Csrk: Into<Option<u128>> {
+        if self.link_encrypted {
+
+            // using or_else because it will only generate a random number if needed
+            let csrk_opt = csrk.into().or_else(|| Some(toolbox::rand_u128()) );
+
+            if let Some( PairingData { db_keys: Some( super::KeyDBEntry { ref mut csrk, ..}), .. }) = self.pairing_data {
+                *csrk = csrk_opt.map(|csrk| (csrk, 0) );
+            }
+
+            csrk_opt
+        } else {
+            None
+        }
+    }
+
+    /// Resend the Identity Resolving Key to the Master Device
     ///
     /// This function will send the IRK to the master device if the internal encryption flag is set
     /// to true by [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)
@@ -135,7 +186,7 @@ where C: ConnectionChannel,
     /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry), however, since the return is a
     /// mutable, you can replace the IRK with `None` which would also cause this function to
     /// return false. If the function returns false then the IRK isn't sent to the Master Device.
-    pub fn send_irk(&self) -> bool {
+    pub fn resend_irk(&self) -> bool {
         if self.link_encrypted {
             if let Some(irk) = self.pairing_data.as_ref()
                 .and_then(|pd| pd.db_keys.as_ref() )
@@ -152,7 +203,7 @@ where C: ConnectionChannel,
         }
     }
 
-    /// Send the Connection Signature Resolving Key to the Master Device
+    /// Resend the Connection Signature Resolving Key to the Master Device
     ///
     /// This function will send the CSRK to the master device if the internal encryption flag is set
     /// to true by [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)
@@ -161,7 +212,7 @@ where C: ConnectionChannel,
     /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry), however, since the return is a
     /// mutable, you can replace the CSRK with `None` which would also cause this function to
     /// return false. If the function returns false then the CSRK isn't sent to the Master Device.
-    pub fn send_csrk(&self) -> bool {
+    pub fn resend_csrk(&self) -> bool {
         if self.link_encrypted {
             if let Some(csrk) = self.pairing_data.as_ref()
                 .and_then(|pd| pd.db_keys.as_ref() )
