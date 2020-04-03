@@ -145,6 +145,8 @@ where C: ConnectionChannel,
                 *irk = irk_opt
             }
 
+            self.send(encrypt_info::IdentityInformation::new(irk_opt.unwrap()));
+
             irk_opt
         } else {
             None
@@ -170,6 +172,8 @@ where C: ConnectionChannel,
             if let Some( PairingData { db_keys: Some( super::KeyDBEntry { ref mut csrk, ..}), .. }) = self.pairing_data {
                 *csrk = csrk_opt.map(|csrk| (csrk, 0) );
             }
+
+            self.send(encrypt_info::SigningInformation::new(csrk_opt.unwrap()));
 
             csrk_opt
         } else {
