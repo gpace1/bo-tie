@@ -9,7 +9,6 @@ use super::{
     KeyGenerationMethod,
     pairing,
     PairingData,
-    SecurityManager,
     toolbox,
 };
 
@@ -288,34 +287,26 @@ where C: ConnectionChannel,
     pub fn process_command<'s>(&'s mut self, acl_data: &'s crate::l2cap::AclData )
     -> Result<Option<&'s mut super::KeyDBEntry>, Error>
     {
-        if acl_data.get_channel_id() != super::L2CAP_CHANNEL_ID {
-            return Err(Error::IncorrectL2capChannelId)
-        }
+        use core::convert::TryFrom;
 
-        let received_data = acl_data.get_payload();
+        let command = CommandType::try_from(acl_data)
+            .map_err(|e| { self.send_err(pairing::PairingFailedReason::UnspecifiedReason); e } )?;
 
-        if received_data.len() > SecurityManager::SMALLEST_PACKET_SIZE {
+        let payload = &acl_data.get_payload()[1..];
 
-            let (d_type, payload) = received_data.split_at(1);
-
-            match CommandType::try_from_val(d_type[0]) {
-                Ok( CommandType::PairingRequest ) => self.p_pairing_request(payload),
-                Ok( CommandType::PairingConfirm ) => self.p_pairing_confirm(payload) ,
-                Ok( CommandType::PairingPublicKey ) => self.p_pairing_public_key(payload),
-                Ok( CommandType::PairingRandom ) => self.p_pairing_random(payload),
-                Ok( CommandType::PairingFailed ) => self.p_pairing_failed(payload),
-                Ok( CommandType::PairingDHKeyCheck ) => self.p_pairing_dh_key_check(payload),
-                Ok( CommandType::IdentityInformation ) => self.p_identity_info(payload),
-                Ok( CommandType::IdentityAddressInformation ) => self.p_identity_address_info(payload),
-                Ok( CommandType::SigningInformation ) => self.p_signing_info(payload),
-                Ok( cmd @ CommandType::MasterIdentification ) | // Legacy SM, not supported
-                Ok( cmd @ CommandType::EncryptionInformation ) | // Legacy SM, not supported
-                Ok( cmd ) => self.p_command_not_supported(cmd),
-                Err( cmd ) => self.p_unknown_command(cmd),
-            }
-
-        } else {
-            self.p_bad_data_len()
+        match command {
+            CommandType::PairingRequest => self.p_pairing_request(payload),
+            CommandType::PairingConfirm => self.p_pairing_confirm(payload) ,
+            CommandType::PairingPublicKey => self.p_pairing_public_key(payload),
+            CommandType::PairingRandom => self.p_pairing_random(payload),
+            CommandType::PairingFailed => self.p_pairing_failed(payload),
+            CommandType::PairingDHKeyCheck => self.p_pairing_dh_key_check(payload),
+            CommandType::IdentityInformation => self.p_identity_info(payload),
+            CommandType::IdentityAddressInformation => self.p_identity_address_info(payload),
+            CommandType::SigningInformation => self.p_signing_info(payload),
+            cmd @ CommandType::MasterIdentification | // Legacy SM, not supported
+            cmd @ CommandType::EncryptionInformation | // Legacy SM, not supported
+            cmd => self.p_command_not_supported(cmd),
         }
     }
 
@@ -334,18 +325,6 @@ where C: ConnectionChannel,
         self.pairing_data = None;
 
         self.send(pairing::PairingFailed::new(fail_reason));
-    }
-
-    fn p_bad_data_len(&mut self) -> Result<Option<&mut super::KeyDBEntry>, Error> {
-        self.send_err(pairing::PairingFailedReason::UnspecifiedReason);
-
-        Err( Error::Size )
-    }
-
-    fn p_unknown_command(&mut self, err: Error) -> Result<Option<&mut super::KeyDBEntry>, Error> {
-        self.send_err(pairing::PairingFailedReason::CommandNotSupported);
-
-        Err(err)
     }
 
     fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<Option<&mut super::KeyDBEntry>, Error> {

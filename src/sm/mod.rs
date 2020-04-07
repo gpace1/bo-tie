@@ -39,6 +39,7 @@
 
 use alloc::vec::Vec;
 use serde::{Serialize, Deserialize};
+use crate::l2cap::AclData;
 
 pub mod toolbox;
 pub mod pairing;
@@ -130,6 +131,48 @@ impl CommandType {
             0xd => Ok( CommandType::PairingDHKeyCheck ),
             0xe => Ok( CommandType::PairingKeyPressNotification ),
             _   => Err( Error::Value)
+        }
+    }
+}
+
+impl core::convert::TryFrom<&'_ AclData> for CommandType {
+    type Error = Error;
+
+    /// Try to get the CommandType from AclData
+    ///
+    /// This rigidly checks the AclData to get the CommandType. If the channel identifier is
+    /// incorrect, the payload does not have a valid value for the command field, or the payload
+    /// length is incorrect, an error is returned.
+    fn try_from(acl_data: &'_ AclData) -> Result<Self, Self::Error> {
+
+        if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
+            return Err(Error::IncorrectL2capChannelId)
+        }
+
+        let possible_type = CommandType::try_from_val(
+            *acl_data.get_payload().get(0).ok_or_else(|| Error::Size)? )?;
+
+        let correct_packet_len = match possible_type {
+            CommandType::PairingRequest |
+            CommandType::PairingResponse => 7,
+            CommandType::PairingConfirm |
+            CommandType::PairingRandom => 17,
+            CommandType::PairingFailed => 2,
+            CommandType::EncryptionInformation => 17,
+            CommandType::MasterIdentification => 11,
+            CommandType::IdentityInformation => 17,
+            CommandType::IdentityAddressInformation => 8,
+            CommandType::SigningInformation => 17,
+            CommandType::SecurityRequest => 2,
+            CommandType::PairingPublicKey => 65,
+            CommandType::PairingDHKeyCheck => 17,
+            CommandType::PairingKeyPressNotification => 2,
+        };
+
+        if correct_packet_len == acl_data.get_payload().len() {
+            Ok(possible_type)
+        } else {
+            Err(Error::Size)
         }
     }
 }
