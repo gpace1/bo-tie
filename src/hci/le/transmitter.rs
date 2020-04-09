@@ -53,8 +53,8 @@ pub mod read_advertising_channel_tx_power {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-                                 -> impl Future<Output=Result<TxPower, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<TxPower, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -117,8 +117,8 @@ pub mod transmitter_test{
         channel: Frequency,
         payload: TestPayload,
         payload_length: u8 )
-        -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
 
         let parameters = CmdParameter {
@@ -150,7 +150,7 @@ pub mod set_advertising_data {
 
     /// Advertising data
     ///
-    /// The Adevertising data is made up of AD Structs. The maximum amount of bytes a
+    /// The Advertising data is made up of AD Structs. The maximum amount of bytes a
     /// regular advertising broadcast can send is 30 bytes (look at extended
     /// advertising for a larger payload). The total payload is 1 byte for the length,
     /// and 30 bytes for the AD structures. The data can consist of as many AD structs
@@ -165,28 +165,7 @@ pub mod set_advertising_data {
     impl AdvertisingData {
 
         /// Create an empty advertising data
-        ///
-        /// This is exactly the same as the function early_terminate, but makes more
-        /// "readable" sense to use this in conjuntion with try_push.
-        #[inline]
         pub fn new() -> Self {
-            Self::early_terminate()
-        }
-
-        /// Ealy termination of advertising
-        ///
-        /// This can also be use to build AdvertisingData object from an "empty" state,
-        /// but it is recommended to use the try_from method.
-        ///
-        /// ```rust
-        /// use bo_tie_linux::hci::le::transmitter::command::set_advertising_data::{ADStruct,AdvertisingData};
-        ///
-        /// // try to use the try_from method instead of doing it this way.
-        /// let mut ad = AdvertisingData::early_terminate();
-        ///
-        /// ad.try_push( ADStruct {ad_type: 0x01u8, data: &[0x00u8]} ).unwrap();
-        /// ```
-        pub fn early_terminate() -> Self {
             AdvertisingData{
                 length: 0,
                 payload: Payload::default(),
@@ -245,11 +224,18 @@ pub mod set_advertising_data {
 
     impl_status_return!(COMMAND);
 
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, adv_data: AdvertisingData )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    pub fn send<'a, T: 'static, A>( hci: &'a HostInterface<T>, adv_data: A )
+    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    where T: HostControllerInterface,
+          A: Into<Option<AdvertisingData>>,
     {
-        ReturnedFuture( hci.send_command(adv_data, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        if let Some(data) = adv_data.into() {
+            ReturnedFuture( hci.send_command(data, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        } else {
+            let data = AdvertisingData::new();
+
+            ReturnedFuture( hci.send_command( data, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        }
     }
 
 }
