@@ -304,10 +304,10 @@ impl GapServiceBuilder {
 
     /// Make a new `GapServiceBuilder`
     ///
-    /// The `device_name` is a readable string for the client. The appperance is an assigned number
-    /// to indiciate to the client the external appearance of the device. Both these fields are
-    /// optional with `device_name` defaulting to an empty string and 'unknown apperance'
-    pub fn new<'a,D,A>(device_name: D, apperance: A) -> Self
+    /// The `device_name` is a readable string for the client. The apppearance is an assigned number
+    /// to indicate to the client the external appearance of the device. Both these fields are
+    /// optional with `device_name` defaulting to an empty string and appearance as 'unknown appearance'
+    pub fn new<'a,D,A>(device_name: D, appearance: A) -> Self
     where D: Into<Option<&'a str>>,
           A: Into<Option<u16>>
     {
@@ -315,10 +315,10 @@ impl GapServiceBuilder {
         use att::AttributePermissions;
 
         let device_name_props = [Properties::Read].to_vec();
-        let apperance_props   = [Properties::Read].to_vec();
+        let appearance_props = [Properties::Read].to_vec();
 
         let device_name_type = UUID::from_u16(0x2a00);
-        let apperance_type   = UUID::from_u16(0x2a01);
+        let appearance_type = UUID::from_u16(0x2a01);
 
         let device_name_val: Box<str> = if let Some(name) = device_name.into() {
             name.into()
@@ -326,14 +326,14 @@ impl GapServiceBuilder {
             "".into()
         };
 
-        let apperance_val = if let Some(appr) = apperance.into() {
+        let apperance_val = if let Some(appr) = appearance.into() {
             Box::new(appr)
         } else {
             Box::new( Self::UNKNOWN_APPERANCE)
         };
 
         let device_name_att_perms = [AttributePermissions::Read].to_vec();
-        let apperance_att_perms = [AttributePermissions::Read].to_vec();
+        let appearance_att_perms = [AttributePermissions::Read].to_vec();
 
         let mut server_builder = ServerBuilder::new_empty();
 
@@ -341,12 +341,14 @@ impl GapServiceBuilder {
         .into_characteristics_adder()
         .build_characteristic(device_name_props, device_name_type, device_name_val, device_name_att_perms)
         .finish_characteristic()
-        .build_characteristic(apperance_props, apperance_type, apperance_val, apperance_att_perms)
+        .build_characteristic(appearance_props, appearance_type, apperance_val, appearance_att_perms)
         .finish_characteristic()
         .finish_service();
 
         GapServiceBuilder { server_builder }
     }
+
+
 }
 
 /// Constructor of a GATT server
