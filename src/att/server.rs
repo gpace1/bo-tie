@@ -280,7 +280,7 @@ where C: l2cap::ConnectionChannel
 
     /// Check if the client has acceptable permissions for the attribute with the provided handle
     ///
-    /// This function checks two sets of premissions against the both the client and the attribute
+    /// This function checks two sets of permissions against the both the client and the attribute
     /// at `handle`. The `required` input is used to check that both the client and attribute have
     /// all permissions in `required`. The `restricted` input is a list of permissions that the
     /// client must have if (but only it) the attribute has them.
