@@ -122,7 +122,7 @@ impl Declaration {
 
     const TYPE: UUID = UUID::from_u16(0x2803);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = &[att::AttributePermissions::Read];
+    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 struct ValueDeclaration<V> {
@@ -183,7 +183,7 @@ impl att::TransferFormatInto for Vec<ExtendedProperties> {
 impl ExtendedProperties {
     const TYPE: UUID = UUID::from_u16(0x2803);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = &[att::AttributePermissions::Read];
+    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 pub struct UserDescription {
@@ -248,11 +248,7 @@ impl att::TransferFormatInto for ClientConfiguration {
 impl ClientConfiguration {
     const TYPE: UUID = UUID::from_u16(2903);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = &[
-        att::AttributePermissions::Read,
-        att::AttributePermissions::Authentication(att::AttributeRestriction::Write),
-        att::AttributePermissions::Authorization(att::AttributeRestriction::Write)
-    ];
+    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 #[derive(PartialEq)]
@@ -289,11 +285,7 @@ impl att::TransferFormatInto for ServerConfiguration {
 impl ServerConfiguration {
     const TYPE: UUID = UUID::from_u16(2903);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = &[
-        att::AttributePermissions::Read,
-        att::AttributePermissions::Authentication(att::AttributeRestriction::Write),
-        att::AttributePermissions::Authorization(att::AttributeRestriction::Write)
-    ];
+    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 pub struct CharacteristicBuilder<'a, C, V> {

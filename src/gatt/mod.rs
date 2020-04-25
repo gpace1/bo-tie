@@ -1,7 +1,4 @@
-use alloc::{
-    boxed::Box,
-    vec::Vec,
-};
+use alloc::vec::Vec;
 use crate::{ att, l2cap, UUID};
 use crate::att::TransferFormatInto;
 
@@ -11,7 +8,9 @@ struct ServiceDefinition;
 
 impl ServiceDefinition {
     /// The permissions of the service definitions is just Read Only
-    const PERMISSIONS: &'static [att::AttributePermissions] = &[att::AttributePermissions::Read];
+    const PERMISSIONS: &'static [att::AttributePermissions] = &[
+        att::AttributePermissions::Read(att::AttributeRestriction::None)
+    ];
 
     /// The primary service UUID
     const PRIMARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2800);
@@ -72,7 +71,7 @@ impl att::TransferFormatInto for ServiceInclude {
 impl ServiceInclude {
     const TYPE: UUID = UUID::from_u16(0x2802);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = &[att::AttributePermissions::Read];
+    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 pub struct ServiceBuilder<'a>
@@ -291,64 +290,100 @@ impl Service {
     }
 }
 
-pub struct GapServiceBuilder {
-    server_builder: ServerBuilder
+pub struct GapServiceBuilder<'a> {
+    device_name: &'a str,
+    device_name_permissions: &'a [att::AttributePermissions],
+    device_appearance: u16,
+    device_appearance_permissions: &'a [att::AttributePermissions],
 }
 
-impl GapServiceBuilder {
+impl<'a> GapServiceBuilder<'a> {
     /// Service UUID
     const GAP_SERVICE_TYPE: UUID = UUID::from_u16(0x1800);
 
+    /// Device Name Characteristic UUID
+    const DEVICE_NAME_TYPE: UUID = UUID::from_u16(0x2a00);
+
+    /// Device Appearance Characteristic UUID
+    const DEVICE_APPEARANCE_TYPE: UUID = UUID::from_u16(0x2a01);
+
+    /// Default attribute permissions
+    const DEFAULT_ATTRIBUTE_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+
+    /// Device Name characteristic properties
+    const DEVICE_NAME_PROPERTIES: &'static [characteristic::Properties] = & [
+        characteristic::Properties::Read,
+    ];
+
+    /// Device Appearance characteristic properties
+    const DEVICE_APPEARANCE_PROPERTIES: &'static [characteristic::Properties] = &[
+        characteristic::Properties::Read,
+    ];
+
     /// Default Appearance
-    pub const UNKNOWN_APPERANCE: u16 = 0;
+    pub const UNKNOWN_APPEARANCE: u16 = 0;
 
     /// Make a new `GapServiceBuilder`
     ///
-    /// The `device_name` is a readable string for the client. The apppearance is an assigned number
+    /// The `device_name` is a readable string for the client. The appearance is an assigned number
     /// to indicate to the client the external appearance of the device. Both these fields are
     /// optional with `device_name` defaulting to an empty string and appearance as 'unknown appearance'
-    pub fn new<'a,D,A>(device_name: D, appearance: A) -> Self
+    pub fn new<D,A>(device_name: D, appearance: A) -> Self
     where D: Into<Option<&'a str>>,
           A: Into<Option<u16>>
     {
-        use characteristic::Properties;
-        use att::AttributePermissions;
+        GapServiceBuilder {
+            device_name: device_name.into().unwrap_or(""),
+            device_name_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
+            device_appearance: appearance.into().unwrap_or( Self::UNKNOWN_APPEARANCE ),
+            device_appearance_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
+        }
+    }
 
-        let device_name_props = [Properties::Read].to_vec();
-        let appearance_props = [Properties::Read].to_vec();
+    /// Set the attribute permissions for the device name characteristic
+    pub fn set_name_permissions(&mut self, permissions: &'a [att::AttributePermissions]) {
+        self.device_name_permissions = permissions
+    }
 
-        let device_name_type = UUID::from_u16(0x2a00);
-        let appearance_type = UUID::from_u16(0x2a01);
+    /// Set the attribute permissions for the device appearance characteristic
+    pub fn set_appearance_permissions(&mut self, permissions: &'a [att::AttributePermissions] ) {
+        self.device_appearance_permissions = permissions
+    }
 
-        let device_name_val: Box<str> = if let Some(name) = device_name.into() {
-            name.into()
-        } else {
-            "".into()
-        };
-
-        let apperance_val = if let Some(appr) = appearance.into() {
-            Box::new(appr)
-        } else {
-            Box::new( Self::UNKNOWN_APPERANCE)
-        };
-
-        let device_name_att_perms = [AttributePermissions::Read].to_vec();
-        let appearance_att_perms = [AttributePermissions::Read].to_vec();
+    fn into_gatt_service(self) -> ServerBuilder {
+        use alloc::string::ToString;
 
         let mut server_builder = ServerBuilder::new_empty();
 
         server_builder.new_service_constructor(Self::GAP_SERVICE_TYPE, true)
-        .into_characteristics_adder()
-        .build_characteristic(device_name_props, device_name_type, device_name_val, device_name_att_perms)
-        .finish_characteristic()
-        .build_characteristic(appearance_props, appearance_type, apperance_val, appearance_att_perms)
-        .finish_characteristic()
-        .finish_service();
+            .into_characteristics_adder()
+            .build_characteristic(
+                Self::DEVICE_NAME_PROPERTIES.to_vec(),
+                Self::DEVICE_NAME_TYPE,
+                self.device_name.to_string(),
+                self.device_name_permissions.to_vec())
+            .finish_characteristic()
+            .build_characteristic(
+                Self::DEVICE_APPEARANCE_PROPERTIES.to_vec(),
+                Self::DEVICE_APPEARANCE_TYPE,
+                self.device_appearance,
+                self.device_appearance_permissions.to_vec())
+            .finish_characteristic()
+            .finish_service();
 
-        GapServiceBuilder { server_builder }
+        server_builder
     }
+}
 
-
+impl Default for GapServiceBuilder<'_> {
+    fn default() -> Self {
+        GapServiceBuilder {
+            device_name: "",
+            device_appearance: GapServiceBuilder::UNKNOWN_APPEARANCE,
+            device_name_permissions: GapServiceBuilder::DEFAULT_ATTRIBUTE_PERMISSIONS,
+            device_appearance_permissions: GapServiceBuilder::DEFAULT_ATTRIBUTE_PERMISSIONS,
+        }
+    }
 }
 
 /// Constructor of a GATT server
@@ -373,14 +408,14 @@ impl ServerBuilder
         }
     }
 
-    /// Construct a new `ServicesBuiler`
+    /// Construct a new `ServicesBuilder`
     ///
     /// This will make a `ServiceBuilder` with the basic requirements for a GATT server. This
     /// server will only contain a *GAP* service with the characteristics *Device Name* and
     /// *Appearance*, but both of these characteristics contain no information.
     pub fn new() -> Self
     {
-        GapServiceBuilder::new("", GapServiceBuilder::UNKNOWN_APPERANCE).server_builder
+        GapServiceBuilder::default().into()
     }
 
     /// Construct a new `ServiceBuilder` with the provided GAP service builder
@@ -388,7 +423,7 @@ impl ServerBuilder
     /// The provided GAP service builder will be used to construct the required GAP service for the
     /// GATT server.
     pub fn new_with_gap(gap: GapServiceBuilder) -> Self {
-        gap.server_builder
+        gap.into_gatt_service()
     }
 
     /// Create a service constructor
@@ -422,6 +457,12 @@ impl ServerBuilder
     }
 }
 
+impl From<GapServiceBuilder<'_>> for ServerBuilder {
+    fn from(gap: GapServiceBuilder) -> Self {
+        Self::new_with_gap(gap)
+    }
+}
+
 pub struct Server<'c, C>
 {
     primary_services: Vec<Service>,
@@ -446,19 +487,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
     /// Read by group type permission check
     fn rbgt_permission_check(&self, service: &Service) -> Result<(), att::pdu::Error> {
-        const REQUIRED_PERMS: &[att::AttributePermissions] = &[
-            att::AttributePermissions::Read
-        ];
-
-        const RESTRICTED_PERMS: &[att::AttributePermissions] = &[
-            att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits128),
-            att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits192),
-            att::AttributePermissions::Encryption(att::AttributeRestriction::Read, att::EncryptionKeySize::Bits256),
-            att::AttributePermissions::Authentication(att::AttributeRestriction::Read),
-            att::AttributePermissions::Authorization(att::AttributeRestriction::Read),
-        ];
-
-        self.server.check_permission(service.service_handle, REQUIRED_PERMS, RESTRICTED_PERMS)
+        self.server.check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
     }
 
     fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
@@ -648,12 +677,12 @@ mod tests {
                 vec!(characteristic::Properties::Read),
                 UUID::from(0x1234u16),
                 Box::new(0usize),
-                vec!(att::AttributePermissions::Read)
+                vec!(att::AttributePermissions::Read(att::AttributeRestriction::None))
             )
             .set_extended_properties( vec!(characteristic::ExtendedProperties::ReliableWrite) )
             .set_user_description( characteristic::UserDescription::new(
                 "Test 1",
-                vec!(att::AttributePermissions::Read) )
+                vec!(att::AttributePermissions::Read(att::AttributeRestriction::None)) )
             )
             .set_client_configuration( vec!(characteristic::ClientConfiguration::Notification) )
             .set_server_configuration( vec!(characteristic::ServerConfiguration::Broadcast) )

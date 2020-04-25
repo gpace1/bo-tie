@@ -7,6 +7,51 @@
 //!
 //! This is implementation of the Attribute Protocol as defined in the Bluetooth Specification
 //! (version 5.0), Vol. 3, Part F.
+//!
+//! # Attribute Protocol Permissions
+//! When an attribute is created it is given permissions to *to determine* access of if by a
+//! client. Permission are *labels for access* to operations, of barriers granting entry for the
+//! client. No permission has any relation with any other permission, and no permission is
+//! inherently given to an attribute or the user by another permission. It is the operations of the
+//! Attribute Protocol or a higher layer protocol that determine what permissions are required to
+//! perform said operation.
+//!
+//! Attributes can only be written to or read from. Permissions restrict reads and writes for
+//! attribute protocol operations performed under open access, encryption, authentication, and
+//! authorization. Different operations require different restrictions, but most of the implemented
+//! Attribute Protocol operations check the permissions of an attribute before performing the
+//! operation. Most of these operations require that the attribute either be at least readable or
+//! writeable, but will check if those reads or writes also require either encryption,
+//! authentication, or authorization.
+//!
+//! Attribute permissions do not posses hierarchy or hereditary characteristics between one another.
+//! This can lead to seeming odd cases where it would seem that because an attribute was given
+//! a permissions it should have another, but the server will report an access error. If an
+//! attribute was only given the permission `Read(None)`, the server will only read the attribute to
+//! the client when the server grants the client the same permission. If the client had any other
+//! permissions except for `Read(None)`, such as `Read(Encryption(Bits128))`, the server would not
+//! read the attribute and would instead return an error to the client.
+//!
+//! ## Client Granted Permissions
+//! The server matches the required permissions of an operation against the permissions of the
+//! client. The server does not determine the permissions of the client, this is done by 'giving'
+//! permission to the client through either your application or some higher layer protocol. When a
+//! client requests an operation to be performed for specified attributes, the server will check the
+//! permissions of the attribute and the permissions of the client. The client will need the
+//! permissions required by the operation matched against the permissions of the attribute(s). If a
+//! permission check fails, then the server will return an error giving the reason for the failure.
+//!
+//! Operations will generally check a number of permissions (usually every type of Read or Write)
+//! against the permissions of the requested attribute and those given to the client. If any of the
+//! permissions to check for are in both the attribute and client, the operation is successfully
+//! performed for the client.
+//!
+//! ## Permission Errors
+//! If an operation cannot be performed because the client does not have the permission to access
+//! an attribute, an error is returned to the client describing the permission problem. However,
+//! it is often the case there are multiple types of permissions that a client can have to access
+//! the attribute, but only one of the errors can be described with the error PDU sent from the
+//! server to the client.
 
 use alloc::{
     boxed::Box,
@@ -30,7 +75,7 @@ pub const MIN_ATT_MTU_LE: u16 = 23;
 /// The minimum number of data bytes in an attribute protocol based packet for bluetooth BR/EDR
 pub const MIN_ATT_MTU_BR_EDR: u16 = 48;
 
-/// Avanced Encryption Standard (AES) key sizes
+/// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum EncryptionKeySize {
     Bits128,
@@ -61,37 +106,47 @@ impl Ord for EncryptionKeySize {
     }
 }
 
-/// Attribute premission restriction
+/// Attribute permission restrictions
 ///
-/// Some attributes permissions are restrictions regarding reading and writing permissions. For
-/// those permissions this enum will be used to specify whether the restriction is for reading,
-/// writing, or both.
+/// Attributes permissions can restrictions regarding reading and writing permissions. These are the
+/// possible attribute restrictions that can be enforced, with `None` representing no restriction
+/// on the operation.
+///
+/// There are three type of restrictions, `Encryption` (with the size of the encryption key),
+/// `Authentication`, and `Authorization`.
 #[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub enum AttributeRestriction {
-    Read,
-    Write
+    None,
+    Encryption(EncryptionKeySize),
+    Authentication,
+    Authorization,
 }
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
 pub enum AttributePermissions {
-    /// Readable attributes
-    Read,
-    /// Writeable attributes
-    Write,
-    /// Encryption Requirement
-    ///
-    /// Encryption is required to access the specified attribute permission(s)
-    /// A minimum key size may also be requred to access the specified
-    Encryption(AttributeRestriction, EncryptionKeySize),
-    /// Authentication Requirement
-    ///
-    /// Authentication is required to access the specified attribute permission(s)
-    Authentication(AttributeRestriction),
-    /// Authorization Requirement
-    ///
-    /// Authorization is required to access the specified attribute permission(s)
-    Authorization(AttributeRestriction),
+    /// Readable Access
+    Read(AttributeRestriction),
+    /// Writeable Access
+    Write(AttributeRestriction),
 }
+
+pub const FULL_READ_PERMISSIONS: &'static [AttributePermissions] = &[
+    AttributePermissions::Read(AttributeRestriction::None),
+    AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
+    AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
+    AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits256)),
+    AttributePermissions::Read(AttributeRestriction::Authorization),
+    AttributePermissions::Read(AttributeRestriction::Authentication),
+];
+
+pub const FULL_WRITE_PERMISSIONS: &'static [AttributePermissions] = &[
+    AttributePermissions::Write(AttributeRestriction::None),
+    AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
+    AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
+    AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits256)),
+    AttributePermissions::Write(AttributeRestriction::Authorization),
+    AttributePermissions::Write(AttributeRestriction::Authentication),
+];
 
 /// An Attribute
 ///
@@ -760,11 +815,14 @@ mod test {
     #[test]
     fn test_att_connection() {
         use std::thread;
-        use crate::l2cap::ConnectionChannel;
+        use crate::{
+            l2cap::ConnectionChannel,
+            UUID
+        };
 
-        const UUID_1: u16 = 1;
-        const UUID_2: u16 = 2;
-        const UUID_3: u16 = 3;
+        const UUID_1: UUID = UUID::from_u16(1);
+        const UUID_2: UUID = UUID::from_u16(2);
+        const UUID_3: UUID = UUID::from_u16(3);
 
         let test_val_1 = 33usize;
         let test_val_2 = 64u64;
@@ -787,20 +845,20 @@ mod test {
             let mut server = server::Server::new( &c2, 256, None );
 
             let attribute_0 = Attribute::new(
-                From::from(UUID_1),
-                [Read, Write].to_vec(),
+                UUID_1,
+                [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
                 0usize
             );
 
             let attribute_1 = Attribute::new(
-                From::from(UUID_2),
-                [Read, Write].to_vec(),
+                UUID_2,
+                [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
                 0u64
             );
 
             let attribute_3 = Attribute::new(
-                From::from(UUID_3),
-                [Read, Write].to_vec(),
+                UUID_3,
+                [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
                 0i8
             );
 
@@ -890,6 +948,7 @@ mod test {
         assert_eq!(test_val_3, read_val_3);
 
         t.join()
-            .map_err(|e| panic!("Thread Failed to join: {}", e.downcast_ref::<String>().unwrap()) );
+            .map_err(|e| format!("Thread Failed to join: {}", e.downcast_ref::<String>().unwrap()) )
+            .unwrap();
     }
 }

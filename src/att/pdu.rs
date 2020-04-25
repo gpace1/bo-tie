@@ -297,7 +297,7 @@ impl core::fmt::Display for Error {
                 write!(f, "No Error")
             },
             Error::InvalidHandle => {
-                write!(f, "The attribute handle given was not valid on this server")
+                write!(f, "Invalid attribute handle")
             },
             Error::ReadNotPermitted => {
                 write!(f, "The attribute cannot be read")
@@ -306,7 +306,7 @@ impl core::fmt::Display for Error {
                 write!(f, "The attribute cannot be written")
             },
             Error::InvalidPDU => {
-                write!(f, "The attribute PDU was invalid")
+                write!(f, "The attribute protocol data unit (PDU) was invalid")
             },
             Error::InsufficientAuthentication => {
                 write!(f, "The attribute requires authentication before it can be read or written")
@@ -315,7 +315,7 @@ impl core::fmt::Display for Error {
                 write!(f, "Attribute server does not support the request received from the client")
             },
             Error::InvalidOffset => {
-                write!(f, "Offset specified was past the end of the attribute")
+                write!(f, "The attribute value byte or word offset was not valid")
             },
             Error::InsufficientAuthorization => {
                 write!(f, "The attribute requires authorization before it can be read or written")
@@ -330,19 +330,19 @@ impl core::fmt::Display for Error {
                 write!(f, "The attribute cannot be read using the Read Blob Request")
             },
             Error::InsufficientEncryptionKeySize => {
-                write!(f, "The Encryption Key Size used for encrypting this link is insufficient")
+                write!(f, "The Encryption Key Size used for encrypting was insufficient for reading or writing this attribute")
             },
             Error::InvalidAttributeValueLength => {
-                write!(f, "The attribute value length is invalid for the operation")
+                write!(f, "The attribute value length was invalid for the operation")
             },
             Error::UnlikelyError => {
-                write!(f, "The attribute request that was requested has encountered an error that was unlikely, and therefore could not be completed as requested")
+                write!(f, "The request could not be completed because of an unlikely error")
             },
             Error::InsufficientEncryption => {
                 write!(f, "The attribute requires encryption before it can be read or written")
             },
             Error::UnsupportedGroupType => {
-                write!(f, "The attribute type is not a supported grouping attribute as defined by a higher layer specification")
+                write!(f, "The attribute type is not a supported grouping type")
             },
             Error::InsufficientResources => {
                 write!(f, "Insufficient Resources to complete the request")

@@ -3,12 +3,15 @@ use alloc::{
     boxed::Box,
 };
 use super::{
+    AttributePermissions,
+    AttributeRestriction,
+    client::ClientPduName,
     pdu,
     TransferFormatError,
-    client::ClientPduName
+    TransferFormatInto,
+    TransferFormatTryFrom,
 };
 use crate::l2cap;
-use crate::att::{TransferFormatTryFrom, TransferFormatInto};
 
 macro_rules! log_debug {
     ( $arg1:expr $(, $args:expr)* ) => { log::debug!(concat!("(ATT) ", $arg1) $(, $args)*) }
@@ -185,7 +188,7 @@ pub struct Server<'c, C>
     /// value as defined in the connection channel will be used.
     set_mtu: Option<u16>,
     connection: &'c C,
-    attributes: Vec<Box<dyn ServerAttribute + Send + Sync >>,
+    attributes: ServerAttributes,
     /// The permissions the client currently has
     given_permissions: Vec<super::AttributePermissions>,
 }
@@ -214,11 +217,7 @@ where C: l2cap::ConnectionChannel
             super::MIN_ATT_MTU_LE
         };
 
-        let attributes = match server_attributes.into()
-        {
-            Some(a) => a.attributes,
-            None => ServerAttributes::new().attributes,
-        };
+        let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
         Self {
             max_mtu: actual_max_mtu,
@@ -251,7 +250,7 @@ where C: l2cap::ConnectionChannel
 
         let ret = self.attributes.len().try_into().expect("Exceeded attribute handle limit");
 
-        self.attributes.push( Box::new( ServerAttEntry::from(attribute) ) );
+        self.attributes.push( attribute );
 
         ret
     }
@@ -280,47 +279,25 @@ where C: l2cap::ConnectionChannel
 
     /// Check if the client has acceptable permissions for the attribute with the provided handle
     ///
-    /// This function checks two sets of permissions against the both the client and the attribute
-    /// at `handle`. The `required` input is used to check that both the client and attribute have
-    /// all permissions in `required`. The `restricted` input is a list of permissions that the
-    /// client must have if (but only it) the attribute has them.
+    /// This function is used to check the permissions of a specified attribute against the
+    /// permissions given to the client to perform an operation. If a client has been given access
+    /// to perform the operation with the attribute, then the return will be `Ok`. When the client
+    /// does not have permission to perform the operation, an error containing the permission
+    /// failure reason is returned. There are to inputs for permission lists. `required` is the list
+    /// of permissions that the operation requires that both the attribute and the client have
+    /// permission for, and `restricted` are the permissions the client must have if the attribute
+    /// requires them.
     ///
-    /// To better explain with an example, say we are going to create a read attribute request and
-    /// response procedure. The responder (the server) would use this function by setting the `required`
-    /// input to contain the permission
-    /// [`Read`](super::AttributePermissions::Read)
-    /// and the `restricted` to contain
-    /// [`Encryption`](super::AttributePermissions::Encryption)([`Read`](super::AttributePermissions::Read),[`Bits128`](super::EncryptionKeySize::Bits128)),
-    /// [`Encryption`](super::AttributePermissions::Encryption)([`Read`](super::AttributePermissions::Read),[`Bits192`](super::EncryptionKeySize::Bits192)),
-    /// [`Encryption`](super::AttributePermissions::Encryption)([`Read`](super::AttributePermissions::Read),[`Bits256`](super::EncryptionKeySize::Bits256)),
-    /// [`Authentication`](super::AttributePermissions::Authentication)([`Read`](super::AttributePermissions::Read)),
-    /// and
-    /// [`Authorization`](super::AttributePermissions::Authorization)([`Read`](super::AttributePermissions::Read))
-    /// to see if the requester (the client) has the adequate rights to read the requested attribute.
-    /// If the attribute with handle `handle` doesn't have the read permission, then
-    /// `check_permission` will always return an error. However, to continue the example, lets say
-    /// that the permissions of the attribute are `Read`, `Encryption`(`Read`,`Bits128`), and
-    /// `Authentication`(`Read`), and `Write`. Now the attribue satisfies all the required permissions,
-    /// but the client also needs to have the required permission as well as
-    /// `Encryption`(`Read`,`Bits128`) and `Authentication`(`Read`) because they are in both the
-    /// restricted permissions and the attribute permissions. The client doesn't need the other
-    /// permissions in the restricted input because they are not part of the permissions set of the
-    /// attribute (also the client doesn't need the `write` permission because it is not part of
-    /// either the `required` or `restricted` lists)
+    /// The `required` input is the permissions that are needed to perform an operation, and the
+    /// operation cannot be done without both the attribute and client having these permissions. If
+    /// the operation is a read operation, it could have
+    /// [`Read`](crate::att::AttributePermissions::Read) as part of its list of 'required'
+    /// permissions. If either the attribute or client does not the `Read` permission then the
+    /// operation should fail with the error `ReadNotPermitted`.
     ///
-    /// # Inputs
-    /// - `required` -> The list of permissions that the attribute and client must have for the
-    /// operation
-    /// - `restricted` -> The list of all possible permissions that the client would be required to
-    /// have if the attribute had them. These permissions do not need to be part of the list of
-    /// permissions assigned to the attribute, they are just a list of permissions that the
-    /// attribute *could* have one or more of.
-    ///
-    /// # Note
-    /// There is no hierarcy of permissions, one permission doesn't supersede another. Also
-    /// the variant values further differentiate each permission, as such the variant
-    /// `Encryption`(`Read`, `Bits128`) is a different permission to
-    /// `Encryption`(`Read`, `Bits256`).
+    /// The `restricted` input is the permissions that are required by the client if the attribute
+    /// has them. These can be thought of as extra permissions required by the attribute to perform
+    /// the operation.
     ///
     /// # Errors
     /// If a permission is not satisfied, this function will return a corresponding error to the
@@ -341,17 +318,15 @@ where C: l2cap::ConnectionChannel
     ///
     /// If there is no attribute with the handle `handle`, then the error
     /// [`InvalidHandle`](super::pdu::Error::InvalidHandle) is returned.
-    pub fn check_permission(
+    pub fn check_permissions(
         &self,
         handle: u16,
-        required: &[super::AttributePermissions],
-        restricted: &[super::AttributePermissions])
+        permissions: &[super::AttributePermissions])
     -> Result<(), pdu::Error>
     {
-        let any_attribute = self.attributes.get(handle as usize)
-            .ok_or(super::pdu::Error::InvalidHandle)?;
+        let att = self.attributes.get(handle).ok_or(super::pdu::Error::InvalidHandle)?;
 
-        match self.validate_permissions(any_attribute.as_ref(), required, restricted) {
+        match self.validate_permissions(att, permissions) {
             None => Ok(()),
             Some(e) => Err(e),
         }
@@ -359,94 +334,88 @@ where C: l2cap::ConnectionChannel
 
     /// Validate the permissions of the attribute
     ///
-    /// There are two types of permissions that are checked for
-    /// * `required` - permissions that *both* the attribute and client must have
-    /// * `restricted` - permissions that the client must have if the the attribute has it.
+    /// This is used to validate a list of possible permissions required to perform an operation.
+    /// The `att` and client need to share at least one of the permissions in `permissions` for
+    /// this function to return without an error.
     ///
-    /// If there is an offending permission, that permission is returned. If 'None' is returned the
-    /// client has the required permissions to proceed with the operation.
+    /// If there is a permission issue, an error corresponding to the missing permission is
+    /// returned. This error will be the first permission in `permissions` that is also a part of
+    /// the permission list for the attribute. If the attribute does not have any of the permissions
+    /// in `permissions` then an `Authorization` error is returned.
+    ///
+    /// If 'None' is returned the client and attribute have the required permissions to proceed with
+    /// the operation.
     fn validate_permissions(&self,
         att: &dyn ServerAttribute,
-        required: &[super::AttributePermissions],
-        restricted: &[super::AttributePermissions])
-    -> Option<pdu::Error>
+        permissions: &[super::AttributePermissions]
+    ) -> Option<pdu::Error>
     {
-        let attribute_permissions = att.get_permissions();
-
         // Both closures for the `filter` functions return true when a permission is not valid. The
         // the closure provided to `map` is only invoked when a permission check fails.
-        required.iter()
-        .filter(|&&p| {
-            attribute_permissions.iter().find(|&&x| x == p).is_none() ||
-            self.given_permissions.iter().find(|&&x| x == p).is_none()
-        })
-        .chain(
-            restricted.iter()
-            .filter(|&&p| {
-                attribute_permissions.iter().find(|&&x| x == p).is_some() &&
-                self.given_permissions.iter().find(|&&x| x == p).is_none()
+        match permissions.iter()
+            .skip_while(|&p| {
+                !att.get_permissions().contains(p) || !self.given_permissions.contains(p)
             })
-        )
-        .map(|p| {
-            // Map the invalid permission to it's corresponding error
-            match p {
-                super::AttributePermissions::Read => pdu::Error::ReadNotPermitted,
-                super::AttributePermissions::Write => pdu::Error::WriteNotPermitted,
-                super::AttributePermissions::Encryption(rest, _) => {
-                    attribute_permissions.iter().find(|&&x| {
-                        match x {
-                            super::AttributePermissions::Encryption(x_rest, _) => *rest == x_rest,
-                            _ => false
-                        }
-                    })
-                    .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize) )
-                    .or_else( || Some(pdu::Error::InsufficientEncryption) )
-                    .unwrap()
-                }
-                super::AttributePermissions::Authentication(_) => pdu::Error::InsufficientAuthentication,
-                super::AttributePermissions::Authorization(_) => pdu::Error::InsufficientAuthorization,
-            }
-        })
-        .nth(0) // return the first offending permission, if any.
+            .nth(0)
+        {
+            Some(_) => None,
+            None => permissions.iter()
+                .find(|&&p| att.get_permissions().iter().find(|&&x| x == p).is_some())
+                .map(|&p| // Map the invalid permission to it's corresponding error
+                    match p {
+                        AttributePermissions::Read(AttributeRestriction::None) =>
+                            pdu::Error::ReadNotPermitted,
+
+                        AttributePermissions::Write(AttributeRestriction::None) =>
+                            pdu::Error::WriteNotPermitted,
+
+                        AttributePermissions::Read(AttributeRestriction::Encryption(_)) =>
+                            self.given_permissions.iter().find(|&&x| {
+                                match x {
+                                    AttributePermissions::Read(AttributeRestriction::Encryption(_)) => true,
+                                    _ => false
+                                }
+                            })
+                            .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize) )
+                            .or_else( || Some(pdu::Error::InsufficientEncryption) )
+                            .unwrap(),
+
+                        AttributePermissions::Write(AttributeRestriction::Encryption(_)) =>
+                            self.given_permissions.iter().find(|&&x| {
+                                match x {
+                                    AttributePermissions::Write(AttributeRestriction::Encryption(_)) => true,
+                                    _ => false
+                                }
+                            })
+                            .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize) )
+                            .or_else( || Some(pdu::Error::InsufficientEncryption) )
+                            .unwrap(),
+
+                        AttributePermissions::Read(AttributeRestriction::Authorization) |
+                        AttributePermissions::Write(AttributeRestriction::Authorization) =>
+                            pdu::Error::InsufficientAuthorization,
+
+                        AttributePermissions::Read(AttributeRestriction::Authentication) |
+                        AttributePermissions::Write(AttributeRestriction::Authentication) =>
+                            pdu::Error::InsufficientAuthentication,
+                    }
+                )
+                .or( Some(pdu::Error::InsufficientAuthorization) )
+        }
     }
 
     /// Check if a client can read the given attribute
     ///
     /// Returns the error as to why the client couldn't read the attribute
     fn client_can_read_attribute(&self, att: &dyn ServerAttribute ) -> Option<pdu::Error> {
-        const REQUIRED: &'static [super::AttributePermissions] = &[
-            super::AttributePermissions::Read
-        ];
-
-        const RESTRICTED: &'static [super::AttributePermissions] = &[
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits128),
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits192),
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Read, super::EncryptionKeySize::Bits256),
-            super::AttributePermissions::Authentication(super::AttributeRestriction::Read),
-            super::AttributePermissions::Authorization(super::AttributeRestriction::Read),
-        ];
-
-        self.validate_permissions(att, REQUIRED, RESTRICTED)
+        self.validate_permissions(att, super::FULL_READ_PERMISSIONS)
     }
 
     /// Check if a client can write the given attribute
     ///
     /// Returns the error as to why the client couldn't read the attribute
-    fn client_can_write_attribute(&self, att: &dyn ServerAttribute ) -> Option<pdu::Error>
-    {
-        const REQUIRED: &'static [super::AttributePermissions] = &[
-            super::AttributePermissions::Write
-        ];
-
-        const RESTRICTED: &'static [super::AttributePermissions] = &[
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Write, super::EncryptionKeySize::Bits128),
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Write, super::EncryptionKeySize::Bits192),
-            super::AttributePermissions::Encryption(super::AttributeRestriction::Write, super::EncryptionKeySize::Bits256),
-            super::AttributePermissions::Authentication(super::AttributeRestriction::Write),
-            super::AttributePermissions::Authorization(super::AttributeRestriction::Write),
-        ];
-
-        self.validate_permissions(att, REQUIRED, RESTRICTED)
+    fn client_can_write_attribute(&self, att: &dyn ServerAttribute ) -> Option<pdu::Error> {
+        self.validate_permissions(att, super::FULL_WRITE_PERMISSIONS)
     }
 
     /// Process a received Acl Data packet form the Bluetooth Controller
@@ -545,8 +514,8 @@ where C: l2cap::ConnectionChannel
     ///
     /// If the handle doesn't exist, then the notification isn't sent and false is returned
     pub fn send_notification(&self, handle: u16) -> bool {
-        self.attributes.get(handle as usize).map( | attribute | {
-            self.send( pdu::handle_value_notification( handle, attribute.as_ref() ) );
+        self.attributes.get(handle).map( | attribute | {
+            self.send( pdu::handle_value_notification( handle, attribute ) );
         } )
         .is_some()
     }
@@ -576,26 +545,22 @@ where C: l2cap::ConnectionChannel
     }
 
     /// Get a reference to an attribute
-    fn get_att(&self, handle: u16) -> Result<& (dyn ServerAttribute + Send + Sync), pdu::Error> {
+    fn get_att(&self, handle: u16) -> Result<&(dyn ServerAttribute + Send + Sync), pdu::Error> {
         if pdu::is_valid_handle(handle) {
-            Err(pdu::Error::InvalidHandle)
+            self.attributes.get(handle).ok_or(pdu::Error::InvalidHandle)
         }
         else {
-            self.attributes.get(handle as usize)
-                .ok_or(pdu::Error::InvalidHandle)
-                .map(|a| a.as_ref() )
+            Err(pdu::Error::InvalidHandle)
         }
     }
 
     /// Get a reference to a mutable attribute
     fn get_att_mut(&mut self, handle: u16) -> Result<&mut (dyn ServerAttribute + Send + Sync + 'static), pdu::Error> {
         if pdu::is_valid_handle(handle) {
-            Err(pdu::Error::InvalidHandle)
+            self.attributes.get_mut(handle).ok_or(pdu::Error::InvalidHandle)
         }
         else {
-            self.attributes.get_mut(handle as usize)
-                .ok_or(pdu::Error::InvalidHandle)
-                .map(|a| a.as_mut() )
+            Err(pdu::Error::InvalidHandle)
         }
     }
 
@@ -715,7 +680,7 @@ where C: l2cap::ConnectionChannel
 
             // Try to build response_payload full of 16 bit attribute types. This will stop at the first
             // attribute type cannot be converted into a shortened 16 bit UUID.
-            let mut handle_uuids_16_bit_itr = HandleUuidItr(false, self.attributes[start..stop]
+            let mut handle_uuids_16_bit_itr = HandleUuidItr(false, self.attributes.attributes[start..stop]
                 .iter()
                 .filter(|att| att.get_type().is_16_bit() )
                 .take_while(|att| self.client_can_write_attribute(att.as_ref()).is_none() )
@@ -731,7 +696,7 @@ where C: l2cap::ConnectionChannel
 
                 // Collect all UUIDs until the PDU is full or the first unreadable attribute is
                 // found.
-                let mut handle_uuids_128_bit_itr = HandleUuidItr(true, self.attributes[start..start]
+                let mut handle_uuids_128_bit_itr = HandleUuidItr(true, self.attributes.attributes[start..start]
                     .iter()
                     .take_while(|att| self.client_can_read_attribute(att.as_ref()).is_none() )
                     .enumerate()
@@ -799,7 +764,7 @@ where C: l2cap::ConnectionChannel
 
                 let payload_max = self.get_mtu() - 1;
 
-                let mut handles = HandleGroupItr( self.attributes[start..end].iter()
+                let mut handles = HandleGroupItr( self.attributes.attributes[start..end].iter()
                     .filter(|att| att.get_type().is_16_bit() )
                     .filter(|att| att.get_type() == att_type)
                     .filter(|att| att.cmp_value_to_raw_transfer_format(raw_value) )
@@ -869,7 +834,7 @@ where C: l2cap::ConnectionChannel
 
             let payload_max = self.get_mtu() - 2;
 
-            let mut init_iter = self.attributes[start..end].iter()
+            let mut init_iter = self.attributes.attributes[start..end].iter()
                 .filter(|att| att.get_type() == desired_att_type)
                 .peekable();
 
@@ -901,9 +866,16 @@ where C: l2cap::ConnectionChannel
             self.send_error(handle_range.starting_handle, ClientPduName::ReadByTypeRequest, pdu::Error::InvalidHandle);
         }
     }
+
+    /// Get an iterator over the attribute informational data
+    ///
+    /// This will return an iterator to get the type, permissions, and handle for each attribute
+    pub fn iter_attr_info(&self) -> impl Iterator<Item = &dyn AttributeInfo > {
+        self.attributes.iter_info()
+    }
 }
 
-impl<'c, C> AsRef<C> for Server<'c, C> where C: l2cap::ConnectionChannel {
+impl<C> AsRef<C> for Server<'_, C> where C: l2cap::ConnectionChannel {
     fn as_ref(&self) -> &C {
         &self.connection
     }
@@ -969,8 +941,31 @@ impl ServerAttributes {
     /// Get an iterator over the attribute informational data
     ///
     /// This will return an iterator to get the type, permissions, and handle for each attribute
-    pub fn iter(&self) -> impl Iterator<Item = &dyn AttributeInfo > {
-        ServerAttributesIter(self.attributes.iter())
+    pub fn iter_info(&self) -> impl Iterator<Item = &dyn AttributeInfo > {
+        ServerAttributesIter(self.attributes[1..].iter())
+    }
+
+    /// Attributes length
+    pub fn len(&self) -> usize { self.attributes.len() }
+
+    /// Get attribute with the given handle
+    ///
+    /// This returns `None` if the handle is 0 or not in attributes
+    fn get(&self, handle: u16) -> Option<&(dyn ServerAttribute + Send + Sync)> {
+        match handle {
+            0 => None,
+            h => self.attributes.get(h as usize).map(|h| h.as_ref() )
+        }
+    }
+
+    /// Get a mutable reference to the attribute with the given handle
+    ///
+    /// This returns `None` if the handle is 0 or not in attributes
+    fn get_mut(&mut self, handle: u16) -> Option<&mut (dyn ServerAttribute + Send + Sync + 'static)> {
+        match handle {
+            0 => None,
+            h => self.attributes.get_mut(h as usize).map(|h| h.as_mut() )
+        }
     }
 }
 
@@ -1176,9 +1171,7 @@ struct ReservedHandle;
 impl AttributeInfo for ReservedHandle {
     fn get_type(&self) -> crate::UUID { crate::UUID::from_u128(0u128) }
 
-    fn get_permissions(&self) -> &[super::AttributePermissions] {
-        &[ super::AttributePermissions::Read ]
-    }
+    fn get_permissions(&self) -> &[super::AttributePermissions] { &[] }
 
     fn get_handle(&self) -> u16 { 0 }
 }
@@ -1203,4 +1196,294 @@ impl ServerAttribute for ReservedHandle
     fn value_transfer_format_size(&self) -> usize { 0 }
 
     fn cmp_value_to_raw_transfer_format(&self, _: &[u8] ) -> bool { false }
+}
+
+#[cfg(test)]
+mod tests {
+    mod permission_tests {
+        use crate::{
+            att::{
+                *,
+                server::*
+            },
+            l2cap::{L2capPdu, AclDataFragment},
+            UUID,
+        };
+        use tinymt::TinyMT64;
+        use std::{
+            mem::MaybeUninit,
+            ops::{Deref, DerefMut},
+            task::Waker,
+        };
+
+        const ALL_ATT_PERM_SIZE: usize = 2;
+
+        type AllAttributePermissions = [AttributePermissions; ALL_ATT_PERM_SIZE];
+
+        struct PermVec {
+            len: usize,
+            permissions: MaybeUninit<AllAttributePermissions>,
+        }
+
+        impl PermVec {
+            fn new() -> Self { Self { len: 0, permissions: MaybeUninit::uninit() } }
+
+            /// Push an item, panics if `self.len > size_of<AllAttributePermissions>()`
+            fn push(&mut self, p: AttributePermissions) {
+                unsafe { (*self.permissions.as_mut_ptr())[self.len] = p };
+                self.len += 1;
+            }
+        }
+
+        impl From<&'_ [AttributePermissions]> for PermVec {
+            fn from(ap: &[AttributePermissions]) -> Self {
+                let mut permissions: MaybeUninit<AllAttributePermissions> = MaybeUninit::uninit();
+
+                let perm_ref = unsafe { &mut *permissions.as_mut_ptr() };
+
+                perm_ref[..ap.len()].copy_from_slice(ap);
+
+                Self { len: ap.len(), permissions }
+            }
+        }
+
+        impl Deref for PermVec {
+            type Target = [AttributePermissions];
+
+            fn deref(&self) -> &Self::Target {
+                unsafe { &(*self.permissions.as_ptr())[..self.len] }
+            }
+        }
+
+        impl DerefMut for PermVec {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                unsafe { &mut (*self.permissions.as_mut_ptr())[..self.len] }
+            }
+        }
+
+        /// Calculate factorial, panics on overflow
+        fn factorial(v: usize) -> usize { (2..=v).fold(1, |c, v| c * v) }
+
+        fn permutations(n: usize, r: usize) -> usize { factorial(n) / factorial(n - r) }
+
+        fn all_sized_permutations_cnt(list_size: usize) -> usize {
+            (0..=list_size).fold(0, |c, k| c + permutations(list_size, k))
+        }
+
+        fn add_permission_set(rng: &mut tinymt::TinyMT64, chance_max: usize) -> bool {
+            use rand::Rng;
+
+            if chance_max != 0 {
+                0 == rng.gen_range(0, chance_max)
+            } else {
+                true
+            }
+        }
+
+        fn permissions_permutations(all_permissions: &AllAttributePermissions) -> Vec<PermVec> {
+            use rand::SeedableRng;
+
+            const MAX_VEC_SIZE: usize = 10_000;
+
+            type Output = Vec<PermVec>;
+
+            fn permutation_step(
+                permutations: &mut Output,
+                perms: &[AttributePermissions],
+                step: &[AttributePermissions],
+                rand_generator: &mut tinymt::TinyMT64,
+                chance_max: usize,
+                added_cnt: &mut usize
+            ) {
+                perms.iter().enumerate().for_each(|(cnt, permission)| {
+
+                    if *added_cnt >= MAX_VEC_SIZE { return }
+
+                    // Because of how many permutations there are,
+                    let step_permutation = {
+                        let mut s = PermVec::from(step);
+                        s.push(*permission);
+                        s
+                    };
+
+                    let rotated_perms = {
+                        let mut v = PermVec::from(perms);
+                        v.rotate_left(cnt);
+                        v
+                    };
+
+                    if add_permission_set(rand_generator, chance_max) {
+                        permutation_step(
+                            permutations,
+                            &rotated_perms[1..],
+                            &step_permutation,
+                            rand_generator,
+                            chance_max,
+                            added_cnt,
+                        );
+
+                        permutations.push(step_permutation);
+
+                        *added_cnt += 1;
+                    } else {
+                        permutation_step(
+                            permutations,
+                            &rotated_perms[1..],
+                            &step_permutation,
+                            rand_generator,
+                            chance_max,
+                            added_cnt,
+                        );
+                    }
+                });
+            }
+
+            let chance_max = all_sized_permutations_cnt(all_permissions.len()) / MAX_VEC_SIZE;
+
+            let mut output = Output::with_capacity(MAX_VEC_SIZE);
+
+            let mut tiny_mt_64 = TinyMT64::from_entropy();
+
+            let mut cnt = if add_permission_set(&mut tiny_mt_64, chance_max) {
+                output.push(PermVec::new());
+                1
+            } else {
+                0
+            };
+
+            permutation_step(
+                &mut output,
+                all_permissions,
+                &[],
+                &mut tiny_mt_64,
+                chance_max,
+                &mut cnt
+            );
+
+            output
+        }
+
+        fn expected_permissions_result(
+            operation_permissions: &[AttributePermissions],
+            attribute_permissions: &[AttributePermissions],
+            client_permissions: &[AttributePermissions],
+        ) -> Result<(), pdu::Error>
+        {
+            use AttributePermissions::*;
+            use AttributeRestriction::{Encryption, Authorization, Authentication};
+            use EncryptionKeySize::*;
+
+            match operation_permissions.iter().find(|&&op|
+                attribute_permissions.iter().find(|&&ap| ap == op).is_some() &&
+                    client_permissions.iter().find(|&&cp| cp == op).is_some()
+            ) {
+                Some(_) => Ok(()),
+                None =>
+                    Err(match operation_permissions.iter()
+                        .find(|&p| client_permissions.contains(p))
+                    {
+                        Some(Read(AttributeRestriction::None)) => pdu::Error::ReadNotPermitted,
+
+                        Some(Write(AttributeRestriction::None)) => pdu::Error::WriteNotPermitted,
+
+                        Some(Read(Encryption(_))) =>
+                            if client_permissions.contains(&Read(Encryption(Bits128))) ||
+                                client_permissions.contains(&Read(Encryption(Bits192))) ||
+                                client_permissions.contains(&Read(Encryption(Bits256)))
+                            {
+                                pdu::Error::InsufficientEncryptionKeySize
+                            } else {
+                                pdu::Error::InsufficientEncryption
+                            },
+
+                        Some(Write(Encryption(_))) =>
+                            if client_permissions.contains(&Write(Encryption(Bits128))) ||
+                                client_permissions.contains(&Write(Encryption(Bits192))) ||
+                                client_permissions.contains(&Write(Encryption(Bits256)))
+                            {
+                                pdu::Error::InsufficientEncryptionKeySize
+                            } else {
+                                pdu::Error::InsufficientEncryption
+                            },
+
+                        Some(Read(Authentication)) |
+                        Some(Write(Authentication)) =>
+                            pdu::Error::InsufficientAuthentication,
+
+                        Some(Read(Authorization)) |
+                        Some(Write(Authorization)) |
+                        None =>
+                            pdu::Error::InsufficientAuthorization,
+                    }
+                    ),
+            }
+        }
+
+        #[test]
+        #[cfg(target_pointer_width = "64")]
+        fn check_permissions_test() {
+            use AttributePermissions::*;
+            use AttributeRestriction::*;
+            use EncryptionKeySize::*;
+
+            let all_permissions: AllAttributePermissions = [
+                Read(None),
+                Read(Encryption(Bits128)),
+                // Read(Encryption(Bits192)),
+                // Read(Encryption(Bits256)),
+                // Read(Authentication),
+                // Read(Authorization),
+                // Write(None),
+                // Write(Encryption(Bits128)),
+                // Write(Encryption(Bits192)),
+                // Write(Encryption(Bits256)),
+                // Write(Authentication),
+                // Write(Authorization),
+            ];
+
+            struct DummyConnection;
+
+            impl crate::l2cap::ConnectionChannel for DummyConnection {
+                fn send<Pdu>(&self, _: Pdu) where Pdu: Into<L2capPdu> {}
+
+                fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> { Some(Vec::new()) }
+            }
+
+            let all_permission_permutations = &permissions_permutations(&all_permissions);
+
+            let mut server_attributes = ServerAttributes::default();
+
+            all_permission_permutations.iter().for_each(|permissions| {
+                let attribute = Attribute::new(UUID::from(1u16), permissions.to_vec(), ());
+
+                server_attributes.push(attribute);
+            });
+
+            let mut server = Server::new(&DummyConnection, 100, server_attributes);
+
+            all_permission_permutations.iter().for_each(|perm_client| {
+                server.revoke_permissions_of_client(&all_permissions);
+
+                perm_client.iter().for_each(|p| server.give_permission_to_client(*p));
+
+                all_permission_permutations.iter().for_each(|perm_op| {
+                    all_permission_permutations.iter().enumerate().for_each(|(cnt, perm_att)| {
+                        // 'cnt + 1' because attributes start at handle 1
+                        let calculated = server.check_permissions((cnt + 1) as u16, perm_op);
+
+                        let expected = expected_permissions_result(&perm_op, &perm_att, &perm_client);
+
+                        assert_eq!(
+                            calculated,
+                            expected,
+                            "Operation permissions {:#?}\nAttribute permissions {:#?}\nClient permissions {:#?}",
+                            perm_op.to_vec(),
+                            perm_att.to_vec(),
+                            perm_client.to_vec()
+                        );
+                    });
+                });
+            })
+        }
+    }
 }
