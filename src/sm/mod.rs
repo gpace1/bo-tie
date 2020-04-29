@@ -611,8 +611,6 @@ pub struct SecurityManager {
 
 impl SecurityManager {
 
-    const SMALLEST_PACKET_SIZE: usize = 1;
-
     pub fn new(keys: Vec<KeyDBEntry>) -> Self {
         SecurityManager {
             keys_db: KeyDB::new(keys),

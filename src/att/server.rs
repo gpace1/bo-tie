@@ -190,6 +190,10 @@ pub struct Server<'c, C>
     connection: &'c C,
     attributes: ServerAttributes,
     /// The permissions the client currently has
+    ///
+    /// This is sorted and de-duplicated, to make things marginally faster for linear search. Most
+    /// permission checks will be for permissions sorted towards the front (Unencrypted Read/Write,
+    /// Encrypted Read/Write,
     given_permissions: Vec<super::AttributePermissions>,
 }
 
@@ -262,18 +266,24 @@ where C: l2cap::ConnectionChannel
     ///
     /// This doesn't check that the client is qualified to receive the permission, it just adds an
     /// indication on the server that the client has it.
-    pub fn give_permission_to_client(&mut self, permission: super::AttributePermissions) {
-        if !self.given_permissions.contains(&permission) {
-            self.given_permissions.push(permission);
-        }
+    pub fn give_permissions_to_client<P>(&mut self, permissions: P )
+    where P: core::borrow::Borrow<[AttributePermissions]>,
+    {
+        permissions.borrow().iter()
+            .for_each(|p| if let Err(pos) = self.given_permissions.binary_search(&p) {
+                    self.given_permissions.insert(pos, *p);
+                }
+            )
     }
 
     /// Remove one or more permission given to the client
     ///
     /// This will remove every permission in `permissions` from the client.
-    pub fn revoke_permissions_of_client(&mut self, permissions: &[super::AttributePermissions]) {
+    pub fn revoke_permissions_of_client<P>(&mut self, permissions: P)
+    where P: core::borrow::Borrow<[AttributePermissions]>
+    {
         self.given_permissions = self.given_permissions.clone().into_iter()
-            .filter(|p| !permissions.contains(p) )
+            .filter(|p| !permissions.borrow().contains(p) )
             .collect();
     }
 
@@ -345,22 +355,21 @@ where C: l2cap::ConnectionChannel
     ///
     /// If 'None' is returned the client and attribute have the required permissions to proceed with
     /// the operation.
-    fn validate_permissions(&self,
+    fn validate_permissions(
+        &self,
         att: &dyn ServerAttribute,
-        permissions: &[super::AttributePermissions]
+        operation_permissions: &[super::AttributePermissions]
     ) -> Option<pdu::Error>
     {
-        // Both closures for the `filter` functions return true when a permission is not valid. The
-        // the closure provided to `map` is only invoked when a permission check fails.
-        match permissions.iter()
+        match self.given_permissions.iter()
             .skip_while(|&p| {
-                !att.get_permissions().contains(p) || !self.given_permissions.contains(p)
+                !att.get_permissions().contains(p) || !operation_permissions.contains(p)
             })
             .nth(0)
         {
             Some(_) => None,
-            None => permissions.iter()
-                .find(|&&p| att.get_permissions().iter().find(|&&x| x == p).is_some())
+            None => operation_permissions.iter()
+                .find(|&p| att.get_permissions().contains(p) )
                 .map(|&p| // Map the invalid permission to it's corresponding error
                     match p {
                         AttributePermissions::Read(AttributeRestriction::None) =>
@@ -376,9 +385,9 @@ where C: l2cap::ConnectionChannel
                                     _ => false
                                 }
                             })
-                            .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize) )
-                            .or_else( || Some(pdu::Error::InsufficientEncryption) )
-                            .unwrap(),
+                                .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize))
+                                .or_else(|| Some(pdu::Error::InsufficientEncryption))
+                                .unwrap(),
 
                         AttributePermissions::Write(AttributeRestriction::Encryption(_)) =>
                             self.given_permissions.iter().find(|&&x| {
@@ -387,9 +396,9 @@ where C: l2cap::ConnectionChannel
                                     _ => false
                                 }
                             })
-                            .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize) )
-                            .or_else( || Some(pdu::Error::InsufficientEncryption) )
-                            .unwrap(),
+                                .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize))
+                                .or_else(|| Some(pdu::Error::InsufficientEncryption))
+                                .unwrap(),
 
                         AttributePermissions::Read(AttributeRestriction::Authorization) |
                         AttributePermissions::Write(AttributeRestriction::Authorization) =>
@@ -615,8 +624,10 @@ where C: l2cap::ConnectionChannel
     fn process_read_request(&mut self, handle: u16) {
         log::trace!("Read Request");
 
-        self.read_att_and(handle, |att_tf| self.send( pdu::read_response(att_tf) ) )
-            .unwrap_or_else(|e| self.send_error(handle, ClientPduName::ReadRequest, e) );
+        match self.read_att_and(handle, |att_tf| self.send( pdu::read_response(att_tf) ) ) {
+            Err(e) => self.send_error(handle, ClientPduName::ReadRequest, e),
+            Ok(_) => (),
+        }
     }
 
     /// Process a Write Request from the client
@@ -625,8 +636,10 @@ where C: l2cap::ConnectionChannel
 
         let handle = TransferFormatTryFrom::try_from( &payload[..2] ).expect("Failed to convert 2 bytes to u16");
 
-        self.write_att( handle, &payload[2..])
-            .unwrap_or_else(|e| self.send_error(handle, ClientPduName::WriteRequest, e) );
+        match self.write_att( handle, &payload[2..]) {
+            Ok(_) => self.send_pdu(pdu::write_response()),
+            Err(e) => self.send_error(handle, ClientPduName::WriteRequest, e),
+        }
     }
 
     /// Process a Find Information Request form the client
@@ -1216,7 +1229,7 @@ mod tests {
             task::Waker,
         };
 
-        const ALL_ATT_PERM_SIZE: usize = 2;
+        const ALL_ATT_PERM_SIZE: usize = 12;
 
         type AllAttributePermissions = [AttributePermissions; ALL_ATT_PERM_SIZE];
 
@@ -1293,7 +1306,7 @@ mod tests {
                 step: &[AttributePermissions],
                 rand_generator: &mut tinymt::TinyMT64,
                 chance_max: usize,
-                added_cnt: &mut usize
+                added_cnt: &mut usize,
             ) {
                 perms.iter().enumerate().for_each(|(cnt, permission)| {
 
@@ -1312,28 +1325,20 @@ mod tests {
                         v
                     };
 
+                    permutation_step(
+                        permutations,
+                        &rotated_perms[1..],
+                        &step_permutation,
+                        rand_generator,
+                        chance_max,
+                        added_cnt,
+                    );
+
                     if add_permission_set(rand_generator, chance_max) {
-                        permutation_step(
-                            permutations,
-                            &rotated_perms[1..],
-                            &step_permutation,
-                            rand_generator,
-                            chance_max,
-                            added_cnt,
-                        );
 
                         permutations.push(step_permutation);
 
                         *added_cnt += 1;
-                    } else {
-                        permutation_step(
-                            permutations,
-                            &rotated_perms[1..],
-                            &step_permutation,
-                            rand_generator,
-                            chance_max,
-                            added_cnt,
-                        );
                     }
                 });
             }
@@ -1380,7 +1385,7 @@ mod tests {
                 Some(_) => Ok(()),
                 None =>
                     Err(match operation_permissions.iter()
-                        .find(|&p| client_permissions.contains(p))
+                        .find(|&p| attribute_permissions.contains(p))
                     {
                         Some(Read(AttributeRestriction::None)) => pdu::Error::ReadNotPermitted,
 
@@ -1415,13 +1420,14 @@ mod tests {
                         None =>
                             pdu::Error::InsufficientAuthorization,
                     }
-                    ),
+                ),
             }
         }
 
         #[test]
         #[cfg(target_pointer_width = "64")]
-        fn check_permissions_test() {
+        #[ignore]
+        fn check_permissions_all_night_test() {
             use AttributePermissions::*;
             use AttributeRestriction::*;
             use EncryptionKeySize::*;
@@ -1429,16 +1435,16 @@ mod tests {
             let all_permissions: AllAttributePermissions = [
                 Read(None),
                 Read(Encryption(Bits128)),
-                // Read(Encryption(Bits192)),
-                // Read(Encryption(Bits256)),
-                // Read(Authentication),
-                // Read(Authorization),
-                // Write(None),
-                // Write(Encryption(Bits128)),
-                // Write(Encryption(Bits192)),
-                // Write(Encryption(Bits256)),
-                // Write(Authentication),
-                // Write(Authorization),
+                Read(Encryption(Bits192)),
+                Read(Encryption(Bits256)),
+                Read(Authentication),
+                Read(Authorization),
+                Write(None),
+                Write(Encryption(Bits128)),
+                Write(Encryption(Bits192)),
+                Write(Encryption(Bits256)),
+                Write(Authentication),
+                Write(Authorization),
             ];
 
             struct DummyConnection;
@@ -1462,21 +1468,27 @@ mod tests {
             let mut server = Server::new(&DummyConnection, 100, server_attributes);
 
             all_permission_permutations.iter().for_each(|perm_client| {
-                server.revoke_permissions_of_client(&all_permissions);
 
-                perm_client.iter().for_each(|p| server.give_permission_to_client(*p));
+                server.revoke_permissions_of_client(all_permissions.as_ref());
+
+                server.give_permissions_to_client(perm_client.as_ref());
 
                 all_permission_permutations.iter().for_each(|perm_op| {
                     all_permission_permutations.iter().enumerate().for_each(|(cnt, perm_att)| {
+
                         // 'cnt + 1' because attributes start at handle 1
                         let calculated = server.check_permissions((cnt + 1) as u16, perm_op);
 
                         let expected = expected_permissions_result(&perm_op, &perm_att, &perm_client);
 
                         assert_eq!(
-                            calculated,
                             expected,
-                            "Operation permissions {:#?}\nAttribute permissions {:#?}\nClient permissions {:#?}",
+                            calculated,
+                            "Permissions check failed, mismatch in return\n\
+                            (Please note: this test is a comparison between two algorithms, and the \
+                            expected result may be incorrect)\n\n\
+                            Operation permissions {:#?}\nAttribute permissions {:#?}\n\
+                            Client permissions {:#?}",
                             perm_op.to_vec(),
                             perm_att.to_vec(),
                             perm_client.to_vec()

@@ -130,6 +130,18 @@ pub enum AttributePermissions {
     Write(AttributeRestriction),
 }
 
+impl core::borrow::Borrow<[AttributePermissions]> for AttributePermissions {
+    fn borrow(&self) -> &[AttributePermissions] {
+        core::slice::from_ref(self)
+    }
+}
+
+impl core::borrow::Borrow<[AttributePermissions]> for &AttributePermissions {
+    fn borrow(&self) -> &[AttributePermissions] {
+        core::slice::from_ref(*self)
+    }
+}
+
 pub const FULL_READ_PERMISSIONS: &'static [AttributePermissions] = &[
     AttributePermissions::Read(AttributeRestriction::None),
     AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
@@ -644,9 +656,9 @@ impl TransferFormatInto for Box<dyn TransferFormatInto> {
 
 impl TransferFormatInto for &dyn TransferFormatInto {
 
-    fn len_of_into(&self) -> usize { unimplemented!() }
+    fn len_of_into(&self) -> usize { (*self).len_of_into() }
 
-    fn build_into_ret(&self, _: &mut [u8] ) { unimplemented!() }
+    fn build_into_ret(&self, into_ret: &mut [u8] ) { (*self).build_into_ret(into_ret) }
 }
 
 impl<T> TransferFormatTryFrom for Vec<T> where T: TransferFormatTryFrom + TransferFormatCollectible {
@@ -723,6 +735,7 @@ mod test {
     use super::*;
     use std::sync::{Arc, Mutex};
     use std::task::Waker;
+    use std::thread::JoinHandle;
 
     struct TwoWayChannel {
         b1: Option<Vec<u8>>,
@@ -814,7 +827,13 @@ mod test {
 
     #[test]
     fn test_att_connection() {
-        use std::thread;
+        use std::{
+            thread,
+            sync::{
+                Arc,
+                atomic,
+            }
+        };
         use crate::{
             l2cap::ConnectionChannel,
             UUID
@@ -832,14 +851,11 @@ mod test {
 
         let (c1,c2) = TwoWayChannel::new();
 
-        fn block_on<F: std::future::Future + std::marker::Unpin>(f: F, timeout_err: &str) -> F::Output{
+        let thread_panicked = Arc::new(atomic::AtomicBool::new(false));
 
-            let tf = async_timer::Timed::platform_new(f, std::time::Duration::from_secs(1));
+        let thread_panicked_clone = thread_panicked.clone();
 
-            futures::executor::block_on(tf).map_err(|_| timeout_err).unwrap()
-        }
-
-        let t = thread::spawn( move || {
+        let t: &mut Option<JoinHandle<_>> = &mut thread::spawn( move || {
             use AttributePermissions::*;
 
             let mut server = server::Server::new( &c2, 256, None );
@@ -866,7 +882,16 @@ mod test {
             server.push(attribute_1); // has handle value of 2
             server.push(attribute_3); // has handle value of 3
 
+            let client_permissions: &[AttributePermissions] = &[
+                Read(AttributeRestriction::None),
+                Write(AttributeRestriction::None),
+            ];
+
+            server.give_permissions_to_client(client_permissions);
+
             if let Err(e) = 'server_loop: loop {
+
+                use std::convert::TryFrom;
 
                 match futures::executor::block_on(c2.future_receiver()) {
                     Ok(l2cap_data_vec) => for l2cap_pdu in l2cap_data_vec {
@@ -876,26 +901,72 @@ mod test {
                                 break 'server_loop Ok(()),
                             Err(e) =>
                                 break 'server_loop Err(
-                                    format!("Pdu error: {:?}, att pdu op: {}", e, l2cap_pdu.get_payload()[0])),
+                                    format!(
+                                        "Pdu error: {:?}, att pdu op: {:?}",
+                                        e,
+                                        client::ClientPduName::try_from(l2cap_pdu.get_payload()[0])
+                                    )
+                                ),
                             _ => (),
                         }
                     },
                     Err(e) => break 'server_loop Err(format!("Future Receiver Error: {:?}", e)),
                 }
             } {
+                thread_panicked_clone.store(true, atomic::Ordering::Relaxed);
                 panic!("{}", e);
             }
-        });
+        })
+        .into();
+
+        /// Creates a block-on implementation
+        ///
+        /// # Panics In Returned Closure
+        /// Input `t` of 'make_block_on' cannot refer to a `None` *for the lifetime of the returned
+        /// closure*.
+        fn make_block_on<'t, F,T>(tp: Arc<atomic::AtomicBool>, t: &'t mut Option<thread::JoinHandle<T>>)
+        -> impl FnMut(F, &str) -> F::Output + 't
+        where F: std::future::Future + std::marker::Unpin {
+            move |f, timeout_err|
+            {
+                let tf = async_timer::Timed::platform_new(f, std::time::Duration::from_secs(1));
+
+                futures::executor::block_on(tf)
+                    .map_err(|_| {
+                        if tp.load(atomic::Ordering::Relaxed) {
+                            format!(
+                                "{}, server_error: {:?}",
+                                timeout_err,
+                                t.take().expect("Input 't' is none").join()
+                                    .map(|_| "")
+                                    .map_err(|any| any.downcast::<String>().unwrap() )
+                                    .unwrap_err()
+                            )
+                        } else {
+                            timeout_err.to_string()
+                        }
+                    })
+                    .unwrap()
+            }
+        }
 
         let client = client::Client::connect(&c1, 512)
-            .process_response(block_on(c1.future_receiver(), "Connect timed out")
-                    .expect("connect receiver").first().unwrap()
+            .process_response(
+                make_block_on(thread_panicked.clone(), t)(
+                    c1.future_receiver(),
+                    "Connect timed out"
+                )
+                .expect("connect receiver").first().unwrap()
             )
             .expect("connect response");
 
         // writing to handle 1
         client.write_request(1, test_val_1).unwrap()
-            .process_response( block_on(c1.future_receiver(), "write handle 1 timed out")
+            .process_response(
+                make_block_on(thread_panicked.clone(), t)(
+                    c1.future_receiver(),
+                    "write handle 1 timed out"
+                )
                 .expect("w1 receiver")
                 .first()
                 .unwrap() )
@@ -903,7 +974,11 @@ mod test {
 
         // writing to handle 2
         client.write_request(2, test_val_2).unwrap()
-            .process_response( block_on(c1.future_receiver(), "write handle 2 timed out")
+            .process_response(
+                make_block_on(thread_panicked.clone(), t)(
+                    c1.future_receiver(),
+                    "write handle 2 timed out"
+                )
                 .expect("w2 receiver")
                 .first()
                 .unwrap() )
@@ -911,7 +986,11 @@ mod test {
 
         // writing to handle 3
         client.write_request(3, test_val_3).unwrap()
-            .process_response( block_on(c1.future_receiver(), "write handle 3 timed out")
+            .process_response(
+                make_block_on(thread_panicked.clone(), t)(
+                    c1.future_receiver(),
+                    "write handle 3 timed out"
+                )
                 .expect("w3 receiver")
                 .first()
                 .unwrap() )
@@ -919,21 +998,32 @@ mod test {
 
         // reading handle 1
         let read_val_1 = client.read_request(1).unwrap()
-            .process_response( block_on(c1.future_receiver(), "read handle 1 timed out")
+            .process_response(
+                make_block_on(thread_panicked.clone(), t)(
+                    c1.future_receiver(),
+                    "read handle 1 timed out"
+                )
                 .expect("r1 receiver")
                 .first()
                 .unwrap() )
             .expect("r1 response");
 
         let read_val_2 = client.read_request(2).unwrap()
-            .process_response( block_on(c1.future_receiver(), "read handle 2 timed out")
+            .process_response( make_block_on(thread_panicked.clone(), t)(
+                c1.future_receiver(),
+                "read handle 2 timed out"
+            )
                 .expect("r2 receiver")
                 .first()
                 .unwrap() )
             .expect("r2 response");
 
         let read_val_3 = client.read_request(3).unwrap()
-            .process_response( block_on(c1.future_receiver(), "read handle 3 timed out")
+            .process_response(
+                make_block_on(thread_panicked.clone(), t)(
+                    c1.future_receiver(),
+                    "read handle 3 timed out"
+                )
                 .expect("r3 receiver")
                 .first()
                 .unwrap() )
@@ -947,8 +1037,13 @@ mod test {
         assert_eq!(test_val_2, read_val_2);
         assert_eq!(test_val_3, read_val_3);
 
-        t.join()
-            .map_err(|e| format!("Thread Failed to join: {}", e.downcast_ref::<String>().unwrap()) )
-            .unwrap();
+        t.take()
+        .map(
+            |handle| {
+                handle.join()
+                .map_err(|e| format!("Thread Failed to join: {}", e.downcast_ref::<String>().unwrap()))
+                .unwrap()
+            }
+        );
     }
 }
