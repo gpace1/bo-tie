@@ -1226,13 +1226,21 @@ mod tests {
         use std::{
             mem::MaybeUninit,
             ops::{Deref, DerefMut},
+            sync::{
+                Arc,
+                Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
             task::Waker,
         };
 
         const ALL_ATT_PERM_SIZE: usize = 12;
 
+        const MAX_VEC_SIZE: usize = 10_000;
+
         type AllAttributePermissions = [AttributePermissions; ALL_ATT_PERM_SIZE];
 
+        #[derive(Debug)]
         struct PermVec {
             len: usize,
             permissions: MaybeUninit<AllAttributePermissions>,
@@ -1283,42 +1291,93 @@ mod tests {
             (0..=list_size).fold(0, |c, k| c + permutations(list_size, k))
         }
 
-        fn add_permission_set(rng: &mut tinymt::TinyMT64, chance_max: usize) -> bool {
+        /// This returns a boolean indicating if the permission should be added to the set of
+        /// permissions to be tested.
+        ///
+        /// This generates a random integer between 0 up to `chance_max`. If the randomly generated
+        /// number is 0 then this function returns true.
+        ///
+        /// This function is a helper function for `permutation_step`.
+        ///
+        /// An implementation of the Mersenne Twister is used to generate the 'random' chance.
+        fn add_permission_set(rng: Arc<Mutex<tinymt::TinyMT64>>, chance_max: usize) -> bool {
             use rand::Rng;
 
             if chance_max != 0 {
-                0 == rng.gen_range(0, chance_max)
+                0 == rng.lock().unwrap().gen_range(0, chance_max)
             } else {
                 true
             }
         }
 
-        fn permissions_permutations(all_permissions: &AllAttributePermissions) -> Vec<PermVec> {
-            use rand::SeedableRng;
+        /// This is used to calculate if an entire recursion branch should be skipped.
+        ///
+        /// This calculates the odds where every generated set of permissions by a recursion branch
+        /// would not be included as part of a returned set. The point of this is to speed up the
+        /// function `permutation_step` by reducing the number of recursion calls made.
+        ///
+        /// The input `do_not_add_chance_max` is the upward bound when generating a random number in
+        ///  a range between zero and it. When zero is the randomly generated number, then it would
+        /// indicate that the permission set would not be added to the list of generated
+        /// permissions.
+        fn do_recursion_branch(
+            rng: Arc<Mutex<tinymt::TinyMT64>>,
+            do_not_add_chance_max: f64,
+            perms_size: usize,
+            step_size: usize,
+        ) -> bool {
+            use rand::Rng;
 
-            const MAX_VEC_SIZE: usize = 10_000;
+            // the exponent for calculating the odds that no members of a branch are added to the
+            // eventual test list.
+            let exponent =
+                (1..=(perms_size-step_size))
+                .fold(0usize, |exp, s_size| exp + permutations(perms_size, s_size) );
 
-            type Output = Vec<PermVec>;
+            let v = match std::convert::TryFrom::try_from(exponent) {
+                Ok(exp) => do_not_add_chance_max.powi(exp),
+                Err(_)  => do_not_add_chance_max.powf(exponent as f64),
+            };
 
-            fn permutation_step(
-                permutations: &mut Output,
-                perms: &[AttributePermissions],
-                step: &[AttributePermissions],
-                rand_generator: &mut tinymt::TinyMT64,
-                chance_max: usize,
-                added_cnt: &mut usize,
-            ) {
-                perms.iter().enumerate().for_each(|(cnt, permission)| {
+            if v <= 1000f64 {
+                // boost numbers by 100_000 for resolution in the random number generation
+                let max = (v * 100_000f64) as usize;
 
-                    if *added_cnt >= MAX_VEC_SIZE { return }
+                100_000 < rng.lock().unwrap().gen_range(0, max)
+            } else if v >= (u64::MAX as f64) {
+                true
+            } else {
+                0 != rng.lock().unwrap().gen_range(0, v as u64)
+            }
+        }
 
-                    // Because of how many permutations there are,
-                    let step_permutation = {
-                        let mut s = PermVec::from(step);
-                        s.push(*permission);
-                        s
-                    };
+        fn permutation_step(
+            permutations: Arc<Mutex<Vec<PermVec>>>,
+            perms: &[AttributePermissions],
+            step: &[AttributePermissions],
+            rand_generator: Arc<Mutex<tinymt::TinyMT64>>,
+            add_chance_max: usize,
+            do_not_add_chance_max: f64,
+            added_cnt: Arc<AtomicUsize>,
+        ) {
+            use rayon::prelude::*;
 
+            perms.par_iter().enumerate().for_each(|(cnt, permission)| {
+
+                if added_cnt.load(Ordering::Acquire) >= MAX_VEC_SIZE { return }
+
+                let step_permutation = {
+                    let mut s = PermVec::from(step);
+                    s.push(*permission);
+                    s
+                };
+
+                if do_recursion_branch(
+                    rand_generator.clone(),
+                    do_not_add_chance_max,
+                    ALL_ATT_PERM_SIZE,
+                    step_permutation.len())
+                {
                     let rotated_perms = {
                         let mut v = PermVec::from(perms);
                         v.rotate_left(cnt);
@@ -1326,46 +1385,59 @@ mod tests {
                     };
 
                     permutation_step(
-                        permutations,
+                        permutations.clone(),
                         &rotated_perms[1..],
                         &step_permutation,
-                        rand_generator,
-                        chance_max,
-                        added_cnt,
+                        rand_generator.clone(),
+                        add_chance_max,
+                        do_not_add_chance_max,
+                        added_cnt.clone(),
                     );
+                }
 
-                    if add_permission_set(rand_generator, chance_max) {
+                if add_permission_set(rand_generator.clone(), add_chance_max) &&
+                    added_cnt.fetch_add(1, Ordering::Release) < MAX_VEC_SIZE
+                {
+                    permutations.lock().unwrap().push(step_permutation);
+                }
+            });
+        }
 
-                        permutations.push(step_permutation);
+        fn permissions_permutations(all_permissions: &AllAttributePermissions) -> Vec<PermVec> {
+            use rand::SeedableRng;
 
-                        *added_cnt += 1;
-                    }
-                });
-            }
+            let all_permutations = all_sized_permutations_cnt(all_permissions.len());
 
-            let chance_max = all_sized_permutations_cnt(all_permissions.len()) / MAX_VEC_SIZE;
 
-            let mut output = Output::with_capacity(MAX_VEC_SIZE);
+            let add_chance_max = all_permutations / MAX_VEC_SIZE;
 
-            let mut tiny_mt_64 = TinyMT64::from_entropy();
+            let do_not_add_chance_max =
+                all_permutations as f64 / (all_permutations - MAX_VEC_SIZE) as f64;
 
-            let mut cnt = if add_permission_set(&mut tiny_mt_64, chance_max) {
-                output.push(PermVec::new());
-                1
+            let output = Arc::new(Mutex::new(Vec::with_capacity(MAX_VEC_SIZE)));
+
+            let tiny_mt_64 = Arc::new(Mutex::new(TinyMT64::from_entropy()));
+
+            // Determine whether to add the empty set or not.
+            let cnt = if add_permission_set(tiny_mt_64.clone(), add_chance_max) {
+                output.lock().unwrap().push(PermVec::new());
+
+                Arc::new(AtomicUsize::new(1))
             } else {
-                0
+                Arc::new(AtomicUsize::default())
             };
 
             permutation_step(
-                &mut output,
+                output.clone(),
                 all_permissions,
                 &[],
-                &mut tiny_mt_64,
-                chance_max,
-                &mut cnt
+                tiny_mt_64,
+                add_chance_max,
+                do_not_add_chance_max,
+                cnt.clone(),
             );
 
-            output
+            Arc::try_unwrap(output).unwrap().into_inner().unwrap()
         }
 
         fn expected_permissions_result(
@@ -1426,11 +1498,17 @@ mod tests {
 
         #[test]
         #[cfg(target_pointer_width = "64")]
-        #[ignore]
-        fn check_permissions_all_night_test() {
+        /// This is an 'entropy' test as it doesn't test every permission combination between
+        /// server operations, client granted permissions, and the permissions of the attributes
+        /// themselves. It selects a random number of permissions (up to 10k, but probably 10k) and
+        /// tests only those. Every time this test is run it is highly, highly, highly likely that
+        /// the sets of tested permissions are different. Re-running the test will probably produce
+        /// different results.
+        fn check_permissions_entropy_test() {
             use AttributePermissions::*;
             use AttributeRestriction::*;
             use EncryptionKeySize::*;
+            use rayon::prelude::*;
 
             let all_permissions: AllAttributePermissions = [
                 Read(None),
@@ -1455,11 +1533,11 @@ mod tests {
                 fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> { Some(Vec::new()) }
             }
 
-            let all_permission_permutations = &permissions_permutations(&all_permissions);
+            let all_tested_permission_permutations = &permissions_permutations(&all_permissions);
 
             let mut server_attributes = ServerAttributes::default();
 
-            all_permission_permutations.iter().for_each(|permissions| {
+             all_tested_permission_permutations.iter().for_each(|permissions| {
                 let attribute = Attribute::new(UUID::from(1u16), permissions.to_vec(), ());
 
                 server_attributes.push(attribute);
@@ -1467,14 +1545,14 @@ mod tests {
 
             let mut server = Server::new(&DummyConnection, 100, server_attributes);
 
-            all_permission_permutations.iter().for_each(|perm_client| {
+            all_tested_permission_permutations.iter().for_each(|perm_client| {
 
                 server.revoke_permissions_of_client(all_permissions.as_ref());
 
                 server.give_permissions_to_client(perm_client.as_ref());
 
-                all_permission_permutations.iter().for_each(|perm_op| {
-                    all_permission_permutations.iter().enumerate().for_each(|(cnt, perm_att)| {
+                all_tested_permission_permutations.par_iter().for_each(|perm_op| {
+                    all_tested_permission_permutations.iter().enumerate().for_each(|(cnt, perm_att)| {
 
                         // 'cnt + 1' because attributes start at handle 1
                         let calculated = server.check_permissions((cnt + 1) as u16, perm_op);
