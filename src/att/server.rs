@@ -1496,14 +1496,15 @@ mod tests {
             }
         }
 
-        #[test]
-        #[cfg(target_pointer_width = "64")]
         /// This is an 'entropy' test as it doesn't test every permission combination between
         /// server operations, client granted permissions, and the permissions of the attributes
         /// themselves. It selects a random number of permissions (up to 10k, but probably 10k) and
         /// tests only those. Every time this test is run it is highly, highly, highly likely that
         /// the sets of tested permissions are different. Re-running the test will probably produce
         /// different results.
+        #[test]
+        #[cfg(target_pointer_width = "64")]
+        #[ignore]
         fn check_permissions_entropy_test() {
             use AttributePermissions::*;
             use AttributeRestriction::*;
