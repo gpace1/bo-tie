@@ -8,9 +8,7 @@ struct ServiceDefinition;
 
 impl ServiceDefinition {
     /// The permissions of the service definitions is just Read Only
-    const PERMISSIONS: &'static [att::AttributePermissions] = &[
-        att::AttributePermissions::Read(att::AttributeRestriction::None)
-    ];
+    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 
     /// The primary service UUID
     const PRIMARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2800);
@@ -46,8 +44,7 @@ impl att::TransferFormatTryFrom for ServiceInclude {
                 },
             })
         } else {
-            Err(att::TransferFormatError::bad_min_size(stringify!(ServiceInclude),
-                                                       6, raw.len()))
+            Err(att::TransferFormatError::bad_min_size(stringify!(ServiceInclude), 6, raw.len()))
         }
     }
 }
@@ -71,40 +68,65 @@ impl att::TransferFormatInto for ServiceInclude {
 impl ServiceInclude {
     const TYPE: UUID = UUID::from_u16(0x2802);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
+/// Construct a GATT Service.
+///
+/// Every service contains a service definition characteristic with a number of other optional
+/// characteristics defined as part of the GATT protocol. A service can also have custom
+/// characteristics defined in a higher layer protocol.
+///
+/// A `ServiceBuilder` is created with the function `new_service_constructor` of
+/// [`ServerBuilder`](crate::gatt::ServerBuilder). `ServiceBuilder` is tied to the `ServerBuilder`
+/// that created it, the service build by this will be part of the server.
+///
+/// By creating a `ServiceBuilder`, a service definition characteristic is added to the server.
+/// Further characteristics of the service are optional, but they can be added by turning this
+/// into a `IncludesAdder` or a `CharacteristicAdder`. The only way to add one or more includes
+/// definition characteristics is to convert the server builder into a `IncludesAdder`. A
+/// `IncludesAdder` can then be converted into `CharacteristicAdder` once all included services are
+/// added. All other characteristics are added with the `CharacteristicAdder`. This is done to
+/// enforce all include definition to come after the service definition but before any other
+/// characteristics.
 pub struct ServiceBuilder<'a>
 {
     service_type: UUID,
-    /// The list of primary services. This is none if the service builder is constructing a
-    /// secondary service.
     is_primary: bool,
-    handle: u16,
     server_builder: &'a mut ServerBuilder,
+    default_permissions: Option<&'a [att::AttributePermissions]>,
+    definition_handle: Option<u16>,
 }
 
 impl<'a> ServiceBuilder<'a>
 {
-    fn new(
-        server_builder: &'a mut ServerBuilder,
-        service_type: UUID,
-        is_primary: bool
-    ) -> Self
-    {
-        let handle = server_builder.attributes.push(
+    fn new( server_builder: &'a mut ServerBuilder, service_type: UUID, is_primary: bool ) -> Self {
+        ServiceBuilder {
+            service_type,
+            is_primary,
+            server_builder,
+            default_permissions: None,
+            definition_handle: None,
+        }
+    }
+
+    /// Set the service definition into the server attributes
+    ///
+    /// This will create and add the service definition to the Attribute Server and return the
+    /// handle to it.
+    fn set_service_definition(&mut self) {
+        self.definition_handle = self.server_builder.attributes.push(
             att::Attribute::new(
-                if is_primary {
+                if self.is_primary {
                     ServiceDefinition::PRIMARY_SERVICE_TYPE
                 } else {
                     ServiceDefinition::SECONDARY_SERVICE_TYPE
                 },
-                ServiceDefinition::PERMISSIONS.into(),
-                service_type
+                self.default_permissions.unwrap_or(ServiceDefinition::DEFAULT_PERMISSIONS).into(),
+                self.service_type
             )
-        );
-
-        ServiceBuilder { service_type, is_primary, handle, server_builder }
+        )
+        .into();
     }
 
     /// Start including other services
@@ -112,40 +134,69 @@ impl<'a> ServiceBuilder<'a>
     /// This converts a `Service Builder` into a `IncludesAdder`. The returned `IncludesAdder`
     /// will allow for the addition of include definitions for other services. Afterwards an
     /// `IncludesAdder` can be further converted into a `CharacteristicAdder`
-    pub fn into_includes_adder(self) -> IncludesAdder<'a> {
-        IncludesAdder::new(self)
+    pub fn into_includes_adder(mut self) -> IncludesAdder<'a> {
+        self.set_service_definition();
+
+        let end_handle = self.definition_handle.unwrap();
+
+        IncludesAdder::new(self, end_handle)
     }
 
     /// Start adding characteristics
     ///
     /// This converts a `Service Builder` into a `CharacteristicAdder`. Use this function when the
-    /// service includes no other services. This will create a
-    /// characteristic adder that can be used to add characteristics after the service difinition
-    /// attribute. It is not possible to add includes to other services if this function is used.
+    /// service includes no other services. This will create a characteristic adder that can be used
+    /// to add characteristics after the service definition attribute. It is not possible to add
+    /// includes to other services if this function is used.
+    ///
+    /// A `CharacteristicAdder` is used to add the value declaration, descriptor declaration,
+    /// extended properties, user description, client configuration, and server configuration
+    /// characteristics. All of these characteristics are optional when creating .
     ///
     /// If you wish to create a service that includes other services, use the
     /// `[into_includes_adder](#add_service_includes)`
     /// function. That function will return a `IncludesAdder` which can be then converted into
     /// a `CharacteristicAdder` for adding characteristics to the service.
-    pub fn into_characteristics_adder(self) -> CharacteristicAdder<'a> {
-        let handle = self.handle;
-        CharacteristicAdder::new(self, handle)
+    pub fn into_characteristics_adder(mut self) -> CharacteristicAdder<'a> {
+        self.set_service_definition();
+
+        let end_handle = self.definition_handle.unwrap();
+
+        CharacteristicAdder::new(self, end_handle)
     }
 
     /// Create an empty service
     ///
-    /// This will create a service with no include definitions or characteristics. This means that
-    /// the service will contain no data other then what is in the service definition. As a result
-    /// an empty service will only contain its UUID.
+    /// This will create a service with no include definitions or characteristics. The service will
+    /// only contain the service definition characteristic.
     pub fn make_empty(mut self) -> Service {
+        self.set_service_definition();
+
         // There is only one handle in an empty Service so both the service handle and end group
         // handle are the same
-        self.make_service(self.handle)
+        self.make_service(self.definition_handle.unwrap())
+    }
+
+    /// Set the baseline attribute permissions for the service
+    ///
+    /// These permissions are used as the attribute permissions of the service definition and as the
+    /// default permissions of every other characteristic of this service. While this is the only
+    /// way to set the permissions of the service definition characteristic, the other
+    /// characteristics can have their permissions set with their respective builders.
+    pub fn set_att_permissions<P>(mut self, permissions: P ) -> Self
+    where P: Into<Option<&'a [att::AttributePermissions]>>
+    {
+        self.default_permissions = permissions.into();
+        self
     }
 
     fn make_service(&mut self, end_service_handle: u16 ) -> Service {
 
-        let service = Service::new( self.handle, end_service_handle, self.service_type);
+        let service = Service::new(
+            self.definition_handle.unwrap(),
+            end_service_handle,
+            self.service_type
+        );
 
         if self.is_primary { self.server_builder.add_primary_service(service)}
 
@@ -170,19 +221,25 @@ pub struct IncludesAdder<'a>
 
 impl<'a> IncludesAdder<'a>
 {
-    fn new( service_builder: ServiceBuilder<'a>)
+    fn new( service_builder: ServiceBuilder<'a>, service_definition_handle: u16 )
     -> Self
     {
-        let handle = service_builder.handle;
-
         IncludesAdder {
             service_builder,
-            end_group_handle: handle,
+            end_group_handle: service_definition_handle,
         }
     }
 
     /// Add a service to include
-    pub fn include_service( mut self, service: &Service ) -> Self {
+    ///
+    /// This takes a reference to the service to include with an optional permissions for the
+    /// include definition. If no permissions are given, then it uses the default permissions of the
+    /// service.
+    pub fn include_service<P: Into<Option<&'a [att::AttributePermissions]>>> (
+        mut self,
+        service: &Service,
+        permissions: P
+    ) -> Self {
         use core::convert::TryInto;
 
         let include = ServiceInclude {
@@ -193,7 +250,9 @@ impl<'a> IncludesAdder<'a>
 
         let attribute = att::Attribute::new(
             ServiceInclude::TYPE,
-            ServiceInclude::PERMISSIONS.into(),
+            permissions.into().or(self.service_builder.default_permissions)
+                .unwrap_or(ServiceInclude::DEFAULT_PERMISSIONS)
+                .into(),
             include
         );
 
@@ -238,6 +297,7 @@ pub struct CharacteristicAdder<'a>
 
 impl<'a> CharacteristicAdder<'a>
 {
+
     fn new(
         service_builder: ServiceBuilder<'a>,
         end_group_handle: u16,
@@ -246,22 +306,25 @@ impl<'a> CharacteristicAdder<'a>
         CharacteristicAdder { service_builder, end_group_handle }
     }
 
-    pub fn build_characteristic<C,V>(
+    pub fn build_characteristic<C,V,P>(
         self,
         properties: Vec<characteristic::Properties>,
         uuid: UUID,
         value: C,
-        value_permissions: Vec<att::AttributePermissions> )
+        value_permissions: P )
     -> characteristic::CharacteristicBuilder<'a, C, V>
         where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
               V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + PartialEq + 'static,
+              P: Into<Option<&'a [att::AttributePermissions]>>
     {
+        let permissions = value_permissions.into();
+
         characteristic::CharacteristicBuilder::new(
             self,
             properties,
             uuid,
             value,
-            value_permissions
+            permissions
         )
     }
 
@@ -291,6 +354,7 @@ impl Service {
 }
 
 pub struct GapServiceBuilder<'a> {
+    service_permissions: Option<&'a [att::AttributePermissions]>,
     device_name: &'a str,
     device_name_permissions: &'a [att::AttributePermissions],
     device_appearance: u16,
@@ -333,11 +397,21 @@ impl<'a> GapServiceBuilder<'a> {
           A: Into<Option<u16>>
     {
         GapServiceBuilder {
+            service_permissions: None,
             device_name: device_name.into().unwrap_or(""),
             device_name_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
             device_appearance: appearance.into().unwrap_or( Self::UNKNOWN_APPEARANCE ),
             device_appearance_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
         }
+    }
+
+    /// Set the service permissions
+    ///
+    /// This will be used as the permissions for all attributes of the GAP service.
+    pub fn set_permissions(&mut self, permissions: &'a [att::AttributePermissions]) {
+        self.service_permissions = permissions.into();
+        self.device_name_permissions = permissions;
+        self.device_appearance_permissions = permissions;
     }
 
     /// Set the attribute permissions for the device name characteristic
@@ -356,18 +430,19 @@ impl<'a> GapServiceBuilder<'a> {
         let mut server_builder = ServerBuilder::new_empty();
 
         server_builder.new_service_constructor(Self::GAP_SERVICE_TYPE, true)
+            .set_att_permissions(self.service_permissions)
             .into_characteristics_adder()
             .build_characteristic(
                 Self::DEVICE_NAME_PROPERTIES.to_vec(),
                 Self::DEVICE_NAME_TYPE,
                 self.device_name.to_string(),
-                self.device_name_permissions.to_vec())
+                self.device_name_permissions)
             .finish_characteristic()
             .build_characteristic(
                 Self::DEVICE_APPEARANCE_PROPERTIES.to_vec(),
                 Self::DEVICE_APPEARANCE_TYPE,
                 self.device_appearance,
-                self.device_appearance_permissions.to_vec())
+                self.device_appearance_permissions)
             .finish_characteristic()
             .finish_service();
 
@@ -378,6 +453,7 @@ impl<'a> GapServiceBuilder<'a> {
 impl Default for GapServiceBuilder<'_> {
     fn default() -> Self {
         GapServiceBuilder {
+            service_permissions: None,
             device_name: "",
             device_appearance: GapServiceBuilder::UNKNOWN_APPEARANCE,
             device_name_permissions: GapServiceBuilder::DEFAULT_ATTRIBUTE_PERMISSIONS,
@@ -412,7 +488,8 @@ impl ServerBuilder
     ///
     /// This will make a `ServiceBuilder` with the basic requirements for a GATT server. This
     /// server will only contain a *GAP* service with the characteristics *Device Name* and
-    /// *Appearance*, but both of these characteristics contain no information.
+    /// *Appearance*, but both of these characteristics contain no information. The permissions for
+    /// the GAP attributes will be the default read attributes.
     pub fn new() -> Self
     {
         GapServiceBuilder::default().into()
@@ -485,7 +562,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
         }
     }
 
-    /// Read by group type permission check
+    /// 'Read by group type' permission check
     fn rbgt_permission_check(&self, service: &Service) -> Result<(), att::pdu::Error> {
         self.server.check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
     }
@@ -669,31 +746,43 @@ mod tests {
     #[test]
     fn create_gatt_attributes() {
 
-        let mut server_builder = ServerBuilder::new();
+        let test_att_permissions: &[att::AttributePermissions] = &[
+            att::AttributePermissions::Read(att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128)),
+            att::AttributePermissions::Write(att::AttributeRestriction::Authentication)
+        ];
+
+        let mut gap_service = GapServiceBuilder::new(None,None);
+
+        gap_service.set_permissions(test_att_permissions);
+
+        let mut server_builder = ServerBuilder::new_with_gap(gap_service);
 
         let test_service_1 = server_builder.new_service_constructor( UUID::from_u16(0x1234), false )
+            .set_att_permissions(test_att_permissions)
             .into_characteristics_adder()
             .build_characteristic(
                 vec!(characteristic::Properties::Read),
                 UUID::from(0x1234u16),
                 Box::new(0usize),
-                vec!(att::AttributePermissions::Read(att::AttributeRestriction::None))
+                None
             )
-            .set_extended_properties( vec!(characteristic::ExtendedProperties::ReliableWrite) )
-            .set_user_description( characteristic::UserDescription::new(
-                "Test 1",
-                vec!(att::AttributePermissions::Read(att::AttributeRestriction::None)) )
-            )
-            .set_client_configuration( vec!(characteristic::ClientConfiguration::Notification) )
-            .set_server_configuration( vec!(characteristic::ServerConfiguration::Broadcast) )
+            .set_extended_properties( vec!(characteristic::ExtendedProperties::ReliableWrite), None )
+            .set_user_description( characteristic::UserDescription::new("Test 1", None ) )
+            .set_client_configuration( vec!(characteristic::ClientConfiguration::Notification), None )
+            .set_server_configuration( vec!(characteristic::ServerConfiguration::Broadcast), None )
             .finish_characteristic()
             .finish_service();
 
         let _test_service_2 = server_builder.new_service_constructor( UUID::from_u16(0x3456), true )
+            .set_att_permissions(test_att_permissions)
             .into_includes_adder()
-            .include_service(&test_service_1)
+            .include_service(&test_service_1, None)
             .finish_service();
 
-        server_builder.make_server(&DummyConnection, 0xFFu16);
+        let server = server_builder.make_server(&DummyConnection, 0xFFu16);
+
+        server.iter_attr_info()
+            .for_each(|info| assert_eq!(info.get_permissions(), test_att_permissions,
+                "failing UUID: {:#x}, handle: {}", info.get_type(), info.get_handle() ) )
     }
 }

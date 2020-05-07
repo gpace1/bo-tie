@@ -122,16 +122,20 @@ impl Declaration {
 
     const TYPE: UUID = UUID::from_u16(0x2803);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
-struct ValueDeclaration<V> {
+struct ValueDeclaration<'a, V> {
     /// The attribute type
     att_type: UUID,
     /// The attribute value
     value: V,
     /// The attribute permissions
-    permissions: Vec<att::AttributePermissions>,
+    permissions: Option<&'a [att::AttributePermissions]>,
+}
+
+impl ValueDeclaration<'_, ()> {
+    const DEFAULT_VALUE_PERMISSIONS: &'static [att::AttributePermissions] = &[];
 }
 
 #[derive(PartialEq)]
@@ -181,25 +185,26 @@ impl att::TransferFormatInto for Vec<ExtendedProperties> {
 }
 
 impl ExtendedProperties {
-    const TYPE: UUID = UUID::from_u16(0x2803);
+    const TYPE: UUID = UUID::from_u16(0x2900);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
-pub struct UserDescription {
+pub struct UserDescription<'a> {
     value: String,
-    permissions: Vec<att::AttributePermissions>
+    permissions: Option<&'a [att::AttributePermissions]>
 }
 
-impl UserDescription {
+impl<'a> UserDescription<'a> {
     const TYPE: UUID = UUID::from_u16(0x2901);
 
-    pub fn new<D>(description: D, permissions: Vec<att::AttributePermissions>) -> Self
-    where D: Into<String>
+    pub fn new<D,P>(description: D, permissions: P) -> Self
+    where D: Into<String>,
+          P: Into<Option<&'a [att::AttributePermissions]>>,
     {
         UserDescription {
             value: description.into(),
-            permissions
+            permissions: permissions.into()
         }
     }
 }
@@ -246,9 +251,9 @@ impl att::TransferFormatInto for ClientConfiguration {
 }
 
 impl ClientConfiguration {
-    const TYPE: UUID = UUID::from_u16(2903);
+    const TYPE: UUID = UUID::from_u16(2902);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 #[derive(PartialEq)]
@@ -285,17 +290,20 @@ impl att::TransferFormatInto for ServerConfiguration {
 impl ServerConfiguration {
     const TYPE: UUID = UUID::from_u16(2903);
 
-    const PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 pub struct CharacteristicBuilder<'a, C, V> {
     characteristic_adder: super::CharacteristicAdder<'a>,
     declaration: Declaration,
-    value_decl: ValueDeclaration<C>,
+    value_decl: ValueDeclaration<'a, C>,
     ext_prop: Option<Vec<ExtendedProperties>>,
-    user_desc: Option<UserDescription>,
+    ext_prop_permissions: Option<&'a [att::AttributePermissions]>,
+    user_desc: Option<UserDescription<'a>>,
     client_cfg: Option<Vec<ClientConfiguration>>,
+    client_cfg_permissions: Option<&'a [att::AttributePermissions]>,
     server_cfg: Option<Vec<ServerConfiguration>>,
+    server_cfg_permissions: Option<&'a [att::AttributePermissions]>,
     pd: core::marker::PhantomData<V>,
 }
 
@@ -303,16 +311,16 @@ impl<'a, C, V> CharacteristicBuilder<'a, C, V>
 where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
       V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + PartialEq + 'static,
 {
-    pub(super) fn new(
+    pub(super) fn new<P>(
         characteristic_adder: super::CharacteristicAdder<'a>,
         properties: Vec<Properties>,
         uuid: UUID,
         value: C,
-        value_permissions: Vec<att::AttributePermissions>
+        value_permissions: P
     ) -> Self
+    where P: Into<Option<&'a [att::AttributePermissions]>>
     {
         CharacteristicBuilder {
-            characteristic_adder,
             declaration: Declaration {
                 properties,
                 value_handle: 0,
@@ -321,31 +329,35 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
             value_decl: ValueDeclaration {
                 att_type: uuid,
                 value,
-                permissions: value_permissions,
+                permissions: value_permissions.into(),
             },
             ext_prop: None,
+            ext_prop_permissions: None,
             user_desc: None,
             client_cfg: None,
+            client_cfg_permissions: None,
             server_cfg: None,
-            pd: core::marker::PhantomData
+            server_cfg_permissions: None,
+            characteristic_adder,
+            pd: core::marker::PhantomData,
         }
     }
 
     /// Instruct the builder to create a `Extended Properties` characteristic descriptor
     /// upon building the characteristic unless the value of `extended_properties` is `None`.
-    #[inline]
-    pub fn set_extended_properties<E>( mut self, extended_properties: E) -> Self
-    where E: Into<Option<Vec<ExtendedProperties>>>
+    pub fn set_extended_properties<E,P>( mut self, extended_properties: E, permissions: P) -> Self
+    where E: Into<Option<Vec<ExtendedProperties>>>,
+          P: Into<Option<&'a [att::AttributePermissions]>>,
     {
         self.ext_prop = extended_properties.into();
+        self.ext_prop_permissions = permissions.into();
         self
     }
 
     /// Instruct the builder to create a `User Description` characteristic descriptor
     /// upon building the characteristic unless the value of `user_description` is `None`.
-    #[inline]
     pub fn set_user_description<D>( mut self, user_description: D) -> Self
-    where D: Into<Option<UserDescription>>
+    where D: Into<Option<UserDescription<'a>>>,
     {
         self.user_desc = user_description.into();
         self
@@ -353,21 +365,23 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
 
     /// Instruct the builder to create a `Client Configuration` characteristic descriptor
     /// upon building the characteristic unless the value of `client_cfg` is `None`.
-    #[inline]
-    pub fn set_client_configuration<Cfg>( mut self, client_cfg: Cfg) -> Self
-    where Cfg: Into<Option<Vec<ClientConfiguration>>>
+    pub fn set_client_configuration<Cfg,P>( mut self, client_cfg: Cfg, permissions: P) -> Self
+    where Cfg: Into<Option<Vec<ClientConfiguration>>>,
+          P: Into<Option<&'a [att::AttributePermissions]>>,
     {
         self.client_cfg = client_cfg.into();
+        self.client_cfg_permissions = permissions.into();
         self
     }
 
     /// Instruct the builder to create a `Server Configuration` characteristic descriptor
     /// upon building the characteristic unless the value of `server_cfg` is `None`.
-    #[inline]
-    pub fn set_server_configuration<Cfg>( mut self, server_cfg: Cfg) -> Self
-    where Cfg: Into<Option<Vec<ServerConfiguration>>>
+    pub fn set_server_configuration<Cfg,P>( mut self, server_cfg: Cfg, permissions: P) -> Self
+    where Cfg: Into<Option<Vec<ServerConfiguration>>>,
+          P: Into<Option<&'a [att::AttributePermissions]>>
     {
         self.server_cfg = server_cfg.into();
+        self.server_cfg_permissions = permissions.into();
         self
     }
 
@@ -386,7 +400,9 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
 
         let declaration = Attribute::new(
             Declaration::TYPE,
-            Declaration::PERMISSIONS.into(),
+            self.characteristic_adder.service_builder.default_permissions
+                .unwrap_or(Declaration::DEFAULT_PERMISSIONS)
+                .into(),
             self.declaration
         );
 
@@ -394,7 +410,10 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
 
         let value = Attribute::new(
             self.value_decl.att_type,
-            self.value_decl.permissions,
+            self.value_decl.permissions
+                .or(self.characteristic_adder.service_builder.default_permissions)
+                .unwrap_or(ValueDeclaration::DEFAULT_VALUE_PERMISSIONS)
+                .into(),
             self.value_decl.value
         );
 
@@ -405,7 +424,10 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
             last_attr = attributes.push(
                 Attribute::new(
                     ExtendedProperties::TYPE,
-                    ExtendedProperties::PERMISSIONS.into(),
+                    self.ext_prop_permissions
+                        .or(self.characteristic_adder.service_builder.default_permissions)
+                        .unwrap_or(ExtendedProperties::DEFAULT_PERMISSIONS)
+                        .into(),
                     ext,
                 )
             );
@@ -415,7 +437,10 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
             last_attr = attributes.push(
                 Attribute::new(
                     UserDescription::TYPE,
-                    desc.permissions,
+                    desc.permissions
+                        .or(self.characteristic_adder.service_builder.default_permissions)
+                        .unwrap_or(&[])
+                        .into(),
                     desc.value
                 )
             );
@@ -425,7 +450,10 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
             last_attr = attributes.push(
                 Attribute::new(
                     ClientConfiguration::TYPE,
-                    ClientConfiguration::PERMISSIONS.into(),
+                    self.client_cfg_permissions
+                        .or(self.characteristic_adder.service_builder.default_permissions)
+                        .unwrap_or(ClientConfiguration::DEFAULT_PERMISSIONS)
+                        .into(),
                     client_cfg
                 )
             );
@@ -435,13 +463,16 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
             last_attr = attributes.push(
                 Attribute::new(
                     ServerConfiguration::TYPE,
-                    ServerConfiguration::PERMISSIONS.into(),
+                    self.server_cfg_permissions
+                        .or(self.characteristic_adder.service_builder.default_permissions)
+                        .unwrap_or(ServerConfiguration::DEFAULT_PERMISSIONS)
+                        .into(),
                     server_cfg
                 )
             );
         }
 
-        self.characteristic_adder.end_group_handle =last_attr;
+        self.characteristic_adder.end_group_handle = last_attr;
 
         self.characteristic_adder
     }
