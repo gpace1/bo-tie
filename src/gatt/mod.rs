@@ -628,11 +628,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                                 .collect()
                         };
 
-                        let pdu = att::pdu::Pdu::new(
-                            att::server::ServerPduName::ReadByGroupTypeResponse.into(),
-                            ReadByGroupTypeResponse::new(response),
-                            None
-                        );
+                        let pdu = att::pdu::read_by_group_type_response(ReadByGroupTypeResponse::new(response));
 
                         self.server.send_pdu(pdu);
                     },
@@ -876,6 +872,21 @@ mod tests {
                     let acl_data = l2cap::AclData::from_raw_data(&data).unwrap();
                     att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
                 } ),
+        );
+
+        let client_pdu = att::pdu::read_by_group_type_request(
+            12..,
+            ServiceDefinition::PRIMARY_SERVICE_TYPE
+        );
+
+        let acl_client_pdu = l2cap::AclData::new(
+            TransferFormatInto::into(&client_pdu),
+            att::L2CAP_CHANNEL_ID
+        );
+
+        assert_eq!(
+            Err(att::Error::PduError(att::pdu::Error::InvalidHandle)),
+            server.process_acl_data(&acl_client_pdu)
         );
     }
 }
