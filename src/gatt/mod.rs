@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 use crate::{ att, l2cap, UUID};
-use crate::att::TransferFormatInto;
 
 pub mod characteristic;
 
@@ -569,49 +568,14 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
     fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
 
-        /// Response Item
-        #[derive(Clone,Copy)]
-        struct ResponseItem<U> {
-            service_handle: u16,
-            end_group_handle: u16,
-            uuid: U
-        }
-
-        struct ServiceGroupResponse<I>(I);
-
-        impl<I,U> att::TransferFormatInto for ServiceGroupResponse<I>
-        where I: Iterator<Item=ResponseItem<U>> + Clone,
-              U: TransferFormatInto,
-        {
-            fn len_of_into(&self) -> usize {
-                1 + self.0.clone().fold(0usize, |acc,ri| acc + 4 + ri.uuid.len_of_into() )
-            }
-
-            fn build_into_ret(&self, into_ret: &mut [u8]) {
-
-                into_ret[0] = 4 + core::mem::size_of::<U>() as u8;
-
-                self.0.clone().fold(&mut into_ret[1..], | into_ret, response_item | {
-
-                    let uuid_len = response_item.uuid.len_of_into();
-
-                    into_ret[..2].copy_from_slice( &response_item.service_handle.to_le_bytes() );
-
-                    into_ret[2..4].copy_from_slice( &response_item.end_group_handle.to_le_bytes() );
-
-                    response_item.uuid.build_into_ret( &mut into_ret[4..(4 + uuid_len)] );
-
-                    &mut into_ret[(4 + uuid_len)..]
-                });
-            }
-        }
-
         match att::TransferFormatTryFrom::try_from(payload) {
             Ok(att::pdu::TypeRequest {
                    handle_range,
                    attr_type: ServiceDefinition::PRIMARY_SERVICE_TYPE,
                }) =>
             {
+                use att::pdu::{ReadGroupTypeData, ReadByGroupTypeResponse};
+
                 let mut service_iter = self.primary_services.iter()
                     .filter(|s| s.service_handle >= handle_range.starting_handle &&
                         s.service_handle <= handle_range.ending_handle)
@@ -627,46 +591,50 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                 // is then sent to the client.
                 match service_iter.peek() {
                     Some(Ok(first_service)) => {
-                        let payload_size = self.server.get_mtu() - 2; // pdu header size is 2 bytes
+                        // pdu header size is 2 bytes
+                        let payload_size = self.server.get_mtu() - 2;
+                        let is_16_bit = first_service.service_type.is_16_bit();
 
-                        // Each data_size is 4 bytes for the attribute handle + the end group handle and
-                        // either 2 bytes for short UUIDs or 16 bytes for full UUIDs
-                        if first_service.service_type.is_16_bit() {
-                            let service_iter = service_iter
-                                .take_while(|rslt| rslt.is_ok())
-                                .map(|rslt| rslt.unwrap())
-                                .take_while(|s| s.service_type.is_16_bit())
+                        let build_response_iter = service_iter
+                            .take_while(|rslt| rslt.is_ok())
+                            .map(|rslt| rslt.unwrap());
+
+                        // Each data_size is 4 bytes for the attribute handle + the end group handle
+                        // and either 2 bytes for short UUIDs or 16 bytes for full UUIDs
+                        let response = if is_16_bit {
+                            build_response_iter.take_while(|s| s.service_type.is_16_bit())
                                 .enumerate()
                                 .take_while(|(cnt, _)| payload_size > cnt * (4 + 2))
-                                .map(|(_, s)| ResponseItem {
-                                    service_handle: s.service_handle,
-                                    end_group_handle: s.end_group_handle,
-                                    uuid: core::convert::TryInto::<u16>::try_into(s.service_type).unwrap(),
-                                });
-
-                            self.server.send_pdu( att::pdu::Pdu::new(
-                                att::server::ServerPduName::ReadByGroupTypeResponse.into(),
-                                ServiceGroupResponse(service_iter),
-                                None
-                            ));
+                                .by_ref()
+                                .map(|(_, s)|
+                                    ReadGroupTypeData::new(
+                                        s.service_handle,
+                                        s.end_group_handle,
+                                        s.service_type
+                                    )
+                                )
+                                .collect()
                         } else {
-                            let service_iter = service_iter
-                                .take_while(|rslt| rslt.is_ok())
-                                .map(|rslt| rslt.unwrap())
-                                .enumerate()
+                            build_response_iter.enumerate()
                                 .take_while(|(cnt, _)| payload_size > cnt * (4 + 16))
-                                .map(|(_, s)| ResponseItem {
-                                    service_handle: s.service_handle,
-                                    end_group_handle: s.end_group_handle,
-                                    uuid: <u128>::from(s.service_type),
-                                });
-
-                            self.server.send_pdu( att::pdu::Pdu::new(
-                                att::server::ServerPduName::ReadByGroupTypeResponse.into(),
-                                ServiceGroupResponse(service_iter),
-                                None
-                            ));
+                                .by_ref()
+                                .map(|(_, s)|
+                                    ReadGroupTypeData::new(
+                                        s.service_handle,
+                                        s.end_group_handle,
+                                        s.service_type
+                                    )
+                                )
+                                .collect()
                         };
+
+                        let pdu = att::pdu::Pdu::new(
+                            att::server::ServerPduName::ReadByGroupTypeResponse.into(),
+                            ReadByGroupTypeResponse::new(response),
+                            None
+                        );
+
+                        self.server.send_pdu(pdu);
                     },
 
                     // Client didn't have adequate permissions to access the first service
@@ -750,7 +718,7 @@ mod tests {
     use crate::l2cap::{ConnectionChannel, L2capPdu, AclDataFragment};
     use crate::UUID;
     use futures::task::Waker;
-    use crate::hci::events::ServiceType;
+    use att::TransferFormatInto;
 
     struct DummyConnection;
 
@@ -872,7 +840,7 @@ mod tests {
                 att::pdu::ReadGroupTypeData::new(1,5, GapServiceBuilder::GAP_SERVICE_TYPE),
                 att::pdu::ReadGroupTypeData::new(6,8, first_test_uuid),
             ]
-        ).unwrap();
+        );
 
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
@@ -899,7 +867,7 @@ mod tests {
             vec![
                 att::pdu::ReadGroupTypeData::new(9,11, second_test_uuid)
             ]
-        ).unwrap();
+        );
 
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),

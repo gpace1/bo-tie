@@ -1086,12 +1086,12 @@ impl<D> ReadByGroupTypeResponse<D> {
 
     /// Create a new `ReadByGroupTypeResponse`
     ///
-    /// Returns a `ReadByGroupTypeResponse` if input `data` is not empty, otherwise an `Err` is
-    /// returned.
-    pub fn new(data: Vec<ReadGroupTypeData<D>>) -> Result<Self, ()> {
+    /// # Panics
+    /// Input `data` cannot be an empty vector.
+    pub fn new(data: Vec<ReadGroupTypeData<D>>) -> Self {
         match data.len() {
-            0 => Err(()),
-            _ => Ok( ReadByGroupTypeResponse { data } )
+            0 => panic!("Input `data` of ReadByGroupTypeResponse::new cannot be an empty vector"),
+            _ => ReadByGroupTypeResponse { data }
         }
     }
 }

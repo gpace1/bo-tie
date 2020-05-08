@@ -524,7 +524,7 @@ where C: l2cap::ConnectionChannel
     /// If the handle doesn't exist, then the notification isn't sent and false is returned
     pub fn send_notification(&self, handle: u16) -> bool {
         self.attributes.get(handle).map( | attribute | {
-            self.send( pdu::handle_value_notification( handle, attribute ) );
+            self.send_pdu( pdu::handle_value_notification( handle, attribute ) );
         } )
         .is_some()
     }
@@ -552,7 +552,7 @@ where C: l2cap::ConnectionChannel
         log_debug!("Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
             Into::<u8>::into(received_opcode), handle, pdu_error);
 
-        self.send( pdu::error_response(received_opcode.into(),handle,pdu_error) );
+        self.send_pdu( pdu::error_response(received_opcode.into(),handle,pdu_error) );
     }
 
     /// Get a reference to an attribute
@@ -619,14 +619,14 @@ where C: l2cap::ConnectionChannel
 
         log_debug!("Sending exchange mtu response");
 
-        self.send(pdu::exchange_mtu_response(self.get_mtu() as u16));
+        self.send_pdu(pdu::exchange_mtu_response(self.get_mtu() as u16));
     }
 
     /// Process a Read Request from the client
     fn process_read_request(&mut self, handle: u16) {
         log::trace!("Read Request");
 
-        match self.read_att_and(handle, |att_tf| self.send( pdu::read_response(att_tf) ) ) {
+        match self.read_att_and(handle, |att_tf| self.send_pdu( pdu::read_response(att_tf) ) ) {
             Err(e) => self.send_error(handle, ClientPduName::ReadRequest, e),
             Ok(_) => (),
         }
@@ -729,7 +729,7 @@ where C: l2cap::ConnectionChannel
                 } else {
                     let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_128_bit_itr, None);
 
-                    self.send( pdu );
+                    self.send_pdu( pdu );
                 }
             } else {
 
@@ -737,7 +737,7 @@ where C: l2cap::ConnectionChannel
 
                 let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_16_bit_itr, None);
 
-                self.send( pdu );
+                self.send_pdu( pdu );
             }
         } else {
             self.send_error(handle_range.starting_handle, ClientPduName::FindInformationRequest, pdu::Error::InvalidHandle);
@@ -797,7 +797,7 @@ where C: l2cap::ConnectionChannel
                     );
 
                 } else {
-                    self.send(pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), handles, None));
+                    self.send_pdu(pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), handles, None));
                 }
             } else {
                 self.send_error(
@@ -873,7 +873,7 @@ where C: l2cap::ConnectionChannel
 
                         let pdu = pdu::Pdu::new(ServerPduName::ReadByTypeResponse.into(), parameter, None);
 
-                        self.send(pdu);
+                        self.send_pdu(pdu);
                     }
                 }
             }
