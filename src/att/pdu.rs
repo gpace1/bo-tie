@@ -76,6 +76,12 @@ impl From<u8> for PduOpCode {
     }
 }
 
+impl core::fmt::Display for PduOpCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        pretty_opcode(self.as_raw(), f)
+    }
+}
+
 fn pretty_opcode(opcode: u8, f: &mut core::fmt::Formatter) -> core::fmt::Result {
     use core::convert::TryFrom;
 
@@ -361,7 +367,7 @@ impl From<Error> for super::Error {
 }
 
 /// Attribute Parameters included with the Error PDU
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ErrorAttributeParameter {
     /// The opcode of the requested
     pub request_opcode: u8,
@@ -1030,7 +1036,7 @@ where R: Into<HandleRange>
 /// A single read by group type response
 ///
 /// The read by group type response will contain one or more of these
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReadGroupTypeData<D> {
     handle: u16,
     end_group_handle: u16,
@@ -1071,7 +1077,7 @@ impl<D> TransferFormatInto for ReadGroupTypeData<D> where D: TransferFormatInto 
 }
 
 /// The full list of response data for read by group type
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ReadByGroupTypeResponse<D> {
     data: Vec<ReadGroupTypeData<D>>,
 }
@@ -1118,7 +1124,9 @@ impl<D> TransferFormatTryFrom for ReadByGroupTypeResponse<D> where D: TransferFo
 
 impl<D> TransferFormatInto for ReadByGroupTypeResponse<D> where D: TransferFormatInto {
     fn len_of_into(&self) -> usize {
-        self.data.iter().fold(0usize, |len, d| d.len_of_into() + len )
+        1 + self.data.first()
+            .map(|first| first.len_of_into() * self.data.len())
+            .unwrap_or_default()
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {

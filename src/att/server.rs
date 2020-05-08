@@ -541,6 +541,8 @@ where C: l2cap::ConnectionChannel
 
     /// Send an attribute PDU to the client
     pub fn send_pdu<D>(&self, pdu: pdu::Pdu<D> ) where D: TransferFormatInto {
+        log::trace!("Sending {}", pdu.get_opcode());
+
         self.send(pdu);
     }
 

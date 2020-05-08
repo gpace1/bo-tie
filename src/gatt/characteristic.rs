@@ -418,10 +418,10 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
         );
 
         // last_attr is handle value of the added attribute
-        let mut last_attr = attributes.push(value);
+        attributes.push(value);
 
         if let Some(ext) = self.ext_prop.take() {
-            last_attr = attributes.push(
+            attributes.push(
                 Attribute::new(
                     ExtendedProperties::TYPE,
                     self.ext_prop_permissions
@@ -434,7 +434,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
         }
 
         if let Some(desc) = self.user_desc.take() {
-            last_attr = attributes.push(
+            attributes.push(
                 Attribute::new(
                     UserDescription::TYPE,
                     desc.permissions
@@ -447,7 +447,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
         }
 
         if let Some(client_cfg) = self.client_cfg.take() {
-            last_attr = attributes.push(
+            attributes.push(
                 Attribute::new(
                     ClientConfiguration::TYPE,
                     self.client_cfg_permissions
@@ -460,7 +460,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
         }
 
         if let Some(server_cfg) = self.server_cfg.take() {
-            last_attr = attributes.push(
+            attributes.push(
                 Attribute::new(
                     ServerConfiguration::TYPE,
                     self.server_cfg_permissions
@@ -472,7 +472,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
             );
         }
 
-        self.characteristic_adder.end_group_handle = last_attr;
+        self.characteristic_adder.end_group_handle = attributes.next_handle() - 1;
 
         self.characteristic_adder
     }

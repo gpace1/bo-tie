@@ -11,10 +11,10 @@ impl ServiceDefinition {
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 
     /// The primary service UUID
-    const PRIMARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2800);
+    pub const PRIMARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2800);
 
     /// The secondary service UUID
-    const SECONDARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2801);
+    pub const SECONDARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2801);
 }
 
 #[derive(PartialEq)]
@@ -198,7 +198,7 @@ impl<'a> ServiceBuilder<'a>
             self.service_type
         );
 
-        if self.is_primary { self.server_builder.add_primary_service(service)}
+        if self.is_primary { self.server_builder.add_primary_service(service) }
 
         service
     }
@@ -589,7 +589,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
 
-                into_ret[0] = core::mem::size_of::<I::Item>() as u8;
+                into_ret[0] = 4 + core::mem::size_of::<U>() as u8;
 
                 self.0.clone().fold(&mut into_ret[1..], | into_ret, response_item | {
 
@@ -597,7 +597,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
                     into_ret[..2].copy_from_slice( &response_item.service_handle.to_le_bytes() );
 
-                    into_ret[2..4].copy_from_slice( &response_item.service_handle.to_le_bytes() );
+                    into_ret[2..4].copy_from_slice( &response_item.end_group_handle.to_le_bytes() );
 
                     response_item.uuid.build_into_ret( &mut into_ret[4..(4 + uuid_len)] );
 
@@ -670,28 +670,42 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                     },
 
                     // Client didn't have adequate permissions to access the first service
-                    Some(Err(e)) => self.server.send_error(
-                        handle_range.starting_handle,
-                        att::client::ClientPduName::ReadByGroupTypeRequest,
-                        (*e).into()),
+                    Some(Err(e)) => {
+                        self.server.send_error(
+                            handle_range.starting_handle,
+                            att::client::ClientPduName::ReadByGroupTypeRequest,
+                            (*e).into());
+
+                        return Err((*e).into());
+                    },
 
                     // No service attributes found within the requested range
-                    None => self.server.send_error(
-                        handle_range.starting_handle,
-                        att::client::ClientPduName::ReadByGroupTypeRequest,
-                        att::pdu::Error::InvalidHandle),
+                    None => {
+                        self.server.send_error(
+                            handle_range.starting_handle,
+                            att::client::ClientPduName::ReadByGroupTypeRequest,
+                            att::pdu::Error::InvalidHandle);
+
+                        return Err(att::pdu::Error::InvalidHandle.into());
+                    },
                 }
             },
-            Ok(att::pdu::TypeRequest { handle_range, .. } ) =>
+            Ok(att::pdu::TypeRequest { handle_range, .. } ) => {
                 self.server.send_error(
                     handle_range.starting_handle,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnsupportedGroupType),
-            _ =>
+                    att::pdu::Error::UnsupportedGroupType);
+
+                return Err(att::pdu::Error::UnsupportedGroupType.into())
+            },
+            _ => {
                 self.server.send_error(
                     0,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnlikelyError),
+                    att::pdu::Error::UnlikelyError);
+
+                return Err(att::pdu::Error::UnlikelyError.into())
+            },
         }
 
         Ok(())
@@ -733,8 +747,10 @@ mod tests {
 
     use super::*;
     use alloc::boxed::Box;
-    use crate::l2cap::ConnectionChannel;
+    use crate::l2cap::{ConnectionChannel, L2capPdu, AclDataFragment};
     use crate::UUID;
+    use futures::task::Waker;
+    use crate::hci::events::ServiceType;
 
     struct DummyConnection;
 
@@ -784,5 +800,114 @@ mod tests {
         server.iter_attr_info()
             .for_each(|info| assert_eq!(info.get_permissions(), test_att_permissions,
                 "failing UUID: {:#x}, handle: {}", info.get_type(), info.get_handle() ) )
+    }
+
+    struct TestChannel {
+        last_sent_pdu: std::cell::Cell<Option<Vec<u8>>>
+    }
+
+    impl l2cap::ConnectionChannel for TestChannel {
+        fn send<Pdu>(&self, data: Pdu) where Pdu: Into<L2capPdu> {
+            self.last_sent_pdu.set(Some(data.into().into_data()));
+        }
+
+        fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn gatt_services_read_by_group_type() {
+
+        let mut server_builder = ServerBuilder::new();
+
+        let first_test_uuid = UUID::from(0x1000u16);
+        let second_test_uuid = UUID::from(0x1001u128);
+
+        server_builder.new_service_constructor( first_test_uuid, true)
+            .into_characteristics_adder()
+            .build_characteristic(
+                vec![characteristic::Properties::Read],
+                UUID::from(0x2000u16),
+                Box::new(0usize),
+                None
+            )
+            .finish_characteristic()
+            .finish_service();
+
+        server_builder.new_service_constructor( second_test_uuid, true)
+            .into_characteristics_adder()
+            .build_characteristic(
+                vec![characteristic::Properties::Read],
+                UUID::from(0x2001u16),
+                Box::new(0usize),
+                None
+            )
+            .finish_characteristic()
+            .finish_service();
+
+        let test_channel = TestChannel { last_sent_pdu: None.into() };
+
+        let mut server = server_builder.make_server(&test_channel, 256);
+
+        server.give_permissions_to_client([
+            att::AttributePermissions::Read(att::AttributeRestriction::None)
+        ]);
+
+        let client_pdu = att::pdu::read_by_group_type_request(
+            1..,
+            ServiceDefinition::PRIMARY_SERVICE_TYPE
+        );
+
+        let acl_client_pdu = l2cap::AclData::new(
+            TransferFormatInto::into(&client_pdu),
+            att::L2CAP_CHANNEL_ID
+        );
+
+        assert_eq!( Ok(()), server.process_acl_data(&acl_client_pdu), );
+
+        let expected_response = att::pdu::ReadByGroupTypeResponse::new(
+            vec![
+                // Gap Service
+                att::pdu::ReadGroupTypeData::new(1,5, GapServiceBuilder::GAP_SERVICE_TYPE),
+                att::pdu::ReadGroupTypeData::new(6,8, first_test_uuid),
+            ]
+        ).unwrap();
+
+        assert_eq!(
+            Some(att::pdu::read_by_group_type_response(expected_response)),
+            test_channel.last_sent_pdu.take()
+                .map(|data| {
+                    let acl_data = l2cap::AclData::from_raw_data(&data).unwrap();
+                    att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
+                } ),
+        );
+
+        let client_pdu = att::pdu::read_by_group_type_request(
+            9..,
+            ServiceDefinition::PRIMARY_SERVICE_TYPE
+        );
+
+        let acl_client_pdu = l2cap::AclData::new(
+            TransferFormatInto::into(&client_pdu),
+            att::L2CAP_CHANNEL_ID
+        );
+
+        assert_eq!( Ok(()), server.process_acl_data(&acl_client_pdu), );
+
+        let expected_response = att::pdu::ReadByGroupTypeResponse::new(
+            vec![
+                att::pdu::ReadGroupTypeData::new(9,11, second_test_uuid)
+            ]
+        ).unwrap();
+
+        assert_eq!(
+            Some(att::pdu::read_by_group_type_response(expected_response)),
+            test_channel.last_sent_pdu.take()
+                .map(|data| {
+                    let acl_data = l2cap::AclData::from_raw_data(&data).unwrap();
+                    att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
+                } ),
+        );
     }
 }

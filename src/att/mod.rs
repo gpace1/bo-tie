@@ -246,6 +246,7 @@ impl<V> Attribute<V> {
     }
 }
 
+#[derive(PartialEq)]
 pub enum Error {
     Other(&'static str),
     /// Returned when there is no connection to the bluetooth controller
@@ -319,6 +320,7 @@ impl From<TransferFormatError> for Error {
     }
 }
 
+#[derive(PartialEq)]
 pub struct TransferFormatError {
     pub pdu_err: pdu::Error,
     pub message: String,
