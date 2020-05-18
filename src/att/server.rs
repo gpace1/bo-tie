@@ -176,8 +176,26 @@ impl ServerPduName {
 
 /// An Attribute server
 ///
-/// For now a server can only handle one client. It will be updated to handle multiple clients
-/// as soon as possible.
+/// This is an implementation of the server role for the Attribute protocol. A server is made up of
+/// attributes, which consist of a handle, a UUID, and a value.
+///
+/// A handle is much like an index of an array and is used to address the attribute. Per the
+/// specification an handle is a u16 value with zero being reserved (attributes will start at handle
+/// one). This server forcibly put all attributes in sequential order, as a vector is used for the
+/// attributes collection.
+///
+/// Each server is unique for the connection to the client. Making the server this way allows for a
+/// unique state for each connection, allowing the commands being processed independent of other
+/// connections. Things like the maximum transfer unit (MTU) and client permissions might be
+/// different per connection. Most importantly, because servers are independent, they can be used
+/// within separate threads.
+///
+/// Having a unique server per connection does not mean that the attribute values will need to be
+/// wrapped within synchronization containers if they're shared between servers. This is where the
+/// somewhat awkward
+/// [`ServerAttributeValue`](crate::att::server::ServerAttributeValue)
+/// can be implemented on the container to perform concurrency safe reading or writing on the
+/// contained value.
 pub struct Server<'c, C>
 {
     /// The maximum mtu that this server can handle. This is also the mtu sent in a MTU response
@@ -248,7 +266,7 @@ where C: l2cap::ConnectionChannel
     /// cause this function to panic.
     pub fn push<X,V>(&mut self, attribute: super::Attribute<X>) -> u16
     where X: ServerAttributeValue<V> + Sized + Send + Sync + 'static,
-          V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq + 'static,
+          V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
     {
         use core::convert::TryInto;
 
@@ -917,7 +935,7 @@ impl ServerAttributes {
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
     pub fn push<C,V>(&mut self, mut attribute: super::Attribute<C>) -> u16
         where C: ServerAttributeValue<V> + Sized + Send + Sync + 'static,
-              V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq + 'static,
+              V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
     {
         use core::convert::TryInto;
 
@@ -1067,7 +1085,7 @@ pub trait AttributeInfo {
 /// server_attributes.push(att_usize);
 /// server_attributes.push(att_msg);
 /// ```
-pub trait ServerAttributeValue<V> {
+pub trait ServerAttributeValue<V>: PartialEq<V> {
 
     fn read_and<F,T>(&self, f: F ) -> T where F: FnMut(&V) -> T;
 
@@ -1075,7 +1093,7 @@ pub trait ServerAttributeValue<V> {
 }
 
 /// The trivial implementation for ServerAttributeValue
-impl<V> ServerAttributeValue<V> for V {
+impl<V> ServerAttributeValue<V> for V where V: PartialEq {
     fn read_and<F,T>(&self, mut f: F ) -> T where F: FnMut(&V) -> T { f( self ) }
 
     fn write_val(&mut self, val: V) { *self = val }
@@ -1139,7 +1157,7 @@ impl<C,V> AttributeInfo for ServerAttEntry<C,V> {
 
 impl<C, V> ServerAttribute for ServerAttEntry<C,V>
 where C: ServerAttributeValue<V> + Send + Sync,
-      V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + PartialEq,
+      V: TransferFormatTryFrom + TransferFormatInto + Send + Sync,
 {
     fn as_att_info(&self) -> &dyn AttributeInfo { self }
 
@@ -1164,7 +1182,7 @@ where C: ServerAttributeValue<V> + Send + Sync,
 
     fn cmp_value_to_raw_transfer_format(&self, raw: &[u8] ) -> bool {
         <V as TransferFormatTryFrom>::try_from(raw)
-            .map( |ref cmp_val| self.attribute.value.read_and( |v| v == cmp_val ) )
+            .map( |cmp_val| self.attribute.value == cmp_val )
             .unwrap_or_default()
     }
 }
