@@ -293,23 +293,23 @@ impl ServerConfiguration {
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
-pub struct CharacteristicBuilder<'a, C, V> {
+pub struct CharacteristicBuilder<'a,'c, C, V> {
     characteristic_adder: super::CharacteristicAdder<'a>,
     declaration: Declaration,
-    value_decl: ValueDeclaration<'a, C>,
+    value_decl: ValueDeclaration<'c, C>,
     ext_prop: Option<Vec<ExtendedProperties>>,
-    ext_prop_permissions: Option<&'a [att::AttributePermissions]>,
-    user_desc: Option<UserDescription<'a>>,
+    ext_prop_permissions: Option<&'c [att::AttributePermissions]>,
+    user_desc: Option<UserDescription<'c>>,
     client_cfg: Option<Vec<ClientConfiguration>>,
-    client_cfg_permissions: Option<&'a [att::AttributePermissions]>,
+    client_cfg_permissions: Option<&'c [att::AttributePermissions]>,
     server_cfg: Option<Vec<ServerConfiguration>>,
-    server_cfg_permissions: Option<&'a [att::AttributePermissions]>,
+    server_cfg_permissions: Option<&'c [att::AttributePermissions]>,
     pd: core::marker::PhantomData<V>,
 }
 
-impl<'a, C, V> CharacteristicBuilder<'a, C, V>
-where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
-      V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + PartialEq + 'static,
+impl< 'a, 'c, C, V> CharacteristicBuilder< 'a,'c, C, V>
+where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + PartialEq<V> + 'static,
+      V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
 {
     pub(super) fn new<P>(
         characteristic_adder: super::CharacteristicAdder<'a>,
@@ -318,7 +318,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
         value: C,
         value_permissions: P
     ) -> Self
-    where P: Into<Option<&'a [att::AttributePermissions]>>
+    where P: Into<Option<&'c [att::AttributePermissions]>>
     {
         CharacteristicBuilder {
             declaration: Declaration {
@@ -347,7 +347,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
     /// upon building the characteristic unless the value of `extended_properties` is `None`.
     pub fn set_extended_properties<E,P>( mut self, extended_properties: E, permissions: P) -> Self
     where E: Into<Option<Vec<ExtendedProperties>>>,
-          P: Into<Option<&'a [att::AttributePermissions]>>,
+          P: Into<Option<&'c [att::AttributePermissions]>>,
     {
         self.ext_prop = extended_properties.into();
         self.ext_prop_permissions = permissions.into();
@@ -357,7 +357,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
     /// Instruct the builder to create a `User Description` characteristic descriptor
     /// upon building the characteristic unless the value of `user_description` is `None`.
     pub fn set_user_description<D>( mut self, user_description: D) -> Self
-    where D: Into<Option<UserDescription<'a>>>,
+    where D: Into<Option<UserDescription<'c>>>,
     {
         self.user_desc = user_description.into();
         self
@@ -367,7 +367,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
     /// upon building the characteristic unless the value of `client_cfg` is `None`.
     pub fn set_client_configuration<Cfg,P>( mut self, client_cfg: Cfg, permissions: P) -> Self
     where Cfg: Into<Option<Vec<ClientConfiguration>>>,
-          P: Into<Option<&'a [att::AttributePermissions]>>,
+          P: Into<Option<&'c [att::AttributePermissions]>>,
     {
         self.client_cfg = client_cfg.into();
         self.client_cfg_permissions = permissions.into();
@@ -378,7 +378,7 @@ where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
     /// upon building the characteristic unless the value of `server_cfg` is `None`.
     pub fn set_server_configuration<Cfg,P>( mut self, server_cfg: Cfg, permissions: P) -> Self
     where Cfg: Into<Option<Vec<ServerConfiguration>>>,
-          P: Into<Option<&'a [att::AttributePermissions]>>
+          P: Into<Option<&'c [att::AttributePermissions]>>
     {
         self.server_cfg = server_cfg.into();
         self.server_cfg_permissions = permissions.into();

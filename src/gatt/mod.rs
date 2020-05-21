@@ -305,16 +305,16 @@ impl<'a> CharacteristicAdder<'a>
         CharacteristicAdder { service_builder, end_group_handle }
     }
 
-    pub fn build_characteristic<C,V,P>(
+    pub fn build_characteristic<'c,C,V,P>(
         self,
         properties: Vec<characteristic::Properties>,
         uuid: UUID,
         value: C,
         value_permissions: P )
-    -> characteristic::CharacteristicBuilder<'a, C, V>
-        where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + 'static,
-              V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + PartialEq + 'static,
-              P: Into<Option<&'a [att::AttributePermissions]>>
+    -> characteristic::CharacteristicBuilder<'a,'c, C, V>
+        where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + PartialEq<V> + 'static,
+              V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
+              P: Into<Option<&'c [att::AttributePermissions]>>
     {
         let permissions = value_permissions.into();
 
