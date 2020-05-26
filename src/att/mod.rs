@@ -691,6 +691,40 @@ impl<T> TransferFormatInto for Vec<T> where T: TransferFormatInto {
     }
 }
 
+/// Option implementation for TransferFormatTryFrom
+///
+/// # Note
+/// * `Some(..)` is transferred with a byte followed by the transfer format of the contained data.
+///   The first byte is a marker byte for Some however its value is undefined.
+/// * `None` is transferred as an empty slice.
+impl<T> TransferFormatTryFrom for Option<T> where T: TransferFormatTryFrom {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+        if raw.len() == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(T::try_from(&raw[1..])?))
+        }
+    }
+}
+
+/// Option implementation for TransferFormatTryFrom
+///
+/// # Note
+/// * `Some(..)` is transferred with a byte followed by the transfer format of the contained data.
+///   The first byte is a marker byte for Some however its value is undefined.
+/// * `None` is transferred as an empty slice.
+impl<T> TransferFormatInto for Option<T> where T: TransferFormatInto {
+
+    fn len_of_into(&self) -> usize { match self { None => 0, Some(t) => t.len_of_into() + 1 } }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        match self {
+            None => debug_assert_eq!(0, into_ret.len()),
+            Some(t) => t.build_into_ret(&mut into_ret[1..])
+        }
+    }
+}
+
 /// Transfer Format collections
 ///
 /// Collections can have multiple `?Sized` entries and as a result it can be unknown how many raw

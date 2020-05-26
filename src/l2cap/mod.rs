@@ -351,9 +351,9 @@ impl<'a, C> ConChanFutureRx<'a, C> where C: ?Sized {
 
     /// Drop all fragments
     ///
-    /// **This will drop all fragments**. This should only be used when polling returns an error
-    /// (with exceptions, see the [Note](#Note)). All assembled L2CAP packets are untouched by this
-    /// function and can be retrieved with `get_received_packets`.
+    /// **This will drop stored all fragments**. This should only be used when polling returns an
+    /// error (with exceptions, see the [Note](#Note)). All assembled L2CAP packets are untouched by
+    /// this function and can be retrieved with `get_received_packets`.
     ///
     /// Once this is called, it is likely that polling will return multiple
     /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment)
@@ -363,7 +363,7 @@ impl<'a, C> ConChanFutureRx<'a, C> where C: ?Sized {
     /// This function doesn't need to be called if polling returns the error
     /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment).
     pub fn drop_fragments(&mut self) {
-        core::mem::replace(&mut self.carryover_fragments, Vec::new() );
+        let _dropped = core::mem::replace(&mut self.carryover_fragments, Vec::new() );
     }
 }
 
