@@ -923,3 +923,86 @@ pub mod read_local_supported_commands {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
 }
+
+pub mod read_buffer_size {
+
+    use crate::hci::*;
+
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBufferSize);
+
+    #[repr(packed)]
+    pub(crate) struct CmdReturn {
+        status: u8,
+        hc_acl_data_packet_len: u16,
+        hc_synchronous_data_packet_len: u8,
+        hc_total_num_acl_data_packets: u16,
+        hc_total_num_synchronous_data_packets: u16,
+    }
+
+    pub struct Return {
+        pub hc_acl_data_packet_len: usize,
+        pub hc_synchronous_data_packet_len: usize,
+        pub hc_total_num_acl_data_packets: usize,
+        pub hc_total_num_synchronous_data_packets: usize,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl Return {
+        pub(crate) fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error> {
+
+            let status = error::Error::from(packed.status);
+
+            if let error::Error::NoError = status {
+                Ok( Self {
+                    hc_acl_data_packet_len:
+                        <u16>::from_le(packed.hc_acl_data_packet_len).into(),
+
+                    hc_synchronous_data_packet_len: packed.hc_synchronous_data_packet_len.into(),
+
+                    hc_total_num_acl_data_packets:
+                        <u16>::from_le(packed.hc_total_num_acl_data_packets).into(),
+
+                    hc_total_num_synchronous_data_packets:
+                        <u16>::from_le(packed.hc_total_num_synchronous_data_packets).into(),
+
+                    completed_packets_cnt: cnt.into()
+                })
+            }
+            else {
+                Err(status)
+            }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    impl_get_data_for_command!(
+        COMMAND,
+        CmdReturn,
+        Return,
+        error::Error
+    );
+
+    impl_command_complete_future!(Return, error::Error);
+
+    #[derive(Clone,Copy)]
+    struct Parameter;
+
+    impl CommandParameter for Parameter {
+        type Parameter = Self;
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> Self::Parameter {*self}
+    }
+
+    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
+    -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
+    {
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+    }
+}

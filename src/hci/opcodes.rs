@@ -141,6 +141,7 @@ pub enum InformationParameters {
     ReadLocalSupportedCommands,
     ReadLocalSupportedFeatures,
     #[allow(non_camel_case_types)] ReadBD_ADDR,
+    ReadBufferSize,
 }
 
 impl InformationParameters {
@@ -156,8 +157,9 @@ impl InformationParameters {
                 ReadLocalSupportedVersionInformation => 0x1,
                 ReadLocalSupportedCommands => 0x2,
                 ReadLocalSupportedFeatures => 0x3,
+                ReadBufferSize => 0x5,
                 ReadBD_ADDR => 0x9,
-            }
+            },
         }
     }
 
@@ -166,6 +168,7 @@ impl InformationParameters {
             0x1 => Ok(InformationParameters::ReadLocalSupportedVersionInformation),
             0x2 => Ok(InformationParameters::ReadLocalSupportedCommands),
             0x3 => Ok(InformationParameters::ReadLocalSupportedFeatures),
+            0x5 => Ok(InformationParameters::ReadBufferSize),
             0x9 => Ok(InformationParameters::ReadBD_ADDR),
             _ => Err(alloc::format!(ocf_error!(), "Information Parameters", ocf)),
         }
