@@ -129,7 +129,7 @@ pub mod read_buffer_size {
             match err_val {
                 error::Error::NoError => {
                     let len = if packed.packet_length != 0 {
-                        Some(packed.packet_length)
+                        Some( <u16>::from_le(packed.packet_length) )
                     } else {
                         None
                     };
