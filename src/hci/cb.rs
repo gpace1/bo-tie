@@ -21,7 +21,9 @@ pub mod reset {
         fn get_parameter(&self) -> Self::Parameter { *self }
     }
 
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -189,7 +191,8 @@ pub mod set_event_mask {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, events: &[EventMask] )
-    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         let parameter = Parameter { mask: EventMask::to_val(events).to_le_bytes() };
 
@@ -221,11 +224,13 @@ pub mod read_transmit_power_level {
     pub struct TransmitPowerLevel {
         pub connection_handle: ConnectionHandle,
         pub power_level: i8,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl TransmitPowerLevel {
 
-        fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
+        fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
@@ -233,11 +238,18 @@ pub mod read_transmit_power_level {
                     // If this panics here the controller returned a bad connection handle
                     connection_handle: ConnectionHandle::try_from(packed.connection_handle).unwrap(),
                     power_level: packed.power_level,
+                    completed_packets_cnt: cnt.into()
                 })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for TransmitPowerLevel {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -248,7 +260,7 @@ pub mod read_transmit_power_level {
             error::Error
         );
 
-    impl_command_data_future!(TransmitPowerLevel, error::Error);
+    impl_command_complete_future!(TransmitPowerLevel, error::Error);
 
     pub enum TransmitPowerLevelType {
         CurrentPowerLevel,
@@ -275,8 +287,8 @@ pub mod read_transmit_power_level {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter )
-                                 -> impl Future<Output=Result<TransmitPowerLevel, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<TransmitPowerLevel, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }

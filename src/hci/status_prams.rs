@@ -25,22 +25,31 @@ pub mod read_rssi {
 
     pub struct RSSIInfo {
         pub handle: ConnectionHandle,
-        pub rssi: i8
+        pub rssi: i8,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl RSSIInfo {
-        fn try_from(packed: CmdReturn) -> Result<Self, error::Error > {
+        fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error > {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
                 Ok( Self {
                     handle: ConnectionHandle::try_from(packed.handle)?,
-                    rssi: packed.rssi
+                    rssi: packed.rssi,
+                    completed_packets_cnt: cnt.into(),
                 })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for RSSIInfo {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -51,11 +60,11 @@ pub mod read_rssi {
             error::Error
         );
 
-    impl_command_data_future!(RSSIInfo, error::Error);
+    impl_command_complete_future!(RSSIInfo, error::Error);
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
-                                 -> impl Future<Output=Result<RSSIInfo, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<RSSIInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         let parameter = Parameter {
             handle: handle.get_raw_handle()

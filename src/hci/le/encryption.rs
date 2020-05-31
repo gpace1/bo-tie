@@ -29,19 +29,27 @@ pub mod encrypt {
     }
 
     pub struct Cypher {
-        pub cypher_text: [u8;16]
+        pub cypher_text: [u8;16],
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl Cypher {
-        fn try_from(packed: CommandReturn) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self { cypher_text: packed.cypher_text })
+                Ok( Self { cypher_text: packed.cypher_text, completed_packets_cnt: cnt.into() })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Cypher {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -52,7 +60,7 @@ pub mod encrypt {
             error::Error
         );
 
-    impl_command_data_future!(Cypher, error::Error);
+    impl_command_complete_future!(Cypher, error::Error);
 
     /// Send the command to start encrypting the `plain_text`
     ///
@@ -112,18 +120,29 @@ pub mod long_term_key_request_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl Return {
-        fn try_from(packed: CommandReturn) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self { connection_handle: ConnectionHandle::try_from(packed.handle)? })
+                Ok( Self {
+                    connection_handle: ConnectionHandle::try_from(packed.handle)?,
+                    completed_packets_cnt: cnt.into(),
+                })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -134,7 +153,7 @@ pub mod long_term_key_request_reply {
             error::Error
         );
 
-    impl_command_data_future!(Return, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     /// Send the command to Long Term Key
     ///
@@ -194,18 +213,29 @@ pub mod long_term_key_request_negative_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl Return {
-        fn try_from(packed: CommandReturn) -> Result<Self, error::Error > {
+        fn try_from((packed,cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self { connection_handle: ConnectionHandle::try_from(packed.handle)? })
+                Ok( Self {
+                    connection_handle: ConnectionHandle::try_from(packed.handle)?,
+                    completed_packets_cnt: cnt.into()
+                })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -216,7 +246,7 @@ pub mod long_term_key_request_negative_reply {
             error::Error
         );
 
-    impl_command_data_future!(Return, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
@@ -257,6 +287,8 @@ pub mod rand {
 
     pub struct Return {
         pub random_number: u64,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl From<Return> for u64 {
@@ -264,15 +296,24 @@ pub mod rand {
     }
 
     impl Return {
-        fn try_from(packed: CommandReturn) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self { random_number: packed.random })
+                Ok( Self {
+                    random_number: packed.random,
+                    completed_packets_cnt: cnt.into(),
+                })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -283,7 +324,7 @@ pub mod rand {
             error::Error
         );
 
-    impl_command_data_future!(Return, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     pub fn send<'a, T: 'static>(hci: &'a HostInterface<T>)
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
@@ -348,7 +389,7 @@ pub mod start_encryption {
     impl_command_status_future!();
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter)
-    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(

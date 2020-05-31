@@ -22,8 +22,8 @@ pub mod read_remote_version_information {
     impl_command_status_future!();
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle)
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
 
         let parameter = CmdParameter {
@@ -127,8 +127,8 @@ pub mod disconnect {
     impl_command_status_future!();
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, dp: DisconnectParameters )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(dp, events::Events::CommandStatus, Duration::from_secs(1) ) )
     }

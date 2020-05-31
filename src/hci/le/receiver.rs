@@ -17,7 +17,7 @@ pub mod receiver_test {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, frequency: Frequency )
-    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(frequency, events::Events::CommandComplete , Duration::from_secs(1) ) )
@@ -58,13 +58,10 @@ pub mod set_scan_enable {
     /// The command has the ability to enable/disable scanning and filter duplicate
     /// advertisement.
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool, filter_duplicates: bool)
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
-        let cmd_param = Parameter {
-            enable: enable,
-            filter_duplicates: filter_duplicates,
-        };
+        let cmd_param = Parameter { enable, filter_duplicates, };
 
         ReturnedFuture( hci.send_command(cmd_param, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -184,8 +181,8 @@ pub mod set_scan_parameters {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, sp: ScanningParameters )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(sp, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }

@@ -115,8 +115,8 @@ pub mod create_connection_cancel {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>)
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -262,8 +262,8 @@ pub mod create_connection {
     impl_command_status_future!();
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cp: ConnectionParameters )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(cp, events::Events::CommandStatus , Duration::from_secs(1) ) )
     }
@@ -287,10 +287,12 @@ pub mod read_channel_map {
         pub handle: ConnectionHandle,
         /// This is the list of channels (from 0 through 36)
         pub channel_map: ::alloc::boxed::Box<[usize]>,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl ChannelMapInfo {
-        fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
+        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
@@ -319,11 +321,18 @@ pub mod read_channel_map {
                 Ok( Self {
                     handle: ConnectionHandle::try_from(packed.connection_handle).unwrap(),
                     channel_map: mapped_channels.into_boxed_slice(),
+                    completed_packets_cnt: cnt.into()
                 })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for ChannelMapInfo {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -346,11 +355,11 @@ pub mod read_channel_map {
             error::Error
         );
 
-    impl_command_data_future!(ChannelMapInfo, error::Error);
+    impl_command_complete_future!(ChannelMapInfo, error::Error);
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
-                                 -> impl Future<Output=Result<ChannelMapInfo, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<ChannelMapInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
 
         let parameter = CmdParameter {
@@ -384,8 +393,8 @@ pub mod read_remote_features {
     impl_command_status_future!();
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
 
         let parameter = CmdParameter {
@@ -465,8 +474,8 @@ pub mod set_host_channel_classification {
     impl_status_return!(COMMAND);
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, map: ChannelMap )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command( map, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }

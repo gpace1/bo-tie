@@ -13,24 +13,37 @@ pub mod read_advertising_channel_tx_power {
     /// The LE Read Advertising Channel Tx Power Command returns dBm, a unit of power
     /// provided to the radio antenna.
     #[derive(Debug)]
-    pub struct TxPower(i8);
+    pub struct TxPower{
+        pub power: i8,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
 
     impl TxPower {
 
-        fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
+        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok(TxPower(packed.tx_power_level))
+                Ok(TxPower{
+                    power: packed.tx_power_level,
+                    completed_packets_cnt: cnt.into(),
+                })
             }
             else {
                 Err(status)
             }
         }
 
-        pub fn into_milli_watts(&self) -> f32 {
+        pub fn as_milli_watts(&self) -> f32 {
             use core::f32;
-            10f32.powf( self.0 as f32 / 10f32 )
+            10f32.powf( self.power as f32 / 10f32 )
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for TxPower {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -41,7 +54,7 @@ pub mod read_advertising_channel_tx_power {
         error::Error
     );
 
-    impl_command_data_future!(TxPower, error::Error);
+    impl_command_complete_future!(TxPower, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -117,7 +130,7 @@ pub mod transmitter_test{
         channel: Frequency,
         payload: TestPayload,
         payload_length: u8 )
-    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
 
@@ -225,7 +238,7 @@ pub mod set_advertising_data {
     impl_status_return!(COMMAND);
 
     pub fn send<'a, T: 'static, A>( hci: &'a HostInterface<T>, adv_data: A )
-    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface,
           A: Into<Option<AdvertisingData>>,
     {
@@ -262,7 +275,9 @@ pub mod set_advertising_enable {
         }
     }
 
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool )
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter{ enable }, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -466,8 +481,8 @@ pub mod set_advertising_parameters {
     impl_status_return!(COMMAND);
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, params: AdvertisingParameters )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
 
         let parameter = CmdParameter {
@@ -516,8 +531,8 @@ pub mod set_random_address {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, rand_addr: crate::BluetoothDeviceAddress )
-                                 -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter{ rand_address: rand_addr }, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }

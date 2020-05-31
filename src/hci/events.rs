@@ -6,7 +6,7 @@ use crate::hci::common::{
     ConnectionLatency,
     EnabledExtendedFeaturesItr,
     EnabledFeaturesIter,
-    EnabledLEFeaturesItr,
+    EnabledLeFeaturesItr,
     EncryptionLevel,
     ExtendedAdvertisingAndScanResponseDataItr,
     ExtendedInquiryResponseDataItr,
@@ -731,68 +731,14 @@ where T : DataResult
     }
 }
 
-#[derive(Clone)]
-pub struct CommandCompleteData {
-    pub number_of_hci_command_packets: u8,
-    pub command_opcode: Option<u16>,
-    /// only public for hci
-    pub(super) raw_data: BufferType<u8>,
-}
-
-/// Implement GetDataForCommand
-///
-/// When using this macro keep in mind that the compiler will not understand how to correctly
-/// convert the raw data into the usable data. The CommandCompleteData instance needs to be casted
-/// to GetDataForCommand with the template type as the desired "usable data" to convert to.
-/// Something like the following example needs to be done:
-/// ```rust
-/// # use ::hci::events::{GetDataForCommand, CommandCompleteData};
-/// #
-/// # /// Made up variables
-/// # let command_data = events::EventsData::CommandComplete {
-/// #   number_of_hci_command_packets: 0,
-/// #   command_opcode: None,
-/// #   raw_data: alloc::vec![1,2,3,4,5,6,7,8,9,10].into_boxed_slice(),
-/// # };
-/// # let ocf = 0;
-/// # let ogf = 0;
-/// # struct UseableDataType;
-/// # type PackedDataType = u8;
-/// # type TryFromReturnType = ();
-/// # type TryFromErrorType = ();
-/// # impl UseableDataType { fn try_from(packed: PackedDataType) -> Result(TryFromReturn, TryFromError)}
-///
-/// // If the type TryFromReturnType is the same as UseableDataType, then TryFromReturnType can be
-/// // ommitted
-/// impl_get_data_for_command!( ocf, ogf, PackedDataType, UseableDataType, TryFromReturnType, TryFromErrorType );
-///
-/// let return_data = (command_data as GetDataForCommand<UseableDataType>).get_return().unwrap();
-///
-/// ```
-///
-/// This macro also implements DataResult for the parameter "data"
-///
-/// # Parameters
-/// - ocf: Opcode Command Field
-/// - ogf: Opcode Group Field
-/// - packed_data: The packed structure of the return parameter as sent by the controller.
-/// - data: The type to convert the packed_data from.
-///   - This type must implement the function 'try_from' in some fation (but this macro does not
-///     perform for disambiguation if you implement the function multiple times). The return of
-///     try_from can either be a result of "data" or the optional parameter "return_ty" with the
-///     error type being try_from_err_ty
-///   - This type should not be a packed data type.
-/// - (optionl) return_ty: If the type "data" doesn't need to be returned and it would make sense
-/// - try_from_err_ty: The error type of the return of the try_from function implemented for "data"
-#[macro_use]
-macro_rules! impl_get_data_for_command {
-    ( $command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty ) => {
+macro_rules! impl_get_data_for_event_data {
+    ( $event_data:path, $command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty ) => {
         impl crate::hci::events::DataResult for $data {
             type ReturnData = $return_ty;
             type UnpackErrorType = $try_from_err_ty;
         }
 
-        impl crate::hci::events::GetDataForCommand<$data> for crate::hci::events::CommandCompleteData {
+        impl crate::hci::events::GetDataForCommand<$data> for $event_data {
             unsafe fn get_return(&self) ->
                 core::result::Result<
                     core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
@@ -829,7 +775,7 @@ macro_rules! impl_get_data_for_command {
 
                     let p_data: $packed_data = core::mem::transmute(buffer);
 
-                    match <$data>::try_from(p_data) {
+                    match <$data>::try_from((p_data, self.number_of_hci_command_packets)) {
                         Ok(val) => Ok(Some(val)),
                         Err(e)  => Err(crate::hci::events::CommandDataErr::UnpackError(e))
                     }
@@ -840,9 +786,84 @@ macro_rules! impl_get_data_for_command {
             }
         }
     };
-    ( $command:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty ) => {
-        impl_get_data_for_command!($command, $packed_data, $data, $data, $try_from_err_ty);
+    ( $event_data:path, $command:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty ) => {
+        impl_get_data_for_event_data!($event_data, $command, $packed_data, $data, $data, $try_from_err_ty);
     };
+}
+
+#[derive(Clone)]
+pub struct CommandCompleteData {
+    pub number_of_hci_command_packets: u8,
+    pub command_opcode: Option<u16>,
+    /// only public for hci
+    pub(super) raw_data: BufferType<u8>,
+}
+
+/// Implement GetDataForCommand
+///
+/// When using this macro keep in mind that the compiler will not understand how to correctly
+/// convert the raw data into the usable data. The CommandCompleteData instance needs to be casted
+/// to GetDataForCommand with the template type as the desired "usable data" to convert to.
+/// Something like the following example needs to be done:
+/// ```rust
+/// # use ::hci::events::{GetDataForCommand, CommandCompleteData};
+/// #
+/// # /// Made up variables
+/// # let command_data = events::EventsData::CommandComplete {
+/// #   number_of_hci_command_packets: 0,
+/// #   command_opcode: None,
+/// #   raw_data: alloc::vec![1,2,3,4,5,6,7,8,9,10].into_boxed_slice(),
+/// # };
+/// # let ocf = 0;
+/// # let ogf = 0;
+/// # struct UseableDataType;
+/// # type PackedDataType = u8;
+/// # type TryFromReturnType = ();
+/// # type TryFromErrorType = ();
+/// # impl UseableDataType { fn try_from(packed: PackedDataType) -> Result(TryFromReturn, TryFromError)}
+///
+/// // If the type TryFromReturnType is the same as UseableDataType, then TryFromReturnType can be
+/// // omitted
+/// impl_get_data_for_command!( ocf, ogf, PackedDataType, UseableDataType, TryFromReturnType, TryFromErrorType );
+///
+/// let return_data = (command_data as GetDataForCommand<UseableDataType>).get_return().unwrap();
+///
+/// ```
+///
+/// This macro also implements DataResult for the parameter "data"
+///
+/// # Parameters
+/// - ocf: Opcode Command Field
+/// - ogf: Opcode Group Field
+/// - packed_data: The packed structure of the return parameter as sent by the controller.
+/// - data: The type to convert the packed_data from.
+///   - This type must implement the function 'try_from' in some fation (but this macro does not
+///     perform for disambiguation if you implement the function multiple times). The return of
+///     try_from can either be a result of "data" or the optional parameter "return_ty" with the
+///     error type being try_from_err_ty
+///   - This type should not be a packed data type.
+/// - (optionl) return_ty: If the type "data" doesn't need to be returned and it would make sense
+/// - try_from_err_ty: The error type of the return of the try_from function implemented for "data"
+macro_rules! impl_get_data_for_command {
+    ($command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty) => {
+        impl_get_data_for_event_data! {
+            crate::hci::events::CommandCompleteData,
+            $command,
+            $packed_data,
+            $data,
+            $return_ty,
+            $try_from_err_ty
+        }
+    };
+    ($command:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty) => {
+        impl_get_data_for_event_data! {
+            crate::hci::events::CommandCompleteData,
+            $command,
+            $packed_data,
+            $data,
+            $try_from_err_ty
+        }
+    }
 }
 
 impl_try_from_for_raw_packet! {
@@ -2532,7 +2553,7 @@ impl LEConnectionUpdateCompleteData {
 pub struct LEReadRemoteFeaturesCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
-    pub features: EnabledLEFeaturesItr,
+    pub features: EnabledLeFeaturesItr,
 }
 
 impl LEReadRemoteFeaturesCompleteData {
@@ -2543,7 +2564,7 @@ impl LEReadRemoteFeaturesCompleteData {
         Ok(LEReadRemoteFeaturesCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
-            features: EnabledLEFeaturesItr::from({
+            features: EnabledLeFeaturesItr::from({
                 let mut features = [0u8;8];
                 features.copy_from_slice(chew!(packet,8));
                 features

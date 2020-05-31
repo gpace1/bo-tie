@@ -292,7 +292,7 @@ impl HciAclData {
 /// Trait for interfacing with the controller
 ///
 ///
-/// # Implemenation
+/// # Implementation
 ///
 /// ## [send_command](#send_command)
 /// This is used for sending the command to the Bluetooth controller by the HostInterface object.
@@ -813,37 +813,12 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     }
 }
 
-/// For commands that only return a status
-macro_rules! impl_status_return {
-    ($command:expr) => {
-        #[doc(hidden)]
-        pub struct Return;
-
-        impl Return {
-            fn try_from( raw: u8 ) -> Result<(), error::Error> {
-                let status = error::Error::from(raw);
-
-                if let error::Error::NoError = status {
-                    Ok(())
-                }
-                else {
-                    Err(status)
-                }
-            }
-        }
-
-        impl_get_data_for_command!($command, u8, Return, (), error::Error);
-
-        impl_command_data_future!(Return, (), error::Error);
-    }
-}
-
  #[derive(Debug)]
 enum OutputErr<TargErr, CmdErr>
 where TargErr: Display + Debug,
       CmdErr: Display + Debug,
 {
-    /// An error occured at the target specific HCI implementation
+    /// An error occurred at the target specific HCI implementation
     TargetSpecificErr(TargErr),
     /// Cannot convert the data from the HCI packed form into its useable form.
     CommandDataConversionError(CmdErr),
@@ -884,6 +859,34 @@ where TargErr: Display + Debug,
     }
 }
 
+/// Controller flow-control information
+///
+/// Flow control information is issued as part of the Command Complete and Command Status events,
+/// however the HCI commands of this library catch and do not return this information. This trait
+/// is instead implemented on the return of those methods for the user to get the flow control
+/// information.
+pub trait FlowControlInfo {
+
+    /// Get the number of packets that can be set to the controller
+    ///
+    /// This function returns the Num_HCI_Command_Packets parameter of the Command Complete and
+    /// Command Status Events.
+    ///
+    /// The return is the number of packets that the Controller can accept from the Host at the time
+    /// of issuing either the Command Complete or Command Status event. If this number is zero, then
+    /// the Host must wait until another Command Complete or Command Status event that does not
+    /// have the number of HCI command packets parameter as zero. Be aware that the Controller can
+    /// issue a Command Complete Event with no opcode to indicate that the host can send packets
+    /// to the controller.
+    fn packet_space(&self) -> usize;
+}
+
+/// Flow control data extracted from the command status event
+struct StatusFlowControlInfo(usize);
+
+impl FlowControlInfo for StatusFlowControlInfo {
+    fn packet_space(&self) -> usize { self.0 }
+}
 
 macro_rules! event_pattern_creator {
     ( $event_path:path, $( $data:pat ),+ ) => { $event_path ( $($data),+ ) };
@@ -927,7 +930,12 @@ macro_rules! impl_returned_future {
 
 }
 
-macro_rules! impl_command_data_future {
+/// A Future for the command complete event.
+///
+/// This future is used for awaiting the command complete event in response to a command sent. If
+/// the Command Complete event is received and it's the one that doesn't contain an op code, this
+/// future will return an error.
+macro_rules! impl_command_complete_future {
     ($data_type: ty, $return_type: ty, $try_from_err_ty:ty) => {
         impl_returned_future!(
             $return_type,
@@ -941,8 +949,7 @@ macro_rules! impl_command_data_future {
                 };
 
                 match unsafe {
-                    (&data as &dyn crate::hci::events::GetDataForCommand<$data_type>)
-                        .get_return()
+                    crate::hci::events::GetDataForCommand::<$data_type>::get_return(&data)
                 } {
                     Ok(Some(ret_val)) => core::task::Poll::Ready(Ok(ret_val)),
                     Ok(None) =>
@@ -953,13 +960,13 @@ macro_rules! impl_command_data_future {
             }
         );
     };
-    ($data: ty, $try_from_err_ty:ty) => { impl_command_data_future!($data, $data, $try_from_err_ty); };
+    ($data: ty, $try_from_err_ty:ty) => { impl_command_complete_future!($data, $data, $try_from_err_ty); };
 }
 
-macro_rules!  impl_command_status_future {
+macro_rules! impl_command_status_future {
     () => {
         impl_returned_future!{
-            (),
+            StatusFlowControlInfo,
             crate::hci::events::EventsData::CommandStatus,
             data,
             &'static str,
@@ -967,7 +974,10 @@ macro_rules!  impl_command_status_future {
                 use crate::hci::OutputErr::CommandStatusErr;
 
                 if let crate::hci::error::Error::NoError = data.status {
-                    core::task::Poll::Ready(Ok(()))
+
+                    let ret = StatusFlowControlInfo(data.number_of_hci_command_packets as usize);
+
+                    core::task::Poll::Ready(Ok(ret))
                 } else {
                     core::task::Poll::Ready(Err(CommandStatusErr(data.status)))
                 }
@@ -976,6 +986,38 @@ macro_rules!  impl_command_status_future {
     };
 }
 
+/// For commands that receive a command complete with just a status
+macro_rules! impl_status_return {
+    ($command:expr) => {
+        struct ReturnData;
+
+        struct ReturnType(usize);
+
+        impl crate::hci::FlowControlInfo for ReturnType {
+            fn packet_space(&self) -> usize { self.0 }
+        }
+
+        impl ReturnData {
+            fn try_from( (raw, packet_cnt): (u8, u8) ) -> Result<ReturnType, error::Error> {
+
+                let status = error::Error::from(raw);
+
+                if let error::Error::NoError = status {
+                    Ok(ReturnType(packet_cnt.into()))
+                }
+                else {
+                    Err(status)
+                }
+            }
+        }
+
+        impl_get_data_for_command!($command, u8, ReturnData, ReturnType, error::Error);
+
+        impl_command_complete_future!(ReturnData, ReturnType, error::Error);
+    }
+}
+
+// All these are down here for the macros
 pub mod le;
 pub mod link_control;
 pub mod link_policy;

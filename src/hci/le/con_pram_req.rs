@@ -67,18 +67,29 @@ pub mod remote_connection_parameter_request_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl Return {
-        fn try_from(packed: CommandReturn) -> Result<Self, error::Error > {
+        fn try_from((packed,cnt): (CommandReturn,u8)) -> Result<Self, error::Error > {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self { connection_handle: ConnectionHandle::try_from(packed.connection_handle)? })
+                Ok( Self {
+                    connection_handle: ConnectionHandle::try_from(packed.connection_handle)?,
+                    completed_packets_cnt: cnt.into()
+                })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -89,7 +100,7 @@ pub mod remote_connection_parameter_request_reply {
         error::Error
     );
 
-    impl_command_data_future!(Return, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: CommandParameters)
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
@@ -126,18 +137,29 @@ pub mod remote_connection_parameter_request_negative_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl Return {
-        fn try_from(packed: CommandReturn) -> Result<Self, error::Error > {
+        fn try_from((packed,cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self { connection_handle: ConnectionHandle::try_from(packed.connection_handle)? })
+                Ok( Self {
+                    connection_handle: ConnectionHandle::try_from(packed.connection_handle)?,
+                    completed_packets_cnt: cnt.into()
+                })
             }
             else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -148,7 +170,7 @@ pub mod remote_connection_parameter_request_negative_reply {
         error::Error
     );
 
-    impl_command_data_future!(Return, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     #[repr(packed)]
     #[derive(Clone, Copy)]

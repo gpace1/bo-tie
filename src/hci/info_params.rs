@@ -18,14 +18,18 @@ pub mod read_bd_addr {
         address: BluetoothDeviceAddress,
     }
 
-    struct Return;
+    pub struct Return {
+        address: BluetoothDeviceAddress,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
 
     impl Return {
-        fn try_from(packed: CmdReturn) -> Result<BluetoothDeviceAddress, error::Error> {
+        fn try_from((packed, cnt): (CmdReturn,u8) ) -> Result<Return, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok(packed.address)
+                Ok( Self { address: packed.address, completed_packets_cnt: cnt.into() } )
             }
             else {
                 Err(status)
@@ -33,15 +37,28 @@ pub mod read_bd_addr {
         }
     }
 
+    impl core::ops::Deref for Return {
+        type Target = BluetoothDeviceAddress;
+
+        fn deref(&self) -> &Self::Target {
+            &self.address
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
     impl_get_data_for_command!(
         COMMAND,
         CmdReturn,
         Return,
-        BluetoothDeviceAddress,
         error::Error
     );
 
-    impl_command_data_future!(Return, BluetoothDeviceAddress, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -54,7 +71,7 @@ pub mod read_bd_addr {
 
     /// Returns the bluetooth device address for the device
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-    -> impl Future<Output=Result<BluetoothDeviceAddress, impl Display + Debug>> + 'a where T: HostControllerInterface
+    -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a where T: HostControllerInterface
     {
         use events::Events::CommandComplete;
 
@@ -81,12 +98,21 @@ pub mod read_local_supported_features {
         features: [u8;8],
     }
 
-    impl EnabledFeaturesIter {
-        fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
+    pub struct EnabledFeatures {
+        itr: EnabledFeaturesIter,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl EnabledFeatures {
+        fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok(EnabledFeaturesIter::from(packed.features))
+                Ok( Self {
+                    itr: EnabledFeaturesIter::from(packed.features),
+                    completed_packets_cnt: cnt.into()
+                })
             }
             else {
                 Err(status)
@@ -94,14 +120,34 @@ pub mod read_local_supported_features {
         }
     }
 
+    impl core::ops::Deref for EnabledFeatures {
+        type Target = EnabledFeaturesIter;
+
+        fn deref(&self) -> &Self::Target {
+            &self.itr
+        }
+    }
+
+    impl core::ops::DerefMut for EnabledFeatures {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.itr
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for EnabledFeatures {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
     impl_get_data_for_command! (
         COMMAND,
         CmdReturn,
-        EnabledFeaturesIter,
+        EnabledFeatures,
         error::Error
     );
 
-    impl_command_data_future!(EnabledFeaturesIter, error::Error);
+    impl_command_complete_future!(EnabledFeatures, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -113,7 +159,7 @@ pub mod read_local_supported_features {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-    -> impl Future<Output=Result<EnabledFeaturesIter, impl Display + Debug>> + 'a
+    -> impl Future<Output=Result<EnabledFeatures, impl Display + Debug>> + 'a
         where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
@@ -149,10 +195,12 @@ pub mod read_local_version_information {
         pub lmp_pal_version: u8,
         pub manufacturer_name: u16,
         pub lmp_pal_subversion: u16,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl VersionInformation {
-        fn try_from(packed: CmdReturn) -> Result<Self, error::Error> {
+        fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
@@ -162,10 +210,17 @@ pub mod read_local_version_information {
                     lmp_pal_version: packed.lmp_pal_version,
                     manufacturer_name: packed.manufacturer_name,
                     lmp_pal_subversion: packed.lmp_pal_subversion,
+                    completed_packets_cnt: cnt.into()
                 })
             } else {
                 Err(status)
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for VersionInformation {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -176,7 +231,7 @@ pub mod read_local_version_information {
         error::Error
     );
 
-    impl_command_data_future!(VersionInformation, error::Error);
+    impl_command_complete_future!(VersionInformation, error::Error);
 
     #[derive(Clone, Copy)]
     struct Parameter;
@@ -188,8 +243,8 @@ pub mod read_local_version_information {
     }
 
     pub fn send<'a, T: 'static>(hci: &'a HostInterface<T>)
-                                -> impl Future<Output=Result<VersionInformation, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<VersionInformation, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1)))
     }
@@ -814,15 +869,43 @@ pub mod read_local_supported_commands {
         }
     }
 
+    pub struct Return {
+        supported_commands: alloc::vec::Vec<SupportedCommands>,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl Return {
+        pub(crate) fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error> {
+            Ok(Self {
+                supported_commands: SupportedCommands::try_from(packed)?,
+                completed_packets_cnt: cnt.into()
+            })
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    impl core::ops::Deref for Return {
+        type Target = [SupportedCommands];
+
+        fn deref(&self) -> &Self::Target {
+            &self.supported_commands
+        }
+    }
+
     impl_get_data_for_command!(
         COMMAND,
         CmdReturn,
-        SupportedCommands,
-       alloc::vec::Vec<SupportedCommands>,
+        Return,
         error::Error
     );
 
-    impl_command_data_future!(SupportedCommands,alloc::vec::Vec<SupportedCommands>, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -834,8 +917,8 @@ pub mod read_local_supported_commands {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-                                 -> impl Future<Output=Result<alloc::vec::Vec<SupportedCommands>, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }

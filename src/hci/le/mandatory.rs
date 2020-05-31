@@ -34,7 +34,7 @@ macro_rules! add_remove_white_list_setup {
         pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>,
             at: AddressType,
             addr: crate::BluetoothDeviceAddress )
-        -> impl core::future::Future<Output=Result<(), impl Display + Debug>> + 'a
+        -> impl core::future::Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
         where T: HostControllerInterface
         {
             let parameter = CommandPrameter {
@@ -76,7 +76,9 @@ pub mod clear_white_list {
 
     impl_status_return!(COMMAND);
 
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<(), impl Display + Debug>> + 'a where T: HostControllerInterface
+    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -116,10 +118,12 @@ pub mod read_buffer_size {
         pub packet_len: Option<u16>,
         /// The maximum number of packets that the controller can hold
         pub packet_cnt: Option<u8>,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
     }
 
     impl BufferSize {
-        fn try_from(packed: CmdReturn) -> Result<Self, error::Error >{
+        fn try_from((packed, buf_cnt): (CmdReturn, u8)) -> Result<Self, error::Error >{
             let err_val = error::Error::from(packed.status);
 
             match err_val {
@@ -139,10 +143,17 @@ pub mod read_buffer_size {
                     Ok(BufferSize {
                         packet_len: len,
                         packet_cnt: cnt,
+                        completed_packets_cnt: buf_cnt.into(),
                     })
                 },
                 _ => Err(err_val),
             }
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for BufferSize {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
         }
     }
 
@@ -152,7 +163,7 @@ pub mod read_buffer_size {
         BufferSize,
         error::Error);
 
-    impl_command_data_future!(BufferSize, error::Error);
+    impl_command_complete_future!(BufferSize, error::Error);
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BufferSize,impl Display + Debug>> + 'a where T: HostControllerInterface
     {
@@ -163,7 +174,7 @@ pub mod read_buffer_size {
 
 pub mod read_local_supported_features {
 
-    use crate::hci::common::EnabledLEFeaturesItr;
+    use crate::hci::common::EnabledLeFeaturesItr;
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
@@ -174,12 +185,28 @@ pub mod read_local_supported_features {
         features: [u8;8]
     }
 
-    impl EnabledLEFeaturesItr {
-        fn try_from( packed: CmdReturn ) -> Result<Self,error::Error> {
+    pub struct ReturnedEnabledLeFeaturesItr {
+        itr: EnabledLeFeaturesItr,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl core::ops::Deref for ReturnedEnabledLeFeaturesItr {
+        type Target = EnabledLeFeaturesItr;
+
+        fn deref(&self) -> &Self::Target {
+            &self.itr
+        }
+    }
+
+    impl ReturnedEnabledLeFeaturesItr {
+        fn try_from( (packed, cnt): (CmdReturn, u8) ) -> Result<Self,error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok(EnabledLEFeaturesItr::from(packed.features))
+                let itr = EnabledLeFeaturesItr::from(packed.features);
+
+                Ok( Self { itr, completed_packets_cnt: cnt.into() })
             }
             else {
                 Err(status)
@@ -187,14 +214,20 @@ pub mod read_local_supported_features {
         }
     }
 
+    impl crate::hci::FlowControlInfo for ReturnedEnabledLeFeaturesItr {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
     impl_get_data_for_command!(
         COMMAND,
         CmdReturn,
-        EnabledLEFeaturesItr,
+        ReturnedEnabledLeFeaturesItr,
         error::Error
     );
 
-    impl_command_data_future!(EnabledLEFeaturesItr, error::Error);
+    impl_command_complete_future!(ReturnedEnabledLeFeaturesItr, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -206,8 +239,8 @@ pub mod read_local_supported_features {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-                                 -> impl Future<Output=Result<EnabledLEFeaturesItr, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<ReturnedEnabledLeFeaturesItr, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -217,7 +250,6 @@ pub mod read_local_supported_features {
 pub mod read_supported_states {
 
     use crate::hci::*;
-    use alloc::collections::BTreeSet;
     use core::mem::size_of_val;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadSupportedStates);
@@ -229,7 +261,7 @@ pub mod read_supported_states {
     }
 
     /// All possible states/roles a controller can be in
-    #[derive(PartialEq,Eq,PartialOrd,Ord,Debug)]
+    #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Debug)]
     pub enum StatesAndRoles {
         ScannableAdvertisingState,
         ConnectableAdvertisingState,
@@ -246,7 +278,7 @@ pub mod read_supported_states {
     impl StatesAndRoles {
 
         /// Returns the total number of states and roles
-        fn get_count() -> usize { 10 }
+        const NUMBER_OF_STATES_AND_ROLES: usize = 10;
 
         /// Returns the total possible bit options
         ///
@@ -256,105 +288,62 @@ pub mod read_supported_states {
         /// This function doesn't return all available states and roles of a device
         /// (since devices can set multiple of these bits indicating the available
         /// roles) so it doesn't return the special type name.
-        fn get_states_for_bit_val( bit_val: usize) ->alloc::vec::Vec<Self> {
+        fn get_states_for_bit_val( bit_val: usize) -> &'static [Self] {
             use self::StatesAndRoles::*;
 
             match bit_val {
-                0  => alloc::vec![ NonConnectableAdvertisingState],
-                1  => alloc::vec![ ScannableAdvertisingState],
-                2  => alloc::vec![ ConnectableAdvertisingState],
-                3  => alloc::vec![ HighDutyCyleDirectedAdvertisingState],
-                4  => alloc::vec![ PassiveScanningState],
-                5  => alloc::vec![ ActiveScanningState],
-                6  => alloc::vec![ InitiatingState],
-                7  => alloc::vec![ ConnectionStateSlaveRole],
-                8  => alloc::vec![ NonConnectableAdvertisingState,
-                            PassiveScanningState],
-                9  => alloc::vec![ ScannableAdvertisingState,
-                            PassiveScanningState],
-                10 => alloc::vec![ ConnectableAdvertisingState,
-                            PassiveScanningState],
-                11 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
-                            PassiveScanningState],
-                12 => alloc::vec![ NonConnectableAdvertisingState,
-                            ActiveScanningState],
-                13 => alloc::vec![ ScannableAdvertisingState,
-                            ActiveScanningState],
-                14 => alloc::vec![ ConnectableAdvertisingState,
-                            ActiveScanningState],
-                15 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
-                            ActiveScanningState],
-                16 => alloc::vec![ NonConnectableAdvertisingState,
-                            InitiatingState],
-                17 => alloc::vec![ ScannableAdvertisingState,
-                            InitiatingState],
-                18 => alloc::vec![ NonConnectableAdvertisingState,
-                            ConnectionStateMasterRole],
-                19 => alloc::vec![ ScannableAdvertisingState,
-                            ConnectionStateMasterRole],
-                20 => alloc::vec![ NonConnectableAdvertisingState,
-                            ConnectionStateSlaveRole],
-                21 => alloc::vec![ ScannableAdvertisingState,
-                            ConnectionStateSlaveRole],
-                22 => alloc::vec![ PassiveScanningState,
-                            InitiatingState],
-                23 => alloc::vec![ ActiveScanningState,
-                            InitiatingState],
-                24 => alloc::vec![ PassiveScanningState,
-                            ConnectionStateMasterRole],
-                25 => alloc::vec![ ActiveScanningState,
-                            ConnectionStateMasterRole],
-                26 => alloc::vec![ PassiveScanningState,
-                            ConnectionStateSlaveRole],
-                27 => alloc::vec![ ActiveScanningState,
-                            ConnectionStateSlaveRole],
-                28 => alloc::vec![ InitiatingState,
-                            ConnectionStateMasterRole],
-                29 => alloc::vec![ LowDutyCycleDirectedAdvertisingState ],
-                30 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
-                            PassiveScanningState],
-                31 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
-                            ActiveScanningState],
-                32 => alloc::vec![ ConnectableAdvertisingState,
-                            InitiatingState],
-                33 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
-                            InitiatingState],
-                34 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
-                            InitiatingState],
-                35 => alloc::vec![ ConnectableAdvertisingState,
-                            ConnectionStateMasterRole],
-                36 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
-                            ConnectionStateMasterRole],
-                37 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
-                            ConnectionStateMasterRole],
-                38 => alloc::vec![ ConnectableAdvertisingState,
-                            ConnectionStateSlaveRole],
-                39 => alloc::vec![ HighDutyCyleDirectedAdvertisingState,
-                            ConnectionStateSlaveRole],
-                40 => alloc::vec![ LowDutyCycleDirectedAdvertisingState,
-                            ConnectionStateSlaveRole],
-                41 => alloc::vec![ InitiatingState,
-                            ConnectionStateSlaveRole],
-                _  => alloc::vec![],
+                0  => &[ NonConnectableAdvertisingState],
+                1  => &[ ScannableAdvertisingState],
+                2  => &[ ConnectableAdvertisingState],
+                3  => &[ HighDutyCyleDirectedAdvertisingState],
+                4  => &[ PassiveScanningState],
+                5  => &[ ActiveScanningState],
+                6  => &[ InitiatingState],
+                7  => &[ ConnectionStateSlaveRole],
+                8  => &[ NonConnectableAdvertisingState, PassiveScanningState],
+                9  => &[ ScannableAdvertisingState, PassiveScanningState],
+                10 => &[ ConnectableAdvertisingState, PassiveScanningState],
+                11 => &[ HighDutyCyleDirectedAdvertisingState, PassiveScanningState],
+                12 => &[ NonConnectableAdvertisingState, ActiveScanningState],
+                13 => &[ ScannableAdvertisingState, ActiveScanningState],
+                14 => &[ ConnectableAdvertisingState, ActiveScanningState],
+                15 => &[ HighDutyCyleDirectedAdvertisingState, ActiveScanningState],
+                16 => &[ NonConnectableAdvertisingState, InitiatingState],
+                17 => &[ ScannableAdvertisingState, InitiatingState],
+                18 => &[ NonConnectableAdvertisingState, ConnectionStateMasterRole],
+                19 => &[ ScannableAdvertisingState, ConnectionStateMasterRole],
+                20 => &[ NonConnectableAdvertisingState, ConnectionStateSlaveRole],
+                21 => &[ ScannableAdvertisingState, ConnectionStateSlaveRole],
+                22 => &[ PassiveScanningState, InitiatingState],
+                23 => &[ ActiveScanningState, InitiatingState],
+                24 => &[ PassiveScanningState, ConnectionStateMasterRole],
+                25 => &[ ActiveScanningState, ConnectionStateMasterRole],
+                26 => &[ PassiveScanningState, ConnectionStateSlaveRole],
+                27 => &[ ActiveScanningState, ConnectionStateSlaveRole],
+                28 => &[ InitiatingState, ConnectionStateMasterRole],
+                29 => &[ LowDutyCycleDirectedAdvertisingState ],
+                30 => &[ LowDutyCycleDirectedAdvertisingState, PassiveScanningState],
+                31 => &[ LowDutyCycleDirectedAdvertisingState, ActiveScanningState],
+                32 => &[ ConnectableAdvertisingState, InitiatingState],
+                33 => &[ HighDutyCyleDirectedAdvertisingState, InitiatingState],
+                34 => &[ LowDutyCycleDirectedAdvertisingState, InitiatingState],
+                35 => &[ ConnectableAdvertisingState, ConnectionStateMasterRole],
+                36 => &[ HighDutyCyleDirectedAdvertisingState, ConnectionStateMasterRole],
+                37 => &[ LowDutyCycleDirectedAdvertisingState, ConnectionStateMasterRole],
+                38 => &[ ConnectableAdvertisingState, ConnectionStateSlaveRole],
+                39 => &[ HighDutyCyleDirectedAdvertisingState, ConnectionStateSlaveRole],
+                40 => &[ LowDutyCycleDirectedAdvertisingState, ConnectionStateSlaveRole],
+                41 => &[ InitiatingState, ConnectionStateSlaveRole],
+                _  => &[],
             }
-        }
-
-        fn collect_to_vec( bts: BTreeSet<StatesAndRoles> ) ->alloc::vec::Vec<Self> {
-            let mut retval =alloc::vec::Vec::<Self>::with_capacity(
-                StatesAndRoles::get_count()
-            );
-
-            for state_or_role in bts {
-                retval.push(state_or_role)
-            }
-
-            retval
         }
 
         /// This function will return all the supported states
-        fn get_supported_states( rss: &CmdReturn) ->alloc::vec::Vec<Self> {
+        ///
+        /// The returned supported states will be ordered per the derived implementation of `ord`.
+        fn get_supported_states( rss: &CmdReturn) -> alloc::vec::Vec<Self> {
 
-            let mut set = BTreeSet::new();
+            let mut set = Vec::with_capacity(Self::NUMBER_OF_STATES_AND_ROLES);
 
             let count = StatesAndRoles::get_bit_count();
 
@@ -363,16 +352,19 @@ pub mod read_supported_states {
                     if (byte * 8 + bit) < count {
                         if 0 != rss.states[byte] & ( 1 << bit ) {
                             for state_or_role in StatesAndRoles::get_states_for_bit_val( bit ) {
-                                set.insert(state_or_role);
+                                if let Err(indx) = set.binary_search(state_or_role) {
+                                    set.insert(indx, *state_or_role);
+                                }
                             }
                         }
                     }
                     else {
-                        return StatesAndRoles::collect_to_vec(set);
+                        return set;
                     }
                 }
             }
-            StatesAndRoles::collect_to_vec(set)
+
+            set
         }
 
         fn try_from(packed: CmdReturn) -> Result<alloc::vec::Vec<Self>, error::Error> {
@@ -387,15 +379,42 @@ pub mod read_supported_states {
         }
     }
 
+    pub struct CurrentStatesAndRoles {
+        states_and_roles: Vec<StatesAndRoles>,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl CurrentStatesAndRoles {
+        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
+            let states_and_roles = StatesAndRoles::try_from(packed)?;
+
+            Ok( Self { states_and_roles, completed_packets_cnt: cnt.into() } )
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for CurrentStatesAndRoles {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    impl core::ops::Deref for CurrentStatesAndRoles {
+        type Target = [StatesAndRoles];
+
+        fn deref(&self) -> &Self::Target {
+            &self.states_and_roles
+        }
+    }
+
     impl_get_data_for_command!(
         COMMAND,
         CmdReturn,
-        StatesAndRoles,
-       alloc::vec::Vec<StatesAndRoles>,
+        CurrentStatesAndRoles,
         error::Error
     );
 
-    impl_command_data_future!(StatesAndRoles,alloc::vec::Vec<StatesAndRoles>, error::Error);
+    impl_command_complete_future!(CurrentStatesAndRoles, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -407,8 +426,8 @@ pub mod read_supported_states {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-                                 -> impl Future<Output=Result<alloc::vec::Vec<StatesAndRoles>, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<CurrentStatesAndRoles, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -427,14 +446,21 @@ pub mod read_white_list_size {
         size: u8,
     }
 
-    pub struct Return;
+    pub struct WhiteListSize {
+        pub list_size: usize,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
 
-    impl Return {
-        fn try_from( packed: CmdReturn) -> Result<usize, error::Error> {
+    impl WhiteListSize {
+        fn try_from( (packed, cnt): (CmdReturn, u8) ) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok(packed.size as usize)
+                Ok( Self {
+                    list_size: packed.size.into(),
+                    completed_packets_cnt: cnt.into(),
+                })
             }
             else {
                 Err(status)
@@ -442,15 +468,28 @@ pub mod read_white_list_size {
         }
     }
 
+    impl core::ops::Deref for WhiteListSize {
+        type Target = usize;
+
+        fn deref(&self) -> &Self::Target {
+            &self.list_size
+        }
+    }
+
+    impl crate::hci::FlowControlInfo for WhiteListSize {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
     impl_get_data_for_command! (
         COMMAND,
         CmdReturn,
-        Return,
-        usize,
+        WhiteListSize,
         error::Error
     );
 
-    impl_command_data_future!(Return, usize, error::Error);
+    impl_command_complete_future!(WhiteListSize, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -462,8 +501,8 @@ pub mod read_white_list_size {
     }
 
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-                                 -> impl Future<Output=Result<usize, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<WhiteListSize, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }
@@ -584,7 +623,7 @@ pub mod set_event_mask {
     /// send(&host_interface, &events);
     /// ```
     pub fn send<'a, T: 'static>( hi: &'a HostInterface<T>, enabled_events: &[LEMeta] )
-    -> impl Future<Output=Result<(), impl Display + Debug>> + 'a
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
 
@@ -609,14 +648,27 @@ pub mod test_end {
         number_of_packets: u16
     }
 
-    pub struct Return;
+    pub struct Return {
+        pub number_of_packets: u16,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl crate::hci::FlowControlInfo for Return {
+        fn packet_space(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
 
     impl Return {
-        fn try_from(packed: CmdReturn) -> Result<usize, error::Error> {
+        fn try_from((packed,cnt): (CmdReturn, u8)) -> Result<Return, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok(packed.number_of_packets as usize)
+                Ok( Self {
+                    number_of_packets: packed.number_of_packets,
+                    completed_packets_cnt: cnt.into()
+                })
             }
             else {
                 Err(status)
@@ -628,11 +680,10 @@ pub mod test_end {
         COMMAND,
         CmdReturn,
         Return,
-        usize,
         error::Error
     );
 
-    impl_command_data_future!(Return, usize, error::Error);
+    impl_command_complete_future!(Return, error::Error);
 
     #[derive(Clone,Copy)]
     struct Parameter;
@@ -646,8 +697,8 @@ pub mod test_end {
     /// This will return a future with its type 'Output' being the number of packets
     /// received during what ever test was done
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-                                 -> impl Future<Output=Result<usize, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
         ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
     }

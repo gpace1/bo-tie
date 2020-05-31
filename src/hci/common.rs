@@ -739,16 +739,16 @@ impl LEFeatures {
 }
 
 #[derive(Clone)]
-pub struct EnabledLEFeaturesItr {
+pub struct EnabledLeFeaturesItr {
     raw: [u8;8],
     bit_index: (u8,u8),
 }
 
-impl EnabledLEFeaturesItr {
+impl EnabledLeFeaturesItr {
     pub(crate) fn from( raw: [u8;8] ) -> Self {
-        EnabledLEFeaturesItr {
+        EnabledLeFeaturesItr {
             bit_index: (0,0),
-            raw: raw,
+            raw,
         }
     }
 
@@ -758,7 +758,7 @@ impl EnabledLEFeaturesItr {
     }
 }
 
-impl Iterator for EnabledLEFeaturesItr {
+impl Iterator for EnabledLeFeaturesItr {
     type Item = LEFeatures;
 
     fn next(&mut self) -> ::core::option::Option<Self::Item> {
@@ -781,7 +781,7 @@ impl Iterator for EnabledLEFeaturesItr {
     }
 }
 
-impl fmt::Debug for EnabledLEFeaturesItr {
+impl fmt::Debug for EnabledLeFeaturesItr {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> Result<(), ::core::fmt::Error> {
         write!(f, "Enabled features: [")?;
 
