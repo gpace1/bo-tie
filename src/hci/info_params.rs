@@ -924,6 +924,7 @@ pub mod read_local_supported_commands {
     }
 }
 
+/// Read the size of the BR/EDR HCI data buffer
 pub mod read_buffer_size {
 
     use crate::hci::*;

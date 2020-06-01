@@ -84,6 +84,7 @@ pub mod clear_white_list {
     }
 }
 
+/// Read the size of the LE HCI data buffer
 pub mod read_buffer_size {
 
     use crate::hci::*;
