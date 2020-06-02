@@ -193,6 +193,23 @@ impl<T,C> From<C> for Multiple<T> where C: Into<BufferType<T>>{
     }
 }
 
+impl<T> core::ops::Deref for Multiple<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> core::iter::IntoIterator for Multiple<T> {
+    type Item = T;
+    type IntoIter = <BufferType<T> as core::iter::IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.into_iter()
+    }
+}
+
 #[derive(Clone)]
 pub enum PageScanRepetitionMode {
     R0,
