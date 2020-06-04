@@ -592,9 +592,25 @@ pub mod set_event_mask {
     /// # #[derive(Default)]
     /// # pub struct StubHi;
     /// #
+    /// # #[derive(Debug)]
+    /// # pub struct ReceiveError;
+    /// #
+    /// # impl bo_tie::hci::Timeout for ReceiveError {
+    /// #     fn timeout_occurred(&self) -> bool {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # impl core::fmt::Display for ReceiveError {
+    /// #     fn fmt(&self,f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+    /// #     {
+    /// #          unimplemented!()
+    /// #     }
+    /// # }
+    /// #
     /// # impl HostControllerInterface for StubHi {
     /// #     type SendCommandError = &'static str;
-    /// #     type ReceiveEventError = &'static str;
+    /// #     type ReceiveEventError = ReceiveError;
     /// #
     /// #     fn send_command<D, W>(&self, _: &D, _: W)
     /// #     -> Result<bool, Self::SendCommandError>
@@ -604,7 +620,7 @@ pub mod set_event_mask {
     /// #         Ok(true)
     /// #     }
     /// #
-    /// #     fn receive_event<P>(&self, _: events::Events, _: &Waker, _: Pin<Arc<P>>, _: Option<Duration>)
+    /// #     fn receive_event<P>(&self, _: Option<events::Events>, _: &Waker, _: Pin<Arc<P>>, _: Option<Duration>)
     /// #     -> Option<Result<events::EventsData, Self::ReceiveEventError>>
     /// #     where P: EventMatcher + Send + Sync + 'static,
     /// #     {
@@ -616,6 +632,7 @@ pub mod set_event_mask {
     ///
     /// use bo_tie::hci::le::mandatory::set_event_mask::{self, send};
     /// use bo_tie::hci::events::LEMeta;
+    /// use serde::export::Formatter;
     ///
     ///
     /// let events = vec!(LEMeta::ConnectionComplete,LEMeta::AdvertisingReport);

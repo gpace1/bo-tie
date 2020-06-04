@@ -1055,14 +1055,20 @@ pub trait AttributeInfo {
 ///     value: Arc<Mutex<V>>
 /// };
 ///
-/// impl<V> ServerAttributeValue<V> for SyncAttVal<V> {
+/// impl<V: PartialEq> ServerAttributeValue<V> for SyncAttVal<V> {
 ///
-///     fn read_and<F,T>(&self, f: F ) -> T where F: FnMut(&V) -> T {
-///         f( self.value.lock.unwrap() )
+///     fn read_and<F,T>(&self, mut f: F ) -> T where F: FnMut(&V) -> T {
+///         f( &self.value.lock().unwrap() )
 ///     }
 ///
 ///     fn write_val(&mut self, val: V) {
 ///         *self.value.lock().unwrap() = val
+///     }
+/// }
+///
+/// impl<V> PartialEq<V> for SyncAttVal<V> where V: PartialEq {
+///     fn eq(&self, other: &V) -> bool {
+///         self.read_and(|val| val == other)
 ///     }
 /// }
 ///

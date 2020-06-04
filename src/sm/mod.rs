@@ -679,7 +679,7 @@ impl SecurityManager {
     /// # let security_manager = bo_tie::sm::SecurityManager::default();
     /// # let resolvable_private_address = [0u8;6];
     ///
-    /// let keys = security_manager.resolve_rpa_iter.find_map(|keys_opt| keys_opt);
+    /// security_manager.resolve_rpa_itr(resolvable_private_address).find_map(|keys_opt| keys_opt);
     /// ```
     pub fn resolve_rpa_itr(&self, addr: crate::BluetoothDeviceAddress)
     -> impl core::iter::Iterator<Item = Option<KeyDBEntry>> + '_

@@ -2,7 +2,7 @@
 //!
 //! The HCI is the primary way of interacting with the controller for this library.
 
-mod opcodes;
+pub mod opcodes;
 pub mod common;
 pub mod error;
 #[macro_use] pub mod events;
@@ -15,6 +15,8 @@ use core::future::Future;
 use core::pin::Pin;
 use core::time::Duration;
 use core::task::{ Poll, Waker };
+
+pub use common::ConnectionHandle;
 
 /// Used to get the information required for sending a command from the host to the controller
 ///

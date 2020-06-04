@@ -1,5 +1,36 @@
+//! Command opcodes for the Bluetooth HCI
+//!
+//! All commands are represented as an enumeration in the `HCICommand` enum. The purpose of the
+//! `HCICommand` is for retrieving the opcode value from the commands parameter. Commands parameters
+//! are required to implement [`CommandParameter`](crate::hci::CommandParameter) which contains the
+//! constant `COMMAND` that is assigned to one of the enums of `HCICommand`.
+//!
+//! ```
+//! # use bo_tie::hci::opcodes::{HCICommand, LinkControl};
+//!
+//! let command = HCICommand::LinkControl(LinkControl::Disconnect);
+//!
+//! let opcode_pair = command.as_opcode_pair();
+//!
+//! assert_eq!( 0x1, opcode_pair.get_ogf() );
+//!
+//! assert_eq!( 0x6, opcode_pair.get_ocf() );
+//!
+//! ```
+//!
+//! # Note
+//! Unfortunately not all opcodes are supported, as this is a work in progress. For the most part,
+//! only the opcodes for HCI commands that are implemented by this library are represented here.
+//! As a result of this, trying to convert from an `OpCodePair` to a `HCICommand` may produce an
+//! error even when the `OpCodePair` is valid. It may be the case that the command has not been
+//! implemented as part of `HCICommand` yet.
+
 use core::convert::TryFrom;
 
+/// Enumerations of the various HCI command opcodes.
+///
+/// All opcodes are based from this enum, which is broken up into the opcode groups. Each opcode
+/// group is further broken up into
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum HCICommand {
     LinkControl(LinkControl),
@@ -22,6 +53,9 @@ impl HCICommand {
 }
 
 /// An type for the pair of OGF (OpCode Group Field) and OCF (OpCode Command Field)
+///
+/// The main use for this is for converting from the `HCICommand` enumeration into the numerical
+/// values to be passed over the interface to the controller.
 pub struct OpCodePair {
     pub(crate) ogf: u16,
     pub(crate) ocf: u16,
@@ -53,6 +87,12 @@ impl OpCodePair {
     }
 }
 
+impl From<HCICommand> for OpCodePair {
+    fn from(cmd: HCICommand) -> OpCodePair {
+        cmd.as_opcode_pair()
+    }
+}
+
 impl TryFrom<OpCodePair> for HCICommand {
     type Error = alloc::string::String;
 
@@ -70,6 +110,7 @@ impl TryFrom<OpCodePair> for HCICommand {
 
 macro_rules! ocf_error{ () => { "OpCode Group Field '{}' doesn't have the Op Code Field 0x{:x}" }; }
 
+/// Link control commands
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum LinkControl {
     Disconnect,
@@ -101,6 +142,7 @@ impl LinkControl {
     }
 }
 
+/// Controller and baseband commands
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum ControllerAndBaseband {
     SetEventMask,
@@ -135,6 +177,7 @@ impl ControllerAndBaseband {
     }
 }
 
+/// Information parameter commands
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum InformationParameters {
     ReadLocalSupportedVersionInformation,
@@ -175,6 +218,7 @@ impl InformationParameters {
     }
 }
 
+/// Status parameter commands
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum StatusParameters {
     ReadRSSI,
@@ -203,6 +247,7 @@ impl StatusParameters {
     }
 }
 
+/// Bluetooth LE commands
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub enum LEController {
     SetEventMask,
