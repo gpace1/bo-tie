@@ -29,6 +29,7 @@ impl ConnectionIntervalBounds {
     }
 }
 
+/// LE Connection Update Command
 pub mod connection_update {
     use crate::hci::*;
     use crate::hci::common::{
@@ -73,26 +74,17 @@ pub mod connection_update {
                 _supervision_timeout: self.supervision_timeout.get_timeout(),
                 _minimum_ce_length:   self.connection_event_len.minimum,
                 _maximum_ce_length:   self.connection_event_len.maximum,
-            }
+             }
         }
     }
 
-    impl_returned_future!(
-            crate::hci::events::LEConnectionUpdateCompleteData,
-            events::EventsData::LEMeta,
-            events::LEMetaData::ConnectionUpdateComplete(data),
-            &'static str, // useless type that has both Display + Debug
-            {
-                core::task::Poll::Ready(Ok(data))
-            }
-        );
+    impl_command_status_future!();
 
-    /// The event expected to be returned is the LEMeta event carrying a Connection Update
-    /// Complete lE event
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cu: ConnectionUpdate, timeout: Duration)
-                                 -> impl Future<Output=Result<crate::hci::events::LEConnectionUpdateCompleteData, impl Display + Debug>> + 'a where T: HostControllerInterface
+    /// Send the command to the controller.
+    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cu: ConnectionUpdate)
+    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command( cu, events::Events::LEMeta( events::LEMeta::ConnectionUpdateComplete ), timeout ) )
+        ReturnedFuture( hci.send_command(cu, events::Events::CommandStatus , Duration::from_secs(1) ) )
     }
 
 }
