@@ -4,7 +4,6 @@ use bo_tie::hci::{
     HciAclData,
 };
 use std::collections::HashMap;
-use std::default;
 use std::error;
 use std::fmt;
 use std::ops::Drop;
@@ -281,8 +280,9 @@ impl AdapterThread {
                         {
                             match msg {
                                 CtrlMsgType::Command => {
-                                    panic!("Received a command message, the HCI adapter task should \
-                                        only receive ACL, Syncronous, or Event Data from a controller")
+                                    panic!("Received a command message, the HCI adapter task \
+                                        should only receive ACL, Synchronous, or Event Data from a \
+                                        controller")
                                 },
                                 CtrlMsgType::Event => {
                                     log::trace!("Processing received HCI data, type:'Event'");
@@ -365,7 +365,7 @@ impl From<usize> for HCIAdapter {
         let device_fd = unsafe{ libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, device::BTPROTO_HCI) };
 
         if device_fd < 0 {
-            panic!("No Bluetooth Adapter with device id {} exists", adapter_id);
+            panic!("Bluetooth not supported on this system");
         }
 
         let sa_p = &device::sockaddr_hci {
@@ -446,7 +446,7 @@ impl From<usize> for HCIAdapter {
 /// # Panics
 /// * No bluetooth adapter exists on the system
 /// * The system couldn't allocate another file descriptor for the device
-impl default::Default for HCIAdapter {
+impl Default for HCIAdapter {
 
     fn default() -> Self {
 

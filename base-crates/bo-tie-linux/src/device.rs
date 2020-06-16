@@ -58,26 +58,28 @@ pub mod hci {
 
         let device_address_opt = device_address.into();
 
-        for dev_req in &hci_dev_list.dev_req[..hci_dev_list.dev_num as usize] {
-            let mut dev_info = super::hci_dev_info::default();
+        hci_dev_list.dev_req.iter()
+            .map(|dev_req| dev_req.dev_id)
+            .find_map(|id| {
+                let mut dev_info = super::hci_dev_info::default();
 
-            dev_info.dev_id = dev_req.dev_id;
+                dev_info.dev_id = id;
 
-            let di_rslt = unsafe {
-                super::hci_get_dev_info(sock.0, &mut dev_info as *mut _ as *mut c_int)
-            };
+                let di_rslt = unsafe {
+                    super::hci_get_dev_info(sock.0, &mut dev_info as *mut _ as *mut c_int)
+                };
 
-            if di_rslt.is_err() || test_flag(HCI_RAW, &[dev_info.flags]) {
-                continue
-            }
+                if di_rslt.is_err() || test_flag(HCI_RAW, &[dev_info.flags]) {
+                    return None
+                }
 
-            match device_address_opt {
-                None => return Ok(dev_req.dev_id as usize),
-                Some(addr) => if addr == dev_info.bdaddr { return Ok(dev_req.dev_id as usize) },
-            }
-        }
-
-        Err( nix::errno::Errno::ENODEV.into() )
+                match device_address_opt {
+                    None => Some(<usize>::from(id)),
+                    Some(addr) if addr == dev_info.bdaddr => Some(<usize>::from(id)) ,
+                    _ => None
+                }
+            })
+            .ok_or(nix::Error::from_errno(nix::errno::Errno::ENODEV))
     }
 
     /// Send a command to the bluetooth controller

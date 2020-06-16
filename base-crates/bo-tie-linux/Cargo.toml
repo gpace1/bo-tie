@@ -6,5 +6,5 @@ edition = "2018"
 
 [dependencies]
 bo-tie = { path = "../../"}
-nix = "~0.14.1"
+nix = "0.17"
 log = "0.4.6"
