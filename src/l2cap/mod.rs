@@ -47,7 +47,7 @@ impl From<LeUserChannelIdentifier> for ChannelIdentifier {
     }
 }
 
-/// Dynamicly created l2cap channel
+/// Dynamically created L2CAP channel
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub struct DynChannelId {
     channel_id: u16
@@ -61,7 +61,7 @@ impl DynChannelId {
         DynChannelId { channel_id }
     }
 
-    /// Create a new Dynamic Channel identifer for the LE-U CID name space
+    /// Create a new Dynamic Channel identifier for the LE-U CID name space
     ///
     /// This will return the enum
     /// [`DynamicallyAllocated`](../enum.LeUserChannelIdentifier.html#variant.DynamicallyAllocated)
@@ -189,7 +189,7 @@ impl AclData {
         v
     }
 
-    /// Create an AclData struct from a non-fragmented raw l2cap acl data
+    /// Create an AclData struct from a non-fragmented raw L2CAP acl data
     ///
     /// # Errors
     /// * The length of the raw data must be >= 4
@@ -295,10 +295,57 @@ impl<Mtu> From<(AclData, Mtu)> for L2capPdu where Mtu: Into<Option<usize>>
 /// A connection channel is used for sending and receiving Asynchronous Connection-oriented (ACL)
 /// data packets between the Host and Bluetooth Controller.
 pub trait ConnectionChannel {
+
+    /// Send a L2CAP PDU to the Controller
+    ///
+    /// This attempts tos sends a *complete* L2CAP pdu to the controller. The pdu must be complete
+    /// as an underlying implementation will perform any necessary flow control. Providing a pdu
+    /// fragment will most likely cause an undefined order of the transferred packets. However,
+    /// there is no issue with fragmenting packets at a higher layer than the L2CAP protocol.
     fn send<Pdu>(&self, data: Pdu) where Pdu: Into<L2capPdu>;
 
+    /// Try to receive a PDU from the controller
+    ///
+    /// This attempts to receive one or more packets from an underlying implementation. If there is
+    /// nothing to be received then the provided waker will be used for waking any awaiting contexts
+    /// when data is ready to be received.
+    ///
+    /// Receive doesn't return `AclData` but instead returns `AclDataFragments`. What is returned
+    /// is what was received from an over-the-air link layer packet, which can be a fragment
+    /// of a complete `AclData`. `receive` does not perform stitching of these fragments into
+    /// the a L2CAP pdu, however it does guarantee that *the order in which fragments are returned
+    /// was the order in which they were received*.
+    ///
+    /// Use the function `future_receiver` to return a future that can be awaited for *complete*
+    /// ACL data.
     fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclDataFragment>>;
 
+    /// A futures receiver for complete `AclData`
+    ///
+    /// This is used to return a structure that can asynchronously receive from a Bluetooth
+    /// controller and process the received fragments into complete `AclData`. A `ConChanFutureRx`
+    /// is expected to be awoken multiple times as more fragmented `AclData` is received. As
+    /// fragments are received, they will be stitched together until they are made into a completed
+    /// packet. When all fragments can be made into a completed the future will finally return
+    /// `Poll::Ready`.
+    ///
+    /// The future utilizes the `receive` method to get ACL data fragments from the controller.
+    /// These fragments are expected to be contiguous as per the requirements for `receive`, however
+    /// this does not guarantee that these fragments can be made into complete `AclData`. If data
+    /// cannot be converted into a fragment, then the future will return an error. These fragments
+    /// and any other fragments received are lost when an error occurs.
+    ///
+    /// Please do not infrequently poll a `ConChanFutureRx`. Infrequent polling occurs when this
+    /// future as polled at a much slower rate then the ACL data received. Polling infrequently may
+    /// cause the future to return `Poll::Pending` much more often, and it is recommended to always
+    /// use `.await` as that guarantees the fastest poll to completion of this future. With
+    /// infrequent polling, the time taken for to poll to completion changes from the time taken to
+    /// receive a complete ACL PDU to the time taken for stitching fragments into multiple ACL
+    /// PDUs. This occurs because the likelihood of having incomplete fragmented data left over
+    /// from a poll call is proportionally increased to the number of fragments returned by a call
+    /// to `receive`. The only exception to this is when you know that all packets will be sent as
+    /// complete packets, but this can only occur when the maximum payload is set to the minimum for
+    /// the given Bluetooth type, BR/EDR or LE, for L2CAP.
     fn future_receiver(&self) -> ConChanFutureRx<'_, Self> {
         ConChanFutureRx {
             cc: self,
@@ -387,7 +434,8 @@ where C: ConnectionChannel
                 Some(fragments) => {
                     match fragments.into_iter().try_for_each( |mut f| {
         
-                        // Continue `try_for_each` if f is an empty fragment
+                        // Continue `try_for_each` if f is an empty fragment, empty fragments can
+                        // be ignored.
                         if f.data.len() == 0 { return Ok(()) }
         
                         if this.carryover_fragments.is_empty()
@@ -395,6 +443,7 @@ where C: ConnectionChannel
                             if !f.is_start_fragment() {
                                 return Err(AclDataError::ExpectedStartFragment)
                             }
+
                             match f.get_acl_len() {
                                 Some(l) if (l + HEADER_SIZE) <= f.data.len() => {
                                     match AclData::from_raw_data(&f.data) {
