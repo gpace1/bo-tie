@@ -231,6 +231,7 @@ impl From<u16> for UUID {
     }
 }
 
+#[cfg(feature = "uuid-crate")]
 impl From<uuid::Uuid> for UUID {
     /// Convert from the
     /// [uuid](https://crates.io/crates/uuid) crate implementation of UUID.
@@ -239,6 +240,7 @@ impl From<uuid::Uuid> for UUID {
     }
 }
 
+#[cfg(feature = "uuid-crate")]
 impl From<UUID> for uuid::Uuid {
     /// Convert a UUID into the UUID from the crate
     /// [uuid](https://crates.io/crates/uuid)
