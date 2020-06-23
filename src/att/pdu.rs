@@ -11,7 +11,6 @@ use super::{
     TransferFormatTryFrom,
     TransferFormatInto,
     TransferFormatError,
-    TransferFormatCollectible,
     client::ClientPduName,
     server::ServerPduName
 };
@@ -545,7 +544,7 @@ where R: Into<HandleRange>
     }
 }
 
-/// A struct that contains an attrube handle and attribute type
+/// A struct that contains an attribute handle and attribute type
 #[derive(Clone,Copy,PartialEq,Eq)]
 pub struct HandleWithType( u16, crate::UUID);
 
@@ -724,6 +723,16 @@ pub struct TypeValueResponse {
     group: u16,
 }
 
+impl TypeValueResponse {
+    pub fn new(handle: u16, group: u16) -> Self {
+        TypeValueResponse { handle, group }
+    }
+
+    pub fn get_handle(&self) -> u16 { self.handle }
+
+    pub fn get_group(&self) -> u16 { self.group }
+}
+
 impl TransferFormatTryFrom for TypeValueResponse {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() != 4 {
@@ -749,19 +758,7 @@ impl TransferFormatInto for TypeValueResponse {
     }
 }
 
-impl TransferFormatCollectible for TypeValueResponse {
-    fn chunk(raw: &[u8]) -> Option<Result<(Self, &[u8]), TransferFormatError>> {
-        if raw.len() == 0 { None }
-        else if raw.len() > 4 {
-            let self_ret  = TransferFormatTryFrom::try_from(&raw[..4]);
-            let slice_ret = &raw[4..];
-
-            Some( self_ret.map(|s| (s, slice_ret) ) )
-        } else {
-            Some( Err(TransferFormatError::bad_size(stringify!(TypeValueResponse), 4, raw.len())) )
-        }
-    }
-}
+impl_transfer_format_for_vec_of!(TypeValueResponse);
 
 pub fn find_by_type_value_response( type_values: Vec<TypeValueResponse> )
 -> Pdu<Vec<TypeValueResponse>>
@@ -844,6 +841,12 @@ pub struct ReadTypeResponse<D> {
     data: D
 }
 
+impl<D> ReadTypeResponse<D> {
+    pub fn new(handle: u16, data: D) -> Self {
+        ReadTypeResponse { handle, data }
+    }
+}
+
 impl<D> TransferFormatTryFrom for ReadTypeResponse<D> where D: TransferFormatTryFrom {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
         if raw.len() == 2 + core::mem::size_of::<D>() {
@@ -853,7 +856,7 @@ impl<D> TransferFormatTryFrom for ReadTypeResponse<D> where D: TransferFormatTry
             })
         } else {
             Err(TransferFormatError::bad_size(stringify!("ReadTypeResponse"),
-                                              2 + core::mem::size_of::<D>(), raw.len()))
+                2 + core::mem::size_of::<D>(), raw.len()))
         }
     }
 }
@@ -869,17 +872,38 @@ impl<D> TransferFormatInto for ReadTypeResponse<D> where D: TransferFormatInto {
     }
 }
 
-impl<D> TransferFormatCollectible for ReadTypeResponse<D> where D: TransferFormatTryFrom {
-    fn chunk(raw: &[u8]) -> Option<Result<(Self, &[u8]), TransferFormatError>> {
-        if raw.len() == 0 { None }
-        else if raw.len() > 2 + core::mem::size_of::<D>() {
-            let self_ret  = TransferFormatTryFrom::try_from(&raw[..2 + core::mem::size_of::<D>()]);
-            let slice_ret = &raw[2 + core::mem::size_of::<D>()..];
+impl<D> TransferFormatInto for Vec<ReadTypeResponse<D>> where D: TransferFormatInto {
 
-            Some( self_ret.map(|s| (s, slice_ret) ) )
-        } else {
-            Some( Err(TransferFormatError::bad_size(stringify!(TypeValueResponse), 4, raw.len())) )
-        }
+    fn len_of_into(&self) -> usize {
+        self.iter()
+            .map(|r| r.len_of_into() )
+            .sum()
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[0] = self.len_of_into() as u8;
+
+        self.iter()
+            .fold(1usize, |acc, r| {
+                let end = acc + r.len_of_into();
+
+                r.build_into_ret(&mut into_ret[acc..end]);
+
+                end
+            });
+    }
+}
+
+impl<D> TransferFormatTryFrom for Vec<ReadTypeResponse<D>> where D: TransferFormatTryFrom {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+        let length = <usize>::from(*raw.get(0)
+            .ok_or(
+                TransferFormatError::bad_min_size("Read Type Response missing length field", 1, 0))?
+        );
+
+        raw[1..].chunks(length)
+            .map(|chunk| <ReadTypeResponse<D> as TransferFormatTryFrom>::try_from(chunk) )
+            .collect()
     }
 }
 

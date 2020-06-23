@@ -720,7 +720,7 @@ impl<I,HI> crate::l2cap::ConnectionChannel for LeAclHciChannel<I,HI>
 where HI: core::ops::Deref<Target = HostInterface<I>>,
        I: HciAclDataInterface
 {
-    fn send<Pdu>(&self, data: Pdu ) where Pdu: Into<crate::l2cap::L2capPdu> {
+    fn send<Pdu>(&self, data: Pdu ) -> crate::l2cap::SendFut where Pdu: Into<crate::l2cap::L2capPdu> {
 
         let l2cap_pdu = data.into();
 
@@ -761,6 +761,8 @@ where HI: core::ops::Deref<Target = HostInterface<I>>,
 
             self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
         }
+
+        crate::l2cap::SendFut::new(true)
     }
 
     fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>> {

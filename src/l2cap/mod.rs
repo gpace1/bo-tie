@@ -1,5 +1,5 @@
 /// Logical Link Control and Adaption protocol (L2CAP)
-
+use core::future::Future;
 use alloc::{
     vec::Vec,
 };
@@ -302,7 +302,7 @@ pub trait ConnectionChannel {
     /// as an underlying implementation will perform any necessary flow control. Providing a pdu
     /// fragment will most likely cause an undefined order of the transferred packets. However,
     /// there is no issue with fragmenting packets at a higher layer than the L2CAP protocol.
-    fn send<Pdu>(&self, data: Pdu) where Pdu: Into<L2capPdu>;
+    fn send<Pdu>(&self, data: Pdu) -> SendFut where Pdu: Into<L2capPdu>;
 
     /// Try to receive a PDU from the controller
     ///
@@ -356,6 +356,33 @@ pub trait ConnectionChannel {
     }
 }
 
+/// Future for polling to await the sending of data *to the controller*
+///
+/// This future is used for awaiting the sending of data to the controller, but is not used for
+/// awaiting data sent to a connected device.
+pub struct SendFut( Option<core::task::Waker>, bool);
+
+impl SendFut {
+    pub fn new(ready: bool) -> Self {
+        SendFut(None, ready)
+    }
+}
+
+impl Future for SendFut {
+    type Output = ();
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if this.1 {
+            core::task::Poll::Ready(())
+        } else {
+            this.0 = Some(cx.waker().clone());
+
+            core::task::Poll::Pending
+        }
+    }
+}
 /// A future for asynchronously waiting for received packets from the connected device
 ///
 /// This struct is created via the function [`future_receiver`](ConnectionChannel::future_receiver)
@@ -414,7 +441,7 @@ impl<'a, C> ConChanFutureRx<'a, C> where C: ?Sized {
     }
 }
 
-impl<'a,C> core::future::Future for ConChanFutureRx<'a,C>
+impl<'a,C> Future for ConChanFutureRx<'a,C>
 where C: ConnectionChannel
 {
     type Output = Result<Vec<AclData>, AclDataError>;

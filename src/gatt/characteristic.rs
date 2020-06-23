@@ -215,22 +215,44 @@ pub enum ClientConfiguration {
     Indication
 }
 
+impl ClientConfiguration {
+    /// Convert to native-endian bits
+    fn to_bits(config: &[ClientConfiguration]) -> u16 {
+        config.iter().fold(0u16, |bits, cfg| {
+            bits | match cfg {
+                ClientConfiguration::Notification => 1 << 0,
+                ClientConfiguration::Indication => 1 << 1,
+            }
+        })
+    }
+
+    /// Convert from native-endian bits
+    ///
+    /// Bits that are specification defined as reserved are ignored
+    fn from_bits(bits: u16) -> Vec<ClientConfiguration> {
+        (0..2).filter_map(|bit| {
+            match bits & 1 << bit {
+                0x1 => Some(ClientConfiguration::Notification),
+                0x2 => Some(ClientConfiguration::Indication),
+                _ => None
+            }
+        })
+        .collect()
+    }
+}
+
+impl att::TransferFormatInto for Vec<ClientConfiguration> {
+    fn len_of_into(&self) -> usize { 2 }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret.copy_from_slice( &ClientConfiguration::to_bits(self).to_le_bytes() )
+    }
+}
+
 impl att::TransferFormatTryFrom for Vec<ClientConfiguration> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
-            let flags = <u16>::from_le_bytes([raw[0], raw[1]]);
-
-            (0..2).map(|shift| flags & (1 << shift) )
-                .filter(|flag| flag != &0)
-                .try_fold(Vec::new(), |mut v, flag| {
-                    v.push( match flag {
-                        0x1 => ClientConfiguration::Notification,
-                        0x2 => ClientConfiguration::Indication,
-                        e => return Err(att::TransferFormatError::from(format!("Unknown Client Configuration '{}'", e)))
-                    } );
-                    Ok(v)
-                })
-
+            Ok( ClientConfiguration::from_bits( <u16>::from_le_bytes([raw[0], raw[1]])) )
         } else {
             Err(att::TransferFormatError::bad_size(stringify!(ClientConfiguration), 2, raw.len()))
         }
@@ -261,16 +283,44 @@ pub enum ServerConfiguration {
     Broadcast
 }
 
+impl ServerConfiguration {
+    /// Convert to native-endian bits
+    fn to_bits(config: &[ServerConfiguration]) -> u16 {
+        config.iter().fold(0u16, |bits, cfg| {
+            bits | match cfg {
+                ServerConfiguration::Broadcast => 1 << 0,
+            }
+        })
+    }
+
+    /// Convert from native-endian bits
+    ///
+    /// Bits that are specification defined as reserved are ignored
+    fn from_bits(bits: u16) -> Vec<ServerConfiguration> {
+        (0..2).filter_map(|bit| {
+            match bits & 1 << bit {
+                0x1 => Some(ServerConfiguration::Broadcast),
+                _ => None
+            }
+        })
+            .collect()
+    }
+}
+
+impl att::TransferFormatInto for Vec<ServerConfiguration> {
+    fn len_of_into(&self) -> usize { 2 }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret.copy_from_slice( &ServerConfiguration::to_bits(self).to_le_bytes() )
+    }
+}
+
 impl att::TransferFormatTryFrom for Vec<ServerConfiguration> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
-            match <u16>::from_le_bytes([raw[0], raw[1]]) {
-                0x1 => Ok(alloc::vec![ ServerConfiguration::Broadcast ] ),
-                e @ _ => Err(att::TransferFormatError::from(
-                    format!("Unknown server configuration: '{}'", e)))
-            }
+            Ok( ServerConfiguration::from_bits( <u16>::from_le_bytes([raw[0], raw[1]])) )
         } else {
-            Err(att::TransferFormatError::bad_size(stringify!(ServerConfiguration), 2, raw.len()))
+            Err(att::TransferFormatError::bad_size(stringify!(ClientConfiguration), 2, raw.len()))
         }
     }
 }

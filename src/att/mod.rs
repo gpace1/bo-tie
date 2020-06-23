@@ -60,10 +60,6 @@ use alloc::{
     vec::Vec,
 };
 
-pub mod pdu;
-pub mod client;
-pub mod server;
-
 use crate::l2cap;
 
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
@@ -455,6 +451,50 @@ pub trait TransferFormatInto {
     }
 }
 
+/// Implement transfer format for Vec<$data_type>.
+///
+/// $data_type must have a constant size for the transfer format. The second input `$data_size` is
+/// an optional input for the size of the transfer format of $data_type. If `$data_size` is omitted
+/// then the size is inferred from the `core::mem::size_of` method.
+macro_rules! impl_transfer_format_for_vec_of {
+
+    ($data_type: ty, $data_size: expr) => {
+
+        impl TransferFormatTryFrom for Vec<$data_type> {
+            fn try_from(raw: &[u8]) -> Result<Self, crate::att::TransferFormatError> {
+                raw.chunks($data_size)
+                    .try_fold(Vec::new(), |mut v, chunk| {
+                        v.push( <$data_type as TransferFormatTryFrom>::try_from(chunk)? );
+                        Ok(v)
+                    })
+            }
+        }
+
+        impl TransferFormatInto for Vec<$data_type>
+        {
+            fn len_of_into(&self) -> usize {
+                self.iter().map(|t| t.len_of_into()).sum()
+            }
+
+            fn build_into_ret(&self, into_ret: &mut [u8]) {
+
+                let mut start = 0;
+
+                self.iter().for_each(|t| {
+                    t.build_into_ret(&mut into_ret[start..t.len_of_into()]);
+
+                    start += t.len_of_into();
+                } )
+            }
+        }
+    };
+
+    ($data_type: ty) => {
+        impl_transfer_format_for_vec_of! { $data_type, core::mem::size_of::<$data_type>() }
+    };
+}
+
+/// Implements transfer format for the given
 macro_rules! impl_transfer_format_for_number {
     ( $num: ty ) => {
         impl TransferFormatTryFrom for $num {
@@ -480,19 +520,7 @@ macro_rules! impl_transfer_format_for_number {
             }
         }
 
-        impl TransferFormatCollectible for $num {
-            fn chunk(raw: &[u8]) -> Option<Result<(Self, &[u8]), TransferFormatError>> {
-                if raw.len() == 0 { None }
-                else if raw.len() > core::mem::size_of::<$num>() {
-                    let self_ret  = TransferFormatTryFrom::try_from(&raw[..core::mem::size_of::<$num>()]);
-                    let slice_ret = &raw[core::mem::size_of::<$num>()..];
-
-                    Some( self_ret.map(|s| (s, slice_ret) ) )
-                } else {
-                    Some(Err(TransferFormatError::bad_size(stringify!($num), core::mem::size_of::<$num>(), raw.len())))
-                }
-            }
-        }
+        impl_transfer_format_for_vec_of!($num);
     }
 }
 
@@ -508,6 +536,8 @@ impl_transfer_format_for_number!{isize}
 impl_transfer_format_for_number!{usize}
 impl_transfer_format_for_number!{i128}
 impl_transfer_format_for_number!{u128}
+impl_transfer_format_for_number!{f32}
+impl_transfer_format_for_number!{f64}
 
 impl TransferFormatTryFrom for alloc::string::String {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
@@ -564,30 +594,6 @@ impl TransferFormatInto for crate::UUID {
 
             Err(_) => <u128>::from(*self).build_into_ret(&mut into_ret[..16]),
         }
-    }
-}
-
-impl<T> TransferFormatTryFrom for Box<[T]> where T: TransferFormatTryFrom + TransferFormatCollectible {
-
-    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
-        <alloc::vec::Vec<T> as TransferFormatTryFrom>::try_from(raw).map(|v| v.into_boxed_slice() )
-    }
-}
-
-impl<T> TransferFormatInto for Box<[T]> where T: TransferFormatInto {
-
-    fn len_of_into(&self) -> usize {
-        self.iter().fold(0usize, |v, t| v + t.len_of_into() )
-    }
-
-    fn build_into_ret(&self, into_ret: &mut [u8] ){
-        let mut start = 0;
-
-        self.iter().for_each(|t| {
-            t.build_into_ret(&mut into_ret[start..t.len_of_into()]);
-
-            start += t.len_of_into();
-        } )
     }
 }
 
@@ -656,39 +662,10 @@ impl TransferFormatInto for Box<dyn TransferFormatInto> {
     }
 }
 
-impl TransferFormatInto for &dyn TransferFormatInto {
-
+impl<T> TransferFormatInto for &T where T: TransferFormatInto + ?Sized {
     fn len_of_into(&self) -> usize { (*self).len_of_into() }
 
     fn build_into_ret(&self, into_ret: &mut [u8] ) { (*self).build_into_ret(into_ret) }
-}
-
-impl<T> TransferFormatTryFrom for Vec<T> where T: TransferFormatTryFrom + TransferFormatCollectible {
-
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
-        T::chunks(raw).try_fold( Vec::new(), |mut v,r| {
-            v.push(r?);
-            Ok(v)
-        })
-    }
-}
-
-impl<T> TransferFormatInto for Vec<T> where T: TransferFormatInto {
-
-    fn len_of_into(&self) -> usize {
-        self.iter().fold(0usize, |v, t| v + t.len_of_into() )
-    }
-
-    fn build_into_ret(&self, into_ret: &mut [u8]) {
-
-        let mut start = 0;
-
-        self.iter().for_each(|t| {
-            t.build_into_ret(&mut into_ret[start..t.len_of_into()]);
-
-            start += t.len_of_into();
-        } )
-    }
 }
 
 /// Option implementation for TransferFormatTryFrom
@@ -722,46 +699,6 @@ impl<T> TransferFormatInto for Option<T> where T: TransferFormatInto {
             None => debug_assert_eq!(0, into_ret.len()),
             Some(t) => t.build_into_ret(&mut into_ret[1..])
         }
-    }
-}
-
-/// Transfer Format collections
-///
-/// Collections can have multiple `?Sized` entries and as a result it can be unknown how many raw
-/// interface bytes are required to convert into a data type. This trait provides methods to help
-/// `TransferInterface` implementations on collections so they can translate raw interface data
-/// into a complete collection
-pub trait TransferFormatCollectible {
-
-    /// Cut, translate to `Self`, and return the rest of a full slice of interface data
-    ///
-    /// Chunk should be implemented to take a slice of any number of bytes and try to translate the
-    /// raw data, starting from the first byte, to as many bytes required of `raw`. If the data can
-    /// be successfully transformed into `Self` then `Self` is returned along with the remaining
-    /// untranslated bytes. If anything goes wrong, say the data in the wrong format or `raw` is
-    /// not large enough, then an error is returned.
-    ///
-    /// For flexibility, the return is optional. `None` should be returned if there is no error
-    /// trying to convert the raw data into `Self` but `Self` cannot be created from the raw
-    /// data. The typical return of `None` occurs when input `raw` is a reference to an empty slice.
-    fn chunk(raw: &[u8]) -> Option<Result<(Self, &[u8]), TransferFormatError>> where Self: Sized;
-
-    /// Chunk the data, iteratively, using function `chunk`
-    ///
-    /// Unfortunately, because the size of `Self` can be `?Sized`, the return `TransferFormatChunks`
-    /// does not have a function to give the remaining bytes.
-    fn chunks(raw: &[u8]) -> TransferFormatChunks<'_,Self> where Self: Sized{
-        TransferFormatChunks(raw, core::marker::PhantomData)
-    }
-}
-
-pub struct TransferFormatChunks<'a,T>(&'a [u8], core::marker::PhantomData<T>);
-
-impl<T> core::iter::Iterator for TransferFormatChunks<'_, T> where T: TransferFormatCollectible {
-    type Item = Result<T, TransferFormatError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        T::chunk(self.0).map(|rslt| rslt.map(|(ret, self_0)| { self.0 = self_0; ret }))
     }
 }
 
@@ -811,7 +748,7 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel1 {
 
-        fn send<Pdu>(&self, data: Pdu) where Pdu: Into<crate::l2cap::L2capPdu>{
+        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<crate::l2cap::L2capPdu>{
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             gaurd.b1 = Some(data.into().into_data());
@@ -819,6 +756,8 @@ mod test {
             if let Some(waker) = gaurd.w1.take() {
                 waker.wake();
             }
+
+            l2cap::SendFut::new(true)
         }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
@@ -837,7 +776,7 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel2 {
 
-        fn send<Pdu>(&self, data: Pdu) where Pdu: Into<crate::l2cap::L2capPdu>{
+        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<crate::l2cap::L2capPdu>{
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             gaurd.b2 = Some(data.into().into_data());
@@ -845,6 +784,8 @@ mod test {
             if let Some(waker) = gaurd.w2.take() {
                 waker.wake();
             }
+
+            l2cap::SendFut::new(true)
         }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
@@ -1083,3 +1024,7 @@ mod test {
         );
     }
 }
+
+pub mod pdu;
+pub mod client;
+pub mod server;

@@ -547,7 +547,8 @@ pub struct Server<'c, C>
 
 impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 {
-    pub fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData) -> Result<(), crate::att::Error>
+    pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData)
+    -> Result<(), crate::att::Error>
     {
         let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
 
@@ -555,9 +556,9 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
             att::client::ClientPduName::ReadByGroupTypeRequest => {
                 log::info!("(GATT) processing '{}'", att::client::ClientPduName::ReadByGroupTypeRequest );
 
-                self.process_read_by_group_type_request(payload)
+                self.process_read_by_group_type_request(payload).await
             }
-            _ => self.server.process_parsed_acl_data(pdu_type, payload)
+            _ => self.server.process_parsed_acl_data(pdu_type, payload).await
         }
     }
 
@@ -566,7 +567,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
         self.server.check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
     }
 
-    fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
+    async fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
 
         match att::TransferFormatTryFrom::try_from(payload) {
             Ok(att::pdu::TypeRequest {
@@ -630,7 +631,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
                         let pdu = att::pdu::read_by_group_type_response(ReadByGroupTypeResponse::new(response));
 
-                        self.server.send_pdu(pdu);
+                        self.server.send_pdu(pdu).await;
                     },
 
                     // Client didn't have adequate permissions to access the first service
@@ -638,7 +639,8 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                         self.server.send_error(
                             handle_range.starting_handle,
                             att::client::ClientPduName::ReadByGroupTypeRequest,
-                            (*e).into());
+                            (*e).into()
+                        ).await;
 
                         return Err((*e).into());
                     },
@@ -648,7 +650,8 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                         self.server.send_error(
                             handle_range.starting_handle,
                             att::client::ClientPduName::ReadByGroupTypeRequest,
-                            att::pdu::Error::InvalidHandle);
+                            att::pdu::Error::InvalidHandle
+                        ).await;
 
                         return Err(att::pdu::Error::InvalidHandle.into());
                     },
@@ -658,7 +661,8 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                 self.server.send_error(
                     handle_range.starting_handle,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnsupportedGroupType);
+                    att::pdu::Error::UnsupportedGroupType
+                ).await;
 
                 return Err(att::pdu::Error::UnsupportedGroupType.into())
             },
@@ -666,7 +670,8 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                 self.server.send_error(
                     0,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnlikelyError);
+                    att::pdu::Error::UnlikelyError
+                ).await;
 
                 return Err(att::pdu::Error::UnlikelyError.into())
             },
@@ -711,7 +716,7 @@ mod tests {
 
     use super::*;
     use alloc::boxed::Box;
-    use crate::l2cap::{ConnectionChannel, L2capPdu, AclDataFragment};
+    use crate::l2cap::{ConnectionChannel, L2capPdu, AclDataFragment, SendFut};
     use crate::UUID;
     use futures::task::Waker;
     use att::TransferFormatInto;
@@ -719,7 +724,10 @@ mod tests {
     struct DummyConnection;
 
     impl ConnectionChannel for DummyConnection {
-        fn send<Pdu>(&self, _: Pdu) where Pdu: Into<crate::l2cap::L2capPdu>{}
+        fn send<Pdu>(&self, _: Pdu) -> SendFut where Pdu: Into<crate::l2cap::L2capPdu> {
+            SendFut::new(true)
+        }
+
         fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> { None }
     }
 
@@ -771,8 +779,10 @@ mod tests {
     }
 
     impl l2cap::ConnectionChannel for TestChannel {
-        fn send<Pdu>(&self, data: Pdu) where Pdu: Into<L2capPdu> {
+        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<L2capPdu> {
             self.last_sent_pdu.set(Some(data.into().into_data()));
+
+            l2cap::SendFut::new(true)
         }
 
         fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> {
