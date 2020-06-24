@@ -1,3 +1,8 @@
+/// Responder side of the Security Manager
+///
+/// A responder is used by a device to to 'respond' to the security manager requests of an
+/// initiating device.
+
 use alloc::vec::Vec;
 use crate::l2cap::ConnectionChannel;
 use super::{

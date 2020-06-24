@@ -25,7 +25,7 @@ async fn start_scanning_for_addr(
     local_name: &str,
 ) -> bo_tie::hci::events::LEAdvertisingReportData {
     use bo_tie::hci::cb::set_event_mask::{self,EventMask};
-    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData};
+    use bo_tie::hci::events::{Events, LEMeta, EventsData, LEMetaData};
     use bo_tie::hci::le::receiver::{set_scan_parameters,set_scan_enable};
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
 
@@ -43,8 +43,9 @@ async fn start_scanning_for_addr(
 
     set_scan_enable::send(hi, true, true).await.unwrap();
 
+    let waited_event = Some(Events::from(LEMeta::AdvertisingReport));
     let ret = 'outer: loop {
-        match hi.wait_for_event(LEMeta::AdvertisingReport.into(), None).await.unwrap() {
+        match hi.wait_for_event(waited_event, None).await.unwrap() {
             EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) => {
                 if let Some(report) = reports.iter()
                     .filter_map(|r| r.as_ref().ok() )
@@ -93,7 +94,7 @@ async fn connect_to<'a>(
 {
     use bo_tie::hci::cb::set_event_mask::{self,EventMask};
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
-    use bo_tie::hci::events::{LEMeta, EventsData, LEMetaData};
+    use bo_tie::hci::events::{Events, LEMeta, EventsData, LEMetaData};
     use bo_tie::hci::le::connection::{
         ConnectionIntervalBounds,
         ConnectionInterval,
@@ -137,7 +138,9 @@ async fn connect_to<'a>(
 
     create_connection::send(hi, parameters).await.unwrap();
 
-    match hi.wait_for_event(LEMeta::ConnectionComplete.into(), None).await.unwrap() {
+    let awaited_event = Some(Events::from(LEMeta::ConnectionComplete));
+
+    match hi.wait_for_event(awaited_event, None).await.unwrap() {
         EventsData::LEMeta(LEMetaData::ConnectionComplete(data)) => {
             raw_handle.store(data.connection_handle.get_raw_handle(), Ordering::Relaxed);
 
@@ -153,17 +156,17 @@ async fn connect_to<'a>(
 async fn pair<C>( cc: &C, msm: &mut bo_tie::sm::initiator::MasterSecurityManager<'_,C> ) -> Option<u128>
 where C: bo_tie::l2cap::ConnectionChannel
 {
-    msm.start_pairing();
+    msm.start_pairing().await;
 
     'outer: loop {
         match cc.future_receiver().await {
             Ok(vec_data) => for data in vec_data {
                 // All data that is not Security Manager related is ignored for this example
                 if data.get_channel_id() == bo_tie::sm::L2CAP_CHANNEL_ID {
-                    match msm.continue_pairing(data) {
+                    match msm.continue_pairing(data).await {
                         Ok(true)  => break 'outer msm.get_keys().and_then( |keys| keys.get_ltk() ),
-                        Err(e)    => panic!("Pairing Error Occured: {:?}", e),
                         Ok(false) => {},
+                        Err(e)    => panic!("Pairing Error Occured: {:?}", e),
                     }
                 }
             },

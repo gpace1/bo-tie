@@ -98,7 +98,9 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
-    let evt_rsl = hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)).await;
+    let waited_event = Some(events::Events::from(events::LEMeta::ConnectionComplete));
+
+    let evt_rsl = hi.wait_for_event(waited_event, Duration::from_secs(60)).await;
 
     match evt_rsl {
         Ok(event) => {
@@ -148,7 +150,7 @@ where C: bo_tie::l2cap::ConnectionChannel
 
     let mut server = gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, att_mtu);
 
-    server.give_permission_to_client(att::AttributePermissions::Read);
+    server.give_permissions_to_client(att::AttributePermissions::Read(att::AttributeRestriction::None));
 
     server
 }
@@ -156,12 +158,14 @@ where C: bo_tie::l2cap::ConnectionChannel
 fn att_server_loop<C>(connection_channel: C, local_name: &str) -> !
 where C: bo_tie::l2cap::ConnectionChannel + std::marker::Unpin
 {
+    use futures::executor::block_on;
+
     let mut server = gatt_server_init(&connection_channel, local_name);
 
     loop {
-        futures::executor::block_on(connection_channel.future_receiver())
+        block_on(connection_channel.future_receiver())
             .map(|l2cap_pdus| l2cap_pdus.iter().for_each( |l2cap_pdu|{
-                match server.process_acl_data(l2cap_pdu) {
+                match block_on(server.process_acl_data(l2cap_pdu)) {
                     Ok(_) => (),
                     Err(e) => println!("Cannot process acl data, '{}'", e),
                 }

@@ -31,7 +31,7 @@ async fn scan_for_local_name<'a>(
     -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>>
 {
     use bo_tie::gap::advertise::{local_name, TryFromRaw};
-    use bo_tie::hci::events::{LEMeta, LEMetaData};
+    use bo_tie::hci::events::{Events, LEMeta, LEMetaData};
     use bo_tie::hci::le::mandatory::set_event_mask;
     use bo_tie::hci::le::receiver::{ set_scan_parameters, set_scan_enable };
 
@@ -50,8 +50,10 @@ async fn scan_for_local_name<'a>(
 
     set_scan_enable::send(&hi, true, true).await.unwrap();
 
+    let awaited_event = Some(Events::from(le_event));
+
     // This will stop 15 seconds after the last advertising packet is received
-    while let Ok(event) = hi.wait_for_event( le_event.into(), Duration::from_secs(5)).await
+    while let Ok(event) = hi.wait_for_event( awaited_event, Duration::from_secs(5)).await
     {
         if let EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) = event {
             for report_result in reports.iter() {
@@ -85,7 +87,7 @@ async fn connect(
     -> Result<EventsData, impl std::fmt::Debug>
 {
     use bo_tie::hci::common;
-    use bo_tie::hci::events::LEMeta;
+    use bo_tie::hci::events::{Events, LEMeta};
     use bo_tie::hci::le::common::{OwnAddressType, ConnectionEventLength};
     use bo_tie::hci::le::connection;
     use bo_tie::hci::le::connection::create_connection;
@@ -119,8 +121,10 @@ async fn connect(
     // create the connection
     create_connection::send(&hi, parameters).await.unwrap();
 
+    let awaited_event = Some(Events::from(connect_event));
+
     // wait for the LEConnectionUpdate event
-    hi.wait_for_event(connect_event.into(), Duration::from_secs(25)).await
+    hi.wait_for_event(awaited_event, Duration::from_secs(25)).await
 }
 
 async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter> ) {
@@ -136,7 +140,7 @@ async fn disconnect(
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {
-        connection_handle: connection_handle,
+        connection_handle,
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 

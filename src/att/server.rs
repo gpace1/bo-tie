@@ -1098,20 +1098,18 @@ pub trait AttributeInfo {
 /// };
 ///
 /// #[async_trait]
-/// impl<V: PartialEq> ServerAttributeValue<V> for SyncAttVal<V> {
+/// impl<V: PartialEq> ServerAttributeValue<V> for SyncAttVal<V> where V: Send + Sync {
 ///
-///     async fn read_and<F,T>(&self, mut f: F ) -> T where F: FnMut(&V) -> T + Send {
+///     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send {
 ///         f( &self.value.lock().unwrap() )
 ///     }
 ///
 ///     async fn write_val(&mut self, val: V) {
 ///         *self.value.lock().unwrap() = val
 ///     }
-/// }
 ///
-/// impl<V> PartialEq<V> for SyncAttVal<V> where V: PartialEq {
-///     fn eq(&self, other: &V) -> bool {
-///         self.read_and(|val| val == other)
+///     async fn eq(&self, other: &V) -> bool {
+///         self.read_and(|val| val == other).await
 ///     }
 /// }
 ///
@@ -1135,11 +1133,16 @@ pub trait AttributeInfo {
 /// server_attributes.push(att_msg);
 /// ```
 #[async_trait]
-pub trait ServerAttributeValue<V>: PartialEq<V> where V: Send + Sync {
+pub trait ServerAttributeValue<V> where V: Send + Sync {
 
+    /// Read the value and call `f` with a reference to it.
     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send;
 
+    /// Write to the value
     async fn write_val(&mut self, val: V);
+
+    /// Compare the value to 'other'
+    async fn eq(&self, other: &V) -> bool;
 }
 
 /// The trivial implementation for ServerAttributeValue
@@ -1148,6 +1151,8 @@ impl<V> ServerAttributeValue<V> for V where V: PartialEq + Send + Sync {
     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send { f( self ) }
 
     async fn write_val(&mut self, val: V) { *self = val }
+
+    async fn eq(&self, other: &V) -> bool { <Self as PartialEq>::eq(self, other) }
 }
 
 /// A server attribute
@@ -1272,9 +1277,10 @@ where C: ServerAttributeValue<V> + Send + Sync,
     }
 
     async fn cmp_value_to_raw_transfer_format(&self, raw: &[u8] ) -> bool {
-        <V as TransferFormatTryFrom>::try_from(raw)
-            .map( |cmp_val| self.attribute.value == cmp_val )
-            .unwrap_or_default()
+        match <V as TransferFormatTryFrom>::try_from(raw) {
+            Err(_) => false,
+            Ok(cmp_val) => self.attribute.value.eq(&cmp_val).await
+        }
     }
 }
 

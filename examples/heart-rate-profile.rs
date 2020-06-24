@@ -118,13 +118,21 @@ mod heart_rate_service
             val: Arc<atomic::AtomicU8>,
         }
 
+        impl PartialEq<HrsData> for HeartRateMeasurement {
+            fn eq(&self, other: &HrsData) -> bool {
+                use std::sync::atomic::Ordering::Relaxed;
+
+                (self.flags == other.0) && (self.val.load(Relaxed) == other.1)
+            }
+        }
+
         impl HeartRateMeasurement{
             pub const GATT_PERMISSIONS: &'static [gatt::characteristic::Properties] = &[
                 gatt::characteristic::Properties::Notify
             ];
 
             pub const ATT_PERMISSIONS: &'static [att::AttributePermissions] = &[
-                att::AttributePermissions::Read,
+                att::AttributePermissions::Read(att::AttributeRestriction::None),
             ];
 
             pub fn new(init: Arc<atomic::AtomicU8>) -> Self {
@@ -143,12 +151,13 @@ mod heart_rate_service
         #[derive(PartialEq)]
         pub struct HrsData(HrsFlags,u8);
 
+        #[async_trait::async_trait]
         impl att::server::ServerAttributeValue<HrsData> for HeartRateMeasurement {
-            fn read_and<F,T>(&self, mut f: F ) -> T where F: FnMut(&HrsData) -> T {
+            async fn read_and<F, T>(&self, f: F) -> T where F: Fn(&HrsData) -> T + Send {
                 f( &HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed)) )
             }
 
-            fn write_val(&mut self, _: HrsData) {
+            async fn write_val(&mut self, _: HrsData) {
                 /*The user cannot write bluetooth to the server*/
             }
         }
@@ -199,10 +208,12 @@ mod heart_rate_service
                 Vec::from(characteristics::HeartRateMeasurement::GATT_PERMISSIONS),
                 characteristics::HEART_RATE_MEASUREMENT_UUID,
                 measurement,
-                Vec::from(characteristics::HeartRateMeasurement::ATT_PERMISSIONS)
+                characteristics::HeartRateMeasurement::ATT_PERMISSIONS
             )
-            .set_client_configuration( vec![gatt::characteristic::ClientConfiguration::Notification] )
-            .finish_characteristic()
+            .set_client_configuration(
+                vec![gatt::characteristic::ClientConfiguration::Notification],
+                [].as_ref()
+            ).finish_characteristic()
             .finish_service();
 
         server_builder.make_server(connection_chanel, mtu)
@@ -255,7 +266,9 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
-    let evt_rsl = hi.wait_for_event(events::LEMeta::ConnectionComplete.into(), Duration::from_secs(60)).await;
+    let awaited_event = Some(events::Events::from(events::LEMeta::ConnectionComplete));
+
+    let evt_rsl = hi.wait_for_event(awaited_event, Duration::from_secs(60)).await;
 
     set_advertising_enable::send(&hi, false).await.unwrap();
 
@@ -376,7 +389,7 @@ fn main() {
 
                     let hrs_value_handle = 3;
 
-                    assert!(server.send_notification(hrs_value_handle));
+                    assert!( executor::block_on(server.send_notification(hrs_value_handle)) );
 
                     thread::sleep(connect_interval)
                 }

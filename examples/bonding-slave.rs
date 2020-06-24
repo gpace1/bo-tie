@@ -54,7 +54,7 @@ impl Bonder {
             gaurd.iter().copied().collect()
         };
 
-        set_event_mask::send(&self.hi, &events).await.expect("failed to set event mask")
+        set_event_mask::send(&self.hi, &events).await.expect("failed to set event mask");
     }
 
     /// Enable/Disable the provided le events
@@ -74,7 +74,7 @@ impl Bonder {
             gaurd.iter().copied().collect()
         };
 
-        set_event_mask::send(&self.hi, &le_events).await.expect("failed to set le event mask")
+        set_event_mask::send(&self.hi, &le_events).await.expect("failed to set le event mask");
     }
 
     async fn init_events(&self) {
@@ -257,12 +257,12 @@ impl Bonder {
         for acl_data in acl_data_vec {
             match acl_data.get_channel_id() {
                 ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) =>
-                    match att_server.process_acl_data(&acl_data) {
+                    match att_server.process_acl_data(&acl_data).await {
                         Ok(_) => (),
                         Err(e) => log::error!("Cannot process acl data for ATT, '{}'", e),
                     }
                 ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
-                    match slave_security_manager.process_command(&acl_data) {
+                    match slave_security_manager.process_command(&acl_data).await {
                         Ok(None) => (),
                         Err(e) => log::error!("Cannot process acl data for SM, '{:?}'", e),
                         Ok(Some(db_entry)) => {
@@ -393,7 +393,8 @@ impl Bonder {
             let mut d = Box::pin( self.hi.wait_for_event(DisconnectionComplete, None).fuse() );
 
             'inner: loop {
-                let a = self.process_acl_data(&connection_channel, &mut gatt_server, &mut slave_sm).fuse();
+                let a = self.process_acl_data(&connection_channel, &mut gatt_server, &mut slave_sm)
+                    .fuse();
 
                 futures::select!{
                     a_res = Box::pin(a) => ltk = a_res,
@@ -407,10 +408,12 @@ impl Bonder {
 
                 slave_sm.set_encrypted(encrypted);
 
-                if encrypted && irk_sent == false {
+                if encrypted && (irk_sent == false) {
                     println!("Sending IRK and Address to Master");
 
-                    if slave_sm.send_irk() && slave_sm.send_static_rand_addr(this_address.clone()) {
+                    if slave_sm.send_new_irk(None).await.is_some() &&
+                       slave_sm.send_static_rand_addr(this_address.clone()).await
+                    {
                         irk_sent = true;
                     } else {
                         log::error!("Failed to send IRK");
@@ -618,20 +621,23 @@ impl Bonder {
 fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> bo_tie::gatt::Server<'c, C>
 where C: bo_tie::l2cap::ConnectionChannel
 {
-    use bo_tie::{gatt, att};
+    use bo_tie::{
+        gatt,
+        att::{AttributePermissions, AttributeRestriction}
+    };
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
     let mut server = gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, 256);
 
-    server.as_mut().give_permission_to_client(att::AttributePermissions::Read);
+    server.as_mut().give_permissions_to_client( AttributePermissions::Read(AttributeRestriction::None) );
 
     server
 }
 
 fn main() {
     use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
-    use futures::task::SpawnExt;
+    use futures::{executor::block_on, task::SpawnExt};
 
     TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
 
@@ -644,27 +650,28 @@ fn main() {
 
     bonder.clone().setup_signal_handle();
 
-    let mut thread_pool = futures::executor::ThreadPool::new().expect("Failed to create ThreadPool");
+    let thread_pool = futures::executor::ThreadPool::new().expect("Failed to create ThreadPool");
 
     println!("This public address: {:x?}", advertise_address);
 
-    // Wait for events to be initialized.
-    thread_pool.run( bonder.init_events() );
+    // Wait for events to be initialized before proceeding to the next steps.
+    block_on( bonder.init_events() );
 
-    // Conection Update Request will run forever (effectively in the background).
+    // Connection Update Request will run forever (effectively in the background).
     thread_pool.spawn( bonder.clone().connection_update_request() ).unwrap();
 
     thread_pool.spawn( Box::pin(bonder.clone().start_advertising(advertise_address, local_name)) ).unwrap();
 
-    // `Run` here will wait for a connection to be made before proceeding. `wait_for_connection`
-    // will disable advertising also when a connection is made.
-    match thread_pool.run( bonder.wait_for_connection() ) {
+    // Spawn the process to await a connection
+    match block_on( bonder.wait_for_connection() )
+    {
         Ok(event_data) => {
             use hci::events::LEConnectionAddressType;
 
             println!("Device Connected! (use ctrl-c to disconnect and exit)");
 
-            thread_pool.run( bonder.clone()
+            // Start the server
+            block_on( bonder.clone()
                 .abortable_server_loop(
                     advertise_address.clone(),
                     local_name,

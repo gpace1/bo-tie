@@ -27,7 +27,7 @@ vendored = ["openssl/vendored"]
 
 [dev-dependencies]
 lazy_static = "1.1"
-futures = { version = "0.3", features = ["async-await"] }
+futures = { version = "0.3", features = ["async-await", "thread-pool"] }
 simplelog = "0.6"
 rand = "0.7"
 async-timer = "0.6"
