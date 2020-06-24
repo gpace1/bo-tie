@@ -941,7 +941,7 @@ where C: l2cap::ConnectionChannel
     /// Get an iterator over the attribute informational data
     ///
     /// This will return an iterator to get the type, permissions, and handle for each attribute
-    pub fn iter_attr_info(&self) -> impl Iterator<Item = &dyn AttributeInfo > {
+    pub fn iter_attr_info(&self) -> impl Iterator<Item = &(dyn AttributeInfo + Send + Sync)> {
         self.attributes.iter_info()
     }
 }
@@ -1012,7 +1012,7 @@ impl ServerAttributes {
     /// Get an iterator over the attribute informational data
     ///
     /// This will return an iterator to get the type, permissions, and handle for each attribute
-    pub fn iter_info(&self) -> impl Iterator<Item = &dyn AttributeInfo > {
+    pub fn iter_info(&self) -> impl Iterator<Item = &(dyn AttributeInfo + Send + Sync) > {
         ServerAttributesIter(self.attributes[1..].iter())
     }
 
@@ -1049,7 +1049,7 @@ impl Default for ServerAttributes {
 struct ServerAttributesIter<'a>(core::slice::Iter<'a, Box<dyn ServerAttribute + Send + Sync >>);
 
 impl<'a> Iterator for ServerAttributesIter<'a> {
-    type Item = &'a dyn AttributeInfo;
+    type Item = &'a (dyn AttributeInfo + Send + Sync);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next().map(|b| b.as_att_info() )
@@ -1100,7 +1100,7 @@ pub trait AttributeInfo {
 /// #[async_trait]
 /// impl<V: PartialEq> ServerAttributeValue<V> for SyncAttVal<V> where V: Send + Sync {
 ///
-///     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send {
+///     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send + Sync {
 ///         f( &self.value.lock().unwrap() )
 ///     }
 ///
@@ -1136,7 +1136,7 @@ pub trait AttributeInfo {
 pub trait ServerAttributeValue<V> where V: Send + Sync {
 
     /// Read the value and call `f` with a reference to it.
-    async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send;
+    async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send + Sync;
 
     /// Write to the value
     async fn write_val(&mut self, val: V);
@@ -1148,7 +1148,7 @@ pub trait ServerAttributeValue<V> where V: Send + Sync {
 /// The trivial implementation for ServerAttributeValue
 #[async_trait]
 impl<V> ServerAttributeValue<V> for V where V: PartialEq + Send + Sync {
-    async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send { f( self ) }
+    async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send + Sync { f( self ) }
 
     async fn write_val(&mut self, val: V) { *self = val }
 
@@ -1161,9 +1161,9 @@ impl<V> ServerAttributeValue<V> for V where V: PartialEq + Send + Sync {
 /// functions are designed to abstract away from the type of the attribute value so a
 /// `ServerAttributes` can have a list of boxed `dyn ServerAttribute`.
 #[async_trait]
-trait ServerAttribute: AttributeInfo {
+trait ServerAttribute: AttributeInfo + Send + Sync {
 
-    fn as_att_info(&self) -> &dyn AttributeInfo;
+    fn as_att_info(&self) -> &(dyn AttributeInfo + Send + Sync);
 
     /// Generate a 'Read Response'
     ///
@@ -1233,7 +1233,7 @@ impl<C, V> ServerAttribute for ServerAttEntry<C,V>
 where C: ServerAttributeValue<V> + Send + Sync,
       V: TransferFormatTryFrom + TransferFormatInto + Send + Sync,
 {
-    fn as_att_info(&self) -> &dyn AttributeInfo { self }
+    fn as_att_info(&self) -> &(dyn AttributeInfo + Send + Sync) { self }
 
     async fn read_response(&self) -> Vec<u8> {
         self.attribute
@@ -1302,7 +1302,7 @@ impl AttributeInfo for ReservedHandle {
 #[async_trait]
 impl ServerAttribute for ReservedHandle
 {
-    fn as_att_info(&self) -> &dyn AttributeInfo { self }
+    fn as_att_info(&self) -> &(dyn AttributeInfo + Send + Sync) { self }
 
     async fn read_response(&self) -> Vec<u8> {
         log::error!("Tried to read the reserved handle for a read response");
