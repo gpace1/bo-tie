@@ -793,6 +793,8 @@ mod tests {
     #[test]
     fn gatt_services_read_by_group_type() {
 
+        use futures::executor::block_on;
+
         let mut server_builder = ServerBuilder::new();
 
         let first_test_uuid = UUID::from(0x1000u16);
@@ -838,7 +840,7 @@ mod tests {
             att::L2CAP_CHANNEL_ID
         );
 
-        assert_eq!( Ok(()), server.process_acl_data(&acl_client_pdu), );
+        assert_eq!( Ok(()), block_on(server.process_acl_data(&acl_client_pdu)), );
 
         let expected_response = att::pdu::ReadByGroupTypeResponse::new(
             vec![
@@ -867,7 +869,7 @@ mod tests {
             att::L2CAP_CHANNEL_ID
         );
 
-        assert_eq!( Ok(()), server.process_acl_data(&acl_client_pdu), );
+        assert_eq!( Ok(()), block_on(server.process_acl_data(&acl_client_pdu)), );
 
         let expected_response = att::pdu::ReadByGroupTypeResponse::new(
             vec![
@@ -896,7 +898,7 @@ mod tests {
 
         assert_eq!(
             Err(att::Error::PduError(att::pdu::Error::InvalidHandle)),
-            server.process_acl_data(&acl_client_pdu)
+            block_on(server.process_acl_data(&acl_client_pdu))
         );
     }
 }

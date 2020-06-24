@@ -171,9 +171,8 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
     /// occur if the response doesn't contain the correct channel identifier or an unexpected ATT
     /// PDU was received. The server is expected to respond with either a mtu response PDU or an
     /// error PDU with request not supported.
-    pub async fn create_client<Mtu>( self, response: l2cap::AclData )
+    pub async fn create_client( self, response: &l2cap::AclData )
     -> Result<Client<'c, C>, super::Error>
-    where Mtu: Into<Option<u16>>
     {
         if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
 

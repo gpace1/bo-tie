@@ -815,6 +815,7 @@ mod test {
             l2cap::ConnectionChannel,
             UUID
         };
+        use futures::executor::block_on;
 
         const UUID_1: UUID = UUID::from_u16(1);
         const UUID_2: UUID = UUID::from_u16(2);
@@ -870,10 +871,10 @@ mod test {
 
                 use std::convert::TryFrom;
 
-                match futures::executor::block_on(c2.future_receiver()) {
+                match block_on(c2.future_receiver()) {
                     Ok(l2cap_data_vec) => for l2cap_pdu in l2cap_data_vec {
 
-                        match server.process_acl_data(&l2cap_pdu) {
+                        match block_on(server.process_acl_data(&l2cap_pdu)) {
                             Err(super::Error::UnknownOpcode(op)) if op == kill_opcode =>
                                 break 'server_loop Ok(()),
                             Err(e) =>
@@ -927,18 +928,18 @@ mod test {
             }
         }
 
-        let client = client::Client::connect(&c1, 512)
-            .process_response(
-                make_block_on(thread_panicked.clone(), t)(
-                    c1.future_receiver(),
-                    "Connect timed out"
-                )
-                .expect("connect receiver").first().unwrap()
-            )
-            .expect("connect response");
+        let le_client_setup = block_on(client::LeConnectClient::initiate(512, &c1)).unwrap();
+
+        let client = block_on(le_client_setup.create_client(
+            make_block_on(thread_panicked.clone(), t)(c1.future_receiver(),"Connect timed out")
+                .expect("connect receiver")
+                .first()
+                .unwrap()
+        ))
+        .unwrap();
 
         // writing to handle 1
-        client.write_request(1, test_val_1).unwrap()
+        block_on(client.write_request(1, test_val_1)).unwrap()
             .process_response(
                 make_block_on(thread_panicked.clone(), t)(
                     c1.future_receiver(),
@@ -950,7 +951,7 @@ mod test {
             .expect("w1 response");
 
         // writing to handle 2
-        client.write_request(2, test_val_2).unwrap()
+        block_on(client.write_request(2, test_val_2)).unwrap()
             .process_response(
                 make_block_on(thread_panicked.clone(), t)(
                     c1.future_receiver(),
@@ -962,7 +963,7 @@ mod test {
             .expect("w2 response");
 
         // writing to handle 3
-        client.write_request(3, test_val_3).unwrap()
+        block_on(client.write_request(3, test_val_3)).unwrap()
             .process_response(
                 make_block_on(thread_panicked.clone(), t)(
                     c1.future_receiver(),
@@ -974,7 +975,7 @@ mod test {
             .expect("w3 response");
 
         // reading handle 1
-        let read_val_1 = client.read_request(1).unwrap()
+        let read_val_1 = block_on(client.read_request(1)).unwrap()
             .process_response(
                 make_block_on(thread_panicked.clone(), t)(
                     c1.future_receiver(),
@@ -985,7 +986,7 @@ mod test {
                 .unwrap() )
             .expect("r1 response");
 
-        let read_val_2 = client.read_request(2).unwrap()
+        let read_val_2 = block_on(client.read_request(2)).unwrap()
             .process_response( make_block_on(thread_panicked.clone(), t)(
                 c1.future_receiver(),
                 "read handle 2 timed out"
@@ -995,7 +996,7 @@ mod test {
                 .unwrap() )
             .expect("r2 response");
 
-        let read_val_3 = client.read_request(3).unwrap()
+        let read_val_3 = block_on(client.read_request(3)).unwrap()
             .process_response(
                 make_block_on(thread_panicked.clone(), t)(
                     c1.future_receiver(),
@@ -1006,7 +1007,7 @@ mod test {
                 .unwrap() )
             .expect("r3 response");
 
-        client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8, None) )
+        block_on( client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8, None) ) )
             .expect("Failed to send kill opcode");
 
         // Check that the send values equal the read values
