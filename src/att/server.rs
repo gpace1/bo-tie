@@ -1013,7 +1013,7 @@ impl ServerAttributes {
     ///
     /// This will return an iterator to get the type, permissions, and handle for each attribute
     pub fn iter_info(&self) -> impl Iterator<Item = &(dyn AttributeInfo + Send + Sync) > {
-        ServerAttributesIter(self.attributes[1..].iter())
+        self.attributes[1..].iter().map(|sa| sa.as_att_info())
     }
 
     /// Attributes length
@@ -1043,16 +1043,6 @@ impl ServerAttributes {
 impl Default for ServerAttributes {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-struct ServerAttributesIter<'a>(core::slice::Iter<'a, Box<dyn ServerAttribute + Send + Sync >>);
-
-impl<'a> Iterator for ServerAttributesIter<'a> {
-    type Item = &'a (dyn AttributeInfo + Send + Sync);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|b| b.as_att_info() )
     }
 }
 
