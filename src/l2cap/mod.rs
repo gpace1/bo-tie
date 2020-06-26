@@ -358,14 +358,34 @@ pub trait ConnectionChannel {
 
 /// Future for polling to await the sending of data *to the controller*
 ///
-/// This future is used for awaiting the sending of data to the controller, but is not used for
-/// awaiting data sent to a connected device.
-pub struct SendFut( Option<core::task::Waker>, bool);
+/// This future is used for awaiting the sending of ACL data to the controller. When to await is
+/// determined by a lower layer implementation as when polled a `SendFut` just determines to return
+/// `Ready(..)` from an internal flag.
+///
+/// Usually there are only two types of 'lower layers' below the `SendFut`, a flow controller or the
+/// trivial case. The trivial case is where there is no monitoring or keeping track of a Bluetooth
+/// controller's data buffers. A flow controller is just the opposite. It is designed to not send
+/// data that would cause the buffers of the controller to go beyond their capacity. The trivial
+/// case will usually be implemented to never await, as `SendFut` will be created with the internal
+/// flag as true. As for the flow controller, generally it will only await when sending data will
+/// overrun a controller's buffer. The flow controller will use a `SendFut` the same way as the
+/// trivial case when there is space for the data within the controllers buffers.
+pub struct SendFut( Option<core::task::Waker>, pub bool);
 
 impl SendFut {
+    /// Create a new `SendFut`
+    ///
+    /// Input `ready` is a boolean to indicate if the future is ready to return 'Poll::Ready(())'.
+    /// Creating a `SendFut` with `ready` as `true` will mean that this future will never await.
     pub fn new(ready: bool) -> Self {
         SendFut(None, ready)
     }
+
+    /// Mark the future as ready to send
+    ///
+    /// This should only be used by a lower layer to have the next poll of this future return ready
+    /// to the awaiting context.
+    pub fn ready(&mut self) { self.1 = true }
 }
 
 impl Future for SendFut {
@@ -383,6 +403,7 @@ impl Future for SendFut {
         }
     }
 }
+
 /// A future for asynchronously waiting for received packets from the connected device
 ///
 /// This struct is created via the function [`future_receiver`](ConnectionChannel::future_receiver)
