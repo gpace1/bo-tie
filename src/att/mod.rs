@@ -233,6 +233,8 @@ impl<V> Attribute<V> {
         &self.value
     }
 
+    pub fn get_mut_value(&mut self) -> &mut V { &mut self.value }
+
     /// Get the handle
     ///
     /// This will only return a handle if the attribute was retrieved from an attribute server. A

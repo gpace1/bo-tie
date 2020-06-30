@@ -312,8 +312,10 @@ impl<'a> CharacteristicAdder<'a>
         value: C,
         value_permissions: P )
     -> characteristic::CharacteristicBuilder<'a,'c, C, V>
-        where C: att::server::ServerAttributeValue<V> + Sized + Send + Sync + PartialEq<V> + 'static,
-              V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
+        where C: att::server::ServerAttributeValue<Value = V> + Sized + Send + Sync +
+                 PartialEq<V> + 'static,
+              V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync +
+                 'static,
               P: Into<Option<&'c [att::AttributePermissions]>>
     {
         let permissions = value_permissions.into();
