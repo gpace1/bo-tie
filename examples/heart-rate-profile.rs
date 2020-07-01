@@ -31,6 +31,7 @@ mod heart_rate_service
         use bo_tie::att;
         use bo_tie::gatt;
         use std::sync::{Arc, atomic};
+        use bo_tie::att::server::PinnedFuture;
 
         /// This is the UUID for the Heart Rate Measurement Characteristic
         pub const HEART_RATE_MEASUREMENT_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0x2A37);
@@ -151,14 +152,19 @@ mod heart_rate_service
         #[derive(PartialEq)]
         pub struct HrsData(HrsFlags,u8);
 
-        #[async_trait::async_trait]
-        impl att::server::ServerAttributeValue<HrsData> for HeartRateMeasurement {
-            async fn read_and<F, T>(&self, f: F) -> T where F: Fn(&HrsData) -> T + Send {
-                f( &HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed)) )
+        impl att::server::ServerAttributeValue for HeartRateMeasurement {
+            type Value = HrsData;
+
+            fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T> where F: FnOnce(&Self::Value) -> T + Send + Sync + 'a {
+                Box::pin( async move { f( &HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed)) ) } )
             }
 
-            async fn write_val(&mut self, _: HrsData) {
-                /*The user cannot write bluetooth to the server*/
+            fn write_val(&mut self, _: Self::Value) -> PinnedFuture<'_, ()> {
+                unreachable!("The user cannot write to the value")
+            }
+
+            fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a, bool> {
+                Box::pin( async move { &HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed)) == other } )
             }
         }
 
