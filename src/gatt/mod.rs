@@ -773,7 +773,7 @@ mod tests {
 
         server.iter_attr_info()
             .for_each(|info| assert_eq!(info.get_permissions(), test_att_permissions,
-                "failing UUID: {:#x}, handle: {}", info.get_type(), info.get_handle() ) )
+                "failing UUID: {:#x}, handle: {}", info.get_uuid(), info.get_handle() ) )
     }
 
     struct TestChannel {

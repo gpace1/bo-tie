@@ -479,14 +479,13 @@ macro_rules! impl_transfer_format_for_vec_of {
             }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
+                self.iter().fold(0usize, |start,t| {
+                    let end: usize = start + t.len_of_into();
 
-                let mut start = 0;
+                    t.build_into_ret(&mut into_ret[start..end]);
 
-                self.iter().for_each(|t| {
-                    t.build_into_ret(&mut into_ret[start..t.len_of_into()]);
-
-                    start += t.len_of_into();
-                } )
+                    end
+                } );
             }
         }
     };
@@ -989,10 +988,11 @@ mod test {
             .expect("r1 response");
 
         let read_val_2 = block_on(client.read_request(2)).unwrap()
-            .process_response( make_block_on(thread_panicked.clone(), t)(
-                c1.future_receiver(),
-                "read handle 2 timed out"
-            )
+            .process_response(
+                make_block_on(thread_panicked.clone(), t)(
+                    c1.future_receiver(),
+                    "read handle 2 timed out"
+                )
                 .expect("r2 receiver")
                 .first()
                 .unwrap() )
