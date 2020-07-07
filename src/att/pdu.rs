@@ -835,7 +835,15 @@ where R: Into<HandleRange>
 
 /// A single read type response
 ///
-/// The read type response will contain one or more of these
+/// A list of `ReadTypeResponse`s is sent the client in response to their Read By Type Request.
+///
+/// `TransferFormatTryFrom` and `TransferFormatInto` are implemented for a vectors of
+/// `ReadTypeResponse`. However these implementations assume that the returned data for each
+/// response has the same transfer format length, which is required per the Bluetooth specification
+/// for the *Read By Type Response*. This libraries implementation of an attribute server
+/// ([`Server`](crate::att::server::Server)) will make sure of this before forming the list of
+/// `ReadTypeResponse`, but you will need to be aware of this when building your own *Read By Type
+/// Response* PDU.
 pub struct ReadTypeResponse<D> {
     handle: u16,
     data: D
@@ -849,14 +857,14 @@ impl<D> ReadTypeResponse<D> {
 
 impl<D> TransferFormatTryFrom for ReadTypeResponse<D> where D: TransferFormatTryFrom {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
-        if raw.len() == 2 + core::mem::size_of::<D>() {
+        if raw.len() >= 2 {
             Ok(Self {
                 handle: <u16>::from_le_bytes([raw[0], raw[1]]),
                 data: TransferFormatTryFrom::try_from(&raw[2..])?,
             })
         } else {
-            Err(TransferFormatError::bad_size(stringify!("ReadTypeResponse"),
-                2 + core::mem::size_of::<D>(), raw.len()))
+            Err(TransferFormatError::bad_min_size(stringify!("ReadTypeResponse"),
+                2, raw.len()))
         }
     }
 }
@@ -881,7 +889,7 @@ impl<D> TransferFormatInto for Vec<ReadTypeResponse<D>> where D: TransferFormatI
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        into_ret[0] = self.len_of_into() as u8;
+        into_ret[0] = self.first().map_or(0u8,|f| f.len_of_into() as u8);
 
         self.iter()
             .fold(1usize, |acc, r| {
