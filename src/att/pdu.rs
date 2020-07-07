@@ -840,10 +840,9 @@ where R: Into<HandleRange>
 /// `TransferFormatTryFrom` and `TransferFormatInto` are implemented for a vectors of
 /// `ReadTypeResponse`. However these implementations assume that the returned data for each
 /// response has the same transfer format length, which is required per the Bluetooth specification
-/// for the *Read By Type Response*. This libraries implementation of an attribute server
-/// ([`Server`](crate::att::server::Server)) will make sure of this before forming the list of
-/// `ReadTypeResponse`, but you will need to be aware of this when building your own *Read By Type
-/// Response* PDU.
+/// for the *Read By Type Response*. The other assumption made is that the entire PDU sent has a
+/// maximum payload size of 256 bytes and that the TransferFormatInto will not generate a PDU larger
+/// than that.
 pub struct ReadTypeResponse<D> {
     handle: u16,
     data: D
@@ -863,8 +862,7 @@ impl<D> TransferFormatTryFrom for ReadTypeResponse<D> where D: TransferFormatTry
                 data: TransferFormatTryFrom::try_from(&raw[2..])?,
             })
         } else {
-            Err(TransferFormatError::bad_min_size(stringify!("ReadTypeResponse"),
-                2, raw.len()))
+            Err( TransferFormatError::bad_min_size(stringify!("ReadTypeResponse"), 2, raw.len()) )
         }
     }
 }
@@ -883,9 +881,9 @@ impl<D> TransferFormatInto for ReadTypeResponse<D> where D: TransferFormatInto {
 impl<D> TransferFormatInto for Vec<ReadTypeResponse<D>> where D: TransferFormatInto {
 
     fn len_of_into(&self) -> usize {
-        1 + self.iter()
-            .map(|r| r.len_of_into() )
-            .sum()
+        let fields_len: usize = self.iter().map( |r| r.len_of_into() ).sum();
+
+        fields_len + 1
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
