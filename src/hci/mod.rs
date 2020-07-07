@@ -725,11 +725,12 @@ where HI: core::ops::Deref<Target = HostInterface<I>>,
         let l2cap_pdu = data.into();
 
         if let Some(mtu) = l2cap_pdu.get_mtu() {
-            log::trace!("fragmenting l2cap data for transmission");
 
             let payload = l2cap_pdu.into_data();
 
             let fragment_size = core::cmp::min(mtu, HciAclData::MINIMUM_LE_U_FRAGMENT_START_SIZE);
+
+            log::trace!("fragmenting l2cap data to mtu ({}) for transmission", fragment_size);
 
             payload.chunks(fragment_size).enumerate().for_each(|(i, chunk)| {
                 let hci_acl_data = if i == 0 {
