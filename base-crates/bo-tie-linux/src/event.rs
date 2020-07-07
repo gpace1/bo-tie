@@ -131,7 +131,7 @@ impl EventExpecter {
 
         let mut gaurd = mutex.lock().expect("Couldn't acquire lock");
 
-        match gaurd.expected.get(&event).and_then(|map| map.get(&pat_key) )
+        match gaurd.expected.get_mut(&event).and_then(|map| map.get_mut(&pat_key) )
         {
             None => {
                 log::debug!("Setting up expectation for event {:?}", event);
@@ -176,7 +176,7 @@ impl EventExpecter {
 
                 None
             }
-            Some(ref val) => {
+            Some(ref mut val) => {
 
                 if val.waker_token.triggered() {
                     log::debug!("Retrieving data for event {:?}", event);
@@ -192,6 +192,12 @@ impl EventExpecter {
                     expected.data
 
                 } else {
+                    // An event matcher has already been set for this `event` but there is no
+                    // event data available yet. This happened because `expect_event` was called
+                    // before the waker was 'woken'. This may have been called to change the waker.
+
+                    val.waker_token.change_waker(waker);
+
                     None
                 }
             }

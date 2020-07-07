@@ -835,7 +835,7 @@ impl WakerToken {
     /// Trigger the waker if there is a waker.
     ///
     /// A trigger flag is set by this method to indicate to the method set_waker that it needs
-    /// to immediately call the wake method of its waker paramter.
+    /// to immediately call the wake method of its waker parameter.
     fn trigger(&mut self) {
 
         self.waker_triggered = true;
@@ -846,9 +846,23 @@ impl WakerToken {
         }
     }
 
-    /// Determine if the trigger method was called or an error occured
+    /// Determine if the trigger method was called or an error occurred
     fn triggered(&self) -> bool {
         self.waker_triggered
+    }
+
+    /// Change the waker.
+    ///
+    /// This changes the waker if 'self.waker' is either None or will not wake the same context as
+    /// the input 'waker'. True is returned if the waker is changed to input `waker`.
+    fn change_waker(&mut self, waker: &core::task::Waker) -> bool {
+        match self.waker.as_ref().map(|w| w.will_wake(waker) ) {
+            Some(true) => false,
+            _ => {
+                self.waker = Some(waker.clone());
+                false
+            }
+        }
     }
 }
 
