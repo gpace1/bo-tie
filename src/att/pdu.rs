@@ -875,7 +875,7 @@ impl<D> TransferFormatInto for ReadTypeResponse<D> where D: TransferFormatInto {
 impl<D> TransferFormatInto for Vec<ReadTypeResponse<D>> where D: TransferFormatInto {
 
     fn len_of_into(&self) -> usize {
-        self.iter()
+        1 + self.iter()
             .map(|r| r.len_of_into() )
             .sum()
     }
