@@ -91,10 +91,10 @@ impl EventExpecter {
 
         let mut gaurd = mutex.lock().expect("Couldn't acquire lock");
 
-        match gaurd.expected.get(&event).and_then(|map| map.get(&pat_key) )
+        match gaurd.expected.get_mut(&event).and_then(|map| map.get_mut(&pat_key) )
         {
             None => {
-                log::debug!("Setting up expectation for event {:?}", event);
+                log::info!("Setting up expectation for event {:?}", event);
 
                 let waker_token = WakerToken::from(waker.clone());
 
@@ -107,7 +107,7 @@ impl EventExpecter {
 
                 None
             }
-            Some(ref val) => {
+            Some(ref mut val) => {
 
                 if val.waker_token.triggered() {
                     log::debug!("Retrieving data for event {:?}", event);
@@ -117,6 +117,11 @@ impl EventExpecter {
                     expected.data
 
                 } else {
+
+                    if val.waker_token.change_waker(waker) {
+                        log::info!("Waker updated for new context")
+                    }
+
                     None
                 }
             }
