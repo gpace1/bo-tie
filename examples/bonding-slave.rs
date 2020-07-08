@@ -165,7 +165,7 @@ impl Bonder {
         use hci::events::LEMetaData::RemoteConnectionParameterRequest as RCPReqData;
 
         loop {
-            let event = self.hi.wait_for_event(Some(RCPReq.into()), None).await;
+            let event = self.hi.wait_for_event(Some(RCPReq.into())).await;
 
             match event {
                 Ok(LEMeta(RCPReqData(e))) => {
@@ -199,7 +199,7 @@ impl Bonder {
 
         println!("Waiting for a connection (timeout is 60 seconds)");
 
-        let evt_rsl = self.hi.wait_for_event(Some(ConnectionComplete.into()), Duration::from_secs(60)).await;
+        let evt_rsl = self.hi.wait_for_event(Some(ConnectionComplete.into())).await;
 
         match evt_rsl {
             Ok(event) => {
@@ -286,7 +286,7 @@ impl Bonder {
         use hci::le::encryption::long_term_key_request_negative_reply;
         use hci::events::{EventsData, LEMeta, LEMetaData};
 
-        let event = self.hi.wait_for_event(Some(LEMeta::LongTermKeyRequest.into()), None).await;
+        let event = self.hi.wait_for_event(Some(LEMeta::LongTermKeyRequest.into())).await;
 
         log::trace!("Received Long Term Key Request");
 
@@ -327,7 +327,7 @@ impl Bonder {
         use hci::events::EventsData::EncryptionChange as EC;
         use hci::common::EncryptionLevel::{AESCCM, Off};
 
-        let evnt = self.hi.wait_for_event(EncryptionChange, None).await;
+        let evnt = self.hi.wait_for_event(EncryptionChange).await;
 
         match evnt {
             Ok(EC(e_data)) =>
@@ -390,7 +390,7 @@ impl Bonder {
 
             let mut l = Box::pin( self.await_ltk_request(handle).fuse() );
 
-            let mut d = Box::pin( self.hi.wait_for_event(DisconnectionComplete, None).fuse() );
+            let mut d = Box::pin( self.hi.wait_for_event(DisconnectionComplete).fuse() );
 
             'inner: loop {
                 let a = self.process_acl_data(&connection_channel, &mut gatt_server, &mut slave_sm)
@@ -527,7 +527,7 @@ impl Bonder {
 
             set_advertising_enable::send(&self.hi, true).await.unwrap();
 
-            let event_rslt = self.hi.wait_for_event(Some(EnhancedConnectionComplete.into()), None).await;
+            let event_rslt = self.hi.wait_for_event(Some(EnhancedConnectionComplete.into())).await;
 
             let event_data_opt = match event_rslt
             {

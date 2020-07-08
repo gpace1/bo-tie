@@ -45,7 +45,7 @@ async fn start_scanning_for_addr(
 
     let waited_event = Some(Events::from(LEMeta::AdvertisingReport));
     let ret = 'outer: loop {
-        match hi.wait_for_event(waited_event, None).await.unwrap() {
+        match hi.wait_for_event(waited_event).await.unwrap() {
             EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) => {
                 if let Some(report) = reports.iter()
                     .filter_map(|r| r.as_ref().ok() )
@@ -140,7 +140,7 @@ async fn connect_to<'a>(
 
     let awaited_event = Some(Events::from(LEMeta::ConnectionComplete));
 
-    match hi.wait_for_event(awaited_event, None).await.unwrap() {
+    match hi.wait_for_event(awaited_event).await.unwrap() {
         EventsData::LEMeta(LEMetaData::ConnectionComplete(data)) => {
             raw_handle.store(data.connection_handle.get_raw_handle(), Ordering::Relaxed);
 
@@ -200,7 +200,7 @@ async fn encrypt(
 
     start_encryption::send(hi, parameter).await.unwrap();
 
-    match hi.wait_for_event(Events::EncryptionChange, Duration::from_secs(5) ).await {
+    match hi.wait_for_event(Events::EncryptionChange).await {
         Ok( EventsData::EncryptionChange(data) ) =>
             if (data.encryption_enabled.get_for_le() == EncryptionLevel::AESCCM) ||
                (data.encryption_enabled.get_for_le() == EncryptionLevel::E0)

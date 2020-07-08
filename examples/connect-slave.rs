@@ -37,7 +37,6 @@ use bo_tie:: {
     },
 };
 use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
-use std::time::Duration;
 
 /// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
 /// from the controller to the user.
@@ -100,7 +99,7 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 
     let waited_event = Some(events::Events::from(events::LEMeta::ConnectionComplete));
 
-    let evt_rsl = hi.wait_for_event(waited_event, Duration::from_secs(60)).await;
+    let evt_rsl = hi.wait_for_event(waited_event).await;
 
     match evt_rsl {
         Ok(event) => {
@@ -239,7 +238,7 @@ fn main() {
 
             println!("Device Connected! (use ctrl-c to disconnect and exit)");
 
-            executor::block_on(interface.wait_for_event(events::Events::DisconnectionComplete, None)).ok();
+            executor::block_on(interface.wait_for_event(events::Events::DisconnectionComplete)).ok();
         },
         Err(err) => println!("Error: {}", err),
     };
