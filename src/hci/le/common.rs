@@ -3,7 +3,6 @@
 //! These are things that are common to multiple modules in `hci`.
 
 use core::convert::From;
-use core::time::Duration;
 
 /// The valid address types for this HCI command
 ///
@@ -114,11 +113,11 @@ impl<T> IntervalRange<T> where T: PartialEq + PartialOrd {
     }
 }
 
-impl From<IntervalRange<u16>> for IntervalRange<Duration> {
+impl From<IntervalRange<u16>> for IntervalRange<core::time::Duration> {
     fn from( raw: IntervalRange<u16> ) -> Self {
         IntervalRange {
-            low: Duration::from_micros( raw.low as u64 * raw.micro_sec_conv  ),
-            hi:  Duration::from_micros( raw.hi as u64 * raw.micro_sec_conv  ),
+            low: core::time::Duration::from_micros( raw.low as u64 * raw.micro_sec_conv  ),
+            hi:  core::time::Duration::from_micros( raw.hi as u64 * raw.micro_sec_conv  ),
             micro_sec_conv: raw.micro_sec_conv,
         }
     }
@@ -196,9 +195,9 @@ macro_rules! make_interval {
             ///
             /// # Error
             /// the value is out of bounds.
-            pub fn try_from_duration( duration: ::core::time::Duration ) -> Result<Self, &'static str>
+            pub fn try_from_duration( duration: core::time::Duration ) -> Result<Self, &'static str>
             {
-                let duration_range = crate::hci::le::common::IntervalRange::<::core::time::Duration>::from($name::RAW_RANGE);
+                let duration_range = crate::hci::le::common::IntervalRange::<core::time::Duration>::from($name::RAW_RANGE);
 
                 if duration_range.contains(&duration) {
                     Ok( $name {
@@ -219,8 +218,8 @@ macro_rules! make_interval {
             pub fn get_raw_val(&self) -> u16 { self.interval }
 
             /// Get the value of the interval as a `Duration`
-            pub fn get_duration(&self) -> ::core::time::Duration {
-                ::core::time::Duration::from_micros(
+            pub fn get_duration(&self) -> core::time::Duration {
+                core::time::Duration::from_micros(
                     (self.interval as u64) * $micro_sec_conv
                 )
             }

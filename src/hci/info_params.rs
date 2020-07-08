@@ -75,7 +75,7 @@ pub mod read_bd_addr {
     {
         use events::Events::CommandComplete;
 
-        let cmd_rslt = hci.send_command(Parameter, CommandComplete, Duration::from_secs(1) );
+        let cmd_rslt = hci.send_command(Parameter, CommandComplete );
 
         ReturnedFuture(cmd_rslt)
     }
@@ -162,7 +162,7 @@ pub mod read_local_supported_features {
     -> impl Future<Output=Result<EnabledFeatures, impl Display + Debug>> + 'a
         where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -246,7 +246,7 @@ pub mod read_local_version_information {
     -> impl Future<Output=Result<VersionInformation, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1)))
+        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
 }
 
@@ -920,7 +920,7 @@ pub mod read_local_supported_commands {
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 }
 
@@ -1004,6 +1004,6 @@ pub mod read_buffer_size {
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 }

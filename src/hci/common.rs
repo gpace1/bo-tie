@@ -1,5 +1,4 @@
 use core::iter::Iterator;
-use core::time::Duration;
 use core::fmt;
 
 #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Debug,Hash)]
@@ -125,8 +124,8 @@ impl ConnectionInterval {
         )
     }
 
-    pub fn as_duration(&self) -> Duration {
-        Duration::from_micros((self.interval as u64) * Self::CNV)
+    pub fn as_duration(&self) -> core::time::Duration {
+        core::time::Duration::from_micros((self.interval as u64) * Self::CNV)
     }
 
     pub fn get_interval(&self) -> u16 {
@@ -230,10 +229,10 @@ impl SupervisionTimeout {
     ///
     /// # Error
     /// the value is out of bounds.
-    pub fn try_from_duration( duration: Duration ) -> Result<Self, &'static str>
+    pub fn try_from_duration( duration: core::time::Duration ) -> Result<Self, &'static str>
     {
-        let min = Duration::from_millis(Self::MIN as u64 * Self::CNV);
-        let max = Duration::from_millis(Self::MAX as u64 * Self::CNV);
+        let min = core::time::Duration::from_millis(Self::MIN as u64 * Self::CNV);
+        let max = core::time::Duration::from_millis(Self::MAX as u64 * Self::CNV);
 
         if duration >= min && duration <= max {
             Ok( SupervisionTimeout {
@@ -250,8 +249,8 @@ impl SupervisionTimeout {
         }
     }
 
-    pub fn as_duration(&self) -> Duration {
-        Duration::from_millis((self.timeout as u64) * Self::CNV)
+    pub fn as_duration(&self) -> core::time::Duration {
+        core::time::Duration::from_millis((self.timeout as u64) * Self::CNV)
     }
 
     pub fn get_timeout(&self) -> u16 {

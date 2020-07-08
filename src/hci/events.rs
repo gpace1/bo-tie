@@ -17,7 +17,6 @@ use crate::hci::error::Error;
 use crate::hci::le;
 use crate::BluetoothDeviceAddress;
 use core::convert::From;
-use core::time::Duration;
 
 macro_rules! make_u16 {
     ( $packet:ident, $start:expr ) => {
@@ -1070,8 +1069,8 @@ impl CurrentModeInterval {
         }
     }
 
-    pub fn get_interval_as_duration(&self) -> Duration {
-        Duration::from_millis( self.interval as u64 * Self::CVT )
+    pub fn get_interval_as_duration(&self) -> core::time::Duration {
+        core::time::Duration::from_millis( self.interval as u64 * Self::CVT )
     }
 }
 
@@ -2628,8 +2627,8 @@ impl LEConnectionTimeout {
     }
 
     /// Get the maximum interval value as a duration
-    pub fn as_duration(&self) -> Duration {
-        Duration::from_millis((self.timeout as u64) * Self::CNV)
+    pub fn as_duration(&self) -> core::time::Duration {
+        core::time::Duration::from_millis((self.timeout as u64) * Self::CNV)
     }
 }
 
@@ -3035,8 +3034,8 @@ impl LEAdvertiseInterval {
     }
 
     /// Get the minimum interval value as a duration
-    pub fn as_duration(&self) -> Duration {
-        Duration::from_micros((self.interval as u64) * Self::CNV)
+    pub fn as_duration(&self) -> core::time::Duration {
+        core::time::Duration::from_micros((self.interval as u64) * Self::CNV)
     }
 }
 

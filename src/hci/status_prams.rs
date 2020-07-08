@@ -70,6 +70,6 @@ pub mod read_rssi {
             handle: handle.get_raw_handle()
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
     }
 }

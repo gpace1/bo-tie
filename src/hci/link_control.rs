@@ -30,7 +30,7 @@ pub mod read_remote_version_information {
             _connection_handle: handle.get_raw_handle()
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus ) )
     }
 }
 
@@ -130,7 +130,7 @@ pub mod disconnect {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(dp, events::Events::CommandStatus, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(dp, events::Events::CommandStatus ) )
     }
 
 }

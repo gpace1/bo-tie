@@ -53,7 +53,7 @@ async fn scan_for_local_name<'a>(
     let awaited_event = Some(Events::from(le_event));
 
     // This will stop 15 seconds after the last advertising packet is received
-    while let Ok(event) = hi.wait_for_event( awaited_event, Duration::from_secs(5)).await
+    while let Ok(event) = hi.wait_for_event( awaited_event).await
     {
         if let EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) = event {
             for report_result in reports.iter() {
@@ -124,7 +124,7 @@ async fn connect(
     let awaited_event = Some(Events::from(connect_event));
 
     // wait for the LEConnectionUpdate event
-    hi.wait_for_event(awaited_event, Duration::from_secs(25)).await
+    hi.wait_for_event(awaited_event).await
 }
 
 async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter> ) {

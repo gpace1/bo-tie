@@ -9,7 +9,6 @@ use bo_tie::hci::{
     },
 };
 use std::sync::{Arc, atomic::{AtomicU16, AtomicU8, Ordering}};
-use std::time::Duration;
 
 /// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
 /// from the controller to the user.
@@ -274,7 +273,7 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 
     let awaited_event = Some(events::Events::from(events::LEMeta::ConnectionComplete));
 
-    let evt_rsl = hi.wait_for_event(awaited_event, Duration::from_secs(60)).await;
+    let evt_rsl = hi.wait_for_event(awaited_event).await;
 
     set_advertising_enable::send(&hi, false).await.unwrap();
 
