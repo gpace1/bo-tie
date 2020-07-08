@@ -42,7 +42,7 @@ macro_rules! add_remove_white_list_setup {
                 _address: addr,
             };
 
-            ReturnedFuture( hci.send_command(parameter, Events::CommandComplete, Duration::from_secs(1) ) )
+            ReturnedFuture( hci.send_command(parameter, Events::CommandComplete ) )
         }
 
         impl CommandParameter for CommandPrameter {
@@ -80,7 +80,7 @@ pub mod clear_white_list {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 }
 
@@ -166,9 +166,11 @@ pub mod read_buffer_size {
 
     impl_command_complete_future!(BufferSize, error::Error);
 
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> ) -> impl Future<Output=Result<BufferSize,impl Display + Debug>> + 'a where T: HostControllerInterface
+    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
+    -> impl Future<Output=Result<BufferSize,impl Display + Debug>> + 'a
+    where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -243,7 +245,7 @@ pub mod read_local_supported_features {
     -> impl Future<Output=Result<ReturnedEnabledLeFeaturesItr, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -430,7 +432,7 @@ pub mod read_supported_states {
     -> impl Future<Output=Result<CurrentStatesAndRoles, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -505,7 +507,7 @@ pub mod read_white_list_size {
     -> impl Future<Output=Result<WhiteListSize, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -649,7 +651,7 @@ pub mod set_event_mask {
             _mask: LEMeta::build_mask(enabled_events),
         };
 
-        ReturnedFuture( hi.send_command(command_pram, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hi.send_command(command_pram, events::Events::CommandComplete ) )
     }
 
 }
@@ -718,7 +720,7 @@ pub mod test_end {
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 
 }

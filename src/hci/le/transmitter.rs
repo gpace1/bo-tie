@@ -69,7 +69,7 @@ pub mod read_advertising_channel_tx_power {
     -> impl Future<Output=Result<TxPower, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -140,7 +140,7 @@ pub mod transmitter_test{
             _packet_payload: payload.into_val(),
         };
 
-        ReturnedFuture( hci.send_command(parameters, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(parameters, events::Events::CommandComplete ) )
     }
 
 }
@@ -243,11 +243,11 @@ pub mod set_advertising_data {
           A: Into<Option<AdvertisingData>>,
     {
         if let Some(data) = adv_data.into() {
-            ReturnedFuture( hci.send_command(data, events::Events::CommandComplete, Duration::from_secs(1) ) )
+            ReturnedFuture( hci.send_command(data, events::Events::CommandComplete ) )
         } else {
             let data = AdvertisingData::new();
 
-            ReturnedFuture( hci.send_command( data, events::Events::CommandComplete, Duration::from_secs(1) ) )
+            ReturnedFuture( hci.send_command( data, events::Events::CommandComplete ) )
         }
     }
 
@@ -279,7 +279,7 @@ pub mod set_advertising_enable {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter{ enable }, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(Parameter{ enable }, events::Events::CommandComplete ) )
     }
 
 }
@@ -504,7 +504,7 @@ pub mod set_advertising_parameters {
             _advertising_filter_policy: params.advertising_filter_policy.into_val(),
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
     }
 }
 
@@ -534,7 +534,9 @@ pub mod set_random_address {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(Parameter{ rand_address: rand_addr }, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        let parameter = Parameter{ rand_address: rand_addr };
+
+        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
     }
 
 }

@@ -84,7 +84,7 @@ pub mod connection_update {
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cu: ConnectionUpdate)
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(cu, events::Events::CommandStatus , Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(cu, events::Events::CommandStatus ) )
     }
 
 }
@@ -110,7 +110,7 @@ pub mod create_connection_cancel {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -125,7 +125,6 @@ pub mod create_connection {
         SupervisionTimeout,
     };
     use crate::hci::le::common::{OwnAddressType, ConnectionEventLength};
-    use core::time::Duration;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnection);
 
@@ -257,7 +256,7 @@ pub mod create_connection {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(cp, events::Events::CommandStatus , Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(cp, events::Events::CommandStatus ) )
     }
 
 }
@@ -358,7 +357,7 @@ pub mod read_channel_map {
             _connection_handle: handle.get_raw_handle()
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
     }
 
 }
@@ -393,7 +392,7 @@ pub mod read_remote_features {
             _connection_handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus ) )
     }
 
 }
@@ -469,7 +468,7 @@ pub mod set_host_channel_classification {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command( map, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command( map, events::Events::CommandComplete ) )
     }
 }
 

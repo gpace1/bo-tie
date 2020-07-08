@@ -74,11 +74,7 @@ pub mod encrypt {
             plain_text,
         };
 
-        ReturnedFuture( hci.send_command(
-            parameter,
-            events::Events::CommandComplete,
-            Duration::from_secs(1)
-        ))
+        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
     }
 }
 
@@ -171,11 +167,7 @@ pub mod long_term_key_request_reply {
             ltk: long_term_key,
         };
 
-        ReturnedFuture( hci.send_command(
-            parameter,
-            events::Events::CommandComplete,
-            Duration::from_secs(1)
-        ))
+        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
     }
 }
 
@@ -258,11 +250,7 @@ pub mod long_term_key_request_negative_reply {
             handle: connection_handle,
         };
 
-        ReturnedFuture( hci.send_command(
-            parameter,
-            events::Events::CommandComplete,
-            Duration::from_secs(1)
-        ))
+        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
     }
 }
 
@@ -330,11 +318,7 @@ pub mod rand {
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(
-            Parameter,
-            events::Events::CommandComplete,
-            Duration::from_secs(1)
-        ))
+        ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete ))
     }
 }
 
@@ -392,10 +376,6 @@ pub mod start_encryption {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(
-            parameter,
-            events::Events::CommandStatus,
-            Duration::from_secs(1)
-        ))
+        ReturnedFuture( hci.send_command( parameter, events::Events::CommandStatus ))
     }
 }

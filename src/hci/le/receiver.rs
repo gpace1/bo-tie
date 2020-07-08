@@ -20,7 +20,7 @@ pub mod receiver_test {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(frequency, events::Events::CommandComplete , Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(frequency, events::Events::CommandComplete ) )
     }
 
 }
@@ -63,7 +63,7 @@ pub mod set_scan_enable {
     {
         let cmd_param = Parameter { enable, filter_duplicates, };
 
-        ReturnedFuture( hci.send_command(cmd_param, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(cmd_param, events::Events::CommandComplete ) )
     }
 
 }
@@ -184,7 +184,7 @@ pub mod set_scan_parameters {
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(sp, events::Events::CommandComplete, Duration::from_secs(1) ) )
+        ReturnedFuture( hci.send_command(sp, events::Events::CommandComplete ) )
     }
 
 }

@@ -106,11 +106,7 @@ pub mod remote_connection_parameter_request_reply {
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
     {
-        ReturnedFuture( hci.send_command(
-            parameter,
-            events::Events::CommandComplete,
-            core::time::Duration::from_secs(1)
-        ))
+        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
     }
 }
 
@@ -196,10 +192,6 @@ pub mod remote_connection_parameter_request_negative_reply {
             _reason: reason.into(),
         };
 
-        ReturnedFuture( hci.send_command(
-            parameter,
-            events::Events::CommandComplete,
-            core::time::Duration::from_secs(1)
-        ))
+        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete, ))
     }
 }

@@ -13,7 +13,6 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use core::future::Future;
 use core::pin::Pin;
-use core::time::Duration;
 use core::task::{ Poll, Waker };
 
 pub use common::ConnectionHandle;
@@ -176,11 +175,6 @@ impl Display for HciAclPacketConvertError {
     }
 }
 
-pub trait Timeout: Display + Debug {
-    /// If a timeout `occurred` this will return true
-    fn timeout_occurred(&self) -> bool;
-}
-
 #[derive(Debug)]
 pub struct HciAclData {
     connection_handle: common::ConnectionHandle,
@@ -296,31 +290,17 @@ impl HciAclData {
 ///
 /// # Implementation
 ///
-/// ## [send_command](#send_command)
+/// ## `send_command`
 /// This is used for sending the command to the Bluetooth controller by the HostInterface object.
 /// It is provided with a input that implements the
-/// [`CommandParameter`] which contains all the information required
-/// for sending the command packet to the Bluetooth controller. This information is not in the
-/// packet format and needs to be implemented as such.
+/// [`CommandParameter`](bo_tie::hci::CommandParameter) which contains all the information required
+/// for sending the command packet to the Bluetooth controller.
 ///
-/// The funciton should return Ok if there were no errors sending the command.
-///
-/// ## [receive_event](#receive_event)
-/// receive_event is used for implementing a future around the controller's event process. When
+/// ## `receive_event`
+/// `receive_event` is used for implementing a future around the controller's event process. When
 /// called it needs to check if the event is available to the Host or not. If the event is not not
-/// immediately available, the implementation of receive_event needs to call wake on the provided
+/// immediately available, the implementation of `receive_event` needs to call wake on the provided
 /// `waker` input when the event is accepted by the Host.
-///
-/// It is suggested, but not necessary, for the implementor to provide a means of timing out while
-/// waiting for the event to be received by the host. The duration of the timeout shall be the
-/// input `timeout` if set to some value, otherwise there is no timeout when the value is None.
-/// When the timeout occurs, the wake function of the provided Waker input will be called. When
-/// receive_event is called the next time (with the same event), it will return an error to
-/// indicate a timeout.
-///
-/// If the timeout functionality isn't implemented, then the only value accepted should be None
-/// and any Duration value provided should cause the function to return an Error stating that
-/// timeouts are not available for this implementation.
 ///
 /// Events need to be correctly propagated to the right context that is currently waiting for the
 /// requested event. Some events can be differentiated from themselves through the data passed with
@@ -331,7 +311,7 @@ impl HciAclData {
 pub trait HostControllerInterface
 {
     type SendCommandError: Debug + Display;
-    type ReceiveEventError: Debug + Display + Timeout;
+    type ReceiveEventError: Debug + Display;
 
     /// Send a command from the Host to the Bluetooth Controller
     ///
@@ -361,15 +341,13 @@ pub trait HostControllerInterface
     ///
     /// The function requires a
     /// [`Waker`](https://doc.rust-lang.org/core/task/struct.Waker.html) object because
-    /// it will call wake when the event has been received after the event is received or a timeout
-    /// occurs (if available). At which point the function must be called again to receive the
-    /// EventData.
+    /// it will call wake when the event has been received after the event is received. At which
+    /// point the function must be called again to receive the EventData.
     fn receive_event<P>(
         &self,
         event: Option<events::Events>,
         waker: &Waker,
         matcher: Pin<Arc<P>>,
-        timeout: Option<Duration>
     ) -> Option<Result<events::EventsData, Self::ReceiveEventError>>
     where P: EventMatcher + Send + Sync + 'static;
 }
@@ -458,7 +436,6 @@ where I: HostControllerInterface,
     command_data: Option<CD>,
     event: events::Events,
     matcher: Pin<Arc<P>>,
-    timeout: Option<Duration>,
 }
 
 impl<'a, I, CD, P> CommandFutureReturn<'a, I, CD, P>
@@ -480,7 +457,7 @@ where I: HostControllerInterface,
             }
         }
 
-        match self.interface.receive_event(self.event.into(), cx.waker(), self.matcher.clone(), self.timeout) {
+        match self.interface.receive_event(self.event.into(), cx.waker(), self.matcher.clone()) {
             None => Poll::Pending,
             Some(result) => Poll::Ready(result.map_err(|e| SendCommandError::Recv(e)))
         }
@@ -494,7 +471,6 @@ where I: HostControllerInterface,
     interface: &'a I,
     event: Option<events::Events>,
     matcher: Pin<Arc<P>>,
-    timeout: Option<Duration>,
 }
 
 impl<'a, I, P> Future for EventReturnFuture<'a, I, P>
@@ -504,7 +480,7 @@ P: EventMatcher + Send + Sync + 'static
     type Output = Result<events::EventsData, I::ReceiveEventError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> Poll<Self::Output> {
-        match self.interface.receive_event(self.event, cx.waker(), self.matcher.clone(), self.timeout) {
+        match self.interface.receive_event(self.event, cx.waker(), self.matcher.clone()) {
             Some(evnt_rspn) => Poll::Ready(evnt_rspn),
             None => Poll::Pending,
         }
@@ -557,16 +533,14 @@ where I: HostControllerInterface
     /// Send a command to the controller
     ///
     /// The command data will be used in the command packet to determine what HCI command is sent
-    /// to the controller. The events specified should be the events directly returned by the
-    /// controller in response to the command, they should not be events that will come later as
-    /// a timeout may occur before the event is sent from the controller.
+    /// to the controller. The events specified must be the events directly returned by the
+    /// controller in response to the command.
     ///
-    /// A future is returned for waiting on the event generated from the controller in *direct*
-    /// response to the sent command.
-    fn send_command<'a, CD, D>( &'a self, cmd_data: CD, event: events::Events, timeout: D )
+    /// A future is returned for waiting on the event generated from the controller in response to
+    /// the sent command.
+    fn send_command<'a, CD>( &'a self, cmd_data: CD, event: events::Events )
     -> CommandFutureReturn<'a, I, CD, impl EventMatcher + Send + Sync + 'static>
     where CD: CommandParameter + Unpin + 'static,
-          D: Into<Option<Duration>>,
     {
         let cmd_matcher = | ed: &events::EventsData | {
 
@@ -609,7 +583,6 @@ where I: HostControllerInterface
             command_data: Some(cmd_data),
             event,
             matcher: Arc::pin(cmd_matcher),
-            timeout: timeout.into(),
         }
     }
 
@@ -621,28 +594,27 @@ where I: HostControllerInterface
     /// [`CommandComplete`](crate::hci::events::Events::CommandComplete),
     /// [`CommandStatus`](crate::hci::events::Events::CommandStatus), and
     /// [`NumberOfCompletedPackets`](crate::hci::events::Events::NumberOfCompletedPackets) are the
-    /// non-maskable events and they will not be returned by the future
-    ///
-    /// # Note
-    /// This library incorporates the matching of either `CommandComplete` or `CommandStatus` in
-    /// the implemented HCI commands. This function should not be called with these events after
-    /// invoking an HCI command in this library.
+    /// non-maskable events and they will not be returned by the future when `None` is used for
+    /// input `event`. This function will await on these events if `event` is specifically one of
+    /// these events, but it is unlikely you will need to await these events yourself. This library
+    /// incorporates the awaiting of either `CommandComplete` or `CommandStatus` events in its
+    /// implemented HCI commands, and a flow controller will await the `NumberOfCompletedPackets`
+    /// event for controlling the sending of data packets to the Bluetooth controller.
     ///
     /// # Limitations
-    /// This function will produce undefined behavior (a race condition) if this is awaited
-    /// concurrently and input `event` cannot be differentiated to wake the correct context. This
-    /// can occur when input `event` is the same or when input `event` is `None` and any other call
-    /// to `wait_for_event` uses a *maskable* event. It is safe to use this concurrently if these
-    /// conditions are not met.
+    /// You cannot await this function concurrently (or polled in parallel) with the same value for
+    /// input 'event'. It will produce undefined behavior (probably race condition) because input
+    /// `event` cannot be differentiated to wake the correct context by the underlying Bluetooth
+    /// controller driver. It is safe to use this concurrently if these conditions are not met.
     ///
     /// The function
     /// [`wait_for_event_with_matcher`](crate::hci::HostInterface::wait_for_event_with_matcher)
     /// can be used to further refine the matching event to get around the limitation of this
-    /// function.
-    pub fn wait_for_event<'a,E,D>(&'a self, event: E, timeout: D)
+    /// function. However it can also run into the same problem if the matcher is not differential
+    /// enough between two events.
+    pub fn wait_for_event<'a,E>(&'a self, event: E)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
     where E: Into<Option<events::Events>>,
-          D: Into<Option<Duration>>,
     {
         fn default_matcher(_: &events::EventsData) -> bool { true }
 
@@ -658,7 +630,6 @@ where I: HostControllerInterface
             interface: &self.interface,
             event: opt_event,
             matcher: Arc::pin(matcher),
-            timeout: timeout.into(),
         }
     }
 
@@ -682,16 +653,14 @@ where I: HostControllerInterface
     /// with matchers that return `true` given the same
     /// [`EventData`](crate::hci::events::EventsData) (the conditions for undefined behaviour
     /// for `wait_for_event` still apply).
-    pub fn wait_for_event_with_matcher<'a,P,D>(&'a self, event: events::Events, timeout: D, matcher: P)
+    pub fn wait_for_event_with_matcher<'a,P>(&'a self, event: events::Events, matcher: P)
     -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
     where P: EventMatcher + Send + Sync + 'static,
-          D: Into<Option<Duration>>,
     {
         EventReturnFuture {
             interface: &self.interface,
             event: event.into(),
             matcher: Arc::pin(matcher),
-            timeout: timeout.into(),
         }
     }
 }

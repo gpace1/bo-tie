@@ -12,21 +12,13 @@ use std::pin::Pin;
 use std::sync::{Arc,Mutex};
 use std::task;
 use std::thread;
-use std::time::Duration;
 use std::os::unix::io::RawFd;
-
-macro_rules! lock {
-    ($( $mutex:ident ).*) => {
-        $($mutex).*.lock().map_err(|e| Error::MPSCError(e.to_string()))?
-    }
-}
 
 macro_rules! log_error_and_panic {
     ($($arg:tt)+) => {{ log::error!( $($arg)+ ); panic!( $($arg)+ ); }}
 }
 
 mod device;
-mod timeout;
 
 #[derive(Debug,PartialEq,Eq)]
 pub struct FileDescriptor(RawFd);
@@ -63,16 +55,6 @@ mod event;
 enum EPollResult {
     BluetoothController,
     TaskExit,
-    Timeout(u64),
-}
-
-impl EPollResult {
-    const TIMEOUT_ID_START: u64 = 2;
-
-    fn make_timeout_id(timeout_fd: RawFd) -> u64 {
-        // The (ch)easy way to make unique id's for the timeouts
-        timeout_fd as u64 + Self::TIMEOUT_ID_START
-    }
 }
 
 impl From<u64> for EPollResult {
@@ -80,7 +62,7 @@ impl From<u64> for EPollResult {
         match val {
             0 => EPollResult::BluetoothController,
             1 => EPollResult::TaskExit,
-            _ => EPollResult::Timeout(val),
+            _ => panic!("Invalid EPollResult '{}'", val),
         }
     }
 }
@@ -90,7 +72,6 @@ impl From<EPollResult> for u64 {
         match epr {
             EPollResult::BluetoothController => 0,
             EPollResult::TaskExit => 1,
-            EPollResult::Timeout(val) => val,
         }
     }
 }
@@ -102,10 +83,6 @@ pub enum Error {
     MPSCError(String),
     Timeout,
     Other(String),
-}
-
-impl bo_tie::hci::Timeout for Error {
-    fn timeout_occurred(&self) -> bool { if let Self::Timeout = self { true } else { false } }
 }
 
 impl fmt::Display for Error  {
@@ -193,7 +170,6 @@ struct AdapterThread {
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
     event_processor: event::EventProcessor,
-    timeout_manager: Arc<Mutex<timeout::TimeoutManager>>,
     hci_data_recv: RcvHciAclData,
 }
 
@@ -309,12 +285,6 @@ impl AdapterThread {
                         read( self.exit_fd.raw_fd(), &mut [0u8;8]).unwrap();
                         break 'task;
                     },
-
-                    EPollResult::Timeout(id) => {
-                        let timeout = self.timeout_manager.lock().expect("Missing Timeout").remove(id).unwrap();
-
-                        timeout.trigger().unwrap();
-                    },
                 }
             }
         }
@@ -335,7 +305,6 @@ pub struct HCIAdapter {
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
     event_expecter: Arc<Mutex<event::EventExpecter>>,
-    timeout_manager: Arc<Mutex<timeout::TimeoutManager>>,
     hci_data_recv: RcvHciAclData,
 }
 
@@ -416,8 +385,6 @@ impl From<usize> for HCIAdapter {
 
         let (event_expecter, event_processor) = event::EventSetup::setup();
 
-        let to_manager = Arc::new(Mutex::new(timeout::TimeoutManager::new()));
-
         let data_receiver = RcvHciAclData::new();
 
         AdapterThread {
@@ -425,7 +392,6 @@ impl From<usize> for HCIAdapter {
             exit_fd: arc_exit_fd.clone(),
             epoll_fd: arc_epoll_fd.clone(),
             event_processor,
-            timeout_manager: to_manager.clone(),
             hci_data_recv: data_receiver.clone(),
         }
         .spawn();
@@ -435,7 +401,6 @@ impl From<usize> for HCIAdapter {
             exit_fd: arc_exit_fd,
             epoll_fd: arc_epoll_fd,
             event_expecter,
-            timeout_manager: to_manager,
             hci_data_recv: data_receiver,
         }
     }
@@ -499,29 +464,15 @@ impl bo_tie::hci::HostControllerInterface for HCIAdapter {
     fn receive_event<P>(&self,
         event: Option<events::Events>,
         waker: &task::Waker,
-        matcher: Pin<Arc<P>>,
-        timeout: Option<Duration>)
-    -> Option<Result<events::EventsData, Self::ReceiveEventError>>
+        matcher: Pin<Arc<P>>
+    ) -> Option<Result<events::EventsData, Self::ReceiveEventError>>
     where P: bo_tie::hci::EventMatcher + Send + Sync + 'static
     {
-        let timeout_builder = match timeout {
-            Some(duration) => match timeout::TimeoutBuilder::new(
-                    self.epoll_fd.clone(),
-                    duration,
-                    self.timeout_manager.clone() )
-                {
-                    Ok(val) => Some(val),
-                    Err(e) => return Some(Err(e)),
-                },
-            None => None,
-        };
-
         event::EventExpecter::expect_event(
             self.event_expecter.clone(),
             event,
             waker,
             matcher,
-            timeout_builder
         )
     }
 }
