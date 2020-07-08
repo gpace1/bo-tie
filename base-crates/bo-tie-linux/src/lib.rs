@@ -805,7 +805,8 @@ impl WakerToken {
     /// Attempt to change the waker
     ///
     /// This will change the waker if the current waker exists but it would not wake the same
-    /// context as input `wake`. Returns true if the waker was updated.
+    /// context as input `wake`. There is no purpose in updating the waker if the current waker is
+    /// None as the prior waker was already triggered. Returns true if the waker was updated.
     fn change_waker(&mut self, waker: &task::Waker) -> bool {
         if let Some(ref mut self_waker) = self.waker {
 
