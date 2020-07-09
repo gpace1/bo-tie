@@ -810,7 +810,7 @@ impl WakerToken {
     fn change_waker(&mut self, waker: &task::Waker) -> bool {
         if let Some(ref mut self_waker) = self.waker {
 
-            if waker.will_wake(self_waker) {
+            if !waker.will_wake(self_waker) {
                 *self_waker = waker.clone();
                 true
             } else {
