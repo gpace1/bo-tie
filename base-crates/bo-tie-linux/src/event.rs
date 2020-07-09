@@ -3,16 +3,15 @@ use bo_tie::hci::{
     EventMatcher,
 };
 use crate::WakerToken;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::convert::From;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Weak, Mutex};
 
 #[derive(Clone)]
 struct DynEventMatcher {
-    matcher: Pin<Arc<dyn EventMatcher>>,
+    weak_matcher: Weak<dyn EventMatcher>,
 }
 
 impl fmt::Debug for DynEventMatcher {
@@ -23,27 +22,15 @@ impl fmt::Debug for DynEventMatcher {
 
 impl Eq for DynEventMatcher {}
 
-impl Ord for DynEventMatcher {
-    fn cmp(&self, other: &Self) -> Ordering {
-        (&*self.matcher as *const dyn EventMatcher).cmp(&(&*other.matcher as *const dyn EventMatcher))
-    }
-}
-
 impl std::cmp::PartialEq for DynEventMatcher {
     fn eq(&self, other: &DynEventMatcher) -> bool {
-        (&*self.matcher as *const dyn EventMatcher) == (&*other.matcher as *const dyn EventMatcher)
-    }
-}
-
-impl std::cmp::PartialOrd for DynEventMatcher {
-    fn partial_cmp(&self, other: &DynEventMatcher) -> Option<std::cmp::Ordering> {
-        (&*self.matcher as *const dyn EventMatcher).partial_cmp(&(&*other.matcher as *const dyn EventMatcher))
+        self.weak_matcher.ptr_eq(&other.weak_matcher)
     }
 }
 
 #[derive(Debug)]
 struct ExpEventInfo {
-    /// The data returned when the coresponding event is received
+    /// The data returned when the corresponding event is received
     ///
     /// Will also contain the error is any error occurs
     data: Option<Result<events::EventsData, crate::Error>>,
@@ -54,7 +41,7 @@ struct ExpEventInfo {
 /// Expected event manager
 #[derive(Debug)]
 pub struct EventExpecter {
-    expected: BTreeMap<Option<events::Events>, BTreeMap<DynEventMatcher, ExpEventInfo>>,
+    expected: BTreeMap<Option<events::Events>, Vec<(DynEventMatcher, ExpEventInfo)>>,
 }
 
 impl EventExpecter {
@@ -65,11 +52,15 @@ impl EventExpecter {
         pattern: &DynEventMatcher)
     -> Option<ExpEventInfo>
     {
-        if let Some(map) = self.expected.get_mut(&event) {
+        if let Some(matchers) = self.expected.get_mut(&event) {
 
-            let retval = map.remove(&pattern);
+            let retval = matchers.iter()
+                .enumerate()
+                .find(|(_,(m,_))| m == pattern)
+                .map(|(idx,_)| idx)
+                .map(|idx| matchers.swap_remove(idx).1 );
 
-            if map.len() == 0 {
+            if matchers.len() == 0 {
                 self.expected.remove(&event);
             }
 
@@ -87,11 +78,14 @@ impl EventExpecter {
     ) -> Option<Result<events::EventsData, crate::Error>>
     where P: bo_tie::hci::EventMatcher + 'static
     {
-        let pat_key = DynEventMatcher { matcher };
+        let inner_arc = unsafe { Pin::into_inner_unchecked(matcher) } as Arc<dyn EventMatcher>;
+
+        let pat_key = DynEventMatcher { weak_matcher: Arc::downgrade(&inner_arc) };
 
         let mut gaurd = mutex.lock().expect("Couldn't acquire lock");
 
-        match gaurd.expected.get_mut(&event).and_then(|map| map.get_mut(&pat_key) )
+        match gaurd.expected.get_mut(&event)
+            .and_then(|vec| vec.iter_mut().find(|(mat,_)| mat == &pat_key) )
         {
             None => {
                 log::info!("Setting up expectation for event {:?}", event);
@@ -103,11 +97,32 @@ impl EventExpecter {
                     waker_token,
                 };
 
-                gaurd.expected.entry(event).or_insert(BTreeMap::new()).insert(pat_key, val);
+                let entry = gaurd.expected.entry(event).or_insert(Vec::new());
+
+                entry.push((pat_key, val));
+
+                // Remove any orphaned `DynEventMatcher` with the entry.
+                //
+                // A DynEventMatcher becomes orphaned when there are no more strong references to
+                // the internal matcher. This generally happens when the original caller containing
+                // the matcher supplied to expect_event doesn't exist anymore.
+                //
+                // Just to keep this function snappy, this is done only for the current event entry.
+
+                let mut cnt = 0;
+
+                while cnt < entry.len() {
+
+                    if entry[cnt].0.weak_matcher.upgrade().is_none() {
+                        entry.swap_remove(cnt);
+                    }
+
+                    cnt += 1;
+                }
 
                 None
             }
-            Some(ref mut val) => {
+            Some((_,ref mut val)) => {
 
                 if val.waker_token.triggered() {
                     log::debug!("Retrieving data for event {:?}", event);
@@ -142,10 +157,13 @@ impl EventProcessor {
             Ok(event_data) => {
                 let received_event = event_data.get_event_name();
 
-                let process_expected = |patterns_map: &mut BTreeMap<DynEventMatcher, ExpEventInfo>| {
-                    for (dyn_matcher, ref mut exp_event_info) in patterns_map.iter_mut() {
-                        if dyn_matcher.matcher.match_event(&event_data) {
+                let process_expected = |patterns_map: &mut Vec<(DynEventMatcher, ExpEventInfo)>| {
 
+                    for (dyn_matcher, ref mut exp_event_info) in patterns_map.iter_mut() {
+                        if dyn_matcher.weak_matcher.upgrade()
+                            .map(|m| m.match_event(&event_data))
+                            .unwrap_or(false)
+                        {
                             log::debug!("Matched event {:?}", received_event);
 
                             exp_event_info.data = Some(Ok(event_data));
@@ -156,7 +174,7 @@ impl EventProcessor {
                     }
                 };
 
-                let expected = &mut self.expected_events.lock().expect("Couldn't acquire mutex").expected;
+                let expected = &mut self.expected_events.lock().unwrap().expected;
 
                 if let Some(ref mut patterns_map) = expected.get_mut(&Some(received_event)) {
                     process_expected(patterns_map)
