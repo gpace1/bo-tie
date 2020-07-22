@@ -80,12 +80,12 @@ impl EventExpecter {
     {
         let inner_arc = unsafe { Pin::into_inner_unchecked(matcher) } as Arc<dyn EventMatcher>;
 
-        let pat_key = DynEventMatcher { weak_matcher: Arc::downgrade(&inner_arc) };
+        let evnt_matcher = DynEventMatcher { weak_matcher: Arc::downgrade(&inner_arc) };
 
         let mut gaurd = mutex.lock().expect("Couldn't acquire lock");
 
         match gaurd.expected.get_mut(&event)
-            .and_then(|vec| vec.iter_mut().find(|(mat,_)| mat == &pat_key) )
+            .and_then(|vec| vec.iter_mut().find(|(mat,_)| mat == &evnt_matcher) )
         {
             None => {
                 log::info!("Setting up expectation for event {:?}", event);
@@ -99,7 +99,7 @@ impl EventExpecter {
 
                 let entry = gaurd.expected.entry(event).or_insert(Vec::new());
 
-                entry.push((pat_key, val));
+                entry.push((evnt_matcher, val));
 
                 // Remove any orphaned `DynEventMatcher` with the entry.
                 //
@@ -125,9 +125,9 @@ impl EventExpecter {
             Some((_,ref mut val)) => {
 
                 if val.waker_token.triggered() {
-                    log::debug!("Retrieving data for event {:?}", event);
+                    log::info!("Retrieving data for event {:?}", event);
 
-                    let expected = gaurd.remove_expected_event(event, &pat_key).unwrap();
+                    let expected = gaurd.remove_expected_event(event, &evnt_matcher).unwrap();
 
                     expected.data
 
