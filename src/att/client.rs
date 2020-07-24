@@ -129,7 +129,7 @@ impl<F,R> ResponseProcessor<F,R>
 /// MTU exchange as part of the connection process. Once the exchange is complete and there were no
 /// errors preventing a connection, a `Client` will be created.
 pub struct LeConnectClient<'c,C> {
-    mtu: u16,
+    l2cap_manager: l2cap::L2capManager<l2cap::LeU>,
     channel: &'c C,
 }
 
@@ -146,8 +146,9 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
     -> Result<LeConnectClient<'c, C>, super::Error>
     where M: Into<Option<u16>>
     {
-        let mtu = mtu.into().unwrap_or(super::MIN_ATT_MTU_LE);
+        let mut l2cap_manager = l2cap::L2capManager::new_le();
 
+        l2cap_manager.set_peer_mtu()
         if super::MIN_ATT_MTU_LE > mtu {
             Err(super::Error::TooSmallMtu)
         } else {
@@ -160,7 +161,7 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
 
             connection_channel.send(acl_data).await;
 
-            Ok( LeConnectClient { mtu, channel: connection_channel } )
+            Ok( LeConnectClient { l2cap_manager, channel: connection_channel } )
         }
     }
     

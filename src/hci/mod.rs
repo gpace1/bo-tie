@@ -175,6 +175,28 @@ impl Display for HciAclPacketConvertError {
     }
 }
 
+/// A HCI ACL Data Packet
+///
+/// HCI ACL data packets are sent between the host and controller for a specified connection. They
+/// consist of a header and payload. The header contains a connection handle, a packet boundary
+/// flag, a broadcast flag, and the total length of the payload. The connection handle is used by
+/// the receiver of this packet to determine what connection the payload is for. The packet boundary
+/// is used to recombining fragmented fragmented and indicating whether the data automatically
+/// flushable. The broadcast flag is used to indicate that the data is a broadcast flag.
+///
+/// # LE-U Logical Link
+/// For a LE-U logical link, a HCI ACL Data Packet header is limited to a subset of the possible
+/// header configuration flags. A LE-U Logical link does not support automatic flushing of packets
+/// in a controller, nor does it support connectionless L2CAP channels. The packet boundary flag can
+/// be either
+/// ['FirstNonFlushable`](bo_tie::hci::AclPacketBoundary::FirstNonFlushable) or
+/// [`ContinuingFragment`](bo_tie::hci::AclPacketBoundary::ContinuingFragment), but it cannot be
+/// [`FirstAutoFlushable`](bo_tie::hci::AclPacketBoundary::FirstAutoFlushable) or
+/// [`CompleteL2capPdu`](bo_tie::hci::AclPacketBoundary::CompleteL2capPdu). The broadcast flag must
+/// always be
+/// [`NoBroadcast`](bo_tie::hci::AclBroadcastFlag::NoBroadcast). Lastly the connection handle can
+/// only be a primary controller handle (which is generated with a *LE Connection Complete* or
+/// *LE Enhanced Connection Complete* event for LE-U).
 #[derive(Debug)]
 pub struct HciAclData {
     connection_handle: common::ConnectionHandle,
@@ -188,10 +210,14 @@ impl HciAclData {
 
     /// The minimum number of bytes that must be in the start fragment for LE-U logical link
     ///
-    /// Per the specification, any L2CAP message cannot be fragmented if it is less then 27 bytes
-    /// (v5.0 | Vol 2, Part E, Section 4.1.1 [at the very end of the section] )
+    /// Per the specification, a L2CAP message cannot be fragmented if it is less then 27
+    /// bytes (v5.0 | Vol 2, Part E, Section 4.1.1 - at the very end of the section )
     pub const MINIMUM_LE_U_FRAGMENT_START_SIZE: usize = 27;
 
+    /// Create a new HciAclData
+    ///
+    /// # Panic
+    /// The payload length must not be larger than the maximum u16 number
     pub fn new(
         connection_handle: common::ConnectionHandle,
         packet_boundary_flag: AclPacketBoundary,
@@ -199,6 +225,8 @@ impl HciAclData {
         payload: Vec<u8>
     ) -> Self
     {
+        assert!( <u16>::MAX >= payload.len() );
+
         HciAclData { connection_handle, packet_boundary_flag, broadcast_flag, payload }
     }
 
@@ -212,13 +240,9 @@ impl HciAclData {
 
     pub fn get_broadcast_flag(&self) -> AclBroadcastFlag { self.broadcast_flag }
 
-    /// Convert the HciAclData into a packet
+    /// Convert the HciAclData into a raw packet
     ///
     /// This will convert HciAclData into a packet that can be sent between the host and controller.
-    ///
-    /// # Panics (TODO to remove)
-    /// For now this panics if the length of data is greater then 2^16 because this library only
-    /// supports LE.
     pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
 
         let mut v = alloc::vec::Vec::with_capacity( self.payload.len() + 4 );
@@ -274,7 +298,9 @@ impl HciAclData {
         }
     }
 
-    fn into_acl_fragment(self) -> crate::l2cap::AclDataFragment {
+    /// Convert into a
+    /// [`AclDataFragment`](crate::l2cap::AclDataFragment)
+    pub fn into_acl_fragment(self) -> crate::l2cap::AclDataFragment {
         use crate::l2cap::AclDataFragment;
 
         match self.packet_boundary_flag {
@@ -665,27 +691,36 @@ where I: HostControllerInterface
     }
 }
 
-struct LeAclHciChannel<I,HI>
+/// A HCI channel for a LE-U Logical Link
+///
+/// This is a HCI connection channel over L2CAP. It is only for a L2CAP LE-U logical link as it does
+/// not support an ACL-U link. The configuration for a LE-U logical link will be used for data sent
+/// and received through this channel.
+struct HciLeUChannel<I,HI>
 where HI: core::ops::Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface
 {
     handle: common::ConnectionHandle,
-    hi: HI
+    hi: HI,
+    manager: crate::l2cap::L2capManager<crate::l2cap::LeU>,
 }
 
-impl<I,HI> LeAclHciChannel<I,HI>
+impl<I,HI> HciLeUChannel<I,HI>
 where HI: core::ops::Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface
 {
+    /// Create a new `HciLeUChannel`
+    ///
+    /// The LE-U channel will be initialized with the default
     fn new(hi: HI, handle: common::ConnectionHandle) -> Self {
 
         hi.interface.start_receiver(handle);
 
-        LeAclHciChannel { handle, hi }
+        HciLeUChannel { handle, hi, manager: crate::l2cap::L2capManager::new_le() }
     }
 }
 
-impl<I,HI> crate::l2cap::ConnectionChannel for LeAclHciChannel<I,HI>
+impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI>
 where HI: core::ops::Deref<Target = HostInterface<I>>,
        I: HciAclDataInterface
 {
@@ -735,6 +770,8 @@ where HI: core::ops::Deref<Target = HostInterface<I>>,
         crate::l2cap::SendFut::new(true)
     }
 
+    fn
+
     fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>> {
         use crate::l2cap::AclDataFragment;
 
@@ -755,7 +792,7 @@ where HI: core::ops::Deref<Target = HostInterface<I>>,
 
 
 
-impl<I, HI> core::ops::Drop for LeAclHciChannel<I,HI>
+impl<I, HI> core::ops::Drop for HciLeUChannel<I,HI>
 where HI: core::ops::Deref<Target = HostInterface<I>>,
        I: HciAclDataInterface
 {
@@ -772,18 +809,19 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     pub fn new_connection_channel<'a>(&'a self, connection_handle: common::ConnectionHandle)
     -> impl crate::l2cap::ConnectionChannel + 'a
     {
-        LeAclHciChannel::new(self, connection_handle)
+        HciLeUChannel::new(self, connection_handle)
     }
 
     /// Create a new connection-oriented data channel with a `HostInterface` wrapped within an `Arc`
     ///
     /// This is an alternative to `new_connection_channel` for situations where the lifetime of
-    /// `self` may not outlive the generated `ConnectionChannel`. This can be really useful for
-    /// thread pools or other synchronization related executors where it may be required to have a
+    /// `self` may not outlive the generated `ConnectionChannel`. This can be useful for thread
+    /// pools or other synchronization related executors where it may be required to have a
+    /// atomically reference counted `HostInterface`.
     pub fn new_sync_connection_channel(self: Arc<Self>, connection_handle: common::ConnectionHandle)
     -> impl crate::l2cap::ConnectionChannel
     {
-        LeAclHciChannel::new(self, connection_handle)
+        HciLeUChannel::new(self, connection_handle)
     }
 }
 

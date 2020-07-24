@@ -65,12 +65,6 @@ use crate::l2cap;
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
 
-/// The minimum number of data bytes in an attribute protocol based packet for bluetooth le
-pub const MIN_ATT_MTU_LE: u16 = 23;
-
-/// The minimum number of data bytes in an attribute protocol based packet for bluetooth BR/EDR
-pub const MIN_ATT_MTU_BR_EDR: u16 = 48;
-
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum EncryptionKeySize {
