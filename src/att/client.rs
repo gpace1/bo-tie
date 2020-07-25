@@ -129,8 +129,9 @@ impl<F,R> ResponseProcessor<F,R>
 /// MTU exchange as part of the connection process. Once the exchange is complete and there were no
 /// errors preventing a connection, a `Client` will be created.
 pub struct LeConnectClient<'c,C> {
-    l2cap_manager: l2cap::L2capManager<l2cap::LeU>,
-    channel: &'c C,
+    requested_mtu: usize,
+    connection_channel: &'c C,
+    skipped_mtu_request: bool
 }
 
 impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
@@ -138,21 +139,33 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
     /// Create a new `LeConnectClient` and initiate the connection process
     ///
     /// This takes a connection channel between this device and a slave device with an optional
-    /// maximum transfer unit (MTU). If `mtu` is `None`, then the minimum MTU
-    /// [`MIN_ATT_MTU_LE`](crate::att::MIN_ATT_MTU_LE) is used. If `mtu` is specified, this is the
-    /// MTU *requested* of the server. During the initiation, the server will respond with its MTU
-    /// and the MTU used during the connection will be the minimum of the client's and server's.
+    /// maximum transfer unit (MTU). If `max_mtu` is `None`, then the minimum MTU
+    /// [`MIN_ATT_MTU_LE`](crate::att::MIN_ATT_MTU_LE) is used as the maximum MTU. If `max_mtu` is
+    /// specified, this is the MTU *requested* of the server.
+    ///
+    /// Using a max_mtu larger than what the Bluetooth controller can handle is likely for the
+    /// controller to return an error event
     pub async fn initiate<M>(mtu: M, connection_channel: &'c C)
     -> Result<LeConnectClient<'c, C>, super::Error>
     where M: Into<Option<u16>>
     {
-        let mut l2cap_manager = l2cap::L2capManager::new_le();
+        let requested_mtu = mtu.into()
+            .map(|mtu| mtu.into())
+            .unwrap_or(connection_channel.min_mtu());
 
-        l2cap_manager.set_peer_mtu()
-        if super::MIN_ATT_MTU_LE > mtu {
+        if connection_channel.min_mtu() > requested_mtu {
             Err(super::Error::TooSmallMtu)
+
+        } else if requested_mtu == connection_channel.min_mtu() {
+            Ok(LeConnectClient {
+                requested_mtu,
+                connection_channel,
+                skipped_mtu_request: true
+            })
+
         } else {
-            let mtu_req = pdu::exchange_mtu_request(mtu);
+
+            let mtu_req = pdu::exchange_mtu_request(requested_mtu as u16);
 
             let acl_data = l2cap::AclData::new(
                 TransferFormatInto::into(&mtu_req),
@@ -161,7 +174,11 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
 
             connection_channel.send(acl_data).await;
 
-            Ok( LeConnectClient { l2cap_manager, channel: connection_channel } )
+            Ok( LeConnectClient {
+                requested_mtu,
+                connection_channel,
+                skipped_mtu_request: false
+            } )
         }
     }
     
@@ -175,7 +192,11 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
     pub async fn create_client( self, response: &l2cap::AclData )
     -> Result<Client<'c, C>, super::Error>
     {
-        if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
+        if self.skipped_mtu_request {
+
+            Ok( Client::new( self.requested_mtu, self.connection_channel))
+
+        } else if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
 
             Err(super::Error::IncorrectChannelId)
 
@@ -199,13 +220,20 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
 
         match pdu {
             Ok(received_mtu) => {
-                let mtu = self.mtu.min(*received_mtu.get_parameters());
+                let mtu: usize = self.requested_mtu.min( (*received_mtu.get_parameters()).into() );
 
-                if super::MIN_ATT_MTU_LE > mtu {
-                    Err(super::Error::Other( "Received a bad MTU (MTU is less than the minimum) \
-                        from the server" ))
+                if self.connection_channel.min_mtu() > mtu {
+                    log::info!("Received a bad MTU (MTU is less than the minimum) \
+                        from the server, default to using the minimum MTU" );
+
+                    Ok(Client::new( self.connection_channel.min_mtu(), self.connection_channel) )
+
+                } else if self.connection_channel.max_mtu() < mtu {
+                    Ok(Client::new( self.connection_channel.max_mtu(), self.connection_channel))
+
                 } else {
-                    Ok(Client::new( mtu, self.channel))
+                    Ok(Client::new( mtu, self.connection_channel) )
+
                 }
             },
             Err(e) => {
@@ -224,10 +252,10 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
                 // Log that exchange MTU is not supported by the server, and return a
                 // client with the default MTU
 
-                log::info!("Server doesn't support 'MTU exchange'; default MTU of {} \
-                                bytes is used", super::MIN_ATT_MTU_LE);
+                log::info!("Server doesn't support 'MTU exchange'; default MTU of {} bytes is used",
+                    self.connection_channel.min_mtu());
 
-                Ok( Client::new(super::MIN_ATT_MTU_LE.into(), self.channel) )
+                Ok( Client::new(self.connection_channel.min_mtu(), self.connection_channel) )
             }
 
             e @ _ => Err(super::Error::from(TransferFormatError {
@@ -273,8 +301,8 @@ pub struct Client<'c, C>
 }
 
 impl<'c, C> Client<'c, C> {
-    fn new(mtu: u16, channel: &'c C) -> Self {
-        Client { mtu: mtu.into() , channel }
+    fn new(mtu: usize, channel: &'c C) -> Self {
+        Client { mtu: mtu , channel }
     }
 }
 
@@ -345,7 +373,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     pub async fn exchange_mtu_request(&'c mut self, mtu: u16 )
     -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error> + 'c, ()>, super::Error>
     {
-        if super::MIN_ATT_MTU_LE > mtu {
+        if self.channel.min_mtu() > mtu.into() {
             Err(super::Error::TooSmallMtu)
         } else {
             self.send(&pdu::exchange_mtu_request(mtu)).await.unwrap();

@@ -20,7 +20,7 @@ impl SignalCode {
     fn try_from_raw(val: u8) -> Result<Self, ()> {
         match val {
             0x1 => Ok(SignalCode::CommandReject),
-            _   => Err(),
+            _   => Err(()),
         }
     }
 }
@@ -49,9 +49,9 @@ impl CommandRejectReason {
     fn to_val(&self) -> u16 {
 
         match self {
-            CommandRejectReason::CommandNotUnderstood => 0x0,
-            CommandRejectReason::SignalingMTUExceeded => 0x1,
-            CommandRejectReason::InvalidCIDInRequest  => 0x2,
+            CommandRejectReason::CommandNotUnderstood => 0x0u16,
+            CommandRejectReason::SignalingMTUExceeded => 0x1u16,
+            CommandRejectReason::InvalidCIDInRequest  => 0x2u16,
         }
         .to_le()
     }
@@ -119,34 +119,29 @@ impl CommandReject {
             data: CommandRejectData::RequestedCid(local_cid, remote_cid)
         }
     }
+
+    fn len(&self) -> usize {
+        6 + self.data.len()
+    }
 }
 
-impl From<CommandReject> for super::L2capPdu {
+impl From<CommandReject> for super::AclData {
     fn from(cr: CommandReject) -> Self {
         use core::convert::TryFrom;
 
-        // size of the CommandReject header + data len
-        let command_reject_len = 4 + cr.data.len();
-
         // size of the L2CAP data header + size of the command reject signal
-        let mut data = alloc::vec::Vec::with_capacity( 4 + command_reject_len );
+        let mut data = alloc::vec::Vec::with_capacity( cr.len() );
 
-        let command_reject_u16_len = <u16>::try_from(command_reject_len).unwrap();
+        data[0] = SignalCode::CommandReject.into();
 
-        data[0..2].copy_from_slice(&command_reject_u16_len.to_le_bytes());
+        data[1] = cr.rejected_sig_id.into();
 
-        data[2..4].copy_from_slice(&ACL_U_SIG_CHANNEL_ID.to_val().to_le_bytes());
+        data[2..4].copy_from_slice( &<u16>::try_from(cr.data.len()).unwrap().to_le_bytes() );
 
-        data[4] = SignalCode::CommandReject.into();
+        data[4..6].copy_from_slice( &cr.reason.to_val().to_le_bytes() );
 
-        data[5] = cr.rejected_sig_id.into();
+        cr.data.copy_to_bytes(&mut data[6..]);
 
-        data[6..8].copy_from_slice( &<u16>::from(cr.data.len()).to_le_bytes() );
-
-        data[8..10].copy_from_slice( cr.reason.to_val().to_le_bytes() );
-
-        cr.data.copy_to_bytes(data[10..]);
-
-        super::L2capPdu { data, mtu: None }
+        super::AclData::new(data, ACL_U_SIG_CHANNEL_ID)
     }
 }

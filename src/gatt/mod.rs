@@ -519,14 +519,12 @@ impl ServerBuilder
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C,Mtu>(self, connection_channel: &'_ C, server_mtu: Mtu)
-    -> Server<C>
+    pub fn make_server<C>(self, connection_channel: &'_ C) -> Server<C>
     where C: l2cap::ConnectionChannel,
-          Mtu: Into<Option<u16>>
     {
         Server {
             primary_services: self.primary_services,
-            server: att::server::Server::new(connection_channel, server_mtu.into(), Some(self.attributes))
+            server: att::server::Server::new(connection_channel, Some(self.attributes))
         }
     }
 

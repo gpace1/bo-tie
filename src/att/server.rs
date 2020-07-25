@@ -19,10 +19,6 @@ use super::{
 use crate::l2cap;
 use crate::att::pdu::ReadTypeResponse;
 
-macro_rules! log_debug {
-    ( $arg1:expr $(, $args:expr)* ) => { log::debug!(concat!("(ATT) ", $arg1) $(, $args)*) }
-}
-
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ServerPduName {
     ErrorResponse,
@@ -204,15 +200,8 @@ impl ServerPduName {
 /// contained value.
 pub struct Server<'c, C>
 {
-    /// The maximum mtu that this server can handle. This is also the mtu sent in a MTU response
-    /// PDU. This is not the mtu that is decided as the maximum transmit size between the server
-    /// and client, that is `set_mtu`.
-    max_mtu: u16,
-    /// The set mtu between the client and server. If this value is ever None, then the default
-    /// value as defined in the connection channel will be used.
-    set_mtu: Option<u16>,
     /// The connection channel for sending and receiving data from the Bluetooth controller
-    connection: &'c C,
+    connection_channel: &'c C,
     /// The attributes of the server
     attributes: ServerAttributes,
     /// The permissions the client currently has
@@ -233,26 +222,13 @@ where C: l2cap::ConnectionChannel
     /// specified by the DEFAULT_ATT_MTU constant in trait `l2cap::ConnectionChannel`. If the provided MTU
     /// value is smaller than DEFAULT_ATT_MTU or none is passed, then the MTU will be set to
     /// DEFAULT_ATT_MTU.
-    pub fn new<Mtu, A>( connection: &'c C, max_mtu: Mtu, server_attributes: A) -> Self
-    where Mtu: Into<Option<u16>>,
-          A: Into<Option<ServerAttributes>>
+    pub fn new<A>( connection: &'c C, server_attributes: A) -> Self
+    where A: Into<Option<ServerAttributes>>
     {
-        let actual_max_mtu = if let Some(val) = max_mtu.into() {
-            if val >= super::MIN_ATT_MTU_LE {
-                val
-            } else {
-                super::MIN_ATT_MTU_LE
-            }
-        } else {
-            super::MIN_ATT_MTU_LE
-        };
-
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
         Self {
-            max_mtu: actual_max_mtu,
-            set_mtu: None,
-            connection,
+            connection_channel: connection,
             attributes,
             given_permissions: Vec::new(),
         }
@@ -262,7 +238,7 @@ where C: l2cap::ConnectionChannel
     ///
     /// The is the current mtu as agreed upon by the client and server
     pub fn get_mtu(&self) -> usize {
-        ( match self.set_mtu { Some(mtu) => mtu, None => super::MIN_ATT_MTU_LE } ) as usize
+        self.connection_channel.get_mtu()
     }
 
     /// Push an attribute onto the handle stack
@@ -565,7 +541,7 @@ where C: l2cap::ConnectionChannel
     async fn send_raw_tf(&self, intf_data: Vec<u8>) {
         let acl_data = l2cap::AclData::new( intf_data, super::L2CAP_CHANNEL_ID );
 
-        self.connection.send(acl_data).await;
+        self.connection_channel.send(acl_data).await;
     }
 
     async fn send<D>(&self, data: D) where D: TransferFormatInto {
@@ -582,7 +558,7 @@ where C: l2cap::ConnectionChannel
     /// Send an error the the client
     pub async fn send_error(&self, handle: u16, received_opcode: ClientPduName, pdu_error: pdu::Error) {
 
-        log_debug!("Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
+        log::info!("Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
             Into::<u8>::into(received_opcode), handle, pdu_error);
 
         self.send_pdu( pdu::error_response(received_opcode.into(),handle,pdu_error) ).await
@@ -655,15 +631,13 @@ where C: l2cap::ConnectionChannel
         }
     }
 
+    /// Process a exchange MTU request from the client
     async fn process_exchange_mtu_request(&mut self, client_mtu: u16) {
+        log::trace!("Exchange mtu response");
 
-        if (super::MIN_ATT_MTU_LE..=self.max_mtu).contains(&client_mtu)  {
-            self.set_mtu = Some(client_mtu.into());
-        }
+        self.connection_channel.set_mtu(client_mtu);
 
-        log_debug!("Sending exchange mtu response");
-
-        self.send_pdu(pdu::exchange_mtu_response(self.get_mtu() as u16)).await;
+        self.send_pdu(pdu::exchange_mtu_response(self.connection_channel.get_mtu() as u16)).await;
     }
 
     /// Process a Read Request from the client
@@ -972,7 +946,7 @@ where C: l2cap::ConnectionChannel
 
 impl<C> AsRef<C> for Server<'_, C> where C: l2cap::ConnectionChannel {
     fn as_ref(&self) -> &C {
-        &self.connection
+        &self.connection_channel
     }
 }
 

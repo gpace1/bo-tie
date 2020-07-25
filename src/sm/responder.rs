@@ -328,7 +328,7 @@ where C: ConnectionChannel,
 
         let acl_data = AclData::new( command.into().into_icd(), super::L2CAP_CHANNEL_ID);
 
-        self.connection_channel.send((acl_data, super::L2CAP_LEGACY_MTU)).await;
+        self.connection_channel.send(acl_data).await;
     }
 
     async fn send_err(&mut self, fail_reason: pairing::PairingFailedReason) {

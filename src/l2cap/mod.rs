@@ -1,12 +1,15 @@
 //! L2CAP protocol
 
-pub mod signals;
-
 /// Logical Link Control and Adaption protocol (L2CAP)
 use core::future::Future;
 use alloc::{
     vec::Vec,
 };
+
+/// A trait containing a constant for the smallest maximum transfer unit for a logical link
+pub trait MinimumMtu {
+    const MIN_MTU: usize;
+}
 
 /// LE-U L2CAP logical link type
 ///
@@ -14,16 +17,24 @@ use alloc::{
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub struct LeU;
 
+impl MinimumMtu for LeU {
+    const MIN_MTU: usize = 23;
+}
+
 /// ACL-U L2CAP logical link type
 ///
 /// This is a marker type for a ACL-U L2CAP logical link.
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub struct AclU;
 
+impl MinimumMtu for AclU {
+    const MIN_MTU: usize = 48;
+}
+
 /// Channel Identifier
 ///
 /// Channel Identifiers are used by the L2CAP to associate the data with a given channel. Channels
-/// are a numeric identifer for a protocol or an association of protocols that are part of L2CAP or
+/// are a numeric identifier for a protocol or an association of protocols that are part of L2CAP or
 /// a higher layer (such as the Attribute (ATT) protocl).
 ///
 /// # Specification Reference
@@ -83,6 +94,11 @@ impl<T> DynChannelId<T> {
     fn new(channel_id: u16) -> Self {
         DynChannelId { channel_id, _p: core::marker::PhantomData }
     }
+
+    /// Get the value of the dynamic channel identifier
+    pub fn get_val(&self) -> u16 {
+        self.channel_id
+    }
 }
 
 impl DynChannelId<LeU> {
@@ -120,7 +136,7 @@ impl DynChannelId<AclU> {
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
-enum AclUserChannelIdentifier {
+pub enum AclUserChannelIdentifier {
     SignalingChannel,
     ConnectionlessChannel,
     AmpManagerProtocol,
@@ -138,7 +154,7 @@ impl AclUserChannelIdentifier {
             AclUserChannelIdentifier::AmpManagerProtocol => 0x3,
             AclUserChannelIdentifier::BrEdrSecurityManager => 0x7,
             AclUserChannelIdentifier::AmpTestManager => 0x3F,
-            AclUserChannelIdentifier::DynamicallyAllocated(ci) => ci,
+            AclUserChannelIdentifier::DynamicallyAllocated(ci) => ci.get_val(),
         }
     }
 
@@ -219,7 +235,7 @@ impl LeUserChannelIdentifier {
 /// defaults for the type of Link Layer (either ACL-U or LE-U).
 pub struct L2capManager<CType> {
     peer_mtu: usize,
-    signaling_cid: ChannelIdentifier,
+    //signaling_cid: ChannelIdentifier,
     p_chan: core::marker::PhantomData<CType>,
 }
 
@@ -229,21 +245,22 @@ impl L2capManager<LeU> {
     /// The configuration will be set to the default values for a LE-U connection.
     pub fn new_le() -> Self {
         Self {
-            peer_mtu: LeU::MTU,
-            signaling_cid: ChannelIdentifier::LE(
-                LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel
-            ),
+            peer_mtu: LeU::MIN_MTU,
+            // signaling_cid: ChannelIdentifier::LE(
+            //     LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel
+            // ),
             p_chan: core::marker::PhantomData,
         }
     }
 }
 
-impl<C> L2capManager<C> {
+impl<C> L2capManager<C> where C: MinimumMtu {
 
     /// Set the peers L2CAP MTU
     ///
     /// This is a 'bottom level' MTU, any protocol above the L2CAP will have this as an upward
-    /// bound of MTU. Higher layer protocols may fragment their data and send it with a smaller MTU.
+    /// bound for its MTU. Higher layer protocols may fragment their data and send it with a smaller
+    /// MTU.
     ///
     /// This is used to manually set the MTU for L2CAP PDUs instead of relying on peer device to
     /// specify it's MTU with a configuration request signalling packet. It is only recommended to
@@ -264,8 +281,13 @@ impl<C> L2capManager<C> {
     ///
     /// When using the HCI, the L2CAP MTU can be found using the *Read Buffer Size* or *LE Read
     /// Buffer Size* commands.
-    pub fn set_peer_mtu(&mut self, mtu: u16) {
-        self.peer_mtu = core::cmp::max(mtu.into(), C::MTU);
+    pub fn set_mtu(&mut self, mtu: u16) {
+        self.peer_mtu = core::cmp::max(mtu.into(), C::MIN_MTU);
+    }
+
+    /// Get the mtu
+    pub fn get_mtu(&self) -> usize {
+        self.peer_mtu
     }
 }
 
@@ -315,7 +337,7 @@ impl core::fmt::Display for AclDataError {
 /// # Mtu
 /// Usage this MTU. However if the MTU value is less than the the minimum MTU for the logical link
 /// or larger than the channel's MTU, it will not be used.
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,Debug)]
 pub enum AclDataSuggestedMtu {
     Channel,
     Minimum,
@@ -407,23 +429,26 @@ impl AclData {
         v
     }
 
-    /// Create an AclData struct from a complete raw L2CAP data packet
+    /// Create an AclData struct from a raw L2CAP ACL data packet
     ///
     /// The input must be a slice of bytes containing a complete L2CAP data packet.
     ///
     /// # Requirements
     /// * The length of the raw data must be >= 4
     /// * The length value in the raw data must be less than or equal to the length of the payload
-    ///   portion of the raw data. Any bytes beyond
+    ///   portion of the raw data. Any bytes beyond the length are ignored.
     /// * The channel id must be valid
-    pub fn from_raw_complete_data(data: &[u8]) -> Result<Self, AclDataError> {
+    pub fn from_raw_data(data: &[u8]) -> Result<Self, AclDataError> {
         if data.len() >= 4 {
-            let len = <u16>::from_le_bytes( [data[0], data[1]] ) as usize;
+            let len: usize = <u16>::from_le_bytes( [data[0], data[1]] ).into();
+
             let raw_channel_id = <u16>::from_le_bytes( [data[2], data[3]] );
+
             let payload = &data[4..];
 
             if len <= payload.len() {
                 Ok( Self {
+                    mtu: AclDataSuggestedMtu::Channel,
                     channel_id: ChannelIdentifier::LE(
                         LeUserChannelIdentifier::try_from_raw(raw_channel_id).or(Err(AclDataError::InvalidChannelId))?
                     ),
@@ -477,22 +502,6 @@ impl AclDataFragment {
     pub fn fragment_data(&self) -> &[u8] { &self.data }
 }
 
-/// Create a `L2capPdu` from an `AclData` where the size may be larger then the MTU.
-///
-/// # Note
-/// If mtu is smaller then 
-/// [`MINIMUM_LE_U_FRAGMENT_START_SIZE`](crate::hci::HciAclData::MINIMUM_LE_U_FRAGMENT_START_SIZE)
-/// then it is sent as that size to the controller over the Host Controller Interface for LE-U.
-impl<Mtu> From<(AclData, Mtu)> for L2capPdu where Mtu: Into<Option<usize>>
-{
-    fn from((acl_data, mtu): (AclData, Mtu)) -> Self {
-        Self {
-            data: acl_data.into_raw_data(),
-            mtu: mtu.into()
-        }
-    }
-}
-
 /// A L2CAP Logical Link Connection channel
 ///
 /// A connection channel is used for sending and receiving L2CAP data packets between the Host and
@@ -521,20 +530,30 @@ pub trait ConnectionChannel {
 
     /// Set the MTU for `send`
     ///
-    /// This is used as the maximum transfer unit of a sent L2CAP data payload. This value must be
-    /// larger than the minimum for the logical link. An ACL-U logical link has a minimum MTU of 48
-    /// and a LE-U logical link has a minimum MTU of 23. If `mtu` is smaller than the minimum MTU it
-    /// will not change the current MTU for the connection channel.
-    fn set_mtu(&mut self, mtu: u16);
+    /// This is used as the maximum transfer unit of sent L2CAP data payloads. This value must be
+    /// larger than equal to the minimum for the logical link, but smaller than or equal to the
+    /// maximum MTU this implementation of `ConnectionChannel` can support (you can get this value
+    /// with a call to `max_mut`). An ACL-U logical link has a minimum MTU of 48 and a LE-U logical
+    /// link has a minimum MTU of 23. If `mtu` is invalid it will not change the current MTU for the
+    /// connection channel.
+    fn set_mtu(&self, mtu: u16);
 
-    /// Get the maximum MTU the Bluetooth controller can handle
+    /// Get the current MTU
+    fn get_mtu(&self) -> usize;
+
+    /// Get the maximum MTU this `ConnectionChannel` can support
     ///
-    /// It is not enforced if this mtu
-    fn max_mtu_hint(&self) -> usize;
+    /// This is the maximum MTU value that higher layer protocols can use to call `set_mtu` with.
+    fn max_mtu(&self) -> usize;
+
+    /// Get the minimum MTU for the logical Link
+    ///
+    /// This will return 48 if this is a ACL-U logical link or 23 if this is a LE-U logical link
+    fn min_mtu(&self) -> usize;
 
     /// Try to receive a PDU from the controller
     ///
-    /// It is recommended to use
+    /// It is highly recommended to use
     /// [`future_receiver`](crate::l2cap::ConnectionChannel::future_receiver) over this method.
     ///
     /// This attempts to receive one or more packets from an underlying implementation. If there is
