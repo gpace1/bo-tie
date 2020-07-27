@@ -6,6 +6,7 @@ pub mod opcodes;
 pub mod common;
 pub mod error;
 #[macro_use] pub mod events;
+mod flow_ctrl;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -14,9 +15,6 @@ use core::fmt::Display;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ Poll, Waker };
-
-pub use common::ConnectionHandle;
-use crate::l2cap::ConnectionChannel;
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -689,147 +687,38 @@ where I: HostControllerInterface
     }
 }
 
-/// A HCI channel for a LE-U Logical Link
-///
-/// This is a HCI connection channel over L2CAP. It is only for a L2CAP LE-U logical link as it does
-/// not support an ACL-U link. The default configuration for a LE-U logical link will be used for
-/// data sent and received through this channel. This configuration cannot be changed as there is
-/// no attached flow controller
-struct HciLeUChannel<I,HI>
-where HI: core::ops::Deref<Target = HostInterface<I>>,
-      I: HciAclDataInterface
-{
-    handle: common::ConnectionHandle,
-    hi: HI,
-    l2cap_manager: crate::l2cap::L2capManager<crate::l2cap::LeU>,
-}
-
-impl<I,HI> HciLeUChannel<I,HI>
-where HI: core::ops::Deref<Target = HostInterface<I>>,
-      I: HciAclDataInterface
-{
-    /// Create a new `HciLeUChannel`
-    ///
-    /// The LE-U channel will be initialized with the default
-    fn new(hi: HI, handle: common::ConnectionHandle) -> Self {
-
-        hi.interface.start_receiver(handle);
-
-        HciLeUChannel { handle, hi, l2cap_manager: crate::l2cap::L2capManager::new_le() }
-    }
-
-    fn get_send_mtu(&self, data: &crate::l2cap::AclData) -> usize {
-        match data.get_mtu() {
-            crate::l2cap::AclDataSuggestedMtu::Minimum => self.min_mtu(),
-
-            crate::l2cap::AclDataSuggestedMtu::Channel => self.l2cap_manager.get_mtu(),
-
-            crate::l2cap::AclDataSuggestedMtu::Mtu(mtu) =>
-                self.l2cap_manager.get_mtu().min(mtu).max(self.min_mtu())
-        }
-    }
-}
-
-impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI>
-where HI: core::ops::Deref<Target = HostInterface<I>>,
-       I: HciAclDataInterface
-{
-    fn send(&self, data: crate::l2cap::AclData ) -> crate::l2cap::SendFut {
-
-        let mtu = self.get_send_mtu(&data);
-
-        let packet = data.into_raw_data();
-
-        packet.chunks(mtu + HciAclData::HEADER_SIZE).enumerate().for_each(|(i, chunk)| {
-            let hci_acl_data = if i == 0 {
-                HciAclData::new(
-                    self.handle,
-                    AclPacketBoundary::FirstNonFlushable,
-                    AclBroadcastFlag::NoBroadcast,
-                    chunk.to_vec()
-                )
-            } else {
-                HciAclData::new(
-                    self.handle,
-                    AclPacketBoundary::ContinuingFragment,
-                    AclBroadcastFlag::NoBroadcast,
-                    chunk.to_vec()
-                )
-            };
-
-            self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
-        });
-
-        crate::l2cap::SendFut::new(true)
-    }
-
-    /// Does nothing
-    ///
-    /// Because `self.max_mtu() == self.min_mtu()` there is no possible way to change the MTU.
-    fn set_mtu(&self, _: u16) {}
-
-    fn get_mtu(&self) -> usize {
-        self.l2cap_manager.get_mtu()
-    }
-
-    fn max_mtu(&self) -> usize {
-        <crate::l2cap::LeU as crate::l2cap::MinimumMtu>::MIN_MTU
-    }
-
-    fn min_mtu(&self) -> usize {
-        <crate::l2cap::LeU as crate::l2cap::MinimumMtu>::MIN_MTU
-    }
-
-    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>> {
-        use crate::l2cap::AclDataFragment;
-
-        self.hi.interface
-        .receive(&self.handle, waker)
-        .and_then( |received| match received {
-            Ok( packets ) => packets.into_iter()
-                .map( |packet| packet.into_acl_fragment() )
-                .collect::<Vec<AclDataFragment>>()
-                .into(),
-            Err( e ) => {
-                log::error!("Failed to receive data: {}", e);
-                Vec::new().into()
-            },
-        })
-    }
-}
-
-
-
-impl<I, HI> core::ops::Drop for HciLeUChannel<I,HI>
-where HI: core::ops::Deref<Target = HostInterface<I>>,
-       I: HciAclDataInterface
-{
-    fn drop(&mut self) {
-        self.hi.interface.stop_receiver(&self.handle)
-    }
-}
-
 impl<I> HostInterface<I> where I: HciAclDataInterface {
 
-    /// Create a new connection-oriented data channel
+    /// Create a new raw LE-U logical link connection channel
     ///
-    /// Make a connection channel for the provided connection handle.
-    pub fn new_connection_channel<'a>(&'a self, connection_handle: common::ConnectionHandle)
+    /// Make a raw HCI connection channel with the provided connection handle for a LE-U logical
+    /// link. This connection channel provides no protection for the controller. There is no flow
+    /// control in this connection channel for data sent to the controller. It is up to the user to
+    /// make sure that the controllers data buffers do not overflow.
+    ///
+    /// The `max_mtu` input is the maximum value the logical link's MTU can be changed to over the
+    /// lifetime of the connection channel. When this is initialized, the used MTU value is
+    /// defaulted to the minimum possible MTU for LE-U, but if it changed it can only be changed to
+    /// a value no greater than `max_mtu`. If `max_mtu` is `None` or smaller than the minimum MTU
+    /// for LE-U, it defaults to the minimum MTU.
+    pub fn le_raw_channel<'a,M>(&'a self, handle: common::ConnectionHandle, max_mtu: M)
     -> impl crate::l2cap::ConnectionChannel + 'a
+    where M: Into<Option<u16>>
     {
-        HciLeUChannel::new(self, connection_handle)
+        flow_ctrl::HciLeUChannel::new_raw(self, handle, max_mtu)
     }
 
     /// Create a new connection-oriented data channel with a `HostInterface` wrapped within an `Arc`
     ///
-    /// This is an alternative to `new_connection_channel` for situations where the lifetime of
+    /// This is an alternative to `new_le_raw_channel` for situations where the lifetime of
     /// `self` may not outlive the generated `ConnectionChannel`. This can be useful for thread
     /// pools or other synchronization related executors where it may be required to have a
     /// atomically reference counted `HostInterface`.
-    pub fn new_sync_connection_channel(self: Arc<Self>, connection_handle: common::ConnectionHandle)
+    pub fn sync_le_raw_channel<M>(self: Arc<Self>, handle: common::ConnectionHandle, max_mtu: M)
     -> impl crate::l2cap::ConnectionChannel
+    where M: Into<Option<u16>>
     {
-        HciLeUChannel::new(self, connection_handle)
+        flow_ctrl::HciLeUChannel::new_raw(self, handle, max_mtu)
     }
 }
 

@@ -14,12 +14,14 @@ rand_core = { version = "0.5", features = ['getrandom'] }
 openssl = { version = "0.10" }
 uuid = { version = "0.8", optional = true }
 bincode = { version = "1.2", features = ["i128"] }
+slab = { version = "0.4.2", optional = true }
 
 [features]
 default = ["v5_0"]
 v4_2 = [] # bluetooth v4.2
 v5_0 = [] # bluetooth v5.0
 uuid-crate = ["uuid"]
+flow-control = ["slab"]
 
 # vendored builds
 vendored = ["openssl/vendored"]
