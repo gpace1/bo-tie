@@ -653,10 +653,10 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                         self.server.send_error(
                             handle_range.starting_handle,
                             att::client::ClientPduName::ReadByGroupTypeRequest,
-                            att::pdu::Error::InvalidHandle
+                            att::pdu::Error::AttributeNotFound
                         ).await;
 
-                        return Err(att::pdu::Error::InvalidHandle.into());
+                        return Err(att::pdu::Error::AttributeNotFound.into());
                     },
                 }
             },
