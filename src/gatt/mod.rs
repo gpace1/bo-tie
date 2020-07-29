@@ -602,10 +602,13 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
                         // Each data_size is 4 bytes for the attribute handle + the end group handle
                         // and either 2 bytes for short UUIDs or 16 bytes for full UUIDs
+                        //
+                        // Each collection is made to take while the *current* iteration does not
+                        // overrun the maximum payload size.
                         let response = if is_16_bit {
                             build_response_iter.take_while(|s| s.service_type.is_16_bit())
                                 .enumerate()
-                                .take_while(|(cnt, _)| payload_size > cnt * (4 + 2))
+                                .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 2))
                                 .by_ref()
                                 .map(|(_, s)|
                                     ReadGroupTypeData::new(
@@ -617,7 +620,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                                 .collect()
                         } else {
                             build_response_iter.enumerate()
-                                .take_while(|(cnt, _)| payload_size > cnt * (4 + 16))
+                                .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 16))
                                 .by_ref()
                                 .map(|(_, s)|
                                     ReadGroupTypeData::new(

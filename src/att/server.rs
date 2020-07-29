@@ -725,7 +725,7 @@ where C: l2cap::ConnectionChannel
                     .filter(|att| att.get_uuid().is_16_bit() )
                     .take_while(|att| self.client_can_write_attribute(att).is_none() )
                     .enumerate()
-                    .take_while(|(cnt, _)| (cnt * item_size_16 < payload_max) )
+                    .take_while(|(cnt, _)| (cnt + 1) * item_size_16 < payload_max )
                     .map(|(_,att)| (att.get_handle().unwrap(), *att.get_uuid()) )
                     .peekable()
             );
@@ -743,7 +743,7 @@ where C: l2cap::ConnectionChannel
                     .iter()
                     .take_while(|att| self.client_can_read_attribute(att).is_none() )
                     .enumerate()
-                    .take_while(|(cnt, _)| cnt * item_size_128 < payload_max )
+                    .take_while(|(cnt, _)| (cnt + 1) * item_size_128 < payload_max )
                     .map(|(_,att)| (att.get_handle().unwrap(), *att.get_uuid()) )
                     .peekable()
                 );
