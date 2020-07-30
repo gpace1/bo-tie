@@ -719,7 +719,7 @@ mod tests {
 
     use super::*;
     use alloc::boxed::Box;
-    use crate::l2cap::{ConnectionChannel, L2capPdu, AclDataFragment, SendFut};
+    use crate::l2cap::{ConnectionChannel, AclDataFragment, SendFut, MinimumMtu};
     use crate::UUID;
     use futures::task::Waker;
     use att::TransferFormatInto;
@@ -727,9 +727,17 @@ mod tests {
     struct DummyConnection;
 
     impl ConnectionChannel for DummyConnection {
-        fn send<Pdu>(&self, _: Pdu) -> SendFut where Pdu: Into<crate::l2cap::L2capPdu> {
+        fn send(&self, _: crate::l2cap::AclData) -> SendFut {
             SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> { None }
     }
@@ -770,7 +778,7 @@ mod tests {
             .include_service(&test_service_1, None)
             .finish_service();
 
-        let server = server_builder.make_server(&DummyConnection, 0xFFu16);
+        let server = server_builder.make_server(&DummyConnection);
 
         server.iter_attr_info()
             .for_each(|info| assert_eq!(info.get_permissions(), test_att_permissions,
@@ -782,11 +790,19 @@ mod tests {
     }
 
     impl l2cap::ConnectionChannel for TestChannel {
-        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<L2capPdu> {
-            self.last_sent_pdu.set(Some(data.into().into_data()));
+        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
+            self.last_sent_pdu.set(Some(data.into_raw_data()));
 
             l2cap::SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> {
             unimplemented!()
@@ -827,7 +843,7 @@ mod tests {
 
         let test_channel = TestChannel { last_sent_pdu: None.into() };
 
-        let mut server = server_builder.make_server(&test_channel, 256);
+        let mut server = server_builder.make_server(&test_channel);
 
         server.give_permissions_to_client([
             att::AttributePermissions::Read(att::AttributeRestriction::None)
@@ -899,9 +915,7 @@ mod tests {
             att::L2CAP_CHANNEL_ID
         );
 
-        assert_eq!(
-            Err(att::Error::PduError(att::pdu::Error::InvalidHandle)),
-            block_on(server.process_acl_data(&acl_client_pdu))
-        );
+        // Request was made for for a attribute that was out of range
+        assert_eq!( Ok(()), block_on(server.process_acl_data(&acl_client_pdu)) );
     }
 }

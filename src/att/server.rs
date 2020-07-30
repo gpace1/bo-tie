@@ -1353,7 +1353,7 @@ mod tests {
                 *,
                 server::*
             },
-            l2cap::{L2capPdu, AclDataFragment},
+            l2cap::AclDataFragment,
             UUID,
         };
         use tinymt::TinyMT64;
@@ -1367,6 +1367,7 @@ mod tests {
             },
             task::Waker,
         };
+        use crate::l2cap::MinimumMtu;
 
         const ALL_ATT_PERM_SIZE: usize = 12;
 
@@ -1663,9 +1664,17 @@ mod tests {
             struct DummyConnection;
 
             impl crate::l2cap::ConnectionChannel for DummyConnection {
-                fn send<Pdu>(&self, _: Pdu) -> crate::l2cap::SendFut where Pdu: Into<L2capPdu> {
+                fn send(&self, _: crate::l2cap::AclData) -> crate::l2cap::SendFut {
                     crate::l2cap::SendFut::new(true)
                 }
+
+                fn set_mtu(&self, _: u16) {}
+
+                fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+                fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+                fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
                 fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> { Some(Vec::new()) }
             }
@@ -1680,7 +1689,7 @@ mod tests {
                 server_attributes.push(attribute);
             });
 
-            let mut server = Server::new(&DummyConnection, 100, server_attributes);
+            let mut server = Server::new(&DummyConnection, server_attributes);
 
             all_tested_permission_permutations.iter().for_each(|perm_client| {
 

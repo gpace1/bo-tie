@@ -704,6 +704,7 @@ mod test {
     use std::sync::{Arc, Mutex};
     use std::task::Waker;
     use std::thread::JoinHandle;
+    use crate::l2cap::MinimumMtu;
 
     struct TwoWayChannel {
         b1: Option<Vec<u8>>,
@@ -743,10 +744,10 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel1 {
 
-        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<crate::l2cap::L2capPdu>{
+        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b1 = Some(data.into().into_data());
+            gaurd.b1 = Some(data.into_raw_data());
 
             if let Some(waker) = gaurd.w1.take() {
                 waker.wake();
@@ -754,6 +755,14 @@ mod test {
 
             l2cap::SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
             use crate::l2cap::AclDataFragment;
@@ -771,10 +780,10 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel2 {
 
-        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<crate::l2cap::L2capPdu>{
+        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b2 = Some(data.into().into_data());
+            gaurd.b2 = Some(data.into_raw_data());
 
             if let Some(waker) = gaurd.w2.take() {
                 waker.wake();
@@ -782,6 +791,14 @@ mod test {
 
             l2cap::SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
             use crate::l2cap::AclDataFragment;
@@ -831,7 +848,7 @@ mod test {
         let t: &mut Option<JoinHandle<_>> = &mut thread::spawn( move || {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new( &c2, 256, None );
+            let mut server = server::Server::new( &c2, None );
 
             let attribute_0 = Attribute::new(
                 UUID_1,
