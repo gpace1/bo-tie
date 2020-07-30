@@ -880,11 +880,12 @@ where C: l2cap::ConnectionChannel
 
             let payload_max = self.get_mtu() - 2;
 
-            let mut init_iter = self.attributes.attributes[start..end].iter()
-                .filter(|att| att.get_uuid() == &desired_att_type)
-                .peekable();
+            let verify_size = |cnt, size| (cnt + 1) * (size + 2) > payload_max;
 
-            match init_iter.peek() {
+            let mut init_iter = self.attributes.attributes[start..end].iter()
+                .filter(|att| att.get_uuid() == &desired_att_type);
+
+            match init_iter.by_ref().next() {
                 None =>
                     self.send_error(
                         handle_range.starting_handle,
@@ -893,7 +894,7 @@ where C: l2cap::ConnectionChannel
                     ).await,
 
                 Some(first_match) => {
-                    if let Some(e) = self.client_can_read_attribute(*first_match) {
+                    if let Some(e) = self.client_can_read_attribute(first_match) {
 
                         self.send_error(
                             handle_range.starting_handle,
@@ -902,28 +903,55 @@ where C: l2cap::ConnectionChannel
                         ).await
 
                     } else {
-                        let first_size = first_match.get_value().value_transfer_format_size().await;
+                        let first_val = first_match.get_value();
+
+                        let first_handle = first_match.get_handle().unwrap();
+
+                        let first_size = first_val.value_transfer_format_size().await;
 
                         let mut responses = Vec::new();
 
-                        for (cnt,att) in init_iter.enumerate() {
+                        if !verify_size(0, first_size) {
 
-                            // Break if read by response data payload max size reached
-                            if cnt * first_size > payload_max { break; }
+                            // This is where the data to be transferred of the first found attribute
+                            // is too large for the attribute MTU. Here, a read by type response is
+                            // generated with as much of the value transfer format that can fit into
+                            // the payload. A read blob request from the client is then required to
+                            // complete the full read.
 
-                            // Break if att doesn't have the correct size instead of filtering. This
-                            // is a break instead of a continue to simplify the client side. This
-                            // way the client doesn't need to keep track of the attributes that were
-                            // skipped.
-                            if att.get_value().value_transfer_format_size().await == first_size {
-                                break;
+
+                            // Read type response includes a 2 byte handle, so the maximum byte
+                            // size for the data is the payload - 2
+                            let max_size = Some(payload_max - 2);
+
+                            let rsp = first_val.read_by_type_response( first_handle, max_size ).await;
+
+                            responses.push(rsp);
+
+                        } else {
+
+                            let fst_rsp = first_val.read_by_type_response( first_handle, None ).await;
+
+                            responses.push(fst_rsp);
+
+                            for (cnt,att) in init_iter.enumerate() {
+
+                                let val = att.get_value();
+                                let handle = att.get_handle().unwrap();
+
+                                // Break if att doesn't have the same transfer size as the
+                                // first value or if adding the value would exceed the MTU for
+                                // the attribute payload
+                                if !verify_size(cnt + 1, first_size) ||
+                                   first_size != val.value_transfer_format_size().await
+                                {
+                                    break;
+                                }
+
+                                let response = val.read_by_type_response( handle, None ).await;
+
+                                responses.push( response );
                             }
-
-                            let response = att.get_value()
-                                .read_by_type_response( att.get_handle().unwrap() )
-                                .await;
-
-                            responses.push( response );
                         }
 
                         self.send_pdu( pdu::read_by_type_response(responses) ).await;
@@ -1223,11 +1251,15 @@ trait ServerAttribute: Send + Sync {
     ///
     /// This creates a
     /// [`ReadByTypeResponse`](crate::att::pdu::ReadByTypeResponse)
-    /// with the data of the response already in the transfer format.
+    /// with the data of the response already in the transfer format. If the first found type cannot
+    /// fit within the attribute MTU for the att payload, then max_size can be used to truncate the
+    /// raw transfer format data of self to max_size. If max_size is None, then truncating is not
+    /// performed.
     ///
     /// # Panic
     /// This should panic if the attribute has not been assigned a handle
-    fn read_by_type_response(&self, handle: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
+    fn read_by_type_response(&self, handle: u16, max_size: Option<usize>)
+    -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
 
     /// Try to convert raw data from the interface and write to the attribute value
     fn try_set_value_from_transfer_format<'a>(&'a mut self, tf_data: &'a [u8])
@@ -1253,13 +1285,18 @@ where C: ServerAttributeValue<Value = V> + Send + Sync,
         self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v)) )
     }
 
-    fn read_by_type_response(&self, handle: u16)-> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
+    fn read_by_type_response(&self, handle: u16, max_size: Option<usize>)
+    -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
     {
         self.read_and(move |v| {
-                let tf = TransferFormatInto::into(v);
+            let mut tf = TransferFormatInto::into(v);
 
-                pdu::ReadTypeResponse::new(handle, tf)
-            })
+            if let Some(max) = max_size {
+                tf.truncate(max)
+            }
+
+            pdu::ReadTypeResponse::new(handle, tf)
+        })
     }
 
     fn try_set_value_from_transfer_format<'a>(&'a mut self, raw: &'a [u8] )
@@ -1324,7 +1361,9 @@ impl ServerAttribute for ReservedHandle {
         } )
     }
 
-    fn read_by_type_response(&self, _: u16) -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>> {
+    fn read_by_type_response(&self, _: u16, _: Option<usize>)
+    -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
+    {
         Box::pin( async {
             log::error!("Tried to read the reserved handle for a read by type response");
 
