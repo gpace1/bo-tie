@@ -852,6 +852,22 @@ impl<D> ReadTypeResponse<D> {
     pub fn new(handle: u16, data: D) -> Self {
         ReadTypeResponse { handle, data }
     }
+
+    pub fn get_handle(&self) -> u16 { self.handle }
+}
+
+impl<D> core::ops::Deref for ReadTypeResponse<D> {
+    type Target = D;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl <D> core::ops::DerefMut for ReadTypeResponse<D> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
 }
 
 impl<D> TransferFormatTryFrom for ReadTypeResponse<D> where D: TransferFormatTryFrom {

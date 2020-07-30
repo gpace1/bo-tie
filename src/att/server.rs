@@ -210,6 +210,23 @@ pub struct Server<'c, C>
     /// permission checks will be for permissions sorted towards the front (Unencrypted Read/Write,
     /// Encrypted Read/Write,
     given_permissions: Vec<super::AttributePermissions>,
+    /// Blob data
+    ///
+    /// A blob request is a request for data that is too large to be sent within one PDU packet. It
+    /// is chopped up across multiple blob requests and re-stitched together at the client side.
+    /// All read responses double as the start of a blob read when the data is too large to be
+    /// completely sent within the read response. Whenever a blob read is started, `blob_data` is
+    /// updated with the full data to be read **whether or not the prior data was fully read by
+    /// the client**.
+    ///
+    /// The following request-response groups will assign `blob_data` *if the data was too large to
+    /// send within one response*. `blob_data` is not assigned if the response can contain complete
+    /// data.
+    /// * Read By Type
+    /// * Read
+    /// * Read Blob
+    /// * Read by group type
+    blob_data: core::cell::Cell<Vec<u8>>
 }
 
 impl<'c, C> Server<'c, C>
@@ -231,6 +248,7 @@ where C: l2cap::ConnectionChannel
             connection_channel: connection,
             attributes,
             given_permissions: Vec::new(),
+            blob_data: core::cell::Cell::default(),
         }
     }
 
@@ -919,18 +937,23 @@ where C: l2cap::ConnectionChannel
                             // the payload. A read blob request from the client is then required to
                             // complete the full read.
 
-
                             // Read type response includes a 2 byte handle, so the maximum byte
                             // size for the data is the payload - 2
-                            let max_size = Some(payload_max - 2);
+                            let max_size = payload_max - 2;
 
-                            let rsp = first_val.read_by_type_response( first_handle, max_size ).await;
+                            let mut rsp = first_val.read_by_type_response( first_handle ).await;
 
-                            responses.push(rsp);
+                            // Copy the complete data to the blob_data
+                            self.blob_data.set( (*rsp).clone());
+
+                            // truncate the data in the response to the max size it can be
+                            rsp.truncate(max_size);
+
+                            responses.push( rsp );
 
                         } else {
 
-                            let fst_rsp = first_val.read_by_type_response( first_handle, None ).await;
+                            let fst_rsp = first_val.read_by_type_response( first_handle ).await;
 
                             responses.push(fst_rsp);
 
@@ -948,7 +971,7 @@ where C: l2cap::ConnectionChannel
                                     break;
                                 }
 
-                                let response = val.read_by_type_response( handle, None ).await;
+                                let response = val.read_by_type_response( handle ).await;
 
                                 responses.push( response );
                             }
@@ -1258,7 +1281,7 @@ trait ServerAttribute: Send + Sync {
     ///
     /// # Panic
     /// This should panic if the attribute has not been assigned a handle
-    fn read_by_type_response(&self, handle: u16, max_size: Option<usize>)
+    fn read_by_type_response(&self, handle: u16)
     -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
 
     /// Try to convert raw data from the interface and write to the attribute value
@@ -1285,15 +1308,11 @@ where C: ServerAttributeValue<Value = V> + Send + Sync,
         self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v)) )
     }
 
-    fn read_by_type_response(&self, handle: u16, max_size: Option<usize>)
+    fn read_by_type_response(&self, handle: u16)
     -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
     {
         self.read_and(move |v| {
-            let mut tf = TransferFormatInto::into(v);
-
-            if let Some(max) = max_size {
-                tf.truncate(max)
-            }
+            let tf = TransferFormatInto::into(v);
 
             pdu::ReadTypeResponse::new(handle, tf)
         })
@@ -1361,7 +1380,7 @@ impl ServerAttribute for ReservedHandle {
         } )
     }
 
-    fn read_by_type_response(&self, _: u16, _: Option<usize>)
+    fn read_by_type_response(&self, _: u16)
     -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
     {
         Box::pin( async {
