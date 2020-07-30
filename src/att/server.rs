@@ -889,14 +889,17 @@ where C: l2cap::ConnectionChannel
                     self.send_error(
                         handle_range.starting_handle,
                         ClientPduName::ReadByTypeRequest,
-                        pdu::Error::InvalidHandle
+                        pdu::Error::AttributeNotFound
                     ).await,
 
                 Some(first_match) => {
                     if let Some(e) = self.client_can_read_attribute(*first_match) {
 
-                        self.send_error(handle_range.starting_handle, ClientPduName::ReadByTypeRequest, e)
-                            .await
+                        self.send_error(
+                            handle_range.starting_handle,
+                            ClientPduName::ReadByTypeRequest,
+                            e
+                        ).await
 
                     } else {
                         let first_size = first_match.get_value().value_transfer_format_size().await;
@@ -1128,6 +1131,7 @@ pub trait ServerAttributeValue {
     fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a,bool>;
 }
 
+#[derive(Debug,PartialEq,Eq,Clone,Copy)]
 pub struct AttributeInfo<'a> {
     ty: &'a crate::UUID,
     handle: u16,
