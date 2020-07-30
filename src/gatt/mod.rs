@@ -656,7 +656,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                             att::pdu::Error::AttributeNotFound
                         ).await;
 
-                        return Err(att::pdu::Error::AttributeNotFound.into());
+                        return Ok(());
                     },
                 }
             },
