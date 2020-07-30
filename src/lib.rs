@@ -136,7 +136,7 @@ pub fn resolve_resolvable_private_address(irk: u128, address: BluetoothDeviceAdd
 /// with bluetooth.
 ///
 /// This structure always handles UUIDs in their 128 bit value form.
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord,Hash,Default)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Default)]
 pub struct UUID {
     base_uuid: u128,
 }
@@ -194,7 +194,7 @@ impl UUID {
           F2: FnOnce( &u32, &mut core::fmt::Formatter) -> core::fmt::Result,
           F3: FnOnce(&u128, &mut core::fmt::Formatter) -> core::fmt::Result,
     {
-        use std::convert::TryFrom;
+        use core::convert::TryFrom;
 
         if let Ok(val) = <u16>::try_from(*self) {
 
@@ -213,6 +213,12 @@ impl UUID {
 
             write!(f, " (128b)")
         }
+    }
+}
+
+impl core::fmt::Debug for UUID {
+    fn fmt(&self, f: &mut core::fmt::Formatter ) -> core::fmt::Result {
+        core::fmt::LowerHex::fmt(self, f)
     }
 }
 
