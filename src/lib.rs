@@ -444,11 +444,17 @@ mod tests {
     #[test]
     fn uuid_16_test() {
 
+        // 16 bit shortened form
         let uuid_val = 0x1234;
 
+        // expected full 128 bit form of uuid_val
         let uuid_128_val: u128 = 0x0000123400001000800000805F9B34FB;
 
         let uuid  = UUID::from_u16(uuid_val);
+
+        let uuid_128 = UUID::from_u128(uuid_128_val);
+
+        let uuid_2 = UUID::from_u16(0xabcd);
 
         assert!( uuid.is_16_bit() );
 
@@ -466,7 +472,7 @@ mod tests {
 
         assert_eq!( "0x1234 (16b)", format!("{:#x}", uuid) );
 
-        let uuid_2 = UUID::from_u16(0xabcd);
+        assert_eq!( uuid, uuid_128 );
 
         assert_eq!( "ABCD (16b)", format!("{:X}", uuid_2) );
 
@@ -475,11 +481,17 @@ mod tests {
 
     #[test]
     fn uuid_32_test() {
+        // 32 bit shortened form
         let uuid_val = 0x12345678;
 
+        // expected full 128 bit form of uuid_val
         let uuid_128_val: u128 = 0x1234567800001000800000805F9B34FB;
 
         let uuid  = UUID::from_u32(uuid_val);
+
+        let uuid_128 = UUID::from_u128(uuid_128_val);
+
+        let uuid_2 = UUID::from_u32(0xabcdef);
 
         assert!( !uuid.is_16_bit() );
 
@@ -493,11 +505,11 @@ mod tests {
 
         assert_eq!( uuid_128_val, uuid.into() );
 
+        assert_eq!( uuid, uuid_128);
+
         assert_eq!( "12345678 (32b)", format!("{:x}", uuid) );
 
         assert_eq!( "0x12345678 (32b)", format!("{:#x}", uuid) );
-
-        let uuid_2 = UUID::from_u32(0xabcdef);
 
         assert_eq!( "ABCDEF (32b)", format!("{:X}", uuid_2) );
 
