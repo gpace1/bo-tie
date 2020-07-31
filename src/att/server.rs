@@ -307,8 +307,8 @@ where C: l2cap::ConnectionChannel
     /// If you manage to push 65535 attributes onto this server, the next pushed attribute will
     /// cause this function to panic.
     pub fn push<X,V>(&mut self, attribute: super::Attribute<X>) -> u16
-    where X: ServerAttributeValue<Value = V> + Sized + Send + Sync + 'static,
-          V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
+    where X: ServerAttributeValue<Value = V> + Send + Sized + 'static,
+          V: TransferFormatTryFrom + TransferFormatInto + 'static,
     {
         use core::convert::TryInto;
 
@@ -626,7 +626,7 @@ where C: l2cap::ConnectionChannel
 
     /// Get an arc clone to an attribute value
     fn get_att(&self, handle: u16)
-    -> Result<&super::Attribute<Box<dyn ServerAttribute + Send + Sync>>, pdu::Error>
+    -> Result<&super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error>
     {
         if pdu::is_valid_handle(handle) {
             self.attributes.get(handle).ok_or(pdu::Error::InvalidHandle)
@@ -638,7 +638,7 @@ where C: l2cap::ConnectionChannel
 
     /// Get a arc to an attribute value
     fn get_att_mut(&mut self, handle: u16)
-    -> Result<&mut super::Attribute<Box<dyn ServerAttribute + Send + Sync>>, pdu::Error>
+    -> Result<&mut super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error>
     {
         if pdu::is_valid_handle(handle) {
             self.attributes.get_mut(handle).ok_or(pdu::Error::InvalidHandle)
@@ -658,7 +658,7 @@ where C: l2cap::ConnectionChannel
     /// Returns an error if the client doesn't have the adequate permissions or the handle is
     /// invalid.
     async fn read_att_and<'s,F,A,O>(&'s self, handle: u16, job: F) -> Result<O, pdu::Error>
-    where F: FnOnce(&'s (dyn ServerAttribute + Send + Sync) ) -> A + 's,
+    where F: FnOnce(&'s (dyn ServerAttribute + Send) ) -> A + 's,
           A: Future<Output=O> + 's,
     {
         let attribute = self.get_att(handle)?;
@@ -1166,7 +1166,7 @@ impl<C> AsRef<C> for Server<'_, C> where C: l2cap::ConnectionChannel {
 }
 
 pub struct ServerAttributes {
-    attributes: Vec<super::Attribute<Box<dyn ServerAttribute + Send + Sync>>>
+    attributes: Vec<super::Attribute<Box<dyn ServerAttribute + Send>>>
 }
 
 impl ServerAttributes {
@@ -1184,8 +1184,8 @@ impl ServerAttributes {
     /// # Panic
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
     pub fn push<C,V>(&mut self, attribute: super::Attribute<C>) -> u16
-        where C: ServerAttributeValue<Value = V> + Sized + Send + Sync + 'static,
-              V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
+        where C: ServerAttributeValue<Value = V> + Send + Sized + 'static,
+              V: TransferFormatTryFrom + TransferFormatInto + 'static,
     {
         use core::convert::TryInto;
 
@@ -1195,7 +1195,7 @@ impl ServerAttributes {
             ty: attribute.ty,
             handle: Some(handle),
             permissions: attribute.permissions,
-            value: Box::from(attribute.value) as Box<dyn ServerAttribute + Send + Sync + 'static>
+            value: Box::from(attribute.value) as Box<dyn ServerAttribute + Send + 'static>
         };
 
         self.attributes.push( pushed_att );
@@ -1238,7 +1238,7 @@ impl ServerAttributes {
     /// Get attribute with the given handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
-    fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttribute + Send + Sync>>> {
+    fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttribute + Send>>> {
         match handle {
             0 => None,
             h => self.attributes.get( <usize>::from(h) )
@@ -1249,7 +1249,7 @@ impl ServerAttributes {
     ///
     /// This returns `None` if the handle is 0 or not in attributes
     fn get_mut(&mut self, handle: u16)
-    -> Option<&mut super::Attribute<Box<dyn ServerAttribute + Send + Sync>>>
+    -> Option<&mut super::Attribute<Box<dyn ServerAttribute + Send>>>
     {
         match handle {
             0 => None,
@@ -1264,7 +1264,7 @@ impl Default for ServerAttributes {
     }
 }
 
-pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output=O> + Send + 'a >>;
+pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output=O> + 'a >>;
 
 /// Server Attributes
 ///
@@ -1332,11 +1332,11 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output=O> + Send + 'a >>;
 /// ```
 pub trait ServerAttributeValue {
 
-    type Value: Send + Sync;
+    type Value;
 
     /// Read the value and call `f` with a reference to it.
     fn read_and<'a,F,T>(&'a self, f: F ) -> PinnedFuture<'a,T>
-    where F: FnOnce(&Self::Value) -> T + Send + Sync + Unpin + 'a;
+    where F: FnOnce(&Self::Value) -> T + Unpin + 'a;
 
     /// Write to the value
     fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_,()>;
@@ -1392,12 +1392,12 @@ impl<T,O> Future for NoPend<T> where T: FnOnce() -> O + Unpin{
 }
 
 /// The trivial implementation for ServerAttributeValue
-impl<V> ServerAttributeValue for V where V: PartialEq + Send + Sync + Unpin {
+impl<V> ServerAttributeValue for V where V: PartialEq + Unpin {
 
     type Value = V;
 
     fn read_and<'a,F,T>(&'a self, f: F ) -> PinnedFuture<'a,T>
-    where F: FnOnce(&V) -> T + Send + Sync + Unpin + 'a
+    where F: FnOnce(&V) -> T + Unpin + 'a
     {
         Box::pin(NoPend::new( move || f( self ) ) )
     }
@@ -1418,7 +1418,7 @@ impl<V> ServerAttributeValue for V where V: PartialEq + Send + Sync + Unpin {
 /// A `ServerAttribute` is an attribute that has been added to the `ServerAttributes`. These
 /// functions are designed to abstract away from the type of the attribute value so a
 /// `ServerAttributes` can have a list of boxed `dyn ServerAttribute`.
-trait ServerAttribute: Send + Sync {
+trait ServerAttribute {
 
     /// Read the data
     ///
@@ -1464,8 +1464,8 @@ trait ServerAttribute: Send + Sync {
 }
 
 impl<C, V> ServerAttribute for C
-where C: ServerAttributeValue<Value = V> + Send + Sync,
-      V: TransferFormatTryFrom + TransferFormatInto + Send + Sync,
+where C: ServerAttributeValue<Value = V>,
+      V: TransferFormatTryFrom + TransferFormatInto,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
         self.read_and( |v| TransferFormatInto::into(v) )
@@ -1522,7 +1522,7 @@ where C: ServerAttributeValue<Value = V> + Send + Sync,
 /// handle when creating a new Attribute Bearer
 struct ReservedHandle;
 
-impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send + Sync>> {
+impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send>> {
 
     fn from(_: ReservedHandle) -> Self {
 
