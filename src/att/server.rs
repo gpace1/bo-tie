@@ -176,6 +176,15 @@ impl ServerPduName {
     }
 }
 
+/// Blob data
+///
+/// This is data that is part of a blob request. The handle is the attribute for which the data is
+/// from, and data is the data already converted from
+struct BlobData {
+    handle: u16,
+    blob: Vec<u8>,
+}
+
 /// An Attribute server
 ///
 /// This is an implementation of the server role for the Attribute protocol. A server is made up of
@@ -198,6 +207,43 @@ impl ServerPduName {
 /// [`ServerAttributeValue`](crate::att::server::ServerAttributeValue)
 /// can be implemented on the container to perform concurrency safe reading or writing on the
 /// contained value.
+///
+/// # Blob Data
+/// Data becomes 'blobbed' when it exceeds the maximum payload size for the response. In general,
+/// the response payload is just a few bytes less than the MTU for the connection, but often the MTU
+/// is still the minimum for the L2CAP link layer type. One way to prevent blobbing is to change the
+/// MTU, but the client needs to initiate this with an 'Exchange MTU Request'. Blobbing occurs only
+/// wile reading
+///
+/// When data becomes 'blobbed', this attribute protocol server effectively fragments the data to
+/// the maximum amount of data bytes it can transfer within the response. While a 'blob request' is
+/// not the only way for a request to initiate data blobbing, it is the only way for the client to
+/// continue getting the data of the blob. Blobs last for as long as the client requests for blobs
+/// from the *same* attribute until the final blob is sent from the server. The server determines
+/// the final blob when the last blob sent does not fill up the entire payload space in the response
+/// message. If a client requests for a read operation from another attribute, if and only if that
+/// read would cause blobbing, the previous blob is considered lost. It is safe for the client to
+/// read from other attributes if it knows that the returned response will not trigger blobbing. In
+/// rust terms, calling a blob lost is equivalent to calling the blob dropped.
+///
+/// When data is blobbed, the blob is liberated from the underlying data as changes to the
+/// attribute's data will not modify the blob. This ensures that the client will receive valid blobs
+/// to assemble into data so long as the blob is not lost. If the data is modified, the client must
+/// re-read the attribute from the beginning to get the modified data. However, once a blob is lost,
+/// there is no guarantee that performing a blob request will return a valid blob. When a blob is
+/// lost, it essentially means there is no saved blob information in the server for that handle. The
+/// server must re-read the attribute data to create a new blob, giving no guarantee that the data
+/// stayed the same in between the creation of the lost blob and the new blob.
+///
+/// The following request-response groups will begin data blobbing if the data was too large to
+/// send within one response. No data is blobbed is the response can contain the entire packet.
+/// data.
+/// * Read By Type
+/// * Read
+/// * Read Blob
+/// * Read by group type (unimplemented by `Server` - only implemented by higher layers than ATT )
+///
+/// A read blob request will not return an error
 pub struct Server<'c, C>
 {
     /// The connection channel for sending and receiving data from the Bluetooth controller
@@ -219,14 +265,8 @@ pub struct Server<'c, C>
     /// updated with the full data to be read **whether or not the prior data was fully read by
     /// the client**.
     ///
-    /// The following request-response groups will assign `blob_data` *if the data was too large to
-    /// send within one response*. `blob_data` is not assigned if the response can contain complete
-    /// data.
-    /// * Read By Type
-    /// * Read
-    /// * Read Blob
-    /// * Read by group type
-    blob_data: core::cell::Cell<Vec<u8>>
+    /// See the doc for `Server` for more information on blob data.
+    blob_data: Option<BlobData>
 }
 
 impl<'c, C> Server<'c, C>
@@ -248,7 +288,7 @@ where C: l2cap::ConnectionChannel
             connection_channel: connection,
             attributes,
             given_permissions: Vec::new(),
-            blob_data: core::cell::Cell::default(),
+            blob_data: None,
         }
     }
 
@@ -526,7 +566,9 @@ where C: l2cap::ConnectionChannel
                 self.process_read_by_type_request( TransferFormatTryFrom::try_from(&payload)? )
                     .await,
 
-            pdu @ super::client::ClientPduName::ReadBlobRequest |
+            super::client::ClientPduName::ReadBlobRequest =>
+                self.process_read_blob_request( TransferFormatTryFrom::try_from(&payload)? ).await,
+
             pdu @ super::client::ClientPduName::ReadMultipleRequest |
             pdu @ super::client::ClientPduName::WriteCommand |
             pdu @ super::client::ClientPduName::PrepareWriteRequest |
@@ -651,7 +693,6 @@ where C: l2cap::ConnectionChannel
 
     /// Process a exchange MTU request from the client
     async fn process_exchange_mtu_request(&mut self, client_mtu: u16) {
-        log::trace!("Exchange mtu response");
 
         self.connection_channel.set_mtu(client_mtu);
 
@@ -660,7 +701,6 @@ where C: l2cap::ConnectionChannel
 
     /// Process a Read Request from the client
     async fn process_read_request(&mut self, handle: u16) {
-        log::trace!("Read Request");
 
         match self.read_att_and(handle, |att_tf| att_tf.read_response() ).await {
             Ok(tf) => self.send_pdu(tf).await,
@@ -670,7 +710,6 @@ where C: l2cap::ConnectionChannel
 
     /// Process a Write Request from the client
     async fn process_write_request(&mut self, payload: &[u8]) {
-        log::trace!("Write Request");
 
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from( &payload[..2] ).unwrap();
@@ -683,8 +722,6 @@ where C: l2cap::ConnectionChannel
 
     /// Process a Find Information Request form the client
     async fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) {
-
-        log::trace!("Find Information Request");
 
         /// Handle with UUID iterator
         ///
@@ -885,7 +922,7 @@ where C: l2cap::ConnectionChannel
     }
 
     /// Process Read By Type Request
-    async fn process_read_by_type_request(&self, type_request: pdu::TypeRequest ) {
+    async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest ) {
         use core::cmp::min;
 
         let handle_range = type_request.handle_range;
@@ -943,10 +980,12 @@ where C: l2cap::ConnectionChannel
 
                             let mut rsp = first_val.read_by_type_response( first_handle ).await;
 
-                            // Copy the complete data to the blob_data
-                            self.blob_data.set( (*rsp).clone());
+                            // Copy the complete data to a blob data
+                            let blob_data = BlobData { handle: first_handle, blob: rsp.clone() };
 
-                            // truncate the data in the response to the max size it can be
+                            self.blob_data = blob_data.into();
+
+                            // truncate the data in the response to the max size it can be sent
                             rsp.truncate(max_size);
 
                             responses.push( rsp );
@@ -987,6 +1026,128 @@ where C: l2cap::ConnectionChannel
                 ClientPduName::ReadByTypeRequest,
                 pdu::Error::InvalidHandle
             ).await;
+        }
+    }
+
+    /// Process read blob request
+    async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest) {
+
+        // Check the permissions (`check_permission` also validates the handle)
+        match match self.check_permissions(blob_request.handle, super::FULL_READ_PERMISSIONS)
+        {
+            Ok(_) => {
+
+                // Make a new blob if blob data doesn't exist or the blob handle does not match the
+                // requested for handle
+                let new_blob = self.blob_data.as_ref()
+                    .map(|bd| bd.handle != blob_request.handle)
+                    .unwrap_or_default();
+
+                match (new_blob, blob_request.offset) {
+
+                    // No prior blob or start of new blob
+                    (false, _) | (_, 0) =>
+                        self.create_blob_send_response(&blob_request).await,
+
+                    // Continuing reading prior blob
+                    (true, offset) =>
+                        self.use_blob_send_response(offset).await,
+                }
+            },
+
+            Err(e) => Err(e),
+        } {
+            Err(e) => self.send_error(blob_request.handle, ClientPduName::ReadBlobRequest, e).await,
+
+            _ => (),
+        }
+    }
+
+    /// Create a new blob and send the blob response
+    ///
+    /// This function is a helper function for process read blob request
+    ///
+    /// # Note
+    /// If the entire data payload can be contained within one response then no blob is created.
+    ///
+    /// # Warning
+    /// This does not check permissions for accessibility of the attribute by the client and assumes
+    /// the handle requested is valid
+    #[inline]
+    async fn create_blob_send_response(&mut self, br: &pdu::ReadBlobRequest) -> Result<(), pdu::Error>
+    {
+        let data = self.attributes.get(br.handle).unwrap().get_value().read().await;
+
+        let rsp = match self.new_read_blob_response(&data, br.offset) {
+
+            // when true is returned the data is blobbed
+            Ok((rsp, true)) => {
+
+                self.blob_data = BlobData { handle: br.handle, blob: data.clone(), }.into();
+
+                rsp
+            },
+
+            Ok((rsp, false)) => rsp,
+
+            Err(e) => return Err(e),
+        };
+
+        self.send_pdu(rsp).await;
+
+        Ok(())
+    }
+
+    /// Use the current blob and send the blob response
+    ///
+    /// This function is a helper function for process read blob request
+    ///
+    /// # Note
+    /// If the entire blob was sent to the client, the blob is deleted from `self`.
+    ///
+    /// # Warning
+    /// This does not check permissions for accessibility of the attribute by the client and assumes
+    /// that `blob_data` is `Some(_)`
+    #[inline]
+    async fn use_blob_send_response(&mut self, offset: u16) -> Result<(), pdu::Error>
+    {
+        let data = self.blob_data.as_ref().unwrap();
+
+        match self.new_read_blob_response(&data.blob, offset) {
+
+            Ok((rsp, false)) => {
+
+                self.send_pdu(rsp).await;
+
+                // This is the final piece of the blob
+                self.blob_data = None;
+            }
+
+            Ok((rsp, true)) => self.send_pdu(rsp).await,
+
+            Err(e) => return Err(e),
+        };
+
+        Ok(())
+    }
+
+    /// Create a Read Blob Response
+    ///
+    /// This return is the Read Blob Response with a boolean to indicate if the response payload was
+    /// completely filled with data bytes.
+    #[inline]
+    fn new_read_blob_response<'a>(&self, data: &'a [u8], offset: u16)
+    -> Result< ( pdu::Pdu<pdu::ReadBlobResponse<'a>>, bool), pdu::Error>
+    {
+        let max_payload = self.get_mtu() - 1;
+
+        match offset as usize {
+            o if o > data.len() => Err(pdu::Error::InvalidOffset),
+
+            o if o + max_payload <= data.len() =>
+                Ok( (pdu::ReadBlobResponse::new(&data[o..(o + max_payload)]).into(), true) ),
+
+            o => Ok( (pdu::ReadBlobResponse::new(&data[o..]).into(), false) )
         }
     }
 
@@ -1133,17 +1294,19 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output=O> + Send + 'a >>;
 /// };
 ///
 /// #[async_trait]
-/// impl<V: PartialEq> ServerAttributeValue<V> for SyncAttVal<V> where V: Send + Sync {
+/// impl<V: PartialEq> ServerAttributeValue for SyncAttVal<V> where V: Send + Sync {
 ///
-///     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&V) -> T + Send + Sync {
+///     type Value = V;
+///
+///     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&Self::Value) -> T + Send + Sync {
 ///         f( &self.value.lock().unwrap() )
 ///     }
 ///
-///     async fn write_val(&mut self, val: V) {
+///     async fn write_val(&mut self, val: Self::Value) {
 ///         *self.value.lock().unwrap() = val
 ///     }
 ///
-///     async fn eq(&self, other: &V) -> bool {
+///     async fn eq(&self, other: &Self::Value) -> bool {
 ///         self.read_and(|val| val == other).await
 ///     }
 /// }
@@ -1257,6 +1420,11 @@ impl<V> ServerAttributeValue for V where V: PartialEq + Send + Sync + Unpin {
 /// `ServerAttributes` can have a list of boxed `dyn ServerAttribute`.
 trait ServerAttribute: Send + Sync {
 
+    /// Read the data
+    ///
+    /// The returned data is in its transfer format
+    fn read(&self) -> PinnedFuture<Vec<u8>>;
+
     /// Generate a 'Read Response'
     ///
     /// This will create a read response PDU in its transfer bytes format.
@@ -1299,6 +1467,10 @@ impl<C, V> ServerAttribute for C
 where C: ServerAttributeValue<Value = V> + Send + Sync,
       V: TransferFormatTryFrom + TransferFormatInto + Send + Sync,
 {
+    fn read(&self) -> PinnedFuture<Vec<u8>> {
+        self.read_and( |v| TransferFormatInto::into(v) )
+    }
+
     fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<Vec<u8>>> {
         self.read_and( |v| pdu::read_response( TransferFormatInto::into(v) ) )
     }
@@ -1363,6 +1535,12 @@ impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send + 
 }
 
 impl ServerAttribute for ReservedHandle {
+
+    fn read(&self) -> PinnedFuture<Vec<u8>> {
+        log::error!("Tried to read the reserved handle");
+
+        Box::pin( async { Vec::new() } )
+    }
 
     fn read_response(&self) -> PinnedFuture<'_,pdu::Pdu<Vec<u8>>> {
         Box::pin( async {

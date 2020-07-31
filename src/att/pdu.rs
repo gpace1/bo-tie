@@ -963,12 +963,12 @@ pub fn read_response<D>( value: D ) -> Pdu<D>{
 }
 
 #[derive(Clone)]
-pub struct BlobRequest {
-    handle: u16,
-    offset: u16
+pub struct ReadBlobRequest {
+    pub handle: u16,
+    pub offset: u16
 }
 
-impl TransferFormatTryFrom for BlobRequest {
+impl TransferFormatTryFrom for ReadBlobRequest {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
         if raw.len() == 4 {
             Ok(Self {
@@ -981,7 +981,7 @@ impl TransferFormatTryFrom for BlobRequest {
     }
 }
 
-impl TransferFormatInto for BlobRequest {
+impl TransferFormatInto for ReadBlobRequest {
 
     fn len_of_into(&self) -> usize { 4 }
 
@@ -991,45 +991,42 @@ impl TransferFormatInto for BlobRequest {
     }
 }
 
-pub fn read_blob_request( handle: u16, offset: u16) -> Pdu<BlobRequest> {
+pub fn read_blob_request( handle: u16, offset: u16) -> Pdu<ReadBlobRequest> {
     Pdu {
         opcode: From::from(ClientPduName::ReadBlobRequest),
-        parameters: BlobRequest { handle, offset },
+        parameters: ReadBlobRequest { handle, offset },
         signature: None,
     }
 }
 
-pub struct ReadBlobResponse<'a,D> {
-    value: &'a D,
-    offset: usize,
-    att_mtu: usize,
+/// Read Blob Response
+///
+/// A blob of data sent from the server to the client. Unusable by the client because value is a
+/// reference so this is not a public structure
+pub(crate) struct ReadBlobResponse<'a> {
+    blob: &'a [u8],
 }
 
-impl<D> TransferFormatInto for ReadBlobResponse<'_,D> where D: TransferFormatInto {
+impl<'a> ReadBlobResponse<'a> {
+    pub(crate) fn new(blob: &'a [u8]) -> Self {
+        Self { blob }
+    }
+}
 
-    /// Get the length of the value
-    ///
-    /// Unfortunately this isn't the length of the data to be transferred, it is instead the length
-    /// of the entire transfer value.
+impl TransferFormatInto for ReadBlobResponse<'_> {
+
     fn len_of_into(&self) -> usize {
-        let rest_len = self.value.len_of_into() - self.offset;
-
-        if rest_len > self.att_mtu { self.att_mtu } else { rest_len }
+        self.blob.len()
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        let data_bytes = self.value.into();
-
-        into_ret.copy_from_slice(&data_bytes[self.offset..self.len_of_into()])
+        into_ret.copy_from_slice(self.blob)
     }
 }
 
-pub fn read_blob_response<D>( value: &D, offset: usize, att_mtu: usize ) -> Pdu<ReadBlobResponse<'_, D>>
-{
-    Pdu {
-        opcode: From::from(ServerPduName::ReadBlobResponse),
-        parameters: ReadBlobResponse { value, offset, att_mtu },
-        signature: None,
+impl<'a> From<ReadBlobResponse<'a>> for Pdu<ReadBlobResponse<'a>> {
+    fn from(rbr: ReadBlobResponse<'a>) -> Self {
+        Self::new(ServerPduName::ReadBlobResponse.into(), rbr, None)
     }
 }
 
