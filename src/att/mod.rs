@@ -62,6 +62,61 @@ use alloc::{
 
 use crate::l2cap;
 
+pub mod client;
+pub mod server;
+
+//==================================================================================================
+// Macros that are used within submodules
+//==================================================================================================
+
+/// Implement transfer format for Vec<$data_type>.
+///
+/// $data_type must have a constant size for the transfer format. The second input `$data_size` is
+/// an optional input for the size of the transfer format of $data_type. If `$data_size` is omitted
+/// then the size is inferred from the `core::mem::size_of` method.
+macro_rules! impl_transfer_format_for_vec_of {
+
+    ($data_type: ty, $data_size: expr) => {
+
+        impl TransferFormatTryFrom for Vec<$data_type> {
+            fn try_from(raw: &[u8]) -> Result<Self, crate::att::TransferFormatError> {
+                raw.chunks($data_size)
+                    .try_fold(Vec::new(), |mut v, chunk| {
+                        v.push( <$data_type as TransferFormatTryFrom>::try_from(chunk)? );
+                        Ok(v)
+                    })
+            }
+        }
+
+        impl TransferFormatInto for Vec<$data_type>
+        {
+            fn len_of_into(&self) -> usize {
+                self.iter().map(|t| t.len_of_into()).sum()
+            }
+
+            fn build_into_ret(&self, into_ret: &mut [u8]) {
+                self.iter().fold(0usize, |start,t| {
+                    let end: usize = start + t.len_of_into();
+
+                    t.build_into_ret(&mut into_ret[start..end]);
+
+                    end
+                } );
+            }
+        }
+    };
+
+    ($data_type: ty) => {
+        impl_transfer_format_for_vec_of! { $data_type, core::mem::size_of::<$data_type>() }
+    };
+}
+
+//==================================================================================================
+// Submodules that use the above macros
+//==================================================================================================
+
+pub mod pdu;
+
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
 
@@ -445,48 +500,6 @@ pub trait TransferFormatInto {
 
         buff
     }
-}
-
-/// Implement transfer format for Vec<$data_type>.
-///
-/// $data_type must have a constant size for the transfer format. The second input `$data_size` is
-/// an optional input for the size of the transfer format of $data_type. If `$data_size` is omitted
-/// then the size is inferred from the `core::mem::size_of` method.
-macro_rules! impl_transfer_format_for_vec_of {
-
-    ($data_type: ty, $data_size: expr) => {
-
-        impl TransferFormatTryFrom for Vec<$data_type> {
-            fn try_from(raw: &[u8]) -> Result<Self, crate::att::TransferFormatError> {
-                raw.chunks($data_size)
-                    .try_fold(Vec::new(), |mut v, chunk| {
-                        v.push( <$data_type as TransferFormatTryFrom>::try_from(chunk)? );
-                        Ok(v)
-                    })
-            }
-        }
-
-        impl TransferFormatInto for Vec<$data_type>
-        {
-            fn len_of_into(&self) -> usize {
-                self.iter().map(|t| t.len_of_into()).sum()
-            }
-
-            fn build_into_ret(&self, into_ret: &mut [u8]) {
-                self.iter().fold(0usize, |start,t| {
-                    let end: usize = start + t.len_of_into();
-
-                    t.build_into_ret(&mut into_ret[start..end]);
-
-                    end
-                } );
-            }
-        }
-    };
-
-    ($data_type: ty) => {
-        impl_transfer_format_for_vec_of! { $data_type, core::mem::size_of::<$data_type>() }
-    };
 }
 
 /// Implements transfer format for the given
@@ -1038,7 +1051,3 @@ mod test {
         );
     }
 }
-
-pub mod pdu;
-pub mod client;
-pub mod server;

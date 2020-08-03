@@ -184,7 +184,7 @@ fn main() {
                 executor::block_on(disconnect(&host_interface, data.connection_handle));
 
                 // its weird to remove the device from the white list here, but because this is an example
-                // and you're probably connecting with some test device you don't probably want this
+                // and you're probably connecting with some tests device you don't probably want this
                 // device in your whitelist.
                 executor::block_on(remove_from_white_list(&host_interface, address));
             }

@@ -15,7 +15,7 @@
 extern crate alloc;
 extern crate bincode as serializer;
 
-// test related
+// tests related
 #[cfg(test)]
 extern crate test;
 pub mod att;

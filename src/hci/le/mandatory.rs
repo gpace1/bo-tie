@@ -597,12 +597,6 @@ pub mod set_event_mask {
     /// # #[derive(Debug)]
     /// # pub struct ReceiveError;
     /// #
-    /// # impl bo_tie::hci::Timeout for ReceiveError {
-    /// #     fn timeout_occurred(&self) -> bool {
-    /// #         unimplemented!()
-    /// #     }
-    /// # }
-    /// #
     /// # impl core::fmt::Display for ReceiveError {
     /// #     fn fmt(&self,f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
     /// #     {
@@ -622,7 +616,7 @@ pub mod set_event_mask {
     /// #         Ok(true)
     /// #     }
     /// #
-    /// #     fn receive_event<P>(&self, _: Option<events::Events>, _: &Waker, _: Pin<Arc<P>>, _: Option<Duration>)
+    /// #     fn receive_event<P>(&self, _: Option<events::Events>, _: &Waker, _: Pin<Arc<P>> )
     /// #     -> Option<Result<events::EventsData, Self::ReceiveEventError>>
     /// #     where P: EventMatcher + Send + Sync + 'static,
     /// #     {
@@ -715,7 +709,7 @@ pub mod test_end {
     }
 
     /// This will return a future with its type 'Output' being the number of packets
-    /// received during what ever test was done
+    /// received during what ever tests was done
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface

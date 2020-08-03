@@ -1,3 +1,36 @@
+//! Attribute Server
+//!
+//! The attribute server for this library is dynamic. It utilizes trait objects for the attribute
+//! data with the only requirements that the data implement
+//! [`TransferFormatInto`](crate::att:TransferFormatInto), and
+//! [`TransferFormatTryFrom`](crate::att::TransferFormatTryFrom). The server organizes the data as
+//! a vectored list, all attributes are forced into a consecutive order. The client can query the
+//! server using the requests specified within the specification (V 5.0, vol 3 part F section 3.4)
+//! except for 'Read By Group Type Request' as groups are not specified by the attribute server.
+//!
+//! Creating a `Server` requires two things, a L2CAP
+//! [`ConnectionChannel`](crate::l2cap::ConnectionChannel) and a
+//! [`ServerAttributes`](crate::att::server::ServerAttributes). A `ConnectionChannel` comes from
+//! something that implements a data link layer, in this library you can create them in the Host
+//! Controller Interface from a
+//! [`HostInterface`](crate::hci::HostInterface). `ServerAttributes` is the actual list of
+//! attributes in the server. Its implemented so that any type of data is accepted so long as the
+//! data type implements `TransferFormatInto` and `TransferFormatTryFrom` and is wrapped within the
+//! type
+//! [`ServerAttributeValue`](crate::att::server::ServerAttributeValue).
+//!
+//! A `Server` does not implement the marker trait `Sync`, meaning it cannot be shared between
+//! threads. There is too many states within a server for a `Server` to be designed to be `Sync`.
+//! Instead of one `Server` being used for all connections, there is instead a `Server` for each
+//! connection (although there is nothing stopping you from using multiple servers for a connection,
+//! its undefined behaviour if you do it). Data can be shared between multiple `Servers` but it
+//! needs to be `Send` + `Sync`, which generally requires some synchronization primitives. The
+//! point of `ServerAttributeValue` is to provide a synchronization container around a data so that
+//! it can be used between multiple servers.
+
+
+#[cfg(test)] mod tests;
+
 use alloc::{
     vec::Vec,
     boxed::Box,
@@ -1282,32 +1315,33 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output=O> + 'a >>;
 /// ['TransferFormatInto`](crate::att:TransferFormatInto). However if you want to implement
 /// locking or reference counting of the value, you will need to implmenent `ServerAttributeValue`.
 /// ```
-/// use std::sync::{Arc, Mutex};
+/// use std::sync::{Arc};
 /// use std::borrow::Borrow;
 /// use bo_tie::att::{Attribute, server::ServerAttributeValue};
-/// use bo_tie::att::server::ServerAttributes;
-/// use async_trait::async_trait;
+/// use bo_tie::att::server::{ServerAttributes, PinnedFuture};
+/// use futures::lock::Mutex;
 ///
 /// #[derive(Default)]
 /// struct SyncAttVal<V> {
 ///     value: Arc<Mutex<V>>
 /// };
 ///
-/// #[async_trait]
-/// impl<V: PartialEq> ServerAttributeValue for SyncAttVal<V> where V: Send + Sync {
+/// impl<V: PartialEq> ServerAttributeValue for SyncAttVal<V> {
 ///
 ///     type Value = V;
 ///
-///     async fn read_and<F,T>(&self, f: F ) -> T where F: Fn(&Self::Value) -> T + Send + Sync {
-///         f( &self.value.lock().unwrap() )
+///     fn read_and<'a,F,T>(&'a self, f: F ) -> PinnedFuture<'a,T>
+///     where F: FnOnce(&Self::Value) -> T + Unpin + 'a
+///     {
+///         Box::pin( async move { f( &*self.value.lock().await ) } )
 ///     }
 ///
-///     async fn write_val(&mut self, val: Self::Value) {
-///         *self.value.lock().unwrap() = val
+///     fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_,()> {
+///         Box::pin( async move { *self.value.lock().await = val } )
 ///     }
 ///
-///     async fn eq(&self, other: &Self::Value) -> bool {
-///         self.read_and(|val| val == other).await
+///     fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a,bool> {
+///         Box::pin( async move { &*self.value.lock().await == other } )
 ///     }
 /// }
 ///
@@ -1582,384 +1616,5 @@ impl ServerAttribute for ReservedHandle {
 
     fn cmp_value_to_raw_transfer_format(&self, _: &[u8] ) -> PinnedFuture<'_,bool> {
         Box::pin( async { false } )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    mod permission_tests {
-        use crate::{
-            att::{
-                *,
-                server::*
-            },
-            l2cap::AclDataFragment,
-            UUID,
-        };
-        use tinymt::TinyMT64;
-        use std::{
-            mem::MaybeUninit,
-            ops::{Deref, DerefMut},
-            sync::{
-                Arc,
-                Mutex,
-                atomic::{AtomicUsize, Ordering},
-            },
-            task::Waker,
-        };
-        use crate::l2cap::MinimumMtu;
-
-        const ALL_ATT_PERM_SIZE: usize = 12;
-
-        const MAX_VEC_SIZE: usize = 10_000;
-
-        type AllAttributePermissions = [AttributePermissions; ALL_ATT_PERM_SIZE];
-
-        #[derive(Debug)]
-        struct PermVec {
-            len: usize,
-            permissions: MaybeUninit<AllAttributePermissions>,
-        }
-
-        impl PermVec {
-            fn new() -> Self { Self { len: 0, permissions: MaybeUninit::uninit() } }
-
-            /// Push an item, panics if `self.len > size_of<AllAttributePermissions>()`
-            fn push(&mut self, p: AttributePermissions) {
-                unsafe { (*self.permissions.as_mut_ptr())[self.len] = p };
-                self.len += 1;
-            }
-        }
-
-        impl From<&'_ [AttributePermissions]> for PermVec {
-            fn from(ap: &[AttributePermissions]) -> Self {
-                let mut permissions: MaybeUninit<AllAttributePermissions> = MaybeUninit::uninit();
-
-                let perm_ref = unsafe { &mut *permissions.as_mut_ptr() };
-
-                perm_ref[..ap.len()].copy_from_slice(ap);
-
-                Self { len: ap.len(), permissions }
-            }
-        }
-
-        impl Deref for PermVec {
-            type Target = [AttributePermissions];
-
-            fn deref(&self) -> &Self::Target {
-                unsafe { &(*self.permissions.as_ptr())[..self.len] }
-            }
-        }
-
-        impl DerefMut for PermVec {
-            fn deref_mut(&mut self) -> &mut Self::Target {
-                unsafe { &mut (*self.permissions.as_mut_ptr())[..self.len] }
-            }
-        }
-
-        /// Calculate factorial, panics on overflow
-        fn factorial(v: usize) -> usize { (2..=v).fold(1, |c, v| c * v) }
-
-        fn permutations(n: usize, r: usize) -> usize { factorial(n) / factorial(n - r) }
-
-        fn all_sized_permutations_cnt(list_size: usize) -> usize {
-            (0..=list_size).fold(0, |c, k| c + permutations(list_size, k))
-        }
-
-        /// This returns a boolean indicating if the permission should be added to the set of
-        /// permissions to be tested.
-        ///
-        /// This generates a random integer between 0 up to `chance_max`. If the randomly generated
-        /// number is 0 then this function returns true.
-        ///
-        /// This function is a helper function for `permutation_step`.
-        ///
-        /// An implementation of the Mersenne Twister is used to generate the 'random' chance.
-        fn add_permission_set(rng: Arc<Mutex<tinymt::TinyMT64>>, chance_max: usize) -> bool {
-            use rand::Rng;
-
-            if chance_max != 0 {
-                0 == rng.lock().unwrap().gen_range(0, chance_max)
-            } else {
-                true
-            }
-        }
-
-        /// This is used to calculate if an entire recursion branch should be skipped.
-        ///
-        /// This calculates the odds where every generated set of permissions by a recursion branch
-        /// would not be included as part of a returned set. The point of this is to speed up the
-        /// function `permutation_step` by reducing the number of recursion calls made.
-        ///
-        /// The input `do_not_add_chance_max` is the upward bound when generating a random number in
-        ///  a range between zero and it. When zero is the randomly generated number, then it would
-        /// indicate that the permission set would not be added to the list of generated
-        /// permissions.
-        fn do_recursion_branch(
-            rng: Arc<Mutex<tinymt::TinyMT64>>,
-            do_not_add_chance_max: f64,
-            perms_size: usize,
-            step_size: usize,
-        ) -> bool {
-            use rand::Rng;
-
-            // the exponent for calculating the odds that no members of a branch are added to the
-            // eventual test list.
-            let exponent =
-                (1..=(perms_size-step_size))
-                .fold(0usize, |exp, s_size| exp + permutations(perms_size, s_size) );
-
-            let v = match std::convert::TryFrom::try_from(exponent) {
-                Ok(exp) => do_not_add_chance_max.powi(exp),
-                Err(_)  => do_not_add_chance_max.powf(exponent as f64),
-            };
-
-            if v <= 1000f64 {
-                // boost numbers by 100_000 for resolution in the random number generation
-                let max = (v * 100_000f64) as usize;
-
-                100_000 < rng.lock().unwrap().gen_range(0, max)
-            } else if v >= (u64::MAX as f64) {
-                true
-            } else {
-                0 != rng.lock().unwrap().gen_range(0, v as u64)
-            }
-        }
-
-        fn permutation_step(
-            permutations: Arc<Mutex<Vec<PermVec>>>,
-            perms: &[AttributePermissions],
-            step: &[AttributePermissions],
-            rand_generator: Arc<Mutex<tinymt::TinyMT64>>,
-            add_chance_max: usize,
-            do_not_add_chance_max: f64,
-            added_cnt: Arc<AtomicUsize>,
-        ) {
-            use rayon::prelude::*;
-
-            perms.par_iter().enumerate().for_each(|(cnt, permission)| {
-
-                if added_cnt.load(Ordering::Acquire) >= MAX_VEC_SIZE { return }
-
-                let step_permutation = {
-                    let mut s = PermVec::from(step);
-                    s.push(*permission);
-                    s
-                };
-
-                if do_recursion_branch(
-                    rand_generator.clone(),
-                    do_not_add_chance_max,
-                    ALL_ATT_PERM_SIZE,
-                    step_permutation.len())
-                {
-                    let rotated_perms = {
-                        let mut v = PermVec::from(perms);
-                        v.rotate_left(cnt);
-                        v
-                    };
-
-                    permutation_step(
-                        permutations.clone(),
-                        &rotated_perms[1..],
-                        &step_permutation,
-                        rand_generator.clone(),
-                        add_chance_max,
-                        do_not_add_chance_max,
-                        added_cnt.clone(),
-                    );
-                }
-
-                if add_permission_set(rand_generator.clone(), add_chance_max) &&
-                    added_cnt.fetch_add(1, Ordering::Release) < MAX_VEC_SIZE
-                {
-                    permutations.lock().unwrap().push(step_permutation);
-                }
-            });
-        }
-
-        fn permissions_permutations(all_permissions: &AllAttributePermissions) -> Vec<PermVec> {
-            use rand::SeedableRng;
-
-            let all_permutations = all_sized_permutations_cnt(all_permissions.len());
-
-
-            let add_chance_max = all_permutations / MAX_VEC_SIZE;
-
-            let do_not_add_chance_max =
-                all_permutations as f64 / (all_permutations - MAX_VEC_SIZE) as f64;
-
-            let output = Arc::new(Mutex::new(Vec::with_capacity(MAX_VEC_SIZE)));
-
-            let tiny_mt_64 = Arc::new(Mutex::new(TinyMT64::from_entropy()));
-
-            // Determine whether to add the empty set or not.
-            let cnt = if add_permission_set(tiny_mt_64.clone(), add_chance_max) {
-                output.lock().unwrap().push(PermVec::new());
-
-                Arc::new(AtomicUsize::new(1))
-            } else {
-                Arc::new(AtomicUsize::default())
-            };
-
-            permutation_step(
-                output.clone(),
-                all_permissions,
-                &[],
-                tiny_mt_64,
-                add_chance_max,
-                do_not_add_chance_max,
-                cnt.clone(),
-            );
-
-            Arc::try_unwrap(output).unwrap().into_inner().unwrap()
-        }
-
-        fn expected_permissions_result(
-            operation_permissions: &[AttributePermissions],
-            attribute_permissions: &[AttributePermissions],
-            client_permissions: &[AttributePermissions],
-        ) -> Result<(), pdu::Error>
-        {
-            use AttributePermissions::*;
-            use AttributeRestriction::{Encryption, Authorization, Authentication};
-            use EncryptionKeySize::*;
-
-            match operation_permissions.iter().find(|&&op|
-                attribute_permissions.iter().find(|&&ap| ap == op).is_some() &&
-                    client_permissions.iter().find(|&&cp| cp == op).is_some()
-            ) {
-                Some(_) => Ok(()),
-                None =>
-                    Err(match operation_permissions.iter()
-                        .find(|&p| attribute_permissions.contains(p))
-                    {
-                        Some(Read(AttributeRestriction::None)) => pdu::Error::ReadNotPermitted,
-
-                        Some(Write(AttributeRestriction::None)) => pdu::Error::WriteNotPermitted,
-
-                        Some(Read(Encryption(_))) =>
-                            if client_permissions.contains(&Read(Encryption(Bits128))) ||
-                                client_permissions.contains(&Read(Encryption(Bits192))) ||
-                                client_permissions.contains(&Read(Encryption(Bits256)))
-                            {
-                                pdu::Error::InsufficientEncryptionKeySize
-                            } else {
-                                pdu::Error::InsufficientEncryption
-                            },
-
-                        Some(Write(Encryption(_))) =>
-                            if client_permissions.contains(&Write(Encryption(Bits128))) ||
-                                client_permissions.contains(&Write(Encryption(Bits192))) ||
-                                client_permissions.contains(&Write(Encryption(Bits256)))
-                            {
-                                pdu::Error::InsufficientEncryptionKeySize
-                            } else {
-                                pdu::Error::InsufficientEncryption
-                            },
-
-                        Some(Read(Authentication)) |
-                        Some(Write(Authentication)) =>
-                            pdu::Error::InsufficientAuthentication,
-
-                        Some(Read(Authorization)) |
-                        Some(Write(Authorization)) |
-                        None =>
-                            pdu::Error::InsufficientAuthorization,
-                    }
-                ),
-            }
-        }
-
-        /// This is an 'entropy' test as it doesn't test every permission combination between
-        /// server operations, client granted permissions, and the permissions of the attributes
-        /// themselves. It selects a random number of permissions (up to 10k, but probably 10k) and
-        /// tests only those. Every time this test is run it is highly, highly, highly likely that
-        /// the sets of tested permissions are different. Re-running the test will probably produce
-        /// different results.
-        #[test]
-        #[cfg(target_pointer_width = "64")]
-        #[ignore]
-        fn check_permissions_entropy_test() {
-            use AttributePermissions::*;
-            use AttributeRestriction::*;
-            use EncryptionKeySize::*;
-            use rayon::prelude::*;
-
-            let all_permissions: AllAttributePermissions = [
-                Read(None),
-                Read(Encryption(Bits128)),
-                Read(Encryption(Bits192)),
-                Read(Encryption(Bits256)),
-                Read(Authentication),
-                Read(Authorization),
-                Write(None),
-                Write(Encryption(Bits128)),
-                Write(Encryption(Bits192)),
-                Write(Encryption(Bits256)),
-                Write(Authentication),
-                Write(Authorization),
-            ];
-
-            struct DummyConnection;
-
-            impl crate::l2cap::ConnectionChannel for DummyConnection {
-                fn send(&self, _: crate::l2cap::AclData) -> crate::l2cap::SendFut {
-                    crate::l2cap::SendFut::new(true)
-                }
-
-                fn set_mtu(&self, _: u16) {}
-
-                fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
-
-                fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
-
-                fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
-
-                fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> { Some(Vec::new()) }
-            }
-
-            let all_tested_permission_permutations = &permissions_permutations(&all_permissions);
-
-            let mut server_attributes = ServerAttributes::default();
-
-             all_tested_permission_permutations.iter().for_each(|permissions| {
-                let attribute = Attribute::new(UUID::from(1u16), permissions.to_vec(), ());
-
-                server_attributes.push(attribute);
-            });
-
-            let mut server = Server::new(&DummyConnection, server_attributes);
-
-            all_tested_permission_permutations.iter().for_each(|perm_client| {
-
-                server.revoke_permissions_of_client(all_permissions.as_ref());
-
-                server.give_permissions_to_client(perm_client.as_ref());
-
-                all_tested_permission_permutations.par_iter().for_each(|perm_op| {
-                    all_tested_permission_permutations.iter().enumerate().for_each(|(cnt, perm_att)| {
-
-                        // 'cnt + 1' because attributes start at handle 1
-                        let calculated = server.check_permissions((cnt + 1) as u16, perm_op);
-
-                        let expected = expected_permissions_result(&perm_op, &perm_att, &perm_client);
-
-                        assert_eq!(
-                            expected,
-                            calculated,
-                            "Permissions check failed, mismatch in return\n\
-                            (Please note: this test is a comparison between two algorithms, and the \
-                            expected result may be incorrect)\n\n\
-                            Operation permissions {:#?}\nAttribute permissions {:#?}\n\
-                            Client permissions {:#?}",
-                            perm_op.to_vec(),
-                            perm_att.to_vec(),
-                            perm_client.to_vec()
-                        );
-                    });
-                });
-            })
-        }
     }
 }
