@@ -5,12 +5,10 @@ use crate::{
         *,
         server::*
     },
-    l2cap::{AclDataFragment, MinimumMtu},
     UUID,
 };
 use tinymt::TinyMT64;
 use std::{
-    cell::RefCell,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     sync::{
@@ -18,7 +16,6 @@ use std::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    task::Waker,
 };
 use super::DummyConnection;
 

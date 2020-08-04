@@ -526,8 +526,11 @@ where C: l2cap::ConnectionChannel
     /// function will then process the request and send to the client the appropriate response
     /// packet.
     ///
-    /// An error will be returned based on the following:
-    /// * The input acl_packet did not contain
+    /// This function is a combination of the methods
+    /// [`parse_acl_packet`](crate::att::server::Server::parse_acl_packet) and
+    /// [`process_parsed_acl_data`](crate::att::server::Server::process_parsed_acl_data). It is
+    /// recommended to use this function over those two functions when this `Server` is at the top
+    /// of your server stack (you're not using GATT or some other custom higher layer protocol).
     pub async fn process_acl_data(&mut self, acl_packet: &crate::l2cap::AclData )
     -> Result<(), super::Error>
     {
@@ -542,6 +545,12 @@ where C: l2cap::ConnectionChannel
     /// * The ACL packet has the correct channel identifier for the Attribute Protocol
     /// * The payload of the packet is not empty
     /// * The pdu type is a [`ClientPduName`](super::client::ClientPduName) enum
+    ///
+    /// # Note
+    /// This is meant to be used by implementations of higher layer protocols for interfacing with
+    /// the attribute protocol. Use
+    /// [`process_acl_data`](crate::att::server::Server::process_acl_data) when directly using this
+    /// server for communication with a client device.
     pub fn parse_acl_packet<'a>(&self, acl_packet: &'a crate::l2cap::AclData)
     -> Result<(super::client::ClientPduName, &'a [u8]), super::Error>
     {
@@ -573,6 +582,12 @@ where C: l2cap::ConnectionChannel
     /// (really `process_acl_data` is just `parse_acl_packet` followed by this function) and is
     /// useful for higher layer protocols that need to parse an ACL packet before performing their
     /// own calculations on the data and *then* have the Attribute server processing the data.
+    ///
+    /// # Note
+    /// This is meant to be used by implementations of higher layer protocols for interfacing with
+    /// the attribute protocol. Use
+    /// [`process_acl_data`](crate::att::server::Server::process_acl_data) when directly using this
+    /// server for communication with a client device.
     pub async fn process_parsed_acl_data(&mut self, pdu_type: super::client::ClientPduName, payload: &[u8])
     -> Result<(), super::Error>
     {
@@ -1072,11 +1087,11 @@ where C: l2cap::ConnectionChannel
 
                 // Make a new blob if blob data doesn't exist or the blob handle does not match the
                 // requested for handle
-                let new_blob = self.blob_data.as_ref()
-                    .map(|bd| bd.handle != blob_request.handle)
+                let use_old_blob = self.blob_data.as_ref()
+                    .map(|bd| bd.handle == blob_request.handle)
                     .unwrap_or_default();
 
-                match (new_blob, blob_request.offset) {
+                match (use_old_blob, blob_request.offset) {
 
                     // No prior blob or start of new blob
                     (false, _) | (_, 0) =>
@@ -1111,19 +1126,17 @@ where C: l2cap::ConnectionChannel
     {
         let data = self.attributes.get(br.handle).unwrap().get_value().read().await;
 
-        let rsp = match self.new_read_blob_response(&data, br.offset) {
+        let rsp = match self.new_read_blob_response(&data, br.offset)? {
 
             // when true is returned the data is blobbed
-            Ok((rsp, true)) => {
+            (rsp, true) => {
 
                 self.blob_data = BlobData { handle: br.handle, blob: data.clone(), }.into();
 
                 rsp
             },
 
-            Ok((rsp, false)) => rsp,
-
-            Err(e) => return Err(e),
+            (rsp, false) => rsp,
         };
 
         self.send_pdu(rsp).await;
@@ -1146,9 +1159,9 @@ where C: l2cap::ConnectionChannel
     {
         let data = self.blob_data.as_ref().unwrap();
 
-        match self.new_read_blob_response(&data.blob, offset) {
+        match self.new_read_blob_response(&data.blob, offset)? {
 
-            Ok((rsp, false)) => {
+            (rsp, false) => {
 
                 self.send_pdu(rsp).await;
 
@@ -1156,9 +1169,7 @@ where C: l2cap::ConnectionChannel
                 self.blob_data = None;
             }
 
-            Ok((rsp, true)) => self.send_pdu(rsp).await,
-
-            Err(e) => return Err(e),
+            (rsp, true) => self.send_pdu(rsp).await,
         };
 
         Ok(())
