@@ -27,7 +27,44 @@
 //! needs to be `Send` + `Sync`, which generally requires some synchronization primitives. The
 //! point of `ServerAttributeValue` is to provide a synchronization container around a data so that
 //! it can be used between multiple servers.
-
+//!
+//! # Data Blobbing
+//! Data becomes 'blobbed' when a response to a read request meets or exceeds the maximum payload
+//! size (MTU) of the connection. One way to prevent this is to change the MTU, but the client needs
+//! to initiate this change with an 'Exchange MTU Request'. Regardless of what MTU value the
+//! connection has currently agreed to, whenever the server sends a response that contains the MTU
+//! number of bytes, the client may need to assume that more bytes are to be sent. But blobbing can
+//! only for certain request, and sometimes only with special conditions. This table gives the
+//! conditions for what read request will initiate blobbing.
+//!
+//! | Request            | Circumstances for data blobbing |
+//! |--------------------|-------------------------------------------------------------------------|
+//! | Read By Type       | The Read By Type Response contains only one element and the size of the response is the same as the connection MTU. |
+//! | Read               | The size of the Read Response is the same as the connection MTU         |
+//! | Read Blob          | The size of the Read Blob Response is the same as the connection MTU    |
+//! | Read By Group Type | The Read By Group Type Response contains only one element and the size of the response is the same as the connection MTU. 'Read By Group Type' is only implemented by a higher layer protocol, so these rules may change depending on the protocols implementation.    |
+//!
+//! Blobbing is effectively fragmenting the data over multiple responses. While a 'blob request' is
+//! not the only way for a request to initiate data blobbing, it is the only way for the client to
+//! continue getting the data fragments of the blob. Blobs last for as long as the client requests
+//! for blobs from the *same* attribute until the final blob is sent from the server. The server
+//! determines the final blob when the last blob sent does not fill up the entire payload space in
+//! the response message. If a client requests for a read operation from another attribute, if and
+//! only if that read would cause blobbing, the previous blob is considered lost. It is safe for the
+//! client to read from other attributes if it knows that the returned response will not trigger
+//! blobbing. In rust terms, calling a blob lost is equivalent to saying the blob dropped.
+//!
+//! When data is blobbed, the blob is liberated from the underlying data as changes to the
+//! attribute's data will not modify the blob. This ensures that the client will receive valid blobs
+//! to assemble into data so long as the blob is not lost. If the data is modified, the client must
+//! re-read the attribute from the beginning to get the modified data. However, once a blob is lost,
+//! there is no guarantee that performing a blob request will return a valid blob. When a blob is
+//! lost, it essentially means there is no saved blob information in the server for that handle. The
+//! server must re-read the attribute data to create a new blob, giving no guarantee that the data
+//! stayed the same in between the creation of the lost blob and the new blob.
+//!
+//! The client does not need to send 'Read Blob Requests' until the entire blob is received by the
+//! client.
 
 #[cfg(test)] mod tests;
 
@@ -240,43 +277,6 @@ struct BlobData {
 /// [`ServerAttributeValue`](crate::att::server::ServerAttributeValue)
 /// can be implemented on the container to perform concurrency safe reading or writing on the
 /// contained value.
-///
-/// # Blob Data
-/// Data becomes 'blobbed' when it exceeds the maximum payload size for the response. In general,
-/// the response payload is just a few bytes less than the MTU for the connection, but often the MTU
-/// is still the minimum for the L2CAP link layer type. One way to prevent blobbing is to change the
-/// MTU, but the client needs to initiate this with an 'Exchange MTU Request'. Blobbing occurs only
-/// wile reading
-///
-/// When data becomes 'blobbed', this attribute protocol server effectively fragments the data to
-/// the maximum amount of data bytes it can transfer within the response. While a 'blob request' is
-/// not the only way for a request to initiate data blobbing, it is the only way for the client to
-/// continue getting the data of the blob. Blobs last for as long as the client requests for blobs
-/// from the *same* attribute until the final blob is sent from the server. The server determines
-/// the final blob when the last blob sent does not fill up the entire payload space in the response
-/// message. If a client requests for a read operation from another attribute, if and only if that
-/// read would cause blobbing, the previous blob is considered lost. It is safe for the client to
-/// read from other attributes if it knows that the returned response will not trigger blobbing. In
-/// rust terms, calling a blob lost is equivalent to calling the blob dropped.
-///
-/// When data is blobbed, the blob is liberated from the underlying data as changes to the
-/// attribute's data will not modify the blob. This ensures that the client will receive valid blobs
-/// to assemble into data so long as the blob is not lost. If the data is modified, the client must
-/// re-read the attribute from the beginning to get the modified data. However, once a blob is lost,
-/// there is no guarantee that performing a blob request will return a valid blob. When a blob is
-/// lost, it essentially means there is no saved blob information in the server for that handle. The
-/// server must re-read the attribute data to create a new blob, giving no guarantee that the data
-/// stayed the same in between the creation of the lost blob and the new blob.
-///
-/// The following request-response groups will begin data blobbing if the data was too large to
-/// send within one response. No data is blobbed is the response can contain the entire packet.
-/// data.
-/// * Read By Type
-/// * Read
-/// * Read Blob
-/// * Read by group type (unimplemented by `Server` - only implemented by higher layers than ATT )
-///
-/// A read blob request will not return an error
 pub struct Server<'c, C>
 {
     /// The connection channel for sending and receiving data from the Bluetooth controller
@@ -696,6 +696,13 @@ where C: l2cap::ConnectionChannel
         }
     }
 
+    /// Set the blob data
+    ///
+    /// Input data must be the full data, in transfer format, of the read item.
+    fn set_blob_data(&mut self, blob: Vec<u8>, handle: u16) {
+        self.blob_data = BlobData { blob, handle }.into();
+    }
+
     /// Read an attribute and perform a conversion function on it.
     ///
     /// `read_att_and` is intended as a wrapper for checking if the client has permissions to
@@ -751,7 +758,19 @@ where C: l2cap::ConnectionChannel
     async fn process_read_request(&mut self, handle: u16) {
 
         match self.read_att_and(handle, |att_tf| att_tf.read_response() ).await {
-            Ok(tf) => self.send_pdu(tf).await,
+            Ok(mut tf) => {
+
+                // Amount of data that can be sent is the MTU minus the read response header size
+                if tf.get_parameters().len() > ( self.get_mtu() - 1 ) {
+                    use core::mem::replace;
+
+                    let sent = tf.get_parameters()[..(self.get_mtu() - 1)].to_vec();
+
+                    self.set_blob_data( replace(tf.get_mut_parameters(), sent), handle);
+                }
+
+                self.send_pdu(tf).await
+            },
             Err(e) => self.send_error(handle, ClientPduName::ReadRequest, e).await,
         }
     }
@@ -983,7 +1002,7 @@ where C: l2cap::ConnectionChannel
 
             let payload_max = self.get_mtu() - 2;
 
-            let verify_size = |cnt, size| (cnt + 1) * (size + 2) > payload_max;
+            let single_payload_size = |cnt, size| (cnt + 1) * (size + 2) < payload_max;
 
             let mut init_iter = self.attributes.attributes[start..end].iter()
                 .filter(|att| att.get_uuid() == &desired_att_type);
@@ -1014,13 +1033,15 @@ where C: l2cap::ConnectionChannel
 
                         let mut responses = Vec::new();
 
-                        if !verify_size(0, first_size) {
+                        if !single_payload_size(0, first_size) {
+
+                            use core::mem::replace;
 
                             // This is where the data to be transferred of the first found attribute
-                            // is too large for the attribute MTU. Here, a read by type response is
-                            // generated with as much of the value transfer format that can fit into
-                            // the payload. A read blob request from the client is then required to
-                            // complete the full read.
+                            // is too large or equal to the connection MTU. Here, a read by type
+                            // response is generated with as much of the value transfer format that
+                            // can fit into the payload. A read blob request from the client is then
+                            // required to complete the full read.
 
                             // Read type response includes a 2 byte handle, so the maximum byte
                             // size for the data is the payload - 2
@@ -1028,13 +1049,11 @@ where C: l2cap::ConnectionChannel
 
                             let mut rsp = first_val.read_by_type_response( first_handle ).await;
 
-                            // Copy the complete data to a blob data
-                            let blob_data = BlobData { handle: first_handle, blob: rsp.clone() };
+                            let sent = rsp[0..max_size].to_vec();
 
-                            self.blob_data = blob_data.into();
-
-                            // truncate the data in the response to the max size it can be sent
-                            rsp.truncate(max_size);
+                            // Move the complete data to a blob data while replacing it with the
+                            // sent amount
+                            self.set_blob_data( replace(&mut *rsp, sent), rsp.get_handle() );
 
                             responses.push( rsp );
 
@@ -1052,7 +1071,7 @@ where C: l2cap::ConnectionChannel
                                 // Break if att doesn't have the same transfer size as the
                                 // first value or if adding the value would exceed the MTU for
                                 // the attribute payload
-                                if !verify_size(cnt + 1, first_size) ||
+                                if !single_payload_size(cnt + 1, first_size) ||
                                    first_size != val.value_transfer_format_size().await
                                 {
                                     break;

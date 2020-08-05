@@ -26,17 +26,18 @@ use crate::{
         MinimumMtu,
     },
 };
+use super::DummyConnection;
 
 /// A connection channel that counts the number of payload bytes sent
 ///
 /// Keeps the number of bytes that were sent as part of the l2cap payload in the last call to
 /// `send`. `send` will also panic if the sent ATT data is a error response.
 #[derive(Default)]
-struct SendCountingConnection {
+struct SendWatchConnection {
     sent_data: core::cell::RefCell<Vec<u8>>,
 }
 
-impl SendCountingConnection {
+impl SendWatchConnection {
     fn reset_data(&self) {
         self.sent_data.borrow_mut().clear();
     }
@@ -44,7 +45,7 @@ impl SendCountingConnection {
     fn len_of_data(&self) -> usize { self.sent_data.borrow().len() }
 }
 
-impl crate::l2cap::ConnectionChannel for SendCountingConnection {
+impl crate::l2cap::ConnectionChannel for SendWatchConnection {
 
     fn send(&self, data: crate::l2cap::AclData) -> crate::l2cap::SendFut {
         use std::convert::TryFrom;
@@ -72,6 +73,11 @@ impl crate::l2cap::ConnectionChannel for SendCountingConnection {
             p => panic!("Unexpected pdu: {:?}", p),
         }
 
+        let payload_len = data.get_payload().len();
+
+        // Validate that the payload length is less than the MTU
+        assert!( payload_len <= self.get_mtu(), "Expected l2cap payloads no larger than {}, tried \
+            to send {} bytes", self.get_mtu(), payload_len );
 
         crate::l2cap::SendFut::new(true)
     }
@@ -136,15 +142,15 @@ impl ServerAttributeValue for DynSizedAttribute {
     }
 }
 
-struct BlobTestInfo<'c> {
+struct BlobTestInfo<'c,C> {
     att_uuid: UUID,
     att_val: DynSizedAttribute,
     att_handle: u16,
-    server: crate::att::server::Server<'c,SendCountingConnection>,
+    server: crate::att::server::Server<'c,C>,
 }
 
-impl<'a> BlobTestInfo<'a> {
-    fn new(dc: &'a SendCountingConnection) -> Self {
+impl<'a,C: ConnectionChannel> BlobTestInfo<'a,C> {
+    fn new(dc: &'a C) -> Self {
 
         let mut server_attribute = ServerAttributes::new();
 
@@ -173,8 +179,6 @@ fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D> ) -> AclData {
 }
 
 fn rand_usize_vec(size: usize) -> Vec<usize> {
-    use rand::Rng;
-
     let mut v = Vec::with_capacity(size);
 
     (0..size).for_each(|_| v.push(rand::random()) );
@@ -185,7 +189,7 @@ fn rand_usize_vec(size: usize) -> Vec<usize> {
 #[test]
 fn blobbing_from_blob_request() {
 
-    let connection = SendCountingConnection::default();
+    let connection = SendWatchConnection::default();
 
     let mut bti = BlobTestInfo::new(&connection);
 
@@ -197,7 +201,7 @@ fn blobbing_from_blob_request() {
 
     let item_cnt = item_size * sent_bytes;
 
-    // Test no blobbing made with data that
+    // Test no blobbing made with data that doesn't have a sent size
 
     let request_1 = pdu_into_acl_data( pdu::read_blob_request(bti.att_handle, 0) );
 
@@ -206,6 +210,8 @@ fn blobbing_from_blob_request() {
     assert!(bti.server.blob_data.is_none());
 
     connection.reset_data();
+
+    // Test data that should cause blobbing when read
 
     *bti.att_val.data.borrow_mut() = rand_usize_vec(item_cnt);
 
@@ -256,14 +262,15 @@ fn blobbing_from_blob_request() {
 
     connection.reset_data();
 
-    // Testing a quark of the blob read. In the doc it mentions that blobs do not drop if reads
+    // Testing a quirk of the blob read. In the doc it mentions that blobs do not drop if reads
     // do not cause blobbing
 
     let blob_request_tangent = pdu_into_acl_data( pdu::read_blob_request(bti.att_handle, 0) );
 
     block_on( bti.server.process_acl_data(&blob_request_tangent) ).unwrap();
 
-    let other_data = (0..sent_bytes).map(|v| v as u16).collect::<Vec<_>>();
+    // Put the max amount of bytes within a read that will not cause blobbing
+    let other_data = (0..sent_bytes - 1).map(|v| v as u8).collect::<Vec<_>>();
 
     let other_handle = bti.server.push(
         crate::att::Attribute::new(
@@ -281,4 +288,44 @@ fn blobbing_from_blob_request() {
         bti.server.blob_data.as_ref().unwrap().blob,
         TransferFormatInto::into(&*bti.att_val.data.borrow())
     );
+}
+
+#[test]
+fn blobbing_from_read_request_test() {
+
+    let mut blob_info = BlobTestInfo::new(&DummyConnection);
+
+    let request_1 = pdu_into_acl_data( pdu::read_request(blob_info.att_handle) );
+
+    block_on( blob_info.server.process_acl_data(&request_1) ).unwrap();
+
+    assert!( blob_info.server.blob_data.is_none() );
+
+    *blob_info.att_val.data.borrow_mut() = rand_usize_vec(32);
+
+    let request_2 = pdu_into_acl_data( pdu::read_request(blob_info.att_handle) );
+
+    block_on( blob_info.server.process_acl_data(&request_2) ).unwrap();
+
+    assert!( blob_info.server.blob_data.is_some() );
+}
+
+#[test]
+fn blobbing_from_read_by_type() {
+
+    let mut blob_info = BlobTestInfo::new(&DummyConnection);
+
+    let request_1 = pdu_into_acl_data( pdu::read_by_type_request(.., blob_info.att_uuid) );
+
+    block_on( blob_info.server.process_acl_data(&request_1) ).unwrap();
+
+    assert!( blob_info.server.blob_data.is_none() );
+
+    *blob_info.att_val.data.borrow_mut() = rand_usize_vec(32);
+
+    let request_2 = pdu_into_acl_data( pdu::read_by_type_request(.., blob_info.att_uuid) );
+
+    block_on( blob_info.server.process_acl_data(&request_2) ).unwrap();
+
+    assert!( blob_info.server.blob_data.is_some() );
 }

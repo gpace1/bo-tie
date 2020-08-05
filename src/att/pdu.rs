@@ -116,6 +116,7 @@ impl<P> Pdu<P>{
 
     pub fn get_opcode(&self) -> PduOpCode { self.opcode }
     pub fn get_parameters(&self) -> &P { &self.parameters }
+    pub fn get_mut_parameters(&mut self) -> &mut P { &mut self.parameters }
     pub fn get_signature(&self) -> Option<[u8;12]> { self.signature }
     pub fn into_parameters(self) -> P { self.parameters }
 }
@@ -843,6 +844,7 @@ where R: Into<HandleRange>
 /// for the *Read By Type Response*. The other assumption made is that the entire PDU sent has a
 /// maximum payload size of 256 bytes and that the TransferFormatInto will not generate a PDU larger
 /// than that.
+#[derive(Debug)]
 pub struct ReadTypeResponse<D> {
     handle: u16,
     data: D
