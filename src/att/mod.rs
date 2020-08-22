@@ -303,7 +303,7 @@ pub enum Error {
     /// The desired MTU is smaller then the minimum value
     TooSmallMtu,
     /// An Error PDU is received
-    Pdu(pdu::Pdu<pdu::ErrorAttributeParameter>),
+    Pdu(pdu::Pdu<pdu::ErrorResponse>),
     /// A different pdu was expected
     ///
     /// This contains the opcode value of the unexpectedly received pdu
@@ -355,8 +355,8 @@ impl core::fmt::Debug for Error {
     }
 }
 
-impl From<pdu::Pdu<pdu::ErrorAttributeParameter>> for Error {
-    fn from(err: pdu::Pdu<pdu::ErrorAttributeParameter>) -> Error {
+impl From<pdu::Pdu<pdu::ErrorResponse>> for Error {
+    fn from(err: pdu::Pdu<pdu::ErrorResponse>) -> Error {
         Error::Pdu(err)
     }
 }
@@ -381,17 +381,22 @@ impl TransferFormatError {
     where D1: core::fmt::Display,
           D2: core::fmt::Display,
     {
-        TransferFormatError::from( format!("Expected a size of {} bytes for {}, data length is {}",
-            expected_len, name, incorrect_len)
-        )
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidAttributeValueLength,
+            message: format!("Expected a size of {} bytes for {}, data length is {}",
+                expected_len, name, incorrect_len)
+        }
     }
 
     pub(crate) fn bad_min_size<D1, D2>(name: &'static str, min_size: D1, data_len: D2) -> Self
     where D1: core::fmt::Display,
           D2: core::fmt::Display,
     {
-        TransferFormatError::from( format!("Expected a minimum size of {} bytes for {}, data \
-            length is {}", min_size, name, data_len) )
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidAttributeValueLength,
+            message: format!("Expected a minimum size of {} bytes for {}, data \
+                length is {}", min_size, name, data_len)
+        }
     }
     /// Create a `TransferFormattedError` for when
     /// `[chunks_exact]`(https://doc.rust-lang.org/nightly/std/primitive.slice.html#method.chunks_exact)
@@ -400,8 +405,27 @@ impl TransferFormatError {
     where D1: core::fmt::Display,
           D2: core::fmt::Display,
     {
-        TransferFormatError::from( format!("Cannot split data for {}, data of length {} is not a \
-             multiple of {}", name, data_len, chunk_size))
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidAttributeValueLength,
+            message: format!("Cannot split data for {}, data of length {} is not a \
+                multiple of {}", name, data_len, chunk_size)
+        }
+    }
+
+    pub(crate) fn error_response(err: &pdu::ErrorResponse) -> Self {
+        TransferFormatError {
+            pdu_err: err.error,
+            message: format!("({})", err),
+        }
+    }
+
+    pub(crate) fn incorrect_opcode(expected: pdu::PduOpcode, received: pdu::PduOpcode) -> Self
+    {
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidPDU,
+            message: format!("Expected ATT PDU opcode {:?}, received opcode {:?}", expected,
+                 received),
+        }
     }
 }
 
@@ -554,11 +578,19 @@ impl TransferFormatTryFrom for alloc::string::String {
     }
 }
 
-impl TransferFormatInto for alloc::string::String {
+impl TransferFormatInto for &str {
     fn len_of_into(&self) -> usize { self.len() }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret.copy_from_slice(self.as_bytes())
+    }
+}
+
+impl TransferFormatInto for alloc::string::String {
+    fn len_of_into(&self) -> usize { (self as &str).len_of_into() }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        (self as &str).build_into_ret(into_ret)
     }
 }
 
@@ -841,6 +873,7 @@ mod test {
             UUID
         };
         use futures::executor::block_on;
+        use super::client::ResponseProcessor;
 
         const UUID_1: UUID = UUID::from_u16(1);
         const UUID_2: UUID = UUID::from_u16(2);
@@ -861,7 +894,7 @@ mod test {
         let t: &mut Option<JoinHandle<_>> = &mut thread::spawn( move || {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new( &c2, None );
+            let mut server = server::Server::new( &c2, None, server::NoQueuedWrites );
 
             let attribute_0 = Attribute::new(
                 UUID_1,
@@ -1033,7 +1066,7 @@ mod test {
                 .unwrap() )
             .expect("r3 response");
 
-        block_on( client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8, None) ) )
+        block_on( client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8) ) )
             .expect("Failed to send kill opcode");
 
         // Check that the send values equal the read values

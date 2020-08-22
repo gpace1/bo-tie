@@ -323,7 +323,7 @@ fn check_permissions_entropy_test() {
             server_attributes.push(attribute);
         });
 
-        let mut server = Server::new(&DummyConnection, server_attributes);
+        let mut server = Server::new(&DummyConnection, server_attributes, NoQueuedWrites);
 
         server.revoke_permissions_of_client(all_permissions.as_ref());
 

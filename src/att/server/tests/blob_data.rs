@@ -16,17 +16,17 @@ use crate::{
             ServerAttributes,
             ServerAttributeValue,
             ServerPduName,
+            NoQueuedWrites,
         },
     },
     UUID,
     l2cap::{
-        AclData,
         AclDataFragment,
         ConnectionChannel,
         MinimumMtu,
     },
 };
-use super::DummyConnection;
+use super::{DummyConnection,pdu_into_acl_data};
 
 /// A connection channel that counts the number of payload bytes sent
 ///
@@ -62,7 +62,7 @@ impl crate::l2cap::ConnectionChannel for SendWatchConnection {
 
             Ok(ServerPduName::ErrorResponse) =>
                 panic!("Server sent error `{:?}`",
-                    <pdu::Pdu<pdu::ErrorAttributeParameter> as TransferFormatTryFrom>::try_from(
+                    <pdu::Pdu<pdu::ErrorResponse> as TransferFormatTryFrom>::try_from(
                         data.get_payload()
                     )
                     .unwrap()
@@ -142,14 +142,14 @@ impl ServerAttributeValue for DynSizedAttribute {
     }
 }
 
-struct BlobTestInfo<'c,C> {
+struct BlobTestInfo<'c,C,Q> {
     att_uuid: UUID,
     att_val: DynSizedAttribute,
     att_handle: u16,
-    server: crate::att::server::Server<'c,C>,
+    server: crate::att::server::Server<'c,C,Q>,
 }
 
-impl<'a,C: ConnectionChannel> BlobTestInfo<'a,C> {
+impl<'a,C: ConnectionChannel> BlobTestInfo<'a,C,NoQueuedWrites> {
     fn new(dc: &'a C) -> Self {
 
         let mut server_attribute = ServerAttributes::new();
@@ -166,16 +166,12 @@ impl<'a,C: ConnectionChannel> BlobTestInfo<'a,C> {
 
         let att_handle = server_attribute.push(att);
 
-        let mut server = Server::new(dc, server_attribute);
+        let mut server = Server::new(dc, server_attribute, NoQueuedWrites);
 
         server.give_permissions_to_client(crate::att::FULL_READ_PERMISSIONS);
 
         Self { att_uuid, att_val, att_handle, server }
     }
-}
-
-fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D> ) -> AclData {
-    AclData::new(TransferFormatInto::into(&pdu), crate::att::L2CAP_CHANNEL_ID )
 }
 
 fn rand_usize_vec(size: usize) -> Vec<usize> {
@@ -222,7 +218,7 @@ fn blobbing_from_blob_request() {
     assert!( bti.server.blob_data.is_some() );
 
     assert_eq!(
-        bti.server.blob_data.as_ref().unwrap().blob,
+        bti.server.blob_data.as_ref().unwrap().tf_data,
         TransferFormatInto::into(&*bti.att_val.data.borrow())
     );
 
@@ -285,7 +281,7 @@ fn blobbing_from_blob_request() {
     block_on( bti.server.process_acl_data(&read_request_tangent) ).unwrap();
 
     assert_eq!(
-        bti.server.blob_data.as_ref().unwrap().blob,
+        bti.server.blob_data.as_ref().unwrap().tf_data,
         TransferFormatInto::into(&*bti.att_val.data.borrow())
     );
 }

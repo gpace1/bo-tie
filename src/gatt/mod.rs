@@ -517,13 +517,17 @@ impl ServerBuilder
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C>(self, connection_channel: &'_ C) -> Server<C>
+    pub fn make_server<C,Q>(self, connection_channel: &'_ C, queue_writer: Q) -> Server<C,Q>
     where C: l2cap::ConnectionChannel,
+          Q: crate::att::server::QueuedWriter,
     {
-        Server {
-            primary_services: self.primary_services,
-            server: att::server::Server::new(connection_channel, Some(self.attributes))
-        }
+        let server = att::server::Server::new(
+            connection_channel,
+            Some(self.attributes),
+            queue_writer,
+        );
+
+        Server { primary_services: self.primary_services, server }
     }
 
     fn add_primary_service(&mut self, service: Service ) {
@@ -537,13 +541,13 @@ impl From<GapServiceBuilder<'_>> for ServerBuilder {
     }
 }
 
-pub struct Server<'c, C>
+pub struct Server<'c,C,Q>
 {
     primary_services: Vec<Service>,
-    server: att::server::Server<'c, C>
+    server: att::server::Server<'c,C,Q>
 }
 
-impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
+impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::QueuedWriter
 {
     pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData)
     -> Result<(), crate::att::Error>
@@ -682,31 +686,27 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
     }
 }
 
-impl<'c, C> AsRef<att::server::Server<'c, C>> for Server<'c, C> where C: l2cap::ConnectionChannel {
-    fn as_ref(&self) -> &att::server::Server<'c, C> {
+impl<'c,C,Q> AsRef<att::server::Server<'c,C,Q>> for Server<'c,C,Q> {
+    fn as_ref(&self) -> &att::server::Server<'c,C,Q> {
         &self.server
     }
 }
 
-impl<'c, C> AsMut<att::server::Server<'c, C>> for Server<'c, C> where C: l2cap::ConnectionChannel {
-    fn as_mut(&mut self) -> &mut att::server::Server<'c, C> {
+impl<'c,C,Q> AsMut<att::server::Server<'c,C,Q>> for Server<'c,C,Q> {
+    fn as_mut(&mut self) -> &mut att::server::Server<'c,C,Q> {
         &mut self.server
     }
 }
 
-impl<'c, C> core::ops::Deref for Server<'c, C>
-where C:l2cap::ConnectionChannel
-{
-    type Target = att::server::Server<'c, C>;
+impl<'c,C,Q> core::ops::Deref for Server<'c,C,Q> {
+    type Target = att::server::Server<'c,C,Q>;
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-impl<'c, C> core::ops::DerefMut for Server<'c, C>
-where C:l2cap::ConnectionChannel
-{
+impl<'c,C,Q> core::ops::DerefMut for Server<'c,C,Q> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }
@@ -721,6 +721,7 @@ mod tests {
     use crate::UUID;
     use futures::task::Waker;
     use att::TransferFormatInto;
+    use crate::att::server::NoQueuedWrites;
 
     struct DummyConnection;
 
@@ -776,7 +777,7 @@ mod tests {
             .include_service(&test_service_1, None)
             .finish_service();
 
-        let server = server_builder.make_server(&DummyConnection);
+        let server = server_builder.make_server(&DummyConnection, NoQueuedWrites);
 
         server.iter_attr_info()
             .for_each(|info| assert_eq!(info.get_permissions(), test_att_permissions,
@@ -841,7 +842,7 @@ mod tests {
 
         let test_channel = TestChannel { last_sent_pdu: None.into() };
 
-        let mut server = server_builder.make_server(&test_channel);
+        let mut server = server_builder.make_server(&test_channel, NoQueuedWrites);
 
         server.give_permissions_to_client([
             att::AttributePermissions::Read(att::AttributeRestriction::None)

@@ -87,7 +87,6 @@ use super::{
     TransferFormatTryFrom,
 };
 use crate::l2cap;
-use crate::att::pdu::ReadTypeResponse;
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ServerPduName {
@@ -107,19 +106,17 @@ pub enum ServerPduName {
     HandleValueIndication,
 }
 
-impl core::convert::TryFrom<super::pdu::PduOpCode> for ServerPduName {
+impl core::convert::TryFrom<super::pdu::PduOpcode> for ServerPduName {
     type Error = ();
 
-    fn try_from(opcode: super::pdu::PduOpCode) -> Result<Self, Self::Error> {
+    fn try_from(opcode: super::pdu::PduOpcode) -> Result<Self, Self::Error> {
         Self::try_from(opcode.as_raw())
     }
 }
 
-impl From<ServerPduName> for pdu::PduOpCode {
-    fn from(pdu_name: ServerPduName) -> pdu::PduOpCode {
-        let raw: u8 = From::from(pdu_name);
-
-        From::from(raw)
+impl From<ServerPduName> for pdu::PduOpcode {
+    fn from(pdu_name: ServerPduName) -> pdu::PduOpcode {
+        pdu::PduOpcode::Server(pdu_name)
     }
 }
 
@@ -246,13 +243,16 @@ impl ServerPduName {
     }
 }
 
-/// Blob data
+/// Blob read or Queued write data
 ///
-/// This is data that is part of a blob request. The handle is the attribute for which the data is
-/// from, and data is the data already converted from
-struct BlobData {
+/// Blob read or Queued write data are reads and writes that are performed over multiple requests
+/// from the client. The server needs to keep track of the data while the client continues to
+/// perform these requests. `MultiReqData` is a structure used for holding onto the data until the
+/// entire operation is ended (successfully or otherwise).
+struct MultiReqData {
     handle: u16,
-    blob: Vec<u8>,
+    /// Data in its transfer format form
+    tf_data: Vec<u8>,
 }
 
 /// An Attribute server
@@ -277,7 +277,7 @@ struct BlobData {
 /// [`ServerAttributeValue`](crate::att::server::ServerAttributeValue)
 /// can be implemented on the container to perform concurrency safe reading or writing on the
 /// contained value.
-pub struct Server<'c, C>
+pub struct Server<'c, C, Q>
 {
     /// The connection channel for sending and receiving data from the Bluetooth controller
     connection_channel: &'c C,
@@ -299,21 +299,23 @@ pub struct Server<'c, C>
     /// the client**.
     ///
     /// See the doc for `Server` for more information on blob data.
-    blob_data: Option<BlobData>
+    blob_data: Option<MultiReqData>,
+    queued_writer: Q,
 }
 
-impl<'c, C> Server<'c, C>
-where C: l2cap::ConnectionChannel
+impl<'c, C, Q> Server<'c, C, Q>
+where C: l2cap::ConnectionChannel,
+      Q: QueuedWriter
 {
 
     /// Create a new Server
     ///
-    /// The maximum transfer unit is set here, it cannot be smaller then the minimum MTU as
-    /// specified by the DEFAULT_ATT_MTU constant in trait `l2cap::ConnectionChannel`. If the provided MTU
-    /// value is smaller than DEFAULT_ATT_MTU or none is passed, then the MTU will be set to
-    /// DEFAULT_ATT_MTU.
-    pub fn new<A>( connection: &'c C, server_attributes: A) -> Self
-    where A: Into<Option<ServerAttributes>>
+    /// Creates an attribute server for a client connected with the logical link `connection`, the
+    /// attributes of the server are optionally initialized with input `server_attributes`, and the
+    /// `queued_writer` is the manager for queued writes. If `server_attributes` is set to `None`
+    /// then a server with no attributes is created.
+    pub fn new<A>( connection: &'c C, server_attributes: A, queued_writer: Q) -> Self
+        where A: Into<Option<ServerAttributes>>,
     {
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
@@ -322,6 +324,7 @@ where C: l2cap::ConnectionChannel
             attributes,
             given_permissions: Vec::new(),
             blob_data: None,
+            queued_writer,
         }
     }
 
@@ -617,10 +620,14 @@ where C: l2cap::ConnectionChannel
             super::client::ClientPduName::ReadBlobRequest =>
                 self.process_read_blob_request( TransferFormatTryFrom::try_from(&payload)? ).await,
 
+            super::client::ClientPduName::PrepareWriteRequest =>
+                self.process_prepare_write_request( &payload ).await,
+
+            super::client::ClientPduName::ExecuteWriteRequest =>
+                self.process_execute_write_request(TransferFormatTryFrom::try_from(&payload)?).await,
+
             pdu @ super::client::ClientPduName::ReadMultipleRequest |
             pdu @ super::client::ClientPduName::WriteCommand |
-            pdu @ super::client::ClientPduName::PrepareWriteRequest |
-            pdu @ super::client::ClientPduName::ExecuteWriteRequest |
             pdu @ super::client::ClientPduName::HandleValueConfirmation |
             pdu @ super::client::ClientPduName::SignedWriteCommand |
             pdu @ super::client::ClientPduName::ReadByGroupTypeRequest =>
@@ -700,7 +707,7 @@ where C: l2cap::ConnectionChannel
     ///
     /// Input data must be the full data, in transfer format, of the read item.
     fn set_blob_data(&mut self, blob: Vec<u8>, handle: u16) {
-        self.blob_data = BlobData { blob, handle }.into();
+        self.blob_data = MultiReqData { tf_data: blob, handle }.into();
     }
 
     /// Read an attribute and perform a conversion function on it.
@@ -761,12 +768,12 @@ where C: l2cap::ConnectionChannel
             Ok(mut tf) => {
 
                 // Amount of data that can be sent is the MTU minus the read response header size
-                if tf.get_parameters().len() > ( self.get_mtu() - 1 ) {
+                if tf.get_parameters().0.len() > ( self.get_mtu() - 1 ) {
                     use core::mem::replace;
 
-                    let sent = tf.get_parameters()[..(self.get_mtu() - 1)].to_vec();
+                    let sent = tf.get_parameters().0[..(self.get_mtu() - 1)].to_vec();
 
-                    self.set_blob_data( replace(tf.get_mut_parameters(), sent), handle);
+                    self.set_blob_data( replace(&mut tf.get_mut_parameters().0, sent), handle);
                 }
 
                 self.send_pdu(tf).await
@@ -872,8 +879,8 @@ where C: l2cap::ConnectionChannel
 
                 if let None = handle_uuids_128_bit_itr.1.peek() {
 
-                    // If there are still no UUIDs then there are no UUIDs within the given range (or
-                    // permissions were not granted)
+                    // If there are still no UUIDs then there are no UUIDs within the given range
+                    // or none had the required read permissions for this operation.
 
                     self.send_error(
                         start as u16,
@@ -885,7 +892,6 @@ where C: l2cap::ConnectionChannel
                     let pdu = pdu::Pdu::new(
                         ServerPduName::FindInformationResponse.into(),
                         handle_uuids_128_bit_itr,
-                        None
                     );
 
                     self.send_pdu( pdu ).await;
@@ -897,7 +903,6 @@ where C: l2cap::ConnectionChannel
                 let pdu = pdu::Pdu::new(
                     ServerPduName::FindInformationResponse.into(),
                     handle_uuids_16_bit_itr,
-                    None
                 );
 
                 self.send_pdu( pdu ).await;
@@ -972,7 +977,7 @@ where C: l2cap::ConnectionChannel
                 } else {
 
                     self.send_pdu(
-                        pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer, None)
+                        pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer)
                     ).await;
 
                 }
@@ -1047,7 +1052,7 @@ where C: l2cap::ConnectionChannel
                             // size for the data is the payload - 2
                             let max_size = payload_max - 2;
 
-                            let mut rsp = first_val.read_by_type_response( first_handle ).await;
+                            let mut rsp = first_val.single_read_by_type_response( first_handle ).await;
 
                             let sent = rsp[0..max_size].to_vec();
 
@@ -1059,7 +1064,7 @@ where C: l2cap::ConnectionChannel
 
                         } else {
 
-                            let fst_rsp = first_val.read_by_type_response( first_handle ).await;
+                            let fst_rsp = first_val.single_read_by_type_response( first_handle ).await;
 
                             responses.push(fst_rsp);
 
@@ -1077,7 +1082,7 @@ where C: l2cap::ConnectionChannel
                                     break;
                                 }
 
-                                let response = val.read_by_type_response( handle ).await;
+                                let response = val.single_read_by_type_response( handle ).await;
 
                                 responses.push( response );
                             }
@@ -1150,7 +1155,7 @@ where C: l2cap::ConnectionChannel
             // when true is returned the data is blobbed
             (rsp, true) => {
 
-                self.blob_data = BlobData { handle: br.handle, blob: data.clone(), }.into();
+                self.blob_data = MultiReqData { handle: br.handle, tf_data: data.clone(), }.into();
 
                 rsp
             },
@@ -1178,7 +1183,7 @@ where C: l2cap::ConnectionChannel
     {
         let data = self.blob_data.as_ref().unwrap();
 
-        match self.new_read_blob_response(&data.blob, offset)? {
+        match self.new_read_blob_response(&data.tf_data, offset)? {
 
             (rsp, false) => {
 
@@ -1200,7 +1205,7 @@ where C: l2cap::ConnectionChannel
     /// completely filled with data bytes.
     #[inline]
     fn new_read_blob_response<'a>(&self, data: &'a [u8], offset: u16)
-    -> Result< ( pdu::Pdu<pdu::ReadBlobResponse<'a>>, bool), pdu::Error>
+    -> Result< (pdu::Pdu<pdu::LocalReadBlobResponse<'a>>, bool), pdu::Error>
     {
         let max_payload = self.get_mtu() - 1;
 
@@ -1208,9 +1213,62 @@ where C: l2cap::ConnectionChannel
             o if o > data.len() => Err(pdu::Error::InvalidOffset),
 
             o if o + max_payload <= data.len() =>
-                Ok( (pdu::ReadBlobResponse::new(&data[o..(o + max_payload)]).into(), true) ),
+                Ok( (pdu::LocalReadBlobResponse::new(&data[o..(o + max_payload)]).into(), true) ),
 
-            o => Ok( (pdu::ReadBlobResponse::new(&data[o..]).into(), false) )
+            o => Ok( (pdu::LocalReadBlobResponse::new(&data[o..]).into(), false) )
+        }
+    }
+
+    async fn process_prepare_write_request(&mut self, payload: &[u8] ) {
+
+        if let Err((h,e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
+            Ok(request) =>
+                match self.check_permissions(request.get_handle(), super::FULL_WRITE_PERMISSIONS)
+                {
+                    Ok(_) => match self.queued_writer.process_prepared(&request) {
+                        Err(e) => Err((request.get_handle(), e)),
+
+                        Ok(_) => {
+                            let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
+
+                            self.send_pdu(response).await;
+
+                            Ok(())
+                        }
+                    }
+
+                    Err(e) => Err((request.get_handle(),e))
+                }
+
+            Err(e) => Err((0, e.pdu_err))
+        } {
+            self.send_error(h, ClientPduName::PrepareWriteRequest, e).await;
+        }
+    }
+
+    async fn process_execute_write_request(&mut self, request_flag : pdu::ExecuteWriteFlag) {
+
+        match match self.queued_writer.process_execute(request_flag) {
+
+            Ok(Some(iter)) => async {
+
+                    for queued_data in iter.into_iter() {
+                        self.check_permissions(queued_data.0, super::FULL_WRITE_PERMISSIONS)?;
+
+                        self.write_att(queued_data.0, &queued_data.1).await?;
+                    }
+
+                    Ok(())
+
+                }.await,
+
+            Ok(None) =>  Ok(()),
+
+            Err(e) => Err(e)
+        } {
+            Err(e) => self.send_error(0, ClientPduName::ExecuteWriteRequest, e).await,
+
+            Ok(_) => self.send_pdu(pdu::execute_write_response()).await,
         }
     }
 
@@ -1220,9 +1278,10 @@ where C: l2cap::ConnectionChannel
     pub fn iter_attr_info(&self) -> impl Iterator<Item = AttributeInfo<'_>> {
         self.attributes.iter_info()
     }
+
 }
 
-impl<C> AsRef<C> for Server<'_, C> where C: l2cap::ConnectionChannel {
+impl<C,Q> AsRef<C> for Server<'_, C,Q> where C: l2cap::ConnectionChannel {
     fn as_ref(&self) -> &C {
         &self.connection_channel
     }
@@ -1492,7 +1551,7 @@ trait ServerAttribute {
     /// Generate a 'Read Response'
     ///
     /// This will create a read response PDU in its transfer bytes format.
-    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<Vec<u8>>>;
+    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>>;
 
     /// Generate a 'Notification'
     ///
@@ -1500,7 +1559,8 @@ trait ServerAttribute {
     ///
     /// # Panic
     /// This should panic if the attribute has not been assigned a handle
-    fn notification(&self, handle: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleWithData<Vec<u8>>>>;
+    fn notification(&self, handle: u16)
+    -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>;
 
     /// Generate a 'Read by Type Response'
     ///
@@ -1513,7 +1573,7 @@ trait ServerAttribute {
     ///
     /// # Panic
     /// This should panic if the attribute has not been assigned a handle
-    fn read_by_type_response(&self, handle: u16)
+    fn single_read_by_type_response(&self, handle: u16)
     -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
 
     /// Try to convert raw data from the interface and write to the attribute value
@@ -1535,16 +1595,17 @@ where C: ServerAttributeValue<Value = V>,
         self.read_and( |v| TransferFormatInto::into(v) )
     }
 
-    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<Vec<u8>>> {
+    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
         self.read_and( |v| pdu::read_response( TransferFormatInto::into(v) ) )
     }
 
-    fn notification(&self, handle: u16) -> PinnedFuture<'_,pdu::Pdu<pdu::HandleWithData<Vec<u8>>>>
+    fn notification(&self, handle: u16)
+    -> PinnedFuture<'_,pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>
     {
         self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v)) )
     }
 
-    fn read_by_type_response(&self, handle: u16)
+    fn single_read_by_type_response(&self, handle: u16)
     -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
     {
         self.read_and(move |v| {
@@ -1606,7 +1667,7 @@ impl ServerAttribute for ReservedHandle {
         Box::pin( async { Vec::new() } )
     }
 
-    fn read_response(&self) -> PinnedFuture<'_,pdu::Pdu<Vec<u8>>> {
+    fn read_response(&self) -> PinnedFuture<'_,pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
         Box::pin( async {
             log::error!("Tried to read the reserved handle for a read response");
 
@@ -1614,7 +1675,9 @@ impl ServerAttribute for ReservedHandle {
         } )
     }
 
-    fn notification(&self, _: u16) -> PinnedFuture<'_,pdu::Pdu<pdu::HandleWithData<Vec<u8>>>> {
+    fn notification(&self, _: u16)
+    -> PinnedFuture<'_,pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>
+    {
         Box::pin( async {
             log::error!("Tried to used the reserved handle as a notification");
 
@@ -1622,13 +1685,13 @@ impl ServerAttribute for ReservedHandle {
         } )
     }
 
-    fn read_by_type_response(&self, _: u16)
+    fn single_read_by_type_response(&self, _: u16)
     -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
     {
         Box::pin( async {
             log::error!("Tried to read the reserved handle for a read by type response");
 
-            ReadTypeResponse::new(0, Vec::new())
+            pdu::ReadTypeResponse::new(0, Vec::new())
         } )
     }
 
@@ -1646,5 +1709,220 @@ impl ServerAttribute for ReservedHandle {
 
     fn cmp_value_to_raw_transfer_format(&self, _: &[u8] ) -> PinnedFuture<'_,bool> {
         Box::pin( async { false } )
+    }
+}
+
+/// Trait for queued writing to the server
+///
+/// A [`Server`](Server) uses this trait for managing queued writes from the client.
+///
+/// # Note
+/// All permission checks for prepare and execute write requests are not dealt with by the
+/// implementor of this trait.
+pub trait QueuedWriter {
+
+    /// An iterator over attribute handles with transfer formatted data
+    type Iter: core::iter::IntoIterator<Item=(u16, Vec<u8>)>;
+
+    /// Process a prepared write request
+    fn process_prepared(&mut self, request: &pdu::PreparedWriteRequest<'_> )
+    -> Result<(), pdu::Error>;
+
+    /// Process an execute request request
+    ///
+    /// This needs to return an iterator over the prepared writes. Each item of the iterator is
+    /// an attribute handle with the data to be written to the attribute value. This data needs to
+    /// still be in the transfer formatted form, the server will convert it from the transfer format
+    /// to the appropriate data type.
+    ///
+    /// If the request contains the `Cancel all prepared writes` flag, then this function must
+    /// return `Ok(None)` and all queued writes must be dropped.
+    fn process_execute(&mut self, request_flag: pdu::ExecuteWriteFlag)
+    -> Result<Option<Self::Iter>, pdu::Error>;
+}
+
+/// The state of a `BasicQueuedWriter`
+///
+/// This contains the 'ok' states for when there are no queued writes or there are queued writes,
+/// and the error state for an incorrect handle received.
+#[derive(Copy, Clone)]
+enum BasicQueuedWriterState {
+    NoQueuedWrites,
+    QueuedWrites(u16),
+    InvalidOffset,
+}
+
+/// A *very* basic queued writer
+///
+/// This queued writer supports queuing of in-order prepared write requests for a single attribute.
+/// Once a client as sent a prepared write request to the server this queue writer will only accept
+/// prepare write requests with the same attribute. Furthermore the offset value in the prepare
+/// write request must match the count of all the attribute value bytes received so far. Lastly
+/// this queue is initialized with a buffer and the total amount of bytes received cannot exceed
+/// the size of the buffer. If any of these conditions are failed the appropriate error is returned.
+/// A new prepare queue is started only when an execute write request is received. Then the server
+/// can start queueing up writes for a different or the same attribute value.
+pub struct BasicQueuedWriter {
+    data: Vec<u8>,
+    state: BasicQueuedWriterState,
+}
+
+impl BasicQueuedWriter {
+
+    /// Create a new BasicQueuedWriter
+    ///
+    /// The input `buffer_cap` is the capacity of the data buffer used for queuing writes.
+    pub fn new(buffer_cap: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(buffer_cap),
+            state: BasicQueuedWriterState::NoQueuedWrites,
+        }
+    }
+
+    fn prepared_nothing_queued(&mut self, request: &pdu::PreparedWriteRequest<'_>)
+    -> Result<(), pdu::Error>
+    {
+        if request.get_prepared_offset() == 0 {
+
+            if request.get_prepared_data().len() <= self.data.capacity() {
+
+                self.state = BasicQueuedWriterState::QueuedWrites(request.get_handle());
+
+                // Data must be already cleared
+                self.data.extend_from_slice(request.get_prepared_data());
+
+                Ok(())
+
+            } else {
+
+                Err(pdu::Error::PrepareQueueFull)
+
+            }
+
+        } else {
+
+            self.state = BasicQueuedWriterState::InvalidOffset;
+
+            Ok(())
+
+        }
+    }
+
+    fn prepared_queued(&mut self, request: &pdu::PreparedWriteRequest<'_>, self_handle: u16)
+    -> Result<(), pdu::Error>
+    {
+        if self.data.len() != request.get_prepared_offset().into() {
+
+            self.state = BasicQueuedWriterState::InvalidOffset;
+
+            Ok(())
+
+        } else if self_handle != request.get_handle() {
+
+            Err(pdu::Error::InvalidHandle)
+
+        } else if self.data.len() + request.get_prepared_data().len() > self.data.capacity() {
+
+            Err(pdu::Error::PrepareQueueFull)
+
+        } else {
+
+            self.data.extend_from_slice(request.get_prepared_data());
+
+            Ok(())
+
+        }
+    }
+
+    /// Cancel the queued write
+    fn cancel_queued_writes(&mut self)
+    -> Result<Option<<Self as QueuedWriter>::Iter>, pdu::Error>
+    {
+        self.data.clear();
+        self.state = BasicQueuedWriterState::NoQueuedWrites;
+        Ok(None)
+    }
+
+    /// Write the queued prepared write to the attribute
+    fn exec_queued_writes(&mut self)
+    -> Result<Option<<Self as QueuedWriter>::Iter>, pdu::Error>
+    {
+        match core::mem::replace(&mut self.state, BasicQueuedWriterState::NoQueuedWrites) {
+
+            BasicQueuedWriterState::NoQueuedWrites => Ok( self.empty_iter().into() ),
+
+            BasicQueuedWriterState::QueuedWrites(h) => Ok( self.create_once_iter(h).into() ),
+
+            BasicQueuedWriterState::InvalidOffset => Err( pdu::Error::InvalidOffset ),
+        }
+    }
+
+    /// Creates a once with the value already iterated out
+    fn empty_iter(&mut self) -> <Self as QueuedWriter>::Iter {
+        let mut once = core::iter::once((0, Vec::new()));
+
+        once.next();
+
+        once
+    }
+
+    /// Create the once iterator
+    ///
+    /// This should only be called when the current state is `QueuedWrites` as this resets both the
+    /// state and data
+    fn create_once_iter(&mut self, handle: u16) -> <Self as QueuedWriter>::Iter {
+        core::iter::once( (handle, core::mem::replace(&mut self.data, Vec::new())) ).into()
+    }
+}
+
+impl QueuedWriter for BasicQueuedWriter {
+
+    type Iter = core::iter::Once<(u16, Vec<u8>)>;
+
+    fn process_prepared(&mut self, request: &pdu::PreparedWriteRequest<'_>)
+    -> Result<(), pdu::Error>
+    {
+        match self.state {
+            BasicQueuedWriterState::NoQueuedWrites => self.prepared_nothing_queued(request),
+
+            BasicQueuedWriterState::QueuedWrites(handle) => self.prepared_queued(request, handle),
+
+            // Error states, client needs to send execute
+
+            BasicQueuedWriterState::InvalidOffset => Ok(()),
+        }
+    }
+
+    fn process_execute(&mut self, flag: pdu::ExecuteWriteFlag)
+    -> Result<Option<Self::Iter>, pdu::Error>
+    {
+        match flag {
+            pdu::ExecuteWriteFlag::CancelAllPreparedWrites => self.cancel_queued_writes(),
+            pdu::ExecuteWriteFlag::WriteAllPreparedWrites => self.exec_queued_writes(),
+        }
+    }
+}
+
+/// A queued writer where queued writes are unsupported
+///
+/// A call to any of the functions of the implemented trait [`QueuedWriter`](QueuedWriter) will
+/// return the attribute PDU error *request not supported*.
+///
+/// This is a
+/// [Unit Struct](https://doc.rust-lang.org/book/ch05-01-defining-structs.html#unit-like-structs-without-any-fields),
+/// there are no fields to be initialized.
+pub struct NoQueuedWrites;
+
+impl QueuedWriter for NoQueuedWrites {
+    type Iter = Vec<(u16, Vec<u8>)>;
+
+    fn process_prepared(&mut self, _: &pdu::PreparedWriteRequest<'_>) -> Result<(), pdu::Error> {
+        Err(pdu::Error::RequestNotSupported)
+    }
+
+    fn process_execute(&mut self, _: pdu::ExecuteWriteFlag)
+    -> Result<Option<Self::Iter>, pdu::Error>
+    {
+        Err(pdu::Error::RequestNotSupported)
     }
 }
