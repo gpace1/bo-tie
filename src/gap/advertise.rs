@@ -1044,11 +1044,11 @@ pub mod local_name {
             // Wrong AD type
             let test_name_5 = [AssignedTypes::Flags.val(), 0x68, 0x65, 0x6c, 0x6c];
 
-            // The first two test names should return errors
+            // The first two tests names should return errors
             assert!(LocalName::try_from_raw(&test_name_1).is_err());
             assert!(LocalName::try_from_raw(&test_name_2).is_err());
 
-            // The next two test names should be valid
+            // The next two tests names should be valid
             assert!(LocalName::try_from_raw(&test_name_3).is_ok());
             assert!(LocalName::try_from_raw(&test_name_4).is_ok());
 

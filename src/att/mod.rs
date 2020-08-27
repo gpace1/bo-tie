@@ -62,6 +62,61 @@ use alloc::{
 
 use crate::l2cap;
 
+pub mod client;
+pub mod server;
+
+//==================================================================================================
+// Macros that are used within submodules
+//==================================================================================================
+
+/// Implement transfer format for Vec<$data_type>.
+///
+/// $data_type must have a constant size for the transfer format. The second input `$data_size` is
+/// an optional input for the size of the transfer format of $data_type. If `$data_size` is omitted
+/// then the size is inferred from the `core::mem::size_of` method.
+macro_rules! impl_transfer_format_for_vec_of {
+
+    ($data_type: ty, $data_size: expr) => {
+
+        impl TransferFormatTryFrom for Vec<$data_type> {
+            fn try_from(raw: &[u8]) -> Result<Self, crate::att::TransferFormatError> {
+                raw.chunks($data_size)
+                    .try_fold(Vec::new(), |mut v, chunk| {
+                        v.push( <$data_type as TransferFormatTryFrom>::try_from(chunk)? );
+                        Ok(v)
+                    })
+            }
+        }
+
+        impl TransferFormatInto for Vec<$data_type>
+        {
+            fn len_of_into(&self) -> usize {
+                self.iter().map(|t| t.len_of_into()).sum()
+            }
+
+            fn build_into_ret(&self, into_ret: &mut [u8]) {
+                self.iter().fold(0usize, |start,t| {
+                    let end: usize = start + t.len_of_into();
+
+                    t.build_into_ret(&mut into_ret[start..end]);
+
+                    end
+                } );
+            }
+        }
+    };
+
+    ($data_type: ty) => {
+        impl_transfer_format_for_vec_of! { $data_type, core::mem::size_of::<$data_type>() }
+    };
+}
+
+//==================================================================================================
+// Submodules that use the above macros
+//==================================================================================================
+
+pub mod pdu;
+
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
 
@@ -248,7 +303,7 @@ pub enum Error {
     /// The desired MTU is smaller then the minimum value
     TooSmallMtu,
     /// An Error PDU is received
-    Pdu(pdu::Pdu<pdu::ErrorAttributeParameter>),
+    Pdu(pdu::Pdu<pdu::ErrorResponse>),
     /// A different pdu was expected
     ///
     /// This contains the opcode value of the unexpectedly received pdu
@@ -300,8 +355,8 @@ impl core::fmt::Debug for Error {
     }
 }
 
-impl From<pdu::Pdu<pdu::ErrorAttributeParameter>> for Error {
-    fn from(err: pdu::Pdu<pdu::ErrorAttributeParameter>) -> Error {
+impl From<pdu::Pdu<pdu::ErrorResponse>> for Error {
+    fn from(err: pdu::Pdu<pdu::ErrorResponse>) -> Error {
         Error::Pdu(err)
     }
 }
@@ -326,17 +381,22 @@ impl TransferFormatError {
     where D1: core::fmt::Display,
           D2: core::fmt::Display,
     {
-        TransferFormatError::from( format!("Expected a size of {} bytes for {}, data length is {}",
-            expected_len, name, incorrect_len)
-        )
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidAttributeValueLength,
+            message: format!("Expected a size of {} bytes for {}, data length is {}",
+                expected_len, name, incorrect_len)
+        }
     }
 
     pub(crate) fn bad_min_size<D1, D2>(name: &'static str, min_size: D1, data_len: D2) -> Self
     where D1: core::fmt::Display,
           D2: core::fmt::Display,
     {
-        TransferFormatError::from( format!("Expected a minimum size of {} bytes for {}, data \
-            length is {}", min_size, name, data_len) )
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidAttributeValueLength,
+            message: format!("Expected a minimum size of {} bytes for {}, data \
+                length is {}", min_size, name, data_len)
+        }
     }
     /// Create a `TransferFormattedError` for when
     /// `[chunks_exact]`(https://doc.rust-lang.org/nightly/std/primitive.slice.html#method.chunks_exact)
@@ -345,8 +405,27 @@ impl TransferFormatError {
     where D1: core::fmt::Display,
           D2: core::fmt::Display,
     {
-        TransferFormatError::from( format!("Cannot split data for {}, data of length {} is not a \
-             multiple of {}", name, data_len, chunk_size))
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidAttributeValueLength,
+            message: format!("Cannot split data for {}, data of length {} is not a \
+                multiple of {}", name, data_len, chunk_size)
+        }
+    }
+
+    pub(crate) fn error_response(err: &pdu::ErrorResponse) -> Self {
+        TransferFormatError {
+            pdu_err: err.error,
+            message: format!("({})", err),
+        }
+    }
+
+    pub(crate) fn incorrect_opcode(expected: pdu::PduOpcode, received: pdu::PduOpcode) -> Self
+    {
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidPDU,
+            message: format!("Expected ATT PDU opcode {:?}, received opcode {:?}", expected,
+                 received),
+        }
     }
 }
 
@@ -447,48 +526,6 @@ pub trait TransferFormatInto {
     }
 }
 
-/// Implement transfer format for Vec<$data_type>.
-///
-/// $data_type must have a constant size for the transfer format. The second input `$data_size` is
-/// an optional input for the size of the transfer format of $data_type. If `$data_size` is omitted
-/// then the size is inferred from the `core::mem::size_of` method.
-macro_rules! impl_transfer_format_for_vec_of {
-
-    ($data_type: ty, $data_size: expr) => {
-
-        impl TransferFormatTryFrom for Vec<$data_type> {
-            fn try_from(raw: &[u8]) -> Result<Self, crate::att::TransferFormatError> {
-                raw.chunks($data_size)
-                    .try_fold(Vec::new(), |mut v, chunk| {
-                        v.push( <$data_type as TransferFormatTryFrom>::try_from(chunk)? );
-                        Ok(v)
-                    })
-            }
-        }
-
-        impl TransferFormatInto for Vec<$data_type>
-        {
-            fn len_of_into(&self) -> usize {
-                self.iter().map(|t| t.len_of_into()).sum()
-            }
-
-            fn build_into_ret(&self, into_ret: &mut [u8]) {
-                self.iter().fold(0usize, |start,t| {
-                    let end: usize = start + t.len_of_into();
-
-                    t.build_into_ret(&mut into_ret[start..end]);
-
-                    end
-                } );
-            }
-        }
-    };
-
-    ($data_type: ty) => {
-        impl_transfer_format_for_vec_of! { $data_type, core::mem::size_of::<$data_type>() }
-    };
-}
-
 /// Implements transfer format for the given
 macro_rules! impl_transfer_format_for_number {
     ( $num: ty ) => {
@@ -541,11 +578,19 @@ impl TransferFormatTryFrom for alloc::string::String {
     }
 }
 
-impl TransferFormatInto for alloc::string::String {
+impl TransferFormatInto for &str {
     fn len_of_into(&self) -> usize { self.len() }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret.copy_from_slice(self.as_bytes())
+    }
+}
+
+impl TransferFormatInto for alloc::string::String {
+    fn len_of_into(&self) -> usize { (self as &str).len_of_into() }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        (self as &str).build_into_ret(into_ret)
     }
 }
 
@@ -704,6 +749,7 @@ mod test {
     use std::sync::{Arc, Mutex};
     use std::task::Waker;
     use std::thread::JoinHandle;
+    use crate::l2cap::MinimumMtu;
 
     struct TwoWayChannel {
         b1: Option<Vec<u8>>,
@@ -743,10 +789,10 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel1 {
 
-        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<crate::l2cap::L2capPdu>{
+        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b1 = Some(data.into().into_data());
+            gaurd.b1 = Some(data.into_raw_data());
 
             if let Some(waker) = gaurd.w1.take() {
                 waker.wake();
@@ -754,6 +800,14 @@ mod test {
 
             l2cap::SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
             use crate::l2cap::AclDataFragment;
@@ -771,10 +825,10 @@ mod test {
 
     impl l2cap::ConnectionChannel for Channel2 {
 
-        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<crate::l2cap::L2capPdu>{
+        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b2 = Some(data.into().into_data());
+            gaurd.b2 = Some(data.into_raw_data());
 
             if let Some(waker) = gaurd.w2.take() {
                 waker.wake();
@@ -782,6 +836,14 @@ mod test {
 
             l2cap::SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
             use crate::l2cap::AclDataFragment;
@@ -811,6 +873,7 @@ mod test {
             UUID
         };
         use futures::executor::block_on;
+        use super::client::ResponseProcessor;
 
         const UUID_1: UUID = UUID::from_u16(1);
         const UUID_2: UUID = UUID::from_u16(2);
@@ -831,7 +894,7 @@ mod test {
         let t: &mut Option<JoinHandle<_>> = &mut thread::spawn( move || {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new( &c2, 256, None );
+            let mut server = server::Server::new( &c2, None, server::NoQueuedWrites );
 
             let attribute_0 = Attribute::new(
                 UUID_1,
@@ -1003,7 +1066,7 @@ mod test {
                 .unwrap() )
             .expect("r3 response");
 
-        block_on( client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8, None) ) )
+        block_on( client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8) ) )
             .expect("Failed to send kill opcode");
 
         // Check that the send values equal the read values
@@ -1021,7 +1084,3 @@ mod test {
         );
     }
 }
-
-pub mod pdu;
-pub mod client;
-pub mod server;

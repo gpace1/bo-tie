@@ -1,15 +1,15 @@
-use super::{
+use crate::att::{
     pdu,
     TransferFormatTryFrom,
     TransferFormatInto,
-    TransferFormatError
+    TransferFormatError,
+    server::ServerPduName
 };
 use alloc::{
     vec::Vec,
     format,
 };
 use crate::l2cap;
-use super::server::ServerPduName;
 
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
 pub enum ClientPduName {
@@ -53,11 +53,9 @@ impl core::convert::TryFrom<u8> for ClientPduName {
     }
 }
 
-impl From<ClientPduName> for pdu::PduOpCode {
-    fn from(pdu_name: ClientPduName) -> pdu::PduOpCode {
-        let raw: u8 = From::from(pdu_name);
-
-        From::from(raw)
+impl From<ClientPduName> for pdu::PduOpcode {
+    fn from(pdu_name: ClientPduName) -> pdu::PduOpcode {
+        pdu::PduOpcode::Client(pdu_name)
     }
 }
 
@@ -103,18 +101,26 @@ impl core::fmt::Display for ClientPduName {
     }
 }
 
+pub trait ResponseProcessor {
+    type Response;
+
+    fn process_response(self, acl_data: &l2cap::AclData) -> Result<Self::Response, super::Error>;
+}
+
 /// Process a server response of a client request
-pub struct ResponseProcessor<F,R>(F)
+struct ResponseProcessorCheck<F,R>(F)
     where F: FnOnce(&[u8]) -> Result<R, super::Error>;
 
-impl<F,R> ResponseProcessor<F,R>
+impl<F,R> ResponseProcessor for ResponseProcessorCheck<F,R>
     where F: FnOnce(&[u8]) -> Result<R, super::Error>
 {
+    type Response = R;
+
     /// Process the response
     ///
     /// The input `acl_data` should be the response from the server to the request that generated
     /// this `ResponseProcessor`.
-    pub fn process_response(self, acl_data: &l2cap::AclData) -> Result<R, super::Error> {
+    fn process_response(self, acl_data: &l2cap::AclData) -> Result<Self::Response, super::Error> {
         if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
             self.0(acl_data.get_payload())
         } else {
@@ -216,11 +222,11 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
     }
 
     fn process_mtu_response(self, payload: &[u8]) -> Result<Client<'c,C>, super::Error> {
-        let pdu: Result<pdu::Pdu<u16>, _> = TransferFormatTryFrom::try_from(payload);
+        let pdu: Result<pdu::Pdu<pdu::MtuResponse>, _> = TransferFormatTryFrom::try_from(payload);
 
         match pdu {
             Ok(received_mtu) => {
-                let mtu: usize = self.requested_mtu.min( (*received_mtu.get_parameters()).into() );
+                let mtu: usize = self.requested_mtu.min(received_mtu.get_parameters().0.into());
 
                 if self.connection_channel.min_mtu() > mtu {
                     log::info!("Received a bad MTU (MTU is less than the minimum) \
@@ -302,18 +308,18 @@ pub struct Client<'c, C>
 
 impl<'c, C> Client<'c, C> {
     fn new(mtu: usize, channel: &'c C) -> Self {
-        Client { mtu: mtu , channel }
+        Client { mtu , channel }
     }
 }
 
-impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel 
+impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
 {
 
     fn process_raw_data<P>(
         expected_response: super::server::ServerPduName,
         bytes: &[u8]
     ) -> Result<P, super::Error>
-    where P: TransferFormatTryFrom
+    where P: TransferFormatTryFrom + pdu::ExpectedOpcode
     {
         use core::convert::TryFrom;
 
@@ -322,14 +328,17 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             Err(super::Error::Empty)
 
         } else if expected_response.is_convertible_from(bytes) {
-            let pdu: Result<pdu::Pdu<P>, super::TransferFormatError> = TransferFormatTryFrom::try_from(&bytes);
+
+            let pdu: Result<pdu::Pdu<P>, _> = TransferFormatTryFrom::try_from(&bytes);
 
             match pdu {
                 Ok(pdu) => Ok(pdu.into_parameters()),
                 Err(e) => Err(e.into()),
             }
+
         } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
-            type ErrPdu = pdu::Pdu<pdu::ErrorAttributeParameter>;
+
+            type ErrPdu = pdu::Pdu<pdu::ErrorResponse>;
 
             let err_pdu: Result<ErrPdu, _> = TransferFormatTryFrom::try_from(&bytes);
 
@@ -337,7 +346,9 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
                 Ok(err_pdu) => Err(err_pdu.into()),
                 Err(e) => Err(e.into()),
             }
+
         } else {
+
             match ServerPduName::try_from(bytes[0]) {
                 Ok(_) => Err(super::Error::UnexpectedPdu(bytes[0])),
                 Err(_) => Err(
@@ -371,17 +382,21 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     ///
     /// The new MTU is returned by the future
     pub async fn exchange_mtu_request(&'c mut self, mtu: u16 )
-    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error> + 'c, ()>, super::Error>
+    -> Result<impl ResponseProcessor<Response=()> + 'c, super::Error>
     {
         if self.channel.min_mtu() > mtu.into() {
             Err(super::Error::TooSmallMtu)
         } else {
             self.send(&pdu::exchange_mtu_request(mtu)).await.unwrap();
 
-            Ok( ResponseProcessor(move |data| {
-                let pdu: pdu::Pdu<u16> = Self::process_raw_data(super::server::ServerPduName::ExchangeMTUResponse, data)?;
+            Ok( ResponseProcessorCheck(move |data| {
 
-                self.mtu = core::cmp::min(mtu, pdu.into_parameters()).into();
+                let response: pdu::MtuResponse = Self::process_raw_data(
+                    ServerPduName::ExchangeMTUResponse,
+                    data
+                )?;
+
+                self.mtu = core::cmp::min(mtu, response.0).into();
 
                 Ok(())
             }) )
@@ -394,13 +409,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// A range cannot be the reserved handle 0x0000 and the ending handle must be larger than or
     /// equal to the starting handle
     pub async fn find_information_request<R>(&self, handle_range: R)
-    -> Result<
-        ResponseProcessor<
-            impl FnOnce(&[u8]) -> Result<pdu::FormattedHandlesWithType, super::Error>,
-            pdu::FormattedHandlesWithType
-        >,
-        super::Error
-    >
+    -> Result<impl ResponseProcessor<Response=pdu::FormattedHandlesWithType>, super::Error>
     where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>
     {
         if !pdu::is_valid_handle_range(&handle_range) {
@@ -409,7 +418,9 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         
         self.send(&pdu::find_information_request(handle_range)).await?;
 
-        Ok( ResponseProcessor( |data| Self::process_raw_data(ServerPduName::FindInformationResponse, data)) )
+        Ok( ResponseProcessorCheck( |data|
+            Self::process_raw_data(ServerPduName::FindInformationResponse, data))
+        )
     }
 
     /// Find by type and value request
@@ -421,12 +432,12 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// # Panic
     /// A range cannot be the reserved handle 0x0000 and the start handle must be larger then the
     /// ending handle
-    pub async fn find_by_type_value_request<R, D>(&self, handle_range: R, uuid: crate::UUID, value: D)
-    -> Result< ResponseProcessor<
-            impl FnOnce(&[u8]) -> Result<pdu::TypeValueRequest<D>, super::Error>,
-            pdu::TypeValueRequest<D>
-        >,
-        super::Error>
+    pub async fn find_by_type_value_request<R, D>(
+        &'c self,
+        handle_range: R,
+        uuid: crate::UUID,
+        value: D
+    ) -> Result< impl ResponseProcessor<Response=pdu::TypeValueResponse> + 'c, super::Error>
     where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
           D: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -440,33 +451,36 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             Ok(pdu) => {
                 self.send(&pdu).await?;
 
-                Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::FindByTypeValueResponse, d)))
+                Ok(ResponseProcessorCheck(
+                    |d| Self::process_raw_data(ServerPduName::FindByTypeValueResponse, d))
+                )
             },
             Err(_) => Err( super::Error::Other("Cannot convert UUID to a 16 bit short version") )
         }
     }
 
-    /// Read request
+    /// Read by type request
     ///
     /// # Panic
     /// A range cannot contain be the reserved handle 0x0000 and the start handle must be larger
     /// then the ending handle
-    pub async fn read_by_type_request<R>(&self, handle_range: R, attr_type: crate::UUID)
-    -> Result< ResponseProcessor<
-            impl FnOnce(&[u8]) -> Result<pdu::TypeRequest, super::Error>,
-            pdu::TypeRequest
-        >,
-        super::Error
-    >
-    where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>
+    pub async fn read_by_type_request<R,D>(&self, handle_range: R, attr_type: crate::UUID)
+    -> Result< impl ResponseProcessor<Response=Vec<pdu::ReadTypeResponse<D>>>, super::Error>
+    where R: Into<pdu::HandleRange>,
+          D: TransferFormatTryFrom + TransferFormatInto
     {
-        if !pdu::is_valid_handle_range(&handle_range) {
+        let handle_range = handle_range.into();
+
+        if !pdu::is_valid_handle_range(&handle_range.to_range_bounds()) {
             panic!("Invalid handle range")
         }
 
         self.send(&pdu::read_by_type_request(handle_range, attr_type)).await?;
 
-        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadByTypeResponse, d)))
+        Ok(ResponseProcessorCheck(|d| {
+            Self::process_raw_data(ServerPduName::ReadByTypeResponse, d)
+                .map(|rsp: pdu::ReadByTypeResponse<D>| rsp.0 )
+        }))
     }
 
     /// Read request
@@ -474,29 +488,42 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
     pub async fn read_request<D>(&self, handle: u16 )
-    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
+    -> Result<impl ResponseProcessor<Response=D>, super::Error>
     where D: TransferFormatTryFrom
     {
-        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        if !pdu::is_valid_handle(handle) {
+            panic!("Handle 0 is reserved for future use by the spec.")
+        }
 
         self.send(&pdu::read_request(handle)).await?;
 
-        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadResponse, d)))
+        Ok(ResponseProcessorCheck(|d| {
+            Self::process_raw_data(ServerPduName::ReadResponse, d)
+                .map(|rsp: pdu::ReadResponse<D>| rsp.0 )
+        }))
     }
 
     /// Read blob request
     ///
+    /// Reading data that must be blobbed is a multi-request process. Once all data is received will
+    ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
     pub async fn read_blob_request<D>(&self, handle: u16, offset: u16)
-    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<D, super::Error>, D>, super::Error>
+    -> Result<impl ResponseProcessor<Response=ReadBlob>, super::Error>
     where D: TransferFormatTryFrom
     {
         if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
 
         self.send( &pdu::read_blob_request(handle, offset) ).await?;
 
-        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadBlobResponse, d)))
+        Ok(ResponseProcessorCheck( move |d| {
+            let rsp: pdu::ReadBlobResponse = Self::process_raw_data(
+                ServerPduName::ReadBlobResponse, d
+            )?;
+
+            Ok( ReadBlob { handle, offset: offset.into(), blob: rsp.into_inner() } )
+        }))
     }
 
     /// Read multiple handles
@@ -506,10 +533,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
     pub async fn read_multiple_request<'a,D,I>(&self, handles: alloc::vec::Vec<u16> )
-    -> Result<
-        ResponseProcessor<impl FnOnce(&'a [u8]) -> Result<Vec<D>, super::Error>,Vec<D>>,
-        super::Error
-    >
+    -> Result<impl ResponseProcessor<Response=Vec<D>>, super::Error >
     where Vec<D>: TransferFormatTryFrom + TransferFormatInto
     {
         handles.iter().for_each(|h| if !pdu::is_valid_handle(*h) {
@@ -518,7 +542,10 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         
         self.send( &pdu::read_multiple_request( handles )? ).await?;
 
-        Ok(ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)))
+        Ok(ResponseProcessorCheck(|d|
+            Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)
+                .map(|rsp: pdu::ReadMultipleResponse<D>| rsp.0 )
+        ))
     }
 
     /// Read by group type
@@ -526,12 +553,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
     pub async fn read_by_group_type_request<R,D>(&self, handle_range: R, group_type: crate::UUID)
-    -> Result< ResponseProcessor<
-            impl FnOnce(&[u8]) -> Result<pdu::ReadByGroupTypeResponse<D>, super::Error>,
-            pdu::ReadByGroupTypeResponse<D>
-        >,
-        super::Error
-    >
+    -> Result<impl ResponseProcessor<Response=pdu::ReadByGroupTypeResponse<D>>, super::Error>
     where R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
           D: TransferFormatTryFrom
     {
@@ -541,7 +563,9 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         
         self.send( &pdu::read_by_group_type_request(handle_range, group_type) ).await?;
 
-        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ReadByGroupTypeResponse, d)) )
+        Ok( ResponseProcessorCheck(|d|
+            Self::process_raw_data(ServerPduName::ReadByGroupTypeResponse, d)
+        ) )
     }
 
     /// Request to write data to a handle on the server
@@ -552,14 +576,19 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
     pub async fn write_request<D>(&self, handle: u16, data: D)
-    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<(), super::Error>, ()>, super::Error>
+    -> Result<impl ResponseProcessor<Response=()>, super::Error>
     where D: TransferFormatTryFrom + TransferFormatInto
     {
-        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        if !pdu::is_valid_handle(handle) {
+            panic!("Handle 0 is reserved for future use by the spec.")
+        }
         
         self.send( &pdu::write_request(handle, data) ).await?;
 
-        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::WriteResponse, d)) )
+        Ok(ResponseProcessorCheck(|d|
+            Self::process_raw_data(ServerPduName::WriteResponse, d)
+                .map(|_:pdu::WriteResponse| () )
+        ))
     }
 
     /// Command the server to write data to a handle
@@ -572,37 +601,42 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
     pub async fn write_command<D>(&self, handle: u16, data: D) -> Result<(), super::Error>
     where D: TransferFormatInto
     {
-        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
+        if !pdu::is_valid_handle(handle) {
+            panic!("Handle 0 is reserved for future use by the spec.")
+        }
         
         self.send( &pdu::write_command(handle, data) ).await
     }
 
     /// Prepare Write Request
-    /// 
+    ///
+    /// An iterator of `PreparedWriteRequest` can be created from an
+    /// [`PreparedWriteRequests`](crate::att::pdu::PreparedWriteRequests) with the `iter` method.
+    ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn prepare_write_request<D>(&self, handle: u16, offset: u16, data: D)
-    -> Result< ResponseProcessor<impl FnOnce(&[u8]) -> Result<
-            pdu::PrepareWriteRequest<D>, super::Error>,
-            pdu::PrepareWriteRequest<D>
-        >,
-        super::Error
-    >
+    pub async fn prepare_write_request<D>(&self, pwr: pdu::Pdu<pdu::PreparedWriteRequest<'_>>)
+    -> Result<impl ResponseProcessor<Response=pdu::PreparedWriteResponse>, super::Error>
     where D: TransferFormatTryFrom + TransferFormatInto
     {
-        if !pdu::is_valid_handle(handle) { panic!("Handle 0 is reserved for future use by the spec.") }
-        
-        self.send(&pdu::prepare_write_request(handle, offset, data)).await?;
+        self.send(&pwr).await?;
 
-        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::PrepareWriteResponse, d)) )
+        Ok(
+            ResponseProcessorCheck(|d|
+                Self::process_raw_data(ServerPduName::PrepareWriteResponse, d)
+            )
+        )
     }
 
-    pub async fn execute_write_request(&self, execute: bool )
-    -> Result<ResponseProcessor<impl FnOnce(&[u8]) -> Result<u8, super::Error>, u8>, super::Error>
+    pub async fn execute_write_request(&self, execute: pdu::ExecuteWriteFlag )
+    -> Result<impl ResponseProcessor<Response = ()>, super::Error>
     {
         self.send(&pdu::execute_write_request(execute)).await?;
 
-        Ok( ResponseProcessor(|d| Self::process_raw_data(ServerPduName::ExecuteWriteResponse, d)) )
+        Ok( ResponseProcessorCheck(|d|
+            Self::process_raw_data(ServerPduName::ExecuteWriteResponse, d)
+                .map(|_: pdu::ExecuteWriteResponse| () )
+        ) )
     }
 
     /// Send a custom command to the server
@@ -617,7 +651,7 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
 
         let op: u8 = pdu.get_opcode().as_raw();
 
-        if ClientPduName::try_from(op).is_err() && super::server::ServerPduName::try_from(op).is_err()
+        if ClientPduName::try_from(op).is_err() && ServerPduName::try_from(op).is_err()
         {
             let data = TransferFormatInto::into(&pdu);
             if self.mtu > data.len() {
@@ -631,4 +665,74 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
             Err(super::Error::AttUsedOpcode(op))
         }
     }
+}
+
+/// A blob of data read from the server
+///
+/// This is a blob of data that was received from the server in response to a read blob request.
+/// Once all blobs are received the client can try to assemble the data into its data type. Each
+/// blob is a pseudo linked list, as they are received then can be combined together until the
+/// combination function determines that all blobs were received.
+///
+/// Blobs can attempt to combine together with the
+/// [`Add`](https://doc.rust-lang.org/std/ops/trait.Add.html), but the offsets and handles need to
+/// be correct. A `ReadBlob` can be combined with another `ReadBlob` when they both have the same
+/// attribute handle, the the offset of the later blob is in the correct position. The offset must
+/// be equal to the offset plus the length of the stored data within the first `ReadBlob`.
+pub struct ReadBlob {
+    handle: u16,
+    offset: usize,
+    blob: Vec<u8>,
+}
+
+impl ReadBlob {
+
+    pub fn get_handle(&self) -> u16 {self.handle}
+
+    pub fn get_offset(&self) -> usize { self.offset }
+
+    /// Get the offset a `ReadBlob` must have to combine with this `ReadBlob`
+    fn combine_offset(&self) -> usize {
+        self.offset + self.blob.len()
+    }
+
+    fn try_append_blob(mut self, other: Self) -> Result<Self, ReadBlobError> {
+        if self.handle != other.handle {
+            return Err(ReadBlobError::IncorrectHandle)
+        }
+
+        if self.combine_offset() != other.offset {
+            Err(ReadBlobError::IncorrectOffset)
+        } else {
+            self.blob.extend(other.blob);
+
+            Ok( ReadBlob {
+                handle: self.handle,
+                offset: self.offset,
+                blob: self.blob,
+            })
+        }
+    }
+}
+
+impl core::ops::Add for ReadBlob {
+    type Output = Result<Self, ReadBlobError>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        self.try_append_blob(rhs)
+    }
+}
+
+impl core::ops::Add<ReadBlob> for Result<ReadBlob, ReadBlobError> {
+    type Output = Self;
+
+    fn add(self, rhs: ReadBlob) -> Self::Output {
+        self.and_then(|rb| rb.try_append_blob(rhs))
+    }
+}
+
+#[derive(Debug)]
+pub  enum ReadBlobError {
+    IncorrectHandle,
+    IncorrectOffset,
 }

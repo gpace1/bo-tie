@@ -1,4 +1,4 @@
-//! Bonding Master test
+//! Bonding Master tests
 //!
 //! This will bond with a connectible device advertising with the name provided for .
 //!
@@ -307,7 +307,7 @@ struct Opts {
     /// The complete local name in the advertising data
     ///
     /// The is the name that will appear as part of the advertising data of the device to run this
-    /// example with. The advertising packet for this test requires a complete local name so that
+    /// example with. The advertising packet for this tests requires a complete local name so that
     /// this example can determine what advertiser to connect to.
     local_name: String
 }

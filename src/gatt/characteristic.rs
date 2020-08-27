@@ -358,9 +358,8 @@ pub struct CharacteristicBuilder<'a,'c, C, V> {
 }
 
 impl< 'a, 'c, C, V> CharacteristicBuilder< 'a,'c, C, V>
-where C: att::server::ServerAttributeValue<Value = V> + Sized + Send + Sync + PartialEq<V> +
-         'static,
-      V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
+where C: att::server::ServerAttributeValue<Value = V> + Sized + Send + 'static,
+      V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
 {
     pub(super) fn new<P>(
         characteristic_adder: super::CharacteristicAdder<'a>,

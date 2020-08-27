@@ -23,7 +23,8 @@ impl MinimumMtu for LeU {
 
 /// ACL-U L2CAP logical link type
 ///
-/// This is a marker type for a ACL-U L2CAP logical link.
+/// This is a marker type for a ACL-U L2CAP logical link. This is not the MTU for ACL-U with support
+/// for the Extended Flow Rate feature.
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
 pub struct AclU;
 

@@ -15,7 +15,7 @@
 extern crate alloc;
 extern crate bincode as serializer;
 
-// test related
+// tests related
 #[cfg(test)]
 extern crate test;
 pub mod att;
@@ -136,7 +136,7 @@ pub fn resolve_resolvable_private_address(irk: u128, address: BluetoothDeviceAdd
 /// with bluetooth.
 ///
 /// This structure always handles UUIDs in their 128 bit value form.
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord,Hash,Default)]
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Default)]
 pub struct UUID {
     base_uuid: u128,
 }
@@ -149,14 +149,14 @@ impl UUID {
     pub const fn from_u32(v: u32) -> Self {
         UUID {
             /// See V 5.0 Vol 3 part B sec 2.5.1 for this equation
-            base_uuid: ((v as u128) << 96) + Self::BLUETOOTH_BASE_UUID,
+            base_uuid: ((v as u128) << 96) | Self::BLUETOOTH_BASE_UUID,
         }
     }
 
     pub const fn from_u16(v: u16) -> Self {
         UUID {
             /// See V 5.0 Vol 3 part B sec 2.5.1 for this equation
-            base_uuid: ((v as u128) << 96) + Self::BLUETOOTH_BASE_UUID,
+            base_uuid: ((v as u128) << 96) | Self::BLUETOOTH_BASE_UUID,
         }
     }
 
@@ -183,33 +183,64 @@ impl UUID {
     pub fn get_version(&self) -> Result<UUIDVersion, ()> {
         UUIDVersion::try_from_uuid(self)
     }
+
+    /// Display format for UUID
+    ///
+    /// The display format for a UUID changes based on whether or not it is a 16 bit or 32 bit
+    /// shortened UUID.
+    fn display_type<F1,F2,F3>(&self, f: &mut core::fmt::Formatter, fn_16: F1, fn_32: F2, fn_128: F3)
+    -> core::fmt::Result
+    where F1: FnOnce( &u16, &mut core::fmt::Formatter) -> core::fmt::Result,
+          F2: FnOnce( &u32, &mut core::fmt::Formatter) -> core::fmt::Result,
+          F3: FnOnce(&u128, &mut core::fmt::Formatter) -> core::fmt::Result,
+    {
+        use core::convert::TryFrom;
+
+        if let Ok(val) = <u16>::try_from(*self) {
+
+            fn_16( &val, f)?;
+
+            write!(f, " (16b)")
+
+        } else if let Ok(val) = <u32>::try_from(*self) {
+
+            fn_32( &val, f)?;
+
+            write!(f, " (32b)")
+
+        } else {
+            fn_128( &self.base_uuid, f) ?;
+
+            write!(f, " (128b)")
+        }
+    }
+}
+
+impl core::fmt::Debug for UUID {
+    fn fmt(&self, f: &mut core::fmt::Formatter ) -> core::fmt::Result {
+        core::fmt::LowerHex::fmt(self, f)
+    }
 }
 
 impl core::fmt::LowerHex for UUID {
     fn fmt(&self, f: &mut core::fmt::Formatter ) -> core::fmt::Result {
-        match core::convert::TryInto::<u16>::try_into(*self) {
-            Ok(val) => {
-                core::fmt::LowerHex::fmt(&val, f)?;
-                write!(f, " (16b)")
-            },
-            Err(_) => {
-                core::fmt::LowerHex::fmt(&self.base_uuid, f)?;
-                write!(f, " (128b)")
-            },
-        }
+        self.display_type(
+            f,
+            |v,f| core::fmt::LowerHex::fmt(v,f),
+            |v,f| core::fmt::LowerHex::fmt(v,f),
+            |v,f| core::fmt::LowerHex::fmt(v,f),
+        )
     }
 }
 
 impl core::fmt::UpperHex for UUID {
     fn fmt(&self, f: &mut core::fmt::Formatter ) -> core::fmt::Result {
-        match core::convert::TryInto::<u16>::try_into(*self) {
-            Ok(val) => {
-                core::fmt::UpperHex::fmt(&val, f)
-            },
-            Err(_) => {
-                core::fmt::UpperHex::fmt(&self.base_uuid, f)
-            },
-        }
+        self.display_type(
+            f,
+            |v,f| core::fmt::UpperHex::fmt(v,f),
+            |v,f| core::fmt::UpperHex::fmt(v,f),
+            |v,f| core::fmt::UpperHex::fmt(v,f),
+        )
     }
 }
 
@@ -351,7 +382,7 @@ impl core::convert::TryFrom<UUID> for u16 {
     }
 }
 
-/// Universially Unique Identifier Version
+/// Universally Unique Identifier Version
 ///
 /// There are 4 UUID versions.
 /// *
@@ -392,6 +423,9 @@ impl core::fmt::Display for UUIDVersion {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::convert::TryFrom;
+
     #[test]
     fn rpa_test() {
         use rand_core::RngCore;
@@ -405,5 +439,107 @@ mod tests {
         let rpa = super::new_resolvable_private_address(irk);
 
         assert!( super::resolve_resolvable_private_address(irk, rpa) );
+    }
+
+    #[test]
+    fn uuid_16_test() {
+
+        // 16 bit shortened form
+        let uuid_val = 0x1234;
+
+        // expected full 128 bit form of uuid_val
+        let uuid_128_val: u128 = 0x0000123400001000800000805F9B34FB;
+
+        let uuid  = UUID::from_u16(uuid_val);
+
+        let uuid_128 = UUID::from_u128(uuid_128_val);
+
+        let uuid_2 = UUID::from_u16(0xabcd);
+
+        assert!( uuid.is_16_bit() );
+
+        assert!( uuid.is_32_bit() );
+
+        assert_eq!( Ok(uuid_val), <u16>::try_from(uuid) );
+
+        assert_eq!( Ok(uuid_val as u32), <u32>::try_from(uuid) );
+
+        assert_eq!( uuid_128_val, uuid.base_uuid );
+
+        assert_eq!( uuid_128_val, uuid.into() );
+
+        assert_eq!( "1234 (16b)", format!("{:x}", uuid) );
+
+        assert_eq!( "0x1234 (16b)", format!("{:#x}", uuid) );
+
+        assert_eq!( uuid, uuid_128 );
+
+        assert_eq!( "ABCD (16b)", format!("{:X}", uuid_2) );
+
+        assert_eq!( "0xABCD (16b)", format!("{:#X}", uuid_2) );
+    }
+
+    #[test]
+    fn uuid_32_test() {
+        // 32 bit shortened form
+        let uuid_val = 0x12345678;
+
+        // expected full 128 bit form of uuid_val
+        let uuid_128_val: u128 = 0x1234567800001000800000805F9B34FB;
+
+        let uuid  = UUID::from_u32(uuid_val);
+
+        let uuid_128 = UUID::from_u128(uuid_128_val);
+
+        let uuid_2 = UUID::from_u32(0xabcdef);
+
+        assert!( !uuid.is_16_bit() );
+
+        assert!( uuid.is_32_bit() );
+
+        assert_eq!( Err(()), <u16>::try_from(uuid) );
+
+        assert_eq!( Ok(uuid_val), <u32>::try_from(uuid) );
+
+        assert_eq!( uuid_128_val, uuid.base_uuid );
+
+        assert_eq!( uuid_128_val, uuid.into() );
+
+        assert_eq!( uuid, uuid_128);
+
+        assert_eq!( "12345678 (32b)", format!("{:x}", uuid) );
+
+        assert_eq!( "0x12345678 (32b)", format!("{:#x}", uuid) );
+
+        assert_eq!( "ABCDEF (32b)", format!("{:X}", uuid_2) );
+
+        assert_eq!( "0xABCDEF (32b)", format!("{:#X}", uuid_2) );
+    }
+
+    #[test]
+    fn uuid_128_test() {
+        let uuid_val = 0x1234567890abcdef;
+
+        let uuid  = UUID::from_u128(uuid_val);
+
+        assert_eq!( uuid, UUID::from(uuid_val) );
+
+        assert!( !uuid.is_16_bit() );
+
+        assert!( !uuid.is_32_bit() );
+
+        assert_eq!( Err(()), <u16>::try_from(uuid) );
+
+        assert_eq!( Err(()), <u32>::try_from(uuid) );
+
+        assert_eq!( uuid_val, uuid.base_uuid );
+
+        assert_eq!( "1234567890abcdef (128b)", format!("{:x}", uuid) );
+
+        assert_eq!( "0x1234567890abcdef (128b)", format!("{:#x}", uuid) );
+
+        assert_eq!( "1234567890ABCDEF (128b)", format!("{:X}", uuid) );
+
+        assert_eq!( "0x1234567890ABCDEF (128b)", format!("{:#X}", uuid) );
     }
 }

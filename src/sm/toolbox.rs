@@ -648,15 +648,15 @@ impl PairingAddress {
 
 /// Tests
 ///
-/// The much of the test data can be retrieved from the end of the Security Manager specification,
-/// but some of the test data is unique. All the data (if the applicable function is implemented)
+/// The much of the tests data can be retrieved from the end of the Security Manager specification,
+/// but some of the tests data is unique. All the data (if the applicable function is implemented)
 /// should be used here for testing.
 #[cfg(test)]
 mod tests {
 
     use super::*;
 
-    /// This is handy for converting the byte data in the Bluetooth Specification into test data
+    /// This is handy for converting the byte data in the Bluetooth Specification into tests data
     ///
     /// spec_data is the concatenation of the data as shown. Whitespace doesn't matter.
     ///
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!( 0x1122_3380_0000_0000_0000_0000_0000_0000u128, aes_cmac_padding(&b) );
     }
 
-    /// The test data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
+    /// The tests data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
     #[test]
     fn aes_cmac_subkey_gen_test() {
         let k = 0x2b7e1516_28aed2a6_abf71588_09cf4f3c;
@@ -746,7 +746,7 @@ mod tests {
         assert_eq!(0xf7ddac30_6ae266cc_f90bc11e_e46d513b, k2);
     }
 
-    /// The test data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
+    /// The tests data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
     #[test]
     fn aes_cmac_gen_test() {
         let k = 0x2b7e1516_28aed2a6_abf71588_09cf4f3c;

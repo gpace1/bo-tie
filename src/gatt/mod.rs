@@ -312,10 +312,8 @@ impl<'a> CharacteristicAdder<'a>
         value: C,
         value_permissions: P )
     -> characteristic::CharacteristicBuilder<'a,'c, C, V>
-        where C: att::server::ServerAttributeValue<Value = V> + Sized + Send + Sync +
-                 PartialEq<V> + 'static,
-              V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync +
-                 'static,
+        where C: att::server::ServerAttributeValue<Value = V> + Send + Sized  + 'static,
+              V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
               P: Into<Option<&'c [att::AttributePermissions]>>
     {
         let permissions = value_permissions.into();
@@ -519,13 +517,17 @@ impl ServerBuilder
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C>(self, connection_channel: &'_ C) -> Server<C>
+    pub fn make_server<C,Q>(self, connection_channel: &'_ C, queue_writer: Q) -> Server<C,Q>
     where C: l2cap::ConnectionChannel,
+          Q: crate::att::server::QueuedWriter,
     {
-        Server {
-            primary_services: self.primary_services,
-            server: att::server::Server::new(connection_channel, Some(self.attributes))
-        }
+        let server = att::server::Server::new(
+            connection_channel,
+            Some(self.attributes),
+            queue_writer,
+        );
+
+        Server { primary_services: self.primary_services, server }
     }
 
     fn add_primary_service(&mut self, service: Service ) {
@@ -539,13 +541,13 @@ impl From<GapServiceBuilder<'_>> for ServerBuilder {
     }
 }
 
-pub struct Server<'c, C>
+pub struct Server<'c,C,Q>
 {
     primary_services: Vec<Service>,
-    server: att::server::Server<'c, C>
+    server: att::server::Server<'c,C,Q>
 }
 
-impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
+impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::QueuedWriter
 {
     pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData)
     -> Result<(), crate::att::Error>
@@ -602,10 +604,13 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
 
                         // Each data_size is 4 bytes for the attribute handle + the end group handle
                         // and either 2 bytes for short UUIDs or 16 bytes for full UUIDs
+                        //
+                        // Each collection is made to take while the *current* iteration does not
+                        // overrun the maximum payload size.
                         let response = if is_16_bit {
                             build_response_iter.take_while(|s| s.service_type.is_16_bit())
                                 .enumerate()
-                                .take_while(|(cnt, _)| payload_size > cnt * (4 + 2))
+                                .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 2))
                                 .by_ref()
                                 .map(|(_, s)|
                                     ReadGroupTypeData::new(
@@ -617,7 +622,7 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                                 .collect()
                         } else {
                             build_response_iter.enumerate()
-                                .take_while(|(cnt, _)| payload_size > cnt * (4 + 16))
+                                .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 16))
                                 .by_ref()
                                 .map(|(_, s)|
                                     ReadGroupTypeData::new(
@@ -650,10 +655,10 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
                         self.server.send_error(
                             handle_range.starting_handle,
                             att::client::ClientPduName::ReadByGroupTypeRequest,
-                            att::pdu::Error::InvalidHandle
+                            att::pdu::Error::AttributeNotFound
                         ).await;
 
-                        return Err(att::pdu::Error::InvalidHandle.into());
+                        return Ok(());
                     },
                 }
             },
@@ -681,31 +686,27 @@ impl<'c, C> Server<'c, C> where C: l2cap::ConnectionChannel
     }
 }
 
-impl<'c, C> AsRef<att::server::Server<'c, C>> for Server<'c, C> where C: l2cap::ConnectionChannel {
-    fn as_ref(&self) -> &att::server::Server<'c, C> {
+impl<'c,C,Q> AsRef<att::server::Server<'c,C,Q>> for Server<'c,C,Q> {
+    fn as_ref(&self) -> &att::server::Server<'c,C,Q> {
         &self.server
     }
 }
 
-impl<'c, C> AsMut<att::server::Server<'c, C>> for Server<'c, C> where C: l2cap::ConnectionChannel {
-    fn as_mut(&mut self) -> &mut att::server::Server<'c, C> {
+impl<'c,C,Q> AsMut<att::server::Server<'c,C,Q>> for Server<'c,C,Q> {
+    fn as_mut(&mut self) -> &mut att::server::Server<'c,C,Q> {
         &mut self.server
     }
 }
 
-impl<'c, C> core::ops::Deref for Server<'c, C>
-where C:l2cap::ConnectionChannel
-{
-    type Target = att::server::Server<'c, C>;
+impl<'c,C,Q> core::ops::Deref for Server<'c,C,Q> {
+    type Target = att::server::Server<'c,C,Q>;
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-impl<'c, C> core::ops::DerefMut for Server<'c, C>
-where C:l2cap::ConnectionChannel
-{
+impl<'c,C,Q> core::ops::DerefMut for Server<'c,C,Q> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }
@@ -716,17 +717,26 @@ mod tests {
 
     use super::*;
     use alloc::boxed::Box;
-    use crate::l2cap::{ConnectionChannel, L2capPdu, AclDataFragment, SendFut};
+    use crate::l2cap::{ConnectionChannel, AclDataFragment, SendFut, MinimumMtu};
     use crate::UUID;
     use futures::task::Waker;
     use att::TransferFormatInto;
+    use crate::att::server::NoQueuedWrites;
 
     struct DummyConnection;
 
     impl ConnectionChannel for DummyConnection {
-        fn send<Pdu>(&self, _: Pdu) -> SendFut where Pdu: Into<crate::l2cap::L2capPdu> {
+        fn send(&self, _: crate::l2cap::AclData) -> SendFut {
             SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> { None }
     }
@@ -767,7 +777,7 @@ mod tests {
             .include_service(&test_service_1, None)
             .finish_service();
 
-        let server = server_builder.make_server(&DummyConnection, 0xFFu16);
+        let server = server_builder.make_server(&DummyConnection, NoQueuedWrites);
 
         server.iter_attr_info()
             .for_each(|info| assert_eq!(info.get_permissions(), test_att_permissions,
@@ -779,11 +789,19 @@ mod tests {
     }
 
     impl l2cap::ConnectionChannel for TestChannel {
-        fn send<Pdu>(&self, data: Pdu) -> l2cap::SendFut where Pdu: Into<L2capPdu> {
-            self.last_sent_pdu.set(Some(data.into().into_data()));
+        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
+            self.last_sent_pdu.set(Some(data.into_raw_data()));
 
             l2cap::SendFut::new(true)
         }
+
+        fn set_mtu(&self, _: u16) {}
+
+        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+
+        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
 
         fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> {
             unimplemented!()
@@ -824,7 +842,7 @@ mod tests {
 
         let test_channel = TestChannel { last_sent_pdu: None.into() };
 
-        let mut server = server_builder.make_server(&test_channel, 256);
+        let mut server = server_builder.make_server(&test_channel, NoQueuedWrites);
 
         server.give_permissions_to_client([
             att::AttributePermissions::Read(att::AttributeRestriction::None)
@@ -896,9 +914,7 @@ mod tests {
             att::L2CAP_CHANNEL_ID
         );
 
-        assert_eq!(
-            Err(att::Error::PduError(att::pdu::Error::InvalidHandle)),
-            block_on(server.process_acl_data(&acl_client_pdu))
-        );
+        // Request was made for for a attribute that was out of range
+        assert_eq!( Ok(()), block_on(server.process_acl_data(&acl_client_pdu)) );
     }
 }
