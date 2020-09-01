@@ -43,11 +43,16 @@
 //! This is implemented only to support LE-U. See the note for `setup_completed_packets_callback`
 //! for what needs to changed when implementing ACL-U buffer support.
 
-use alloc::sync::Arc;
+use alloc::{
+    sync::Arc,
+    boxed::Box,
+};
 use core::{
     cell::Cell,
+    fmt::Debug,
     future::Future,
-    mem::MaybeUninit,
+    mem::transmute,
+    ops::{Deref,DerefMut},
     pin::Pin,
     sync::atomic::{Ordering, AtomicPtr, AtomicBool, spin_loop_hint},
     task::{Waker,Poll,Context},
@@ -485,13 +490,10 @@ static BUSY_LINK: &usize = &0usize;
 /// For this pointer to work the `SenderNodes` that are pointed to (when this is in the *valid*
 /// state) must be pinned within memory.
 struct SenderNodePtr{
-    /// The state pointer
-    ptr: AtomicPtr<SenderNode>,
+    state_ptr: AtomicPtr<SenderNode>,
     busy_val: Cell<Option<*mut SenderNode>>,
+    _pin: core::marker::PhantomPinned,
 }
-
-unsafe impl Send for SenderNodePtr {}
-unsafe impl Sync for SenderNodePtr {}
 
 impl SenderNodePtr {
 
@@ -500,8 +502,9 @@ impl SenderNodePtr {
     /// This will create a node that is currently in the *unoccupied* state.
     pub fn new() -> Self {
         SenderNodePtr {
-            ptr: AtomicPtr::new(core::ptr::null_mut()),
+            state_ptr: AtomicPtr::new(core::ptr::null_mut()),
             busy_val: Cell::new(None),
+            _pin: core::marker::PhantomPinned,
         }
     }
 
@@ -511,7 +514,7 @@ impl SenderNodePtr {
     pub fn own_busy(&self) -> Result<(),()> {
         // Wait for the pointer check with `BUSY_LINK` to fail; success means some other context
         // is currently using this pointer.
-        let valid = match self.ptr.compare_exchange(
+        let valid = match self.state_ptr.compare_exchange(
             BUSY_LINK as *const _ as *mut _,
             BUSY_LINK as *const _ as *mut _,
             Ordering::Acquire,
@@ -522,7 +525,7 @@ impl SenderNodePtr {
         };
 
         // Now try to set the pointer to *Self::BUSY_LINK* to own the *busy* state
-        match self.ptr.compare_exchange_weak(
+        match self.state_ptr.compare_exchange_weak(
             valid,
             BUSY_LINK as *const _ as *mut _,
             Ordering::Acquire,
@@ -542,7 +545,7 @@ impl SenderNodePtr {
     /// the pointer is in another state or this doesn't currently own the *busy* state. When the
     /// *busy* state is released the pointer will equal `busy_val`.
     pub fn release_busy(&self) {
-        self.busy_val.take().map(|old| self.ptr.store(old, Ordering::Release) );
+        self.busy_val.take().map(|old| self.state_ptr.store(old, Ordering::Release) );
     }
 
     /// Set the pointer to a valid state
@@ -554,18 +557,15 @@ impl SenderNodePtr {
     ///
     /// `true` is returned when if the current state is the owned *busy* state.
     pub fn set_and_release(&self, node_ref: *mut SenderNode) {
-        self.busy_val.take().map(|_| self.ptr.store(node_ref, Ordering::Release) );
+        self.busy_val.take().map(|_| self.state_ptr.store(node_ref, Ordering::Release) );
     }
 
     /// Get the pointer
     ///
-    /// The pointer can only be retrieved during an owned Busy state
-    pub fn get_ptr(&self) -> Option<*mut SenderNode> {
-        let ret = self.busy_val.get();
-
-        debug_assert_ne!(ret, Some(BUSY_LINK as *const _ as *mut _));
-
-        ret
+    /// This function can only be called during an owned busy state. Undefined behaviour can occur
+    /// if this is called when the pointer is not in an owned busy state.
+    pub unsafe fn get_ptr(&self) -> Option<*mut SenderNode> {
+        self.busy_val.get()
     }
 }
 
@@ -581,25 +581,52 @@ impl SenderNodePtr {
 ///
 /// Only use the public functions outside of the implementation for `SendNode`.
 ///
+/// # Waking
+/// Each node contains an optional waker used for waking the associated context. This waker is only
+/// optional because the required start and end nodes of the linked list and the case where a node
+/// is added to an empty list do not need an assigned waker. Secondly, its easier to take and move
+/// a Waker when it is wrapped within an `Option`.
+///
+/// The member `start_node_ptr` points to the start node within the list. When a node is dropped, it
+/// checks to see if its previous pointer is equal to this pointer. When it is it will take the
+/// waker in the next node of the list and waker. *This is the only place, and can be the only
+/// place, where this can occur*. The waker will not be touched, and cannot be due to
+/// synchronization reasons, under any other condition.
+///
 /// # Note
 /// When creating a linked list of these nodes, locking occurs when both links between two
 /// consecutive nodes are put into an owned busy state. Once a lock occurs
 struct SenderNode {
-    future: *mut crate::l2cap::SendFut,
+    waker: Option<Waker>,
+    start_node_ptr: *const SenderNode,
     next: SenderNodePtr,
     prev: SenderNodePtr,
-    _pin: core::marker::PhantomPinned,
 }
 
 impl SenderNode {
 
     /// Create a new `SenderNode`
-    pub fn new(future: *mut crate::l2cap::SendFut) -> Self {
+    ///
+    /// This takes the waker to wake the future that is used for awaiting the mutex lock.
+    pub fn new(waker: Waker) -> Self {
         SenderNode {
-            future,
+            waker: waker.into(),
+            start_node_ptr: core::ptr::null(),
             next: SenderNodePtr::new(),
             prev: SenderNodePtr::new(),
-            _pin: core::marker::PhantomPinned,
+        }
+    }
+
+    /// Create a start or end node
+    ///
+    /// These nodes are created without a waker. They are not part of the list of nodes used for
+    /// awaiting for the mutex lock.
+    pub fn new_start_or_end() -> Self {
+        SenderNode {
+            waker: None,
+            start_node_ptr: core::ptr::null(),
+            next: SenderNodePtr::new(),
+            prev: SenderNodePtr::new(),
         }
     }
 
@@ -612,27 +639,26 @@ impl SenderNode {
     ///
     /// # Note
     /// The prev to next busy acquire is always submissive to a next to busy operation (this
-    /// function). One direction must be submissive to the other, and this function's operation was
-    /// chosen to be dominate because it is used more likely to be used than the other operation.
+    /// function). One direction must be submissive to the other to reduce the time of spin-looping.
+    /// This operation was chosen to be dominate as it is used less than the submissive operation.
     ///
     /// This function is dominate because after it acquires own *busy* for `self.next` it will never
-    /// give it up until the operation completes.
-    ///
-    /// Without a dom
-    fn busy_lock_next_to_prev<'a,'b>(&self) -> Option<&'b SenderNode> {
-        let mut spin_cnt: u64 = 0;
+    /// give it up until the function completes.
+    fn busy_lock_next_mut_to_prev<'a,'b>(&self) -> Option<&'b mut SenderNode> {
 
-        loop { if let Ok(_) = self.next.own_busy() { break } spin_cnt += 1; std::thread::yield_now();; }
+        loop {
+            if let Ok(_) = self.next.own_busy() { break }
+            spin_loop_hint();
+        }
 
-        let ret = unsafe { self.next.get_ptr().unwrap().as_ref() }.map(|next_node| {
-            loop { if let Ok(_) = next_node.prev.own_busy() { break } spin_cnt += 1; std::thread::yield_now();; }
+        unsafe { self.next.get_ptr().unwrap().as_mut() }.map(|next_node| {
+            loop {
+                if let Ok(_) = next_node.prev.own_busy() { break }
+                spin_loop_hint();
+            }
 
             next_node
-        });
-
-        println!("prev_to_next 1 for {:?} spin count {}", std::thread::current().id(), spin_cnt );
-
-        ret
+        })
     }
 
     /// Busy lock the `prev` node pointer and the previous node's `next` pointer
@@ -643,21 +669,15 @@ impl SenderNode {
     /// reference to the node pointed to by `next` if `next` is not a null pointer.
     ///
     /// # Note
-    /// The prev to next busy acquire (this function) is always submissive to a next to busy
-    /// operation. One direction must be submissive to the other, and this function's operation was
-    /// chosen to be submissive because it is less likely to be used than the other operation.
+    /// The prev to next busy acquire (this function) is always submissive to a next to prev acquire
+    /// operation. One direction must be submissive to the other to improve performance of the .
     ///
     /// This function is submissive because if it cannot acquire own *busy* state for
     /// `prev_node.next` it will release its own *busy* state for `self.prev`.
-    fn busy_lock_prev_to_next<'a, 'b>(&self) -> Option<&'b SenderNode> {
-        let mut spin_cnt: u64 = 0;
-
-        let ret = loop {
-
-            spin_cnt += 1;
-
+    fn busy_lock_prev_to_next<'a, 'b>(&'a self) -> Option<&'b SenderNode> {
+        loop {
             if let Err(_) = self.prev.own_busy() {
-                std::thread::yield_now();;
+                spin_loop_hint();
                 continue
             }
 
@@ -668,52 +688,85 @@ impl SenderNode {
                 Some(prev_node) =>
                     if let Err(_) = prev_node.next.own_busy() {
                         self.prev.release_busy();
-                        std::thread::yield_now();;
+                        spin_loop_hint();
                     } else {
                         break Some(prev_node)
                     }
             }
-        };
-
-        println!("prev_to_next 1 for {:?} spin count {}", std::thread::current().id(), spin_cnt );
-
-        ret
+        }
     }
 
     /// Insert this item before `next`
-    pub fn insert_before(self: Pin<&Self>, next: Pin<&Self>) {
+    ///
+    /// This will insert this `SenderNode` before node `next`. This node cannot be part of *any*
+    /// linked list, it must be an orphan node. If it is part of a linked list, than that linked
+    /// list's links will become invalid and operations will produce undefined behaviour.
+    ///
+    /// self is not pinned here because a node is required to be pinned only *after* the node is in
+    /// the linked list, thus it technically only needs to be pinned after `insert_before` returns.
+    pub fn insert_before(self: &mut Self, next: Pin<&Self>, start_ptr: *const Self) {
 
-        println!("inserting before for {:?}", std::thread::current().id() );
+        debug_assert_eq!( self.next.state_ptr.load(Ordering::Relaxed), core::ptr::null_mut() );
+        debug_assert_eq!( self.prev.state_ptr.load(Ordering::Relaxed), core::ptr::null_mut() );
+        debug_assert_ne!( next.prev.state_ptr.load(Ordering::Relaxed), core::ptr::null_mut() );
+        debug_assert_ne!( start_ptr,                                   core::ptr::null_mut() );
 
-        let this = unsafe { Pin::into_inner_unchecked(self) };
-        let next_mut = unsafe { Pin::into_inner_unchecked(next) };
+        let next_ref = unsafe { Pin::into_inner_unchecked(next) };
 
-        if let Some(prev) = next_mut.busy_lock_prev_to_next() {
-            prev.next.set_and_release(this as *const _ as *mut _);
+        self.start_node_ptr = start_ptr;
+
+        self.next.state_ptr.store(next_ref as *const _ as *mut _, Ordering::Release);
+
+        if let Some(prev_ref) = next_ref.busy_lock_prev_to_next() {
+
+            self.prev.state_ptr.store(prev_ref as *const _ as *mut _, Ordering::Release);
+
+            prev_ref.next.set_and_release(self as *const _ as *mut _);
         }
 
-        next_mut.prev.set_and_release(this as *const _ as *mut _);
+        next_ref.prev.set_and_release(self as *const _ as *mut _);
+    }
+
+    /// Get a pointer to the next node
+    ///
+    /// This will return the next node in the list if it exists. If this cannot return the next node
+    /// then `Err(_)` is returned, if there is no next node then `Some(None)` is returned. The
+    /// next node cannot be retrieved if the pointer to the next node (`self.next`) is in the *busy*
+    /// state.
+    pub fn next_node_ptr(&self) -> Result<*const SenderNode, ()> {
+        let next_ptr = self.next.state_ptr.load(Ordering::Acquire);
+
+        if next_ptr == BUSY_LINK as *const _ as *mut _ {
+            Err(())
+        } else {
+            Ok( next_ptr as *const _ )
+        }
     }
 }
 
 impl Drop for SenderNode {
     fn drop(&mut self) {
 
-        match (self.busy_lock_next_to_prev(), self.busy_lock_prev_to_next()) {
+        match (self.busy_lock_next_mut_to_prev(), self.busy_lock_prev_to_next()) {
 
             ( Some(next), Some(prev) ) => {
+
+                // Call wake on the next node's waker if this is the first item in the list
+                //
+                // Please note the linked list's `new` method takes advantage of this check to
+                // set an uninitialized waker for the start and end nodes.
+                if prev as *const _ == self.start_node_ptr {
+                    // The return of take is not unwrapped because the next node might be the
+                    // end_node which has no waker
+                    if let Some(waker) = next.waker.take() { waker.wake() }
+                }
+
                 next.prev.set_and_release( prev as *const _ as *mut _ );
                 prev.next.set_and_release( next as *const _ as *mut _ );
             }
 
-            ( Some(next), None ) => next.prev.set_and_release( core::ptr::null_mut() ),
-
-            ( None, Some(prev) ) => prev.next.set_and_release( core::ptr::null_mut() ),
-
-            _ => ()
+            _ => (), // Item was never added to the list
         };
-
-        println!("dropped {:?}", std::thread::current().id());
     }
 }
 
@@ -737,6 +790,12 @@ impl core::ops::DerefMut for SenderNode {
 /// a given time. This is a doubly linked list but it designed to be a FIFO. Entries can only be
 /// pushed onto the end of the list and entries can only be taken from the front of the list.
 ///
+/// Nodes of the linked list can only be removed by dropping them. The important location of this
+/// list is the first item in it as that node is the one who has acquired the mutex lock. Thus only
+/// when an item goes out of scope and it's drop implementation is called can it be removed from the
+/// list. This is also follows the mutex-guard pattern of having locks acquired for as long as the
+/// guard isn't dropped.
+///
 /// Please only use the public methods outside the implementation for `SenderNodeLinkedList`
 ///
 /// # Note
@@ -745,30 +804,34 @@ impl core::ops::DerefMut for SenderNode {
 struct SenderNodeLinkedList {
     start: SenderNode,
     end: SenderNode,
-    new: AtomicBool,
+    unlinked: AtomicBool,
 }
 
-unsafe impl Send for SenderNodeLinkedList {}
 unsafe impl Sync for SenderNodeLinkedList {}
 
 impl SenderNodeLinkedList {
 
     /// Create a new `SenderNodeLinkedList`
     fn new() -> Self {
+        println!("Busy address {:?}", BUSY_LINK as *const _);
+        // Using uninitialized memory is safe here because these nodes do not have a link back to
+        // the start node.
         SenderNodeLinkedList {
-            start: SenderNode::new( core::ptr::null_mut() ),
-            end:   SenderNode::new( core::ptr::null_mut() ),
-            new:   AtomicBool::new( true ),
+            start: SenderNode::new_start_or_end(),
+            end:   SenderNode::new_start_or_end(),
+            unlinked:   AtomicBool::new( true ),
         }
     }
 
     /// Insert the first item **ever** into the linked list
     ///
-    /// This method must be called once, but should only be used by the push method. This is not to
-    /// be called if the list is empty but a prior entry (or entries) were removed until it was
-    /// empty. This should only be called after a `SendNodeLinkedList` was created and the first
-    /// element is to be added to the list. After it is called once it should not be called again.
-    fn insert_first_ever(&self, node: Pin<&SenderNode>) {
+    /// Insert the first item into the list. This must be called to insert the first item in the
+    /// list, but after that it is inefficient to continue to call this. It should only be called
+    /// again due to a race condition between multiple threads trying to insert the first node.
+    ///
+    /// The return is a boolean to indicate if this item is the first node within the list. A return
+    /// of true does not necessarily mean that `node` was the first item put into the list.
+    fn insert_first_ever(&self, node: Pin<&mut SenderNode>) -> bool {
 
         const NULL: *mut SenderNode = core::ptr::null_mut();
 
@@ -789,27 +852,29 @@ impl SenderNodeLinkedList {
             }
         }
 
-        println!("Owned busy for {:?}", std::thread::current().id() );
-
         #[allow(unreachable_code)]
-        match (self.start.next.get_ptr(), self.end.prev.get_ptr()) {
+        match unsafe { (self.start.next.get_ptr(), self.end.prev.get_ptr() ) } {
 
             (Some(NULL), Some(NULL)) => {
 
                 // `node` is not in the list so directly setting the links without checking if
-                // they are busy is fine.
+                // they are busy is OK.
 
-                node.next.ptr.store(&self.end as *const _ as *mut _, Ordering::Relaxed);
+                let node_ptr = &node as *const _ as *mut _;
 
-                node.prev.ptr.store(&self.start as *const _ as *mut _, Ordering::Relaxed);
+                node.next.state_ptr.store(&self.end as *const _ as *mut _, Ordering::Relaxed);
 
-                let node_ptr = node.get_ref() as *const _ as *mut _;
+                node.prev.state_ptr.store(&self.start as *const _ as *mut _, Ordering::Relaxed);
+
+                unsafe { node.get_unchecked_mut().start_node_ptr = &self.start as *const _ };
 
                 self.start.next.set_and_release(node_ptr);
 
                 self.end.prev.set_and_release(node_ptr);
 
-                self.new.store(false, Ordering::Release);
+                self.unlinked.store(false, Ordering::Release);
+
+                true
             }
 
             (Some(_), Some(_)) => {
@@ -819,7 +884,7 @@ impl SenderNodeLinkedList {
 
                 self.end.prev.release_busy();
 
-                unsafe { Pin::new_unchecked(self) }.push(node);
+                unsafe { Pin::new_unchecked(self) }.push(node)
             }
 
             (None, _) | (_, None) => panic!("This should never occur, this is a logic error"),
@@ -827,12 +892,264 @@ impl SenderNodeLinkedList {
     }
 
     /// Push an element onto the end of the list
-    pub fn push(self: Pin<&Self>, node: Pin<&SenderNode>) {
-        if self.new.load(Ordering::Relaxed) {
+    ///
+    /// If this function returns true then this node was the first node in the list. However if
+    /// `false` is returned, that only guarantees that the item was not *pushed* onto the first
+    /// position. It may become the first in-between the time the first position was checked and the
+    /// boolean was returned.
+    pub fn push(self: Pin<&Self>, node: Pin<&mut SenderNode>) -> bool {
+        if self.unlinked.load(Ordering::Relaxed) {
             self.get_ref().insert_first_ever(node)
         } else {
-            node.insert_before( unsafe { self.map_unchecked(|this| &this.end) } )
+            let node_mut = unsafe { node.get_unchecked_mut() };
+
+            let start_ptr = &self.start as *const _;
+
+            node_mut.insert_before( unsafe { Pin::new_unchecked( &self.end ) }, start_ptr );
+
+            self.as_ref().is_first( node_mut )
         }
+    }
+
+    /// Checks if `node` is the first item in the linked list
+    ///
+    /// `true` is returned if `node` is the first item in the list, otherwise false is returned.
+    /// However, `false` doesn't mean that the item is not *currently* the first item in the list.
+    /// In-between the time the first position was checked and the value was returned, `node` could
+    /// have been put into the first place of the linked list. Thus a return of `true` guarantees
+    /// that the item is in the first position whereas a return of `false` does not guarantee that
+    /// the item is not in the first position.
+    pub fn is_first(&self, node: &SenderNode) -> bool {
+
+        let first_ptr = loop { if let Ok(ptr) = self.start.next_node_ptr() { break ptr } };
+
+        first_ptr == node as *const _
+    }
+}
+
+/// A no-allocation, future driven mutex
+///
+/// This mutex is designed to work within no_std environments, however it should not be used with
+/// std, and especially with an operating system with a preemptive scheduler. This implementation
+/// relies on atomic spinlocks and pinning to provide a linked list queue of awaiting futures.
+/// Each future has a ticket that must be pinned in memory as it is pointed to the other members of
+/// the linked list.
+///
+/// # `alloc` Feature
+/// While allocation is not needed for this mutex to function, it does does make using this mutex
+/// easier.
+struct SenderMutex<T> {
+    item: T,
+    await_list: SenderNodeLinkedList
+}
+
+impl<T> SenderMutex<T> {
+
+    /// Create a new `NoStdSenderMutes` in a pinned `Arc`
+    pub fn new( item: T ) -> Self {
+        Self { item, await_list: SenderNodeLinkedList::new() }
+    }
+
+    /// Create a future that is both the locker and guard of the mutex data.
+    ///
+    /// This method returns a future that once polled to completion will return a reference to the
+    /// data of the mutex. Unlike method `lock`, the output of this future is not a mutex guard and
+    /// its lifetime is tied to the lifetime of the future.
+    ///
+    /// ```
+    /// # use core::pin::Pin;
+    /// # use core::ops::Deref;
+    ///
+    /// async fn example<T>(mutex: Pin<impl Deref<Target=SenderMutex<T>>>) {
+    ///
+    ///     let mut lock_guard = mutex.as_ref().lock_guard();
+    ///
+    ///     let data_mut = lock_guard.await;
+    /// }
+    /// ```
+    ///
+    /// # Note
+    /// Normally for asynchronous mutex implementation, the output of the future isn't tied to the
+    /// lifetime of the future. These implementations normally return a guard whose lifetime matches
+    /// the lifetime the lock. Unfortunately because of the implementation of this mutex, there is
+    /// an interal ticket that not only must life for both the lifetime of the future and the gaurd,
+    /// but also must be pinned within memory. And because the ticket is pinned in memory, it cannot
+    /// be moved from the future to the gaurd. Thus the return of this function is both the locking
+    /// future and guard of the mutex data. If you decide to look at the code, the ticket is the
+    /// struct member `node`.
+    pub fn lock_guard<'a>(self: Pin<&'a Self>)
+    -> impl Future<Output = impl DerefMut<Target = T> + 'a > + 'a
+    {
+        let fut = NoStdLockingFuture::new(&self.get_ref());
+
+        // This works because pin is represented as a transparent. This is done because
+        // Pin::new_unchecked requires NoStdLockingFuture to implement Deref, but implementing
+        // Deref would be useless.
+        unsafe { transmute::<_, Pin<NoStdLockingFuture<'a, T>>>( fut ) }
+    }
+
+    pub fn lock<'a>(self: Pin<&'a Self>) -> Pin<Box<impl Future<Output = MutexGuard<'a, T>> + 'a>> {
+        Box::pin(AllocLockingFuture::new(&self.get_ref()))
+    }
+}
+
+/// Async Lock
+///
+/// This is the locking guard returned by
+/// [`guard_lock`]
+struct NoStdLockingFuture<'a,T> {
+    await_list_ref: &'a SenderNodeLinkedList,
+    node: Option<SenderNode>,
+    item_ptr: *mut T,
+}
+
+impl<'a,T> NoStdLockingFuture<'a, T> {
+
+    fn new(mutex: &'a SenderMutex<T>) -> Self {
+
+        let await_list_ref = &mutex.await_list;
+
+        let item_ptr = &mutex.item as *const _ as *mut _;
+
+        Self {
+            await_list_ref,
+            node: None,
+            item_ptr,
+        }
+    }
+}
+
+/// Implementation of `Future` for a pinned `NoStdLockingFuture`
+///
+/// `Future` is implemented for a *pinned* `NoStdLockingFuture` instead of just a
+/// `NoStdLockingFuture` as a reference to the `SendNode` is part to the output `NoStdMutexGuard`.
+/// As explained in the doc for `lock`
+///
+/// # Warning
+/// This takes advantage that `Pin` is represented as transparent (`#[repr(transmute)]`). There is
+/// no way to implement Deref and DerefMut as that causes a conflicting implementation with the
+/// implementation of pin for
+impl<'a, T: 'a> Future for Pin<NoStdLockingFuture<'a, T>> {
+    type Output = DataRef<'a, T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+
+        // This requires pin to be transparent
+        let this = unsafe { transmute::<Pin<&mut Self>,&mut NoStdLockingFuture<'a, T>>(self) };
+
+        if if this.node.is_none() {
+
+            this.node = SenderNode::new( cx.waker().clone() ).into();
+
+            let pinned_node = unsafe { Pin::new_unchecked( this.node.as_mut().unwrap() ) };
+
+            let pinned_list = unsafe { Pin::new_unchecked( this.await_list_ref ) };
+
+            pinned_list.push(pinned_node)
+
+        } else {
+            this.await_list_ref.is_first( this.node.as_ref().unwrap() )
+        } {
+            Poll::Ready( DataRef::new(this) )
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+/// A locking future for use with allocation
+///
+/// This provides a more user friendly way of locking. When polled to completion it returns a mutex
+/// guard instead of the reference `NoStdLockingFuture` returns.
+struct AllocLockingFuture<'a, T> {
+    await_list_ref: &'a SenderNodeLinkedList,
+    ticket: Option<Pin<Box<SenderNode>>>,
+    item_ptr: *mut T
+}
+
+impl<'a, T> AllocLockingFuture<'a, T> {
+    fn new(mutex: &'a SenderMutex<T> ) -> Self {
+        Self {
+            await_list_ref: &mutex.await_list,
+            ticket: None,
+            item_ptr: &mutex.item as *const _ as *mut _,
+        }
+    }
+}
+
+impl<'a,T: 'a> Future for AllocLockingFuture<'a, T> {
+    type Output = MutexGuard<'a, T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if if this.ticket.is_none() {
+            let mut node = Box::pin( SenderNode::new(cx.waker().clone()) );
+
+            let is_first = unsafe { Pin::new_unchecked(this.await_list_ref) }.push( node.as_mut() );
+
+            this.ticket = node.into();
+
+            is_first
+        } else {
+            this.await_list_ref.is_first( &this.ticket.as_ref().unwrap() )
+        } {
+            Poll::Ready( MutexGuard::new(this) )
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+struct MutexGuard<'a,T> {
+    item_ptr: *mut T,
+    ticket: Pin<Box<SenderNode>>,
+    _pd: core::marker::PhantomData<&'a T>,
+}
+
+impl<'a, T> MutexGuard<'a,T> {
+
+    /// Create a new MutexGuard
+    ///
+    /// # Panic
+    /// This will panic if member `ticket` of input `fut` is `None`.
+    fn new(fut: &mut AllocLockingFuture<'a, T>) -> Self {
+        Self {
+            item_ptr: fut.item_ptr,
+            ticket: fut.ticket.take().unwrap(),
+            _pd: core::marker::PhantomData
+        }
+    }
+}
+
+/// A way for the user to refer to the Mutex data
+///
+/// This is not a lock guard, it provides no way of `guarding` the mutex lock until it is dropped.
+/// All it provides is a way to `Deref` and `DerefMut` to the Mutex data. The biggest difference is
+/// that a Guard can be moved away from the future that was used to lock the mutex whereas this
+/// cannot. See the doc for
+pub struct DataRef<'a, T> {
+    fut: &'a NoStdLockingFuture<'a, T>,
+}
+
+impl<'a, T> DataRef<'a, T> {
+
+    fn new(fut: &'a NoStdLockingFuture<'a, T> ) -> Self {
+        Self { fut }
+    }
+}
+
+impl<T> Deref for DataRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.fut.item_ptr }
+    }
+}
+
+impl<T> DerefMut for DataRef<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.fut.item_ptr}
     }
 }
 
@@ -842,7 +1159,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linked_list_thread_test() {
+    #[ignore]
+    fn linked_list_collide_thread_test() {
 
         lazy_static::lazy_static! {
             static ref LINKED_LIST: SenderNodeLinkedList = SenderNodeLinkedList::new();
@@ -850,19 +1168,61 @@ mod tests {
 
         let linked_list_ref = unsafe { Pin::new_unchecked(&*LINKED_LIST) };
 
-        let threads = (0..10).into_iter()
-            .map( |_| std::thread::spawn( move || {
+        for _ in 0..100 {
+            let threads = (0..1000).into_iter()
+                .map(|_| std::thread::spawn(move || {
 
-                let node = SenderNode::new( core::ptr::null_mut() );
+                    let mut node = SenderNode::new( futures::task::noop_waker() );
 
-                let pinned_node = unsafe { Pin::new_unchecked(&node) };
+                    let pinned_node = unsafe { Pin::new_unchecked(&mut node) };
 
-                linked_list_ref.push(pinned_node);
+                    linked_list_ref.push(pinned_node);
+                }))
+                .collect::<Vec<_>>();
 
-            }))
-            .collect::<Vec<_>>();
+            threads.into_iter()
+                .for_each(|handle| handle.join().unwrap())
+        }
+    }
 
-        threads.into_iter()
-            .for_each(|handle| handle.join().unwrap() )
+    #[test]
+    #[ignore]
+    fn linked_list_barrier_thread_test() {
+        use std::sync::Barrier;
+
+        lazy_static::lazy_static! {
+            static ref LINKED_LIST: SenderNodeLinkedList = SenderNodeLinkedList::new();
+        };
+
+        let linked_list_ref = unsafe { Pin::new_unchecked(&*LINKED_LIST) };
+
+        let barrier = Arc::new(Barrier::new(50));
+
+        for c in 0..100 {
+
+            println!("******************** run {} ***********************", c);
+
+            let threads = (0..50).into_iter()
+                .map(|_| {
+                    let wall = barrier.clone();
+
+                    std::thread::spawn(move || {
+
+                        let mut node = SenderNode::new( futures::task::noop_waker() );
+
+                        let pinned_node = unsafe { Pin::new_unchecked(&mut node) };
+
+                        linked_list_ref.push(pinned_node);
+
+                        wall.wait();
+
+                        std::mem::forget(node)
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            threads.into_iter()
+                .for_each(|handle| handle.join().unwrap())
+        }
     }
 }
