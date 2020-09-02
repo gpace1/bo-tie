@@ -15,17 +15,11 @@
 //! For the the functions defined in the specification, all array inputs need to be in big-endian
 //! order.
 
-/// The Identifier for NIST P-256 curve
-static ECC_NAME: openssl::nid::Nid = openssl::nid::Nid::X9_62_PRIME256V1;
-
 /// The public key type for the P-256 curve
-pub(super) type PubKey = openssl::pkey::PKey<openssl::pkey::Public>;
+pub(super) type PubKey = p256::PublicKey;
 
-/// The private key type for the P-256 curve
-pub(super) type PriKey = openssl::pkey::PKey<openssl::pkey::Private>;
-
-/// The peer public key type for the P-256 curve
-pub(super) type PeerPubKey = openssl::pkey::PKey<openssl::pkey::Public>;
+/// The private (Ephemeral Secret) key type for the P-256 curve
+pub(super) type PriKey = p256::ecdh::EphemeralSecret;
 
 /// The identifier for an uncompressed public key
 const UNCOMPRESSED_PUB_KEY_TYPE: u8 = 0x4;
@@ -42,23 +36,19 @@ const PUB_KEY_X_RANGE: core::ops::Range<usize> = 1..33;
 const PUB_KEY_Y_RANGE: core::ops::Range<usize> = 33..65;
 
 /// The Diffie-Hellman shared secret
-pub(super) type DHSecret = [u8;32];
+pub(super) type DHSharedSecret = [u8;32];
 
 impl super::GetXOfP256Key for PubKey {
     fn x(&self) -> [u8;32] {
-        use openssl::bn::BigNumContext;
-        use openssl::ec::EcGroup;
-        use openssl::ec::PointConversionForm;
+        use p256::PublicKey;
 
-        let ec_key = self.ec_key().unwrap();
-        let ec_group = EcGroup::from_curve_name(ECC_NAME).unwrap();
-        let mut bg_num = BigNumContext::new().unwrap();
+        if let PublicKey::Compressed(_) = self {
+            panic!("Public key is compressed, compressed points are not used")
+        }
 
-        let mut ret = [0u8;32];
+        let bytes = self.as_bytes();
 
-        let bytes = ec_key
-            .public_key()
-            .to_bytes(&ec_group, PointConversionForm::UNCOMPRESSED, &mut bg_num).unwrap();
+        let mut ret = <[u8;32]>::default();
 
         ret.copy_from_slice(&bytes[PUB_KEY_X_RANGE]);
 
@@ -66,20 +56,14 @@ impl super::GetXOfP256Key for PubKey {
     }
 }
 
-impl super::CommandData for PeerPubKey {
+impl super::CommandData for PubKey {
     fn into_icd(self) -> alloc::vec::Vec<u8> {
-        use openssl::ec::EcGroup;
-        use openssl::ec::PointConversionForm;
-        use openssl::bn::BigNumContext;
 
-        let ec_key = self.ec_key().unwrap();
-        let ec_group = EcGroup::from_curve_name(ECC_NAME).unwrap();
-        let mut bg_num = BigNumContext::new().unwrap();
+        if let PubKey::Compressed(_) = self {
+            panic!("Public key is compressed, compressed points are not used")
+        }
 
-        let mut key = ec_key.public_key()
-            .to_bytes(&ec_group,PointConversionForm::UNCOMPRESSED, &mut bg_num)
-            .unwrap()[PUB_KEY_RANGE]
-            .to_vec();
+        let mut key = self.as_bytes()[PUB_KEY_RANGE].to_vec();
 
         // Reverse the keys from little endian to big endian
         key[..32].reverse(); // x
@@ -89,11 +73,9 @@ impl super::CommandData for PeerPubKey {
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
-        use openssl::ec::{ EcPoint, EcGroup, EcKey};
-            use openssl::pkey::PKey;
-        use openssl::bn::BigNumContext;
 
-        // The icd doesn't contain the compression byte indicator
+        // The icd doesn't contain the compression byte indicator in Bluetooth's Security Manager
+        // PDUs.
         if icd.len() == PUB_KEY_BYTE_LEN - 1 {
             let mut pub_key = alloc::vec::Vec::with_capacity(PUB_KEY_BYTE_LEN);
 
@@ -105,15 +87,7 @@ impl super::CommandData for PeerPubKey {
             pub_key[PUB_KEY_X_RANGE].reverse();
             pub_key[PUB_KEY_Y_RANGE].reverse();
 
-            let group = EcGroup::from_curve_name(ECC_NAME).unwrap();
-
-            let mut bg_num = BigNumContext::new().unwrap();
-
-            let ec_point = EcPoint::from_bytes(&group, &pub_key, &mut bg_num).unwrap();
-
-            let ec_key = EcKey::from_public_key(&group, &ec_point).unwrap();
-
-            Ok( PKey::from_ec_key(ec_key).unwrap() )
+            PubKey::from_bytes(&pub_key).ok_or(super::Error::Format)
         } else {
             Err( super::Error::Size )
         }
@@ -457,35 +431,35 @@ pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
 
 /// Security function *e*
 ///
-/// This is the encrypted data generator for LE legacy. It generates 128-bit data from a 128-bit key
-/// using the AES-128 bit block cypher (see [FIPS-197](https://en.wikipedia.org/wiki/FIPS_197)).
+/// This is the encrypted data generator for LE legacy and secure connections. It generates 128-bit
+/// data from a 128-bit key using the AES-128 bit block cypher
+/// (see [FIPS-197](https://en.wikipedia.org/wiki/FIPS_197)).
 ///
-/// This function uses OpenSSL's aes implementation to generate the Ciphertext.
-///
-/// This is the synchronous version of this function and doesn't rely on the HCI to encrypt the
-/// payload. Whether or not this function is faster then the asynchronous version
-/// depends on the architecture of your system in relation to the Bluetooth controller. However, it
+/// This is host version of this function and doesn't rely on the controller to encrypt the payload.
+/// Whether or not this function is faster then the asynchronous version depends on the architecture
+/// of your system in relation to the Bluetooth controller. However, it
 /// is recommended to use this function if your target architecture supports the
 /// [AES Instruction Set](https://en.wikipedia.org/wiki/AES_instruction_set).
+///
+/// # Note
+/// While this function can be used for encryption of other l2cap connection channels, but it is
+/// recommended to leave to controller to perform a connection channels encryption. This function
+/// main purpose is for use with the security manager's pairing, and as a result it is inefficient
+/// to call it constantly as it initializes a new AES cypher on each call.
 pub fn e(key: u128, plain_text: u128 ) -> u128 {
 
-    use openssl::symm::{Cipher, Mode, Crypter};
+    use aes::block_cipher::generic_array::GenericArray;
+    use aes::block_cipher::{BlockCipher, NewBlockCipher};
 
-    let cipher = Cipher::aes_128_ecb();
+    let key_bytes = key.to_be_bytes();
 
-    let mut cypher_block = [0u8;32];
+    let cipher = aes::Aes128::new( GenericArray::from_slice(&key_bytes) );
 
-    let mut crypter = Crypter::new(cipher, Mode::Encrypt, &key.to_be_bytes(), None).unwrap();
+    let mut block = plain_text.to_be_bytes();
 
-    crypter.update(&plain_text.to_be_bytes(), &mut cypher_block).unwrap();
+    cipher.encrypt_block( GenericArray::from_mut_slice(&mut block) ) ;
 
-    crypter.finalize(&mut cypher_block[16..]).unwrap();
-
-    let mut cypher_value = [0u8;16];
-
-    cypher_value.copy_from_slice(&cypher_block[..16]);
-
-    <u128>::from_be_bytes(cypher_value)
+    <u128>::from_be_bytes(block)
 }
 
 /// AES-CMAC subkey generation algorithm
@@ -569,21 +543,11 @@ pub fn aes_cmac_verify(key: u128, msg: &[u8], auth_code: u128) -> bool {
 /// This will return an error if the random number generation failed.
 pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 
-    use openssl::ec::{EcKey, EcGroup};
-    use openssl::pkey::PKey;
+    let ephemeral_secret = PriKey::generate( &mut rand_core::OsRng );
 
-    let group = match EcGroup::from_curve_name(ECC_NAME) {
-        Err(e) => return Err(e),
-        Ok(g) => g
-    };
+    let public_key = PubKey::from(&ephemeral_secret);
 
-    let ec_pri_key = EcKey::generate( &group )?;
-    let ec_pub_key = EcKey::from_public_key( &group, ec_pri_key.public_key() )?;
-
-    let private_key = PKey::from_ec_key(ec_pri_key)?;
-    let public_key  = PKey::from_ec_key(ec_pub_key)?;
-
-    Ok( (private_key, public_key) )
+    Ok( (ephemeral_secret, public_key) ) as Result<_, ()>
 }
 
 /// Calculate the elliptic curve Diffie-Hellman shared secret from the provided public key
@@ -593,22 +557,18 @@ pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 ///
 /// The `raw_remote_public_key` needs to be in the byte order as shown in the Security Manager's
 /// 'Pairing Public Key' PDU.
-pub fn ecdh(this_private_key: PriKey, peer_public_key: &PeerPubKey) -> Result<DHSecret, impl core::fmt::Debug>
+pub fn ecdh(this_private_key: PriKey, peer_public_key: &PubKey) -> Result<DHSharedSecret, impl core::fmt::Debug>
 {
-    use openssl::derive::Deriver;
-
-    let mut deriver = match Deriver::new(&this_private_key) {
+    let shared_secret = match this_private_key.diffie_hellman(peer_public_key){
+        Ok(s) => s,
         Err(e) => return Err(e),
-        Ok(d) => d,
     };
 
-    let mut secret = DHSecret::default();
+    let mut secret_bytes = DHSharedSecret::default();
 
-    deriver.set_peer(peer_public_key)?;
+    secret_bytes.copy_from_slice( shared_secret.as_bytes().as_slice() );
 
-    secret.copy_from_slice( &deriver.derive_to_vec()? );
-
-    Ok(secret)
+    Ok(secret_bytes)
 }
 
 /// Generate a random u128 value
@@ -900,7 +860,7 @@ mod tests {
         raw_peer_key[..32].reverse();
         raw_peer_key[32..].reverse();
 
-        let peer_key = PeerPubKey::try_from_icd(&raw_peer_key).expect("Failed to make PeerKey");
+        let peer_key = PubKey::try_from_icd(&raw_peer_key).expect("Failed to make PeerKey");
 
         let _secret = ecdh(pri_key, &peer_key).expect("Failed to generate secret");
     }
