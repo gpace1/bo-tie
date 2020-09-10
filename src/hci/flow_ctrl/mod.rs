@@ -1,25 +1,26 @@
 #[cfg(feature = "flow-ctrl")] pub(super) mod flow_manager;
 
+use alloc::vec::Vec;
+use core::{
+    future::Future,
+    ops::Deref,
+    pin::Pin,
+    task::{Context,Poll},
+};
+use crate::l2cap::{AclData, AclDataFragment, ConnectionChannel};
 use super::{
     common,
     HostInterface,
-    HostControllerInterface,
     HciAclDataInterface,
     HciAclData,
     AclPacketBoundary,
     AclBroadcastFlag,
 };
-use alloc::{
-    vec::Vec,
+#[cfg(feature = "flow-ctrl")] use super::HostControllerInterface;
+#[cfg(feature = "flow-ctrl")] use core::{
     sync::Arc,
+    task::Waker,
 };
-use core::{
-    future::Future,
-    ops::Deref,
-    pin::Pin,
-    task::{Waker,Context,Poll},
-};
-use crate::l2cap::{AclData, AclDataFragment};
 #[cfg(feature = "flow-ctrl")] use flow_manager::HciDataPacketFlowManager;
 #[cfg(feature = "flow-ctrl")] pub use flow_manager::AsyncLock;
 
@@ -40,7 +41,7 @@ where HI: Deref<Target = HostInterface<I>>,
     minimum_mtu: usize,
     handle: common::ConnectionHandle,
     hi: HI,
-    flow_controller: F,
+    #[allow(dead_code)] flow_controller: F,
 }
 
 impl<I,HI> HciLeUChannel<I,HI,NoFlowController>
@@ -77,9 +78,7 @@ where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface,
       Self: crate::l2cap::ConnectionChannel,
 {
-    fn get_send_mtu(&self, data: &crate::l2cap::AclData) -> usize {
-        use crate::l2cap::ConnectionChannel;
-
+    fn get_send_mtu(&self, data: &AclData) -> usize {
         match data.get_mtu() {
             crate::l2cap::AclDataSuggestedMtu::Minimum => self.min_mtu(),
 
@@ -99,7 +98,7 @@ where HI: Deref<Target = HostInterface<I>>,
 
     type SendFutErr = ();
 
-    fn send(&self, data: crate::l2cap::AclData ) -> Self::SendFut {
+    fn send(&self, data: AclData ) -> Self::SendFut {
 
         let mtu = self.get_send_mtu(&data);
 
@@ -260,4 +259,12 @@ impl Future for NoFlowController {
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(Ok(()))
     }
+}
+
+#[cfg(feature = "flow-ctrl")]
+trait FlowControl {
+    type ConnectionChannel: ConnectionChannel;
+
+    /// Create a new connection channel
+    fn new_channel(&self) -> Self::ConnectionChannel;
 }

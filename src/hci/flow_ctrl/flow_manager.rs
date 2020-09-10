@@ -462,7 +462,6 @@ impl<M> Drop for HciDataPacketFlowManager<M> {
 
 pub(super) type FlowControllerError<I> = <I as HciAclDataInterface>::SendAclDataError;
 
-
 /// A trait for implementing an asynchronous locking.
 ///
 /// This is needed for a flow controller as fragmented data must be sent contiguously to the
@@ -525,5 +524,147 @@ where Hci: core::ops::Deref<Target = HostInterface<I>> + Clone + Unpin + 'static
             },
             Some(fut) => fut,
         }.as_mut().poll(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hci::{
+        HostInterface,
+        HostControllerInterface,
+        HciAclDataInterface,
+        CommandParameter,
+        EventMatcher,
+        events,
+        opcodes
+    };
+    use crate::hci::events::{EventsData, Events};
+    use std::sync::Mutex;
+
+    #[derive(Clone)]
+    struct TestInterface {
+        event_waker: Arc<Mutex<Option<Waker>>>,
+        e_data: Arc<Mutex<Option<EventsData>>>,
+        send_cnt: Arc<AtomicUsize>,
+        end_thread: Arc<AtomicBool>,
+    }
+
+    impl TestInterface {
+        const MAX_PAYLOAD_SIZE: u16 = 100;
+        const BUFFER_SIZE: u8 = 12;
+
+        fn thread(self) {
+            use rand_core::RngCore;
+
+            let mut rand = rand_core::OsRng::default();
+
+            loop {
+                std::thread::sleep( std::time::Duration::from_millis( rand.next_u64() % 100 ) );
+
+                if self.end_thread.load(Ordering::Relaxed) { break }
+
+                let cnt = self.send_cnt.load(Ordering::Relaxed);
+
+                self.send_cnt.fetch_sub( (rand.next_u64() % cnt) as usize, Ordering::Relaxed );
+
+                self.event_waker.lock().unwrap().take().map( |w| w.wake() );
+            }
+        }
+    }
+
+    impl Default for TestInterface {
+        fn default() -> Self {
+            let interface = TestInterface {
+                event_waker: Arc::default(),
+                e_data: Arc::default(),
+                send_cnt: Arc::default(),
+                end_thread: Arc::default(),
+            };
+
+            std::thread::spawn(interface.clone().thread());
+
+            interface
+        }
+    }
+
+
+    impl HostControllerInterface for TestInterface {
+        type SendCommandError = usize;
+        type ReceiveEventError = usize;
+
+        fn send_command<D, W>(&self, command: &D, waker: W) -> Result<bool, Self::SendCommandError>
+            where D: CommandParameter,
+                  W: Into<Option<Waker>>
+        {
+            match CommandParameter::COMMAND {
+                opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize) => {
+
+                    let packet_len = Self::MAX_PAYLOAD_SIZE.to_le_bytes();
+
+                    *self.e_data.lock().unwrap() = Some(events::EventsData::CommandComplete(
+                        events::CommandCompleteData {
+                            number_of_hci_command_packets: 10,
+                            command_opcode: Some( opcodes::HCICommand::LEController(
+                                opcodes::LEController::ReadBufferSize
+                            ).as_opcode_pair().as_opcode() ),
+                            raw_data: vec![0, packet_len[0], packet_len[1], Self::BUFFER_SIZE]
+                        }
+                    ));
+                },
+
+                opcodes::HCICommand::InformationParameters(
+                    opcodes::InformationParameters::ReadBufferSize
+                ) => {
+                    unimplemented!("Reading the BR/EDR buffer size isn't not implemented")
+                },
+
+                opcode => panic!("Received unexpected command {:?}", opcode),
+            };
+
+            Ok(true)
+        }
+
+        fn receive_event<P>(&self, event: Option<Events>, waker: &Waker, matcher: Pin<Arc<P>>)
+        -> Option<Result<EventsData, Self::ReceiveEventError>>
+        where P: EventMatcher + Send + Sync + 'static {
+            match self.e_data.lock().unwrap().take() {
+                None => {
+                    *self.event_waker.lock().unwrap() = Some(waker.clone());
+
+                    None
+                },
+                Some(event_data) => Some(Ok(event_data)),
+            }
+        }
+    }
+
+    impl HciAclDataInterface for TestInterface {
+        type SendAclDataError = usize;
+        type ReceiveAclDataError = usize;
+
+        fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError> {
+
+            assert!( data.get_payload().len() <= Self::MAX_PAYLOAD_SIZE as usize );
+
+            // `<` comparison instead of `<=` as this is a fetch_add return.
+            assert!( self.send_cnt.fetch_add(1,Ordering::Relaxed) < Self::BUFFER_SIZE as usize );
+
+            Ok(0)
+        }
+
+        fn start_receiver(&self, _: ConnectionHandle) {}
+
+        fn stop_receiver(&self, _: &ConnectionHandle) {}
+
+        fn receive(&self, _: &ConnectionHandle, _: &Waker)
+        -> Option<Result<Vec<HciAclData>, Self::ReceiveAclDataError>> {
+            None
+        }
+    }
+
+    #[test]
+    fn flow_manager_test() {
+        let hci = HostInterface::<TestInterface>::default();
     }
 }

@@ -757,9 +757,24 @@ mod test {
 
     use super::*;
     use std::sync::{Arc, Mutex};
-    use std::task::Waker;
     use std::thread::JoinHandle;
     use crate::l2cap::MinimumMtu;
+
+    use std::{
+        future::Future,
+        task::{Poll,Waker,Context},
+        pin::Pin
+    };
+
+    struct DummySendFut;
+
+    impl Future for DummySendFut {
+        type Output = Result<(), ()>;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     struct TwoWayChannel {
         b1: Option<Vec<u8>>,
@@ -798,8 +813,10 @@ mod test {
     }
 
     impl l2cap::ConnectionChannel for Channel1 {
+        type SendFut = DummySendFut;
+        type SendFutErr = ();
 
-        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
+        fn send(&self, data: crate::l2cap::AclData) -> Self::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             gaurd.b1 = Some(data.into_raw_data());
@@ -808,7 +825,7 @@ mod test {
                 waker.wake();
             }
 
-            l2cap::SendFut::new(true)
+            DummySendFut
         }
 
         fn set_mtu(&self, _: u16) {}
@@ -834,8 +851,10 @@ mod test {
     }
 
     impl l2cap::ConnectionChannel for Channel2 {
+        type SendFut = DummySendFut;
+        type SendFutErr = ();
 
-        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
+        fn send(&self, data: crate::l2cap::AclData) -> Self::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             gaurd.b2 = Some(data.into_raw_data());
@@ -844,7 +863,7 @@ mod test {
                 waker.wake();
             }
 
-            l2cap::SendFut::new(true)
+            DummySendFut
         }
 
         fn set_mtu(&self, _: u16) {}

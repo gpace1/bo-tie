@@ -27,6 +27,21 @@ use crate::{
     },
 };
 use super::{DummyConnection,pdu_into_acl_data};
+use std::{
+    future::Future,
+    task::{Poll,Context},
+    pin::Pin
+};
+
+struct DummySendFut;
+
+impl Future for DummySendFut {
+    type Output = Result<(), ()>;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Ok(()))
+    }
+}
 
 /// A connection channel that counts the number of payload bytes sent
 ///
@@ -46,8 +61,10 @@ impl SendWatchConnection {
 }
 
 impl crate::l2cap::ConnectionChannel for SendWatchConnection {
+    type SendFut = DummySendFut;
+    type SendFutErr = ();
 
-    fn send(&self, data: crate::l2cap::AclData) -> crate::l2cap::SendFut {
+    fn send(&self, data: crate::l2cap::AclData) -> Self::SendFut {
         use std::convert::TryFrom;
 
         let pdu_name = ServerPduName::try_from(data.get_payload()[0]);
@@ -79,7 +96,7 @@ impl crate::l2cap::ConnectionChannel for SendWatchConnection {
         assert!( payload_len <= self.get_mtu(), "Expected l2cap payloads no larger than {}, tried \
             to send {} bytes", self.get_mtu(), payload_len );
 
-        crate::l2cap::SendFut::new(true)
+        DummySendFut
     }
 
     fn set_mtu(&self, _: u16) {}

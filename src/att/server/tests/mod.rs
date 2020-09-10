@@ -4,9 +4,15 @@ mod permissions;
 mod blob_data;
 mod basic_queue_writer;
 
-use crate::l2cap::{MinimumMtu, AclDataFragment, AclData, SendFut};
+use crate::l2cap::{MinimumMtu, AclDataFragment, AclData, ConnectionChannel};
 use crate::att::{TransferFormatInto, pdu};
 use crate::att::server::{PinnedFuture};
+
+use std::{
+    future::Future,
+    task::{Poll,Context},
+    pin::Pin
+};
 
 /// A false connection.
 ///
@@ -14,9 +20,22 @@ use crate::att::server::{PinnedFuture};
 /// nothing (but not `None`, instead an empty vector).
 struct DummyConnection;
 
-impl crate::l2cap::ConnectionChannel for DummyConnection {
-    fn send(&self, _: crate::l2cap::AclData) -> crate::l2cap::SendFut {
-        crate::l2cap::SendFut::new(true)
+struct DummySendFut;
+
+impl Future for DummySendFut {
+    type Output = Result<(), ()>;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl ConnectionChannel for DummyConnection {
+    type SendFut = DummySendFut;
+    type SendFutErr = ();
+
+    fn send(&self, _: crate::l2cap::AclData) -> Self::SendFut {
+        DummySendFut
     }
 
     fn set_mtu(&self, _: u16) { unimplemented!() }
@@ -63,12 +82,15 @@ struct PayloadConnection {
     sent: std::cell::Cell<Vec<u8>>
 }
 
-impl crate::l2cap::ConnectionChannel for PayloadConnection {
-    fn send(&self, data: AclData) -> SendFut {
+impl ConnectionChannel for PayloadConnection {
+    type SendFut = DummySendFut;
+    type SendFutErr = ();
+
+    fn send(&self, data: AclData) -> Self::SendFut {
 
         self.sent.set(data.get_payload().to_vec());
 
-        crate::l2cap::SendFut::new(true)
+        DummySendFut
     }
 
     fn set_mtu(&self, _: u16) { unimplemented!() }

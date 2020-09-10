@@ -712,17 +712,34 @@ mod tests {
 
     use super::*;
     use alloc::boxed::Box;
-    use crate::l2cap::{ConnectionChannel, AclDataFragment, SendFut, MinimumMtu};
+    use crate::l2cap::{ConnectionChannel, AclDataFragment, MinimumMtu};
     use crate::UUID;
-    use futures::task::Waker;
     use att::TransferFormatInto;
     use crate::att::server::NoQueuedWrites;
+    use std::{
+        future::Future,
+        task::{Poll,Waker,Context},
+        pin::Pin
+    };
+
+    struct DummySendFut;
+
+    impl Future for DummySendFut {
+        type Output = Result<(), ()>;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     struct DummyConnection;
 
     impl ConnectionChannel for DummyConnection {
-        fn send(&self, _: crate::l2cap::AclData) -> SendFut {
-            SendFut::new(true)
+        type SendFut = DummySendFut;
+        type SendFutErr = ();
+
+        fn send(&self, _: crate::l2cap::AclData) -> Self::SendFut {
+            DummySendFut
         }
 
         fn set_mtu(&self, _: u16) {}
@@ -784,10 +801,13 @@ mod tests {
     }
 
     impl l2cap::ConnectionChannel for TestChannel {
-        fn send(&self, data: crate::l2cap::AclData) -> l2cap::SendFut {
+        type SendFut = DummySendFut;
+        type SendFutErr = ();
+
+        fn send(&self, data: crate::l2cap::AclData) -> Self::SendFut {
             self.last_sent_pdu.set(Some(data.into_raw_data()));
 
-            l2cap::SendFut::new(true)
+            DummySendFut
         }
 
         fn set_mtu(&self, _: u16) {}

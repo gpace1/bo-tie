@@ -2,6 +2,48 @@
 //!
 //! The HCI is the primary way of interacting with the controller for this library.
 
+/// Macro for implementing HostInterface
+///
+/// Enabling feature "flow-ctrl" requires the HostInterface to have a generic parameter for the
+/// flow controller's type. When it is not enabled the HostController only requires the generic
+/// input for the interface. This macro provides a different implementation for traits depending on
+/// the enablement of the feature "flow-ctrl"
+#[cfg(not(feature = "flow-ctrl"))]
+macro_rules! impl_for_host_interface {
+    ($trait:tt <$gen:ident>, $body: tt) => {
+        impl<$gen> $trait<$gen> for HostInterface<$gen> $body
+    };
+
+    ($trait:tt, $body: tt) => {
+        impl<I> $trait for HostInterface<I> $body
+    };
+}
+
+/// Macro for implementing HostInterface
+///
+/// Enabling feature "flow-ctrl" requires the HostInterface to have a generic parameter for the
+/// flow controller's type. When it is not enabled the HostController only requires the generic
+/// input for the interface. This macro provides a different implementation for traits depending on
+/// the enablement of the feature "flow-ctrl"
+#[cfg(feature = "flow-ctrl")]
+macro_rules! impl_for_host_interface {
+    ($trait:tt <$gen_1:ident, $gen_2:ident>, $body: tt) => {
+        impl<$gen_1,$gen_2> $trait<$gen_1,$gen_2> for HostInterface<$gen_1,$gen_2> $body
+    };
+
+    ($trait:tt <I>, $body: tt) => {
+        impl<I,F> $trait<I> for HostInterface<I,F> $body
+    };
+
+    ($trait:tt <F>, $body: tt) => {
+        impl<I,F> $trait<F> for HostInterface<I,F> $body
+    };
+
+    ($trait:tt, $body: tt) => {
+        impl<I,F> $trait for HostInterface<I,F> $body
+    };
+}
+
 pub mod opcodes;
 pub mod common;
 pub mod error;
@@ -513,24 +555,18 @@ P: EventMatcher + Send + Sync + 'static
 ///
 /// This is used by the host to interact with the interface between itself and the Bluetooth
 /// Controller.
+#[derive(Clone, Default)]
 #[cfg(not(feature = "flow-ctrl"))]
-#[derive(Clone)]
-pub struct HostInterface<I>
-{
+pub struct HostInterface<I> {
     interface: I,
 }
 
-/// The host interface
-///
-/// This is used by the host to interact with the interface between itself and the Bluetooth
-/// Controller.
 #[cfg(feature = "flow-ctrl")]
-#[derive(Clone)]
-pub struct HostInterface<I,F>
-{
+pub struct HostInterface<I,F> {
     interface: I,
-    flow_ctrl: Option<F>
+    flow_controller: F,
 }
+
 
 impl<I> AsRef<I> for HostInterface<I> {
     fn as_ref(&self) -> &I {
@@ -550,15 +586,14 @@ impl<I> HostInterface<I> {
 
 impl<I> From<I> for HostInterface<I>
 {
+    #[cfg(not(feature = "flow-ctrl"))]
     fn from(interface: I) -> Self {
         HostInterface { interface }
     }
-}
 
-impl<T> Default for HostInterface<T> where T: Default {
-
-    fn default() -> Self {
-        HostInterface { interface: T::default() }
+    #[cfg(feature = "flow-ctrl")]
+    fn from(interface: I) -> Self {
+        HostInterface { interface, flow_ctrl: None }
     }
 }
 
