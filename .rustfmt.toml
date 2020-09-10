@@ -1,0 +1,19 @@
+# This is the rustfmt configuration file for the project
+#
+# Only stable rustfmt configuration options are used.
+
+########################################################################################################################
+# Stickied configuration
+########################################################################################################################
+
+# Maximum width of each line
+max_width = 120
+
+# Width heuristics
+width_heuristics = "Max"
+
+########################################################################################################################
+# Alphabetical List
+#
+# Anything not listed uses either the default configuration or the 'width_heuristics'.
+########################################################################################################################

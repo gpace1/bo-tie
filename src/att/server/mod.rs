@@ -632,9 +632,7 @@ where C: l2cap::ConnectionChannel,
             pdu @ super::client::ClientPduName::SignedWriteCommand |
             pdu @ super::client::ClientPduName::ReadByGroupTypeRequest =>
                 self.send_error(0, pdu.into(), pdu::Error::RequestNotSupported).await,
-        };
-
-        Ok(())
+        }
     }
 
     /// Send out a notification
@@ -653,26 +651,33 @@ where C: l2cap::ConnectionChannel,
     ///
     /// This takes a complete Attribute PDU in its transfer byte form. This will package it into
     /// a L2CAP PDU and send it using the `ConnectionChannel`.
-    async fn send_raw_tf(&self, intf_data: Vec<u8>) {
+    async fn send_raw_tf(&self, intf_data: Vec<u8>) -> Result<(), super::Error> {
         let acl_data = l2cap::AclData::new( intf_data, super::L2CAP_CHANNEL_ID );
 
-        self.connection_channel.send(acl_data).await;
+        self.connection_channel.send(acl_data).await.map_err(|e| super::Error::send_error::<C>(e) )
     }
 
-    async fn send<D>(&self, data: D) where D: TransferFormatInto {
-        self.send_raw_tf( TransferFormatInto::into(&data) ).await;
+    async fn send<D>(&self, data: D) -> Result<(), super::Error> where D: TransferFormatInto {
+        self.send_raw_tf( TransferFormatInto::into(&data) ).await
     }
 
     /// Send an attribute PDU to the client
-    pub async fn send_pdu<D>(&self, pdu: pdu::Pdu<D> ) where D: TransferFormatInto {
+    pub async fn send_pdu<D>(&self, pdu: pdu::Pdu<D> ) -> Result<(), super::Error>
+    where D: TransferFormatInto
+    {
         log::trace!("Sending {}", pdu.get_opcode());
 
-        self.send(pdu).await;
+        self.send(pdu).await
     }
 
     /// Send an error the the client
-    pub async fn send_error(&self, handle: u16, received_opcode: ClientPduName, pdu_error: pdu::Error) {
-
+    pub async fn send_error(
+        &self,
+        handle: u16,
+        received_opcode: ClientPduName,
+        pdu_error: pdu::Error
+    ) -> Result<(), super::Error>
+    {
         log::info!("Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
             Into::<u8>::into(received_opcode), handle, pdu_error);
 
@@ -754,15 +759,15 @@ where C: l2cap::ConnectionChannel,
     }
 
     /// Process a exchange MTU request from the client
-    async fn process_exchange_mtu_request(&mut self, client_mtu: u16) {
+    async fn process_exchange_mtu_request(&mut self, client_mtu: u16) -> Result<(), super::Error> {
 
         self.connection_channel.set_mtu(client_mtu);
 
-        self.send_pdu(pdu::exchange_mtu_response(self.connection_channel.get_mtu() as u16)).await;
+        self.send_pdu(pdu::exchange_mtu_response(self.connection_channel.get_mtu() as u16)).await
     }
 
     /// Process a Read Request from the client
-    async fn process_read_request(&mut self, handle: u16) {
+    async fn process_read_request(&mut self, handle: u16) -> Result<(), super::Error> {
 
         match self.read_att_and(handle, |att_tf| att_tf.read_response() ).await {
             Ok(mut tf) => {
@@ -783,7 +788,7 @@ where C: l2cap::ConnectionChannel,
     }
 
     /// Process a Write Request from the client
-    async fn process_write_request(&mut self, payload: &[u8]) {
+    async fn process_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
 
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from( &payload[..2] ).unwrap();
@@ -795,8 +800,9 @@ where C: l2cap::ConnectionChannel,
     }
 
     /// Process a Find Information Request form the client
-    async fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) {
-
+    async fn process_find_information_request(&mut self, handle_range: pdu::HandleRange)
+    -> Result<(), super::Error>
+    {
         /// Handle with UUID iterator
         ///
         /// The boolean is used to indicate whether or not the iterator is over short or long UUIDs.
@@ -894,7 +900,7 @@ where C: l2cap::ConnectionChannel,
                         handle_uuids_128_bit_itr,
                     );
 
-                    self.send_pdu( pdu ).await;
+                    self.send_pdu( pdu ).await
                 }
             } else {
 
@@ -905,14 +911,14 @@ where C: l2cap::ConnectionChannel,
                     handle_uuids_16_bit_itr,
                 );
 
-                self.send_pdu( pdu ).await;
+                self.send_pdu( pdu ).await
             }
         } else {
             self.send_error(
                 handle_range.starting_handle,
                 ClientPduName::FindInformationRequest,
                 pdu::Error::InvalidHandle
-            ).await;
+            ).await
         }
     }
 
@@ -922,8 +928,9 @@ where C: l2cap::ConnectionChannel,
     ///
     /// Because the Attribute Protocol doesn't define what a 'group' is this returns the group
     /// end handle with the same found attribute handle.
-    async fn process_find_by_type_value_request(&mut self, payload: &[u8] ) {
-
+    async fn process_find_by_type_value_request(&mut self, payload: &[u8] )
+    -> Result<(), super::Error>
+    {
         if payload.len() >= 6 {
 
             let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from( &payload[..4] ).unwrap();
@@ -972,13 +979,13 @@ where C: l2cap::ConnectionChannel,
                         handle_range.starting_handle,
                         ClientPduName::FindByTypeValueRequest,
                         pdu::Error::AttributeNotFound
-                    ).await;
+                    ).await
 
                 } else {
 
                     self.send_pdu(
                         pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer)
-                    ).await;
+                    ).await
 
                 }
             } else {
@@ -986,15 +993,17 @@ where C: l2cap::ConnectionChannel,
                     handle_range.starting_handle,
                     ClientPduName::FindByTypeValueRequest,
                     pdu::Error::AttributeNotFound
-                ).await;
+                ).await
             }
         } else {
-            self.send_error(0, ClientPduName::FindInformationRequest, pdu::Error::InvalidPDU).await;
+            self.send_error(0, ClientPduName::FindInformationRequest, pdu::Error::InvalidPDU).await
         }
     }
 
     /// Process Read By Type Request
-    async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest ) {
+    async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest )
+    -> Result<(), super::Error>
+    {
         use core::cmp::min;
 
         let handle_range = type_request.handle_range;
@@ -1088,7 +1097,7 @@ where C: l2cap::ConnectionChannel,
                             }
                         }
 
-                        self.send_pdu( pdu::read_by_type_response(responses) ).await;
+                        self.send_pdu( pdu::read_by_type_response(responses) ).await
                     }
                 }
             }
@@ -1097,13 +1106,14 @@ where C: l2cap::ConnectionChannel,
                 handle_range.starting_handle,
                 ClientPduName::ReadByTypeRequest,
                 pdu::Error::InvalidHandle
-            ).await;
+            ).await
         }
     }
 
     /// Process read blob request
-    async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest) {
-
+    async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest)
+    -> Result<(), super::Error>
+    {
         // Check the permissions (`check_permission` also validates the handle)
         match match self.check_permissions(blob_request.handle, super::FULL_READ_PERMISSIONS)
         {
@@ -1127,11 +1137,16 @@ where C: l2cap::ConnectionChannel,
                 }
             },
 
-            Err(e) => Err(e),
+            Err(e) => Err(e.into()),
         } {
-            Err(e) => self.send_error(blob_request.handle, ClientPduName::ReadBlobRequest, e).await,
+            Err(e) => match e {
+                super::Error::PduError(e) =>
+                    self.send_error(blob_request.handle, ClientPduName::ReadBlobRequest, e).await,
 
-            _ => (),
+                _ => Err(e)
+            },
+
+            _ => Ok(()),
         }
     }
 
@@ -1146,7 +1161,8 @@ where C: l2cap::ConnectionChannel,
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// the handle requested is valid
     #[inline]
-    async fn create_blob_send_response(&mut self, br: &pdu::ReadBlobRequest) -> Result<(), pdu::Error>
+    async fn create_blob_send_response(&mut self, br: &pdu::ReadBlobRequest)
+    -> Result<(), super::Error>
     {
         let data = self.attributes.get(br.handle).unwrap().get_value().read().await;
 
@@ -1163,9 +1179,7 @@ where C: l2cap::ConnectionChannel,
             (rsp, false) => rsp,
         };
 
-        self.send_pdu(rsp).await;
-
-        Ok(())
+        self.send_pdu(rsp).await
     }
 
     /// Use the current blob and send the blob response
@@ -1179,7 +1193,7 @@ where C: l2cap::ConnectionChannel,
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// that `blob_data` is `Some(_)`
     #[inline]
-    async fn use_blob_send_response(&mut self, offset: u16) -> Result<(), pdu::Error>
+    async fn use_blob_send_response(&mut self, offset: u16) -> Result<(), super::Error>
     {
         let data = self.blob_data.as_ref().unwrap();
 
@@ -1187,16 +1201,16 @@ where C: l2cap::ConnectionChannel,
 
             (rsp, false) => {
 
-                self.send_pdu(rsp).await;
+                self.send_pdu(rsp).await?;
 
                 // This is the final piece of the blob
                 self.blob_data = None;
+
+                Ok(())
             }
 
             (rsp, true) => self.send_pdu(rsp).await,
-        };
-
-        Ok(())
+        }
     }
 
     /// Create a Read Blob Response
@@ -1219,7 +1233,7 @@ where C: l2cap::ConnectionChannel,
         }
     }
 
-    async fn process_prepare_write_request(&mut self, payload: &[u8] ) {
+    async fn process_prepare_write_request(&mut self, payload: &[u8] ) -> Result<(), super::Error> {
 
         if let Err((h,e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) =>
@@ -1231,7 +1245,7 @@ where C: l2cap::ConnectionChannel,
                         Ok(_) => {
                             let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
 
-                            self.send_pdu(response).await;
+                            self.send_pdu(response).await?;
 
                             Ok(())
                         }
@@ -1242,11 +1256,15 @@ where C: l2cap::ConnectionChannel,
 
             Err(e) => Err((0, e.pdu_err))
         } {
-            self.send_error(h, ClientPduName::PrepareWriteRequest, e).await;
+            self.send_error(h, ClientPduName::PrepareWriteRequest, e).await
+        } else {
+            Ok(())
         }
     }
 
-    async fn process_execute_write_request(&mut self, request_flag : pdu::ExecuteWriteFlag) {
+    async fn process_execute_write_request(&mut self, request_flag : pdu::ExecuteWriteFlag)
+    -> Result<(), super::Error>
+    {
 
         match match self.queued_writer.process_execute(request_flag) {
 

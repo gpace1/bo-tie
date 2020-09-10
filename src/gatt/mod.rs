@@ -424,7 +424,6 @@ impl<'a> GapServiceBuilder<'a> {
     }
 
     fn into_gatt_service(self) -> ServerBuilder {
-        use alloc::string::ToString;
 
         let mut server_builder = ServerBuilder::new_empty();
 
@@ -434,7 +433,7 @@ impl<'a> GapServiceBuilder<'a> {
             .build_characteristic(
                 Self::DEVICE_NAME_PROPERTIES.to_vec(),
                 Self::DEVICE_NAME_TYPE,
-                self.device_name.to_string(),
+                alloc::string::String::from(self.device_name),
                 self.device_name_permissions)
             .finish_characteristic()
             .build_characteristic(
@@ -636,7 +635,7 @@ impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::Q
 
                         let pdu = att::pdu::read_by_group_type_response(ReadByGroupTypeResponse::new(response));
 
-                        self.server.send_pdu(pdu).await;
+                        self.server.send_pdu(pdu).await
                     },
 
                     // Client didn't have adequate permissions to access the first service
@@ -645,9 +644,9 @@ impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::Q
                             handle_range.starting_handle,
                             att::client::ClientPduName::ReadByGroupTypeRequest,
                             (*e).into()
-                        ).await;
+                        ).await?;
 
-                        return Err((*e).into());
+                        return Err((*e).into())
                     },
 
                     // No service attributes found within the requested range
@@ -656,9 +655,7 @@ impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::Q
                             handle_range.starting_handle,
                             att::client::ClientPduName::ReadByGroupTypeRequest,
                             att::pdu::Error::AttributeNotFound
-                        ).await;
-
-                        return Ok(());
+                        ).await
                     },
                 }
             },
@@ -667,22 +664,20 @@ impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::Q
                     handle_range.starting_handle,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
                     att::pdu::Error::UnsupportedGroupType
-                ).await;
+                ).await?;
 
-                return Err(att::pdu::Error::UnsupportedGroupType.into())
+                Err(att::pdu::Error::UnsupportedGroupType.into())
             },
             _ => {
                 self.server.send_error(
                     0,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
                     att::pdu::Error::UnlikelyError
-                ).await;
+                ).await?;
 
-                return Err(att::pdu::Error::UnlikelyError.into())
+                Err(att::pdu::Error::UnlikelyError.into())
             },
         }
-
-        Ok(())
     }
 }
 

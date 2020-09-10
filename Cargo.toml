@@ -16,15 +16,17 @@ p256 = { version = "0.4.1", features = ["ecdh"] }
 aes = { version = "0.5" }
 uuid = { version = "0.8", optional = true }
 bincode = { version = "1.2", features = ["i128"] }
+lazy_static = "1.4"
+
 
 [features]
 default = ["v5_0"]
 v4_2 = [] # bluetooth v4.2
 v5_0 = [] # bluetooth v5.0
 uuid-crate = ["uuid"]
+flow-ctrl = []
 
 [dev-dependencies]
-lazy_static = "1.4"
 futures = { version = "0.3", features = ["async-await", "thread-pool"] }
 simplelog = "0.6"
 rand = "0.7"

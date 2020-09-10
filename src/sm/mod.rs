@@ -71,6 +71,8 @@ pub enum Error {
     UnknownIfLinkIsEncrypted,
     /// Incorrect L2CAP channel ID
     IncorrectL2capChannelId,
+    /// Send related error
+    DataSend(alloc::string::String),
 }
 
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]

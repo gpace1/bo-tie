@@ -322,7 +322,9 @@ pub enum Error {
     /// Incorrect Channel Identifier
     IncorrectChannelId,
     /// Pdu Error
-    PduError(pdu::Error)
+    PduError(pdu::Error),
+    /// Error when trying to send data to the peer device
+    SendError(String),
 }
 
 impl core::fmt::Display for Error{
@@ -343,8 +345,8 @@ impl core::fmt::Display for Error{
             Error::IncorrectChannelId =>
                 write!(f, "The channel identifier of the ACL Data does not match the assigned \
                     number for the Attribute Protocol"),
-            Error::PduError(err) =>
-                write!(f, "Attribute PDU error '{}'", err),
+            Error::PduError(err) => write!(f, "Attribute PDU error '{}'", err),
+            Error::SendError(r) => write!(f, "Failed to send data, '{}'", r),
         }
     }
 }
@@ -364,6 +366,14 @@ impl From<pdu::Pdu<pdu::ErrorResponse>> for Error {
 impl From<TransferFormatError> for Error {
     fn from(err: TransferFormatError) -> Self {
         Error::TransferFormatTryFrom(err)
+    }
+}
+
+impl Error {
+
+    /// An error generated when trying to send with a connection channel
+    fn send_error<C: crate::l2cap::ConnectionChannel>(error: C::SendFutErr) -> Self {
+        Self::SendError(format!("{:?}", error))
     }
 }
 

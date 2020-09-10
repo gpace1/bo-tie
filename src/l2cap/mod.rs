@@ -309,6 +309,8 @@ pub struct AclData {
 
 impl AclData {
 
+    pub const HEADER_SIZE: usize = 4;
+
     /// Create a new `AclData`
     ///
     /// The channel identifier field
@@ -320,17 +322,17 @@ impl AclData {
         }
     }
 
-    /// Use a specific maximum transfer unit for transferring this data
+    /// Try to use a specific maximum transfer unit for transferring this data
     ///
-    /// This is a *request* to use the specified `mtu` for transferring this data to the connected
-    /// device. It is up to the implementation of the
-    /// [`ConnectionChannel`](crate::l2cap::ConnectionChannel) whether or not to use this MTU.
-    /// However `ConnectionChannel` implementations should prefer to use this MTU so long as the mtu
-    /// is not larger than the MTU agreed upon of the connected device nor smaller than the minimum
-    /// MTU for the Link type (ACL-U or LE-U).
+    /// Request to the
+    /// [`ConnectionChannel`](crate::l2cap::ConnectionChannel) to use this MTU for sending this
+    /// specific packet, however it is up to the implementation of the `ConnectionChannel`
+    /// whether to use this MTU. However `ConnectionChannel` implementations should prefer to use
+    /// this MTU so long as the mtu is not larger than the MTU agreed upon of the connected device
+    /// nor smaller than the minimum MTU for the Link type (ACL-U or LE-U).
     ///
-    /// If `mtu` is `None` then this data will be transferred with the minimum MTU for the logical
-    /// link. This is 48 bytes for ACL-U and 23 bytes for LE-U.
+    /// If `mtu` is `None` then the MTU will be set to the minimum for the logical link. This is 48
+    /// bytes for ACL-U and 23 bytes for LE-U.
     pub fn use_mtu<Mtu: Into<Option<u16>>>(&mut self, mtu: Mtu) {
         self.mtu = match mtu.into() {
             None    => AclDataSuggestedMtu::Minimum,
@@ -448,6 +450,14 @@ impl AclDataFragment {
 /// systems that do not support a host controller interface.
 pub trait ConnectionChannel {
 
+    /// Sending future
+    ///
+    /// The controller will probably have limits on the number of L2CAP PDU's that can be sent. This
+    /// future is used for awaiting the sending process until the entire L2CAP PDU is sent.
+    type SendFut: Future<Output=Result<(), Self::SendFutErr>>;
+
+    type SendFutErr: core::fmt::Debug;
+
     /// Send a L2CAP PDU to the Controller
     ///
     /// This attempts to sends a L2CAP data packet to the controller. The pdu must be complete as
@@ -458,7 +468,7 @@ pub trait ConnectionChannel {
     /// [`AclDataSuggestedMtu`](crate::l2cap::AclDataSuggestedMtu) included with an `AclData` for
     /// fragmentation of the data. Implementors of `ConnectionChannel` within this library already
     /// use the `AclDataSuggestedMtu` in the implementation of `send`.
-    fn send(&self, data: AclData) -> SendFut;
+    fn send(&self, data: AclData) -> Self::SendFut;
 
     /// Set the MTU for `send`
     ///
@@ -534,54 +544,6 @@ pub trait ConnectionChannel {
             full_acl_data: Vec::new(),
             carryover_fragments: Vec::new(),
             length: None,
-        }
-    }
-}
-
-/// Future for polling to await the sending of data *to the controller*
-///
-/// This future is used for awaiting the sending of ACL data to the controller. When to await is
-/// determined by a lower layer implementation as when polled a `SendFut` just determines to return
-/// `Ready(..)` from an internal flag.
-///
-/// Usually there are only two types of 'lower layers' below the `SendFut`, a flow controller or the
-/// trivial case. The trivial case is where there is no monitoring or keeping track of a Bluetooth
-/// controller's data buffers. A flow controller is just the opposite. It is designed to not send
-/// data that would cause the buffers of the controller to go beyond their capacity. The trivial
-/// case will usually be implemented to never await, as `SendFut` will be created with the internal
-/// flag as true. As for the flow controller, generally it will only await when sending data will
-/// overrun a controller's buffer. The flow controller will use a `SendFut` the same way as the
-/// trivial case when there is space for the data within the controllers buffers.
-pub struct SendFut( Option<core::task::Waker>, pub bool);
-
-impl SendFut {
-    /// Create a new `SendFut`
-    ///
-    /// Input `ready` is a boolean to indicate if the future is ready to return 'Poll::Ready(())'.
-    /// Creating a `SendFut` with `ready` as `true` will mean that this future will never await.
-    pub fn new(ready: bool) -> Self {
-        SendFut(None, ready)
-    }
-
-    /// Mark the future as ready to send
-    ///
-    /// This should only be used by a lower layer to have the next poll of this future return ready
-    /// to the awaiting context.
-    pub fn ready(&mut self) { self.1 = true }
-}
-
-impl Future for SendFut {
-    type Output = ();
-
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
-        let this = self.get_mut();
-
-        if this.1 {
-            core::task::Poll::Ready(())
-        } else {
-            this.0 = Some(cx.waker().clone());
-
-            core::task::Poll::Pending
         }
     }
 }

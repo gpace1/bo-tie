@@ -513,10 +513,23 @@ P: EventMatcher + Send + Sync + 'static
 ///
 /// This is used by the host to interact with the interface between itself and the Bluetooth
 /// Controller.
+#[cfg(not(feature = "flow-ctrl"))]
 #[derive(Clone)]
 pub struct HostInterface<I>
 {
-    interface: I
+    interface: I,
+}
+
+/// The host interface
+///
+/// This is used by the host to interact with the interface between itself and the Bluetooth
+/// Controller.
+#[cfg(feature = "flow-ctrl")]
+#[derive(Clone)]
+pub struct HostInterface<I,F>
+{
+    interface: I,
+    flow_ctrl: Option<F>
 }
 
 impl<I> AsRef<I> for HostInterface<I> {
@@ -542,7 +555,7 @@ impl<I> From<I> for HostInterface<I>
     }
 }
 
-impl<T> ::core::default::Default for HostInterface<T> where T: Default {
+impl<T> Default for HostInterface<T> where T: Default {
 
     fn default() -> Self {
         HostInterface { interface: T::default() }
@@ -722,6 +735,26 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     }
 }
 
+impl<I> HostInterface<I>
+where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static
+{
+    /// Create a channel that uses a flow controller
+    ///
+    /// This connection channel will query the controller *once* to get the maximum HCI packet size
+    /// and the number of HCI packets it can accept. This flow controller will then fragment data
+    /// to the maximum size (if needed) and pend when the controllers buffer is full. The querying
+    /// of the controller only occurs once, after that it uses the values already queued for.
+    #[cfg(feature = "flow-ctrl")]
+    pub async fn flow_ctrl_channel<M>(self: Arc<Self>, handle: common::ConnectionHandle)
+    -> impl crate::l2cap::ConnectionChannel
+    where M: flow_ctrl::AsyncLock + Default + 'static,
+    {
+        flow_ctrl::HciLeUChannel
+            ::<I,Arc<Self>,Arc<flow_ctrl::flow_manager::HciDataPacketFlowManager<M>>>
+            ::new_le_flow_manager(self, handle).await
+    }
+}
+
  #[derive(Debug)]
 enum OutputErr<TargErr, CmdErr>
 where TargErr: Display + Debug,
@@ -776,7 +809,7 @@ where TargErr: Display + Debug,
 /// information.
 pub trait FlowControlInfo {
 
-    /// Get the number of packets that can be set to the controller
+    /// Get the number of HCI command packets that can be set to the controller
     ///
     /// This function returns the Num_HCI_Command_Packets parameter of the Command Complete and
     /// Command Status Events.

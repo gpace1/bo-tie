@@ -1,13 +1,13 @@
-pub mod flow_manager;
+#[cfg(feature = "flow-ctrl")] pub(super) mod flow_manager;
 
 use super::{
-    HostInterface,
     common,
+    HostInterface,
+    HostControllerInterface,
     HciAclDataInterface,
     HciAclData,
     AclPacketBoundary,
     AclBroadcastFlag,
-    HostControllerInterface
 };
 use alloc::{
     vec::Vec,
@@ -15,10 +15,13 @@ use alloc::{
 };
 use core::{
     future::Future,
-    task::{Poll,Context,Waker},
+    ops::Deref,
     pin::Pin,
-    sync::atomic::AtomicPtr,
+    task::{Waker,Context,Poll},
 };
+use crate::l2cap::{AclData, AclDataFragment};
+#[cfg(feature = "flow-ctrl")] use flow_manager::HciDataPacketFlowManager;
+#[cfg(feature = "flow-ctrl")] pub use flow_manager::AsyncLock;
 
 /// A HCI channel for a LE-U Logical Link
 ///
@@ -28,20 +31,21 @@ use core::{
 /// no attached flow controller. The user of this channel must be aware of both the controllers
 /// maximum HCI data packet size and the amount of packets sent to the HCI LE data buffer (or the
 /// shared with BR/EDR data buffer if there is no LE only data buffer).
-pub struct HciLeUChannel<I,HI,F>
-    where HI: core::ops::Deref<Target = HostInterface<I>>,
-          I: HciAclDataInterface
+pub(super) struct HciLeUChannel<I,HI,F>
+where HI: Deref<Target = HostInterface<I>>,
+      I: HciAclDataInterface
 {
     mtu: core::cell::Cell<usize>,
     maximum_mtu: usize,
+    minimum_mtu: usize,
     handle: common::ConnectionHandle,
     hi: HI,
     flow_controller: F,
 }
 
 impl<I,HI> HciLeUChannel<I,HI,NoFlowController>
-    where HI: core::ops::Deref<Target = HostInterface<I>>,
-          I: HciAclDataInterface
+where HI: Deref<Target = HostInterface<I>>,
+      I: HciAclDataInterface
 {
     /// Create a new `HciLeUChannel`
     ///
@@ -60,6 +64,7 @@ impl<I,HI> HciLeUChannel<I,HI,NoFlowController>
         HciLeUChannel {
             mtu: crate::l2cap::LeU::MIN_MTU.into(),
             maximum_mtu,
+            minimum_mtu: crate::l2cap::LeU::MIN_MTU.into(),
             handle,
             hi,
             flow_controller: NoFlowController,
@@ -68,9 +73,9 @@ impl<I,HI> HciLeUChannel<I,HI,NoFlowController>
 }
 
 impl<I,HI,F> HciLeUChannel<I,HI,F>
-    where HI: core::ops::Deref<Target = HostInterface<I>>,
-          I: HciAclDataInterface,
-          Self: crate::l2cap::ConnectionChannel,
+where HI: Deref<Target = HostInterface<I>>,
+      I: HciAclDataInterface,
+      Self: crate::l2cap::ConnectionChannel,
 {
     fn get_send_mtu(&self, data: &crate::l2cap::AclData) -> usize {
         use crate::l2cap::ConnectionChannel;
@@ -87,10 +92,14 @@ impl<I,HI,F> HciLeUChannel<I,HI,F>
 }
 
 impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,NoFlowController>
-    where HI: core::ops::Deref<Target = HostInterface<I>>,
-          I: HciAclDataInterface,
+where HI: Deref<Target = HostInterface<I>>,
+      I: HciAclDataInterface,
 {
-    fn send(&self, data: crate::l2cap::AclData ) -> crate::l2cap::SendFut {
+    type SendFut = NoFlowController;
+
+    type SendFutErr = ();
+
+    fn send(&self, data: crate::l2cap::AclData ) -> Self::SendFut {
 
         let mtu = self.get_send_mtu(&data);
 
@@ -116,7 +125,7 @@ impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,NoFlowControll
             self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
         });
 
-        self.flow_controller.new_send_fut()
+        NoFlowController
     }
 
     fn set_mtu(&self, mtu: u16) {
@@ -132,14 +141,89 @@ impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,NoFlowControll
     }
 
     fn min_mtu(&self) -> usize {
-        <crate::l2cap::LeU as crate::l2cap::MinimumMtu>::MIN_MTU
+        self.minimum_mtu
     }
 
     fn receive(&self, waker: &core::task::Waker)
-               -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>>
+    -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>>
     {
-        use crate::l2cap::AclDataFragment;
+        self.hi.interface
+            .receive(&self.handle, waker)
+            .and_then( |received| match received {
+                Ok( packets ) => packets.into_iter()
+                    .map( |packet| packet.into_acl_fragment() )
+                    .collect::<Vec<AclDataFragment>>()
+                    .into(),
+                Err( e ) => {
+                    log::error!("Failed to receive data: {}", e);
+                    Vec::new().into()
+                },
+            })
+    }
+}
 
+#[cfg(feature = "flow-ctrl")]
+impl<I,HI,M> HciLeUChannel<I,HI,Arc<HciDataPacketFlowManager<M>>>
+where HI: Deref<Target = HostInterface<I>>,
+      I: HostControllerInterface + HciAclDataInterface + 'static,
+      M: flow_manager::AsyncLock + Default,
+{
+    /// Create a new `HciLeUChannel` with a `HciDataPacketFlowManager` for LE-U
+    pub async fn new_le_flow_manager(hi: HI, handle: common::ConnectionHandle) -> Self {
+        use crate::l2cap::MinimumMtu;
+
+        let flow_manager = HciDataPacketFlowManager::new_le(&hi).await;
+
+        Self {
+            mtu: crate::l2cap::LeU::MIN_MTU.into(),
+            maximum_mtu: <u16>::MAX as usize, // maximum a L2CAP pdu can handle
+            minimum_mtu: crate::l2cap::LeU::MIN_MTU,
+            handle,
+            hi,
+            flow_controller: flow_manager.into(),
+        }
+    }
+}
+
+#[cfg(feature = "flow-ctrl")]
+impl<I,HI,M,L,G> crate::l2cap::ConnectionChannel  for
+    HciLeUChannel<I,HI,Arc<HciDataPacketFlowManager<M>>>
+where HI: Deref<Target = HostInterface<I>> + Send + Clone + Unpin + 'static,
+      I: HciAclDataInterface + HostControllerInterface + Unpin + 'static,
+      M: AsyncLock<Guard=G,Locker=L> + Default + 'static,
+      L: Future<Output=G> + 'static,
+      G: 'static,
+{
+    type SendFut = flow_manager::SendFuture<M,HI,I>;
+
+    type SendFutErr = flow_manager::FlowControllerError<I>;
+
+    fn send(&self, data: AclData) -> Self::SendFut {
+        flow_manager::SendFuture::new(
+            self.flow_controller.clone(),
+            self.hi.clone(),
+            data,
+            self.handle
+        )
+    }
+
+    fn set_mtu(&self, mtu: u16) {
+        self.mtu.set( <usize>::from(mtu).max(self.min_mtu()).min(self.max_mtu()) );
+    }
+
+    fn get_mtu(&self) -> usize {
+        self.mtu.get()
+    }
+
+    fn max_mtu(&self) -> usize {
+        self.maximum_mtu
+    }
+
+    fn min_mtu(&self) -> usize {
+        self.minimum_mtu
+    }
+
+    fn receive(&self, waker: &Waker) -> Option<Vec<AclDataFragment>> {
         self.hi.interface
             .receive(&self.handle, waker)
             .and_then( |received| match received {
@@ -156,21 +240,24 @@ impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,NoFlowControll
 }
 
 impl<I,HI,F> core::ops::Drop for HciLeUChannel<I,HI,F>
-    where HI: core::ops::Deref<Target = HostInterface<I>>,
-          I: HciAclDataInterface
+where HI: Deref<Target = HostInterface<I>>,
+      I: HciAclDataInterface
 {
     fn drop(&mut self) {
         self.hi.interface.stop_receiver(&self.handle)
     }
 }
 
+
 /// A false flow controller
 ///
-/// This does nothing. `SendFut` created from it never await.
-pub struct NoFlowController;
+/// This does nothing and polling it immediately returns.
+pub(super) struct NoFlowController;
 
-impl NoFlowController {
-    fn new_send_fut(&self) -> crate::l2cap::SendFut {
-        crate::l2cap::SendFut::new(true)
+impl Future for NoFlowController {
+    type Output = Result<(),()>;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Ok(()))
     }
 }

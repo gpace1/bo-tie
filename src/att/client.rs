@@ -178,7 +178,7 @@ impl<'c, C> LeConnectClient<'c, C> where C: l2cap::ConnectionChannel {
                 super::L2CAP_CHANNEL_ID
             );
 
-            connection_channel.send(acl_data).await;
+            connection_channel.send(acl_data).await.map_err(|e| super::Error::send_error::<C>(e) )?;
 
             Ok( LeConnectClient {
                 requested_mtu,
@@ -370,8 +370,9 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
         if payload.len() > self.mtu {
             Err( super::Error::MtuExceeded )
         } else {
-            self.channel.send(l2cap::AclData::new(payload.to_vec(), super::L2CAP_CHANNEL_ID)).await;
-            Ok(())
+            let data = l2cap::AclData::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
+
+            self.channel.send(data).await.map_err(|e| super::Error::send_error::<C>(e) )
         }
     }
 
@@ -653,9 +654,8 @@ impl<'c, C> Client<'c, C> where C: l2cap::ConnectionChannel
 
         if ClientPduName::try_from(op).is_err() && ServerPduName::try_from(op).is_err()
         {
-            let data = TransferFormatInto::into(&pdu);
-            if self.mtu > data.len() {
-                self.channel.send(l2cap::AclData::new(data.into(), super::L2CAP_CHANNEL_ID)).await;
+            if self.mtu > pdu.len_of_into() {
+                self.send(&pdu).await?;
 
                 Ok(())
             } else {
