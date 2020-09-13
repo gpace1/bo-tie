@@ -994,6 +994,44 @@ macro_rules! impl_status_return {
     }
 }
 
+/// Implement a function that uses `HostInterface`
+///
+/// This is required for implementing functions that either take an input of type `HostInterface`,
+/// return a `HostInterface`, or a trait bound deals with `HostInterface`. If the
+/// function declaration has a `HostInterface` somewhere in it, this macro can be used so that
+/// multiple implementations do not need to be written of the function due to the feature
+/// "flow-ctrl". Enabling this feature changes the number of generics for `HostInterface`, which
+/// means that every function, implementation, or anything else that uses it must be written twice,
+/// once for use with the feature, and once for without it. This is only used for the functions.
+///
+/// # Dev Notes (TODO remove before merging to main)
+///
+/// ## send functionsg
+/// Find send regex ->
+/// ((\/\/\/.*[\s]*)*)(pub)?[\s]+fn[\s]+send<?([',\:\sa-zA-Z0-9]*)>?[\s]*\((.+(?=HostInterface)[^}]*?)\)[\s]*(->)?[\s]*([^{]*)(?=where)(where)?([^{]*)(\{(?:[^}{]+|\{(?:[^}{]+|\{[^}{]*\})*\})*\})
+/// Replace regex substitution ->
+/// host_intf_fn! { $1 name -> send; generics ->$2; inputs -> $3; return -> $5; where -> $7; $8 }
+macro_rules! host_intf_fn {
+    ( $visab:vis name -> $name:ident ;
+      $( doc -> $( $doc:meta )+ ; )?
+      $( meta -> $( $attr:meta )+ ; )?
+      $( generics -> $($gen:tt $(: $bound:tt $(+ $b_others:tt )* )? ),* ; )?
+      $( inputs -> $($input:tt : $input_type:ty),* ; )?
+      $( return -> $ret:ty ;)?
+      $( where -> $($wgen:tt $(: $wbound:tt $(+ $wb_others:tt )* )? ),* ; )?
+      $body:block
+    ) => {
+        $( $($doc)+ )?
+        $( $($attr)+ )?
+        $visab fn $name
+        $(< $($gen $(: $bound $(+ $b_others)* )? ),+ >)?
+        ( $( $($input: $input_type),* )? )
+        -> $( $ret )?
+        where $( $($wgen: $( $wbound $(+ $wb_others)* )? ),+ )?
+        { $body }
+    };
+}
+
 // All these are down here for the macros
 pub mod le;
 pub mod link_control;
