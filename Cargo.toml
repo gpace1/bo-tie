@@ -42,5 +42,7 @@ simple-signal= "1.1.1"
 
 [workspace]
 members = [
-    "base-crates/bo-tie-linux"
+    "base-crates/bo-tie-linux",
+
+    "bo-tie-macros"
 ]
