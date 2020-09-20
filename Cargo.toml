@@ -8,6 +8,7 @@ license = "MIT"
 edition = "2018"
 
 [dependencies]
+bo-tie-macros = { path = 'bo-tie-macros' }
 serde = { version = "1", features = ['derive'] }
 log = "0.4.6"
 rand_core = { version = "0.5", features = ['getrandom'] }
@@ -24,7 +25,7 @@ default = ["v5_0"]
 v4_2 = [] # bluetooth v4.2
 v5_0 = [] # bluetooth v5.0
 uuid-crate = ["uuid"]
-flow-ctrl = []
+flow-ctrl = ["bo-tie-macros/flow-ctrl"]
 
 [dev-dependencies]
 futures = { version = "0.3", features = ["async-await", "thread-pool"] }

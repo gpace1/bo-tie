@@ -65,6 +65,7 @@ pub mod encrypt {
     /// Send the command to start encrypting the `plain_text`
     ///
     /// The input 'key' should be in native byte order.
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, key: u128, plain_text: [u8;16])
     -> impl Future<Output=Result<Cypher, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -155,6 +156,7 @@ pub mod long_term_key_request_reply {
     ///
     /// The input `long_term_key` is the encryption (cypher) secret key and it is in native byte
     /// order
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,
@@ -240,6 +242,7 @@ pub mod long_term_key_request_negative_reply {
 
     impl_command_complete_future!(Return, error::Error);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,
@@ -314,6 +317,7 @@ pub mod rand {
 
     impl_command_complete_future!(Return, error::Error);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>(hci: &'a HostInterface<T>)
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -372,6 +376,7 @@ pub mod start_encryption {
 
     impl_command_status_future!();
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter)
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface

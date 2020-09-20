@@ -102,6 +102,7 @@ pub mod remote_connection_parameter_request_reply {
 
     impl_command_complete_future!(Return, error::Error);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: CommandParameters)
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -181,6 +182,7 @@ pub mod remote_connection_parameter_request_negative_reply {
         fn get_parameter(&self) -> Self::Parameter { *self }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>,
         handle: ConnectionHandle,
         reason: error::Error

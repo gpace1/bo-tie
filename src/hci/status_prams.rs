@@ -62,6 +62,7 @@ pub mod read_rssi {
 
     impl_command_complete_future!(RSSIInfo, error::Error);
 
+    #[cfg(not(feature = "flow-ctrl"))]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
     -> impl Future<Output=Result<RSSIInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface

@@ -21,6 +21,7 @@ pub mod reset {
         fn get_parameter(&self) -> Self::Parameter { *self }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -190,6 +191,7 @@ pub mod set_event_mask {
         fn get_parameter(&self) -> Self::Parameter { self.mask }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, events: &[EventMask] )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -286,6 +288,7 @@ pub mod read_transmit_power_level {
         }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter )
     -> impl Future<Output=Result<TransmitPowerLevel, impl Display + Debug>> + 'a
     where T: HostControllerInterface

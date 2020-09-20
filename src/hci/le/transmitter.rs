@@ -65,6 +65,7 @@ pub mod read_advertising_channel_tx_power {
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<TxPower, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -125,6 +126,7 @@ pub mod transmitter_test{
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         channel: Frequency,
@@ -237,6 +239,7 @@ pub mod set_advertising_data {
 
     impl_status_return!(COMMAND);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static, A>( hci: &'a HostInterface<T>, adv_data: A )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface,
@@ -275,6 +278,7 @@ pub mod set_advertising_enable {
         }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -480,6 +484,7 @@ pub mod set_advertising_parameters {
 
     impl_status_return!(COMMAND);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, params: AdvertisingParameters )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -530,6 +535,7 @@ pub mod set_random_address {
         }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, rand_addr: crate::BluetoothDeviceAddress )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface

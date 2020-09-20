@@ -16,13 +16,10 @@ use super::{
     AclPacketBoundary,
     AclBroadcastFlag,
 };
-#[cfg(feature = "flow-ctrl")] use super::HostControllerInterface;
-#[cfg(feature = "flow-ctrl")] use core::{
-    sync::Arc,
-    task::Waker,
-};
+#[cfg(feature = "flow-ctrl")] use core::task::Waker;
 #[cfg(feature = "flow-ctrl")] use flow_manager::HciDataPacketFlowManager;
 #[cfg(feature = "flow-ctrl")] pub use flow_manager::AsyncLock;
+#[cfg(feature = "flow-ctrl")] use super::HostControllerInterface;
 
 /// A HCI channel for a LE-U Logical Link
 ///
@@ -32,7 +29,8 @@ use super::{
 /// no attached flow controller. The user of this channel must be aware of both the controllers
 /// maximum HCI data packet size and the amount of packets sent to the HCI LE data buffer (or the
 /// shared with BR/EDR data buffer if there is no LE only data buffer).
-pub(super) struct HciLeUChannel<I,HI,F>
+#[bo_tie_macros::host_interface]
+pub(super) struct HciLeUChannel<I,HI>
 where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface
 {
@@ -41,16 +39,18 @@ where HI: Deref<Target = HostInterface<I>>,
     minimum_mtu: usize,
     handle: common::ConnectionHandle,
     hi: HI,
-    #[allow(dead_code)] flow_controller: F,
 }
 
-impl<I,HI> HciLeUChannel<I,HI,NoFlowController>
+#[bo_tie_macros::host_interface]
+impl<I,HI> HciLeUChannel<I,HI>
 where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface
 {
-    /// Create a new `HciLeUChannel`
+    /// Create a new raw `HciLeUChannel`
     ///
-    /// The LE-U channel will be initialized with the default
+    /// This HciLeUChannel provides no flow control of sent data to the controller. It up to the
+    /// user to make sure that the host does not send either to large of data packets or to many
+    /// data packets to the controller.
     pub fn new_raw<T>(hi: HI, handle: common::ConnectionHandle, max_mtu: T) -> Self
         where T: Into<Option<u16>>
     {
@@ -68,16 +68,19 @@ where HI: Deref<Target = HostInterface<I>>,
             minimum_mtu: crate::l2cap::LeU::MIN_MTU.into(),
             handle,
             hi,
-            flow_controller: NoFlowController,
         }
     }
 }
 
-impl<I,HI,F> HciLeUChannel<I,HI,F>
+#[bo_tie_macros::host_interface]
+impl<I,HI> HciLeUChannel<I,HI>
 where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface,
       Self: crate::l2cap::ConnectionChannel,
 {
+    /// Get the MTU for a specified data packet
+    ///
+    /// Data packets can have a different MTU based on the request to use a specified MTU by `data`.
     fn get_send_mtu(&self, data: &AclData) -> usize {
         match data.get_mtu() {
             crate::l2cap::AclDataSuggestedMtu::Minimum => self.min_mtu(),
@@ -90,11 +93,18 @@ where HI: Deref<Target = HostInterface<I>>,
     }
 }
 
-impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,NoFlowController>
+/// The 'raw' connection channel implementation
+///
+/// This implementation uses a [`RawSender`](RawSender) for `SendFut`, which provides no flow
+/// control on the number of packets that can be sent to the controller (from the host). However,
+/// the packet size is limited to the minimum size for the type of connection channel (either LE
+/// or ACL)
+#[bo_tie_macros::host_interface(flow_ctrl_concrete = "NoFlowControl")]
+impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI>
 where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface,
 {
-    type SendFut = NoFlowController;
+    type SendFut = RawSender;
 
     type SendFutErr = ();
 
@@ -124,7 +134,7 @@ where HI: Deref<Target = HostInterface<I>>,
             self.hi.interface.send(hci_acl_data).expect("Failed to send hci acl data");
         });
 
-        NoFlowController
+        RawSender
     }
 
     fn set_mtu(&self, mtu: u16) {
@@ -162,16 +172,14 @@ where HI: Deref<Target = HostInterface<I>>,
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,HI,M> HciLeUChannel<I,HI,Arc<HciDataPacketFlowManager<M>>>
-where HI: Deref<Target = HostInterface<I>>,
+impl<I,HI,M> HciLeUChannel<I,HI,HciDataPacketFlowManager<M>>
+where HI: Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>>,
       I: HostControllerInterface + HciAclDataInterface + 'static,
-      M: flow_manager::AsyncLock + Default,
+      M: flow_manager::AsyncLock,
 {
     /// Create a new `HciLeUChannel` with a `HciDataPacketFlowManager` for LE-U
     pub async fn new_le_flow_manager(hi: HI, handle: common::ConnectionHandle) -> Self {
         use crate::l2cap::MinimumMtu;
-
-        let flow_manager = HciDataPacketFlowManager::new_le(&hi).await;
 
         Self {
             mtu: crate::l2cap::LeU::MIN_MTU.into(),
@@ -179,27 +187,26 @@ where HI: Deref<Target = HostInterface<I>>,
             minimum_mtu: crate::l2cap::LeU::MIN_MTU,
             handle,
             hi,
-            flow_controller: flow_manager.into(),
         }
     }
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,HI,M,L,G> crate::l2cap::ConnectionChannel  for
-    HciLeUChannel<I,HI,Arc<HciDataPacketFlowManager<M>>>
-where HI: Deref<Target = HostInterface<I>> + Send + Clone + Unpin + 'static,
+impl<I,HI,M,L,G> crate::l2cap::ConnectionChannel
+for HciLeUChannel<I,HI,HciDataPacketFlowManager<M>>
+where HI: Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>> + Unpin + Clone +
+          'static,
       I: HciAclDataInterface + HostControllerInterface + Unpin + 'static,
-      M: AsyncLock<Guard=G,Locker=L> + Default + 'static,
+      M: AsyncLock<Guard=G,Locker=L> + 'static,
       L: Future<Output=G> + 'static,
       G: 'static,
 {
-    type SendFut = flow_manager::SendFuture<M,HI,I>;
+    type SendFut = flow_manager::SendFuture<HI,I>;
 
     type SendFutErr = flow_manager::FlowControllerError<I>;
 
     fn send(&self, data: AclData) -> Self::SendFut {
         flow_manager::SendFuture::new(
-            self.flow_controller.clone(),
             self.hi.clone(),
             data,
             self.handle
@@ -238,7 +245,8 @@ where HI: Deref<Target = HostInterface<I>> + Send + Clone + Unpin + 'static,
     }
 }
 
-impl<I,HI,F> core::ops::Drop for HciLeUChannel<I,HI,F>
+#[bo_tie_macros::host_interface]
+impl<I,HI> core::ops::Drop for HciLeUChannel<I,HI>
 where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface
 {
@@ -247,24 +255,24 @@ where HI: Deref<Target = HostInterface<I>>,
     }
 }
 
-
-/// A false flow controller
+/// A marker struct for no flow control
 ///
-/// This does nothing and polling it immediately returns.
-pub(super) struct NoFlowController;
+/// When enabling "flow-ctrl" the implementation for a raw channel conflicts without using this
+/// structure with the `l2cap::ConnectionChannel` implementation. This is used as the concrete type
+/// for the flow controller.
+#[cfg(feature = "flow-ctrl")]
+pub struct NoFlowControl;
 
-impl Future for NoFlowController {
+/// A 'raw' sender
+///
+/// This is used for the sending future in a raw connection channel. This sender provides no flow
+/// control capabilities and can either overflow or
+pub(super) struct RawSender;
+
+impl Future for RawSender {
     type Output = Result<(),()>;
 
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(Ok(()))
     }
-}
-
-#[cfg(feature = "flow-ctrl")]
-trait FlowControl {
-    type ConnectionChannel: ConnectionChannel;
-
-    /// Create a new connection channel
-    fn new_channel(&self) -> Self::ConnectionChannel;
 }

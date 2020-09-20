@@ -2,48 +2,6 @@
 //!
 //! The HCI is the primary way of interacting with the controller for this library.
 
-/// Macro for implementing HostInterface
-///
-/// Enabling feature "flow-ctrl" requires the HostInterface to have a generic parameter for the
-/// flow controller's type. When it is not enabled the HostController only requires the generic
-/// input for the interface. This macro provides a different implementation for traits depending on
-/// the enablement of the feature "flow-ctrl"
-#[cfg(not(feature = "flow-ctrl"))]
-macro_rules! impl_for_host_interface {
-    ($trait:tt <$gen:ident>, $body: tt) => {
-        impl<$gen> $trait<$gen> for HostInterface<$gen> $body
-    };
-
-    ($trait:tt, $body: tt) => {
-        impl<I> $trait for HostInterface<I> $body
-    };
-}
-
-/// Macro for implementing HostInterface
-///
-/// Enabling feature "flow-ctrl" requires the HostInterface to have a generic parameter for the
-/// flow controller's type. When it is not enabled the HostController only requires the generic
-/// input for the interface. This macro provides a different implementation for traits depending on
-/// the enablement of the feature "flow-ctrl"
-#[cfg(feature = "flow-ctrl")]
-macro_rules! impl_for_host_interface {
-    ($trait:tt <$gen_1:ident, $gen_2:ident>, $body: tt) => {
-        impl<$gen_1,$gen_2> $trait<$gen_1,$gen_2> for HostInterface<$gen_1,$gen_2> $body
-    };
-
-    ($trait:tt <I>, $body: tt) => {
-        impl<I,F> $trait<I> for HostInterface<I,F> $body
-    };
-
-    ($trait:tt <F>, $body: tt) => {
-        impl<I,F> $trait<F> for HostInterface<I,F> $body
-    };
-
-    ($trait:tt, $body: tt) => {
-        impl<I,F> $trait for HostInterface<I,F> $body
-    };
-}
-
 pub mod opcodes;
 pub mod common;
 pub mod error;
@@ -567,36 +525,34 @@ pub struct HostInterface<I,F> {
     flow_controller: F,
 }
 
+#[bo_tie_macros::host_interface]
+impl<I> HostInterface<I> {
+    pub fn into_inner(self) -> I { self.interface }
+}
 
+#[bo_tie_macros::host_interface]
 impl<I> AsRef<I> for HostInterface<I> {
     fn as_ref(&self) -> &I {
         &self.interface
     }
 }
 
+#[bo_tie_macros::host_interface]
 impl<I> AsMut<I> for HostInterface<I> {
     fn as_mut(&mut self) -> &mut I {
         &mut self.interface
     }
 }
 
-impl<I> HostInterface<I> {
-    pub fn into_inner(self) -> I { self.interface }
-}
-
+#[cfg(not(feature = "flow-ctrl"))]
 impl<I> From<I> for HostInterface<I>
 {
-    #[cfg(not(feature = "flow-ctrl"))]
     fn from(interface: I) -> Self {
         HostInterface { interface }
     }
-
-    #[cfg(feature = "flow-ctrl")]
-    fn from(interface: I) -> Self {
-        HostInterface { interface, flow_ctrl: None }
-    }
 }
 
+#[bo_tie_macros::host_interface]
 impl<I> HostInterface<I>
 where I: HostControllerInterface
 {
@@ -735,6 +691,7 @@ where I: HostControllerInterface
     }
 }
 
+#[bo_tie_macros::host_interface(flow_ctrl_concrete = "flow_ctrl::NoFlowControl")]
 impl<I> HostInterface<I> where I: HciAclDataInterface {
 
     /// Create a new raw LE-U logical link connection channel
@@ -770,8 +727,12 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     }
 }
 
-impl<I> HostInterface<I>
-where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static
+#[cfg(feature = "flow-ctrl")]
+impl<I,M,L,G> HostInterface<I,flow_ctrl::flow_manager::HciDataPacketFlowManager<M>>
+where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
+      M: flow_ctrl::flow_manager::AsyncLock<Guard=G,Locker=L> + 'static,
+      L: Future<Output=G> + 'static,
+      G: 'static,
 {
     /// Create a channel that uses a flow controller
     ///
@@ -779,18 +740,17 @@ where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + '
     /// and the number of HCI packets it can accept. This flow controller will then fragment data
     /// to the maximum size (if needed) and pend when the controllers buffer is full. The querying
     /// of the controller only occurs once, after that it uses the values already queued for.
-    #[cfg(feature = "flow-ctrl")]
-    pub async fn flow_ctrl_channel<M>(self: Arc<Self>, handle: common::ConnectionHandle)
+    pub async fn flow_ctrl_channel<HI>(self: Arc<Self>, handle: common::ConnectionHandle)
     -> impl crate::l2cap::ConnectionChannel
-    where M: flow_ctrl::AsyncLock + Default + 'static,
     {
         flow_ctrl::HciLeUChannel
-            ::<I,Arc<Self>,Arc<flow_ctrl::flow_manager::HciDataPacketFlowManager<M>>>
-            ::new_le_flow_manager(self, handle).await
+            ::<I,Arc<Self>,flow_ctrl::flow_manager::HciDataPacketFlowManager<M>>
+            ::new_le_flow_manager(self, handle)
+            .await
     }
 }
 
- #[derive(Debug)]
+#[derive(Debug)]
 enum OutputErr<TargErr, CmdErr>
 where TargErr: Display + Debug,
       CmdErr: Display + Debug,
@@ -992,44 +952,6 @@ macro_rules! impl_status_return {
 
         impl_command_complete_future!(ReturnData, ReturnType, error::Error);
     }
-}
-
-/// Implement a function that uses `HostInterface`
-///
-/// This is required for implementing functions that either take an input of type `HostInterface`,
-/// return a `HostInterface`, or a trait bound deals with `HostInterface`. If the
-/// function declaration has a `HostInterface` somewhere in it, this macro can be used so that
-/// multiple implementations do not need to be written of the function due to the feature
-/// "flow-ctrl". Enabling this feature changes the number of generics for `HostInterface`, which
-/// means that every function, implementation, or anything else that uses it must be written twice,
-/// once for use with the feature, and once for without it. This is only used for the functions.
-///
-/// # Dev Notes (TODO remove before merging to main)
-///
-/// ## send functionsg
-/// Find send regex ->
-/// ((\/\/\/.*[\s]*)*)(pub)?[\s]+fn[\s]+send<?([',\:\sa-zA-Z0-9]*)>?[\s]*\((.+(?=HostInterface)[^}]*?)\)[\s]*(->)?[\s]*([^{]*)(?=where)(where)?([^{]*)(\{(?:[^}{]+|\{(?:[^}{]+|\{[^}{]*\})*\})*\})
-/// Replace regex substitution ->
-/// host_intf_fn! { $1 name -> send; generics ->$2; inputs -> $3; return -> $5; where -> $7; $8 }
-macro_rules! host_intf_fn {
-    ( $visab:vis name -> $name:ident ;
-      $( doc -> $( $doc:meta )+ ; )?
-      $( meta -> $( $attr:meta )+ ; )?
-      $( generics -> $($gen:tt $(: $bound:tt $(+ $b_others:tt )* )? ),* ; )?
-      $( inputs -> $($input:tt : $input_type:ty),* ; )?
-      $( return -> $ret:ty ;)?
-      $( where -> $($wgen:tt $(: $wbound:tt $(+ $wb_others:tt )* )? ),* ; )?
-      $body:block
-    ) => {
-        $( $($doc)+ )?
-        $( $($attr)+ )?
-        $visab fn $name
-        $(< $($gen $(: $bound $(+ $b_others)* )? ),+ >)?
-        ( $( $($input: $input_type),* )? )
-        -> $( $ret )?
-        where $( $($wgen: $( $wbound $(+ $wb_others)* )? ),+ )?
-        { $body }
-    };
 }
 
 // All these are down here for the macros

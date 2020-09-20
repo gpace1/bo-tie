@@ -16,6 +16,7 @@ pub mod receiver_test {
         }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, frequency: Frequency )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -57,6 +58,7 @@ pub mod set_scan_enable {
 
     /// The command has the ability to enable/disable scanning and filter duplicate
     /// advertisement.
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool, filter_duplicates: bool)
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -180,6 +182,7 @@ pub mod set_scan_parameters {
         }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, sp: ScanningParameters )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface

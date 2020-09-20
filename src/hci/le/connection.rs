@@ -80,7 +80,7 @@ pub mod connection_update {
 
     impl_command_status_future!();
 
-    /// Send the command to the controller.
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cu: ConnectionUpdate)
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a where T: HostControllerInterface
     {
@@ -106,6 +106,7 @@ pub mod create_connection_cancel {
         fn get_parameter(&self) -> Self::Parameter { *self }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>)
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -252,6 +253,7 @@ pub mod create_connection {
 
     impl_command_status_future!();
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cp: ConnectionParameters )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -348,6 +350,7 @@ pub mod read_channel_map {
 
     impl_command_complete_future!(ChannelMapInfo, error::Error);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
     -> impl Future<Output=Result<ChannelMapInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -383,6 +386,7 @@ pub mod read_remote_features {
 
     impl_command_status_future!();
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -464,6 +468,7 @@ pub mod set_host_channel_classification {
 
     impl_status_return!(COMMAND);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, map: ChannelMap )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface

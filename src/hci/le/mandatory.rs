@@ -19,9 +19,6 @@ macro_rules! add_remove_white_list_setup {
         use crate::hci::le::common::AddressType;
 
         /// Command parameter data for both add and remove whitelist commands.
-        ///
-        /// Not using bluez becasue there are different parameter structs for the
-        /// two commands even though they are the same in structure.
         #[repr(packed)]
         #[derive(Clone, Copy)]
         struct CommandPrameter {
@@ -31,6 +28,7 @@ macro_rules! add_remove_white_list_setup {
 
         impl_status_return!( $command );
 
+        #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
         pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>,
             at: AddressType,
             addr: crate::BluetoothDeviceAddress )
@@ -76,6 +74,7 @@ pub mod clear_white_list {
 
     impl_status_return!(COMMAND);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -166,6 +165,7 @@ pub mod read_buffer_size {
 
     impl_command_complete_future!(BufferSize, error::Error);
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<BufferSize,impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -241,6 +241,7 @@ pub mod read_local_supported_features {
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<ReturnedEnabledLeFeaturesItr, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -428,6 +429,7 @@ pub mod read_supported_states {
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<CurrentStatesAndRoles, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -503,6 +505,7 @@ pub mod read_white_list_size {
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<WhiteListSize, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -636,6 +639,7 @@ pub mod set_event_mask {
     /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
     /// send(&host_interface, &events);
     /// ```
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hi: &'a HostInterface<T>, enabled_events: &[LEMeta] )
     -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -710,6 +714,7 @@ pub mod test_end {
 
     /// This will return a future with its type 'Output' being the number of packets
     /// received during what ever tests was done
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface

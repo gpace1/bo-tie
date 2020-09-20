@@ -70,6 +70,7 @@ pub mod read_bd_addr {
     }
 
     /// Returns the bluetooth device address for the device
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a where T: HostControllerInterface
     {
@@ -158,6 +159,7 @@ pub mod read_local_supported_features {
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<EnabledFeatures, impl Display + Debug>> + 'a
         where T: HostControllerInterface
@@ -242,6 +244,7 @@ pub mod read_local_version_information {
         fn get_parameter(&self) -> Self::Parameter { *self }
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>(hci: &'a HostInterface<T>)
     -> impl Future<Output=Result<VersionInformation, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -916,6 +919,7 @@ pub mod read_local_supported_commands {
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface
@@ -1000,6 +1004,7 @@ pub mod read_buffer_size {
         fn get_parameter(&self) -> Self::Parameter {*self}
     }
 
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
     pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
     -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
     where T: HostControllerInterface

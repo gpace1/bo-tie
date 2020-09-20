@@ -35,7 +35,7 @@
 //! fragments, can reduce or prevent (if the fragments don't need to be fragmented).
 //!
 //! # WARNING
-//! For now this only works for one buffer on the system. It doesn't differentiate between BR/EDR
+//! For now this only works for one buffer on the HCI. It doesn't differentiate between BR/EDR
 //! and LE. To do that it needs to keep track of connection handles, assign them with one buffer
 //! or the other, and have multiple counts for each buffer.
 //!
@@ -83,7 +83,7 @@ use crate::hci::AclBroadcastFlag;
 #[derive(Debug, Default)]
 pub struct HciDataPacketFlowManager<M> {
     /// Once someone starts sending, they have a total lock until all data fragments are sent. There
-    /// is no way multiple contexts to send fragmented data to the controller at the same time.
+    /// is no way for multiple contexts to send data to the controller at the same time.
     sender_lock: Arc<M>,
     /// The maximum size of the payload for each *hci* packet
     max_packet_payload_size: usize,
@@ -97,7 +97,7 @@ pub struct HciDataPacketFlowManager<M> {
     controller_buffer_size: usize,
     /// The current waker
     current_waker: Arc<AtomicPtr<Waker>>,
-    /// Matcher flag for clearing the matching method.
+    /// Matcher flag for clearing the matching method given to the driver.
     match_flag: Arc<AtomicBool>,
 }
 
@@ -130,19 +130,18 @@ impl<M> HciDataPacketFlowManager<M> {
     /// `receive_event` does not wake anything and the provides matcher will never return true. This
     /// should ensure that the driver will never remove the matcher for the *Number of Completed
     /// Packets Event*, **but the consequences of this is that the user can no longer await for this
-    /// event in their library or application** for the lifetime of the matcher. The matcher is tied
-    /// to all instances of a `ConnectionChannel` associated with a single instance of a
+    /// event in their library or application for the lifetime of the matcher**. The matcher is tied
+    /// to all instances of a `ConnectionChannel` associated with an instance of a
     /// `HciDataPacketFlowManager`.
     ///
     /// # TODO Note
     /// As this is currently implemented, it doesn't differentiate between the ACL controller buffer
     /// and the LE controller buffer when counting the number of freed space. When implementing ACL
-    /// the 'freed' count needs to be divided between ACL-U and LE-U. Doing this may mean that
-    /// two wakers could be supported, one for ACL-U and one for LE-U.
+    /// the 'freed' count needs to be divided between ACL-U and LE-U.
     fn setup_completed_packets_callback<I>(
         current_waker: Arc<core::sync::atomic::AtomicPtr<Waker>>,
         used_space: Arc<AtomicUsize>,
-        interface: &HostInterface<I>,
+        interface: &HostInterface<I,Self>,
         match_flag: Arc<AtomicBool>
     )
     where I: HostControllerInterface + HciAclDataInterface,
@@ -330,12 +329,12 @@ impl<M> HciDataPacketFlowManager<M> {
     }
 }
 
-impl<M,L,G> HciDataPacketFlowManager<M>
-where M: AsyncLock<Guard=G,Locker=L> + Default,
+impl<M: 'static,L,G> HciDataPacketFlowManager<M>
+where M: AsyncLock<Guard=G,Locker=L>,
       L: Future<Output=G>
 {
-    /// Create a new HCI data packet flow manager for LE data.
-    pub async fn new_le<I>( hi: &HostInterface<I> ) -> Self
+    /// Initialize the HCI data packet flow manager for LE data.
+    pub async fn initialize_le<I>( hi: &mut HostInterface<I,Self> )
     where I: HostControllerInterface + HciAclDataInterface + 'static,
     {
         use crate::hci::{
@@ -379,15 +378,12 @@ where M: AsyncLock<Guard=G,Locker=L> + Default,
             match_flag.clone(),
         );
 
-        Self {
-            sender_lock: Arc::default(),
-            max_packet_payload_size: pl.into(),
-            min_packet_payload_size: crate::l2cap::LeU::MIN_MTU,
-            controller_used_space,
-            controller_buffer_size: pc.into(),
-            current_waker: Arc::default(),
-            match_flag,
-        }
+
+        hi.flow_controller.max_packet_payload_size = pl.into();
+        hi.flow_controller.min_packet_payload_size = crate::l2cap::LeU::MIN_MTU;
+        hi.flow_controller.controller_used_space   = controller_used_space;
+        hi.flow_controller.controller_buffer_size  = pc.into();
+        hi.flow_controller.match_flag              = match_flag;
     }
 
     /// Send ACL data to controller
@@ -397,35 +393,39 @@ where M: AsyncLock<Guard=G,Locker=L> + Default,
     /// cannot be done through the HCI as specified in the specification). When it is determined
     /// that the controller has enough room for one or more packets, the future will be awoken to
     /// send more packets to the controller.
-    pub async fn send<Hci,I>(
-        self: Arc<Self>,
+    pub async fn send_hci_data<Hci,I>(
         hi: Hci,
         data: AclData,
         connection_handle: ConnectionHandle
     ) -> Result<(), FlowControllerError<I>>
-    where Hci: core::ops::Deref<Target = HostInterface<I>>,
+    where Hci: core::ops::Deref<Target = HostInterface<I,Self>> + 'static,
           I: HciAclDataInterface,
     {
-        match self.fragment(&data, connection_handle) {
+        let flow_controller = &hi.flow_controller;
+
+        match flow_controller.fragment(&data, connection_handle) {
             Ok(vec_data) => {
                 // Fragmented sending requires exclusive access to the HCI interface
-                let _lock = self.sender_lock.lock().await;
+                let _lock = flow_controller.sender_lock.lock().await;
 
-                self.set_waker().await;
+                flow_controller.set_waker().await;
 
-                let buffer_used_space = self.controller_used_space.load(Ordering::SeqCst);
+                let buffer_used_space = flow_controller.controller_used_space.load(Ordering::SeqCst);
 
-                if self.controller_buffer_size < (vec_data.len() + buffer_used_space)
+                if flow_controller.controller_buffer_size < (vec_data.len() + buffer_used_space)
                 {
-                    self.controller_used_space.fetch_add(vec_data.len(), Ordering::Acquire);
+                    flow_controller.controller_used_space.fetch_add(
+                        vec_data.len(),
+                        Ordering::Acquire
+                    );
 
                     vec_data.into_iter().try_for_each(|data| hi.as_ref().send(data).map(|_| ()))
                 } else {
-                    let send_amount = self.controller_buffer_size
+                    let send_amount = flow_controller.controller_buffer_size
                         .checked_sub(buffer_used_space)
                         .unwrap_or_default();
 
-                    self.controller_used_space.fetch_add(send_amount, Ordering::Acquire);
+                    flow_controller.controller_used_space.fetch_add(send_amount, Ordering::Acquire);
 
                     let mut data_itr = vec_data.into_iter();
 
@@ -434,20 +434,22 @@ where M: AsyncLock<Guard=G,Locker=L> + Default,
                         .take_while(|(i, _)| i < &send_amount)
                         .try_for_each(|(_, data)| hi.as_ref().send(data).map(|_| ()))?;
 
-                    self.wait_for_controller(hi.as_ref(), data_itr).await
+                    flow_controller.wait_for_controller(hi.as_ref(), data_itr).await
                 }
             }
             Err(single_data) => {
-                let _lock = self.sender_lock.lock().await;
+                let _lock = flow_controller.sender_lock.lock().await;
 
-                self.set_waker().await;
+                flow_controller.set_waker().await;
 
-                let buffer_used_space = self.controller_used_space.load(Ordering::SeqCst);
+                let buffer_used_space = flow_controller.controller_used_space.load(
+                    Ordering::SeqCst
+                );
 
-                if self.controller_buffer_size < buffer_used_space {
+                if flow_controller.controller_buffer_size < buffer_used_space {
                     hi.as_ref().send(single_data).map(|_| ())
                 } else {
-                    self.wait_for_controller(hi.as_ref(), Some(single_data)).await
+                    flow_controller.wait_for_controller(hi.as_ref(), Some(single_data)).await
                 }
             }
         }
@@ -474,23 +476,21 @@ pub trait AsyncLock {
     fn lock(&self) -> Self::Locker;
 }
 
-pub struct SendFuture<M,Hci,I> where I: HciAclDataInterface + HostControllerInterface {
-    manager: Arc<HciDataPacketFlowManager<M>>,
+/// A future for sending HCI data packets to the controller
+pub struct SendFuture<Hci,I> where I: HciAclDataInterface {
     hi: Hci,
     data: Option<AclData>,
     handle: ConnectionHandle,
-    fut: Option<Pin<Box<dyn Future<Output=Result<(), FlowControllerError<I> > > > >>,
+    fut: Option<Pin<Box<dyn Future<Output=Result<(), FlowControllerError<I>>>>>>,
 }
 
-impl<M,Hci,I> SendFuture<M,Hci,I> where I: HciAclDataInterface + HostControllerInterface {
+impl<Hci,I> SendFuture<Hci,I> where I: HciAclDataInterface {
     pub fn new(
-        manager: Arc<HciDataPacketFlowManager<M>>,
         hi: Hci,
         data: AclData,
         handle: ConnectionHandle
     ) -> Self {
         SendFuture {
-            manager,
             hi,
             data: Some(data),
             handle,
@@ -499,10 +499,11 @@ impl<M,Hci,I> SendFuture<M,Hci,I> where I: HciAclDataInterface + HostControllerI
     }
 }
 
-impl<M,Hci,I,G,L> Future for SendFuture<M,Hci,I>
-where Hci: core::ops::Deref<Target = HostInterface<I>> + Clone + Unpin + 'static,
-      I: HciAclDataInterface + HostControllerInterface + Unpin + 'static,
-      M: AsyncLock<Guard=G,Locker=L> + Default + 'static,
+impl<M,Hci,I,G,L> Future for SendFuture<Hci,I>
+where Hci: core::ops::Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>> + Clone + Unpin
+           + 'static,
+      I: HciAclDataInterface + Unpin + 'static,
+      M: AsyncLock<Guard=G,Locker=L>  + 'static,
       L: Future<Output=G> + 'static,
       G: 'static
 {
@@ -514,11 +515,11 @@ where Hci: core::ops::Deref<Target = HostInterface<I>> + Clone + Unpin + 'static
 
         match this.fut.as_mut() {
             None => {
-                this.fut = Some( Box::pin( this.manager.clone().send(
+                this.fut = Some( Box::pin( HciDataPacketFlowManager::send_hci_data(
                     this.hi.clone(),
                     this.data.take().unwrap(),
-                    this.handle)
-                ) );
+                    this.handle
+                )));
 
                 this.fut.as_mut().unwrap()
             },
