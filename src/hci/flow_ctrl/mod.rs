@@ -12,12 +12,8 @@ use super::{
     common,
     HostInterface,
     HciAclDataInterface,
-    HciAclData,
-    AclPacketBoundary,
-    AclBroadcastFlag,
 };
 #[cfg(feature = "flow-ctrl")] use core::task::Waker;
-#[cfg(feature = "flow-ctrl")] use flow_manager::HciDataPacketFlowManager;
 #[cfg(feature = "flow-ctrl")] pub use flow_manager::AsyncLock;
 #[cfg(feature = "flow-ctrl")] use super::HostControllerInterface;
 
@@ -41,7 +37,7 @@ where HI: Deref<Target = HostInterface<I>>,
     hi: HI,
 }
 
-#[bo_tie_macros::host_interface]
+#[cfg(not(feature = "flow-ctrl"))]
 impl<I,HI> HciLeUChannel<I,HI>
 where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface
@@ -99,7 +95,7 @@ where HI: Deref<Target = HostInterface<I>>,
 /// control on the number of packets that can be sent to the controller (from the host). However,
 /// the packet size is limited to the minimum size for the type of connection channel (either LE
 /// or ACL)
-#[bo_tie_macros::host_interface(flow_ctrl_concrete = "NoFlowControl")]
+#[cfg(not(feature = "flow-ctrl"))]
 impl<I,HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI>
 where HI: Deref<Target = HostInterface<I>>,
       I: HciAclDataInterface,
@@ -109,6 +105,7 @@ where HI: Deref<Target = HostInterface<I>>,
     type SendFutErr = ();
 
     fn send(&self, data: AclData ) -> Self::SendFut {
+        use crate::hci::{ HciAclData, AclPacketBoundary, AclBroadcastFlag, };
 
         let mtu = self.get_send_mtu(&data);
 
@@ -172,18 +169,29 @@ where HI: Deref<Target = HostInterface<I>>,
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,HI,M> HciLeUChannel<I,HI,HciDataPacketFlowManager<M>>
-where HI: Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>>,
+impl<I,HI,M> HciLeUChannel<I,HI,M>
+where HI: Deref<Target = HostInterface<I,M>>,
       I: HostControllerInterface + HciAclDataInterface + 'static,
       M: flow_manager::AsyncLock,
 {
-    /// Create a new `HciLeUChannel` with a `HciDataPacketFlowManager` for LE-U
-    pub async fn new_le_flow_manager(hi: HI, handle: common::ConnectionHandle) -> Self {
+    /// Create a new `HciLeUChannel` from the `HciDataPacketFlowManager` of a `HostInterface` for
+    /// LE-U
+    ///
+    /// This flow controller is attached to the flow manager of the `hi` input. The other inputs
+    /// are the connection handle for the connection and a maximum mtu value.
+    ///
+    /// # Note
+    /// No validation is made for the value of `maximum_mtu`.
+    pub async fn new_le_flow_controller(
+        hi: HI,
+        handle: common::ConnectionHandle,
+        maximum_mtu: usize,
+    ) -> Self {
         use crate::l2cap::MinimumMtu;
 
         Self {
             mtu: crate::l2cap::LeU::MIN_MTU.into(),
-            maximum_mtu: <u16>::MAX as usize, // maximum a L2CAP pdu can handle
+            maximum_mtu: maximum_mtu.into(),
             minimum_mtu: crate::l2cap::LeU::MIN_MTU,
             handle,
             hi,
@@ -192,9 +200,8 @@ where HI: Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>>,
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,HI,M,L,G> crate::l2cap::ConnectionChannel
-for HciLeUChannel<I,HI,HciDataPacketFlowManager<M>>
-where HI: Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>> + Unpin + Clone +
+impl<I,HI,M,L,G> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,M>
+where HI: Deref<Target = HostInterface<I,M>> + Unpin + Clone +
           'static,
       I: HciAclDataInterface + HostControllerInterface + Unpin + 'static,
       M: AsyncLock<Guard=G,Locker=L> + 'static,
@@ -208,6 +215,7 @@ where HI: Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>> + Unpin +
     fn send(&self, data: AclData) -> Self::SendFut {
         flow_manager::SendFuture::new(
             self.hi.clone(),
+            self.get_send_mtu(&data),
             data,
             self.handle
         )
@@ -254,14 +262,6 @@ where HI: Deref<Target = HostInterface<I>>,
         self.hi.interface.stop_receiver(&self.handle)
     }
 }
-
-/// A marker struct for no flow control
-///
-/// When enabling "flow-ctrl" the implementation for a raw channel conflicts without using this
-/// structure with the `l2cap::ConnectionChannel` implementation. This is used as the concrete type
-/// for the flow controller.
-#[cfg(feature = "flow-ctrl")]
-pub struct NoFlowControl;
 
 /// A 'raw' sender
 ///

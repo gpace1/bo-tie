@@ -15,6 +15,7 @@ use core::fmt::Display;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ Poll, Waker };
+#[cfg(feature = "flow_ctrl")] pub use flow_ctrl::flow_manager::AsyncLock;
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -511,18 +512,80 @@ P: EventMatcher + Send + Sync + 'static
 
 /// The host interface
 ///
-/// This is used by the host to interact with the interface between itself and the Bluetooth
-/// Controller.
+/// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
+/// host controller interface.
+///
+/// # Feature *flow-ctrl*
+/// The default implementation of `HostInterface` provides no flow control for HCI data sent from
+/// the host to the controller. HCI data packets that are too large or too many packets within too
+/// short of time frame can be sent. It is up to the user of a HostInterface to be sure that the
+/// HCI data packets sent to the controller are not too big or overflow the buffers.
+///
+/// Building this library with the "flow-ctrl" feature adds a flow controller to a `HostInterface`.
+/// This flow controller monitors the *Number of Completed Packets Event* sent from the controller
+/// and allows packets to be sent to the controller so long as there is space in the controllers
+/// buffers. Every [`ConnectionChannel`](crate::l2cap::ConnectionChannel) made from a
+/// `HostInterface` will be regulated by the flow controller when sending data to the controller.
+///
+/// A flow controller is not built with a HostInterface by default since there are a few issues with
+/// having it. First is that a flow controller must be initialized. Without a flow controller a
+/// `HostInterface` can be created with either `default()` or `from(your_interface)`, but with it
+/// the only way to create a `HostInterface` is with the `initialize()` async method. The flow
+/// controller's initialization process is to query the controller for the HCI send buffer
+/// information, to get both the maximum HCI data packet size and number of HCI data packets the
+/// size of the buffer. The next issue is that the *Number of Completed Packets Event* cannot be
+/// awaited upon. The flow-controller must be the only user of this event. Lastly the 'raw'
+/// `ConnectionChannel` implementations are not available, you are forced to use the flow
+/// controller when creating a `ConnectionChannel`.
+///
+/// The main reason why feature *flow-ctrl* is not a part of the default features list is that for
+/// most use cases a flow controller is unnecessary. It should really only be needed for when
+/// numerous connections are made or for some reason the buffer information is unknown. Most of the
+/// time the raw connections will suffice with the MTU value set to the maximum packet size of the
+/// HCI receive data buffer on the controller.
 #[derive(Clone, Default)]
 #[cfg(not(feature = "flow-ctrl"))]
 pub struct HostInterface<I> {
     interface: I,
 }
 
+/// The host interface
+///
+/// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
+/// host controller interface.
+///
+/// # Feature *flow-ctrl*
+/// The default implementation of `HostInterface` provides no flow control for HCI data sent from
+/// the host to the controller. HCI data packets that are too large or too many packets within too
+/// short of time frame can be sent. It is up to the user of a HostInterface to be sure that the
+/// HCI data packets sent to the controller are not too big or overflow the buffers.
+///
+/// Building this library with the "flow-ctrl" feature adds a flow controller to a `HostInterface`.
+/// This flow controller monitors the *Number of Completed Packets Event* sent from the controller
+/// and allows packets to be sent to the controller so long as there is space in the controllers
+/// buffers. Every [`ConnectionChannel`](crate::l2cap::ConnectionChannel) made from a
+/// `HostInterface` will be regulated by the flow controller when sending data to the controller.
+///
+/// A flow controller is not built with a HostInterface by default since there are a few issues with
+/// having it. First is that a flow controller must be initialized. Without a flow controller a
+/// `HostInterface` can be created with either `default()` or `from(your_interface)`, but with it
+/// the only way to create a `HostInterface` is with the `initialize()` async method. The flow
+/// controller's initialization process is to query the controller for the HCI send buffer
+/// information, to get both the maximum HCI data packet size and number of HCI data packets the
+/// size of the buffer. The next issue is that the *Number of Completed Packets Event* cannot be
+/// awaited upon. The flow-controller must be the only user of this event. Lastly the 'raw'
+/// `ConnectionChannel` implementations are not available, you are forced to use the flow
+/// controller when creating a `ConnectionChannel`.
+///
+/// The main reason why feature *flow-ctrl* is not a part of the default features list is that for
+/// most use cases a flow controller is unnecessary. It should really only be needed for when
+/// numerous connections are made or for some reason the buffer information is unknown. Most of the
+/// time the raw connections will suffice with the MTU value set to the maximum packet size of the
+/// HCI receive data buffer on the controller.
 #[cfg(feature = "flow-ctrl")]
-pub struct HostInterface<I,F> {
+pub struct HostInterface<I,M> {
     interface: I,
-    flow_controller: F,
+    flow_controller: flow_ctrl::flow_manager::HciDataPacketFlowManager<M>,
 }
 
 #[bo_tie_macros::host_interface]
@@ -691,7 +754,7 @@ where I: HostControllerInterface
     }
 }
 
-#[bo_tie_macros::host_interface(flow_ctrl_concrete = "flow_ctrl::NoFlowControl")]
+#[cfg(not(feature = "flow-ctrl"))]
 impl<I> HostInterface<I> where I: HciAclDataInterface {
 
     /// Create a new raw LE-U logical link connection channel
@@ -728,25 +791,58 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,M,L,G> HostInterface<I,flow_ctrl::flow_manager::HciDataPacketFlowManager<M>>
+impl<I,M,L,G> HostInterface<I,M>
 where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
       M: flow_ctrl::flow_manager::AsyncLock<Guard=G,Locker=L> + 'static,
       L: Future<Output=G> + 'static,
       G: 'static,
 {
-    /// Create a channel that uses a flow controller
-    ///
-    /// This connection channel will query the controller *once* to get the maximum HCI packet size
-    /// and the number of HCI packets it can accept. This flow controller will then fragment data
-    /// to the maximum size (if needed) and pend when the controllers buffer is full. The querying
-    /// of the controller only occurs once, after that it uses the values already queued for.
-    pub async fn flow_ctrl_channel<HI>(self: Arc<Self>, handle: common::ConnectionHandle)
-    -> impl crate::l2cap::ConnectionChannel
+    /// Create a new HostInterface
+    pub async fn new() -> Self
+    where I: Default, M: Default
     {
-        flow_ctrl::HciLeUChannel
-            ::<I,Arc<Self>,flow_ctrl::flow_manager::HciDataPacketFlowManager<M>>
-            ::new_le_flow_manager(self, handle)
-            .await
+        let mut hci = HostInterface {
+            interface: Default::default(),
+            flow_controller: Default::default(),
+        };
+
+        flow_ctrl::flow_manager::HciDataPacketFlowManager::initialize(&mut hci).await;
+
+        hci
+    }
+
+    /// Create a connection channel with a flow controller
+    ///
+    /// This connection channel is flow controlled when sending HCI data to the controller. Data
+    /// that is larger than the maximum packet size will be fragmented into multiple packets and
+    /// if there is no room in the controller's buffer the send will pend.
+    ///
+    /// The input `max_mtu` is the maximum MTU that can be set by higher layer protocols. When the
+    /// connection is created the MTU is set to the minimum MTU for a L2CAP LE-U logical link, but
+    /// it can be changed to a value up to `max_mtu`. Not specifying the input `max_mtu` will result
+    /// is the maximum MTU that the HCI LE (or the BR/EDR) data buffer can handle.
+    ///
+    /// # Panic (debug only)
+    /// Input `max_mtu` may not be smaller then the minimum MTU for a LE-U logical link.
+    pub async fn flow_ctrl_channel<Mtu>(
+        self: Arc<Self>,
+        handle: common::ConnectionHandle,
+        max_mtu: Mtu
+    ) -> impl crate::l2cap::ConnectionChannel
+    where Mtu: Into<Option<u16>>
+    {
+        let max = match max_mtu.into(){
+            None => self.flow_controller.get_max_payload_size(),
+            Some(v) => {
+                let val = <usize>::from(v);
+
+                debug_assert!(val > <crate::l2cap::LeU as crate::l2cap::MinimumMtu>::MIN_MTU);
+
+                val
+            },
+        };
+
+        flow_ctrl::HciLeUChannel::<I,Arc<Self>,M>::new_le_flow_controller(self,handle,max).await
     }
 }
 

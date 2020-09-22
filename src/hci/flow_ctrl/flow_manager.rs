@@ -141,7 +141,7 @@ impl<M> HciDataPacketFlowManager<M> {
     fn setup_completed_packets_callback<I>(
         current_waker: Arc<core::sync::atomic::AtomicPtr<Waker>>,
         used_space: Arc<AtomicUsize>,
-        interface: &HostInterface<I,Self>,
+        interface: &HostInterface<I,M>,
         match_flag: Arc<AtomicBool>
     )
     where I: HostControllerInterface + HciAclDataInterface,
@@ -209,16 +209,14 @@ impl<M> HciDataPacketFlowManager<M> {
     /// # Panic
     /// If data has a packet boundary flag indicating a complete L2CAP PDU and the payload is larger
     /// then the controller's accepted payload size, this function produces a panic.
-    fn fragment(&self, data: &AclData, connection_handle: ConnectionHandle)
+    fn fragment(&self, mtu: usize, data: &AclData, connection_handle: ConnectionHandle)
     -> Result<alloc::vec::Vec<HciAclData>, HciAclData>
     {
-
-        if data.get_payload().len() + AclData::HEADER_SIZE > self.max_packet_payload_size {
+        if data.get_payload().len() > mtu {
 
             let mut first_packet = true;
 
-            let fragments = data.into_raw_data()
-                .chunks(self.max_packet_payload_size)
+            let fragments = data.into_raw_data().chunks(mtu)
                 .map(|chunk| HciAclData::new(
                     connection_handle,
                     if first_packet {
@@ -334,7 +332,7 @@ where M: AsyncLock<Guard=G,Locker=L>,
       L: Future<Output=G>
 {
     /// Initialize the HCI data packet flow manager for LE data.
-    pub async fn initialize_le<I>( hi: &mut HostInterface<I,Self> )
+    pub async fn initialize<I>(hi: &mut HostInterface<I,M> )
     where I: HostControllerInterface + HciAclDataInterface + 'static,
     {
         use crate::hci::{
@@ -396,14 +394,15 @@ where M: AsyncLock<Guard=G,Locker=L>,
     pub async fn send_hci_data<Hci,I>(
         hi: Hci,
         data: AclData,
-        connection_handle: ConnectionHandle
+        connection_handle: ConnectionHandle,
+        mtu: usize,
     ) -> Result<(), FlowControllerError<I>>
-    where Hci: core::ops::Deref<Target = HostInterface<I,Self>> + 'static,
+    where Hci: core::ops::Deref<Target = HostInterface<I,M>> + 'static,
           I: HciAclDataInterface,
     {
         let flow_controller = &hi.flow_controller;
 
-        match flow_controller.fragment(&data, connection_handle) {
+        match flow_controller.fragment(mtu, &data, connection_handle) {
             Ok(vec_data) => {
                 // Fragmented sending requires exclusive access to the HCI interface
                 let _lock = flow_controller.sender_lock.lock().await;
@@ -466,7 +465,7 @@ pub(super) type FlowControllerError<I> = <I as HciAclDataInterface>::SendAclData
 
 /// A trait for implementing an asynchronous locking.
 ///
-/// This is needed for a flow controller as fragmented data must be sent contiguously to the
+/// This is needed for a flow controller as data must be sent sequentially (not concurrently) to the
 /// controller. The lock ensures that no other sender can send data to the controller until all
 /// fragments are sent.
 pub trait AsyncLock {
@@ -479,6 +478,7 @@ pub trait AsyncLock {
 /// A future for sending HCI data packets to the controller
 pub struct SendFuture<Hci,I> where I: HciAclDataInterface {
     hi: Hci,
+    mtu: usize,
     data: Option<AclData>,
     handle: ConnectionHandle,
     fut: Option<Pin<Box<dyn Future<Output=Result<(), FlowControllerError<I>>>>>>,
@@ -487,11 +487,13 @@ pub struct SendFuture<Hci,I> where I: HciAclDataInterface {
 impl<Hci,I> SendFuture<Hci,I> where I: HciAclDataInterface {
     pub fn new(
         hi: Hci,
+        mtu: usize,
         data: AclData,
         handle: ConnectionHandle
     ) -> Self {
         SendFuture {
             hi,
+            mtu,
             data: Some(data),
             handle,
             fut: None
@@ -500,7 +502,7 @@ impl<Hci,I> SendFuture<Hci,I> where I: HciAclDataInterface {
 }
 
 impl<M,Hci,I,G,L> Future for SendFuture<Hci,I>
-where Hci: core::ops::Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>>> + Clone + Unpin
+where Hci: core::ops::Deref<Target = HostInterface<I,M>> + Clone + Unpin
            + 'static,
       I: HciAclDataInterface + Unpin + 'static,
       M: AsyncLock<Guard=G,Locker=L>  + 'static,
@@ -518,7 +520,8 @@ where Hci: core::ops::Deref<Target = HostInterface<I,HciDataPacketFlowManager<M>
                 this.fut = Some( Box::pin( HciDataPacketFlowManager::send_hci_data(
                     this.hi.clone(),
                     this.data.take().unwrap(),
-                    this.handle
+                    this.handle,
+                    this.mtu
                 )));
 
                 this.fut.as_mut().unwrap()
@@ -565,8 +568,9 @@ mod tests {
 
                 if self.end_thread.load(Ordering::Relaxed) { break }
 
-                let cnt = self.send_cnt.load(Ordering::Relaxed);
+                let cnt = self.send_cnt.load(Ordering::Relaxed) as u64;
 
+                // Remove a random amount
                 self.send_cnt.fetch_sub( (rand.next_u64() % cnt) as usize, Ordering::Relaxed );
 
                 self.event_waker.lock().unwrap().take().map( |w| w.wake() );
@@ -583,7 +587,9 @@ mod tests {
                 end_thread: Arc::default(),
             };
 
-            std::thread::spawn(interface.clone().thread());
+            let interface_clone = interface.clone();
+
+            std::thread::spawn(move || interface_clone.thread());
 
             interface
         }
@@ -664,8 +670,23 @@ mod tests {
         }
     }
 
+    struct TestLock {
+        mux: futures::lock::Mutex<()>
+    }
+
+    impl AsyncLock for TestLock {
+        type Guard = futures::lock::MutexGuard<'static, ()>;
+        type Locker = futures::lock::MutexLockFuture<'static, ()>;
+
+        fn lock(&self) -> Self::Locker {
+            self.mux.lock()
+        }
+    }
+
     #[test]
     fn flow_manager_test() {
-        let hci = HostInterface::<TestInterface>::default();
+        use futures::executor::block_on;
+
+        let hci = block_on( HostInterface::new() );
     }
 }
