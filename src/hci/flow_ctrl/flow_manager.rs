@@ -663,7 +663,7 @@ mod tests {
             Ok(true)
         }
 
-        fn receive_event<P>(&self, event: Option<Events>, waker: &Waker, matcher: Pin<Arc<P>>)
+        fn receive_event<P>(&self, event: Option<Events>, _: &Waker, matcher: Pin<Arc<P>>)
         -> Option<Result<EventsData, Self::ReceiveEventError>>
         where P: EventMatcher + Send + Sync + 'static
         {
