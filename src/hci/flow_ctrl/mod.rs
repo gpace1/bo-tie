@@ -62,7 +62,7 @@ where HI: Deref<Target = HostInterface<I>>,
 
         HciLeUChannel {
             mtu: crate::l2cap::LeU::MIN_MTU.into(),
-            maximum_mtu,
+            maximum_mtu: max_mtu,
             minimum_mtu: crate::l2cap::LeU::MIN_MTU.into(),
             handle,
             hi,

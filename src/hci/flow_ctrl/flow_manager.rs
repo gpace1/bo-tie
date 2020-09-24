@@ -177,7 +177,7 @@ impl<M> HciDataPacketFlowManager<M> {
 
             let mut first_packet = true;
 
-            let fragments: Vec<_> = data.into_raw_data().chunks(mtu)
+            let fragments = data.into_raw_data().chunks(mtu)
                 .map(|chunk| HciAclData::new(
                     connection_handle,
                     if first_packet {
