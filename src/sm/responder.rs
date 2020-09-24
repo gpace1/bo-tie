@@ -138,7 +138,10 @@ where C: ConnectionChannel,
     ///
     /// An IRK is generated if input `irk` is `None`.
     ///
+    /// # Return
     /// If the encryption flag is true, the return value is either input `irk` or the generated IRK.
+    /// `None` is returned if the encryption flag is not set and an error is returned when sending
+    /// the PDU fails.
     pub async fn send_new_irk<Irk>(&mut self, irk: Irk) -> Result<Option<u128>, Error> where Irk: Into<Option<u128>>{
         if self.link_encrypted {
 
@@ -166,7 +169,10 @@ where C: ConnectionChannel,
     /// A CSRK is generated if input `csrk` is `None`. There is no input for the sign counter as
     /// the CSRK is considered a new value, thus the sign counter is 0.
     ///
+    /// # Return
     /// If the encryption flag is true, the return value is either input 'csrk' the generated CSRK.
+    /// `None` is returned if the encryption flag is not set and an error is returned when sending
+    /// the PDU fails.
     pub async fn send_new_csrk<Csrk>(&mut self, csrk: Csrk) -> Result<Option<u128>, Error> where Csrk: Into<Option<u128>> {
         if self.link_encrypted {
 
