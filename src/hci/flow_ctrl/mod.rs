@@ -47,14 +47,16 @@ where HI: Deref<Target = HostInterface<I>>,
     /// This HciLeUChannel provides no flow control of sent data to the controller. It up to the
     /// user to make sure that the host does not send either to large of data packets or to many
     /// data packets to the controller.
-    pub fn new_raw<T>(hi: HI, handle: common::ConnectionHandle, max_mtu: T) -> Self
+    pub fn new_raw<T>(hi: HI, handle: common::ConnectionHandle, maximum_mtu: T) -> Self
         where T: Into<Option<u16>>
     {
         use crate::l2cap::MinimumMtu;
 
-        let maximum_mtu: usize = max_mtu.into()
-            .map(|mtu| <usize>::from(mtu).max(crate::l2cap::LeU::MIN_MTU))
+        let max_mtu: usize = maximum_mtu.into()
+            .map(|mtu| mtu.into() )
             .unwrap_or(crate::l2cap::LeU::MIN_MTU);
+
+        assert!(max_mtu >= crate::l2cap::LeU::MIN_MTU);
 
         hi.interface.start_receiver(handle);
 
@@ -172,7 +174,7 @@ where HI: Deref<Target = HostInterface<I>>,
 impl<I,HI,M> HciLeUChannel<I,HI,M>
 where HI: Deref<Target = HostInterface<I,M>>,
       I: HostControllerInterface + HciAclDataInterface + 'static,
-      M: flow_manager::AsyncLock,
+      M: for<'a> flow_manager::AsyncLock<'a>,
 {
     /// Create a new `HciLeUChannel` from the `HciDataPacketFlowManager` of a `HostInterface` for
     /// LE-U
@@ -182,7 +184,7 @@ where HI: Deref<Target = HostInterface<I,M>>,
     ///
     /// # Note
     /// No validation is made for the value of `maximum_mtu`.
-    pub async fn new_le_flow_controller(
+    pub fn new_le_flow_controller(
         hi: HI,
         handle: common::ConnectionHandle,
         maximum_mtu: usize,
@@ -200,22 +202,21 @@ where HI: Deref<Target = HostInterface<I,M>>,
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,HI,M,L,G> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,M>
-where HI: Deref<Target = HostInterface<I,M>> + Unpin + Clone +
-          'static,
+impl<I,HI,M> crate::l2cap::ConnectionChannel for HciLeUChannel<I,HI,M>
+where HI: Deref<Target = HostInterface<I,M>> + Unpin + Clone + 'static,
       I: HciAclDataInterface + HostControllerInterface + Unpin + 'static,
-      M: AsyncLock<Guard=G,Locker=L> + 'static,
-      L: Future<Output=G> + 'static,
-      G: 'static,
+      M: for<'a> AsyncLock<'a>,
 {
     type SendFut = flow_manager::SendFuture<HI,I>;
 
     type SendFutErr = flow_manager::FlowControllerError<I>;
 
     fn send(&self, data: AclData) -> Self::SendFut {
+        let max_fc_mtu = self.hi.flow_controller.get_max_payload_size() - AclData::HEADER_SIZE;
+
         flow_manager::SendFuture::new(
             self.hi.clone(),
-            self.get_send_mtu(&data),
+            self.get_send_mtu(&data).min(max_fc_mtu),
             data,
             self.handle
         )

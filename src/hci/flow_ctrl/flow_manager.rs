@@ -48,7 +48,6 @@ use alloc::{
     boxed::Box,
 };
 use core::{
-    fmt::Debug,
     future::Future,
     pin::Pin,
     sync::atomic::{Ordering, AtomicPtr, AtomicBool, AtomicUsize},
@@ -65,8 +64,65 @@ use crate::{
     },
     l2cap::AclData,
 };
-use crate::hci::AclBroadcastFlag;
+use crate::hci::{AclBroadcastFlag, EventMatcher};
 
+/// Monitoring information of a controllers buffers
+#[derive(Default)]
+struct BufferMonitorInfo {
+    /// The current used space of the controller's buffer. This number increases for each sent HCI
+    /// data payload, and decreases when the controller reports that data was freed from its
+    /// buffers.
+    used_space: AtomicUsize,
+    /// The current waker
+    current_waker: AtomicPtr<Waker>,
+    /// Matcher flag that may be required for clearing the matching method given to the driver.
+    match_flag: AtomicBool,
+}
+
+impl BufferMonitorInfo {
+
+    /// Create the matcher
+    ///
+    /// Only one matcher should be created per `BufferMonitorInfo` (not for every
+    /// `Arc<BufferMonitorInfo>`)
+    fn create_matcher(self: Arc<Self>) -> Pin<Arc<impl EventMatcher>> {
+        use crate::hci::events::EventsData;
+
+        Arc::pin( move |e_data: &EventsData| {
+            match e_data {
+
+                EventsData::NumberOfCompletedPackets(info) => {
+                    let freed = info.iter()
+                        .map(|d| <usize>::from(d.number_of_completed_packets))
+                        .sum();
+
+                    loop {
+                        let old = self.used_space.load(Ordering::Relaxed);
+
+                        match self.used_space.compare_exchange_weak(
+                            old,
+                            old.checked_sub(freed).unwrap_or_default(),
+                            Ordering::SeqCst,
+                            Ordering::Acquire,
+                        ) {
+                            Ok(_) => break,
+                            _ => ()
+                        }
+                    }
+
+                    let waker_ptr = self.current_waker.load(Ordering::Relaxed);
+
+                    unsafe {waker_ptr.as_ref()}.map( |waker| waker.wake_by_ref() );
+
+                    self.match_flag.load(Ordering::Relaxed)
+                },
+
+                _ => false,
+            }
+        })
+        .into()
+    }
+}
 
 /// A manager of sent data to a buffers controller
 ///
@@ -80,124 +136,29 @@ use crate::hci::AclBroadcastFlag;
 /// implementation of the mutex does not matter, but it must be lockable.
 ///
 /// See the module level documentation for full details.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct HciDataPacketFlowManager<M> {
     /// Once someone starts sending, they have a total lock until all data fragments are sent. There
     /// is no way for multiple contexts to send data to the controller at the same time.
-    sender_lock: Arc<M>,
+    sender_lock: M,
     /// The maximum size of the payload for each *hci* packet
     max_packet_payload_size: usize,
-    /// The minimum size of the payload for each *hci* packet. This is the same as the L2CAP min.
-    min_packet_payload_size: usize,
-    /// The current used space of the controller's buffer. This number increases for each sent HCI
-    /// data payload, and decreases when the controller reports that data was freed from its
-    /// buffers.
-    controller_used_space: Arc<AtomicUsize>,
     /// The size, in packets, of the controllers buffer
     controller_buffer_size: usize,
-    /// The current waker
-    current_waker: Arc<AtomicPtr<Waker>>,
-    /// Matcher flag for clearing the matching method given to the driver.
-    match_flag: Arc<AtomicBool>,
+    /// Information used for monitoring the receive buffer on the bluetooth controller
+    controller_buffer_info: Arc<BufferMonitorInfo>,
+    /// A reference to the matcher, used only to up the strong count for the lifetime of `Self`
+    matcher: Option<Pin<Arc<dyn EventMatcher>>>
 }
 
 impl<M> HciDataPacketFlowManager<M> {
 
-    /// Get the maximum HCI acl data payload that the controller can receive
+    /// Get the maximum **L2CAP** ACL data payload that the controller can receive.
     ///
-    /// When calling
-    /// [`send`](crate::protocol::bluetooth::HciDataPacketFlowManager::send)
-    /// , it may fragment the data sent to the function before sending each
-    /// fragment to the controller. This has some issues (read the doc for `send`) which can be
-    /// mitigated by fragmenting at a higher layer than the HCI. This can be used for determining
-    /// the fragmentation size at a higher layer.
+    /// This is the same as the maximum HCI ACL data payload size minus the header size of a L2CAP
+    /// packet.
     pub fn get_max_payload_size(&self) -> usize {
-            self.max_packet_payload_size
-        }
-
-    /// Create a matcher that will be used to set the available data buffer space.
-    ///
-    /// This callback is used for tracking the *Number of Completed Packets Event* from the
-    /// controller. This implementation relies on never polling to completion to maintain a
-    /// matcher within the driver. The event is sent at will by the controller. Generally the event
-    /// is sent periodically by the controller, but the host must assume that it may be sent
-    /// randomly.
-    ///
-    /// Normally when waiting on a event, the `receive_event` function of `HostControllerInterface`
-    /// is called at least twice, first to setup the waker and matcher for the driver then lastly to
-    /// clear the waker and matcher from the driver and get the event data. This takes advantage of
-    /// this and never recalls `receive_event` after the first time. The provides waker to
-    /// `receive_event` does not wake anything and the provides matcher will never return true. This
-    /// should ensure that the driver will never remove the matcher for the *Number of Completed
-    /// Packets Event*, **but the consequences of this is that the user can no longer await for this
-    /// event in their library or application for the lifetime of the matcher**. The matcher is tied
-    /// to all instances of a `ConnectionChannel` associated with an instance of a
-    /// `HciDataPacketFlowManager`.
-    ///
-    /// # TODO Note
-    /// As this is currently implemented, it doesn't differentiate between the ACL controller buffer
-    /// and the LE controller buffer when counting the number of freed space. When implementing ACL
-    /// the 'freed' count needs to be divided between ACL-U and LE-U.
-    fn setup_completed_packets_callback<I>(
-        current_waker: Arc<core::sync::atomic::AtomicPtr<Waker>>,
-        used_space: Arc<AtomicUsize>,
-        interface: &HostInterface<I,M>,
-        match_flag: Arc<AtomicBool>
-    )
-    where I: HostControllerInterface + HciAclDataInterface,
-    {
-        use core::task::{RawWakerVTable, RawWaker};
-        use crate::hci::events::EventsData;
-
-        fn c_wake(_: *const ()) -> RawWaker { RawWaker::new(core::ptr::null(), &WAKER_V_TABLE) }
-        fn n_wake(_: *const ()) {}
-        fn r_wake(_: *const ()) {}
-        fn d_wake(_: *const ()) {}
-
-        const WAKER_V_TABLE: RawWakerVTable = RawWakerVTable::new(c_wake, n_wake, r_wake, d_wake);
-
-        let dummy_waker = unsafe {
-            Waker::from_raw(RawWaker::new(core::ptr::null(), &WAKER_V_TABLE))
-        };
-
-        let event = Some(crate::hci::events::Events::NumberOfCompletedPackets);
-
-        let matcher = Arc::pin( move |e_data: &EventsData| {
-            match e_data {
-                EventsData::NumberOfCompletedPackets(info) => {
-
-                    let freed = info.iter()
-                        .map(|d| <usize>::from(d.number_of_completed_packets))
-                        .sum();
-
-                    loop {
-                        let old = used_space.load(Ordering::Relaxed);
-
-                        match used_space.compare_exchange_weak(
-                            old,
-                            old.checked_sub(freed).unwrap_or_default(),
-                            Ordering::SeqCst,
-                            Ordering::Acquire,
-                        ) {
-                            Ok(_) => break,
-                            _ => ()
-                        }
-                    }
-
-                    let waker_ptr = current_waker.load(Ordering::Relaxed);
-
-                    unsafe {waker_ptr.as_ref()}.map( |waker| waker.wake_by_ref() );
-
-                    match_flag.load(Ordering::Relaxed)
-                },
-                _ => false,
-            }
-        });
-
-        if interface.as_ref().receive_event(event, &dummy_waker, matcher).is_some() {
-            panic!("Received an event result when expected `None` from call to receive_event in \
-                HciDataPacketFlowManager::setup_completed_packets_callback")
-        }
+            self.max_packet_payload_size - crate::l2cap::AclData::HEADER_SIZE
     }
 
     /// Non-flush-able data fragmentation
@@ -216,7 +177,7 @@ impl<M> HciDataPacketFlowManager<M> {
 
             let mut first_packet = true;
 
-            let fragments = data.into_raw_data().chunks(mtu)
+            let fragments: Vec<_> = data.into_raw_data().chunks(mtu)
                 .map(|chunk| HciAclData::new(
                     connection_handle,
                     if first_packet {
@@ -259,7 +220,8 @@ impl<M> HciDataPacketFlowManager<M> {
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 let waker_ptr = Box::into_raw( Box::new(cx.waker().clone()) );
 
-                self.get_mut().0.current_waker.store(waker_ptr, Ordering::Relaxed);
+                self.get_mut().0.controller_buffer_info.current_waker
+                    .store(waker_ptr, Ordering::Relaxed);
 
                 Poll::Ready(())
             }
@@ -296,12 +258,11 @@ impl<M> HciDataPacketFlowManager<M> {
                 let this = self.get_mut().0;
 
                 loop {
-                    let used_buff = this.controller_used_space.load(Ordering::Relaxed);
+                    let used_buff = this.controller_buffer_info.used_space.load(Ordering::Relaxed);
 
-                    if used_buff >= this.get_max_payload_size() {
-                        log::trace!("Awaiting for space to be freed up in the controller");
+                    if used_buff >= this.controller_buffer_size {
                         break Poll::Pending
-                    } else if this.controller_used_space.compare_exchange_weak(
+                    } else if this.controller_buffer_info.used_space.compare_exchange_weak(
                         used_buff,
                         used_buff + 1,
                         Ordering::SeqCst,
@@ -327,25 +288,29 @@ impl<M> HciDataPacketFlowManager<M> {
     }
 }
 
-impl<M: 'static,L,G> HciDataPacketFlowManager<M>
-where M: AsyncLock<Guard=G,Locker=L>,
-      L: Future<Output=G>
+impl<M> HciDataPacketFlowManager<M>
 {
     /// Initialize the HCI data packet flow manager for LE data.
+    ///
+    /// This performs a series of steps to get the information from the controller and process the
+    /// number of packets that are currently sitting within the Bluetooth Controller's HCI receive
+    /// buffer. The first thing done is to query the Controller for the LE and regular HCI data
+    /// receiver buffer to get the maximum packet size and the size of the buffer. Next thing done
+    /// is the setup of a matcher for the *Number Of Completed Packets* event sent to the host. The
+    /// matcher is a bit of a hack as the buffer packet count is updated without requiring the user
+    /// of this library to process the event.
+    ///
+    /// # Panic
+    /// Input `hi` must be the only reference to the inner `HostInterface` as a mutable reference
+    /// must be made to the inner `HostInterface`.
     pub async fn initialize<I>(hi: &mut HostInterface<I,M> )
     where I: HostControllerInterface + HciAclDataInterface + 'static,
+          M: 'static
     {
         use crate::hci::{
             le::mandatory::read_buffer_size as le_read_buffer_size,
             info_params::read_buffer_size
         };
-        use crate::l2cap::MinimumMtu;
-
-        let current_waker: Arc<AtomicPtr<Waker>> = Arc::default();
-
-        let controller_used_space: Arc<AtomicUsize>  = Arc::default();
-
-        let match_flag: Arc<AtomicBool> = Arc::default();
 
         // Check the controller for a LE data buffer, if it doesn't exist then use the ACL data
         // buffer.
@@ -369,19 +334,64 @@ where M: AsyncLock<Guard=G,Locker=L>,
         log::info!("Maximum HCI ACL data size: {}", pl);
         log::info!("Controller ACL LE data buffer size: {}", pc);
 
-        Self::setup_completed_packets_callback(
-            current_waker.clone(),
-            controller_used_space.clone(),
-            hi,
-            match_flag.clone(),
-        );
-
-
         hi.flow_controller.max_packet_payload_size = pl.into();
-        hi.flow_controller.min_packet_payload_size = crate::l2cap::LeU::MIN_MTU;
-        hi.flow_controller.controller_used_space   = controller_used_space;
+
         hi.flow_controller.controller_buffer_size  = pc.into();
-        hi.flow_controller.match_flag              = match_flag;
+
+        let matcher = hi.flow_controller.controller_buffer_info.clone().create_matcher();
+
+        Self::setup_completed_packets_callback(hi.as_ref(), matcher.clone());
+
+        hi.flow_controller.matcher = Some( matcher as Pin<Arc<dyn EventMatcher>> );
+    }
+
+    /// Create a matcher that will be used to set the available data buffer space.
+    ///
+    /// This callback is used for tracking the *Number of Completed Packets Event* from the
+    /// controller. This implementation relies on never polling to completion to maintain a
+    /// matcher within the driver. The event is sent at will by the controller. Generally the event
+    /// is sent periodically by the controller, but the host must assume that it may be sent
+    /// randomly.
+    ///
+    /// Normally when waiting on a event, the `receive_event` function of `HostControllerInterface`
+    /// is called at least twice, first to setup the waker and matcher for the driver then lastly to
+    /// clear the waker and matcher from the driver and get the event data. This takes advantage of
+    /// this and never recalls `receive_event` after the first time. The provides waker to
+    /// `receive_event` does not wake anything and the provides matcher will never return true. This
+    /// should ensure that the driver will never remove the matcher for the *Number of Completed
+    /// Packets Event*, **but the consequences of this is that the user can no longer await for this
+    /// event in their library or application for the lifetime of the matcher**. The matcher is tied
+    /// to all instances of a `ConnectionChannel` associated with an instance of a
+    /// `HciDataPacketFlowManager`.
+    ///
+    /// # TODO Note
+    /// As this is currently implemented, it doesn't differentiate between the ACL controller buffer
+    /// and the LE controller buffer when counting the number of freed space. When implementing ACL
+    /// the 'freed' count needs to be divided between ACL-U and LE-U.
+    fn setup_completed_packets_callback<I>(
+        interface: &I,
+        matcher: Pin<Arc<impl EventMatcher + 'static>>
+    ) where I: HostControllerInterface
+    {
+        use core::task::{RawWakerVTable, RawWaker};
+        fn c_wake(_: *const ()) -> RawWaker { RawWaker::new(core::ptr::null(), &WAKER_V_TABLE) }
+        fn n_wake(_: *const ()) {}
+        fn r_wake(_: *const ()) {}
+        fn d_wake(_: *const ()) {}
+
+        const WAKER_V_TABLE: RawWakerVTable = RawWakerVTable::new(c_wake, n_wake, r_wake, d_wake);
+
+        let dummy_waker = unsafe {
+            Waker::from_raw(RawWaker::new(core::ptr::null(), &WAKER_V_TABLE))
+        };
+
+        let event = Some(crate::hci::events::Events::NumberOfCompletedPackets);
+
+        // Attach the matcher to the device specific base crate of the HCI
+        if interface.receive_event(event, &dummy_waker, matcher).is_some() {
+            panic!("Received an event result when expected `None` from call to receive_event in \
+                HciDataPacketFlowManager::setup_completed_packets_callback")
+        }
     }
 
     /// Send ACL data to controller
@@ -391,64 +401,66 @@ where M: AsyncLock<Guard=G,Locker=L>,
     /// cannot be done through the HCI as specified in the specification). When it is determined
     /// that the controller has enough room for one or more packets, the future will be awoken to
     /// send more packets to the controller.
-    pub async fn send_hci_data<Hci,I>(
-        hi: Hci,
+    pub async fn send_hci_data<I>(
+        &self,
+        interface: &I,
         data: AclData,
         connection_handle: ConnectionHandle,
         mtu: usize,
     ) -> Result<(), FlowControllerError<I>>
-    where Hci: core::ops::Deref<Target = HostInterface<I,M>> + 'static,
-          I: HciAclDataInterface,
+    where I: HciAclDataInterface,
+          M: for<'a> AsyncLock<'a>
     {
-        let flow_controller = &hi.flow_controller;
-
-        match flow_controller.fragment(mtu, &data, connection_handle) {
+        match self.fragment(mtu, &data, connection_handle) {
             Ok(vec_data) => {
                 // Fragmented sending requires exclusive access to the HCI interface
-                let _lock = flow_controller.sender_lock.lock().await;
+                let _lock = AsyncLock::lock(&self.sender_lock).await;
 
-                flow_controller.set_waker().await;
+                self.set_waker().await;
 
-                let buffer_used_space = flow_controller.controller_used_space.load(Ordering::SeqCst);
+                let buffer_used_space = self.controller_buffer_info.used_space.load(
+                    Ordering::SeqCst
+                );
 
-                if flow_controller.controller_buffer_size < (vec_data.len() + buffer_used_space)
+                if self.controller_buffer_size > (vec_data.len() + buffer_used_space)
                 {
-                    flow_controller.controller_used_space.fetch_add(
+                    self.controller_buffer_info.used_space.fetch_add(
                         vec_data.len(),
                         Ordering::Acquire
                     );
 
-                    vec_data.into_iter().try_for_each(|data| hi.as_ref().send(data).map(|_| ()))
+                    vec_data.into_iter().try_for_each(|data| interface.send(data).map(|_| ()))
                 } else {
-                    let send_amount = flow_controller.controller_buffer_size
+                    let send_amount = self.controller_buffer_size
                         .checked_sub(buffer_used_space)
                         .unwrap_or_default();
 
-                    flow_controller.controller_used_space.fetch_add(send_amount, Ordering::Acquire);
+                    self.controller_buffer_info.used_space
+                        .fetch_add(send_amount, Ordering::Acquire);
 
                     let mut data_itr = vec_data.into_iter();
 
                     data_itr.by_ref()
                         .enumerate()
                         .take_while(|(i, _)| i < &send_amount)
-                        .try_for_each(|(_, data)| hi.as_ref().send(data).map(|_| ()))?;
+                        .try_for_each(|(_, data)| interface.send(data).map(|_| ()))?;
 
-                    flow_controller.wait_for_controller(hi.as_ref(), data_itr).await
+                    self.wait_for_controller(interface, data_itr).await
                 }
             }
             Err(single_data) => {
-                let _lock = flow_controller.sender_lock.lock().await;
+                let _lock = self.sender_lock.lock().await;
 
-                flow_controller.set_waker().await;
+                self.set_waker().await;
 
-                let buffer_used_space = flow_controller.controller_used_space.load(
+                let buffer_used_space = self.controller_buffer_info.used_space.load(
                     Ordering::SeqCst
                 );
 
-                if flow_controller.controller_buffer_size < buffer_used_space {
-                    hi.as_ref().send(single_data).map(|_| ())
+                if self.controller_buffer_size < buffer_used_space {
+                    interface.send(single_data).map(|_| ())
                 } else {
-                    flow_controller.wait_for_controller(hi.as_ref(), Some(single_data)).await
+                    self.wait_for_controller(interface, Some(single_data)).await
                 }
             }
         }
@@ -457,7 +469,7 @@ where M: AsyncLock<Guard=G,Locker=L>,
 
 impl<M> Drop for HciDataPacketFlowManager<M> {
     fn drop(&mut self) {
-        self.match_flag.store(true, Ordering::Relaxed);
+        self.controller_buffer_info.match_flag.store(true, Ordering::Relaxed);
     }
 }
 
@@ -468,11 +480,11 @@ pub(super) type FlowControllerError<I> = <I as HciAclDataInterface>::SendAclData
 /// This is needed for a flow controller as data must be sent sequentially (not concurrently) to the
 /// controller. The lock ensures that no other sender can send data to the controller until all
 /// fragments are sent.
-pub trait AsyncLock {
-    type Guard;
-    type Locker: Future<Output = Self::Guard>;
+pub trait AsyncLock<'a> {
+    type Guard: 'a;
+    type Locker: Future<Output = Self::Guard> + 'a;
 
-    fn lock(&self) -> Self::Locker;
+    fn lock(&'a self) -> Self::Locker;
 }
 
 /// A future for sending HCI data packets to the controller
@@ -501,13 +513,10 @@ impl<Hci,I> SendFuture<Hci,I> where I: HciAclDataInterface {
     }
 }
 
-impl<M,Hci,I,G,L> Future for SendFuture<Hci,I>
-where Hci: core::ops::Deref<Target = HostInterface<I,M>> + Clone + Unpin
-           + 'static,
-      I: HciAclDataInterface + Unpin + 'static,
-      M: AsyncLock<Guard=G,Locker=L>  + 'static,
-      L: Future<Output=G> + 'static,
-      G: 'static
+impl<M,Hci,I> Future for SendFuture<Hci,I>
+where Hci: core::ops::Deref<Target = HostInterface<I,M>> + Clone + Unpin + 'static,
+      I: HciAclDataInterface + Unpin,
+      M: for<'a> AsyncLock<'a>,
 {
     type Output = Result<(), FlowControllerError<I>>;
 
@@ -517,12 +526,19 @@ where Hci: core::ops::Deref<Target = HostInterface<I,M>> + Clone + Unpin
 
         match this.fut.as_mut() {
             None => {
-                this.fut = Some( Box::pin( HciDataPacketFlowManager::send_hci_data(
-                    this.hi.clone(),
-                    this.data.take().unwrap(),
-                    this.handle,
-                    this.mtu
-                )));
+                let hi_clone = this.hi.clone();
+                let data     = this.data.take().unwrap();
+                let handle   = this.handle;
+                let mtu      = this.mtu;
+
+                this.fut = Some( Box::pin( async move {
+                    hi_clone.flow_controller.send_hci_data(
+                        &hi_clone.interface,
+                        data,
+                        handle,
+                        mtu
+                    ).await
+                }));
 
                 this.fut.as_mut().unwrap()
             },
@@ -543,19 +559,21 @@ mod tests {
         events,
         opcodes
     };
-    use crate::hci::events::{EventsData, Events};
+    use crate::hci::events::{EventsData, Events, NumberOfCompletedPacketsData, Multiple};
     use std::sync::Mutex;
 
     #[derive(Clone)]
     struct TestInterface {
-        event_waker: Arc<Mutex<Option<Waker>>>,
+        /// The matcher used by the flow controller for NumberOfCompletedPackets event
+        matcher: Arc<Mutex<Option<Pin<Arc<dyn EventMatcher>>>>>,
+        /// Event data (used for command complete)
         e_data: Arc<Mutex<Option<EventsData>>>,
-        send_cnt: Arc<AtomicUsize>,
-        end_thread: Arc<AtomicBool>,
+        /// Increases for each item sent, decreases within thread
+        sent_cnt: Arc<AtomicUsize>,
     }
 
     impl TestInterface {
-        const MAX_PAYLOAD_SIZE: u16 = 100;
+        const MAX_PAYLOAD_SIZE: u16 = 33;
         const BUFFER_SIZE: u8 = 12;
 
         fn thread(self) {
@@ -566,14 +584,28 @@ mod tests {
             loop {
                 std::thread::sleep( std::time::Duration::from_millis( rand.next_u64() % 100 ) );
 
-                if self.end_thread.load(Ordering::Relaxed) { break }
+                let cnt = self.sent_cnt.load(Ordering::Relaxed) as u64;
 
-                let cnt = self.send_cnt.load(Ordering::Relaxed) as u64;
+                let mod_cnt = if cnt == 1 { 2 } else if cnt == 0 { 1 } else { cnt };
 
-                // Remove a random amount
-                self.send_cnt.fetch_sub( (rand.next_u64() % cnt) as usize, Ordering::Relaxed );
+                let sub_amount = rand.next_u64() % mod_cnt;
 
-                self.event_waker.lock().unwrap().take().map( |w| w.wake() );
+                self.sent_cnt.fetch_sub(sub_amount as usize, Ordering::Relaxed);
+
+                let event_data = EventsData::NumberOfCompletedPackets( Multiple::from(
+                    &[
+                        NumberOfCompletedPacketsData {
+                            connection_handle: ConnectionHandle::try_from(1).unwrap(),
+                            number_of_completed_packets: sub_amount as u16,
+                        }
+                    ] as &[_]
+                ));
+
+                if let Some(matcher) = self.matcher.lock().unwrap().as_ref() {
+                    // When the match returns true, the flow controller is using this to indicate
+                    // that the matching is finished.
+                    if matcher.match_event(&event_data) { break }
+                }
             }
         }
     }
@@ -581,10 +613,9 @@ mod tests {
     impl Default for TestInterface {
         fn default() -> Self {
             let interface = TestInterface {
-                event_waker: Arc::default(),
+                matcher: Arc::default(),
                 e_data: Arc::default(),
-                send_cnt: Arc::default(),
-                end_thread: Arc::default(),
+                sent_cnt: Arc::default(),
             };
 
             let interface_clone = interface.clone();
@@ -600,11 +631,11 @@ mod tests {
         type SendCommandError = usize;
         type ReceiveEventError = usize;
 
-        fn send_command<D, W>(&self, command: &D, waker: W) -> Result<bool, Self::SendCommandError>
-            where D: CommandParameter,
-                  W: Into<Option<Waker>>
+        fn send_command<D, W>(&self, _: &D, _: W) -> Result<bool, Self::SendCommandError>
+        where D: CommandParameter,
+              W: Into<Option<Waker>>
         {
-            match CommandParameter::COMMAND {
+            match D::COMMAND {
                 opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize) => {
 
                     let packet_len = Self::MAX_PAYLOAD_SIZE.to_le_bytes();
@@ -634,15 +665,13 @@ mod tests {
 
         fn receive_event<P>(&self, event: Option<Events>, waker: &Waker, matcher: Pin<Arc<P>>)
         -> Option<Result<EventsData, Self::ReceiveEventError>>
-        where P: EventMatcher + Send + Sync + 'static {
-            match self.e_data.lock().unwrap().take() {
-                None => {
-                    *self.event_waker.lock().unwrap() = Some(waker.clone());
-
-                    None
-                },
-                Some(event_data) => Some(Ok(event_data)),
+        where P: EventMatcher + Send + Sync + 'static
+        {
+            if event == Some(events::Events::NumberOfCompletedPackets) {
+                *self.matcher.lock().unwrap() = Some(matcher);
             }
+
+            self.e_data.lock().unwrap().take().map(|event_data| Ok(event_data))
         }
     }
 
@@ -652,10 +681,19 @@ mod tests {
 
         fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError> {
 
-            assert!( data.get_payload().len() <= Self::MAX_PAYLOAD_SIZE as usize );
+            assert!( data.get_payload().len() <= Self::MAX_PAYLOAD_SIZE as usize, "{} !<= {}",
+                data.get_payload().len(),
+                 Self::MAX_PAYLOAD_SIZE,
+            );
+
+            let loaded = self.sent_cnt.fetch_add(1, Ordering::Relaxed);
 
             // `<` comparison instead of `<=` as this is a fetch_add return.
-            assert!( self.send_cnt.fetch_add(1,Ordering::Relaxed) < Self::BUFFER_SIZE as usize );
+            assert!( loaded < Self::BUFFER_SIZE as usize,
+                "{} !< {}",
+                loaded,
+                Self::BUFFER_SIZE,
+            );
 
             Ok(0)
         }
@@ -670,15 +708,16 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct TestLock {
         mux: futures::lock::Mutex<()>
     }
 
-    impl AsyncLock for TestLock {
-        type Guard = futures::lock::MutexGuard<'static, ()>;
-        type Locker = futures::lock::MutexLockFuture<'static, ()>;
+    impl<'a> AsyncLock<'a> for TestLock {
+        type Guard = futures::lock::MutexGuard<'a, ()>;
+        type Locker = futures::lock::MutexLockFuture<'a, ()>;
 
-        fn lock(&self) -> Self::Locker {
+        fn lock(&'a self) -> Self::Locker {
             self.mux.lock()
         }
     }
@@ -686,7 +725,22 @@ mod tests {
     #[test]
     fn flow_manager_test() {
         use futures::executor::block_on;
+        use crate::l2cap::{ConnectionChannel, ChannelIdentifier};
 
-        let hci = block_on( HostInterface::new() );
+        let hci = block_on( HostInterface::<TestInterface, TestLock>::new() );
+
+        let handle = ConnectionHandle::try_from(0x11).unwrap();
+
+        let cc = hci.clone().flow_ctrl_channel(handle, 50);
+
+        const TEST_DATA_CNT: usize = 1000;
+
+        let mut test_data = Vec::from([0;TEST_DATA_CNT]);
+
+        rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut test_data);
+
+        let data = AclData::new(test_data, ChannelIdentifier::NullIdentifier);
+
+        block_on( cc.send(data) ).unwrap();
     }
 }

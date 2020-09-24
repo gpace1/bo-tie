@@ -211,6 +211,11 @@ impl HciAclData {
     /// The size of the header of a HCI ACL data packet
     pub const HEADER_SIZE: usize = 4;
 
+    /// It is required that the minimum maximum payload size of a HCI ACL data packet be 27 bytes.
+    /// Both the host and controller must be able to accept a HCI ACL data packet with 27 bytes.
+    /// Larger maximum payload sizes may be defined by either the host or controller.
+    pub const MIN_MAX_PAYLOAD_SIZE: usize = 27;
+
     /// Create a new HciAclData
     ///
     /// # Panic
@@ -757,19 +762,39 @@ where I: HostControllerInterface
 #[cfg(not(feature = "flow-ctrl"))]
 impl<I> HostInterface<I> where I: HciAclDataInterface {
 
-    /// Create a new raw LE-U logical link connection channel
+    /// Create a new raw logical link connection channel
     ///
-    /// Make a raw HCI connection channel with the provided connection handle for a LE-U logical
-    /// link. This connection channel provides no protection for the controller. There is no flow
-    /// control in this connection channel for data sent to the controller. It is up to the user to
-    /// make sure that the controllers data buffers do not overflow.
+    /// Make a raw HCI connection channel with the provided connection handle for a logical
+    /// link. This raw connection channel provides no protection for the controller. It only
+    /// provides fragmentation of data that is currently larger than the `mtu`. It is up to the user
+    /// to make sure that the controllers data buffers do not overflow because too many HCI data
+    /// packets are sent.
     ///
+    /// # MTU
     /// The `max_mtu` input is the maximum value the logical link's MTU can be changed to over the
     /// lifetime of the connection channel. When this is initialized, the used MTU value is
-    /// defaulted to the minimum possible MTU for LE-U, but if it changed it can only be changed to
-    /// a value no greater than `max_mtu`. If `max_mtu` is `None` or smaller than the minimum MTU
-    /// for LE-U, it defaults to the minimum MTU.
-    pub fn le_raw_channel<'a,M>(&'a self, handle: common::ConnectionHandle, max_mtu: M)
+    /// defaulted to the minimum possible MTU for LE-U. It can later be changed by higher layer
+    /// protocols with set MTU requests or directly by the method `set_mtu` within a
+    /// `ConnectionChannel`. If `max_mtu` is `None` it defaults to the minimum MTU.
+    ///
+    /// The `max_mtu` will not be the initial value for the MTU of the connection. It is the maximum
+    /// value that the MTU can be changed to. The default MTU is the minimum MTU a HCI ACL data
+    /// payload can have, which translates to a 23 byte MTU for a L2CAP logical link. This is not
+    /// necessarily the same as the minimum MTU for the L2CAP layer type, although it happens to be
+    /// the same as the minimum MTU of a LE-U logical link packet. The `mtu` can be changed directly
+    /// or through a higher layer protocol using the `set_mtu` method of a `ConnectionChannel`.
+    ///
+    /// # Panic
+    /// The minimum number of bytes required to be in the payload of a HCI ACL data packet is
+    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciAclData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
+    /// occurs if `max_mtu` plus the header size of a L2CAP data packet (4 bytes) is not greater
+    /// than or equal to `MIN_MAX_PAYLOAD_SIZE`. Thus the minimum `max_mtu` is the same as the
+    /// minimum mtu for LE-U since they are the same number of bytes.
+    ///
+    /// # Warning
+    /// Supplying a handle that does not represent a connection with the controller will result in
+    /// undefined behaviour.
+    pub fn raw_channel<'a,M>(&'a self, handle: common::ConnectionHandle, max_mtu: M)
     -> impl crate::l2cap::ConnectionChannel + 'a
     where M: Into<Option<u16>>
     {
@@ -782,7 +807,9 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     /// `self` may not outlive the generated `ConnectionChannel`. This can be useful for thread
     /// pools or other synchronization related executors where it may be required to have a
     /// atomically reference counted `HostInterface`.
-    pub fn sync_le_raw_channel<M>(self: Arc<Self>, handle: common::ConnectionHandle, max_mtu: M)
+    ///
+    /// All `handle` and `max_mtu` rules and panics still apply.
+    pub fn sync_raw_channel<M>(self: Arc<Self>, handle: common::ConnectionHandle, max_mtu: M)
     -> impl crate::l2cap::ConnectionChannel
     where M: Into<Option<u16>>
     {
@@ -791,14 +818,12 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,M,L,G> HostInterface<I,M>
+impl<I,M> HostInterface<I,M>
 where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
-      M: flow_ctrl::flow_manager::AsyncLock<Guard=G,Locker=L> + 'static,
-      L: Future<Output=G> + 'static,
-      G: 'static,
+      M: for<'a> flow_ctrl::flow_manager::AsyncLock<'a> + 'static
 {
     /// Create a new HostInterface
-    pub async fn new() -> Self
+    pub async fn new() -> Arc<Self>
     where I: Default, M: Default
     {
         let mut hci = HostInterface {
@@ -808,23 +833,47 @@ where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + '
 
         flow_ctrl::flow_manager::HciDataPacketFlowManager::initialize(&mut hci).await;
 
-        hci
+        Arc::new(hci)
     }
 
     /// Create a connection channel with a flow controller
     ///
-    /// This connection channel is flow controlled when sending HCI data to the controller. Data
-    /// that is larger than the maximum packet size will be fragmented into multiple packets and
-    /// if there is no room in the controller's buffer the send will pend.
+    /// This connection channel is flow controlled when sending HCI data to the controller. Unlike a
+    /// raw channel this will make sure that the controller cannot be sent HCI ACL data that is
+    /// either too large or too many within a time frame for the controller. Data that is larger
+    /// than the maximum packet size will be fragmented into multiple packets and when there is no
+    /// room in the controller's buffer the sending future will pend.
     ///
-    /// The input `max_mtu` is the maximum MTU that can be set by higher layer protocols. When the
-    /// connection is created the MTU is set to the minimum MTU for a L2CAP LE-U logical link, but
-    /// it can be changed to a value up to `max_mtu`. Not specifying the input `max_mtu` will result
-    /// is the maximum MTU that the HCI LE (or the BR/EDR) data buffer can handle.
+    /// # MTU
+    /// The `max_mtu` input is the maximum value the logical link's MTU can be changed to over the
+    /// lifetime of the connection channel. When this is initialized, the used MTU value is
+    /// defaulted to the minimum possible MTU for LE-U, but if it changed it can only be changed to
+    /// a value no greater than `max_mtu`. If `max_mtu` is `None` it defaults to the minimum MTU.
     ///
-    /// # Panic (debug only)
-    /// Input `max_mtu` may not be smaller then the minimum MTU for a LE-U logical link.
-    pub async fn flow_ctrl_channel<Mtu>(
+    /// The `max_mtu` will not be the initial value for the MTU of the connection. It is the maximum
+    /// value that the MTU can be changed to. The default MTU is the minimum MTU a HCI ACL data
+    /// payload can have, which translates to a 23 byte MTU for a L2CAP logical link. This is not
+    /// necessarily the same as the minimum MTU for the L2CAP layer type, although it happens to be
+    /// the same as the minimum MTU of a LE-U logical link packet. The `mtu` can be changed directly
+    /// or through a higher layer protocol using the `set_mtu` method of a `ConnectionChannel`.
+    ///
+    /// # Fragmentation
+    /// Data is fragmented to either the MTU or the maximum HCI data payload size minus the L2CAP
+    /// data header size. If the MTU is changed to be larger than the maximum size supported by the
+    /// Bluetooth Controller's buffer, it will be fragmented to the buffer's maximum instead of the
+    /// set MTU.
+    ///
+    /// # Panic
+    /// The minimum number of bytes in the payload of a HCI ACL data packet is
+    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciAclData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
+    /// occurs if `max_mtu` plus the header size of a L2CAP data packet (4 bytes) is not greater
+    /// than or equal to `MIN_MAX_PAYLOAD_SIZE`. Thus the minimum `max_mtu` is defined as the
+    /// minimum mtu for LE-U since they are the same number of bytes.
+    ///
+    /// # Warning
+    /// Supplying a handle that does not represent a connection with the controller will result in
+    /// undefined behaviour.
+    pub fn flow_ctrl_channel<Mtu>(
         self: Arc<Self>,
         handle: common::ConnectionHandle,
         max_mtu: Mtu
@@ -836,13 +885,11 @@ where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + '
             Some(v) => {
                 let val = <usize>::from(v);
 
-                debug_assert!(val > <crate::l2cap::LeU as crate::l2cap::MinimumMtu>::MIN_MTU);
-
                 val
             },
         };
 
-        flow_ctrl::HciLeUChannel::<I,Arc<Self>,M>::new_le_flow_controller(self,handle,max).await
+        flow_ctrl::HciLeUChannel::<I,Arc<Self>,M>::new_le_flow_controller(self,handle,max)
     }
 }
 
