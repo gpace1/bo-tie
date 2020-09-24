@@ -64,7 +64,7 @@ use crate::{
     },
     l2cap::AclData,
 };
-use crate::hci::{AclBroadcastFlag, EventMatcher};
+use crate::hci::{AclBroadcastFlag, EventMatcher, AsyncLock};
 
 /// Monitoring information of a controllers buffers
 #[derive(Default)]
@@ -474,18 +474,6 @@ impl<M> Drop for HciDataPacketFlowManager<M> {
 }
 
 pub(super) type FlowControllerError<I> = <I as HciAclDataInterface>::SendAclDataError;
-
-/// A trait for implementing an asynchronous locking.
-///
-/// This is needed for a flow controller as data must be sent sequentially (not concurrently) to the
-/// controller. The lock ensures that no other sender can send data to the controller until all
-/// fragments are sent.
-pub trait AsyncLock<'a> {
-    type Guard: 'a;
-    type Locker: Future<Output = Self::Guard> + 'a;
-
-    fn lock(&'a self) -> Self::Locker;
-}
 
 /// A future for sending HCI data packets to the controller
 pub struct SendFuture<Hci,I> where I: HciAclDataInterface {

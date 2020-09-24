@@ -14,7 +14,7 @@ use super::{
     HciAclDataInterface,
 };
 #[cfg(feature = "flow-ctrl")] use core::task::Waker;
-#[cfg(feature = "flow-ctrl")] pub use flow_manager::AsyncLock;
+#[cfg(feature = "flow-ctrl")] use super::AsyncLock;
 #[cfg(feature = "flow-ctrl")] use super::HostControllerInterface;
 
 /// A HCI channel for a LE-U Logical Link
@@ -174,7 +174,7 @@ where HI: Deref<Target = HostInterface<I>>,
 impl<I,HI,M> HciLeUChannel<I,HI,M>
 where HI: Deref<Target = HostInterface<I,M>>,
       I: HostControllerInterface + HciAclDataInterface + 'static,
-      M: for<'a> flow_manager::AsyncLock<'a>,
+      M: for<'a> AsyncLock<'a>,
 {
     /// Create a new `HciLeUChannel` from the `HciDataPacketFlowManager` of a `HostInterface` for
     /// LE-U

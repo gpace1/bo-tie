@@ -15,7 +15,6 @@ use core::fmt::Display;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{ Poll, Waker };
-#[cfg(feature = "flow_ctrl")] pub use flow_ctrl::flow_manager::AsyncLock;
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -515,6 +514,19 @@ P: EventMatcher + Send + Sync + 'static
     }
 }
 
+/// A trait for implementing asynchronous locking.
+///
+/// This is needed for the flow controller of `HostInterface` as data must be sent sequentially (not
+/// concurrently) to the controller. The lock ensures that no other sender can send data while a
+/// HCI data packet is being sent.
+#[cfg(feature = "flow-ctrl")]
+pub trait AsyncLock<'a> {
+    type Guard: 'a;
+    type Locker: Future<Output = Self::Guard> + 'a;
+
+    fn lock(&'a self) -> Self::Locker;
+}
+
 /// The host interface
 ///
 /// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
@@ -820,7 +832,7 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
 #[cfg(feature = "flow-ctrl")]
 impl<I,M> HostInterface<I,M>
 where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
-      M: for<'a> flow_ctrl::flow_manager::AsyncLock<'a> + 'static
+      M: for<'a> AsyncLock<'a> + 'static
 {
     /// Create a new HostInterface
     pub async fn new() -> Arc<Self>
