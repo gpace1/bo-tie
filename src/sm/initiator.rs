@@ -344,8 +344,8 @@ where C: ConnectionChannel
                     log::trace!("Responder Nonce: {:?}", random_pdu.get_value());
 
                     let initiator_confirm = toolbox::f4(
-                        peer_public_key.x(),
-                        public_key.x(),
+                        GetXOfP256Key::x(peer_public_key),
+                        GetXOfP256Key::x(public_key),
                         responder_nonce,
                         0
                     );

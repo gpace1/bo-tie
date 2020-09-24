@@ -16,7 +16,7 @@
 //! order.
 
 /// The public key type for the P-256 curve
-pub(super) type PubKey = p256::PublicKey;
+pub(super) type PubKey = p256::EncodedPoint;
 
 /// The private (Ephemeral Secret) key type for the P-256 curve
 pub(super) type PriKey = p256::ecdh::EphemeralSecret;
@@ -25,9 +25,6 @@ pub(super) type PriKey = p256::ecdh::EphemeralSecret;
 const UNCOMPRESSED_PUB_KEY_TYPE: u8 = 0x4;
 
 const PUB_KEY_BYTE_LEN: usize = 65;
-
-/// The Range of the public key
-const PUB_KEY_RANGE: core::ops::RangeFrom<usize> = 1..;
 
 /// The range in the public key bytes of the x part of the coordinate
 const PUB_KEY_X_RANGE: core::ops::Range<usize> = 1..33;
@@ -40,32 +37,25 @@ pub(super) type DHSharedSecret = [u8;32];
 
 impl super::GetXOfP256Key for PubKey {
     fn x(&self) -> [u8;32] {
-        use p256::PublicKey;
+        let mut ret = [0;32];
 
-        if let PublicKey::Compressed(_) = self {
-            panic!("Public key is compressed, compressed points are not used")
-        }
-
-        let bytes = self.as_bytes();
-
-        let mut ret = <[u8;32]>::default();
-
-        ret.copy_from_slice(&bytes[PUB_KEY_X_RANGE]);
+        ret.copy_from_slice( self.x().as_slice() );
 
         ret
     }
 }
 
 impl super::CommandData for PubKey {
+    /// # Panics
+    /// This will panic if `PubKey` is compressed
     fn into_icd(self) -> alloc::vec::Vec<u8> {
 
-        if let PubKey::Compressed(_) = self {
-            panic!("Public key is compressed, compressed points are not used")
-        }
+        let mut key = alloc::vec::Vec::with_capacity(64);
 
-        let mut key = self.as_bytes()[PUB_KEY_RANGE].to_vec();
+        key.extend_from_slice(&self.x().as_slice());
+        key.extend_from_slice(&self.y().unwrap().as_slice());
 
-        // Reverse the keys from little endian to big endian
+        // Reverse the keys from big endian to little endian
         key[..32].reverse(); // x
         key[32..].reverse(); // y
 
@@ -87,7 +77,7 @@ impl super::CommandData for PubKey {
             pub_key[PUB_KEY_X_RANGE].reverse();
             pub_key[PUB_KEY_Y_RANGE].reverse();
 
-            PubKey::from_bytes(&pub_key).ok_or(super::Error::Format)
+            PubKey::from_bytes(&pub_key).map_err(|_| super::Error::Format)
         } else {
             Err( super::Error::Size )
         }
@@ -107,7 +97,8 @@ pub fn ah(k: u128, r: [u8;3]) -> [u8; 3]{
     let cypher_text = e(k,r_padded ) ;
 
     [ cypher_text as u8 , (cypher_text >> 8) as u8 , (cypher_text >> 16) as u8 ]
-} 
+}
+
 /// Phase 2 (LE legacy) confirm value function
 ///
 /// # Inputs
@@ -543,7 +534,7 @@ pub fn aes_cmac_verify(key: u128, msg: &[u8], auth_code: u128) -> bool {
 /// This will return an error if the random number generation failed.
 pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 
-    let ephemeral_secret = PriKey::generate( &mut rand_core::OsRng );
+    let ephemeral_secret = PriKey::random( &mut rand_core::OsRng );
 
     let public_key = PubKey::from(&ephemeral_secret);
 

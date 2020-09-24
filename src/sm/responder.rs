@@ -472,8 +472,8 @@ where C: ConnectionChannel,
                         *secret_key = Some(key);
 
                         let confirm_value = toolbox::f4(
-                            public_key.x(),
-                            peer_pub_key.x(),
+                            GetXOfP256Key::x(public_key),
+                            GetXOfP256Key::x(&peer_pub_key),
                             *nonce,
                             0
                         );
