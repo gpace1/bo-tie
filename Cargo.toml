@@ -10,11 +10,11 @@ edition = "2018"
 [dependencies]
 bo-tie-macros = { path = 'bo-tie-macros' }
 serde = { version = "1", features = ['derive'] }
-log = "0.4.6"
+log = "0.4"
 rand_core = { version = "0.5", features = ['getrandom'] }
 elliptic-curve = { version = "0.6", features = ["ecdh"] }
 p256 = { version = "0.5", features = ["ecdh"] }
-aes = { version = "0.5" }
+aes = { version = "0.6" }
 uuid = { version = "0.8", optional = true }
 bincode = { version = "1.2", features = ["i128"] }
 lazy_static = "1.4"

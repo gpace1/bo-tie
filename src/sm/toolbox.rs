@@ -439,8 +439,8 @@ pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
 /// to call it constantly as it initializes a new AES cypher on each call.
 pub fn e(key: u128, plain_text: u128 ) -> u128 {
 
-    use aes::block_cipher::generic_array::GenericArray;
-    use aes::block_cipher::{BlockCipher, NewBlockCipher};
+    use aes::cipher::generic_array::GenericArray;
+    use aes::cipher::{BlockCipher, NewBlockCipher};
 
     let key_bytes = key.to_be_bytes();
 
