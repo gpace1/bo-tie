@@ -604,6 +604,22 @@ impl TransferFormatInto for alloc::string::String {
     }
 }
 
+impl<T> TransferFormatInto for [T] where T: TransferFormatInto {
+    fn len_of_into(&self) -> usize { self.iter().map(|t| t.len_of_into()).sum() }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        self.iter()
+            .map(|t| (t.len_of_into(), t) )
+            .fold(0, |off, (len, t)| {
+                let end = off + len;
+
+                t.build_into_ret(&mut into_ret[off..end]);
+
+                end
+            });
+    }
+}
+
 impl TransferFormatTryFrom for crate::UUID {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         use core::mem::size_of;
