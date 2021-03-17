@@ -148,7 +148,7 @@ pub struct HciDataPacketFlowManager<M> {
     /// Information used for monitoring the receive buffer on the bluetooth controller
     controller_buffer_info: Arc<BufferMonitorInfo>,
     /// A reference to the matcher, used only to up the strong count for the lifetime of `Self`
-    matcher: Option<Pin<Arc<dyn EventMatcher>>>
+    _matcher: Option<Pin<Arc<dyn EventMatcher>>>
 }
 
 impl<M> HciDataPacketFlowManager<M> {
@@ -342,7 +342,7 @@ impl<M> HciDataPacketFlowManager<M>
 
         Self::setup_completed_packets_callback(hi.as_ref(), matcher.clone());
 
-        hi.flow_controller.matcher = Some( matcher as Pin<Arc<dyn EventMatcher>> );
+        hi.flow_controller._matcher = Some( matcher as Pin<Arc<dyn EventMatcher>> );
     }
 
     /// Create a matcher that will be used to set the available data buffer space.

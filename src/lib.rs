@@ -51,7 +51,7 @@ pub fn bluetooth_address_from_string( addr: &str ) -> Result<BluetoothDeviceAddr
 }
 
 pub fn bluetooth_address_into_string( addr: BluetoothDeviceAddress ) -> alloc::string::String {
-    alloc::format!("{}:{}:{}:{}:{}:{}", addr[5], addr[4], addr[3], addr[2], addr[1], addr[0])
+    alloc::format!("{:X}:{:X}:{:X}:{:X}:{:X}:{:X}", addr[5], addr[4], addr[3], addr[2], addr[1], addr[0])
 }
 
 /// Create a static random address

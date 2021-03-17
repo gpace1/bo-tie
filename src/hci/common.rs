@@ -148,7 +148,7 @@ impl LEAddressType {
             0x01 => LEAddressType::RandomDeviceAddress,
             0x02 => LEAddressType::PublicIdentityAddress,
             0x03 => LEAddressType::RandomIdentityAddress,
-            _    => panic!("Unknown {}"),
+            _    => panic!("Unknown {}", raw),
         }
     }
 
@@ -817,5 +817,12 @@ mod tests {
                 "Didn't find feature {:?} in list",
                 feature );
         }
+    }
+
+    #[test]
+    fn string_address_test() {
+        let string_address = "4A:bc:19:3:99:C0";
+
+        let numeric_address = [0x4au8, 0xbc, 0x19, 0x3, 0x99, 0xc0];
     }
 }
