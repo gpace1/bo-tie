@@ -9,9 +9,6 @@
 # Maximum width of each line
 max_width = 120
 
-# Width heuristics
-width_heuristics = "Max"
-
 ########################################################################################################################
 # Alphabetical List
 #
