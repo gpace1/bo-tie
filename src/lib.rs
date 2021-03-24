@@ -13,11 +13,10 @@
 
 // These crates are used all the time
 extern crate alloc;
-extern crate bincode as serializer;
 
 // tests related
-#[cfg(test)]
-extern crate test;
+#[cfg(test)] extern crate test;
+
 pub mod att;
 pub mod gap;
 pub mod gatt;

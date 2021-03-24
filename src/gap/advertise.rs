@@ -112,8 +112,15 @@ pub enum Error {
     IncorrectDataType,
     IncorrectLength,
     RawTooSmall,
-    UTF8Error(::alloc::str::Utf8Error),
+    UTF8Error(alloc::str::Utf8Error),
     LeBytesConversionError,
+    AttributeFormat(crate::att::TransferFormatError),
+}
+
+impl From<crate::att::TransferFormatError> for Error {
+    fn from(e: crate::att::TransferFormatError) -> Self {
+        Error::AttributeFormat(e)
+    }
 }
 
 impl fmt::Display for Error where {
@@ -124,7 +131,8 @@ impl fmt::Display for Error where {
             Error::RawTooSmall => write!(f, "Raw data length is too small"),
             Error::UTF8Error(utf8_err) => write!(f, "UTF-8 conversion error, valid up to {}: '{}'",
                 utf8_err.valid_up_to(), alloc::string::ToString::to_string(&utf8_err)),
-            Error::LeBytesConversionError => write!(f, "Error converting bytes from le")
+            Error::LeBytesConversionError => write!(f, "Error converting bytes from le"),
+            Error::AttributeFormat(ref e) => e.fmt(f),
         }
     }
 }
@@ -819,22 +827,19 @@ pub mod service_data {
     use super::*;
 
     /// Create service data for 16-bit UUID's
-    pub fn new_16<Data>(uuid: u16, data: &Data) -> crate::serializer::Result<ServiceData<u16>>
-        where Data: ::serde::Serialize
+    pub fn new_16<Data>(uuid: u16, data: Data) -> ServiceData<u16, Data>
     {
         ServiceData::new(uuid, data)
     }
 
     /// Create service data for 32-bit UUID's
-    pub fn new_32<Data>(uuid: u32, data: &Data) -> crate::serializer::Result<ServiceData<u32>>
-        where Data: ::serde::Serialize
+    pub fn new_32<Data>(uuid: u32, data: Data) -> ServiceData<u32, Data>
     {
         ServiceData::new(uuid, data)
     }
 
     /// Create service data for 64-bit UUID's
-    pub fn new_128<Data>(uuid: u128, data: &Data) -> crate::serializer::Result<ServiceData<u128>>
-        where Data: ::serde::Serialize
+    pub fn new_128<Data>(uuid: u128, data: Data) -> ServiceData<u128, Data>
     {
         ServiceData::new(uuid, data)
     }
@@ -849,56 +854,48 @@ pub mod service_data {
     /// `[new_128]` (../fn.new_128.html)
     /// to crunstruct a new, empty `ServiceData` (of 16, 32, or 128 bit UUIDs, respectively).
     #[derive(Clone, Debug)]
-    pub struct ServiceData<UuidType> {
+    pub struct ServiceData<UuidType, Data> {
         uuid: UuidType,
-        pub(crate) serialized_data:alloc::vec::Vec<u8>,
+        data: Data,
     }
 
-    impl<UuidType> ServiceData<UuidType>
+    impl<UuidType, Data> ServiceData<UuidType, Data>
     {
-        const AD_TYPE: AssignedTypes = AssignedTypes::ServiceData;
-
-        fn new<Data>(uuid: UuidType, data: &Data) -> crate::serializer::Result<Self>
-            where Data: ::serde::Serialize
+        fn new(uuid: UuidType, data: Data) -> Self
         {
-            Ok(ServiceData {
-                uuid: uuid,
-                serialized_data: crate::serializer::serialize(&data)?,
-            })
+            ServiceData {
+                uuid,
+                data,
+            }
         }
 
         pub fn get_uuid(&self) -> UuidType where UuidType: Copy {
             self.uuid
         }
 
-        /// Attemp to get the service data as `Data`
-        pub fn get_data<'d, Data>(&'d self) -> crate::serializer::Result<Data>
-            where Data: ::serde::Deserialize<'d>
+        /// Attempt to get the service data as `Data`
+        pub fn get_data(&self) -> &Data
         {
-            crate::serializer::deserialize(&self.serialized_data)
+            &self.data
         }
 
-        /// Get a reference to the serialized data
-        pub fn get_serialized_data<'a>(&'a self) -> &'a [u8] {
-            self.serialized_data.as_ref()
-        }
-
-        /// Consume self and get the serialized data
-        pub fn into_serialized_data(self) -> alloc::boxed::Box<[u8]> {
-            self.serialized_data.into_boxed_slice()
+        /// Get the data serialized
+        pub fn get_serialized_data(&self) -> alloc::vec::Vec<u8> where Data: crate::att::TransferFormatInto {
+            crate::att::TransferFormatInto::into(&self.data)
         }
     }
 
+
     macro_rules! impl_raw {
         ( $type:tt, $ad_type:path ) => {
-            impl IntoRaw for ServiceData<$type> {
+            impl<Data> IntoRaw for ServiceData<$type, Data> where Data: crate::att::TransferFormatInto {
 
-                fn into_raw(&self) ->alloc::vec::Vec<u8> {
-                    let mut raw = new_raw_type(Self::AD_TYPE.val());
+                fn into_raw(&self) -> alloc::vec::Vec<u8> {
+                    let mut raw = new_raw_type($ad_type.val());
 
                     raw.extend_from_slice(&self.uuid.to_le_bytes());
 
-                    raw.extend(self.serialized_data.clone());
+                    raw.extend(crate::att::TransferFormatInto::into(&self.data));
 
                     set_len(&mut raw);
 
@@ -906,9 +903,9 @@ pub mod service_data {
                 }
             }
 
-            impl TryFromRaw for ServiceData<$type> {
+            impl<Data> TryFromRaw for ServiceData<$type, Data> where Data: crate::att::TransferFormatTryFrom {
 
-                fn try_from_raw( raw: &[u8] ) -> Result<ServiceData<$type>,Error> {
+                fn try_from_raw( raw: &[u8] ) -> Result<ServiceData<$type, Data>, Error> {
                     let ad_type = $ad_type;
                     from_raw!{raw, ad_type, {
                         use core::convert::TryInto;
@@ -919,7 +916,7 @@ pub mod service_data {
 
                             ServiceData {
                                 uuid: $type::from_le_bytes(uuid_raw.try_into().or(Err(err))?),
-                                serialized_data:alloc::vec::Vec::from(data),
+                                data: crate::att::TransferFormatTryFrom::try_from(data)?,
                             }
                         }
                         else {
