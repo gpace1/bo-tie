@@ -333,55 +333,65 @@ impl core::fmt::Display for Error {
                 write!(f, "No Error")
             },
             Error::InvalidHandle => {
-                write!(f, "Invalid attribute handle")
+                write!(f, "Invalid handle: the attribute handle given was not valid on this server")
             },
             Error::ReadNotPermitted => {
-                write!(f, "The attribute cannot be read")
+                write!(f, "Read not permitted: the attribute cannot be read")
             },
             Error::WriteNotPermitted => {
-                write!(f, "The attribute cannot be written")
+                write!(f, "Write not permitted: the attribute cannot be written")
             },
             Error::InvalidPDU => {
-                write!(f, "The attribute protocol data unit (PDU) was invalid")
+                write!(f, "Invalid PDU: the attribute protocol data unit (PDU) was invalid")
             },
             Error::InsufficientAuthentication => {
-                write!(f, "The attribute requires authentication before it can be read or written")
+                write!(f, "Insufficient authentication: the attribute requires authentication \
+                before it can be read or written")
             },
             Error::RequestNotSupported => {
-                write!(f, "Attribute server does not support the request received from the client")
+                write!(f, "Request not supported, the attribute server does not support the \
+                request received from the client")
             },
             Error::InvalidOffset => {
-                write!(f, "The attribute value byte or word offset was not valid")
+                write!(f, "Invalid offset: the attribute value byte or word offset was not valid")
             },
             Error::InsufficientAuthorization => {
-                write!(f, "The attribute requires authorization before it can be read or written")
+                write!(f, "Insufficient authorization: the attribute requires authorization before \
+                it can be read or written")
             },
             Error::PrepareQueueFull => {
-                write!(f, "Too many prepare writes have been queued")
+                write!(f, "Prepare queue full: too many prepare writes have been queued")
             },
             Error::AttributeNotFound => {
-                write!(f, "No attribute found within the given attribute handle range")
+                write!(f, "Attribute not foundL: no attribute found within the given attribute \
+                handle range")
             },
             Error::AttributeNotLong => {
-                write!(f, "The attribute cannot be read using the Read Blob Request")
+                write!(f, "Attribute not long: the attribute cannot be read using the Read Blob \
+                Request")
             },
             Error::InsufficientEncryptionKeySize => {
-                write!(f, "The Encryption Key Size used for encrypting was insufficient for reading or writing this attribute")
+                write!(f, "Insufficient encryption key size: The Encryption Key Size used for \
+                encrypting was insufficient for reading or writing this attribute")
             },
             Error::InvalidAttributeValueLength => {
-                write!(f, "The attribute value length was invalid for the operation")
+                write!(f, "Invalid attribute value length: the attribute value length was invalid \
+                for the operation")
             },
             Error::UnlikelyError => {
-                write!(f, "The request could not be completed because of an unlikely error")
+                write!(f, "Unlikely error: the request could not be completed because of an \
+                unlikely error")
             },
             Error::InsufficientEncryption => {
-                write!(f, "The attribute requires encryption before it can be read or written")
+                write!(f, "Insufficient encryption: the attribute requires encryption before it \
+                can be read or written")
             },
             Error::UnsupportedGroupType => {
-                write!(f, "The attribute type is not a supported grouping type")
+                write!(f, "Unsupported group type: the attribute type is not a supported grouping \
+                type")
             },
             Error::InsufficientResources => {
-                write!(f, "Insufficient Resources to complete the request")
+                write!(f, "Insufficient resources: insufficient Resources to complete the request")
             },
             Error::Other(other) => {
                 write!(f, "{}", other)
