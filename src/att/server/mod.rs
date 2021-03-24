@@ -589,8 +589,6 @@ where
         pdu_type: super::client::ClientPduName,
         payload: &[u8],
     ) -> Result<(), super::Error> {
-        log::info!("(ATT) processing '{:?}'", pdu_type);
-
         match pdu_type {
             super::client::ClientPduName::ExchangeMtuRequest => {
                 self.process_exchange_mtu_request(TransferFormatTryFrom::try_from(&payload)?)
@@ -778,6 +776,8 @@ where
 
     /// Process a exchange MTU request from the client
     async fn process_exchange_mtu_request(&mut self, client_mtu: u16) -> Result<(), super::Error> {
+        log::info!("Processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
+
         self.connection_channel.set_mtu(client_mtu);
 
         self.send_pdu(pdu::exchange_mtu_response(self.connection_channel.get_mtu() as u16))
@@ -786,6 +786,8 @@ where
 
     /// Process a Read Request from the client
     async fn process_read_request(&mut self, handle: u16) -> Result<(), super::Error> {
+        log::info!("Processing PDU ATT_READ_REQ {{ handle: {} }}", handle);
+
         match self.read_att_and(handle, |att_tf| att_tf.read_response()).await {
             Ok(mut tf) => {
                 // Amount of data that can be sent is the MTU minus the read response header size
@@ -808,6 +810,8 @@ where
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
 
+        log::info!("Processing PDU ATT_WRITE_REQ {{ handle: {} }}", handle);
+
         match self.write_att(handle, &payload[2..]).await {
             Ok(_) => self.send_pdu(pdu::write_response()).await,
             Err(e) => self.send_error(handle, ClientPduName::WriteRequest, e).await,
@@ -816,6 +820,12 @@ where
 
     /// Process a Find Information Request form the client
     async fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) -> Result<(), super::Error> {
+        log::info!(
+            "Processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {}, end handle: {} }}",
+            handle_range.starting_handle,
+            handle_range.ending_handle
+        );
+
         /// Handle with UUID iterator
         ///
         /// The boolean is used to indicate whether or not the iterator is over short or long UUIDs.
@@ -942,6 +952,13 @@ where
 
             let att_type: crate::UUID = TransferFormatTryFrom::try_from(&payload[4..6]).unwrap();
 
+            log::info!("Processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {}, end handle: \
+                {}, type: {:?}}}",
+                handle_range.starting_handle,
+                handle_range.ending_handle,
+                att_type
+            );
+
             let raw_value = &payload[6..];
 
             if handle_range.is_valid() {
@@ -1002,6 +1019,13 @@ where
 
     /// Process Read By Type Request
     async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest) -> Result<(), super::Error> {
+        log::info!("Processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {}, end handle: {}, type: \
+            {:?} }}",
+            type_request.handle_range.starting_handle,
+            type_request.handle_range.ending_handle,
+            type_request.attr_type
+        );
+
         use core::cmp::min;
 
         let handle_range = type_request.handle_range;
@@ -1105,6 +1129,11 @@ where
 
     /// Process read blob request
     async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest) -> Result<(), super::Error> {
+        log::info!("Processing PDU ATT_READ_BLOB_REQ {{ handle: {}, offset {} }}",
+            blob_request.handle,
+            blob_request.offset
+        );
+
         // Check the permissions (`check_permission` also validates the handle)
         match match self.check_permissions(blob_request.handle, super::FULL_READ_PERMISSIONS) {
             Ok(_) => {
@@ -1226,20 +1255,27 @@ where
 
     async fn process_prepare_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
         if let Err((h, e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
-            Ok(request) => match self.check_permissions(request.get_handle(), super::FULL_WRITE_PERMISSIONS) {
-                Ok(_) => match self.queued_writer.process_prepared(&request) {
+            Ok(request) => {
+                log::info!("Processing ATT_PREPARE_WRITE_REQ {{ handle: {}, offset {} }}",
+                    request.get_handle(),
+                    request.get_prepared_offset()
+                );
+
+                match self.check_permissions(request.get_handle(), super::FULL_WRITE_PERMISSIONS) {
+                    Ok(_) => match self.queued_writer.process_prepared(&request) {
+                        Err(e) => Err((request.get_handle(), e)),
+
+                        Ok(_) => {
+                            let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
+
+                            self.send_pdu(response).await?;
+
+                            Ok(())
+                        }
+                    },
+
                     Err(e) => Err((request.get_handle(), e)),
-
-                    Ok(_) => {
-                        let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
-
-                        self.send_pdu(response).await?;
-
-                        Ok(())
-                    }
-                },
-
-                Err(e) => Err((request.get_handle(), e)),
+                }
             },
 
             Err(e) => Err((0, e.pdu_err)),
@@ -1251,18 +1287,17 @@ where
     }
 
     async fn process_execute_write_request(&mut self, request_flag: pdu::ExecuteWriteFlag) -> Result<(), super::Error> {
+        log::info!("Processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
+
         match match self.queued_writer.process_execute(request_flag) {
             Ok(Some(iter)) => {
-                async {
-                    for queued_data in iter.into_iter() {
-                        self.check_permissions(queued_data.0, super::FULL_WRITE_PERMISSIONS)?;
+                for queued_data in iter.into_iter() {
+                    self.check_permissions(queued_data.0, super::FULL_WRITE_PERMISSIONS)?;
 
-                        self.write_att(queued_data.0, &queued_data.1).await?;
-                    }
-
-                    Ok(())
+                    self.write_att(queued_data.0, &queued_data.1).await?;
                 }
-                .await
+
+                Ok(())
             }
 
             Ok(None) => Ok(()),
