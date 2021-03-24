@@ -4,7 +4,7 @@
 //! Specification (v5.0 | Vol 3, Part H, section 3.6)
 use super::*;
 
-#[derive(Debug,Clone,Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum AuthRequirements {
     Bonding,
     ManInTheMiddleProtection,
@@ -15,52 +15,57 @@ pub enum AuthRequirements {
 
 impl AuthRequirements {
     pub(super) fn make_auth_req_val(reqs: &[AuthRequirements]) -> u8 {
-        reqs.iter().fold(0u8, |val, r| {
-            match r {
-                AuthRequirements::Bonding => val | (0b01 << 0),
-                AuthRequirements::ManInTheMiddleProtection => val | (1 << 2),
-                AuthRequirements::Sc => val | (1 << 3),
-                AuthRequirements::KeyPress => val | (1 << 4)
-            }
+        reqs.iter().fold(0u8, |val, r| match r {
+            AuthRequirements::Bonding => val | (0b01 << 0),
+            AuthRequirements::ManInTheMiddleProtection => val | (1 << 2),
+            AuthRequirements::Sc => val | (1 << 3),
+            AuthRequirements::KeyPress => val | (1 << 4),
         })
     }
 
     pub(super) fn vec_from_val(val: u8) -> Vec<Self> {
         let mut v = Vec::new();
 
-        if 1 == val & 0x11 { v.push(AuthRequirements::Bonding) }
+        if 1 == val & 0x11 {
+            v.push(AuthRequirements::Bonding)
+        }
 
-        if 1 == (val >> 2) & 0x1 { v.push(AuthRequirements::ManInTheMiddleProtection) }
+        if 1 == (val >> 2) & 0x1 {
+            v.push(AuthRequirements::ManInTheMiddleProtection)
+        }
 
-        if 1 == (val >> 3) & 0x1 { v.push(AuthRequirements::Sc) }
+        if 1 == (val >> 3) & 0x1 {
+            v.push(AuthRequirements::Sc)
+        }
 
-        if 1 == (val >> 4) & 0x1 { v.push(AuthRequirements::KeyPress) }
+        if 1 == (val >> 4) & 0x1 {
+            v.push(AuthRequirements::KeyPress)
+        }
 
         v
     }
 }
 
 pub struct EncryptionInformation {
-    long_term_key: u128
+    long_term_key: u128,
 }
 
 impl CommandData for EncryptionInformation {
-
     fn into_icd(self) -> Vec<u8> {
         self.long_term_key.to_le_bytes().to_vec()
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
-            let mut v = [0u8;16];
+            let mut v = [0u8; 16];
 
             v.copy_from_slice(icd);
 
-            Ok( EncryptionInformation {
-                long_term_key: <u128>::from_le_bytes(v)
+            Ok(EncryptionInformation {
+                long_term_key: <u128>::from_le_bytes(v),
             })
         } else {
-            Err( Error::Size )
+            Err(Error::Size)
         }
     }
 }
@@ -79,11 +84,10 @@ impl From<EncryptionInformation> for Command<EncryptionInformation> {
 
 pub struct MasterIdentification {
     encryption_diversifier: u16,
-    random: u64
+    random: u64,
 }
 
 impl CommandData for MasterIdentification {
-
     fn into_icd(self) -> Vec<u8> {
         let ediv = self.encryption_diversifier.to_le_bytes();
         let rand = self.random.to_le_bytes();
@@ -93,18 +97,18 @@ impl CommandData for MasterIdentification {
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 10 {
-            let mut ediv_a = [0u8;2];
-            let mut rand_a = [0u8;8];
+            let mut ediv_a = [0u8; 2];
+            let mut rand_a = [0u8; 8];
 
             ediv_a.copy_from_slice(&icd[..2]);
             rand_a.copy_from_slice(&icd[2..]);
 
-            Ok( MasterIdentification {
+            Ok(MasterIdentification {
                 encryption_diversifier: <u16>::from_le_bytes(ediv_a),
-                random: <u64>::from_le_bytes(rand_a)
+                random: <u64>::from_le_bytes(rand_a),
             })
         } else {
-            Err( Error::Size )
+            Err(Error::Size)
         }
     }
 }
@@ -116,7 +120,7 @@ impl MasterIdentification {
     }
 
     /// Set the random value (Rand)
-    pub fn set_random(&mut self, rand: u64 ) {
+    pub fn set_random(&mut self, rand: u64) {
         self.random = rand
     }
 }
@@ -128,7 +132,7 @@ impl From<MasterIdentification> for Command<MasterIdentification> {
 }
 
 pub struct IdentityInformation {
-    irk: u128
+    irk: u128,
 }
 
 impl IdentityInformation {
@@ -136,26 +140,27 @@ impl IdentityInformation {
         IdentityInformation { irk }
     }
 
-    pub fn get_irk(&self) -> u128 { self.irk }
+    pub fn get_irk(&self) -> u128 {
+        self.irk
+    }
 }
 
 impl CommandData for IdentityInformation {
-
     fn into_icd(self) -> Vec<u8> {
         self.irk.to_le_bytes().to_vec()
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
-            let mut v = [0u8;16];
+            let mut v = [0u8; 16];
 
             v.copy_from_slice(icd);
 
-            Ok( IdentityInformation {
-                irk: <u128>::from_le_bytes(v)
+            Ok(IdentityInformation {
+                irk: <u128>::from_le_bytes(v),
             })
         } else {
-            Err( Error::Size )
+            Err(Error::Size)
         }
     }
 }
@@ -173,18 +178,17 @@ enum AddressType {
 
 pub struct IdentityAddressInformation {
     addr_type: AddressType,
-    address: crate::BluetoothDeviceAddress
+    address: crate::BluetoothDeviceAddress,
 }
 
 impl CommandData for IdentityAddressInformation {
-
     fn into_icd(self) -> Vec<u8> {
         let addr_type_val = match self.addr_type {
             AddressType::Public => 0,
             AddressType::StaticRandom => 1,
         };
 
-        let mut v = alloc::vec![ addr_type_val ];
+        let mut v = alloc::vec![addr_type_val];
 
         v.extend_from_slice(&self.address);
 
@@ -196,23 +200,21 @@ impl CommandData for IdentityAddressInformation {
             let addr_type = match icd[0] {
                 0 => AddressType::Public,
                 1 => AddressType::StaticRandom,
-                _ => return Err( Error::Value)
+                _ => return Err(Error::Value),
             };
 
             let mut address = crate::BluetoothDeviceAddress::default();
 
             address.copy_from_slice(&icd[1..]);
 
-            Ok( IdentityAddressInformation { addr_type, address } )
-
+            Ok(IdentityAddressInformation { addr_type, address })
         } else {
-            Err( Error::Size )
+            Err(Error::Size)
         }
     }
 }
 
 impl IdentityAddressInformation {
-
     /// Create a new `IdentityAddressInformation` containing a public address
     pub fn new_pub(address: crate::BluetoothDeviceAddress) -> Self {
         Self {
@@ -229,13 +231,13 @@ impl IdentityAddressInformation {
     pub fn new_static(address: crate::BluetoothDeviceAddress) -> Self {
         Self {
             addr_type: AddressType::StaticRandom,
-            address
+            address,
         }
     }
 }
 
 impl From<IdentityAddressInformation> for BluAddr {
-    fn from( iai: IdentityAddressInformation) -> Self {
+    fn from(iai: IdentityAddressInformation) -> Self {
         match iai.addr_type {
             AddressType::Public => BluAddr::Public(iai.address),
             AddressType::StaticRandom => BluAddr::StaticRandom(iai.address),
@@ -250,33 +252,33 @@ impl From<IdentityAddressInformation> for Command<IdentityAddressInformation> {
 }
 
 pub struct SigningInformation {
-    signature_key: u128
+    signature_key: u128,
 }
 
 impl CommandData for SigningInformation {
-
     fn into_icd(self) -> Vec<u8> {
         self.signature_key.to_le_bytes().to_vec()
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
-            let mut key_arr = [0u8;16];
+            let mut key_arr = [0u8; 16];
 
             key_arr.copy_from_slice(&icd);
 
-            Ok( SigningInformation {
-                signature_key: <u128>::from_le_bytes(key_arr)
+            Ok(SigningInformation {
+                signature_key: <u128>::from_le_bytes(key_arr),
             })
-
         } else {
-            Err( Error::Size )
+            Err(Error::Size)
         }
     }
 }
 
 impl SigningInformation {
-    pub fn new(csrk: u128) -> Self { Self { signature_key: csrk } }
+    pub fn new(csrk: u128) -> Self {
+        Self { signature_key: csrk }
+    }
 
     pub fn get_signature_key(&self) -> u128 {
         self.signature_key
@@ -290,28 +292,27 @@ impl From<SigningInformation> for Command<SigningInformation> {
 }
 
 pub struct SecurityRequest {
-    auth_req: Vec<AuthRequirements>
+    auth_req: Vec<AuthRequirements>,
 }
 
 impl CommandData for SecurityRequest {
-
     fn into_icd(self) -> Vec<u8> {
-        alloc::vec![ AuthRequirements::make_auth_req_val(&self.auth_req) ]
+        alloc::vec![AuthRequirements::make_auth_req_val(&self.auth_req)]
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 1 {
             let auth_req = AuthRequirements::vec_from_val(icd[0]);
 
-            Ok( SecurityRequest { auth_req } )
+            Ok(SecurityRequest { auth_req })
         } else {
-            Err( Error::Size )
+            Err(Error::Size)
         }
     }
 }
 
 impl SecurityRequest {
-    pub fn set_auth_requirements( &mut self, req: Vec<AuthRequirements> ) {
+    pub fn set_auth_requirements(&mut self, req: Vec<AuthRequirements>) {
         self.auth_req = req
     }
 }

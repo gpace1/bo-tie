@@ -12,36 +12,40 @@ pub mod encrypt {
     #[repr(packed)]
     struct CommandReturn {
         status: u8,
-        cypher_text: [u8;16]
+        cypher_text: [u8; 16],
     }
 
     #[repr(packed)]
     #[derive(Clone)]
     struct Parameter {
-        key: [u8;16],
-        plain_text: [u8;16],
+        key: [u8; 16],
+        plain_text: [u8; 16],
     }
 
     impl CommandParameter for Parameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { self.clone() }
+        fn get_parameter(&self) -> Self::Parameter {
+            self.clone()
+        }
     }
 
     pub struct Cypher {
-        pub cypher_text: [u8;16],
+        pub cypher_text: [u8; 16],
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
 
     impl Cypher {
-        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self { cypher_text: packed.cypher_text, completed_packets_cnt: cnt.into() })
-            }
-            else {
+                Ok(Self {
+                    cypher_text: packed.cypher_text,
+                    completed_packets_cnt: cnt.into(),
+                })
+            } else {
                 Err(status)
             }
         }
@@ -53,37 +57,37 @@ pub mod encrypt {
         }
     }
 
-    impl_get_data_for_command!(
-            COMMAND,
-            CommandReturn,
-            Cypher,
-            error::Error
-        );
+    impl_get_data_for_command!(COMMAND, CommandReturn, Cypher, error::Error);
 
     impl_command_complete_future!(Cypher, error::Error);
 
     /// Send the command to start encrypting the `plain_text`
     ///
     /// The input 'key' should be in native byte order.
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, key: u128, plain_text: [u8;16])
-    -> impl Future<Output=Result<Cypher, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        key: u128,
+        plain_text: [u8; 16],
+    ) -> impl Future<Output = Result<Cypher, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
         let parameter = Parameter {
             key: key.to_be_bytes(),
             plain_text,
         };
 
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
 pub mod long_term_key_request_reply {
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::LongTermKeyRequestReply);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::LongTermKeyRequestReply);
 
     #[repr(packed)]
     struct CommandReturn {
@@ -110,7 +114,7 @@ pub mod long_term_key_request_reply {
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
                 handle: self.handle.get_raw_handle().to_le(),
-                ltk: self.ltk.to_le()
+                ltk: self.ltk.to_le(),
             }
         }
     }
@@ -122,16 +126,15 @@ pub mod long_term_key_request_reply {
     }
 
     impl Return {
-        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self {
+                Ok(Self {
                     connection_handle: ConnectionHandle::try_from(packed.handle)?,
                     completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -143,12 +146,7 @@ pub mod long_term_key_request_reply {
         }
     }
 
-    impl_get_data_for_command!(
-            COMMAND,
-            CommandReturn,
-            Return,
-            error::Error
-        );
+    impl_get_data_for_command!(COMMAND, CommandReturn, Return, error::Error);
 
     impl_command_complete_future!(Return, error::Error);
 
@@ -156,28 +154,30 @@ pub mod long_term_key_request_reply {
     ///
     /// The input `long_term_key` is the encryption (cypher) secret key and it is in native byte
     /// order
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,
         long_term_key: u128,
-    ) -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
         let parameter = Parameter {
             handle: connection_handle,
             ltk: long_term_key,
         };
 
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
 pub mod long_term_key_request_negative_reply {
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::LongTermKeyRequestNegativeReply);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::LongTermKeyRequestNegativeReply);
 
     #[repr(packed)]
     struct CommandReturn {
@@ -212,16 +212,15 @@ pub mod long_term_key_request_negative_reply {
     }
 
     impl Return {
-        fn try_from((packed,cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self {
+                Ok(Self {
                     connection_handle: ConnectionHandle::try_from(packed.handle)?,
-                    completed_packets_cnt: cnt.into()
+                    completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -233,27 +232,23 @@ pub mod long_term_key_request_negative_reply {
         }
     }
 
-    impl_get_data_for_command!(
-            COMMAND,
-            CommandReturn,
-            Return,
-            error::Error
-        );
+    impl_get_data_for_command!(COMMAND, CommandReturn, Return, error::Error);
 
     impl_command_complete_future!(Return, error::Error);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,
-    ) -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
-        where T: HostControllerInterface
+    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
         let parameter = Parameter {
             handle: connection_handle,
         };
 
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
@@ -273,7 +268,9 @@ pub mod rand {
     impl CommandParameter for Parameter {
         type Parameter = ();
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { () }
+        fn get_parameter(&self) -> Self::Parameter {
+            ()
+        }
     }
 
     pub struct Return {
@@ -283,20 +280,21 @@ pub mod rand {
     }
 
     impl From<Return> for u64 {
-        fn from(ret: Return) -> Self { ret.random_number }
+        fn from(ret: Return) -> Self {
+            ret.random_number
+        }
     }
 
     impl Return {
-        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self {
+                Ok(Self {
                     random_number: packed.random,
                     completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -308,21 +306,18 @@ pub mod rand {
         }
     }
 
-    impl_get_data_for_command!(
-            COMMAND,
-            CommandReturn,
-            Return,
-            error::Error
-        );
+    impl_get_data_for_command!(COMMAND, CommandReturn, Return, error::Error);
 
     impl_command_complete_future!(Return, error::Error);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>(hci: &'a HostInterface<T>)
-    -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
 }
 
@@ -338,12 +333,12 @@ pub mod rand {
 /// [Encryption Key Refresh](crate::hci::events::Events::EncryptionKeyRefreshComplete) event once the
 /// encryption is updated.
 pub mod start_encryption {
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::StartEncryption);
 
-    #[derive(Debug,Clone,Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub struct Parameter {
         pub handle: ConnectionHandle,
         pub random_number: u64,
@@ -376,11 +371,14 @@ pub mod start_encryption {
 
     impl_command_status_future!();
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        parameter: Parameter,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandStatus ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandStatus))
     }
 }

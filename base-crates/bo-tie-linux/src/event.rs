@@ -1,13 +1,10 @@
-use bo_tie::hci::{
-    events,
-    EventMatcher,
-};
 use crate::WakerToken;
+use bo_tie::hci::{events, EventMatcher};
 use std::collections::BTreeMap;
 use std::convert::From;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::{Arc, Weak, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Clone)]
 struct DynEventMatcher {
@@ -45,20 +42,18 @@ pub struct EventExpecter {
 }
 
 impl EventExpecter {
-
     fn remove_expected_event(
         &mut self,
         event: Option<events::Events>,
-        pattern: &DynEventMatcher)
-    -> Option<ExpEventInfo>
-    {
+        pattern: &DynEventMatcher,
+    ) -> Option<ExpEventInfo> {
         if let Some(matchers) = self.expected.get_mut(&event) {
-
-            let retval = matchers.iter()
+            let retval = matchers
+                .iter()
                 .enumerate()
-                .find(|(_,(m,_))| m == pattern)
-                .map(|(idx,_)| idx)
-                .map(|idx| matchers.swap_remove(idx).1 );
+                .find(|(_, (m, _))| m == pattern)
+                .map(|(idx, _)| idx)
+                .map(|idx| matchers.swap_remove(idx).1);
 
             if matchers.len() == 0 {
                 self.expected.remove(&event);
@@ -76,16 +71,21 @@ impl EventExpecter {
         waker: &core::task::Waker,
         matcher: Pin<Arc<P>>,
     ) -> Option<Result<events::EventsData, crate::Error>>
-    where P: bo_tie::hci::EventMatcher + 'static
+    where
+        P: bo_tie::hci::EventMatcher + 'static,
     {
         let inner_arc = unsafe { Pin::into_inner_unchecked(matcher) } as Arc<dyn EventMatcher>;
 
-        let evnt_matcher = DynEventMatcher { weak_matcher: Arc::downgrade(&inner_arc) };
+        let evnt_matcher = DynEventMatcher {
+            weak_matcher: Arc::downgrade(&inner_arc),
+        };
 
         let mut gaurd = mutex.lock().expect("Couldn't acquire lock");
 
-        match gaurd.expected.get_mut(&event)
-            .and_then(|vec| vec.iter_mut().find(|(mat,_)| mat == &evnt_matcher) )
+        match gaurd
+            .expected
+            .get_mut(&event)
+            .and_then(|vec| vec.iter_mut().find(|(mat, _)| mat == &evnt_matcher))
         {
             None => {
                 log::info!("Setting up expectation for event {:?}", event);
@@ -112,7 +112,6 @@ impl EventExpecter {
                 let mut cnt = 0;
 
                 while cnt < entry.len() {
-
                     if entry[cnt].0.weak_matcher.upgrade().is_none() {
                         entry.swap_remove(cnt);
                     }
@@ -122,17 +121,14 @@ impl EventExpecter {
 
                 None
             }
-            Some((_,ref mut val)) => {
-
+            Some((_, ref mut val)) => {
                 if val.waker_token.triggered() {
                     log::info!("Retrieving data for event {:?}", event);
 
                     let expected = gaurd.remove_expected_event(event, &evnt_matcher).unwrap();
 
                     expected.data
-
                 } else {
-
                     if val.waker_token.change_waker(waker) {
                         log::info!("Waker updated for new context")
                     }
@@ -149,18 +145,17 @@ pub struct EventProcessor {
 }
 
 impl EventProcessor {
-
     /// Processor for events from a bluetooth controller
     pub fn process(&mut self, raw_event_packet: &[u8]) {
-
         match events::EventsData::from_packet(raw_event_packet) {
             Ok(event_data) => {
                 let received_event = event_data.get_event_name();
 
                 let process_expected = |patterns_map: &mut Vec<(DynEventMatcher, ExpEventInfo)>| {
-
                     for (dyn_matcher, ref mut exp_event_info) in patterns_map.iter_mut() {
-                        if dyn_matcher.weak_matcher.upgrade()
+                        if dyn_matcher
+                            .weak_matcher
+                            .upgrade()
                             .map(|m| m.match_event(&event_data))
                             .unwrap_or(false)
                         {
@@ -183,7 +178,7 @@ impl EventProcessor {
                 }
 
                 // Any events not matched are ignored
-            },
+            }
             Err(e) => log::error!("HCI Event Error: {}", e),
         }
     }
@@ -192,9 +187,7 @@ impl EventProcessor {
 pub struct EventSetup;
 
 impl EventSetup {
-
     pub fn setup() -> (Arc<Mutex<EventExpecter>>, EventProcessor) {
-
         let expecter = Arc::new(Mutex::new(EventExpecter {
             expected: BTreeMap::new(),
         }));

@@ -41,7 +41,7 @@ impl AddressType {
 /// - RPAFromLocalIRKRA -> Controller generates Resolvable Private Address based on
 ///     the local IRK from the resolving list. If the resolving list contains no
 ///     matching entry, use the random address from LE_Set_Random_Address.
-#[cfg_attr(test,derive(Debug))]
+#[cfg_attr(test, derive(Debug))]
 pub enum OwnAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
@@ -66,9 +66,9 @@ impl Default for OwnAddressType {
     }
 }
 
-#[cfg_attr(test,derive(Debug))]
+#[cfg_attr(test, derive(Debug))]
 pub struct Frequency {
-    val: u8
+    val: u8,
 }
 
 impl Frequency {
@@ -85,39 +85,46 @@ impl Frequency {
     /// # Error
     /// The value is less then MIN or greater than MAX. MIN or MAX is returned
     /// depending on which bound is violated.
-    pub fn new( mega_hz: usize ) -> Result<Frequency, usize> {
+    pub fn new(mega_hz: usize) -> Result<Frequency, usize> {
         if mega_hz < Frequency::MIN {
             Err(Frequency::MIN)
-        }
-        else if mega_hz > Frequency::MAX {
+        } else if mega_hz > Frequency::MAX {
             Err(Frequency::MAX)
-        }
-        else {
-            Ok(Frequency{ val: ((mega_hz - 2402) / 2) as u8})
+        } else {
+            Ok(Frequency {
+                val: ((mega_hz - 2402) / 2) as u8,
+            })
         }
     }
 
-    pub(in super::super) fn get_val(&self) -> u8 { self.val }
+    pub(in super::super) fn get_val(&self) -> u8 {
+        self.val
+    }
 }
 
-pub struct IntervalRange<T> where T: PartialEq + PartialOrd {
+pub struct IntervalRange<T>
+where
+    T: PartialEq + PartialOrd,
+{
     pub low: T,
     pub hi: T,
     pub micro_sec_conv: u64,
 }
 
-impl<T> IntervalRange<T> where T: PartialEq + PartialOrd {
-
-    pub fn contains(&self, val: &T ) -> bool {
+impl<T> IntervalRange<T>
+where
+    T: PartialEq + PartialOrd,
+{
+    pub fn contains(&self, val: &T) -> bool {
         self.low <= *val && *val <= self.hi
     }
 }
 
 impl From<IntervalRange<u16>> for IntervalRange<core::time::Duration> {
-    fn from( raw: IntervalRange<u16> ) -> Self {
+    fn from(raw: IntervalRange<u16>) -> Self {
         IntervalRange {
-            low: core::time::Duration::from_micros( raw.low as u64 * raw.micro_sec_conv  ),
-            hi:  core::time::Duration::from_micros( raw.hi as u64 * raw.micro_sec_conv  ),
+            low: core::time::Duration::from_micros(raw.low as u64 * raw.micro_sec_conv),
+            hi: core::time::Duration::from_micros(raw.hi as u64 * raw.micro_sec_conv),
             micro_sec_conv: raw.micro_sec_conv,
         }
     }

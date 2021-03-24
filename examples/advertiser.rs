@@ -8,21 +8,19 @@
 //! Super User privileges may be required to interact with your bluetooth peripheral. To do will
 //! probably require the full path to cargo. The cargo binary is usually locacted in your home
 //! directory at `.cargo/bin/cargo`.
-use bo_tie::hci;
 use bo_tie::gap::advertise;
-use bo_tie::hci::le::transmitter::{
-    set_advertising_data,
-    set_advertising_parameters,
-    set_advertising_enable,
+use bo_tie::hci;
+use bo_tie::hci::le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
-use std::sync::{ Arc, atomic::{AtomicBool,Ordering} };
 
-async fn advertise_setup (
+async fn advertise_setup(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
     data: set_advertising_data::AdvertisingData,
-    flag: Arc<AtomicBool> )
-{
-
+    flag: Arc<AtomicBool>,
+) {
     println!("Advertising Setup:");
 
     set_advertising_enable::send(&hi, false).await.unwrap();
@@ -41,7 +39,9 @@ async fn advertise_setup (
 
     println!("{:5>}", "Set Advertising Parameters");
 
-    set_advertising_enable::send(&hi, flag.load(Ordering::Relaxed) ).await.unwrap();
+    set_advertising_enable::send(&hi, flag.load(Ordering::Relaxed))
+        .await
+        .unwrap();
 
     println!("{:5>}", "Advertising Enabled");
 }
@@ -51,14 +51,14 @@ async fn advertise_teardown(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
 }
 
 #[cfg(unix)]
-fn handle_sig( flag: Arc<AtomicBool> ) {
-    simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term],
-        move |_| { flag.store(false, Ordering::Relaxed) }
-    );
+fn handle_sig(flag: Arc<AtomicBool>) {
+    simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
+        flag.store(false, Ordering::Relaxed)
+    });
 }
 
 #[cfg(not(any(unix)))]
-fn handle_sig( flag: Arc<AtomicBool> ) {
+fn handle_sig(flag: Arc<AtomicBool>) {
     unimplemented!("handle_sig needs to be implemented for this platform");
 }
 
@@ -66,29 +66,31 @@ fn get_arg_options() -> getopts::Options {
     let mut opts = getopts::Options::new();
     opts.parsing_style(getopts::ParsingStyle::FloatingFrees);
     opts.long_only(false);
-    opts.optflag("h", "help", "Print this help menu" );
-    opts.opt("s",
-            "service-uuid",
-            "Space-separated 128 bit service uuids to advertise with. The UUIDs must be in the \
+    opts.optflag("h", "help", "Print this help menu");
+    opts.opt(
+        "s",
+        "service-uuid",
+        "Space-separated 128 bit service uuids to advertise with. The UUIDs must be in the \
             format of XX:XX:XX:XX:XX:XX (From most significant to least significant byte)",
-            "UUIDs",
-            getopts::HasArg::Yes,
-            getopts::Occur::Multi);
+        "UUIDs",
+        getopts::HasArg::Yes,
+        getopts::Occur::Multi,
+    );
     opts
 }
 
 struct ParsedArgs {
-    advertising_data: set_advertising_data::AdvertisingData
+    advertising_data: set_advertising_data::AdvertisingData,
 }
 
-fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
+fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
     let options = get_arg_options();
 
     let program_name = args.next().unwrap();
 
-    let matches = match options.parse( &args.collect::<Vec<_>>() ) {
+    let matches = match options.parse(&args.collect::<Vec<_>>()) {
         Ok(all_match) => all_match,
-        Err(no_match) => panic!(no_match.to_string())
+        Err(no_match) => panic!(no_match.to_string()),
     };
 
     if matches.opt_present("h") {
@@ -98,10 +100,9 @@ fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
         let mut advertising_data = set_advertising_data::AdvertisingData::new();
 
         // Add service UUIDs to the advertising data
-        let services_128 = matches.opt_strs("s")
-            .into_iter()
-            .fold( bo_tie::gap::advertise::service_uuids::new_128(true), |mut services, str_uuid|
-            {
+        let services_128 = matches.opt_strs("s").into_iter().fold(
+            bo_tie::gap::advertise::service_uuids::new_128(true),
+            |mut services, str_uuid| {
                 use std::convert::TryFrom;
 
                 let uuid = bo_tie::UUID::try_from(str_uuid.as_str()).expect("Invalid UUID");
@@ -109,27 +110,24 @@ fn parse_args(mut args: std::env::Args ) -> Option<ParsedArgs> {
                 services.add(uuid.into());
 
                 services
-            }
+            },
         );
 
-        if ! services_128.as_ref().is_empty() {
+        if !services_128.as_ref().is_empty() {
             advertising_data.try_push(services_128).expect("Couldn't add services");
         }
 
-        Some(
-            ParsedArgs {
-                advertising_data: advertising_data
-            }
-        )
+        Some(ParsedArgs {
+            advertising_data: advertising_data,
+        })
     }
 }
 
 fn main() {
-
     use futures::executor;
-    use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
+    use simplelog::{Config, LevelFilter, TermLogger, TerminalMode};
 
-    TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
+    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
 
     let adv_flag = Arc::new(AtomicBool::new(true));
 

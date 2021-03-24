@@ -10,7 +10,6 @@ pub struct ScanPayloadIter<'a, T> {
 }
 
 impl<'a, T> ScanPayloadIter<'a, T> {
-
     /// Create an iterator over
     pub fn iter(bytes: &'a [u8]) -> Self {
         Self {
@@ -21,8 +20,8 @@ impl<'a, T> ScanPayloadIter<'a, T> {
 }
 
 impl<T> Iterator for ScanPayloadIter<'_, T>
-    where
-        T: super::advertise::TryFromRaw,
+where
+    T: super::advertise::TryFromRaw,
 {
     type Item = Result<T, super::advertise::Error>;
 

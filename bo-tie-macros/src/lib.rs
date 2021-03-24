@@ -22,7 +22,8 @@
 
 extern crate proc_macro;
 
-#[cfg(feature = "flow-ctrl")] mod hi;
+#[cfg(feature = "flow-ctrl")]
+mod hi;
 
 use proc_macro::TokenStream;
 
@@ -60,4 +61,6 @@ pub fn host_interface(args: TokenStream, item: TokenStream) -> TokenStream {
 /// When no features are enabled within bo-tie-macros, the `host_interface` attribute does nothing.
 #[cfg(not(any(feature = "flow-ctrl")))]
 #[proc_macro_attribute]
-pub fn host_interface(_: TokenStream, ts: TokenStream) -> TokenStream {ts}
+pub fn host_interface(_: TokenStream, ts: TokenStream) -> TokenStream {
+    ts
+}

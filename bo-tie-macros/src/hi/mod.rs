@@ -9,7 +9,6 @@
 //! contain a `HostInterface` somewhere within their token tree. Only the use cases required for
 //! the bo-tie crate are implemented.
 
-
 use proc_macro::TokenStream;
 use quote::ToTokens;
 
@@ -39,13 +38,13 @@ macro_rules! invalid_type {
     ($type_:literal $(, $reason:literal)? ) => { return_invalid!($type_,"type" $(, $reason)? )}
 }
 
-mod flow_control;
 mod args;
+mod flow_control;
 
 const IDENTITY_NAME: &'static str = "HostInterface";
 
 /// Generics to modify `HostInterface` with the enabling and disabling of features
-#[derive(Clone,Copy)]
+#[derive(Clone, Copy)]
 enum FeatureGenerics {
     /// No feature generics to add. Either implement for no features enabled or there is no
     /// `HostInterface` within the token tree
@@ -64,16 +63,16 @@ struct Bubble {
 }
 
 impl Bubble {
-
     fn new<N>(ex: FeatureGenerics, generic_name: N, cfg: args::AttributeConfig) -> Self
-    where N: AsRef<str> + 'static
+    where
+        N: AsRef<str> + 'static,
     {
         Self {
             has_hi: false,
             trait_self_ty: false,
             extra_generics: ex,
             generic_name: Box::new(generic_name),
-            cfg
+            cfg,
         }
     }
 
@@ -84,7 +83,9 @@ impl Bubble {
     fn check_ident(&mut self, ident: &syn::Ident) -> bool {
         let cmp = ident == IDENTITY_NAME;
 
-        if cmp { self.has_hi = true }
+        if cmp {
+            self.has_hi = true
+        }
 
         cmp
     }
@@ -99,12 +100,10 @@ impl Bubble {
 }
 
 /// Parse the item that has the `host_interface` configuration attribute
-pub fn parse_item(args: &syn::AttributeArgs, item: &mut syn::Item) -> Result<TokenStream,String> {
-
+pub fn parse_item(args: &syn::AttributeArgs, item: &mut syn::Item) -> Result<TokenStream, String> {
     let bubble = &mut Bubble::new(FeatureGenerics::FlowControl, "F", args::process_args(args)?);
 
     match item {
-
         syn::Item::Const(_) => invalid_item!("const"),
 
         syn::Item::Enum(item_enum) => parse_enum_item(item_enum, bubble)?,
@@ -133,8 +132,7 @@ pub fn parse_item(args: &syn::AttributeArgs, item: &mut syn::Item) -> Result<Tok
 
         syn::Item::Type(_) => invalid_item!("type alias"),
 
-        syn::Item::Union(_) =>
-            invalid_item!("union", "attribute host_interface is not implemented for a union"),
+        syn::Item::Union(_) => invalid_item!("union", "attribute host_interface is not implemented for a union"),
 
         syn::Item::Use(_) => invalid_item!("use"),
 
@@ -143,20 +141,25 @@ pub fn parse_item(args: &syn::AttributeArgs, item: &mut syn::Item) -> Result<Tok
         _ => return Err("Exhaustive pattern for 'item' reached".into()),
     }
 
-    Ok( quote::quote! { #item }.into() )
+    Ok(quote::quote! { #item }.into())
 }
 
 /// Tokens that are not effected by `HostInterface` structure changes
 #[inline]
-fn inconsequential<'a, P: 'a + ToTokens>(_: P, _: &mut Bubble) -> ret!() { Ok(()) }
+fn inconsequential<'a, P: 'a + ToTokens>(_: P, _: &mut Bubble) -> ret!() {
+    Ok(())
+}
 
 fn parse_enum_item(item_enum: &mut syn::ItemEnum, bubble: &mut Bubble) -> ret!() {
-    item_enum.variants.iter_mut().try_for_each(|variant| parse_enum_variant(variant, bubble) )?;
+    item_enum
+        .variants
+        .iter_mut()
+        .try_for_each(|variant| parse_enum_variant(variant, bubble))?;
 
     match bubble.generic_change() {
         FeatureGenerics::None => (),
         FeatureGenerics::FlowControl => {
-            if ! flow_control::already_has_generic(item_enum.generics.params.iter_mut(), bubble) {
+            if !flow_control::already_has_generic(item_enum.generics.params.iter_mut(), bubble) {
                 item_enum.generics.params.push(flow_control::generic_param())
             }
         }
@@ -166,10 +169,12 @@ fn parse_enum_item(item_enum: &mut syn::ItemEnum, bubble: &mut Bubble) -> ret!()
 }
 
 fn parse_fn_item(item_fn: &mut syn::ItemFn, bubble: &mut Bubble) -> ret!() {
-    item_fn.sig.inputs.iter_mut().try_for_each(|arg| if let syn::FnArg::Typed(t) = arg {
-        parse_type(&mut t.ty, bubble)
-    } else {
-        Ok(())
+    item_fn.sig.inputs.iter_mut().try_for_each(|arg| {
+        if let syn::FnArg::Typed(t) = arg {
+            parse_type(&mut t.ty, bubble)
+        } else {
+            Ok(())
+        }
     })?;
 
     parse_return(&mut item_fn.sig.output, bubble)?;
@@ -177,7 +182,7 @@ fn parse_fn_item(item_fn: &mut syn::ItemFn, bubble: &mut Bubble) -> ret!() {
     match bubble.generic_change() {
         FeatureGenerics::None => (),
         FeatureGenerics::FlowControl => {
-            if ! flow_control::already_has_generic(item_fn.sig.generics.params.iter_mut(), bubble) {
+            if !flow_control::already_has_generic(item_fn.sig.generics.params.iter_mut(), bubble) {
                 item_fn.sig.generics.params.push(flow_control::generic_param());
             }
         }
@@ -190,7 +195,6 @@ fn parse_fn_item(item_fn: &mut syn::ItemFn, bubble: &mut Bubble) -> ret!() {
 ///
 /// This only checks the self-type of the declaration and not the items of the `ImplItem`.
 fn parse_impl_item(item_impl: &mut syn::ItemImpl, bubble: &mut Bubble) -> ret!() {
-
     parse_generics(&mut item_impl.generics, bubble)?;
 
     bubble.trait_self_ty = true;
@@ -199,21 +203,21 @@ fn parse_impl_item(item_impl: &mut syn::ItemImpl, bubble: &mut Bubble) -> ret!()
 
     bubble.trait_self_ty = false;
 
-    match ( bubble.generic_change(), bubble.cfg.is_concrete() ) {
+    match (bubble.generic_change(), bubble.cfg.is_concrete()) {
         (FeatureGenerics::None, _) | (_, true) => (),
         (FeatureGenerics::FlowControl, false) => {
-            if ! flow_control::already_has_generic(item_impl.generics.params.iter_mut(), bubble) {
+            if !flow_control::already_has_generic(item_impl.generics.params.iter_mut(), bubble) {
                 item_impl.generics.params.push(flow_control::generic_param());
             }
-        },
+        }
     }
 
     flow_control::modify_where_clause(&mut item_impl.generics.where_clause, bubble)
 }
 
 fn parse_struct_item(item_struct: &mut syn::ItemStruct, bubble: &mut Bubble) -> ret!() {
-    if ! bubble.check_ident(&item_struct.ident) {
-        parse_fields( &mut item_struct.fields, bubble )?
+    if !bubble.check_ident(&item_struct.ident) {
+        parse_fields(&mut item_struct.fields, bubble)?
     }
 
     parse_generics(&mut item_struct.generics, bubble)?;
@@ -221,7 +225,7 @@ fn parse_struct_item(item_struct: &mut syn::ItemStruct, bubble: &mut Bubble) -> 
     match bubble.generic_change() {
         FeatureGenerics::None => (),
         FeatureGenerics::FlowControl => {
-            if ! flow_control::already_has_generic(item_struct.generics.params.iter_mut(), bubble) {
+            if !flow_control::already_has_generic(item_struct.generics.params.iter_mut(), bubble) {
                 item_struct.generics.params.push(flow_control::generic_param());
             }
         }
@@ -231,7 +235,6 @@ fn parse_struct_item(item_struct: &mut syn::ItemStruct, bubble: &mut Bubble) -> 
 }
 
 fn parse_type(t: &mut syn::Type, bubble: &mut Bubble) -> ret!() {
-    
     match t {
         syn::Type::Array(array) => parse_typed_array(array, bubble),
 
@@ -272,7 +275,10 @@ fn parse_typed_array(array: &mut syn::TypeArray, bubble: &mut Bubble) -> ret!() 
 }
 
 fn parse_bare_fn(bare_fn: &mut syn::TypeBareFn, bubble: &mut Bubble) -> ret!() {
-    bare_fn.inputs.iter_mut().try_for_each(|arg| parse_type(&mut arg.ty, bubble))
+    bare_fn
+        .inputs
+        .iter_mut()
+        .try_for_each(|arg| parse_type(&mut arg.ty, bubble))
 }
 
 fn parse_paren(paren: &mut syn::TypeParen, bubble: &mut Bubble) -> ret!() {
@@ -296,11 +302,14 @@ fn parse_slice(slice: &mut syn::TypeSlice, bubble: &mut Bubble) -> ret!() {
 }
 
 fn parse_trait_object(trait_object: &mut syn::TypeTraitObject, bubble: &mut Bubble) -> ret!() {
-    trait_object.bounds.iter_mut().try_for_each(|bound| parse_type_pram_bound(bound, bubble))
+    trait_object
+        .bounds
+        .iter_mut()
+        .try_for_each(|bound| parse_type_pram_bound(bound, bubble))
 }
 
 fn parse_tuple(tuple: &mut syn::TypeTuple, bubble: &mut Bubble) -> ret!() {
-    tuple.elems.iter_mut().try_for_each(|elem| parse_type(elem, bubble) )
+    tuple.elems.iter_mut().try_for_each(|elem| parse_type(elem, bubble))
 }
 
 fn parse_trait_bound(trait_bound: &mut syn::TraitBound, bubble: &mut Bubble) -> ret!() {
@@ -315,11 +324,10 @@ fn parse_trait_bound(trait_bound: &mut syn::TraitBound, bubble: &mut Bubble) -> 
 fn parse_path(path: &mut syn::Path, bubble: &mut Bubble) -> ret!() {
     let seg_cnt = path.segments.len();
 
-    path.segments.iter_mut().enumerate().try_for_each( |(cnt, segment)| {
-
+    path.segments.iter_mut().enumerate().try_for_each(|(cnt, segment)| {
         // Check if this is a HostInterface or the last item that must be modified for a trait
         // implementation of a self type.
-        if bubble.check_ident(&segment.ident) || ( bubble.trait_self_ty && cnt == (seg_cnt - 1) ) {
+        if bubble.check_ident(&segment.ident) || (bubble.trait_self_ty && cnt == (seg_cnt - 1)) {
             match &bubble.generic_change() {
                 FeatureGenerics::None => (),
                 FeatureGenerics::FlowControl => flow_control::modify_path_segment(segment, bubble)?,
@@ -331,19 +339,23 @@ fn parse_path(path: &mut syn::Path, bubble: &mut Bubble) -> ret!() {
 }
 
 fn parse_generics(generics: &mut syn::Generics, bubble: &mut Bubble) -> ret!() {
-
-    generics.where_clause.as_mut().map(|wc| parse_where_clause(wc, bubble)).unwrap_or(Ok(()))
+    generics
+        .where_clause
+        .as_mut()
+        .map(|wc| parse_where_clause(wc, bubble))
+        .unwrap_or(Ok(()))
 }
 
 fn parse_path_arguments(path_args: &mut syn::PathArguments, bubble: &mut Bubble) -> ret!() {
     match path_args {
         syn::PathArguments::None => Ok(()),
 
-        syn::PathArguments::AngleBracketed(generics) =>
-            generics.args.iter_mut().try_for_each(|arg| parse_generic_argument(arg,bubble)),
+        syn::PathArguments::AngleBracketed(generics) => generics
+            .args
+            .iter_mut()
+            .try_for_each(|arg| parse_generic_argument(arg, bubble)),
 
-        syn::PathArguments::Parenthesized(_) =>
-            Err("Function style paths are unimplemented".into()),
+        syn::PathArguments::Parenthesized(_) => Err("Function style paths are unimplemented".into()),
     }
 }
 
@@ -351,8 +363,10 @@ fn parse_generic_argument(arg: &mut syn::GenericArgument, bubble: &mut Bubble) -
     match arg {
         syn::GenericArgument::Binding(binding) => parse_type(&mut binding.ty, bubble),
 
-        syn::GenericArgument::Constraint(constraint) => constraint.bounds.iter_mut()
-            .try_for_each(|bounds| parse_type_pram_bound(bounds, bubble) ),
+        syn::GenericArgument::Constraint(constraint) => constraint
+            .bounds
+            .iter_mut()
+            .try_for_each(|bounds| parse_type_pram_bound(bounds, bubble)),
 
         _ => Ok(()),
     }
@@ -371,11 +385,17 @@ fn parse_fields(fields: &mut syn::Fields, bubble: &mut Bubble) -> ret!() {
 }
 
 fn parse_fields_named(fields: &mut syn::FieldsNamed, bubble: &mut Bubble) -> ret!() {
-    fields.named.iter_mut().try_for_each(|field| parse_type(&mut field.ty, bubble))
+    fields
+        .named
+        .iter_mut()
+        .try_for_each(|field| parse_type(&mut field.ty, bubble))
 }
 
 fn parse_fields_unnamed(fields: &mut syn::FieldsUnnamed, bubble: &mut Bubble) -> ret!() {
-    fields.unnamed.iter_mut().try_for_each(|field| parse_type(&mut field.ty, bubble))
+    fields
+        .unnamed
+        .iter_mut()
+        .try_for_each(|field| parse_type(&mut field.ty, bubble))
 }
 
 fn parse_return(ret: &mut syn::ReturnType, bubble: &mut Bubble) -> ret!() {
@@ -386,26 +406,30 @@ fn parse_return(ret: &mut syn::ReturnType, bubble: &mut Bubble) -> ret!() {
 }
 
 fn parse_where_clause(where_clause: &mut syn::WhereClause, bubble: &mut Bubble) -> ret!() {
-    where_clause.predicates.iter_mut()
+    where_clause
+        .predicates
+        .iter_mut()
         .try_for_each(|predicate| parse_where_predicate(predicate, bubble))
 }
 
 fn parse_where_predicate(predicate: &mut syn::WherePredicate, bubble: &mut Bubble) -> ret!() {
     match predicate {
         syn::WherePredicate::Type(ty) => parse_where_predicate_type(ty, bubble),
-        _ => Ok(())
+        _ => Ok(()),
     }
 }
 
 fn parse_where_predicate_type(ty: &mut syn::PredicateType, bubble: &mut Bubble) -> ret!() {
     parse_type(&mut ty.bounded_ty, bubble)?;
 
-    ty.bounds.iter_mut().try_for_each(|type_bound| parse_type_pram_bound(type_bound,bubble))
+    ty.bounds
+        .iter_mut()
+        .try_for_each(|type_bound| parse_type_pram_bound(type_bound, bubble))
 }
 
 fn parse_type_pram_bound(ty_bound: &mut syn::TypeParamBound, bubble: &mut Bubble) -> ret!() {
     match ty_bound {
         syn::TypeParamBound::Trait(t) => parse_trait_bound(t, bubble),
-        _ => Ok(())
+        _ => Ok(()),
     }
 }

@@ -31,7 +31,7 @@ use core::convert::TryFrom;
 ///
 /// All opcodes are based from this enum, which is broken up into the opcode groups. Each opcode
 /// group is further broken up into
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HCICommand {
     LinkControl(LinkControl),
     ControllerAndBaseband(ControllerAndBaseband),
@@ -62,12 +62,15 @@ pub struct OpCodePair {
 }
 
 impl OpCodePair {
-
     /// Get the OpCode Command Field value
-    pub fn get_ogf(&self) -> u16 { self.ogf }
+    pub fn get_ogf(&self) -> u16 {
+        self.ogf
+    }
 
     /// Get the OpCode Group Field value
-    pub fn get_ocf(&self) -> u16 { self.ocf }
+    pub fn get_ocf(&self) -> u16 {
+        self.ocf
+    }
 
     /// Convert the OpCodePair into the opcode
     ///
@@ -98,20 +101,28 @@ impl TryFrom<OpCodePair> for HCICommand {
 
     fn try_from(opc_pair: OpCodePair) -> Result<Self, Self::Error> {
         match opc_pair.ogf {
-            0x1 => Ok(HCICommand::LinkControl( LinkControl::try_from(opc_pair.ocf)? )),
-            0x3 => Ok(HCICommand::ControllerAndBaseband( ControllerAndBaseband::try_from(opc_pair.ocf)? )),
-            0x4 => Ok(HCICommand::InformationParameters( InformationParameters::try_from(opc_pair.ocf)? )),
-            0x5 => Ok(HCICommand::StatusParameters( StatusParameters::try_from(opc_pair.ocf)? )),
-            0x8 => Ok(HCICommand::LEController( LEController::try_from(opc_pair.ocf)? )),
+            0x1 => Ok(HCICommand::LinkControl(LinkControl::try_from(opc_pair.ocf)?)),
+            0x3 => Ok(HCICommand::ControllerAndBaseband(ControllerAndBaseband::try_from(
+                opc_pair.ocf,
+            )?)),
+            0x4 => Ok(HCICommand::InformationParameters(InformationParameters::try_from(
+                opc_pair.ocf,
+            )?)),
+            0x5 => Ok(HCICommand::StatusParameters(StatusParameters::try_from(opc_pair.ocf)?)),
+            0x8 => Ok(HCICommand::LEController(LEController::try_from(opc_pair.ocf)?)),
             _ => Err(alloc::format!("Unknown OpCode Group Field value: 0x{:x}", opc_pair.ogf)),
         }
     }
 }
 
-macro_rules! ocf_error{ () => { "OpCode Group Field '{}' doesn't have the Op Code Field 0x{:x}" }; }
+macro_rules! ocf_error {
+    () => {
+        "OpCode Group Field '{}' doesn't have the Op Code Field 0x{:x}"
+    };
+}
 
 /// Link control commands
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LinkControl {
     Disconnect,
     ReadRemoteVersionInformation,
@@ -129,13 +140,13 @@ impl LinkControl {
             ocf: match *self {
                 Disconnect => 0x6,
                 ReadRemoteVersionInformation => 0x1d,
-            }
+            },
         }
     }
 
-    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+    fn try_from(ocf: u16) -> Result<Self, alloc::string::String> {
         match ocf {
-            0x6  => Ok(LinkControl::Disconnect),
+            0x6 => Ok(LinkControl::Disconnect),
             0x1d => Ok(LinkControl::ReadRemoteVersionInformation),
             _ => Err(alloc::format!(ocf_error!(), "Link Control", ocf)),
         }
@@ -143,7 +154,7 @@ impl LinkControl {
 }
 
 /// Controller and baseband commands
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ControllerAndBaseband {
     SetEventMask,
     Reset,
@@ -163,14 +174,14 @@ impl ControllerAndBaseband {
                 SetEventMask => 0x1,
                 Reset => 0x3,
                 ReadTransmitPowerLevel => 0x2d,
-            }
+            },
         }
     }
 
-    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+    fn try_from(ocf: u16) -> Result<Self, alloc::string::String> {
         match ocf {
-            0x1  => Ok(ControllerAndBaseband::SetEventMask),
-            0x3  => Ok(ControllerAndBaseband::Reset),
+            0x1 => Ok(ControllerAndBaseband::SetEventMask),
+            0x3 => Ok(ControllerAndBaseband::Reset),
             0x2d => Ok(ControllerAndBaseband::ReadTransmitPowerLevel),
             _ => Err(alloc::format!(ocf_error!(), "Controller and Baseband", ocf)),
         }
@@ -178,12 +189,13 @@ impl ControllerAndBaseband {
 }
 
 /// Information parameter commands
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InformationParameters {
     ReadLocalSupportedVersionInformation,
     ReadLocalSupportedCommands,
     ReadLocalSupportedFeatures,
-    #[allow(non_camel_case_types)] ReadBD_ADDR,
+    #[allow(non_camel_case_types)]
+    ReadBD_ADDR,
     ReadBufferSize,
 }
 
@@ -206,7 +218,7 @@ impl InformationParameters {
         }
     }
 
-    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+    fn try_from(ocf: u16) -> Result<Self, alloc::string::String> {
         match ocf {
             0x1 => Ok(InformationParameters::ReadLocalSupportedVersionInformation),
             0x2 => Ok(InformationParameters::ReadLocalSupportedCommands),
@@ -219,7 +231,7 @@ impl InformationParameters {
 }
 
 /// Status parameter commands
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StatusParameters {
     ReadRSSI,
 }
@@ -235,11 +247,11 @@ impl StatusParameters {
             ogf: StatusParameters::OGF,
             ocf: match *self {
                 ReadRSSI => 0x5,
-            }
+            },
         }
     }
 
-    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+    fn try_from(ocf: u16) -> Result<Self, alloc::string::String> {
         match ocf {
             0x5 => Ok(StatusParameters::ReadRSSI),
             _ => Err(alloc::format!(ocf_error!(), "Status Parameters", ocf)),
@@ -248,7 +260,7 @@ impl StatusParameters {
 }
 
 /// Bluetooth LE commands
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LEController {
     SetEventMask,
     ReadBufferSize,
@@ -294,7 +306,7 @@ impl LEController {
     const OGF: u16 = 0x8;
 
     #[inline]
-    fn as_opcode_pair( &self ) -> OpCodePair{
+    fn as_opcode_pair(&self) -> OpCodePair {
         use self::LEController::*;
 
         OpCodePair {
@@ -342,22 +354,22 @@ impl LEController {
         }
     }
 
-    fn try_from(ocf: u16) -> Result< Self, alloc::string::String> {
+    fn try_from(ocf: u16) -> Result<Self, alloc::string::String> {
         match ocf {
-            0x1  => Ok(LEController::SetEventMask),
-            0x2  => Ok(LEController::ReadBufferSize),
-            0x3  => Ok(LEController::ReadLocalSupportedFeatures),
-            0x5  => Ok(LEController::SetRandomAddress),
-            0x6  => Ok(LEController::SetAdvertisingParameters),
-            0x7  => Ok(LEController::ReadAdvertisingChannelTxPower),
-            0x8  => Ok(LEController::SetAdvertisingData),
-            0x9  => Ok(LEController::SetScanResponseData),
-            0xa  => Ok(LEController::SetAdvertisingEnable),
-            0xb  => Ok(LEController::SetScanParameters),
-            0xC  => Ok(LEController::SetScanEnable),
-            0xD  => Ok(LEController::CreateConnection),
-            0xe  => Ok(LEController::CreateConnectionCancel),
-            0xf  => Ok(LEController::ReadWhiteListSize),
+            0x1 => Ok(LEController::SetEventMask),
+            0x2 => Ok(LEController::ReadBufferSize),
+            0x3 => Ok(LEController::ReadLocalSupportedFeatures),
+            0x5 => Ok(LEController::SetRandomAddress),
+            0x6 => Ok(LEController::SetAdvertisingParameters),
+            0x7 => Ok(LEController::ReadAdvertisingChannelTxPower),
+            0x8 => Ok(LEController::SetAdvertisingData),
+            0x9 => Ok(LEController::SetScanResponseData),
+            0xa => Ok(LEController::SetAdvertisingEnable),
+            0xb => Ok(LEController::SetScanParameters),
+            0xC => Ok(LEController::SetScanEnable),
+            0xD => Ok(LEController::CreateConnection),
+            0xe => Ok(LEController::CreateConnectionCancel),
+            0xf => Ok(LEController::ReadWhiteListSize),
             0x10 => Ok(LEController::ClearWhiteList),
             0x11 => Ok(LEController::AddDeviceToWhiteList),
             0x12 => Ok(LEController::RemoveDeviceFromWhiteList),
@@ -395,8 +407,8 @@ mod tests {
     fn op_code_test() {
         let ogf = 0x8;
         let ocf = 0xa;
-        let oc  = HCICommand::LEController(LEController::SetAdvertisingEnable);
+        let oc = HCICommand::LEController(LEController::SetAdvertisingEnable);
 
-        assert_eq!( oc, HCICommand::try_from( OpCodePair{ ogf, ocf } ).unwrap() );
+        assert_eq!(oc, HCICommand::try_from(OpCodePair { ogf, ocf }).unwrap());
     }
 }

@@ -20,7 +20,13 @@ struct Bonder {
     le_event_mask: Arc<Mutex<HashSet<hci::events::LEMeta>>>,
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
     abort_server_handle: Arc<Mutex<Option<futures::future::AbortHandle>>>,
-    privacy_info: Arc<Mutex<(Option<u128>, Option<u128>, Option<(bool, bo_tie::BluetoothDeviceAddress)>)>>
+    privacy_info: Arc<
+        Mutex<(
+            Option<u128>,
+            Option<u128>,
+            Option<(bool, bo_tie::BluetoothDeviceAddress)>,
+        )>,
+    >,
 }
 
 impl Bonder {
@@ -37,7 +43,6 @@ impl Bonder {
 }
 
 impl Bonder {
-
     /// Enable/Disable the provided events
     async fn set_events(&self, events: &[hci::cb::set_event_mask::EventMask], enable: bool) {
         use hci::cb::set_event_mask::{self, EventMask};
@@ -46,75 +51,84 @@ impl Bonder {
             let mut gaurd = self.event_mask.lock().await;
 
             if enable {
-                events.iter().for_each(|e| { gaurd.insert(*e); } );
+                events.iter().for_each(|e| {
+                    gaurd.insert(*e);
+                });
             } else {
-                events.iter().for_each(|e| { gaurd.insert(*e); } );
+                events.iter().for_each(|e| {
+                    gaurd.insert(*e);
+                });
             }
 
             gaurd.iter().copied().collect()
         };
 
-        set_event_mask::send(&self.hi, &events).await.expect("failed to set event mask");
+        set_event_mask::send(&self.hi, &events)
+            .await
+            .expect("failed to set event mask");
     }
 
     /// Enable/Disable the provided le events
     async fn set_le_events(&self, events: &[hci::events::LEMeta], enable: bool) {
-        use hci::le::mandatory::set_event_mask;
         use hci::events::LEMeta;
+        use hci::le::mandatory::set_event_mask;
 
         let le_events: Vec<LEMeta> = {
             let mut gaurd = self.le_event_mask.lock().await;
 
             if enable {
-                events.iter().for_each(|e| { gaurd.insert(*e); } );
+                events.iter().for_each(|e| {
+                    gaurd.insert(*e);
+                });
             } else {
-                events.iter().for_each(|e| { gaurd.insert(*e); } );
+                events.iter().for_each(|e| {
+                    gaurd.insert(*e);
+                });
             }
 
             gaurd.iter().copied().collect()
         };
 
-        set_event_mask::send(&self.hi, &le_events).await.expect("failed to set le event mask");
+        set_event_mask::send(&self.hi, &le_events)
+            .await
+            .expect("failed to set le event mask");
     }
 
     async fn init_events(&self) {
         use hci::cb::set_event_mask::EventMask;
         use hci::events::LEMeta;
 
-        self.set_events( &[
+        self.set_events(
+            &[
                 EventMask::DisconnectionComplete,
                 EventMask::EncryptionChange,
                 EventMask::EncryptionKeyRefreshComplete,
                 EventMask::LEMeta,
             ],
-            true
-        ).await;
+            true,
+        )
+        .await;
 
-        self.set_le_events( &[
+        self.set_le_events(
+            &[
                 LEMeta::ConnectionComplete,
                 LEMeta::LongTermKeyRequest,
                 LEMeta::RemoteConnectionParameterRequest,
             ],
-            true
-        ).await;
+            true,
+        )
+        .await;
     }
 
     /// Starting advertising
     ///
     /// This advertising is for connecting with a bluetooth device that has not been bonded with
     /// this device (or lost bonding information).
-    async fn start_advertising(
-        self,
-        advertised_address: bo_tie::BluetoothDeviceAddress,
-        advertised_name: &str )
-    {
-        use hci::le::transmitter:: {
-            set_advertising_data,
-            set_advertising_parameters,
-            set_advertising_enable,
-            set_random_address,
-        };
+    async fn start_advertising(self, advertised_address: bo_tie::BluetoothDeviceAddress, advertised_name: &str) {
         use bo_tie::gap::advertise;
+        use hci::le::transmitter::{
+            set_advertising_data, set_advertising_enable, set_advertising_parameters, set_random_address,
+        };
 
         let adv_name = advertise::local_name::LocalName::new(advertised_name, false);
 
@@ -122,11 +136,21 @@ impl Bonder {
 
         // This is the flag specification for a LE-only, limited discoverable advertising.
         // All core flags are deliberately set here, but the default is disabled.
-        adv_flags.get_core(advertise::flags::CoreFlags::LELimitedDiscoverableMode).enable();
-        adv_flags.get_core(advertise::flags::CoreFlags::LEGeneralDiscoverableMode).disable();
-        adv_flags.get_core(advertise::flags::CoreFlags::BREDRNotSupported).enable();
-        adv_flags.get_core(advertise::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR).disable();
-        adv_flags.get_core(advertise::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR).disable();
+        adv_flags
+            .get_core(advertise::flags::CoreFlags::LELimitedDiscoverableMode)
+            .enable();
+        adv_flags
+            .get_core(advertise::flags::CoreFlags::LEGeneralDiscoverableMode)
+            .disable();
+        adv_flags
+            .get_core(advertise::flags::CoreFlags::BREDRNotSupported)
+            .enable();
+        adv_flags
+            .get_core(advertise::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR)
+            .disable();
+        adv_flags
+            .get_core(advertise::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR)
+            .disable();
 
         let mut adv_data = set_advertising_data::AdvertisingData::new();
 
@@ -149,20 +173,12 @@ impl Bonder {
     }
 
     async fn connection_update_request(self) {
-
-        use hci::le::con_pram_req::remote_connection_parameter_request_reply::{
-            send,
-            CommandParameters
-        };
-        use hci::common::{
-            ConnectionInterval,
-            ConnectionLatency,
-            SupervisionTimeout,
-        };
-        use hci::le::common::ConnectionEventLength;
+        use hci::common::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
         use hci::events::EventsData::LEMeta;
         use hci::events::LEMeta::RemoteConnectionParameterRequest as RCPReq;
         use hci::events::LEMetaData::RemoteConnectionParameterRequest as RCPReqData;
+        use hci::le::common::ConnectionEventLength;
+        use hci::le::con_pram_req::remote_connection_parameter_request_reply::{send, CommandParameters};
 
         loop {
             let event = self.hi.wait_for_event(Some(RCPReq.into())).await;
@@ -175,26 +191,27 @@ impl Bonder {
                         interval_max: ConnectionInterval::try_from(400).unwrap(),
                         latency: ConnectionLatency::try_from(0).unwrap(),
                         timeout: SupervisionTimeout::try_from_duration(Duration::from_secs(5)).unwrap(),
-                        ce_len: ConnectionEventLength { minimum: 0, maximum: 0xFFFF },
+                        ce_len: ConnectionEventLength {
+                            minimum: 0,
+                            maximum: 0xFFFF,
+                        },
                     };
 
-                    send(&self.hi, cp).await
-                    .err()
-                    .map(|e| log::error!("LE Connection Parameter Request Reply failed: {:?}", e) );
+                    send(&self.hi, cp)
+                        .await
+                        .err()
+                        .map(|e| log::error!("LE Connection Parameter Request Reply failed: {:?}", e));
                 }
-                e => log::error!("Received unexpected event or error: {:?}", e)
+                e => log::error!("Received unexpected event or error: {:?}", e),
             }
-
         }
     }
 
     // For simplicity, I've left the race condition in here. There could be a case where the connection
     // is made and the ConnectionComplete event isn't propicated & processed
-    async fn wait_for_connection(&self)
-    -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display>
-    {
+    async fn wait_for_connection(&self) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
         use hci::events::LEMeta::ConnectionComplete;
-        use hci::events::{EventsData,LEMetaData};
+        use hci::events::{EventsData, LEMetaData};
         use hci::le::transmitter::set_advertising_enable;
 
         println!("Waiting for a connection (timeout is 60 seconds)");
@@ -204,25 +221,20 @@ impl Bonder {
         match evt_rsl {
             Ok(event) => {
                 if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
-
                     *self.handle.lock().await = event_data.connection_handle.clone().into();
 
                     set_advertising_enable::send(&self.hi, false).await.unwrap();
 
                     Ok(event_data)
-                }
-                else {
+                } else {
                     Err(format!("Received the incorrect event {:?}", event))
                 }
             }
-            Err(e) => {
-                Err(format!("Timeout Occured: {:?}", e))
-            }
+            Err(e) => Err(format!("Timeout Occured: {:?}", e)),
         }
     }
 
-    async fn disconnect(&self)
-    {
+    async fn disconnect(&self) {
         use hci::le::connection::disconnect;
 
         if let Some(abort_handle) = self.abort_server_handle.try_lock().and_then(|mut g| g.take()) {
@@ -235,7 +247,9 @@ impl Bonder {
                 disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
             };
 
-            disconnect::send(&self.hi, prams).await.err()
+            disconnect::send(&self.hi, prams)
+                .await
+                .err()
                 .map(|e| log::error!("Failed to disconnect: {:?}", e));
         }
     }
@@ -243,10 +257,11 @@ impl Bonder {
     async fn process_acl_data<C>(
         &self,
         connection_channel: &C,
-        att_server: &mut bo_tie::gatt::Server<'_,C>,
-        slave_security_manager: &mut bo_tie::sm::responder::SlaveSecurityManager<'_,C>
+        att_server: &mut bo_tie::gatt::Server<'_, C>,
+        slave_security_manager: &mut bo_tie::sm::responder::SlaveSecurityManager<'_, C>,
     ) -> Option<u128>
-    where C: bo_tie::l2cap::ConnectionChannel
+    where
+        C: bo_tie::l2cap::ConnectionChannel,
     {
         use bo_tie::l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
 
@@ -256,12 +271,13 @@ impl Bonder {
 
         for acl_data in acl_data_vec {
             match acl_data.get_channel_id() {
-                ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) =>
+                ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) => {
                     match att_server.process_acl_data(&acl_data).await {
                         Ok(_) => (),
                         Err(e) => log::error!("Cannot process acl data for ATT, '{}'", e),
                     }
-                ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) =>
+                }
+                ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) => {
                     match slave_security_manager.process_command(&acl_data).await {
                         Ok(None) => (),
                         Err(e) => log::error!("Cannot process acl data for SM, '{:?}'", e),
@@ -275,6 +291,7 @@ impl Bonder {
                             *self.privacy_info.lock().await = (local_irk, peer_irk, peer_addr)
                         }
                     }
+                }
                 _ => (),
             }
         }
@@ -283,68 +300,65 @@ impl Bonder {
     }
 
     async fn await_ltk_request(&self, ch: hci::common::ConnectionHandle) -> bool {
-        use hci::le::encryption::long_term_key_request_negative_reply;
         use hci::events::{EventsData, LEMeta, LEMetaData};
+        use hci::le::encryption::long_term_key_request_negative_reply;
 
         let event = self.hi.wait_for_event(Some(LEMeta::LongTermKeyRequest.into())).await;
 
         log::trace!("Received Long Term Key Request");
 
         match event {
-            Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) if ltk_req.connection_handle == ch => {
-                true
-            },
+            Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) if ltk_req.connection_handle == ch => true,
             Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) => {
-                long_term_key_request_negative_reply::send(&self.hi, ltk_req.connection_handle).await.unwrap();
+                long_term_key_request_negative_reply::send(&self.hi, ltk_req.connection_handle)
+                    .await
+                    .unwrap();
                 false
-            },
+            }
             Ok(e) => {
                 log::error!("Received incorrect event {:?}", e);
                 false
-            },
+            }
             Err(e) => panic!("Event error: {:?}", e),
         }
     }
 
-    async fn send_ltk(
-        &self,
-        ch: hci::common::ConnectionHandle,
-        ltk: Option<u128>,
-    ){
-        use hci::le::encryption::long_term_key_request_reply;
+    async fn send_ltk(&self, ch: hci::common::ConnectionHandle, ltk: Option<u128>) {
         use hci::le::encryption::long_term_key_request_negative_reply;
+        use hci::le::encryption::long_term_key_request_reply;
 
         match ltk {
-            Some(ltk) => { long_term_key_request_reply::send(&self.hi, ch, ltk).await.unwrap(); },
-            None => { long_term_key_request_negative_reply::send(&self.hi, ch).await.unwrap(); }
+            Some(ltk) => {
+                long_term_key_request_reply::send(&self.hi, ch, ltk).await.unwrap();
+            }
+            None => {
+                long_term_key_request_negative_reply::send(&self.hi, ch).await.unwrap();
+            }
         }
     }
 
-    async fn await_encryption(&self, ch: hci::common::ConnectionHandle) -> bool
-    {
+    async fn await_encryption(&self, ch: hci::common::ConnectionHandle) -> bool {
+        use hci::common::EncryptionLevel::{Off, AESCCM};
         use hci::events::Events::EncryptionChange;
-        use hci::events::LEMeta;
         use hci::events::EventsData::EncryptionChange as EC;
-        use hci::common::EncryptionLevel::{AESCCM, Off};
+        use hci::events::LEMeta;
 
         let evnt = self.hi.wait_for_event(EncryptionChange).await;
 
         match evnt {
-            Ok(EC(e_data)) =>
-                match (e_data.encryption_enabled.get_for_le(), e_data.connection_handle) {
-                    (AESCCM, handle) if ch == handle => {
+            Ok(EC(e_data)) => match (e_data.encryption_enabled.get_for_le(), e_data.connection_handle) {
+                (AESCCM, handle) if ch == handle => {
+                    // removing connection complete event
+                    self.set_le_events(&[LEMeta::ConnectionComplete], false).await;
 
-                        // removing connection complete event
-                        self.set_le_events(&[LEMeta::ConnectionComplete], false).await;
-
-                        true
-                    },
-                    (Off, _) => (false),
-                    (e, h) => {
-                        log::error!("Using encrypt {:?} for handle {:?}, expected {:?}", e, h, ch);
-                        false
-                    },
-                },
+                    true
+                }
+                (Off, _) => (false),
+                (e, h) => {
+                    log::error!("Using encrypt {:?} for handle {:?}, expected {:?}", e, h, ch);
+                    false
+                }
+            },
             _ => {
                 log::error!("Expected EncryptinoChange event");
                 false
@@ -365,8 +379,8 @@ impl Bonder {
         mut peer_address_is_random: bool,
     ) {
         use futures::future::FutureExt;
-        use hci::events::Events::DisconnectionComplete;
         use hci::common::LEAddressType;
+        use hci::events::Events::DisconnectionComplete;
 
         let connection_channel = self.hi.new_connection_channel(handle);
 
@@ -382,21 +396,22 @@ impl Bonder {
                 &peer_address,
                 &this_address,
                 peer_address_is_random,
-                true // this example used a random address for advertising
+                true, // this example used a random address for advertising
             )
             .build();
 
-            let mut e = Box::pin( self.await_encryption(handle).fuse() );
+            let mut e = Box::pin(self.await_encryption(handle).fuse());
 
-            let mut l = Box::pin( self.await_ltk_request(handle).fuse() );
+            let mut l = Box::pin(self.await_ltk_request(handle).fuse());
 
-            let mut d = Box::pin( self.hi.wait_for_event(DisconnectionComplete).fuse() );
+            let mut d = Box::pin(self.hi.wait_for_event(DisconnectionComplete).fuse());
 
             'inner: loop {
-                let a = self.process_acl_data(&connection_channel, &mut gatt_server, &mut slave_sm)
+                let a = self
+                    .process_acl_data(&connection_channel, &mut gatt_server, &mut slave_sm)
                     .fuse();
 
-                futures::select!{
+                futures::select! {
                     a_res = Box::pin(a) => ltk = a_res,
 
                     e_res = e => encrypted = e_res,
@@ -411,8 +426,8 @@ impl Bonder {
                 if encrypted && (irk_sent == false) {
                     println!("Sending IRK and Address to Master");
 
-                    if slave_sm.send_new_irk(None).await.is_some() &&
-                       slave_sm.send_static_rand_addr(this_address.clone()).await
+                    if slave_sm.send_new_irk(None).await.is_some()
+                        && slave_sm.send_static_rand_addr(this_address.clone()).await
                     {
                         irk_sent = true;
                     } else {
@@ -428,9 +443,8 @@ impl Bonder {
                 Some(event_data) => {
                     handle = event_data.connection_handle;
                     peer_address = event_data.peer_address;
-                    peer_address_is_random =
-                        event_data.peer_address_type == LEAddressType::RandomIdentityAddress ||
-                        event_data.peer_address_type == LEAddressType::RandomDeviceAddress;
+                    peer_address_is_random = event_data.peer_address_type == LEAddressType::RandomIdentityAddress
+                        || event_data.peer_address_type == LEAddressType::RandomDeviceAddress;
                 }
             }
         }
@@ -444,70 +458,57 @@ impl Bonder {
         peer_address: bo_tie::BluetoothDeviceAddress,
         peer_address_is_random: bool,
     ) {
-        use futures::future::{Abortable, AbortHandle};
+        use futures::future::{AbortHandle, Abortable};
 
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
 
         *self.abort_server_handle.lock().await = Some(abort_handle);
 
-        let server_loop = self.server_loop(
-            this_address,
-            local_name,
-            handle,
-            peer_address,
-            peer_address_is_random
-        );
+        let server_loop = self.server_loop(this_address, local_name, handle, peer_address, peer_address_is_random);
 
-        Abortable::new( server_loop, abort_registration ).await.ok();
+        Abortable::new(server_loop, abort_registration).await.ok();
     }
 
     /// Continuing advertising
     ///
     /// This advertising will be used after the master disconnects. Only the master that previously
     /// connected *and bonded* to this device will be able to reestablish a connection.
-    async fn advertising_and_connect_with_privacy(&self)
-    -> Option<hci::events::LEEnhancedConnectionCompleteData>
-    {
+    async fn advertising_and_connect_with_privacy(&self) -> Option<hci::events::LEEnhancedConnectionCompleteData> {
+        use hci::events::EventsData;
+        use hci::events::LEMeta::EnhancedConnectionComplete;
+        use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
         use hci::le::{
-            common::{
-                OwnAddressType
-            },
+            common::OwnAddressType,
+            privacy::{add_device_to_resolving_list, set_address_resolution_enable, PeerIdentityAddressType},
             transmitter::{
                 set_advertising_enable,
                 set_advertising_parameters::{self, PeerAddressType},
             },
-            privacy::{
-                PeerIdentityAddressType,
-                add_device_to_resolving_list,
-                set_address_resolution_enable
-            }
         };
-        use hci::events::LEMeta::EnhancedConnectionComplete;
-        use hci::events::EventsData;
-        use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
 
         println!("Starting Advertising and Connection with privacy");
 
         let keys = self.privacy_info.lock().await.clone();
 
         if let (Some(local_irk), Some(peer_irk), Some((peer_addr_is_pub, peer_addr))) = keys {
-
-            self.set_le_events( &[EnhancedConnectionComplete], true ).await;
+            self.set_le_events(&[EnhancedConnectionComplete], true).await;
 
             set_advertising_enable::send(&self.hi, false).await.unwrap();
 
             let resolve_list_param = add_device_to_resolving_list::Parameter {
                 identity_address_type: if peer_addr_is_pub {
-                        PeerIdentityAddressType::PublicIdentityAddress
-                    } else {
-                        PeerIdentityAddressType::RandomStaticIdentityAddress
-                    },
+                    PeerIdentityAddressType::PublicIdentityAddress
+                } else {
+                    PeerIdentityAddressType::RandomStaticIdentityAddress
+                },
                 peer_identity_address: peer_addr,
                 peer_irk,
                 local_irk,
             };
 
-            add_device_to_resolving_list::send(&self.hi, resolve_list_param).await.unwrap();
+            add_device_to_resolving_list::send(&self.hi, resolve_list_param)
+                .await
+                .unwrap();
 
             set_address_resolution_enable::send(&self.hi, true).await.unwrap();
 
@@ -523,18 +524,19 @@ impl Bonder {
                 PeerAddressType::RandomAddress
             };
 
-            set_advertising_parameters::send(&self.hi, advertise_param).await.unwrap();
+            set_advertising_parameters::send(&self.hi, advertise_param)
+                .await
+                .unwrap();
 
             set_advertising_enable::send(&self.hi, true).await.unwrap();
 
             let event_rslt = self.hi.wait_for_event(Some(EnhancedConnectionComplete.into())).await;
 
-            let event_data_opt = match event_rslt
-            {
+            let event_data_opt = match event_rslt {
                 Err(e) => {
                     log::error!("Failed to receive EnhancedConnectionComplete: {:?}", e);
                     None
-                },
+                }
                 Ok(EventsData::LEMeta(ECCData(event_data))) => {
                     if event_data.status == hci::error::Error::NoError {
                         *self.handle.lock().await = Some(event_data.connection_handle);
@@ -543,16 +545,16 @@ impl Bonder {
                         log::error!("Received bad enhanced connection: {}", event_data.status);
                         None
                     }
-                },
+                }
                 Ok(e) => {
                     log::error!("Received unexpected event: {:?}", e);
                     None
-                },
+                }
             };
 
             set_advertising_enable::send(&self.hi, false).await.unwrap();
 
-            self.set_le_events( &[EnhancedConnectionComplete], false ).await;
+            self.set_le_events(&[EnhancedConnectionComplete], false).await;
 
             set_address_resolution_enable::send(&self.hi, false).await.unwrap();
 
@@ -568,14 +570,14 @@ impl Bonder {
         use hci::le::privacy::remove_device_from_resolving_list::{send, Parameter};
         use hci::le::privacy::PeerIdentityAddressType;
 
-        if let ( _, _, Some((peer_addr_is_pub, peer_addr)) ) = self.privacy_info.lock().await.clone() {
+        if let (_, _, Some((peer_addr_is_pub, peer_addr))) = self.privacy_info.lock().await.clone() {
             let pram = Parameter {
                 identity_address_type: if peer_addr_is_pub {
-                        PeerIdentityAddressType::PublicIdentityAddress
-                    } else {
-                        PeerIdentityAddressType::RandomStaticIdentityAddress
-                    },
-                peer_identity_address: peer_addr
+                    PeerIdentityAddressType::PublicIdentityAddress
+                } else {
+                    PeerIdentityAddressType::RandomStaticIdentityAddress
+                },
+                peer_identity_address: peer_addr,
             };
 
             if let Err(e) = send(&self.hi, pram).await {
@@ -584,62 +586,62 @@ impl Bonder {
         }
     }
 
-    fn setup_signal_handle(self)
-    {
+    fn setup_signal_handle(self) {
         use hci::le::transmitter::set_advertising_enable;
 
-        simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term],
-            move |_| {
-
-                // Cancel advertising if advertising
-                if let Err(e) = futures::executor::block_on(set_advertising_enable::send(&self.hi, false)) {
-                    log::error!("Failed to stop advertising: {:?}", e);
-                }
-
-                futures::executor::block_on(self.disconnect());
-
-                futures::executor::block_on(self.remove_bonding_info());
-
-                println!("Exiting example");
-
-                // Force dropping the `HostInterface`. Not doing this may cause problems with your
-                // bluetooth controller if the HCI is not closed cleanly, espically when running
-                // with a superuser.
-                unsafe {
-                    let b = Box::from_raw(Arc::into_raw(self.hi.clone()) as *mut hci::HostInterface<bo_tie_linux::HCIAdapter>);
-
-                    std::mem::drop( b )
-                };
-
-                std::process::exit(0);
+        simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
+            // Cancel advertising if advertising
+            if let Err(e) = futures::executor::block_on(set_advertising_enable::send(&self.hi, false)) {
+                log::error!("Failed to stop advertising: {:?}", e);
             }
-        );
+
+            futures::executor::block_on(self.disconnect());
+
+            futures::executor::block_on(self.remove_bonding_info());
+
+            println!("Exiting example");
+
+            // Force dropping the `HostInterface`. Not doing this may cause problems with your
+            // bluetooth controller if the HCI is not closed cleanly, espically when running
+            // with a superuser.
+            unsafe {
+                let b =
+                    Box::from_raw(Arc::into_raw(self.hi.clone()) as *mut hci::HostInterface<bo_tie_linux::HCIAdapter>);
+
+                std::mem::drop(b)
+            };
+
+            std::process::exit(0);
+        });
     }
 }
 
 /// Initialize a basic the GATT Server
 fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> bo_tie::gatt::Server<'c, C>
-where C: bo_tie::l2cap::ConnectionChannel
+where
+    C: bo_tie::l2cap::ConnectionChannel,
 {
     use bo_tie::{
+        att::{AttributePermissions, AttributeRestriction},
         gatt,
-        att::{AttributePermissions, AttributeRestriction}
     };
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
     let mut server = gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, 256);
 
-    server.as_mut().give_permissions_to_client( AttributePermissions::Read(AttributeRestriction::None) );
+    server
+        .as_mut()
+        .give_permissions_to_client(AttributePermissions::Read(AttributeRestriction::None));
 
     server
 }
 
 fn main() {
-    use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
     use futures::{executor::block_on, task::SpawnExt};
+    use simplelog::{Config, LevelFilter, TermLogger, TerminalMode};
 
-    TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
+    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
 
     let local_name = "Bonding Test";
 
@@ -655,32 +657,33 @@ fn main() {
     println!("This public address: {:x?}", advertise_address);
 
     // Wait for events to be initialized before proceeding to the next steps.
-    block_on( bonder.init_events() );
+    block_on(bonder.init_events());
 
     // Connection Update Request will run forever (effectively in the background).
-    thread_pool.spawn( bonder.clone().connection_update_request() ).unwrap();
+    thread_pool.spawn(bonder.clone().connection_update_request()).unwrap();
 
-    thread_pool.spawn( Box::pin(bonder.clone().start_advertising(advertise_address, local_name)) ).unwrap();
+    thread_pool
+        .spawn(Box::pin(
+            bonder.clone().start_advertising(advertise_address, local_name),
+        ))
+        .unwrap();
 
     // Spawn the process to await a connection
-    match block_on( bonder.wait_for_connection() )
-    {
+    match block_on(bonder.wait_for_connection()) {
         Ok(event_data) => {
             use hci::events::LEConnectionAddressType;
 
             println!("Device Connected! (use ctrl-c to disconnect and exit)");
 
             // Start the server
-            block_on( bonder.clone()
-                .abortable_server_loop(
-                    advertise_address.clone(),
-                    local_name,
-                    event_data.connection_handle,
-                    event_data.peer_address,
-                    event_data.peer_address_type == LEConnectionAddressType::RandomDeviceAddress
-                )
-            );
-        },
+            block_on(bonder.clone().abortable_server_loop(
+                advertise_address.clone(),
+                local_name,
+                event_data.connection_handle,
+                event_data.peer_address,
+                event_data.peer_address_type == LEConnectionAddressType::RandomDeviceAddress,
+            ));
+        }
         Err(err) => println!("Error: {}", err),
     };
 

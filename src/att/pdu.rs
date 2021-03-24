@@ -8,35 +8,34 @@
 //! the client to the server. *Responses*, and *Confirmations* are sent by the server to the client.
 
 use super::{
-    TransferFormatTryFrom,
-    TransferFormatInto,
-    TransferFormatError,
-    client::ClientPduName,
-    server::ServerPduName
+    client::ClientPduName, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom,
 };
-use alloc::{
-    vec::Vec,
-    format,
-};
+use alloc::{format, vec::Vec};
 
 pub const INVALID_HANDLE: u16 = 0;
 
 #[inline]
-pub fn is_valid_handle(handle: u16) -> bool { handle != INVALID_HANDLE }
+pub fn is_valid_handle(handle: u16) -> bool {
+    handle != INVALID_HANDLE
+}
 
-pub fn is_valid_handle_range<R>(range: &R) -> bool where R: core::ops::RangeBounds<u16> {
+pub fn is_valid_handle_range<R>(range: &R) -> bool
+where
+    R: core::ops::RangeBounds<u16>,
+{
     use core::ops::Bound;
 
     let start = range.start_bound();
     let end = range.end_bound();
 
-    (start != Bound::Included(&0)) && match (start, end) {
-        (Bound::Included(s), Bound::Included(e)) => s <= e,
-        (Bound::Included(s), Bound::Excluded(e)) => s <  e,
-        (Bound::Excluded(s), Bound::Included(e)) => s <  e,
-        (Bound::Excluded(s), Bound::Excluded(e)) => s <= e,
-        _ => true,
-    }
+    (start != Bound::Included(&0))
+        && match (start, end) {
+            (Bound::Included(s), Bound::Included(e)) => s <= e,
+            (Bound::Included(s), Bound::Excluded(e)) => s < e,
+            (Bound::Excluded(s), Bound::Included(e)) => s < e,
+            (Bound::Excluded(s), Bound::Excluded(e)) => s <= e,
+            _ => true,
+        }
 }
 
 /// An Attribute PDU Opcode
@@ -53,7 +52,7 @@ pub fn is_valid_handle_range<R>(range: &R) -> bool where R: core::ops::RangeBoun
 /// * bit 6: The Command Flag - Indicates that this PDU is a command from the client that doesn't
 ///   invoke a server response.
 /// * bits 5-0: The Method - The rest of the bits that make up the OpCode.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PduOpcode {
     Client(super::client::ClientPduName),
     Server(super::server::ServerPduName),
@@ -61,7 +60,6 @@ pub enum PduOpcode {
 }
 
 impl PduOpcode {
-
     /// Get the full raw value of the opcode
     pub fn as_raw(&self) -> u8 {
         match *self {
@@ -112,7 +110,7 @@ impl core::fmt::Display for PduOpcode {
 }
 
 /// Todo implement this
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pdu<P> {
     /// The Attribute Opcode
     opcode: PduOpcode,
@@ -120,10 +118,9 @@ pub struct Pdu<P> {
     parameters: P,
 }
 
-impl<P> Pdu<P>{
-
+impl<P> Pdu<P> {
     /// Create a new Pdu
-    pub fn new(opcode: PduOpcode, parameters: P ) -> Self {
+    pub fn new(opcode: PduOpcode, parameters: P) -> Self {
         Pdu { opcode, parameters }
     }
 
@@ -153,52 +150,53 @@ pub trait ExpectedOpcode {
     fn expected_opcode() -> PduOpcode;
 }
 
-impl<P> TransferFormatTryFrom for Pdu<P> where P: TransferFormatTryFrom + ExpectedOpcode {
+impl<P> TransferFormatTryFrom for Pdu<P>
+where
+    P: TransferFormatTryFrom + ExpectedOpcode,
+{
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() > 0 {
             let opcode = PduOpcode::from(raw[0]);
 
             if opcode == P::expected_opcode() {
-
                 let pdu = Pdu {
                     opcode,
                     parameters: TransferFormatTryFrom::try_from(&raw[1..])?,
                 };
 
                 Ok(pdu)
-
             } else if opcode == ServerPduName::ErrorResponse.into() {
-
                 let e: ErrorResponse = TransferFormatTryFrom::try_from(&raw[1..])?;
 
                 Err(TransferFormatError::error_response(&e))
-
             } else {
-
-                Err(TransferFormatError::incorrect_opcode( P::expected_opcode(), opcode) )
-
+                Err(TransferFormatError::incorrect_opcode(P::expected_opcode(), opcode))
             }
-
         } else {
             Err(TransferFormatError::from("Pdu with length of zero received"))
         }
     }
 }
 
-impl<P> TransferFormatInto for Pdu<P> where P: TransferFormatInto {
-
+impl<P> TransferFormatInto for Pdu<P>
+where
+    P: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         1 + self.parameters.len_of_into()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret[0] = self.opcode.as_raw();
 
-        self.parameters.build_into_ret( &mut into_ret[1..] );
+        self.parameters.build_into_ret(&mut into_ret[1..]);
     }
 }
 
-impl<P> core::fmt::Display for Pdu<P> where P: core::fmt::Display {
+impl<P> core::fmt::Display for Pdu<P>
+where
+    P: core::fmt::Display,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Pdu Opcode: {}, Parameter: '{}'", self.opcode, self.parameters)
     }
@@ -210,7 +208,7 @@ impl<P> core::fmt::Display for Pdu<P> where P: core::fmt::Display {
 /// elsewhere. If an error value cannot be converted into an `[Error](#Error)', then this is
 /// returned. Usually a protocol above the ATT protocol will take this information and process the
 /// error.
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ErrorConversionError {
     /// Application level error code
     ApplicationError(u8),
@@ -225,13 +223,17 @@ impl core::fmt::Display for ErrorConversionError {
         match self {
             ErrorConversionError::ApplicationError(val) => {
                 write!(f, "Application Error: 0x{:X}", val)
-            },
+            }
             ErrorConversionError::Reserved(val) => {
                 write!(f, "Error value is reserved for future use (0x{:X})", val)
-            },
+            }
             ErrorConversionError::CommonErrorCode(val) => {
-                write!(f, "Common error: 0x{:X} (defined in the Bluetooth Core Specification Supplement)", val)
-            },
+                write!(
+                    f,
+                    "Common error: 0x{:X} (defined in the Bluetooth Core Specification Supplement)",
+                    val
+                )
+            }
         }
     }
 }
@@ -243,7 +245,7 @@ impl core::fmt::Display for ErrorConversionError {
 ///
 /// See the Bluetooth Specification (V. 5.0) volume 3, part F, section 3.4 for more information on
 /// the error codes
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
     /// Used to represent 0x0000, this should never be used as an error code
     NoError,
@@ -266,7 +268,7 @@ pub enum Error {
     InsufficientResources,
     /// The rest of the error codes are either reserved for future use, used for higher layer
     /// protocols, or a common error code from the core specification.
-    Other(ErrorConversionError)
+    Other(ErrorConversionError),
 }
 
 impl Error {
@@ -290,10 +292,10 @@ impl Error {
             0x0F => Error::InsufficientEncryption,
             0x10 => Error::UnsupportedGroupType,
             0x11 => Error::InsufficientResources,
-            0x12 ..= 0x7F => Error::Other(ErrorConversionError::Reserved(val)),
-            0x80 ..= 0x9F => Error::Other(ErrorConversionError::ApplicationError(val)),
-            0xA0 ..= 0xDF => Error::Other(ErrorConversionError::Reserved(val)),
-            0xE0 ..= 0xFF => Error::Other(ErrorConversionError::CommonErrorCode(val)),
+            0x12..=0x7F => Error::Other(ErrorConversionError::Reserved(val)),
+            0x80..=0x9F => Error::Other(ErrorConversionError::ApplicationError(val)),
+            0xA0..=0xDF => Error::Other(ErrorConversionError::Reserved(val)),
+            0xE0..=0xFF => Error::Other(ErrorConversionError::CommonErrorCode(val)),
         }
     }
 
@@ -331,68 +333,107 @@ impl core::fmt::Display for Error {
         match self {
             Error::NoError => {
                 write!(f, "No Error")
-            },
+            }
             Error::InvalidHandle => {
-                write!(f, "Invalid handle: the attribute handle given was not valid on this server")
-            },
+                write!(
+                    f,
+                    "Invalid handle: the attribute handle given was not valid on this server"
+                )
+            }
             Error::ReadNotPermitted => {
                 write!(f, "Read not permitted: the attribute cannot be read")
-            },
+            }
             Error::WriteNotPermitted => {
                 write!(f, "Write not permitted: the attribute cannot be written")
-            },
+            }
             Error::InvalidPDU => {
                 write!(f, "Invalid PDU: the attribute protocol data unit (PDU) was invalid")
-            },
+            }
             Error::InsufficientAuthentication => {
-                write!(f, "Insufficient authentication: the attribute requires authentication \
-                before it can be read or written")
-            },
+                write!(
+                    f,
+                    "Insufficient authentication: the attribute requires authentication \
+                before it can be read or written"
+                )
+            }
             Error::RequestNotSupported => {
-                write!(f, "Request not supported, the attribute server does not support the \
-                request received from the client")
-            },
+                write!(
+                    f,
+                    "Request not supported, the attribute server does not support the \
+                request received from the client"
+                )
+            }
             Error::InvalidOffset => {
-                write!(f, "Invalid offset: the attribute value byte or word offset was not valid")
-            },
+                write!(
+                    f,
+                    "Invalid offset: the attribute value byte or word offset was not valid"
+                )
+            }
             Error::InsufficientAuthorization => {
-                write!(f, "Insufficient authorization: the attribute requires authorization before \
-                it can be read or written")
-            },
+                write!(
+                    f,
+                    "Insufficient authorization: the attribute requires authorization before \
+                it can be read or written"
+                )
+            }
             Error::PrepareQueueFull => {
                 write!(f, "Prepare queue full: too many prepare writes have been queued")
-            },
+            }
             Error::AttributeNotFound => {
-                write!(f, "Attribute not foundL: no attribute found within the given attribute \
-                handle range")
-            },
+                write!(
+                    f,
+                    "Attribute not foundL: no attribute found within the given attribute \
+                handle range"
+                )
+            }
             Error::AttributeNotLong => {
-                write!(f, "Attribute not long: the attribute cannot be read using the Read Blob \
-                Request")
-            },
+                write!(
+                    f,
+                    "Attribute not long: the attribute cannot be read using the Read Blob \
+                Request"
+                )
+            }
             Error::InsufficientEncryptionKeySize => {
-                write!(f, "Insufficient encryption key size: The Encryption Key Size used for \
-                encrypting was insufficient for reading or writing this attribute")
-            },
+                write!(
+                    f,
+                    "Insufficient encryption key size: The Encryption Key Size used for \
+                encrypting was insufficient for reading or writing this attribute"
+                )
+            }
             Error::InvalidAttributeValueLength => {
-                write!(f, "Invalid attribute value length: the attribute value length was invalid \
-                for the operation")
-            },
+                write!(
+                    f,
+                    "Invalid attribute value length: the attribute value length was invalid \
+                for the operation"
+                )
+            }
             Error::UnlikelyError => {
-                write!(f, "Unlikely error: the request could not be completed because of an \
-                unlikely error")
-            },
+                write!(
+                    f,
+                    "Unlikely error: the request could not be completed because of an \
+                unlikely error"
+                )
+            }
             Error::InsufficientEncryption => {
-                write!(f, "Insufficient encryption: the attribute requires encryption before it \
-                can be read or written")
-            },
+                write!(
+                    f,
+                    "Insufficient encryption: the attribute requires encryption before it \
+                can be read or written"
+                )
+            }
             Error::UnsupportedGroupType => {
-                write!(f, "Unsupported group type: the attribute type is not a supported grouping \
-                type")
-            },
+                write!(
+                    f,
+                    "Unsupported group type: the attribute type is not a supported grouping \
+                type"
+                )
+            }
             Error::InsufficientResources => {
-                write!(f, "Insufficient resources: insufficient Resources to complete the request")
-            },
+                write!(
+                    f,
+                    "Insufficient resources: insufficient Resources to complete the request"
+                )
+            }
             Error::Other(other) => {
                 write!(f, "{}", other)
             }
@@ -419,7 +460,9 @@ pub struct ErrorResponse {
 
 impl core::fmt::Display for ErrorResponse {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "request: {:?}, attribute handle: {:#x}, error: {:?}",
+        write!(
+            f,
+            "request: {:?}, attribute handle: {:#x}, error: {:?}",
             PduOpcode::from(self.request_opcode),
             self.requested_handle,
             self.error
@@ -443,17 +486,23 @@ impl TransferFormatTryFrom for ErrorResponse {
                 error: Error::from_raw(raw[3]),
             })
         } else {
-            Err(TransferFormatError::bad_size(stringify!(ErrorAttributeParameter), 4, raw.len()))
+            Err(TransferFormatError::bad_size(
+                stringify!(ErrorAttributeParameter),
+                4,
+                raw.len(),
+            ))
         }
     }
 }
 
 impl TransferFormatInto for ErrorResponse {
-    fn len_of_into(&self) -> usize { 4 }
+    fn len_of_into(&self) -> usize {
+        4
+    }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret[0] = self.request_opcode;
-        into_ret[1..3].copy_from_slice( &self.requested_handle.to_le_bytes() );
+        into_ret[1..3].copy_from_slice(&self.requested_handle.to_le_bytes());
         into_ret[3] = self.error.get_raw();
     }
 }
@@ -461,12 +510,14 @@ impl TransferFormatInto for ErrorResponse {
 /// Error Response Attribute
 ///
 /// This is sent by the server when ever there is an issue with a client's request
-pub fn error_response(request_opcode: u8, requested_handle: u16, error: Error)
--> Pdu<ErrorResponse>
-{
+pub fn error_response(request_opcode: u8, requested_handle: u16, error: Error) -> Pdu<ErrorResponse> {
     Pdu {
         opcode: From::from(ServerPduName::ErrorResponse),
-        parameters: ErrorResponse { request_opcode, requested_handle, error },
+        parameters: ErrorResponse {
+            request_opcode,
+            requested_handle,
+            error,
+        },
     }
 }
 
@@ -481,7 +532,10 @@ impl ExpectedOpcode for MtuRequest {
 }
 
 impl TransferFormatTryFrom for MtuRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(MtuRequest(TransferFormatTryFrom::try_from(raw)?))
     }
 }
@@ -519,7 +573,10 @@ impl ExpectedOpcode for MtuResponse {
 }
 
 impl TransferFormatTryFrom for MtuResponse {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(MtuResponse(TransferFormatTryFrom::try_from(raw)?))
     }
 }
@@ -564,14 +621,13 @@ pub fn exchange_mtu_response(mtu: u16) -> Pdu<MtuResponse> {
 /// reserved handle value as specified by the ATT Protocol specification and it can lead to errors
 /// if uses as the starting attribute handle. When the start of the range is unbounded, then
 /// 1 is used as the value for the starting handle.
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct HandleRange {
     pub starting_handle: u16,
-    pub ending_handle: u16
+    pub ending_handle: u16,
 }
 
 impl HandleRange {
-
     /// Check that the handle range is valid
     ///
     /// This will return true if `starting_handle` <= `ending_handle`
@@ -593,8 +649,13 @@ impl TransferFormatTryFrom for HandleRange {
                 ending_handle: <u16>::from_le_bytes([raw[2], raw[3]]),
             };
 
-            if range.is_valid() { Ok(range) }
-            else { Err(TransferFormatError::from(alloc::string::String::from("Bad handle range"))) }
+            if range.is_valid() {
+                Ok(range)
+            } else {
+                Err(TransferFormatError::from(alloc::string::String::from(
+                    "Bad handle range",
+                )))
+            }
         } else {
             Err(TransferFormatError::bad_size(stringify!(HandleRange), 4, raw.len()))
         }
@@ -602,8 +663,9 @@ impl TransferFormatTryFrom for HandleRange {
 }
 
 impl TransferFormatInto for HandleRange {
-
-    fn len_of_into(&self) -> usize { 4 }
+    fn len_of_into(&self) -> usize {
+        4
+    }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret[..2].copy_from_slice(&self.starting_handle.to_le_bytes());
@@ -612,7 +674,10 @@ impl TransferFormatInto for HandleRange {
     }
 }
 
-impl<R> From<R> for HandleRange where R: core::ops::RangeBounds<u16> {
+impl<R> From<R> for HandleRange
+where
+    R: core::ops::RangeBounds<u16>,
+{
     fn from(range: R) -> Self {
         use core::ops::Bound;
 
@@ -628,7 +693,10 @@ impl<R> From<R> for HandleRange where R: core::ops::RangeBounds<u16> {
             Bound::Unbounded => <u16>::MAX,
         };
 
-        Self { starting_handle, ending_handle }
+        Self {
+            starting_handle,
+            ending_handle,
+        }
     }
 }
 
@@ -643,8 +711,11 @@ impl ExpectedOpcode for FindInfoRequest {
 }
 
 impl TransferFormatTryFrom for FindInfoRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
-        Ok(FindInfoRequest( TransferFormatTryFrom::try_from(raw)? ))
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        Ok(FindInfoRequest(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
@@ -654,7 +725,7 @@ impl TransferFormatInto for FindInfoRequest {
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        self.0.build_into_ret( into_ret )
+        self.0.build_into_ret(into_ret)
     }
 }
 
@@ -662,8 +733,9 @@ impl TransferFormatInto for FindInfoRequest {
 ///
 /// This is a request from the client for obtaining the mapping of attribute handles on the
 /// server to attribute types.
-pub fn find_information_request<R>( range: R ) -> Pdu<FindInfoRequest>
-where R: Into<HandleRange>
+pub fn find_information_request<R>(range: R) -> Pdu<FindInfoRequest>
+where
+    R: Into<HandleRange>,
 {
     Pdu {
         opcode: From::from(ClientPduName::FindInformationRequest),
@@ -672,8 +744,8 @@ where R: Into<HandleRange>
 }
 
 /// A struct that contains an attribute handle and attribute type
-#[derive(Clone,Copy,PartialEq,Eq)]
-pub struct HandleWithType( u16, crate::UUID);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct HandleWithType(u16, crate::UUID);
 
 /// Formatted handle with type
 ///
@@ -697,13 +769,12 @@ impl TransferFormatTryFrom for FormattedHandlesWithType {
                 let chunks = raw[1..].chunks_exact(4);
 
                 if chunks.remainder().len() == 0 {
-                    let v = chunks.into_iter()
+                    let v = chunks
+                        .into_iter()
                         .map(|chunk| {
                             let handle = <u16>::from_le_bytes([chunk[0], chunk[1]]);
 
-                            let uuid = Into::<crate::UUID>::into(
-                                <u16>::from_le_bytes([chunk[2], chunk[3]])
-                            );
+                            let uuid = Into::<crate::UUID>::into(<u16>::from_le_bytes([chunk[2], chunk[3]]));
 
                             HandleWithType(handle, uuid)
                         })
@@ -711,45 +782,54 @@ impl TransferFormatTryFrom for FormattedHandlesWithType {
 
                     Ok(FormattedHandlesWithType::HandlesWithShortUuids(v))
                 } else {
-                    Err(TransferFormatError::bad_exact_chunks(stringify!(FormattedHandlesWithType),
-                                                              4, raw[1..].len()))
+                    Err(TransferFormatError::bad_exact_chunks(
+                        stringify!(FormattedHandlesWithType),
+                        4,
+                        raw[1..].len(),
+                    ))
                 }
-            },
+            }
             Self::UUID_128_BIT => {
                 let chunks = raw[1..].chunks_exact(18);
 
                 if chunks.remainder().len() == 0 {
-                    let v = chunks.into_iter().map(|chunk| {
-                        let handle = <u16>::from_le_bytes([chunk[0], chunk[1]]);
+                    let v = chunks
+                        .into_iter()
+                        .map(|chunk| {
+                            let handle = <u16>::from_le_bytes([chunk[0], chunk[1]]);
 
-                        let mut uuid_bytes = [0u8; core::mem::size_of::<u128>()];
+                            let mut uuid_bytes = [0u8; core::mem::size_of::<u128>()];
 
-                        uuid_bytes.clone_from_slice(&chunk[2..]);
+                            uuid_bytes.clone_from_slice(&chunk[2..]);
 
-                        let uuid = Into::<crate::UUID>::into(<u128>::from_le_bytes(uuid_bytes));
+                            let uuid = Into::<crate::UUID>::into(<u128>::from_le_bytes(uuid_bytes));
 
-                        HandleWithType(handle, uuid)
-                    })
+                            HandleWithType(handle, uuid)
+                        })
                         .collect();
 
                     Ok(FormattedHandlesWithType::HandlesWithFullUuids(v))
                 } else {
-                    Err(TransferFormatError::bad_exact_chunks(stringify!(FormattedHandlesWithType),
-                                                              18, raw[1..].len()))
+                    Err(TransferFormatError::bad_exact_chunks(
+                        stringify!(FormattedHandlesWithType),
+                        18,
+                        raw[1..].len(),
+                    ))
                 }
-            },
-            _ => Err(TransferFormatError::from(concat!("Invalid Type for ",
-            stringify!(FormattedHandlesWithType)))),
+            }
+            _ => Err(TransferFormatError::from(concat!(
+                "Invalid Type for ",
+                stringify!(FormattedHandlesWithType)
+            ))),
         }
     }
 }
 
 impl TransferFormatInto for FormattedHandlesWithType {
-
     fn len_of_into(&self) -> usize {
         match self {
-            FormattedHandlesWithType::HandlesWithShortUuids(v) => 2 + 2  * v.len(),
-            FormattedHandlesWithType::HandlesWithFullUuids(v)  => 2 + 16 * v.len(),
+            FormattedHandlesWithType::HandlesWithShortUuids(v) => 2 + 2 * v.len(),
+            FormattedHandlesWithType::HandlesWithFullUuids(v) => 2 + 16 * v.len(),
         }
     }
 
@@ -760,20 +840,21 @@ impl TransferFormatInto for FormattedHandlesWithType {
 
                 into_ret[0] = Self::UUID_16_BIT;
 
-                v.iter().try_fold(into_ret, |into_ret, hu| -> Result<&mut [u8], ()> {
-                    into_ret[ ..2].copy_from_slice( &hu.0.to_le_bytes() );
-                    into_ret[2..4].copy_from_slice( &TryInto::<u16>::try_into(hu.1)?.to_le_bytes() );
-                    Ok(&mut into_ret[4.. ])
-                })
-                .ok();
+                v.iter()
+                    .try_fold(into_ret, |into_ret, hu| -> Result<&mut [u8], ()> {
+                        into_ret[..2].copy_from_slice(&hu.0.to_le_bytes());
+                        into_ret[2..4].copy_from_slice(&TryInto::<u16>::try_into(hu.1)?.to_le_bytes());
+                        Ok(&mut into_ret[4..])
+                    })
+                    .ok();
             }
             FormattedHandlesWithType::HandlesWithFullUuids(v) => {
                 into_ret[0] = Self::UUID_128_BIT;
 
                 v.iter().fold(into_ret, |into_ret, hu| {
-                    into_ret[  ..2].copy_from_slice( &hu.0.to_le_bytes() );
-                    into_ret[2..18].copy_from_slice( &<u128>::from(hu.1).to_le_bytes() );
-                    &mut into_ret[18.. ]
+                    into_ret[..2].copy_from_slice(&hu.0.to_le_bytes());
+                    into_ret[2..18].copy_from_slice(&<u128>::from(hu.1).to_le_bytes());
+                    &mut into_ret[18..]
                 });
             }
         }
@@ -787,9 +868,7 @@ impl ExpectedOpcode for FormattedHandlesWithType {
 }
 
 /// Create a Find Information Response PDU
-pub fn find_information_response(parameters: FormattedHandlesWithType)
--> Pdu<FormattedHandlesWithType>
-{
+pub fn find_information_response(parameters: FormattedHandlesWithType) -> Pdu<FormattedHandlesWithType> {
     Pdu {
         opcode: ServerPduName::FindInformationResponse.into(),
         parameters,
@@ -810,7 +889,10 @@ impl<D> ExpectedOpcode for TypeValueRequest<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for TypeValueRequest<D> where D: TransferFormatTryFrom {
+impl<D> TransferFormatTryFrom for TypeValueRequest<D>
+where
+    D: TransferFormatTryFrom,
+{
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() >= 6 {
             Ok(TypeValueRequest {
@@ -819,25 +901,31 @@ impl<D> TransferFormatTryFrom for TypeValueRequest<D> where D: TransferFormatTry
                 value: TransferFormatTryFrom::try_from(&raw[6..])?,
             })
         } else {
-            Err(TransferFormatError::bad_min_size(stringify!(TypeValueRequest), 6, raw.len()))
+            Err(TransferFormatError::bad_min_size(
+                stringify!(TypeValueRequest),
+                6,
+                raw.len(),
+            ))
         }
     }
 }
 
-impl<D> TransferFormatInto for TypeValueRequest<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for TypeValueRequest<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.handle_range.len_of_into() + 2 + self.value.len_of_into()
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-
         let hr_size = self.handle_range.len_of_into();
 
-        self.handle_range.build_into_ret( &mut into_ret[..hr_size] );
+        self.handle_range.build_into_ret(&mut into_ret[..hr_size]);
 
         into_ret[hr_size..(hr_size + 2)].copy_from_slice(&self.attr_type.to_le_bytes());
 
-        self.value.build_into_ret( &mut into_ret[(hr_size + 2)..] );
+        self.value.build_into_ret(&mut into_ret[(hr_size + 2)..]);
     }
 }
 
@@ -847,21 +935,23 @@ impl<D> TransferFormatInto for TypeValueRequest<D> where D: TransferFormatInto {
 /// and the provided attribute value.
 ///
 /// The uuid must be convertible into a 16 bit assigned number, otherwise this will return an error.
-pub fn find_by_type_value_request<R,D>(handle_range: R, uuid: crate::UUID, value: D)
--> Result< Pdu<TypeValueRequest<D>>, ()>
-where R: Into<HandleRange>,
+pub fn find_by_type_value_request<R, D>(
+    handle_range: R,
+    uuid: crate::UUID,
+    value: D,
+) -> Result<Pdu<TypeValueRequest<D>>, ()>
+where
+    R: Into<HandleRange>,
 {
     if let Ok(uuid) = core::convert::TryFrom::try_from(uuid) {
-        Ok(
-            Pdu {
-                opcode: From::from(ClientPduName::FindByTypeValueRequest),
-                parameters: TypeValueRequest{
-                    handle_range: handle_range.into(),
-                    attr_type: uuid,
-                    value,
-                },
-            }
-        )
+        Ok(Pdu {
+            opcode: From::from(ClientPduName::FindByTypeValueRequest),
+            parameters: TypeValueRequest {
+                handle_range: handle_range.into(),
+                attr_type: uuid,
+                value,
+            },
+        })
     } else {
         Err(())
     }
@@ -885,42 +975,47 @@ impl TypeValueResponse {
         TypeValueResponse { handle, group }
     }
 
-    pub fn get_handle(&self) -> u16 { self.handle }
+    pub fn get_handle(&self) -> u16 {
+        self.handle
+    }
 
-    pub fn get_group(&self) -> u16 { self.group }
+    pub fn get_group(&self) -> u16 {
+        self.group
+    }
 }
 
 impl TransferFormatTryFrom for TypeValueResponse {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() != 4 {
-            Ok(
-                TypeValueResponse {
-                    handle: <u16>::from_le_bytes([raw[0], raw[1]]),
-                    group: <u16>::from_le_bytes([raw[2], raw[3]]),
-                }
-            )
+            Ok(TypeValueResponse {
+                handle: <u16>::from_le_bytes([raw[0], raw[1]]),
+                group: <u16>::from_le_bytes([raw[2], raw[3]]),
+            })
         } else {
-            Err(TransferFormatError::bad_size(stringify!(TypeValueResponse), 4, raw.len()))
+            Err(TransferFormatError::bad_size(
+                stringify!(TypeValueResponse),
+                4,
+                raw.len(),
+            ))
         }
     }
 }
 
 impl TransferFormatInto for TypeValueResponse {
+    fn len_of_into(&self) -> usize {
+        4
+    }
 
-    fn len_of_into(&self) -> usize { 4 }
-
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
-        into_ret[2..].copy_from_slice( &self.group.to_le_bytes() );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
+        into_ret[2..].copy_from_slice(&self.group.to_le_bytes());
     }
 }
 
 impl_transfer_format_for_vec_of!(TypeValueResponse);
 
 /// Create a Find By Type Value Response PDU
-pub fn find_by_type_value_response( type_values: Vec<TypeValueResponse> )
--> Pdu<Vec<TypeValueResponse>>
-{
+pub fn find_by_type_value_response(type_values: Vec<TypeValueResponse>) -> Pdu<Vec<TypeValueResponse>> {
     Pdu {
         opcode: From::from(ServerPduName::FindByTypeValueResponse),
         parameters: type_values,
@@ -928,7 +1023,7 @@ pub fn find_by_type_value_response( type_values: Vec<TypeValueResponse> )
 }
 
 /// Parameter for a Read By Type Request
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct TypeRequest {
     pub handle_range: HandleRange,
     pub attr_type: crate::UUID,
@@ -944,32 +1039,33 @@ impl TransferFormatTryFrom for TypeRequest {
         } else if raw.len() == 20 {
             Ok(Self {
                 handle_range: TransferFormatTryFrom::try_from(&raw[..4])?,
-                attr_type: Into::<crate::UUID>::into(<u128>::from_le_bytes(
-                    {
-                        let mut bytes = [0; 16];
-                        bytes.clone_from_slice(&raw[4..]);
-                        bytes
-                    }
-                ))
+                attr_type: Into::<crate::UUID>::into(<u128>::from_le_bytes({
+                    let mut bytes = [0; 16];
+                    bytes.clone_from_slice(&raw[4..]);
+                    bytes
+                })),
             })
         } else {
-            Err(TransferFormatError::bad_size(stringify!(TypeRequest), "6 or 20", raw.len()))
+            Err(TransferFormatError::bad_size(
+                stringify!(TypeRequest),
+                "6 or 20",
+                raw.len(),
+            ))
         }
     }
 }
 
 impl TransferFormatInto for TypeRequest {
-
     fn len_of_into(&self) -> usize {
         self.handle_range.len_of_into() + self.attr_type.len_of_into()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
         let hr_size = self.handle_range.len_of_into();
 
-        self.handle_range.build_into_ret( &mut into_ret[..hr_size] );
+        self.handle_range.build_into_ret(&mut into_ret[..hr_size]);
 
-        self.attr_type.build_into_ret( &mut into_ret[hr_size..] );
+        self.attr_type.build_into_ret(&mut into_ret[hr_size..]);
     }
 }
 
@@ -984,7 +1080,10 @@ impl ExpectedOpcode for ReadByTypeRequest {
 }
 
 impl TransferFormatTryFrom for ReadByTypeRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
@@ -1004,13 +1103,14 @@ impl TransferFormatInto for ReadByTypeRequest {
 /// This is a request from the client for finding attributes by their type within a range of
 /// handles.
 pub fn read_by_type_request<R>(handle_range: R, attr_type: crate::UUID) -> Pdu<ReadByTypeRequest>
-where R: Into<HandleRange>
+where
+    R: Into<HandleRange>,
 {
     Pdu {
         opcode: From::from(ClientPduName::ReadByTypeRequest),
-        parameters: ReadByTypeRequest( TypeRequest {
+        parameters: ReadByTypeRequest(TypeRequest {
             handle_range: handle_range.into(),
-            attr_type
+            attr_type,
         }),
     }
 }
@@ -1028,7 +1128,7 @@ where R: Into<HandleRange>
 #[derive(Debug)]
 pub struct ReadTypeResponse<D> {
     handle: u16,
-    data: D
+    data: D,
 }
 
 impl<D> ReadTypeResponse<D> {
@@ -1036,7 +1136,9 @@ impl<D> ReadTypeResponse<D> {
         ReadTypeResponse { handle, data }
     }
 
-    pub fn get_handle(&self) -> u16 { self.handle }
+    pub fn get_handle(&self) -> u16 {
+        self.handle
+    }
 }
 
 impl<D> core::ops::Deref for ReadTypeResponse<D> {
@@ -1047,67 +1149,90 @@ impl<D> core::ops::Deref for ReadTypeResponse<D> {
     }
 }
 
-impl <D> core::ops::DerefMut for ReadTypeResponse<D> {
+impl<D> core::ops::DerefMut for ReadTypeResponse<D> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data
     }
 }
 
-impl<D> TransferFormatTryFrom for ReadTypeResponse<D> where D: TransferFormatTryFrom {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+impl<D> TransferFormatTryFrom for ReadTypeResponse<D>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         if raw.len() >= 2 {
             Ok(Self {
                 handle: <u16>::from_le_bytes([raw[0], raw[1]]),
                 data: TransferFormatTryFrom::try_from(&raw[2..])?,
             })
         } else {
-            Err( TransferFormatError::bad_min_size(stringify!("ReadTypeResponse"), 2, raw.len()) )
+            Err(TransferFormatError::bad_min_size(
+                stringify!("ReadTypeResponse"),
+                2,
+                raw.len(),
+            ))
         }
     }
 }
 
-impl<D> TransferFormatInto for ReadTypeResponse<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for ReadTypeResponse<D>
+where
+    D: TransferFormatInto,
+{
+    fn len_of_into(&self) -> usize {
+        2 + self.data.len_of_into()
+    }
 
-    fn len_of_into(&self) -> usize { 2 + self.data.len_of_into() }
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
-
-        self.data.build_into_ret( &mut into_ret[2..] );
+        self.data.build_into_ret(&mut into_ret[2..]);
     }
 }
 
-impl<D> TransferFormatInto for Vec<ReadTypeResponse<D>> where D: TransferFormatInto {
-
+impl<D> TransferFormatInto for Vec<ReadTypeResponse<D>>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
-        let fields_len: usize = self.iter().map( |r| r.len_of_into() ).sum();
+        let fields_len: usize = self.iter().map(|r| r.len_of_into()).sum();
 
         fields_len + 1
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        into_ret[0] = self.first().map_or(0u8,|f| f.len_of_into() as u8);
+        into_ret[0] = self.first().map_or(0u8, |f| f.len_of_into() as u8);
 
-        self.iter()
-            .fold(1usize, |acc, r| {
-                let end = acc + r.len_of_into();
+        self.iter().fold(1usize, |acc, r| {
+            let end = acc + r.len_of_into();
 
-                r.build_into_ret(&mut into_ret[acc..end]);
+            r.build_into_ret(&mut into_ret[acc..end]);
 
-                end
-            });
+            end
+        });
     }
 }
 
-impl<D> TransferFormatTryFrom for Vec<ReadTypeResponse<D>> where D: TransferFormatTryFrom {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
-        let length = <usize>::from(*raw.get(0)
-            .ok_or(
-                TransferFormatError::bad_min_size("Read Type Response missing length field", 1, 0))?
-        );
+impl<D> TransferFormatTryFrom for Vec<ReadTypeResponse<D>>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        let length = <usize>::from(*raw.get(0).ok_or(TransferFormatError::bad_min_size(
+            "Read Type Response missing length field",
+            1,
+            0,
+        ))?);
 
-        raw[1..].chunks(length)
-            .map(|chunk| <ReadTypeResponse<D> as TransferFormatTryFrom>::try_from(chunk) )
+        raw[1..]
+            .chunks(length)
+            .map(|chunk| <ReadTypeResponse<D> as TransferFormatTryFrom>::try_from(chunk))
             .collect()
     }
 }
@@ -1122,13 +1247,22 @@ impl<D> ExpectedOpcode for ReadByTypeResponse<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for ReadByTypeResponse<D> where D: TransferFormatTryFrom {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+impl<D> TransferFormatTryFrom for ReadByTypeResponse<D>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(ReadByTypeResponse(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for ReadByTypeResponse<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for ReadByTypeResponse<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -1146,9 +1280,7 @@ impl<D> TransferFormatInto for ReadByTypeResponse<D> where D: TransferFormatInto
 /// This generates a PDU, but that PDU isn't checked if it is larger then the ATT MTU or if the
 /// size of type D is greater then 255. Its the responsibility of the caller to make sure that
 /// the size of the data sent to the controller is correct.
-pub fn read_by_type_response<D>( responses: Vec<ReadTypeResponse<D>>)
--> Pdu<ReadByTypeResponse<D>>
-{
+pub fn read_by_type_response<D>(responses: Vec<ReadTypeResponse<D>>) -> Pdu<ReadByTypeResponse<D>> {
     Pdu {
         opcode: From::from(ServerPduName::ReadByTypeResponse),
         parameters: ReadByTypeResponse(responses),
@@ -1166,7 +1298,10 @@ impl ExpectedOpcode for ReadRequest {
 }
 
 impl TransferFormatTryFrom for ReadRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
@@ -1182,7 +1317,7 @@ impl TransferFormatInto for ReadRequest {
 }
 
 /// Create a Read Request PDU
-pub fn read_request( handle: u16 ) -> Pdu<ReadRequest> {
+pub fn read_request(handle: u16) -> Pdu<ReadRequest> {
     Pdu {
         opcode: From::from(ClientPduName::ReadRequest),
         parameters: ReadRequest(handle),
@@ -1199,13 +1334,22 @@ impl<D> ExpectedOpcode for ReadResponse<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for ReadResponse<D> where D: TransferFormatTryFrom {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+impl<D> TransferFormatTryFrom for ReadResponse<D>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for ReadResponse<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for ReadResponse<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -1216,7 +1360,7 @@ impl<D> TransferFormatInto for ReadResponse<D> where D: TransferFormatInto {
 }
 
 /// Create a Read Response PDU
-pub fn read_response<D>( value: D ) -> Pdu<ReadResponse<D>>{
+pub fn read_response<D>(value: D) -> Pdu<ReadResponse<D>> {
     Pdu {
         opcode: From::from(ServerPduName::ReadResponse),
         parameters: ReadResponse(value),
@@ -1227,7 +1371,7 @@ pub fn read_response<D>( value: D ) -> Pdu<ReadResponse<D>>{
 #[derive(Clone)]
 pub struct ReadBlobRequest {
     pub handle: u16,
-    pub offset: u16
+    pub offset: u16,
 }
 
 impl ExpectedOpcode for ReadBlobRequest {
@@ -1237,7 +1381,10 @@ impl ExpectedOpcode for ReadBlobRequest {
 }
 
 impl TransferFormatTryFrom for ReadBlobRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         if raw.len() == 4 {
             Ok(Self {
                 handle: <u16>::from_le_bytes([raw[0], raw[1]]),
@@ -1250,8 +1397,9 @@ impl TransferFormatTryFrom for ReadBlobRequest {
 }
 
 impl TransferFormatInto for ReadBlobRequest {
-
-    fn len_of_into(&self) -> usize { 4 }
+    fn len_of_into(&self) -> usize {
+        4
+    }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
@@ -1260,7 +1408,7 @@ impl TransferFormatInto for ReadBlobRequest {
 }
 
 /// Create a Read Blob Request PDU
-pub fn read_blob_request( handle: u16, offset: u16) -> Pdu<ReadBlobRequest> {
+pub fn read_blob_request(handle: u16, offset: u16) -> Pdu<ReadBlobRequest> {
     Pdu {
         opcode: From::from(ClientPduName::ReadBlobRequest),
         parameters: ReadBlobRequest { handle, offset },
@@ -1271,7 +1419,7 @@ pub fn read_blob_request( handle: u16, offset: u16) -> Pdu<ReadBlobRequest> {
 ///
 /// Contains a blob of data sent from the server
 pub struct ReadBlobResponse {
-    blob: Vec<u8>
+    blob: Vec<u8>,
 }
 
 impl ExpectedOpcode for ReadBlobResponse {
@@ -1287,8 +1435,11 @@ impl ReadBlobResponse {
 }
 
 impl TransferFormatTryFrom for ReadBlobResponse {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
-        Ok( ReadBlobResponse { blob: raw.to_vec() } )
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        Ok(ReadBlobResponse { blob: raw.to_vec() })
     }
 }
 
@@ -1314,12 +1465,11 @@ impl<'a> LocalReadBlobResponse<'a> {
 }
 
 impl TransferFormatInto for LocalReadBlobResponse<'_> {
-
     fn len_of_into(&self) -> usize {
         self.blob.len()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret.copy_from_slice(self.blob)
     }
 }
@@ -1347,7 +1497,10 @@ impl ExpectedOpcode for ReadMultipleRequest {
 }
 
 impl TransferFormatTryFrom for ReadMultipleRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
@@ -1366,7 +1519,7 @@ impl TransferFormatInto for ReadMultipleRequest {
 ///
 /// This is sent by the client to requests 2 or more values to read. If the length of the input is
 /// less then 2 then the return will be an error.
-pub fn read_multiple_request( handles: Vec<u16> ) -> Result<Pdu<ReadMultipleRequest>,super::Error> {
+pub fn read_multiple_request(handles: Vec<u16>) -> Result<Pdu<ReadMultipleRequest>, super::Error> {
     if handles.len() >= 2 {
         Ok(Pdu {
             opcode: From::from(ClientPduName::ReadMultipleRequest),
@@ -1387,13 +1540,19 @@ impl<D> ExpectedOpcode for ReadMultipleResponse<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for ReadMultipleResponse<D> where Vec<D>: TransferFormatTryFrom {
+impl<D> TransferFormatTryFrom for ReadMultipleResponse<D>
+where
+    Vec<D>: TransferFormatTryFrom,
+{
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for ReadMultipleResponse<D> where Vec<D>: TransferFormatInto {
+impl<D> TransferFormatInto for ReadMultipleResponse<D>
+where
+    Vec<D>: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -1406,8 +1565,7 @@ impl<D> TransferFormatInto for ReadMultipleResponse<D> where Vec<D>: TransferFor
 /// Read Multiple Response
 ///
 /// Server response to a read multiple request
-pub fn read_multiple_response<D>( values: Vec<D> ) -> Pdu<ReadMultipleResponse<D>>
-{
+pub fn read_multiple_response<D>(values: Vec<D>) -> Pdu<ReadMultipleResponse<D>> {
     Pdu {
         opcode: From::from(ServerPduName::ReadMultipleResponse),
         parameters: ReadMultipleResponse(values),
@@ -1425,7 +1583,10 @@ impl ExpectedOpcode for ReadByGroupTypeRequest {
 }
 
 impl TransferFormatTryFrom for ReadByGroupTypeRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
@@ -1444,16 +1605,16 @@ impl TransferFormatInto for ReadByGroupTypeRequest {
 ///
 /// Client request for reading attributes' data that are under a group specified by a higher layer
 /// protocol. The read
-pub fn read_by_group_type_request<R>(handle_range: R, group_type: crate::UUID)
--> Pdu<ReadByGroupTypeRequest>
-where R: Into<HandleRange>
+pub fn read_by_group_type_request<R>(handle_range: R, group_type: crate::UUID) -> Pdu<ReadByGroupTypeRequest>
+where
+    R: Into<HandleRange>,
 {
     Pdu {
         opcode: From::from(ClientPduName::ReadByGroupTypeRequest),
-        parameters: ReadByGroupTypeRequest( TypeRequest{
+        parameters: ReadByGroupTypeRequest(TypeRequest {
             handle_range: handle_range.into(),
             attr_type: group_type,
-        }) ,
+        }),
     }
 }
 
@@ -1464,26 +1625,43 @@ where R: Into<HandleRange>
 pub struct ReadGroupTypeData<D> {
     handle: u16,
     end_group_handle: u16,
-    data: D
+    data: D,
 }
 
 impl<D> ReadGroupTypeData<D> {
-    pub fn new( handle: u16, end_group_handle: u16, data: D) -> Self {
-        Self { handle, end_group_handle, data}
+    pub fn new(handle: u16, end_group_handle: u16, data: D) -> Self {
+        Self {
+            handle,
+            end_group_handle,
+            data,
+        }
     }
 
-    pub fn get_handle(&self) -> u16 { self.handle }
+    pub fn get_handle(&self) -> u16 {
+        self.handle
+    }
 
-    pub fn get_end_group_handle(&self) -> u16 { self.end_group_handle }
+    pub fn get_end_group_handle(&self) -> u16 {
+        self.end_group_handle
+    }
 
-    pub fn get_data(&self) -> &D { &self.data }
+    pub fn get_data(&self) -> &D {
+        &self.data
+    }
 
-    pub fn get_mut_data(&mut self) -> &mut D { &mut self.data }
+    pub fn get_mut_data(&mut self) -> &mut D {
+        &mut self.data
+    }
 
-    pub fn into_inner(self) -> D { self.data }
+    pub fn into_inner(self) -> D {
+        self.data
+    }
 }
 
-impl<D> TransferFormatTryFrom for ReadGroupTypeData<D> where D: TransferFormatTryFrom {
+impl<D> TransferFormatTryFrom for ReadGroupTypeData<D>
+where
+    D: TransferFormatTryFrom,
+{
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() >= 4 {
             Ok(Self {
@@ -1492,20 +1670,26 @@ impl<D> TransferFormatTryFrom for ReadGroupTypeData<D> where D: TransferFormatTr
                 data: TransferFormatTryFrom::try_from(&raw[4..])?,
             })
         } else {
-            Err(TransferFormatError::bad_min_size(stringify!(ReadGroupTypeData), 4, raw.len()))
+            Err(TransferFormatError::bad_min_size(
+                stringify!(ReadGroupTypeData),
+                4,
+                raw.len(),
+            ))
         }
     }
 }
 
-impl<D> TransferFormatInto for ReadGroupTypeData<D> where D: TransferFormatInto {
-
+impl<D> TransferFormatInto for ReadGroupTypeData<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         4 + self.data.len_of_into()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
-        into_ret[2..4].copy_from_slice( &self.end_group_handle.to_le_bytes() );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
+        into_ret[2..4].copy_from_slice(&self.end_group_handle.to_le_bytes());
         self.data.build_into_ret(&mut into_ret[4..]);
     }
 }
@@ -1523,7 +1707,6 @@ impl<D> ExpectedOpcode for ReadByGroupTypeResponse<D> {
 }
 
 impl<D> ReadByGroupTypeResponse<D> {
-
     /// Create a new `ReadByGroupTypeResponse`
     ///
     /// # Panics
@@ -1531,14 +1714,19 @@ impl<D> ReadByGroupTypeResponse<D> {
     pub fn new(data: Vec<ReadGroupTypeData<D>>) -> Self {
         match data.len() {
             0 => panic!("Input `data` of ReadByGroupTypeResponse::new cannot be an empty vector"),
-            _ => ReadByGroupTypeResponse { data }
+            _ => ReadByGroupTypeResponse { data },
         }
     }
 
-    pub fn into_inner(self) -> Vec<ReadGroupTypeData<D>> { self.data }
+    pub fn into_inner(self) -> Vec<ReadGroupTypeData<D>> {
+        self.data
+    }
 }
 
-impl<D> TransferFormatTryFrom for ReadByGroupTypeResponse<D> where D: TransferFormatTryFrom {
+impl<D> TransferFormatTryFrom for ReadByGroupTypeResponse<D>
+where
+    D: TransferFormatTryFrom,
+{
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() >= 5 {
             let item_len = raw[0] as usize;
@@ -1556,17 +1744,29 @@ impl<D> TransferFormatTryFrom for ReadByGroupTypeResponse<D> where D: TransferFo
                     .or_else(|e: TransferFormatError| Err(e.into()))
             } else {
                 Err(TransferFormatError::bad_exact_chunks(
-                    stringify!(ReadByGroupTypeResponse), item_len, raw[1..].len()))
+                    stringify!(ReadByGroupTypeResponse),
+                    item_len,
+                    raw[1..].len(),
+                ))
             }
         } else {
-            Err(TransferFormatError::bad_min_size(stringify!(ReadByGroupTypeResponse), 5, raw.len()))
+            Err(TransferFormatError::bad_min_size(
+                stringify!(ReadByGroupTypeResponse),
+                5,
+                raw.len(),
+            ))
         }
     }
 }
 
-impl<D> TransferFormatInto for ReadByGroupTypeResponse<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for ReadByGroupTypeResponse<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
-        1 + self.data.first()
+        1 + self
+            .data
+            .first()
             .map(|first| first.len_of_into() * self.data.len())
             .unwrap_or_default()
     }
@@ -1574,20 +1774,18 @@ impl<D> TransferFormatInto for ReadByGroupTypeResponse<D> where D: TransferForma
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         let mut piter = self.data.iter().peekable();
 
-        let data_size = piter.peek().map(|d| d.len_of_into() ).unwrap_or_default();
+        let data_size = piter.peek().map(|d| d.len_of_into()).unwrap_or_default();
 
         into_ret[0] = data_size as u8;
 
-        piter.enumerate().for_each(|(c,d)|
-            d.build_into_ret( &mut into_ret[(1 + c * data_size)..(1 + (1 + c) * data_size)] )
-        );
+        piter
+            .enumerate()
+            .for_each(|(c, d)| d.build_into_ret(&mut into_ret[(1 + c * data_size)..(1 + (1 + c) * data_size)]));
     }
 }
 
 /// Read an attribute group response
-pub fn read_by_group_type_response<D>( response: ReadByGroupTypeResponse<D>)
--> Pdu<ReadByGroupTypeResponse<D>>
-{
+pub fn read_by_group_type_response<D>(response: ReadByGroupTypeResponse<D>) -> Pdu<ReadByGroupTypeResponse<D>> {
     Pdu {
         opcode: From::from(ServerPduName::ReadByGroupTypeResponse),
         parameters: response,
@@ -1595,48 +1793,62 @@ pub fn read_by_group_type_response<D>( response: ReadByGroupTypeResponse<D>)
 }
 
 /// Data with its Attribute Handle
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct HandleWithData<D> {
     handle: u16,
     data: D,
 }
 
 impl<D> HandleWithData<D> {
+    pub fn get_handle(&self) -> u16 {
+        self.handle
+    }
 
-    pub fn get_handle(&self) -> u16 { self.handle }
+    pub fn get_data(&self) -> &D {
+        &self.data
+    }
 
-    pub fn get_data(&self) -> &D { &self.data }
+    pub fn get_mut_data(&mut self) -> &mut D {
+        &mut self.data
+    }
 
-    pub fn get_mut_data(&mut self) -> &mut D { &mut self.data }
-
-    pub fn into_data(self) -> D { self.data }
+    pub fn into_data(self) -> D {
+        self.data
+    }
 }
 
-impl<D> TransferFormatTryFrom for HandleWithData<D> where D: TransferFormatTryFrom {
+impl<D> TransferFormatTryFrom for HandleWithData<D>
+where
+    D: TransferFormatTryFrom,
+{
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() >= 2 {
-            Ok(
-                HandleWithData {
-                    handle: <u16>::from_le_bytes([raw[0], raw[1]]),
-                    data: TransferFormatTryFrom::try_from(&raw[2..])?,
-                }
-            )
+            Ok(HandleWithData {
+                handle: <u16>::from_le_bytes([raw[0], raw[1]]),
+                data: TransferFormatTryFrom::try_from(&raw[2..])?,
+            })
         } else {
-            Err(TransferFormatError::bad_min_size(stringify!(HandleWithData), 2, raw.len()))
+            Err(TransferFormatError::bad_min_size(
+                stringify!(HandleWithData),
+                2,
+                raw.len(),
+            ))
         }
     }
 }
 
-impl<D> TransferFormatInto for HandleWithData<D> where D: TransferFormatInto {
-
+impl<D> TransferFormatInto for HandleWithData<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         2 + self.data.len_of_into()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
 
-        self.data.build_into_ret( &mut into_ret[2..] );
+        self.data.build_into_ret(&mut into_ret[2..]);
     }
 }
 
@@ -1650,13 +1862,22 @@ impl<D> ExpectedOpcode for WriteRequest<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for WriteRequest<D> where D: TransferFormatTryFrom {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+impl<D> TransferFormatTryFrom for WriteRequest<D>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for WriteRequest<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for WriteRequest<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -1670,7 +1891,7 @@ impl<D> TransferFormatInto for WriteRequest<D> where D: TransferFormatInto {
 pub fn write_request<D>(handle: u16, data: D) -> Pdu<WriteRequest<D>> {
     Pdu {
         opcode: From::from(ClientPduName::WriteRequest),
-        parameters: WriteRequest( HandleWithData{ handle, data } ),
+        parameters: WriteRequest(HandleWithData { handle, data }),
     }
 }
 
@@ -1685,9 +1906,12 @@ impl ExpectedOpcode for WriteResponse {
 }
 
 impl TransferFormatTryFrom for WriteResponse {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         if raw.len() == 0 {
-            Ok( Self )
+            Ok(Self)
         } else {
             Err(TransferFormatError::from("Expected no parameter for Write Response"))
         }
@@ -1695,7 +1919,9 @@ impl TransferFormatTryFrom for WriteResponse {
 }
 
 impl TransferFormatInto for WriteResponse {
-    fn len_of_into(&self) -> usize { 0 }
+    fn len_of_into(&self) -> usize {
+        0
+    }
 
     fn build_into_ret(&self, _: &mut [u8]) {}
 }
@@ -1718,13 +1944,22 @@ impl<D> ExpectedOpcode for WriteCommand<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for WriteCommand<D> where D: TransferFormatTryFrom {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+impl<D> TransferFormatTryFrom for WriteCommand<D>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for WriteCommand<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for WriteCommand<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -1738,7 +1973,7 @@ impl<D> TransferFormatInto for WriteCommand<D> where D: TransferFormatInto {
 pub fn write_command<D>(handle: u16, data: D) -> Pdu<WriteCommand<D>> {
     Pdu {
         opcode: From::from(ClientPduName::WriteCommand),
-        parameters: WriteCommand( HandleWithData{ handle, data } ),
+        parameters: WriteCommand(HandleWithData { handle, data }),
     }
 }
 
@@ -1746,7 +1981,7 @@ pub fn write_command<D>(handle: u16, data: D) -> Pdu<WriteCommand<D>> {
 ///
 /// This requires that the signature specification be implemented in bo-tie which isn't done yet.
 /// For now this will just panic with the message unimplemented.
-pub fn signed_write_command<D,Sig>(_handle: u16, _data: D, _csrk: u128) {
+pub fn signed_write_command<D, Sig>(_handle: u16, _data: D, _csrk: u128) {
     unimplemented!();
 }
 
@@ -1758,23 +1993,29 @@ pub fn signed_write_command<D,Sig>(_handle: u16, _data: D, _csrk: u128) {
 pub struct PreparedWriteRequest<'a> {
     handle: u16,
     offset: u16,
-    data: &'a [u8]
+    data: &'a [u8],
 }
 
 impl<'a> PreparedWriteRequest<'a> {
     /// Get the handle of the attribute to be written to
-    pub fn get_handle(&self) -> u16 { self.handle }
+    pub fn get_handle(&self) -> u16 {
+        self.handle
+    }
 
     /// Get the offset from the start of the transfer format data for this data fragment
-    pub fn get_prepared_offset(&self) -> u16 { self.offset }
+    pub fn get_prepared_offset(&self) -> u16 {
+        self.offset
+    }
 
     /// The fragment of data that is sent with this request
-    pub fn get_prepared_data(&self) -> &'a [u8] { self.data }
+    pub fn get_prepared_data(&self) -> &'a [u8] {
+        self.data
+    }
 
     /// Try to make a prepared write request from a raw source
     pub fn try_from_raw(raw: &'a [u8]) -> Result<Self, TransferFormatError> {
         if raw.len() < 4 {
-            Err(TransferFormatError::bad_min_size("PreparedWriteRequest",4, raw.len()))
+            Err(TransferFormatError::bad_min_size("PreparedWriteRequest", 4, raw.len()))
         } else {
             Ok(Self {
                 handle: TransferFormatTryFrom::try_from(&raw[..2])?,
@@ -1786,17 +2027,16 @@ impl<'a> PreparedWriteRequest<'a> {
 }
 
 impl TransferFormatInto for PreparedWriteRequest<'_> {
-
     fn len_of_into(&self) -> usize {
         4 + self.data.len()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
 
-        into_ret[2..4].copy_from_slice( &self.offset.to_le_bytes() );
+        into_ret[2..4].copy_from_slice(&self.offset.to_le_bytes());
 
-        into_ret[4..].copy_from_slice( self.data  );
+        into_ret[4..].copy_from_slice(self.data);
     }
 }
 
@@ -1853,7 +2093,6 @@ pub struct PreparedWriteRequests {
 }
 
 impl PreparedWriteRequests {
-
     const REQUEST_HEADER_SIZE: usize = 5;
 
     /// Create prepared write requests
@@ -1863,24 +2102,27 @@ impl PreparedWriteRequests {
     /// number. You will need some higher layer or your own implementation for fragmenting over
     /// multiple prepared writes if a panic is produced.
     pub fn new<D>(handle: u16, data: &D, mtu: usize) -> Self
-    where D: TransferFormatInto
+    where
+        D: TransferFormatInto,
     {
         let tf_data = TransferFormatInto::into(&data);
 
-        assert!( tf_data.len() <= <u16>::MAX.into(),
-             "Transfer format data length exceeds the maximum ({})", <u16>::MAX
+        assert!(
+            tf_data.len() <= <u16>::MAX.into(),
+            "Transfer format data length exceeds the maximum ({})",
+            <u16>::MAX
         );
 
         Self { handle, tf_data, mtu }
     }
 
     /// Iterator for generating prepared write requests
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item=Pdu<PreparedWriteRequest<'a>>> + 'a {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = Pdu<PreparedWriteRequest<'a>>> + 'a {
         PreparedWriteRequestIter {
             handle: self.handle,
             offset: 0,
             tf_data: &self.tf_data,
-            send_size: self.mtu - Self::REQUEST_HEADER_SIZE
+            send_size: self.mtu - Self::REQUEST_HEADER_SIZE,
         }
     }
 
@@ -1928,8 +2170,7 @@ impl<'a> Iterator for PreparedWriteRequestIter<'a> {
     }
 }
 
-impl<'a> From<PreparedWriteRequest<'a>> for Pdu<PreparedWriteRequest<'a>>
-{
+impl<'a> From<PreparedWriteRequest<'a>> for Pdu<PreparedWriteRequest<'a>> {
     fn from(pwr: PreparedWriteRequest<'a>) -> Self {
         Pdu {
             opcode: From::from(ClientPduName::PrepareWriteRequest),
@@ -1947,13 +2188,12 @@ pub struct PreparedWriteResponse {
 }
 
 impl PreparedWriteResponse {
-
     /// Create a Response from a Request
     ///
     /// Since the Response is just an echo's what was in the request packet, this function converts
     /// a `PreparedWriteRequest` into a `PreparedWriteResponse`.
-    pub fn pdu_from_request(request: &PreparedWriteRequest<'_> ) -> Pdu<Self> {
-        prepare_write_response(request.handle, request.offset, request.data.to_vec() )
+    pub fn pdu_from_request(request: &PreparedWriteRequest<'_>) -> Pdu<Self> {
+        prepare_write_response(request.handle, request.offset, request.data.to_vec())
     }
 }
 
@@ -1964,46 +2204,54 @@ impl ExpectedOpcode for PreparedWriteResponse {
 }
 
 impl TransferFormatInto for PreparedWriteResponse {
-
     fn len_of_into(&self) -> usize {
         4 + self.data.len()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret[..2].copy_from_slice( &self.handle.to_le_bytes() );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.handle.to_le_bytes());
 
-        into_ret[2..4].copy_from_slice( &(self.offset as u16).to_le_bytes() );
+        into_ret[2..4].copy_from_slice(&(self.offset as u16).to_le_bytes());
 
-        into_ret[4..].copy_from_slice( &self.data  );
+        into_ret[4..].copy_from_slice(&self.data);
     }
 }
 
 impl TransferFormatTryFrom for PreparedWriteResponse {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         if raw.len() >= 4 {
-            Ok( Self {
+            Ok(Self {
                 handle: TransferFormatTryFrom::try_from(&raw[..2])?,
                 offset: <u16 as TransferFormatTryFrom>::try_from(&raw[2..4])?.into(),
                 data: raw[4..].to_vec(),
-            } )
+            })
         } else {
-            Err(TransferFormatError::bad_min_size(stringify!(PreparedWriteResponse), 4, raw.len()))
+            Err(TransferFormatError::bad_min_size(
+                stringify!(PreparedWriteResponse),
+                4,
+                raw.len(),
+            ))
         }
     }
 }
 
 /// Create a Prepared Write Response PDU
-pub fn prepare_write_response(handle: u16, offset: u16, data: Vec<u8> )
--> Pdu<PreparedWriteResponse>
-{
+pub fn prepare_write_response(handle: u16, offset: u16, data: Vec<u8>) -> Pdu<PreparedWriteResponse> {
     Pdu {
         opcode: From::from(ServerPduName::PrepareWriteResponse),
-        parameters: PreparedWriteResponse { handle, offset: offset.into(), data },
+        parameters: PreparedWriteResponse {
+            handle,
+            offset: offset.into(),
+            data,
+        },
     }
 }
 
 /// Parameter for the Execute Write Request
-#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExecuteWriteFlag {
     CancelAllPreparedWrites,
     WriteAllPreparedWrites,
@@ -2016,15 +2264,18 @@ impl ExpectedOpcode for ExecuteWriteFlag {
 }
 
 impl TransferFormatTryFrom for ExecuteWriteFlag {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         if raw.len() == 1 {
             match raw[0] {
                 0 => Ok(ExecuteWriteFlag::CancelAllPreparedWrites),
                 1 => Ok(ExecuteWriteFlag::WriteAllPreparedWrites),
                 f => Err(TransferFormatError {
                     pdu_err: Error::InvalidPDU,
-                    message: format!("Invalid execute write flag {}", f)
-                })
+                    message: format!("Invalid execute write flag {}", f),
+                }),
             }
         } else {
             Err(TransferFormatError::bad_size("Execute Write Flag", 1, raw.len()))
@@ -2052,7 +2303,7 @@ impl TransferFormatInto for ExecuteWriteFlag {
 ///
 /// If the execute flag is false, then everything in the queue is not written and instead the
 /// client is indication to the server to drop all data into the queue.
-pub fn execute_write_request( execute: ExecuteWriteFlag ) -> Pdu<ExecuteWriteFlag> {
+pub fn execute_write_request(execute: ExecuteWriteFlag) -> Pdu<ExecuteWriteFlag> {
     Pdu {
         opcode: From::from(ClientPduName::ExecuteWriteRequest),
         parameters: execute,
@@ -2070,17 +2321,24 @@ impl ExpectedOpcode for ExecuteWriteResponse {
 }
 
 impl TransferFormatTryFrom for ExecuteWriteResponse {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         if raw.len() == 0 {
-            Ok( Self )
+            Ok(Self)
         } else {
-            Err(TransferFormatError::from("Expected no parameter for an Execute Write Response"))
+            Err(TransferFormatError::from(
+                "Expected no parameter for an Execute Write Response",
+            ))
         }
     }
 }
 
 impl TransferFormatInto for ExecuteWriteResponse {
-    fn len_of_into(&self) -> usize { 0 }
+    fn len_of_into(&self) -> usize {
+        0
+    }
 
     fn build_into_ret(&self, _: &mut [u8]) {}
 }
@@ -2102,13 +2360,22 @@ impl<D> ExpectedOpcode for HandleValueNotification<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for HandleValueNotification<D> where D: TransferFormatTryFrom{
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+impl<D> TransferFormatTryFrom for HandleValueNotification<D>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for HandleValueNotification<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for HandleValueNotification<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -2119,11 +2386,10 @@ impl<D> TransferFormatInto for HandleValueNotification<D> where D: TransferForma
 }
 
 /// Create a server sent notification
-pub fn handle_value_notification<D>(handle: u16, data: D ) -> Pdu<HandleValueNotification<D>>
-{
+pub fn handle_value_notification<D>(handle: u16, data: D) -> Pdu<HandleValueNotification<D>> {
     Pdu {
         opcode: From::from(ServerPduName::HandleValueNotification),
-        parameters: HandleValueNotification( HandleWithData { handle, data } ),
+        parameters: HandleValueNotification(HandleWithData { handle, data }),
     }
 }
 
@@ -2137,13 +2403,22 @@ impl<D> ExpectedOpcode for HandleValueIndication<D> {
     }
 }
 
-impl<D> TransferFormatTryFrom for HandleValueIndication<D> where D: TransferFormatTryFrom {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+impl<D> TransferFormatTryFrom for HandleValueIndication<D>
+where
+    D: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for HandleValueIndication<D> where D: TransferFormatInto {
+impl<D> TransferFormatInto for HandleValueIndication<D>
+where
+    D: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -2154,11 +2429,10 @@ impl<D> TransferFormatInto for HandleValueIndication<D> where D: TransferFormatI
 }
 
 /// Create a server sent indication
-pub fn handle_value_indication<D>(handle: u16, data: D) -> Pdu<HandleValueIndication<D>>
-{
+pub fn handle_value_indication<D>(handle: u16, data: D) -> Pdu<HandleValueIndication<D>> {
     Pdu {
         opcode: From::from(ServerPduName::HandleValueIndication),
-        parameters: HandleValueIndication( HandleWithData { handle, data } ),
+        parameters: HandleValueIndication(HandleWithData { handle, data }),
     }
 }
 
@@ -2173,17 +2447,24 @@ impl ExpectedOpcode for HandleValueConfirmation {
 }
 
 impl TransferFormatTryFrom for HandleValueConfirmation {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
         if raw.len() == 0 {
-            Ok( Self )
+            Ok(Self)
         } else {
-            Err(TransferFormatError::from("Expected no parameter for a Handle Value Confirmation"))
+            Err(TransferFormatError::from(
+                "Expected no parameter for a Handle Value Confirmation",
+            ))
         }
     }
 }
 
 impl TransferFormatInto for HandleValueConfirmation {
-    fn len_of_into(&self) -> usize { 0 }
+    fn len_of_into(&self) -> usize {
+        0
+    }
 
     fn build_into_ret(&self, _: &mut [u8]) {}
 }

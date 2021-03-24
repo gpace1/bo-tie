@@ -8,36 +8,41 @@ pub mod reset {
 
     use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
 
     impl_status_return!(COMMAND);
 
-    #[derive(Clone,Copy)]
+    #[derive(Clone, Copy)]
     struct Parameter;
 
     impl CommandParameter for Parameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
-
 }
 
 /// Enable events
 pub mod set_event_mask {
     use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::SetEventMask);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::SetEventMask);
 
-    #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
     pub enum EventMask {
         /// A marker for the default enabled (upon controller reset) list of events
         #[doc(hidden)]
@@ -95,7 +100,6 @@ pub mod set_event_mask {
     }
 
     impl EventMask {
-
         const DEFAULT_MASK: &'static [Self] = &[Self::_Default];
 
         const DEFAULT_MASK_LE: &'static [Self] = &[Self::_Default, Self::LEMeta];
@@ -106,7 +110,9 @@ pub mod set_event_mask {
         /// The returned slice only contains a hidden member of `EventMask`. The hidden member is
         /// used for quickly masking the bits of the command parameter corresponding to the default
         /// events.
-        pub fn default() -> &'static [EventMask] { Self::DEFAULT_MASK }
+        pub fn default() -> &'static [EventMask] {
+            Self::DEFAULT_MASK
+        }
 
         /// Get the default enabled events with the `LEMeta` event also enabled.
         ///
@@ -118,11 +124,12 @@ pub mod set_event_mask {
         /// [`LEMeta`](EventMask::LEMeta) event.
         /// The hidden member is used for quickly masking the bits of the command parameter
         /// corresponding to the default events.
-        pub fn default_le() -> &'static [EventMask] { Self::DEFAULT_MASK_LE }
+        pub fn default_le() -> &'static [EventMask] {
+            Self::DEFAULT_MASK_LE
+        }
 
         pub(crate) fn to_val(masks: &[Self]) -> u64 {
-
-            masks.iter().fold( 0u64, |val, mask| {
+            masks.iter().fold(0u64, |val, mask| {
                 val | match mask {
                     EventMask::_Default => 0x1FFF_FFFF_FFFF,
                     EventMask::InquiryComplete => 1 << 0,
@@ -182,31 +189,39 @@ pub mod set_event_mask {
     impl_status_return!(COMMAND);
 
     struct Parameter {
-        mask: [u8;8]
+        mask: [u8; 8],
     }
 
     impl CommandParameter for Parameter {
-        type Parameter = [u8;8];
+        type Parameter = [u8; 8];
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { self.mask }
+        fn get_parameter(&self) -> Self::Parameter {
+            self.mask
+        }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, events: &[EventMask] )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        events: &[EventMask],
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        let parameter = Parameter { mask: EventMask::to_val(events).to_le_bytes() };
+        let parameter = Parameter {
+            mask: EventMask::to_val(events).to_le_bytes(),
+        };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
 pub mod read_transmit_power_level {
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::ReadTransmitPowerLevel);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::ReadTransmitPowerLevel);
 
     #[repr(packed)]
     #[doc(hidden)]
@@ -231,8 +246,7 @@ pub mod read_transmit_power_level {
     }
 
     impl TransmitPowerLevel {
-
-        fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error> {
+        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
@@ -240,10 +254,9 @@ pub mod read_transmit_power_level {
                     // If this panics here the controller returned a bad connection handle
                     connection_handle: ConnectionHandle::try_from(packed.connection_handle).unwrap(),
                     power_level: packed.power_level,
-                    completed_packets_cnt: cnt.into()
+                    completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -255,12 +268,7 @@ pub mod read_transmit_power_level {
         }
     }
 
-    impl_get_data_for_command!(
-            COMMAND,
-            CmdReturn,
-            TransmitPowerLevel,
-            error::Error
-        );
+    impl_get_data_for_command!(COMMAND, CmdReturn, TransmitPowerLevel, error::Error);
 
     impl_command_complete_future!(TransmitPowerLevel, error::Error);
 
@@ -283,16 +291,19 @@ pub mod read_transmit_power_level {
                 _level_type: match self.level_type {
                     TransmitPowerLevelType::CurrentPowerLevel => 0,
                     TransmitPowerLevelType::MaximumPowerLevel => 1,
-                }
+                },
             }
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: Parameter )
-    -> impl Future<Output=Result<TransmitPowerLevel, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        parameter: Parameter,
+    ) -> impl Future<Output = Result<TransmitPowerLevel, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }

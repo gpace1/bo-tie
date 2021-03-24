@@ -37,15 +37,15 @@
 //! # Temporary Note
 //! For now passkey pairing is not supported. Only Numeric Comparison and Out Of Band are supported
 
-use alloc::vec::Vec;
-use serde::{Serialize, Deserialize};
 use crate::l2cap::AclData;
+use alloc::vec::Vec;
+use serde::{Deserialize, Serialize};
 
-pub mod toolbox;
-pub mod pairing;
 pub mod encrypt_info;
-pub mod responder;
 pub mod initiator;
+pub mod pairing;
+pub mod responder;
+pub mod toolbox;
 
 //const ENCRYPTION_KEY_MIN_SIZE: usize = 7;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
@@ -75,7 +75,7 @@ pub enum Error {
     DataSend(alloc::string::String),
 }
 
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CommandType {
     PairingRequest,
     PairingResponse,
@@ -115,21 +115,21 @@ impl CommandType {
 
     fn try_from_val(val: u8) -> Result<Self, Error> {
         match val {
-            0x1 => Ok( CommandType::PairingRequest ),
-            0x2 => Ok( CommandType::PairingResponse ),
-            0x3 => Ok( CommandType::PairingConfirm ),
-            0x4 => Ok( CommandType::PairingRandom ),
-            0x5 => Ok( CommandType::PairingFailed ),
-            0x6 => Ok( CommandType::EncryptionInformation ),
-            0x7 => Ok( CommandType::MasterIdentification ),
-            0x8 => Ok( CommandType::IdentityInformation ),
-            0x9 => Ok( CommandType::IdentityAddressInformation ),
-            0xa => Ok( CommandType::SigningInformation ),
-            0xb => Ok( CommandType::SecurityRequest ),
-            0xc => Ok( CommandType::PairingPublicKey ),
-            0xd => Ok( CommandType::PairingDHKeyCheck ),
-            0xe => Ok( CommandType::PairingKeyPressNotification ),
-            _   => Err( Error::Value)
+            0x1 => Ok(CommandType::PairingRequest),
+            0x2 => Ok(CommandType::PairingResponse),
+            0x3 => Ok(CommandType::PairingConfirm),
+            0x4 => Ok(CommandType::PairingRandom),
+            0x5 => Ok(CommandType::PairingFailed),
+            0x6 => Ok(CommandType::EncryptionInformation),
+            0x7 => Ok(CommandType::MasterIdentification),
+            0x8 => Ok(CommandType::IdentityInformation),
+            0x9 => Ok(CommandType::IdentityAddressInformation),
+            0xa => Ok(CommandType::SigningInformation),
+            0xb => Ok(CommandType::SecurityRequest),
+            0xc => Ok(CommandType::PairingPublicKey),
+            0xd => Ok(CommandType::PairingDHKeyCheck),
+            0xe => Ok(CommandType::PairingKeyPressNotification),
+            _ => Err(Error::Value),
         }
     }
 }
@@ -143,19 +143,15 @@ impl core::convert::TryFrom<&'_ AclData> for CommandType {
     /// incorrect, the payload does not have a valid value for the command field, or the payload
     /// length is incorrect, an error is returned.
     fn try_from(acl_data: &'_ AclData) -> Result<Self, Self::Error> {
-
         if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
-            return Err(Error::IncorrectL2capChannelId)
+            return Err(Error::IncorrectL2capChannelId);
         }
 
-        let possible_type = CommandType::try_from_val(
-            *acl_data.get_payload().get(0).ok_or_else(|| Error::Size)? )?;
+        let possible_type = CommandType::try_from_val(*acl_data.get_payload().get(0).ok_or_else(|| Error::Size)?)?;
 
         let correct_packet_len = match possible_type {
-            CommandType::PairingRequest |
-            CommandType::PairingResponse => 7,
-            CommandType::PairingConfirm |
-            CommandType::PairingRandom => 17,
+            CommandType::PairingRequest | CommandType::PairingResponse => 7,
+            CommandType::PairingConfirm | CommandType::PairingRandom => 17,
             CommandType::PairingFailed => 2,
             CommandType::EncryptionInformation => 17,
             CommandType::MasterIdentification => 11,
@@ -180,8 +176,10 @@ impl core::convert::TryFrom<&'_ AclData> for CommandType {
 ///
 /// A trait for converting to or from the data format sent over the radio as specified in the
 /// Bluetooth Specification Security Manager Protocol (V.5.0 | Vol 3, Part H
-trait CommandData where Self: Sized {
-
+trait CommandData
+where
+    Self: Sized,
+{
     /// Convert into the interface formatted command data
     fn into_icd(self) -> Vec<u8>;
 
@@ -197,13 +195,15 @@ struct Command<D> {
 }
 
 impl<D> Command<D> {
-    fn new( command_type: CommandType, data: D) -> Self {
+    fn new(command_type: CommandType, data: D) -> Self {
         Command { command_type, data }
     }
 }
 
-impl<D> CommandData for Command<D> where D: CommandData {
-
+impl<D> CommandData for Command<D>
+where
+    D: CommandData,
+{
     fn into_icd(self) -> Vec<u8> {
         let mut data_v = self.data.into_icd();
 
@@ -216,14 +216,14 @@ impl<D> CommandData for Command<D> where D: CommandData {
         rec
     }
 
-    fn try_from_icd(icd : &[u8] ) -> Result<Self, Error> {
+    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 0 {
             Err(Error::Size)
         } else {
-            Ok( Command {
+            Ok(Command {
                 command_type: CommandType::try_from_val(icd[0])?,
-                data: D::try_from_icd(&icd[1..])?
-            } )
+                data: D::try_from_icd(&icd[1..])?,
+            })
         }
     }
 }
@@ -239,69 +239,65 @@ enum KeyGenerationMethod {
 }
 
 impl KeyGenerationMethod {
-
     /// Used to determine the pairing method to be executed between the initiator and responder
     ///
     /// # Note
     /// `is_legacy` must be false as the security manager doesn't support legacy. It is only left
     /// here in case that changes (which is unlikely).
-    fn determine_method (
+    fn determine_method(
         initiator_oob_data: pairing::OOBDataFlag,
         responder_oob_data: pairing::OOBDataFlag,
         initiator_io_capability: pairing::IOCapability,
         responder_io_capability: pairing::IOCapability,
         is_legacy: bool,
-    ) -> Self
-    {
+    ) -> Self {
         use pairing::{IOCapability, OOBDataFlag};
 
         // This match should match Table 2.8 in the Bluetooth Specification v5.0 | Vol 3, Part H,
         // section 2.3.5.1
         match (initiator_oob_data, responder_oob_data) {
+            (
+                OOBDataFlag::AuthenticationDataFromRemoteDevicePresent,
+                OOBDataFlag::AuthenticationDataFromRemoteDevicePresent,
+            ) => KeyGenerationMethod::Oob,
 
-            ( OOBDataFlag::AuthenticationDataFromRemoteDevicePresent,
-                OOBDataFlag::AuthenticationDataFromRemoteDevicePresent) =>
-                KeyGenerationMethod::Oob,
+            (_, _) => match (initiator_io_capability, responder_io_capability) {
+                (IOCapability::DisplayOnly, IOCapability::KeyboardOnly)
+                | (IOCapability::DisplayOnly, IOCapability::KeyboardDisplay) => KeyGenerationMethod::PassKeyEntry,
 
-            (_,_) => match (initiator_io_capability, responder_io_capability) {
+                (IOCapability::DisplayWithYesOrNo, IOCapability::DisplayWithYesOrNo) if !is_legacy => {
+                    KeyGenerationMethod::NumbComp
+                }
 
-                (IOCapability::DisplayOnly, IOCapability::KeyboardOnly) |
-                (IOCapability::DisplayOnly, IOCapability::KeyboardDisplay) =>
-                    KeyGenerationMethod::PassKeyEntry,
+                (IOCapability::DisplayWithYesOrNo, IOCapability::KeyboardOnly) => KeyGenerationMethod::PassKeyEntry,
 
-                (IOCapability::DisplayWithYesOrNo, IOCapability::DisplayWithYesOrNo) if !is_legacy =>
-                    KeyGenerationMethod::NumbComp,
-
-                (IOCapability::DisplayWithYesOrNo, IOCapability::KeyboardOnly) =>
-                    KeyGenerationMethod::PassKeyEntry,
-
-                (IOCapability::DisplayWithYesOrNo, IOCapability::KeyboardDisplay) =>
+                (IOCapability::DisplayWithYesOrNo, IOCapability::KeyboardDisplay) => {
                     if is_legacy {
                         KeyGenerationMethod::PassKeyEntry
                     } else {
                         KeyGenerationMethod::NumbComp
                     }
+                }
 
-                (IOCapability::KeyboardOnly, IOCapability::DisplayOnly) |
-                (IOCapability::KeyboardOnly, IOCapability::DisplayWithYesOrNo) |
-                (IOCapability::KeyboardOnly, IOCapability::KeyboardOnly) |
-                (IOCapability::KeyboardOnly, IOCapability::KeyboardDisplay) =>
-                    KeyGenerationMethod::PassKeyEntry,
+                (IOCapability::KeyboardOnly, IOCapability::DisplayOnly)
+                | (IOCapability::KeyboardOnly, IOCapability::DisplayWithYesOrNo)
+                | (IOCapability::KeyboardOnly, IOCapability::KeyboardOnly)
+                | (IOCapability::KeyboardOnly, IOCapability::KeyboardDisplay) => KeyGenerationMethod::PassKeyEntry,
 
-                (IOCapability::KeyboardDisplay, IOCapability::DisplayOnly) |
-                (IOCapability::KeyboardDisplay, IOCapability::KeyboardOnly) =>
-                    KeyGenerationMethod::PassKeyEntry,
+                (IOCapability::KeyboardDisplay, IOCapability::DisplayOnly)
+                | (IOCapability::KeyboardDisplay, IOCapability::KeyboardOnly) => KeyGenerationMethod::PassKeyEntry,
 
-                (IOCapability::KeyboardDisplay, IOCapability::DisplayWithYesOrNo) |
-                (IOCapability::KeyboardDisplay, IOCapability::KeyboardDisplay) =>
+                (IOCapability::KeyboardDisplay, IOCapability::DisplayWithYesOrNo)
+                | (IOCapability::KeyboardDisplay, IOCapability::KeyboardDisplay) => {
                     if is_legacy {
                         KeyGenerationMethod::PassKeyEntry
                     } else {
                         KeyGenerationMethod::NumbComp
                     }
+                }
 
-                (_,_) => KeyGenerationMethod::JustWorks
-            }
+                (_, _) => KeyGenerationMethod::JustWorks,
+            },
         }
     }
 }
@@ -319,9 +315,9 @@ struct PairingData {
     private_key: Option<toolbox::PriKey>,
     /// Initiator IOcap information. This must match the exact bits sent over from the master, even
     /// if the bits are not valid for their field.
-    initiator_io_cap: [u8;3],
+    initiator_io_cap: [u8; 3],
     /// This IOcap information
-    responder_io_cap: [u8;3],
+    responder_io_cap: [u8; 3],
     /// Nonce value
     ///
     /// This will change multiple times for passkey, but is static for just works or number
@@ -360,7 +356,7 @@ struct PairingData {
 /// IRK and CSRK per `SecurityManager`, but any number of `KeyDBEntry`s can use them. If a static
 /// CSRK is used, the sign counter for this `KeyDBEntry` can only be used through the connection to
 /// the peer device.
-#[derive(Clone,Serialize,Deserialize,Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct KeyDBEntry {
     /// The Long Term Key (private key)
     ///
@@ -380,17 +376,16 @@ pub struct KeyDBEntry {
     peer_irk: Option<u128>,
 
     /// The peer's public or static random address
-    peer_addr: Option<BluAddr>
+    peer_addr: Option<BluAddr>,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum BluAddr {
     Public(crate::BluetoothDeviceAddress),
-    StaticRandom(crate::BluetoothDeviceAddress)
+    StaticRandom(crate::BluetoothDeviceAddress),
 }
 
 impl KeyDBEntry {
-
     /// Construct a new `KeyDBEntry` with no keys
     pub fn new() -> Self {
         KeyDBEntry::default()
@@ -407,27 +402,26 @@ impl KeyDBEntry {
     }
 
     /// Compare entries by the peer keys irk and addr
-    fn cmp_entry_by_keys<'a,I,A>(&self, peer_irk: I, peer_addr: A) -> core::cmp::Ordering
-        where I: Into<Option<&'a u128>> + 'a,
-              A: Into<Option<&'a BluAddr>> + 'a,
+    fn cmp_entry_by_keys<'a, I, A>(&self, peer_irk: I, peer_addr: A) -> core::cmp::Ordering
+    where
+        I: Into<Option<&'a u128>> + 'a,
+        A: Into<Option<&'a BluAddr>> + 'a,
     {
         use core::cmp::Ordering;
 
-        match (self.peer_irk.as_ref(), peer_irk.into(), self.peer_addr.as_ref(), peer_addr.into()) {
-            (Some(this),Some(other), _, _) =>
-                this.cmp(other),
-            (Some(_), None, _, _) =>
-                Ordering::Less,
-            (None, Some(_), _, _) =>
-                Ordering::Greater,
-            (None, None, Some(this), Some(other)) =>
-                this.cmp(other),
-            (None,None,Some(_), None) =>
-                Ordering::Less,
-            (None,None,None,Some(_)) =>
-                Ordering::Greater,
-            (None, None, None, None) =>
-                Ordering::Equal
+        match (
+            self.peer_irk.as_ref(),
+            peer_irk.into(),
+            self.peer_addr.as_ref(),
+            peer_addr.into(),
+        ) {
+            (Some(this), Some(other), _, _) => this.cmp(other),
+            (Some(_), None, _, _) => Ordering::Less,
+            (None, Some(_), _, _) => Ordering::Greater,
+            (None, None, Some(this), Some(other)) => this.cmp(other),
+            (None, None, Some(_), None) => Ordering::Less,
+            (None, None, None, Some(_)) => Ordering::Greater,
+            (None, None, None, None) => Ordering::Equal,
         }
     }
 
@@ -467,39 +461,49 @@ impl KeyDBEntry {
     }
 
     /// Get the peer devices Identity Resolving Key
-    pub fn get_peer_irk(&self) -> Option<u128> { self.peer_irk }
+    pub fn get_peer_irk(&self) -> Option<u128> {
+        self.peer_irk
+    }
 
     /// Get the peer devices Connection Signature Resolving Key
-    pub fn get_peer_csrk(&self) -> Option<u128> { self.peer_csrk.map(|(c,_)| c) }
+    pub fn get_peer_csrk(&self) -> Option<u128> {
+        self.peer_csrk.map(|(c, _)| c)
+    }
 
     /// Get the saved Connection Signature Resolving Key Sign Counter
-    pub fn get_peer_csrk_cnt(&self) -> Option<u32> { self.csrk.map(|(_,c)| c) }
+    pub fn get_peer_csrk_cnt(&self) -> Option<u32> {
+        self.csrk.map(|(_, c)| c)
+    }
 
     /// Get the peer devices address
     ///
     /// Returns a bluetooth device address along with a flag to indicate if the address is a public.
     /// If the flag is false then the address is a static random address.
     pub fn get_peer_addr(&self) -> Option<(bool, crate::BluetoothDeviceAddress)> {
-        self.peer_addr.clone().map(|addr| {
-            match addr {
-                BluAddr::Public(addr) => (true, addr),
-                BluAddr::StaticRandom(addr) => (true, addr),
-            }
+        self.peer_addr.clone().map(|addr| match addr {
+            BluAddr::Public(addr) => (true, addr),
+            BluAddr::StaticRandom(addr) => (true, addr),
         })
     }
 
     /// Get the Identity Resolving Key
     ///
     /// If this is `None` then this connection uses the static IRK of the `SecurityManager`.
-    pub fn get_irk(&self) -> Option<u128> { self.irk }
+    pub fn get_irk(&self) -> Option<u128> {
+        self.irk
+    }
 
     /// Get the Connection Signature Resolving Key
     ///
     /// If this is `None` then the connection uses the static CSRK of the `SecurityManager`.
-    pub fn get_csrk(&self) -> Option<u128> { self.csrk.map(|(c,_)| c) }
+    pub fn get_csrk(&self) -> Option<u128> {
+        self.csrk.map(|(c, _)| c)
+    }
 
     /// Get the saved Connection Signature Resolving Key Sign Counter
-    pub fn get_csrk_cnt(&self) -> Option<u32> { self.csrk.map(|(_,c)| c)}
+    pub fn get_csrk_cnt(&self) -> Option<u32> {
+        self.csrk.map(|(_, c)| c)
+    }
 
     /// Get the Long Term Key
     ///
@@ -508,7 +512,9 @@ impl KeyDBEntry {
     ///
     /// If this is `None` then encryption cannot be established. This may happen when encryption
     /// cannot be established to the peer device, but the peer's IRK or CSRK is known.
-    pub fn get_ltk(&self) -> Option<u128> { self.ltk }
+    pub fn get_ltk(&self) -> Option<u128> {
+        self.ltk
+    }
 }
 
 /// The Encryption Key "database"
@@ -520,15 +526,13 @@ struct KeyDB {
 }
 
 impl KeyDB {
-
     /// Create a new `KeyDB` from a vector of `KeyDBEntry`
     ///
     /// # Panic
     /// All entries must have either a peer IRK or a peer Address set. A KeyDBEntry can be checked
     /// to be valid if [`is_databaseable`](KeyDBEntry::is_databaseable) returns true.
     fn new(mut entries: Vec<KeyDBEntry>) -> Self {
-
-        entries.sort_by(|rhs, lhs| rhs.compare_entry(lhs) );
+        entries.sort_by(|rhs, lhs| rhs.compare_entry(lhs));
 
         Self { entries }
     }
@@ -537,17 +541,19 @@ impl KeyDB {
     ///
     /// Return the keys associated with the specified `irk` and/or `address`. `None` is
     /// returned if there is no entry associated with the given keys.
-    fn get<'s, 'a, I,A>(&'s self, irk: I, address: A) -> Option<&'s KeyDBEntry>
-    where I: Into<Option<&'a u128>>,
-          A: Into<Option<&'a BluAddr>>,
+    fn get<'s, 'a, I, A>(&'s self, irk: I, address: A) -> Option<&'s KeyDBEntry>
+    where
+        I: Into<Option<&'a u128>>,
+        A: Into<Option<&'a BluAddr>>,
     {
         let i = irk.into();
         let a = address.into();
         let entries = &self.entries;
 
-        self.entries.binary_search_by(|entry| entry.cmp_entry_by_keys(i, a) )
+        self.entries
+            .binary_search_by(|entry| entry.cmp_entry_by_keys(i, a))
             .ok()
-            .map_or(None, |idx| entries.get(idx) )
+            .map_or(None, |idx| entries.get(idx))
     }
 
     /// Add the keys with the provided KeyDBEntry
@@ -558,8 +564,8 @@ impl KeyDB {
     /// nothing.
     fn add(&mut self, entry: KeyDBEntry) {
         if entry.is_databaseable() {
-            match self.entries.binary_search_by(|in_entry| in_entry.compare_entry(&entry) ) {
-                Ok(idx)  => self.entries[idx] = entry,
+            match self.entries.binary_search_by(|in_entry| in_entry.compare_entry(&entry)) {
+                Ok(idx) => self.entries[idx] = entry,
                 Err(idx) => self.entries.insert(idx, entry),
             }
         }
@@ -569,24 +575,28 @@ impl KeyDB {
         self.entries.iter()
     }
 
-    fn remove<'a, I,A>(&'a mut self, irk: I, address: A) -> bool
-    where I: Into<Option<&'a u128>>,
-          A: Into<Option<&'a BluAddr>>,
+    fn remove<'a, I, A>(&'a mut self, irk: I, address: A) -> bool
+    where
+        I: Into<Option<&'a u128>>,
+        A: Into<Option<&'a BluAddr>>,
     {
         let i = irk.into();
         let a = address.into();
 
-        self.entries.binary_search_by(|entry| entry.cmp_entry_by_keys(i, a) )
+        self.entries
+            .binary_search_by(|entry| entry.cmp_entry_by_keys(i, a))
             .ok()
-            .map_or(false, |idx| { self.entries.remove(idx); true } )
+            .map_or(false, |idx| {
+                self.entries.remove(idx);
+                true
+            })
     }
 }
 
 impl Default for KeyDB {
-
     /// Create an empty KeyDB
     fn default() -> Self {
-        KeyDB::new( Vec::new() )
+        KeyDB::new(Vec::new())
     }
 }
 
@@ -609,7 +619,6 @@ pub struct SecurityManager {
 }
 
 impl SecurityManager {
-
     pub fn new(keys: Vec<KeyDBEntry>) -> Self {
         SecurityManager {
             keys_db: KeyDB::new(keys),
@@ -620,7 +629,7 @@ impl SecurityManager {
 
     /// Get an iterator over the keys
     pub fn iter(&self) -> impl Iterator<Item = &KeyDBEntry> {
-       self.keys_db.iter()
+        self.keys_db.iter()
     }
 
     /// Assign a static Identity Resolving Key (IRK)
@@ -630,7 +639,10 @@ impl SecurityManager {
     ///
     /// The static IRK is used when a unique IRK is not generated by the bonding procedure. However
     /// a this function must be called to set (or generate) a static IRK before it is used.
-    pub fn set_static_irk<I>( &mut self, irk: I ) -> u128 where I: Into<Option<u128>> {
+    pub fn set_static_irk<I>(&mut self, irk: I) -> u128
+    where
+        I: Into<Option<u128>>,
+    {
         match irk.into() {
             None => {
                 let v = toolbox::rand_u128();
@@ -651,7 +663,10 @@ impl SecurityManager {
     ///
     /// The static CSRK is used when a unique CSRK is not generated by the bonding procedure.
     /// However a this function must be called to set (or generate) a static CSRK before it is used.
-    pub fn set_static_csrk<I>( &mut self, irk: I ) -> u128 where I: Into<Option<u128>> {
+    pub fn set_static_csrk<I>(&mut self, irk: I) -> u128
+    where
+        I: Into<Option<u128>>,
+    {
         match irk.into() {
             None => {
                 let v = toolbox::rand_u128();
@@ -664,7 +679,6 @@ impl SecurityManager {
             }
         }
     }
-
 
     /// Returns an iterator to resolve a resolvable private address from all peer devices'
     /// Identity Resolving Key (IRK) in the keys database.
@@ -680,18 +694,26 @@ impl SecurityManager {
     ///
     /// security_manager.resolve_rpa_itr(resolvable_private_address).find_map(|keys_opt| keys_opt);
     /// ```
-    pub fn resolve_rpa_itr(&self, addr: crate::BluetoothDeviceAddress)
-    -> impl core::iter::Iterator<Item = Option<KeyDBEntry>> + '_
-    {
-        let hash = [addr[0], addr[1], addr[2] ];
+    pub fn resolve_rpa_itr(
+        &self,
+        addr: crate::BluetoothDeviceAddress,
+    ) -> impl core::iter::Iterator<Item = Option<KeyDBEntry>> + '_ {
+        let hash = [addr[0], addr[1], addr[2]];
         let prand = [addr[3], addr[4], addr[5]];
 
-        self.keys_db.entries.iter()
-            .take_while(|e| e.peer_irk.is_some() )
-            .map(move |e| e.peer_irk.and_then( |irk|
-                if toolbox::ah( irk, prand ) == hash { Some(e.clone()) } else { None }
-            )
-        )
+        self.keys_db
+            .entries
+            .iter()
+            .take_while(|e| e.peer_irk.is_some())
+            .map(move |e| {
+                e.peer_irk.and_then(|irk| {
+                    if toolbox::ah(irk, prand) == hash {
+                        Some(e.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
     }
 
     /// Add (or replace) keys in the database
@@ -707,7 +729,7 @@ impl SecurityManager {
                 self.keys_db.add(keys);
                 true
             }
-            _ => false
+            _ => false,
         }
     }
 
@@ -719,27 +741,29 @@ impl SecurityManager {
     }
 
     /// Get a specific `KeyDBEntry` from its peer IRK and peer Address
-    pub fn get_keys<I,A>(&self, peer_irk: I, peer_addr: A, peer_addr_is_pub: bool)
-    -> Option<&KeyDBEntry>
-    where I: Into<Option<u128>>,
-          A: Into<Option<crate::BluetoothDeviceAddress>>
+    pub fn get_keys<I, A>(&self, peer_irk: I, peer_addr: A, peer_addr_is_pub: bool) -> Option<&KeyDBEntry>
+    where
+        I: Into<Option<u128>>,
+        A: Into<Option<crate::BluetoothDeviceAddress>>,
     {
-        let peer_addr = peer_addr.into().map(|addr| if peer_addr_is_pub {
+        let peer_addr = peer_addr.into().map(|addr| {
+            if peer_addr_is_pub {
                 BluAddr::Public(addr)
             } else {
                 BluAddr::StaticRandom(addr)
-            });
+            }
+        });
 
         self.keys_db.get(peer_irk.into().as_ref(), peer_addr.as_ref())
     }
 }
 
 trait GetXOfP256Key {
-    fn x(&self) -> [u8;32];
+    fn x(&self) -> [u8; 32];
 }
 
-impl GetXOfP256Key for [u8;64] {
-    fn x(&self) -> [u8;32] {
+impl GetXOfP256Key for [u8; 64] {
+    fn x(&self) -> [u8; 32] {
         let mut x = [0u8; 32];
 
         x.copy_from_slice(&self[..32]);

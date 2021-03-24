@@ -53,12 +53,7 @@
 //! the attribute, but only one of the errors can be described with the error PDU sent from the
 //! server to the client.
 
-use alloc::{
-    boxed::Box,
-    format,
-    string::String,
-    vec::Vec,
-};
+use alloc::{boxed::Box, format, string::String, vec::Vec};
 
 use crate::l2cap;
 
@@ -75,33 +70,29 @@ pub mod server;
 /// an optional input for the size of the transfer format of $data_type. If `$data_size` is omitted
 /// then the size is inferred from the `core::mem::size_of` method.
 macro_rules! impl_transfer_format_for_vec_of {
-
     ($data_type: ty, $data_size: expr) => {
-
         impl TransferFormatTryFrom for Vec<$data_type> {
             fn try_from(raw: &[u8]) -> Result<Self, crate::att::TransferFormatError> {
-                raw.chunks($data_size)
-                    .try_fold(Vec::new(), |mut v, chunk| {
-                        v.push( <$data_type as TransferFormatTryFrom>::try_from(chunk)? );
-                        Ok(v)
-                    })
+                raw.chunks($data_size).try_fold(Vec::new(), |mut v, chunk| {
+                    v.push(<$data_type as TransferFormatTryFrom>::try_from(chunk)?);
+                    Ok(v)
+                })
             }
         }
 
-        impl TransferFormatInto for Vec<$data_type>
-        {
+        impl TransferFormatInto for Vec<$data_type> {
             fn len_of_into(&self) -> usize {
                 self.iter().map(|t| t.len_of_into()).sum()
             }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
-                self.iter().fold(0usize, |start,t| {
+                self.iter().fold(0usize, |start, t| {
                     let end: usize = start + t.len_of_into();
 
                     t.build_into_ret(&mut into_ret[start..end]);
 
                     end
-                } );
+                });
             }
         }
     };
@@ -121,7 +112,7 @@ pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncryptionKeySize {
     Bits128,
     Bits192,
@@ -159,7 +150,7 @@ impl Ord for EncryptionKeySize {
 ///
 /// There are three type of restrictions, `Encryption` (with the size of the encryption key),
 /// `Authentication`, and `Authorization`.
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AttributeRestriction {
     None,
     Encryption(EncryptionKeySize),
@@ -167,7 +158,7 @@ pub enum AttributeRestriction {
     Authorization,
 }
 
-#[derive(Clone,Copy,Debug,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AttributePermissions {
     /// Readable Access
     Read(AttributeRestriction),
@@ -227,9 +218,8 @@ pub const FULL_WRITE_PERMISSIONS: &'static [AttributePermissions] = &[
 /// permissions `Read` and `Write` define how the user can access the data, where as the
 /// permissions `Encryption`, `Authentication`, and `Authorization` define the conditions where
 /// `Read` and `Write` permissions are available to the client.
-#[derive(Clone,Debug,PartialEq,Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attribute<V> {
-
     /// The Attribute type
     ty: crate::UUID,
 
@@ -247,7 +237,6 @@ pub struct Attribute<V> {
 }
 
 impl<V> Attribute<V> {
-
     /// Create an Attribute
     ///
     /// There are four components to an attribute, the type of the attribute, the handle of the
@@ -256,9 +245,7 @@ impl<V> Attribute<V> {
     /// pushed on to the server.
     ///
     /// Ihe input 'permissions' will have all duplicates removed.
-    pub fn new( attribute_type: crate::UUID, mut permissions: Vec<AttributePermissions>, value: V)
-    -> Self
-    {
+    pub fn new(attribute_type: crate::UUID, mut permissions: Vec<AttributePermissions>, value: V) -> Self {
         permissions.sort();
         permissions.dedup();
 
@@ -282,7 +269,9 @@ impl<V> Attribute<V> {
         &self.value
     }
 
-    pub fn get_mut_value(&mut self) -> &mut V { &mut self.value }
+    pub fn get_mut_value(&mut self) -> &mut V {
+        &mut self.value
+    }
 
     /// Get the handle
     ///
@@ -327,24 +316,24 @@ pub enum Error {
     SendError(String),
 }
 
-impl core::fmt::Display for Error{
+impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Error::Other(r) => write!(f, "{}", r),
-            Error::NotConnected => write!( f, "Not Connected" ),
-            Error::MtuExceeded => write!( f, "Maximum Transmission Unit exceeded" ),
-            Error::TooSmallMtu => write!( f, "Minimum Transmission Unit larger then specified" ),
-            Error::Pdu(pdu) => write!( f, "Received Error PDU: {}", pdu ),
-            Error::UnexpectedPdu(val) => write!( f, "{}", val ),
-            Error::TransferFormatTryFrom(t_e) => write!( f, "{}", t_e ),
-            Error::Empty => write!( f, "Received an empty PDU" ),
-            Error::UnknownOpcode(op) =>
-                write!( f, "Opcode not known to the attribute protocol ({:#x})", op),
-            Error::AttUsedOpcode(op) =>
-                write!(f, "Opcode {:#x} is already used by the Attribute Protocol", op),
-            Error::IncorrectChannelId =>
-                write!(f, "The channel identifier of the ACL Data does not match the assigned \
-                    number for the Attribute Protocol"),
+            Error::NotConnected => write!(f, "Not Connected"),
+            Error::MtuExceeded => write!(f, "Maximum Transmission Unit exceeded"),
+            Error::TooSmallMtu => write!(f, "Minimum Transmission Unit larger then specified"),
+            Error::Pdu(pdu) => write!(f, "Received Error PDU: {}", pdu),
+            Error::UnexpectedPdu(val) => write!(f, "{}", val),
+            Error::TransferFormatTryFrom(t_e) => write!(f, "{}", t_e),
+            Error::Empty => write!(f, "Received an empty PDU"),
+            Error::UnknownOpcode(op) => write!(f, "Opcode not known to the attribute protocol ({:#x})", op),
+            Error::AttUsedOpcode(op) => write!(f, "Opcode {:#x} is already used by the Attribute Protocol", op),
+            Error::IncorrectChannelId => write!(
+                f,
+                "The channel identifier of the ACL Data does not match the assigned \
+                    number for the Attribute Protocol"
+            ),
             Error::PduError(err) => write!(f, "Attribute PDU error '{}'", err),
             Error::SendError(r) => write!(f, "Failed to send data, '{}'", r),
         }
@@ -353,7 +342,7 @@ impl core::fmt::Display for Error{
 
 impl core::fmt::Debug for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        core::fmt::Display::fmt(self,f)
+        core::fmt::Display::fmt(self, f)
     }
 }
 
@@ -370,7 +359,6 @@ impl From<TransferFormatError> for Error {
 }
 
 impl Error {
-
     /// An error generated when trying to send with a connection channel
     fn send_error<C: crate::l2cap::ConnectionChannel>(error: C::SendFutErr) -> Self {
         Self::SendError(format!("{:?}", error))
@@ -384,41 +372,51 @@ pub struct TransferFormatError {
 }
 
 impl TransferFormatError {
-
     /// Create a `TransferFormatError` for when the processed bytes does not match the expected
     /// number of bytes
     pub(crate) fn bad_size<D1, D2>(name: &'static str, expected_len: D1, incorrect_len: D2) -> Self
-    where D1: core::fmt::Display,
-          D2: core::fmt::Display,
+    where
+        D1: core::fmt::Display,
+        D2: core::fmt::Display,
     {
         TransferFormatError {
             pdu_err: pdu::Error::InvalidAttributeValueLength,
-            message: format!("Expected a size of {} bytes for {}, data length is {}",
-                expected_len, name, incorrect_len)
+            message: format!(
+                "Expected a size of {} bytes for {}, data length is {}",
+                expected_len, name, incorrect_len
+            ),
         }
     }
 
     pub(crate) fn bad_min_size<D1, D2>(name: &'static str, min_size: D1, data_len: D2) -> Self
-    where D1: core::fmt::Display,
-          D2: core::fmt::Display,
+    where
+        D1: core::fmt::Display,
+        D2: core::fmt::Display,
     {
         TransferFormatError {
             pdu_err: pdu::Error::InvalidAttributeValueLength,
-            message: format!("Expected a minimum size of {} bytes for {}, data \
-                length is {}", min_size, name, data_len)
+            message: format!(
+                "Expected a minimum size of {} bytes for {}, data \
+                length is {}",
+                min_size, name, data_len
+            ),
         }
     }
     /// Create a `TransferFormattedError` for when
     /// `[chunks_exact]`(https://doc.rust-lang.org/nightly/std/primitive.slice.html#method.chunks_exact)
     /// created an `ChunksExact` object that contained a remainder that isn't zero
     pub(crate) fn bad_exact_chunks<D1, D2>(name: &'static str, chunk_size: D1, data_len: D2) -> Self
-    where D1: core::fmt::Display,
-          D2: core::fmt::Display,
+    where
+        D1: core::fmt::Display,
+        D2: core::fmt::Display,
     {
         TransferFormatError {
             pdu_err: pdu::Error::InvalidAttributeValueLength,
-            message: format!("Cannot split data for {}, data of length {} is not a \
-                multiple of {}", name, data_len, chunk_size)
+            message: format!(
+                "Cannot split data for {}, data of length {} is not a \
+                multiple of {}",
+                name, data_len, chunk_size
+            ),
         }
     }
 
@@ -429,12 +427,10 @@ impl TransferFormatError {
         }
     }
 
-    pub(crate) fn incorrect_opcode(expected: pdu::PduOpcode, received: pdu::PduOpcode) -> Self
-    {
+    pub(crate) fn incorrect_opcode(expected: pdu::PduOpcode, received: pdu::PduOpcode) -> Self {
         TransferFormatError {
             pdu_err: pdu::Error::InvalidPDU,
-            message: format!("Expected ATT PDU opcode {:?}, received opcode {:?}", expected,
-                 received),
+            message: format!("Expected ATT PDU opcode {:?}, received opcode {:?}", expected, received),
         }
     }
 }
@@ -444,7 +440,10 @@ impl From<String> for TransferFormatError {
     ///
     /// The member `pdu_err` will be set to `InvalidPDU`
     fn from(message: String) -> Self {
-        TransferFormatError { pdu_err: pdu::Error::InvalidPDU, message }
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidPDU,
+            message,
+        }
     }
 }
 
@@ -453,7 +452,10 @@ impl From<&'_ str> for TransferFormatError {
     ///
     /// The member `pdu` will be set to `InvalidPDU`
     fn from(msg: &'_ str) -> Self {
-        TransferFormatError { pdu_err: pdu::Error::InvalidPDU, message: msg.into() }
+        TransferFormatError {
+            pdu_err: pdu::Error::InvalidPDU,
+            message: msg.into(),
+        }
     }
 }
 
@@ -462,7 +464,10 @@ impl From<pdu::Error> for TransferFormatError {
     ///
     /// The member message will just be set to 'unspecified'
     fn from(err: pdu::Error) -> Self {
-        TransferFormatError { pdu_err: err, message: "unspecified".into() }
+        TransferFormatError {
+            pdu_err: err,
+            message: "unspecified".into(),
+        }
     }
 }
 
@@ -487,7 +492,9 @@ pub trait TransferFormatTryFrom {
     /// This will attempt to take the passed byte slice and convert it into Self. The byte slice
     /// needs to only be the attribute parameter, it cannot contain either the attribute opcode
     /// or the attribute signature.
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> where Self: Sized;
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized;
 }
 
 /// ATT Protocol Into transmission format
@@ -526,7 +533,7 @@ pub trait TransferFormatInto {
     fn into(&self) -> Vec<u8> {
         let len = self.len_of_into();
 
-        let mut buff = Vec::with_capacity( len );
+        let mut buff = Vec::with_capacity(len);
 
         buff.resize(len, 0);
 
@@ -540,56 +547,62 @@ pub trait TransferFormatInto {
 macro_rules! impl_transfer_format_for_number {
     ( $num: ty ) => {
         impl TransferFormatTryFrom for $num {
-            fn try_from( raw: &[u8]) -> Result<Self, TransferFormatError> {
+            fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
                 if raw.len() == core::mem::size_of::<$num>() {
-                    let mut bytes = <[u8;core::mem::size_of::<$num>()]>::default();
+                    let mut bytes = <[u8; core::mem::size_of::<$num>()]>::default();
 
                     bytes.clone_from_slice(raw);
 
                     Ok(Self::from_le_bytes(bytes))
                 } else {
-                    Err(TransferFormatError::bad_size(stringify!($num), core::mem::size_of::<$num>(), raw.len()))
+                    Err(TransferFormatError::bad_size(
+                        stringify!($num),
+                        core::mem::size_of::<$num>(),
+                        raw.len(),
+                    ))
                 }
             }
         }
 
         impl TransferFormatInto for $num {
-
-            fn len_of_into(&self) -> usize { core::mem::size_of::<$num>() }
+            fn len_of_into(&self) -> usize {
+                core::mem::size_of::<$num>()
+            }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
-                into_ret.copy_from_slice( &self.to_le_bytes() )
+                into_ret.copy_from_slice(&self.to_le_bytes())
             }
         }
 
         impl_transfer_format_for_vec_of!($num);
-    }
+    };
 }
 
-impl_transfer_format_for_number!{i8}
-impl_transfer_format_for_number!{u8}
-impl_transfer_format_for_number!{i16}
-impl_transfer_format_for_number!{u16}
-impl_transfer_format_for_number!{i32}
-impl_transfer_format_for_number!{u32}
-impl_transfer_format_for_number!{i64}
-impl_transfer_format_for_number!{u64}
-impl_transfer_format_for_number!{isize}
-impl_transfer_format_for_number!{usize}
-impl_transfer_format_for_number!{i128}
-impl_transfer_format_for_number!{u128}
-impl_transfer_format_for_number!{f32}
-impl_transfer_format_for_number!{f64}
+impl_transfer_format_for_number! {i8}
+impl_transfer_format_for_number! {u8}
+impl_transfer_format_for_number! {i16}
+impl_transfer_format_for_number! {u16}
+impl_transfer_format_for_number! {i32}
+impl_transfer_format_for_number! {u32}
+impl_transfer_format_for_number! {i64}
+impl_transfer_format_for_number! {u64}
+impl_transfer_format_for_number! {isize}
+impl_transfer_format_for_number! {usize}
+impl_transfer_format_for_number! {i128}
+impl_transfer_format_for_number! {u128}
+impl_transfer_format_for_number! {f32}
+impl_transfer_format_for_number! {f64}
 
 impl TransferFormatTryFrom for alloc::string::String {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
-        alloc::string::String::from_utf8(raw.to_vec())
-            .map_err(|e| TransferFormatError::from(format!("{:?}", e)))
+        alloc::string::String::from_utf8(raw.to_vec()).map_err(|e| TransferFormatError::from(format!("{:?}", e)))
     }
 }
 
 impl TransferFormatInto for &str {
-    fn len_of_into(&self) -> usize { self.len() }
+    fn len_of_into(&self) -> usize {
+        self.len()
+    }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         into_ret.copy_from_slice(self.as_bytes())
@@ -597,26 +610,31 @@ impl TransferFormatInto for &str {
 }
 
 impl TransferFormatInto for alloc::string::String {
-    fn len_of_into(&self) -> usize { (self as &str).len_of_into() }
+    fn len_of_into(&self) -> usize {
+        (self as &str).len_of_into()
+    }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         (self as &str).build_into_ret(into_ret)
     }
 }
 
-impl<T> TransferFormatInto for [T] where T: TransferFormatInto {
-    fn len_of_into(&self) -> usize { self.iter().map(|t| t.len_of_into()).sum() }
+impl<T> TransferFormatInto for [T]
+where
+    T: TransferFormatInto,
+{
+    fn len_of_into(&self) -> usize {
+        self.iter().map(|t| t.len_of_into()).sum()
+    }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        self.iter()
-            .map(|t| (t.len_of_into(), t) )
-            .fold(0, |off, (len, t)| {
-                let end = off + len;
+        self.iter().map(|t| (t.len_of_into(), t)).fold(0, |off, (len, t)| {
+            let end = off + len;
 
-                t.build_into_ret(&mut into_ret[off..end]);
+            t.build_into_ret(&mut into_ret[off..end]);
 
-                end
-            });
+            end
+        });
     }
 }
 
@@ -624,28 +642,30 @@ impl TransferFormatTryFrom for crate::UUID {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         use core::mem::size_of;
 
-        macro_rules! err_fmt { () =>  { "Failed to create UUID, {}" } }
+        macro_rules! err_fmt {
+            () => {
+                "Failed to create UUID, {}"
+            };
+        }
 
         if raw.len() == size_of::<u16>() {
-
             TransferFormatTryFrom::try_from(raw)
-            .and_then( |uuid_16: u16| Ok(crate::UUID::from_u16(uuid_16)) )
-            .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
-
+                .and_then(|uuid_16: u16| Ok(crate::UUID::from_u16(uuid_16)))
+                .or_else(|e| Err(TransferFormatError::from(format!(err_fmt!(), e))))
         } else if raw.len() == size_of::<u128>() {
-
             TransferFormatTryFrom::try_from(raw)
-            .and_then( |uuid_128: u128| Ok(crate::UUID::from_u128(uuid_128)) )
-            .or_else( |e| Err(TransferFormatError::from(format!(err_fmt!(),e))) )
-
+                .and_then(|uuid_128: u128| Ok(crate::UUID::from_u128(uuid_128)))
+                .or_else(|e| Err(TransferFormatError::from(format!(err_fmt!(), e))))
         } else {
-            Err(TransferFormatError::from(format!(err_fmt!(), "raw data is not 16 or 128 bits")))
+            Err(TransferFormatError::from(format!(
+                err_fmt!(),
+                "raw data is not 16 or 128 bits"
+            )))
         }
     }
 }
 
 impl TransferFormatInto for crate::UUID {
-
     fn len_of_into(&self) -> usize {
         if self.is_16_bit() {
             core::mem::size_of::<u16>()
@@ -655,7 +675,7 @@ impl TransferFormatInto for crate::UUID {
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        match core::convert::TryInto::<u16>::try_into( *self ) {
+        match core::convert::TryInto::<u16>::try_into(*self) {
             Ok(raw) => raw.build_into_ret(&mut into_ret[..2]),
 
             Err(_) => <u128>::from(*self).build_into_ret(&mut into_ret[..16]),
@@ -663,14 +683,19 @@ impl TransferFormatInto for crate::UUID {
     }
 }
 
-impl<T> TransferFormatTryFrom for Box<T> where T: TransferFormatTryFrom {
-    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
-        <T as TransferFormatTryFrom>::try_from(raw).and_then( |v| Ok(Box::new(v)) )
+impl<T> TransferFormatTryFrom for Box<T>
+where
+    T: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+        <T as TransferFormatTryFrom>::try_from(raw).and_then(|v| Ok(Box::new(v)))
     }
 }
 
-impl<T> TransferFormatInto for Box<T> where T: TransferFormatInto {
-
+impl<T> TransferFormatInto for Box<T>
+where
+    T: TransferFormatInto,
+{
     fn len_of_into(&self) -> usize {
         self.as_ref().len_of_into()
     }
@@ -681,29 +706,25 @@ impl<T> TransferFormatInto for Box<T> where T: TransferFormatInto {
 }
 
 impl TransferFormatTryFrom for Box<str> {
-    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         core::str::from_utf8(raw)
-            .and_then( |s| Ok( s.into() ) )
-            .or_else( |e| {
-                Err( TransferFormatError::from(format!("{}", e)))
-            })
+            .and_then(|s| Ok(s.into()))
+            .or_else(|e| Err(TransferFormatError::from(format!("{}", e))))
     }
 }
 
 impl TransferFormatInto for Box<str> {
-
     fn len_of_into(&self) -> usize {
         self.len()
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret.copy_from_slice( self.as_bytes() )
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret.copy_from_slice(self.as_bytes())
     }
 }
 
 impl TransferFormatTryFrom for () {
-
-    fn try_from(raw: &[u8] ) -> Result<Self, TransferFormatError> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() == 0 {
             Ok(())
         } else {
@@ -713,25 +734,34 @@ impl TransferFormatTryFrom for () {
 }
 
 impl TransferFormatInto for () {
+    fn len_of_into(&self) -> usize {
+        0
+    }
 
-    fn len_of_into(&self) -> usize { 0 }
-
-    fn build_into_ret(&self, _: &mut [u8] ) {}
+    fn build_into_ret(&self, _: &mut [u8]) {}
 }
 
 impl TransferFormatInto for Box<dyn TransferFormatInto> {
+    fn len_of_into(&self) -> usize {
+        self.as_ref().len_of_into()
+    }
 
-    fn len_of_into(&self) -> usize { self.as_ref().len_of_into() }
-
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
         self.as_ref().build_into_ret(into_ret);
     }
 }
 
-impl<T> TransferFormatInto for &T where T: TransferFormatInto + ?Sized {
-    fn len_of_into(&self) -> usize { (*self).len_of_into() }
+impl<T> TransferFormatInto for &T
+where
+    T: TransferFormatInto + ?Sized,
+{
+    fn len_of_into(&self) -> usize {
+        (*self).len_of_into()
+    }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) { (*self).build_into_ret(into_ret) }
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        (*self).build_into_ret(into_ret)
+    }
 }
 
 /// Option implementation for TransferFormatTryFrom
@@ -740,7 +770,10 @@ impl<T> TransferFormatInto for &T where T: TransferFormatInto + ?Sized {
 /// * `Some(..)` is transferred with a byte followed by the transfer format of the contained data.
 ///   The first byte is a marker byte for Some however its value is undefined.
 /// * `None` is transferred as an empty slice.
-impl<T> TransferFormatTryFrom for Option<T> where T: TransferFormatTryFrom {
+impl<T> TransferFormatTryFrom for Option<T>
+where
+    T: TransferFormatTryFrom,
+{
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() == 0 {
             Ok(None)
@@ -756,14 +789,21 @@ impl<T> TransferFormatTryFrom for Option<T> where T: TransferFormatTryFrom {
 /// * `Some(..)` is transferred with a byte followed by the transfer format of the contained data.
 ///   The first byte is a marker byte for Some however its value is undefined.
 /// * `None` is transferred as an empty slice.
-impl<T> TransferFormatInto for Option<T> where T: TransferFormatInto {
-
-    fn len_of_into(&self) -> usize { match self { None => 0, Some(t) => t.len_of_into() + 1 } }
+impl<T> TransferFormatInto for Option<T>
+where
+    T: TransferFormatInto,
+{
+    fn len_of_into(&self) -> usize {
+        match self {
+            None => 0,
+            Some(t) => t.len_of_into() + 1,
+        }
+    }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         match self {
             None => debug_assert_eq!(0, into_ret.len()),
-            Some(t) => t.build_into_ret(&mut into_ret[1..])
+            Some(t) => t.build_into_ret(&mut into_ret[1..]),
         }
     }
 }
@@ -772,14 +812,14 @@ impl<T> TransferFormatInto for Option<T> where T: TransferFormatInto {
 mod test {
 
     use super::*;
+    use crate::l2cap::MinimumMtu;
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
-    use crate::l2cap::MinimumMtu;
 
     use std::{
         future::Future,
-        task::{Poll,Waker,Context},
-        pin::Pin
+        pin::Pin,
+        task::{Context, Poll, Waker},
     };
 
     struct DummySendFut;
@@ -802,12 +842,12 @@ mod test {
 
     /// Channel 1 sends to b1 and receives from b2
     struct Channel1 {
-        two_way: Arc<Mutex<TwoWayChannel>>
+        two_way: Arc<Mutex<TwoWayChannel>>,
     }
 
     /// Channel 2 sends to b2 and receives from b1
     struct Channel2 {
-        two_way: Arc<Mutex<TwoWayChannel>>
+        two_way: Arc<Mutex<TwoWayChannel>>,
     }
 
     impl TwoWayChannel {
@@ -846,11 +886,17 @@ mod test {
 
         fn set_mtu(&self, _: u16) {}
 
-        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn get_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn max_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn min_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
             use crate::l2cap::AclDataFragment;
@@ -884,11 +930,17 @@ mod test {
 
         fn set_mtu(&self, _: u16) {}
 
-        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn get_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn max_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn min_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
         fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
             use crate::l2cap::AclDataFragment;
@@ -906,19 +958,13 @@ mod test {
 
     #[test]
     fn test_att_connection() {
-        use std::{
-            thread,
-            sync::{
-                Arc,
-                atomic,
-            }
-        };
-        use crate::{
-            l2cap::ConnectionChannel,
-            UUID
-        };
-        use futures::executor::block_on;
         use super::client::ResponseProcessor;
+        use crate::{l2cap::ConnectionChannel, UUID};
+        use futures::executor::block_on;
+        use std::{
+            sync::{atomic, Arc},
+            thread,
+        };
 
         const UUID_1: UUID = UUID::from_u16(1);
         const UUID_2: UUID = UUID::from_u16(2);
@@ -930,67 +976,63 @@ mod test {
 
         let kill_opcode = 0xFFu8;
 
-        let (c1,c2) = TwoWayChannel::new();
+        let (c1, c2) = TwoWayChannel::new();
 
         let thread_panicked = Arc::new(atomic::AtomicBool::new(false));
 
         let thread_panicked_clone = thread_panicked.clone();
 
-        let t: &mut Option<JoinHandle<_>> = &mut thread::spawn( move || {
+        let t: &mut Option<JoinHandle<_>> = &mut thread::spawn(move || {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new( &c2, None, server::NoQueuedWrites );
+            let mut server = server::Server::new(&c2, None, server::NoQueuedWrites);
 
             let attribute_0 = Attribute::new(
                 UUID_1,
                 [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
-                0usize
+                0usize,
             );
 
             let attribute_1 = Attribute::new(
                 UUID_2,
                 [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
-                0u64
+                0u64,
             );
 
             let attribute_3 = Attribute::new(
                 UUID_3,
                 [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
-                0i8
+                0i8,
             );
 
             server.push(attribute_0); // has handle value of 1
             server.push(attribute_1); // has handle value of 2
             server.push(attribute_3); // has handle value of 3
 
-            let client_permissions: &[AttributePermissions] = &[
-                Read(AttributeRestriction::None),
-                Write(AttributeRestriction::None),
-            ];
+            let client_permissions: &[AttributePermissions] =
+                &[Read(AttributeRestriction::None), Write(AttributeRestriction::None)];
 
             server.give_permissions_to_client(client_permissions);
 
             if let Err(e) = 'server_loop: loop {
-
                 use std::convert::TryFrom;
 
                 match block_on(c2.future_receiver()) {
-                    Ok(l2cap_data_vec) => for l2cap_pdu in l2cap_data_vec {
-
-                        match block_on(server.process_acl_data(&l2cap_pdu)) {
-                            Err(super::Error::UnknownOpcode(op)) if op == kill_opcode =>
-                                break 'server_loop Ok(()),
-                            Err(e) =>
-                                break 'server_loop Err(
-                                    format!(
+                    Ok(l2cap_data_vec) => {
+                        for l2cap_pdu in l2cap_data_vec {
+                            match block_on(server.process_acl_data(&l2cap_pdu)) {
+                                Err(super::Error::UnknownOpcode(op)) if op == kill_opcode => break 'server_loop Ok(()),
+                                Err(e) => {
+                                    break 'server_loop Err(format!(
                                         "Pdu error: {:?}, att pdu op: {:?}",
                                         e,
                                         client::ClientPduName::try_from(l2cap_pdu.get_payload()[0])
-                                    )
-                                ),
-                            _ => (),
+                                    ))
+                                }
+                                _ => (),
+                            }
                         }
-                    },
+                    }
                     Err(e) => break 'server_loop Err(format!("Future Receiver Error: {:?}", e)),
                 }
             } {
@@ -1005,11 +1047,14 @@ mod test {
         /// # Panics In Returned Closure
         /// Input `t` of 'make_block_on' cannot refer to a `None` *for the lifetime of the returned
         /// closure*.
-        fn make_block_on<'t, F,T>(tp: Arc<atomic::AtomicBool>, t: &'t mut Option<thread::JoinHandle<T>>)
-        -> impl FnMut(F, &str) -> F::Output + 't
-        where F: std::future::Future + std::marker::Unpin {
-            move |f, timeout_err|
-            {
+        fn make_block_on<'t, F, T>(
+            tp: Arc<atomic::AtomicBool>,
+            t: &'t mut Option<thread::JoinHandle<T>>,
+        ) -> impl FnMut(F, &str) -> F::Output + 't
+        where
+            F: std::future::Future + std::marker::Unpin,
+        {
+            move |f, timeout_err| {
                 let tf = async_timer::Timed::platform_new(f, std::time::Duration::from_secs(1));
 
                 futures::executor::block_on(tf)
@@ -1018,9 +1063,11 @@ mod test {
                             format!(
                                 "{}, server_error: {:?}",
                                 timeout_err,
-                                t.take().expect("Input 't' is none").join()
+                                t.take()
+                                    .expect("Input 't' is none")
+                                    .join()
                                     .map(|_| "")
-                                    .map_err(|any| any.downcast::<String>().unwrap() )
+                                    .map_err(|any| any.downcast::<String>().unwrap())
                                     .unwrap_err()
                             )
                         } else {
@@ -1033,99 +1080,92 @@ mod test {
 
         let le_client_setup = block_on(client::LeConnectClient::initiate(512, &c1)).unwrap();
 
-        let client = block_on(le_client_setup.create_client(
-            make_block_on(thread_panicked.clone(), t)(c1.future_receiver(),"Connect timed out")
-                .expect("connect receiver")
-                .first()
-                .unwrap()
-        ))
+        let client = block_on(
+            le_client_setup.create_client(
+                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "Connect timed out")
+                    .expect("connect receiver")
+                    .first()
+                    .unwrap(),
+            ),
+        )
         .unwrap();
 
         // writing to handle 1
-        block_on(client.write_request(1, test_val_1)).unwrap()
+        block_on(client.write_request(1, test_val_1))
+            .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(
-                    c1.future_receiver(),
-                    "write handle 1 timed out"
-                )
-                .expect("w1 receiver")
-                .first()
-                .unwrap() )
+                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "write handle 1 timed out")
+                    .expect("w1 receiver")
+                    .first()
+                    .unwrap(),
+            )
             .expect("w1 response");
 
         // writing to handle 2
-        block_on(client.write_request(2, test_val_2)).unwrap()
+        block_on(client.write_request(2, test_val_2))
+            .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(
-                    c1.future_receiver(),
-                    "write handle 2 timed out"
-                )
-                .expect("w2 receiver")
-                .first()
-                .unwrap() )
+                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "write handle 2 timed out")
+                    .expect("w2 receiver")
+                    .first()
+                    .unwrap(),
+            )
             .expect("w2 response");
 
         // writing to handle 3
-        block_on(client.write_request(3, test_val_3)).unwrap()
+        block_on(client.write_request(3, test_val_3))
+            .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(
-                    c1.future_receiver(),
-                    "write handle 3 timed out"
-                )
-                .expect("w3 receiver")
-                .first()
-                .unwrap() )
+                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "write handle 3 timed out")
+                    .expect("w3 receiver")
+                    .first()
+                    .unwrap(),
+            )
             .expect("w3 response");
 
         // reading handle 1
-        let read_val_1 = block_on(client.read_request(1)).unwrap()
+        let read_val_1 = block_on(client.read_request(1))
+            .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(
-                    c1.future_receiver(),
-                    "read handle 1 timed out"
-                )
-                .expect("r1 receiver")
-                .first()
-                .unwrap() )
+                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "read handle 1 timed out")
+                    .expect("r1 receiver")
+                    .first()
+                    .unwrap(),
+            )
             .expect("r1 response");
 
-        let read_val_2 = block_on(client.read_request(2)).unwrap()
+        let read_val_2 = block_on(client.read_request(2))
+            .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(
-                    c1.future_receiver(),
-                    "read handle 2 timed out"
-                )
-                .expect("r2 receiver")
-                .first()
-                .unwrap() )
+                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "read handle 2 timed out")
+                    .expect("r2 receiver")
+                    .first()
+                    .unwrap(),
+            )
             .expect("r2 response");
 
-        let read_val_3 = block_on(client.read_request(3)).unwrap()
+        let read_val_3 = block_on(client.read_request(3))
+            .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(
-                    c1.future_receiver(),
-                    "read handle 3 timed out"
-                )
-                .expect("r3 receiver")
-                .first()
-                .unwrap() )
+                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "read handle 3 timed out")
+                    .expect("r3 receiver")
+                    .first()
+                    .unwrap(),
+            )
             .expect("r3 response");
 
-        block_on( client.custom_command( pdu::Pdu::new(kill_opcode.into(), 0u8) ) )
-            .expect("Failed to send kill opcode");
+        block_on(client.custom_command(pdu::Pdu::new(kill_opcode.into(), 0u8))).expect("Failed to send kill opcode");
 
         // Check that the send values equal the read values
         assert_eq!(test_val_1, read_val_1);
         assert_eq!(test_val_2, read_val_2);
         assert_eq!(test_val_3, read_val_3);
 
-        t.take()
-        .map(
-            |handle| {
-                handle.join()
+        t.take().map(|handle| {
+            handle
+                .join()
                 .map_err(|e| format!("Thread Failed to join: {}", e.downcast_ref::<String>().unwrap()))
                 .unwrap()
-            }
-        );
+        });
     }
 }

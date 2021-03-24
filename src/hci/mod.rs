@@ -2,10 +2,11 @@
 //!
 //! The HCI is the primary way of interacting with the controller for this library.
 
-pub mod opcodes;
 pub mod common;
 pub mod error;
-#[macro_use] pub mod events;
+pub mod opcodes;
+#[macro_use]
+pub mod events;
 mod flow_ctrl;
 
 use alloc::sync::Arc;
@@ -14,7 +15,7 @@ use core::fmt::Debug;
 use core::fmt::Display;
 use core::future::Future;
 use core::pin::Pin;
-use core::task::{ Poll, Waker };
+use core::task::{Poll, Waker};
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -51,16 +52,16 @@ pub trait CommandParameter {
 
         // Allocating a vector to the exact size of the packet. The 3 bytes come from the opcode
         // field (2 bytes) and the length field (1 byte)
-        let mut buffer: Vec<u8> =  Vec::with_capacity( parameter_size + 3);
+        let mut buffer: Vec<u8> = Vec::with_capacity(parameter_size + 3);
 
         let parameter = self.get_parameter();
 
         let p_bytes_p = &parameter as *const Self::Parameter as *const u8;
 
-        let parm_bytes = unsafe { core::slice::from_raw_parts( p_bytes_p, parameter_size ) };
+        let parm_bytes = unsafe { core::slice::from_raw_parts(p_bytes_p, parameter_size) };
 
         // Add opcode to packet
-        buffer.extend_from_slice( &Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes() );
+        buffer.extend_from_slice(&Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes());
 
         // Add the length of the parameter
         buffer.push(parm_bytes.len() as u8);
@@ -78,10 +79,13 @@ pub trait CommandParameter {
 /// event should be propigated to. The event must be matched to determine this.
 pub trait EventMatcher: Sync + Send {
     /// Match the event data
-    fn match_event(&self, event_data: &events::EventsData ) -> bool;
+    fn match_event(&self, event_data: &events::EventsData) -> bool;
 }
 
-impl<F> EventMatcher for F where F: Fn( &events::EventsData ) -> bool + Sized + Sync + Send {
+impl<F> EventMatcher for F
+where
+    F: Fn(&events::EventsData) -> bool + Sized + Sync + Send,
+{
     fn match_event(&self, event_data: &events::EventsData) -> bool {
         self(event_data)
     }
@@ -96,23 +100,22 @@ pub enum AclPacketBoundary {
 }
 
 impl AclPacketBoundary {
-
     /// Get the value shifted into the correct place of the Packet Boundary Flag in the HCI ACL
     /// data packet. The returned value is in host byte order.
     fn get_shifted_val(&self) -> u16 {
-        ( match self {
+        (match self {
             AclPacketBoundary::FirstNonFlushable => 0x0,
             AclPacketBoundary::ContinuingFragment => 0x1,
             AclPacketBoundary::FirstAutoFlushable => 0x2,
             AclPacketBoundary::CompleteL2capPdu => 0x3,
-        } ) << 12
+        }) << 12
     }
 
     /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn from_shifted_val(val: u16) -> Self {
-        match (val >> 12) & 3  {
+        match (val >> 12) & 3 {
             0x0 => AclPacketBoundary::FirstNonFlushable,
             0x1 => AclPacketBoundary::ContinuingFragment,
             0x2 => AclPacketBoundary::FirstAutoFlushable,
@@ -131,24 +134,23 @@ pub enum AclBroadcastFlag {
 }
 
 impl AclBroadcastFlag {
-
     /// Get the value shifted into the correct place of the Packet Boundary Flag in the HCI ACL
     /// data packet. The returned value is in host byte order.
     fn get_shifted_val(&self) -> u16 {
-        ( match self {
+        (match self {
             AclBroadcastFlag::NoBroadcast => 0x0,
             AclBroadcastFlag::ActiveSlaveBroadcast => 0x1,
-        } ) << 14
+        }) << 14
     }
 
     /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn try_from_shifted_val(val: u16) -> Result<Self, ()> {
-        match (val >> 14) & 1  {
+        match (val >> 14) & 1 {
             0x0 => Ok(AclBroadcastFlag::NoBroadcast),
             0x1 => Ok(AclBroadcastFlag::ActiveSlaveBroadcast),
-            0x2 | 0x3 => Err( () ),
+            0x2 | 0x3 => Err(()),
             _ => panic!("This cannot happen"),
         }
     }
@@ -158,18 +160,17 @@ impl AclBroadcastFlag {
 pub enum HciAclPacketConvertError {
     PacketTooSmall,
     InvalidBroadcastFlag,
-    InvalidConnectionHandle( &'static str ),
+    InvalidConnectionHandle(&'static str),
 }
 
 impl Display for HciAclPacketConvertError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            HciAclPacketConvertError::PacketTooSmall =>
-                write!(f, "Packet is too small to be a valid HCI ACL Data"),
-            HciAclPacketConvertError::InvalidBroadcastFlag =>
-                write!(f, "Packet has invalid broadcast Flag"),
-            HciAclPacketConvertError::InvalidConnectionHandle(reason) =>
-                write!(f, "Invalid connection handle, {}", reason),
+            HciAclPacketConvertError::PacketTooSmall => write!(f, "Packet is too small to be a valid HCI ACL Data"),
+            HciAclPacketConvertError::InvalidBroadcastFlag => write!(f, "Packet has invalid broadcast Flag"),
+            HciAclPacketConvertError::InvalidConnectionHandle(reason) => {
+                write!(f, "Invalid connection handle, {}", reason)
+            }
         }
     }
 }
@@ -206,7 +207,6 @@ pub struct HciAclData {
 }
 
 impl HciAclData {
-
     /// The size of the header of a HCI ACL data packet
     pub const HEADER_SIZE: usize = 4;
 
@@ -223,40 +223,49 @@ impl HciAclData {
         connection_handle: common::ConnectionHandle,
         packet_boundary_flag: AclPacketBoundary,
         broadcast_flag: AclBroadcastFlag,
-        payload: Vec<u8>
-    ) -> Self
-    {
-        assert!( payload.len() <= <u16>::MAX.into() );
+        payload: Vec<u8>,
+    ) -> Self {
+        assert!(payload.len() <= <u16>::MAX.into());
 
-        HciAclData { connection_handle, packet_boundary_flag, broadcast_flag, payload }
+        HciAclData {
+            connection_handle,
+            packet_boundary_flag,
+            broadcast_flag,
+            payload,
+        }
     }
 
     pub fn get_handle(&self) -> &common::ConnectionHandle {
         &self.connection_handle
     }
 
-    pub fn get_payload(&self) -> &[u8] { &self.payload }
+    pub fn get_payload(&self) -> &[u8] {
+        &self.payload
+    }
 
-    pub fn get_packet_boundary_flag(&self) -> AclPacketBoundary { self.packet_boundary_flag }
+    pub fn get_packet_boundary_flag(&self) -> AclPacketBoundary {
+        self.packet_boundary_flag
+    }
 
-    pub fn get_broadcast_flag(&self) -> AclBroadcastFlag { self.broadcast_flag }
+    pub fn get_broadcast_flag(&self) -> AclBroadcastFlag {
+        self.broadcast_flag
+    }
 
     /// Convert the HciAclData into a raw packet
     ///
     /// This will convert HciAclData into a packet that can be sent between the host and controller.
     pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
-
-        let mut v = alloc::vec::Vec::with_capacity( self.payload.len() + 4 );
+        let mut v = alloc::vec::Vec::with_capacity(self.payload.len() + 4);
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
             | self.packet_boundary_flag.get_shifted_val()
             | self.broadcast_flag.get_shifted_val();
 
-        v.extend_from_slice( &first_2_bytes.to_le_bytes() );
+        v.extend_from_slice(&first_2_bytes.to_le_bytes());
 
-        v.extend_from_slice( &(self.payload.len() as u16).to_le_bytes() );
+        v.extend_from_slice(&(self.payload.len() as u16).to_le_bytes());
 
-        v.extend_from_slice( &self.payload );
+        v.extend_from_slice(&self.payload);
 
         v
     }
@@ -269,33 +278,30 @@ impl HciAclData {
         const HEADER_SIZE: usize = 4;
 
         if packet.len() >= HEADER_SIZE {
-            let first_2_bytes = <u16>::from_le_bytes( [ packet[0], packet[1] ] );
+            let first_2_bytes = <u16>::from_le_bytes([packet[0], packet[1]]);
 
-            let connection_handle = match common::ConnectionHandle::try_from( first_2_bytes & 0xFFF) {
+            let connection_handle = match common::ConnectionHandle::try_from(first_2_bytes & 0xFFF) {
                 Ok(handle) => handle,
-                Err(e) => return Err( HciAclPacketConvertError::InvalidConnectionHandle(e) ),
+                Err(e) => return Err(HciAclPacketConvertError::InvalidConnectionHandle(e)),
             };
 
-            let packet_boundary_flag = AclPacketBoundary::from_shifted_val( first_2_bytes );
+            let packet_boundary_flag = AclPacketBoundary::from_shifted_val(first_2_bytes);
 
-            let broadcast_flag = match AclBroadcastFlag::try_from_shifted_val( first_2_bytes ) {
+            let broadcast_flag = match AclBroadcastFlag::try_from_shifted_val(first_2_bytes) {
                 Ok(flag) => flag,
-                Err(_) => return Err( HciAclPacketConvertError::InvalidBroadcastFlag ),
+                Err(_) => return Err(HciAclPacketConvertError::InvalidBroadcastFlag),
             };
 
-            let data_length = <u16>::from_le_bytes( [ packet[2], packet[3] ] ) as usize;
+            let data_length = <u16>::from_le_bytes([packet[2], packet[3]]) as usize;
 
-            Ok(
-                HciAclData {
-                    connection_handle,
-                    packet_boundary_flag,
-                    broadcast_flag,
-                    payload: packet[HEADER_SIZE..(HEADER_SIZE + data_length)].to_vec(),
-                }
-            )
-
+            Ok(HciAclData {
+                connection_handle,
+                packet_boundary_flag,
+                broadcast_flag,
+                payload: packet[HEADER_SIZE..(HEADER_SIZE + data_length)].to_vec(),
+            })
         } else {
-            Err( HciAclPacketConvertError::PacketTooSmall )
+            Err(HciAclPacketConvertError::PacketTooSmall)
         }
     }
 
@@ -306,11 +312,10 @@ impl HciAclData {
 
         match self.packet_boundary_flag {
             AclPacketBoundary::ContinuingFragment => AclDataFragment::new(false, self.payload),
-            _                                     => AclDataFragment::new(true, self.payload),
+            _ => AclDataFragment::new(true, self.payload),
         }
     }
 }
-
 
 /// Trait for interfacing with the controller
 ///
@@ -335,8 +340,7 @@ impl HciAclData {
 /// event. Its the responsibility of the implementor of `HostControllerInterface` to determine
 /// what event goes with what `waker`, along with matching events to a `waker` based on the provided
 /// matcher.
-pub trait HostControllerInterface
-{
+pub trait HostControllerInterface {
     type SendCommandError: Debug + Display;
     type ReceiveEventError: Debug + Display;
 
@@ -349,9 +353,10 @@ pub trait HostControllerInterface
     ///
     /// The `cmd_data` input contains all the HCI command information, where as the `waker` input
     /// is used to wake the context for the command to be resent.
-    fn send_command<D,W>(&self, cmd_data: &D, waker: W) -> Result<bool, Self::SendCommandError>
-    where D: CommandParameter,
-          W: Into<Option<Waker>>;
+    fn send_command<D, W>(&self, cmd_data: &D, waker: W) -> Result<bool, Self::SendCommandError>
+    where
+        D: CommandParameter,
+        W: Into<Option<Waker>>;
 
     /// Receive an event from the Bluetooth controller
     ///
@@ -376,7 +381,8 @@ pub trait HostControllerInterface
         waker: &Waker,
         matcher: Pin<Arc<P>>,
     ) -> Option<Result<events::EventsData, Self::ReceiveEventError>>
-    where P: EventMatcher + Send + Sync + 'static;
+    where
+        P: EventMatcher + Send + Sync + 'static;
 }
 
 /// HCI ACL Data interface
@@ -392,10 +398,7 @@ pub trait HciAclDataInterface {
     ///
     /// The return value is the number of bytes of acl data payload + 1 ( due to added packet
     /// indicator ) sent.
-    fn send(
-        &self,
-        data: HciAclData,
-    ) -> Result<usize, Self::SendAclDataError>;
+    fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError>;
 
     /// Register a handle for receiving ACL packets
     ///
@@ -427,12 +430,18 @@ pub trait HciAclDataInterface {
     ) -> Option<Result<alloc::vec::Vec<HciAclData>, Self::ReceiveAclDataError>>;
 }
 
-enum SendCommandError<I> where I: HostControllerInterface {
+enum SendCommandError<I>
+where
+    I: HostControllerInterface,
+{
     Send(<I as HostControllerInterface>::SendCommandError),
     Recv(<I as HostControllerInterface>::ReceiveEventError),
 }
 
-impl<I> Debug for SendCommandError<I> where I: HostControllerInterface {
+impl<I> Debug for SendCommandError<I>
+where
+    I: HostControllerInterface,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             SendCommandError::Send(err) => Debug::fmt(err, f),
@@ -441,7 +450,10 @@ impl<I> Debug for SendCommandError<I> where I: HostControllerInterface {
     }
 }
 
-impl<I> Display for SendCommandError<I> where I: HostControllerInterface {
+impl<I> Display for SendCommandError<I>
+where
+    I: HostControllerInterface,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             SendCommandError::Send(err) => Display::fmt(err, f),
@@ -451,9 +463,10 @@ impl<I> Display for SendCommandError<I> where I: HostControllerInterface {
 }
 
 struct CommandFutureReturn<'a, I, CD, P>
-where I: HostControllerInterface,
-      CD: CommandParameter,
-      P: EventMatcher + Send + Sync + 'static,
+where
+    I: HostControllerInterface,
+    CD: CommandParameter,
+    P: EventMatcher + Send + Sync + 'static,
 {
     interface: &'a I,
     /// Parameter data sent with the command packet
@@ -466,34 +479,39 @@ where I: HostControllerInterface,
 }
 
 impl<'a, I, CD, P> CommandFutureReturn<'a, I, CD, P>
-where I: HostControllerInterface,
-      CD: CommandParameter + Unpin,
-      P: EventMatcher + Send + Sync + 'static,
+where
+    I: HostControllerInterface,
+    CD: CommandParameter + Unpin,
+    P: EventMatcher + Send + Sync + 'static,
 {
-
     /// This is just called within an implemenation of future created by the macro
     /// `[impl_returned_future]`(../index.html#impl_returned_future)
     fn fut_poll(&mut self, cx: &mut core::task::Context) -> Poll<Result<events::EventsData, SendCommandError<I>>> {
-
         if let Some(ref data) = self.command_data {
-            match self.interface.send_command(data, cx.waker().clone() ) {
+            match self.interface.send_command(data, cx.waker().clone()) {
                 Err(e) => return Poll::Ready(Err(SendCommandError::Send(e))),
                 // False means the command wasn't sent
                 Ok(false) => return Poll::Pending,
-                Ok(true) => { self.command_data.take(); },
+                Ok(true) => {
+                    self.command_data.take();
+                }
             }
         }
 
-        match self.interface.receive_event(self.event.into(), cx.waker(), self.matcher.clone()) {
+        match self
+            .interface
+            .receive_event(self.event.into(), cx.waker(), self.matcher.clone())
+        {
             None => Poll::Pending,
-            Some(result) => Poll::Ready(result.map_err(|e| SendCommandError::Recv(e)))
+            Some(result) => Poll::Ready(result.map_err(|e| SendCommandError::Recv(e))),
         }
     }
 }
 
 struct EventReturnFuture<'a, I, P>
-where I: HostControllerInterface,
-      P: EventMatcher + Sync + Send + 'static
+where
+    I: HostControllerInterface,
+    P: EventMatcher + Sync + Send + 'static,
 {
     interface: &'a I,
     event: Option<events::Events>,
@@ -501,13 +519,17 @@ where I: HostControllerInterface,
 }
 
 impl<'a, I, P> Future for EventReturnFuture<'a, I, P>
-where I: HostControllerInterface,
-P: EventMatcher + Send + Sync + 'static
+where
+    I: HostControllerInterface,
+    P: EventMatcher + Send + Sync + 'static,
 {
     type Output = Result<events::EventsData, I::ReceiveEventError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> Poll<Self::Output> {
-        match self.interface.receive_event(self.event, cx.waker(), self.matcher.clone()) {
+        match self
+            .interface
+            .receive_event(self.event, cx.waker(), self.matcher.clone())
+        {
             Some(evnt_rspn) => Poll::Ready(evnt_rspn),
             None => Poll::Pending,
         }
@@ -600,14 +622,16 @@ pub struct HostInterface<I> {
 /// time the raw connections will suffice with the MTU value set to the maximum packet size of the
 /// HCI receive data buffer on the controller.
 #[cfg(feature = "flow-ctrl")]
-pub struct HostInterface<I,M> {
+pub struct HostInterface<I, M> {
     interface: I,
     flow_controller: flow_ctrl::flow_manager::HciDataPacketFlowManager<M>,
 }
 
 #[bo_tie_macros::host_interface]
 impl<I> HostInterface<I> {
-    pub fn into_inner(self) -> I { self.interface }
+    pub fn into_inner(self) -> I {
+        self.interface
+    }
 }
 
 #[bo_tie_macros::host_interface]
@@ -625,8 +649,7 @@ impl<I> AsMut<I> for HostInterface<I> {
 }
 
 #[cfg(not(feature = "flow-ctrl"))]
-impl<I> From<I> for HostInterface<I>
-{
+impl<I> From<I> for HostInterface<I> {
     fn from(interface: I) -> Self {
         HostInterface { interface }
     }
@@ -634,7 +657,8 @@ impl<I> From<I> for HostInterface<I>
 
 #[bo_tie_macros::host_interface]
 impl<I> HostInterface<I>
-where I: HostControllerInterface
+where
+    I: HostControllerInterface,
 {
     /// Send a command to the controller
     ///
@@ -644,29 +668,27 @@ where I: HostControllerInterface
     ///
     /// A future is returned for waiting on the event generated from the controller in response to
     /// the sent command.
-    fn send_command<'a, CD>( &'a self, cmd_data: CD, event: events::Events )
-    -> CommandFutureReturn<'a, I, CD, impl EventMatcher + Send + Sync + 'static>
-    where CD: CommandParameter + Unpin + 'static,
+    fn send_command<'a, CD>(
+        &'a self,
+        cmd_data: CD,
+        event: events::Events,
+    ) -> CommandFutureReturn<'a, I, CD, impl EventMatcher + Send + Sync + 'static>
+    where
+        CD: CommandParameter + Unpin + 'static,
     {
-        let cmd_matcher = | ed: &events::EventsData | {
-
+        let cmd_matcher = |ed: &events::EventsData| {
             fn match_opcode<CD: CommandParameter>(opcode: Option<u16>) -> bool {
                 match opcode {
                     Some(opcode) => {
                         use core::convert::TryFrom;
 
                         let expected_op_code =
-                            opcodes::HCICommand::try_from(<CD as CommandParameter>::COMMAND)
-                            .unwrap();
+                            opcodes::HCICommand::try_from(<CD as CommandParameter>::COMMAND).unwrap();
 
-                        let recv_oc_code = opcodes::HCICommand::try_from(
-                            opcodes::OpCodePair::from_opcode(opcode)
-                        );
+                        let recv_oc_code = opcodes::HCICommand::try_from(opcodes::OpCodePair::from_opcode(opcode));
 
                         match recv_oc_code {
-                            Ok(code) => {
-                                expected_op_code == code
-                            },
+                            Ok(code) => expected_op_code == code,
                             Err(reason) => {
                                 log::error!("{}", reason);
                                 false
@@ -679,8 +701,8 @@ where I: HostControllerInterface
 
             match ed {
                 events::EventsData::CommandComplete(data) => match_opcode::<CD>(data.command_opcode),
-                events::EventsData::CommandStatus(data)   => match_opcode::<CD>(data.command_opcode),
-                _ => false
+                events::EventsData::CommandStatus(data) => match_opcode::<CD>(data.command_opcode),
+                _ => false,
             }
         };
 
@@ -718,11 +740,16 @@ where I: HostControllerInterface
     /// can be used to further refine the matching event to get around the limitation of this
     /// function. However it can also run into the same problem if the matcher is not differential
     /// enough between two events.
-    pub fn wait_for_event<'a,E>(&'a self, event: E)
-    -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
-    where E: Into<Option<events::Events>>,
+    pub fn wait_for_event<'a, E>(
+        &'a self,
+        event: E,
+    ) -> impl Future<Output = Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError>> + 'a
+    where
+        E: Into<Option<events::Events>>,
     {
-        fn default_matcher(_: &events::EventsData) -> bool { true }
+        fn default_matcher(_: &events::EventsData) -> bool {
+            true
+        }
 
         fn most_matcher(e: &events::EventsData) -> bool {
             e.get_event_name().is_maskable()
@@ -730,7 +757,11 @@ where I: HostControllerInterface
 
         let opt_event: Option<events::Events> = event.into();
 
-        let matcher = if opt_event.is_none() { most_matcher } else { default_matcher };
+        let matcher = if opt_event.is_none() {
+            most_matcher
+        } else {
+            default_matcher
+        };
 
         EventReturnFuture {
             interface: &self.interface,
@@ -759,9 +790,13 @@ where I: HostControllerInterface
     /// with matchers that return `true` given the same
     /// [`EventData`](crate::hci::events::EventsData) (the conditions for undefined behaviour
     /// for `wait_for_event` still apply).
-    pub fn wait_for_event_with_matcher<'a,P>(&'a self, event: events::Events, matcher: P)
-    -> impl Future<Output=Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError >> + 'a
-    where P: EventMatcher + Send + Sync + 'static,
+    pub fn wait_for_event_with_matcher<'a, P>(
+        &'a self,
+        event: events::Events,
+        matcher: P,
+    ) -> impl Future<Output = Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError>> + 'a
+    where
+        P: EventMatcher + Send + Sync + 'static,
     {
         EventReturnFuture {
             interface: &self.interface,
@@ -772,8 +807,10 @@ where I: HostControllerInterface
 }
 
 #[cfg(not(feature = "flow-ctrl"))]
-impl<I> HostInterface<I> where I: HciAclDataInterface {
-
+impl<I> HostInterface<I>
+where
+    I: HciAclDataInterface,
+{
     /// Create a new raw logical link connection channel
     ///
     /// Make a raw HCI connection channel with the provided connection handle for a logical
@@ -806,9 +843,13 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     /// # Warning
     /// Supplying a handle that does not represent a connection with the controller will result in
     /// undefined behaviour.
-    pub fn raw_channel<'a,M>(&'a self, handle: common::ConnectionHandle, max_mtu: M)
-    -> impl crate::l2cap::ConnectionChannel + 'a
-    where M: Into<Option<u16>>
+    pub fn raw_channel<'a, M>(
+        &'a self,
+        handle: common::ConnectionHandle,
+        max_mtu: M,
+    ) -> impl crate::l2cap::ConnectionChannel + 'a
+    where
+        M: Into<Option<u16>>,
     {
         flow_ctrl::HciLeUChannel::new_raw(self, handle, max_mtu)
     }
@@ -821,22 +862,29 @@ impl<I> HostInterface<I> where I: HciAclDataInterface {
     /// atomically reference counted `HostInterface`.
     ///
     /// All `handle` and `max_mtu` rules and panics still apply.
-    pub fn sync_raw_channel<M>(self: Arc<Self>, handle: common::ConnectionHandle, max_mtu: M)
-    -> impl crate::l2cap::ConnectionChannel
-    where M: Into<Option<u16>>
+    pub fn sync_raw_channel<M>(
+        self: Arc<Self>,
+        handle: common::ConnectionHandle,
+        max_mtu: M,
+    ) -> impl crate::l2cap::ConnectionChannel
+    where
+        M: Into<Option<u16>>,
     {
         flow_ctrl::HciLeUChannel::new_raw(self, handle, max_mtu)
     }
 }
 
 #[cfg(feature = "flow-ctrl")]
-impl<I,M> HostInterface<I,M>
-where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
-      M: for<'a> AsyncLock<'a> + 'static
+impl<I, M> HostInterface<I, M>
+where
+    I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
+    M: for<'a> AsyncLock<'a> + 'static,
 {
     /// Create a new HostInterface
     pub async fn new() -> Arc<Self>
-    where I: Default, M: Default
+    where
+        I: Default,
+        M: Default,
     {
         let mut hci = HostInterface {
             interface: Default::default(),
@@ -888,27 +936,29 @@ where I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + '
     pub fn flow_ctrl_channel<Mtu>(
         self: Arc<Self>,
         handle: common::ConnectionHandle,
-        max_mtu: Mtu
+        max_mtu: Mtu,
     ) -> impl crate::l2cap::ConnectionChannel
-    where Mtu: Into<Option<u16>>
+    where
+        Mtu: Into<Option<u16>>,
     {
-        let max = match max_mtu.into(){
+        let max = match max_mtu.into() {
             None => self.flow_controller.get_max_payload_size(),
             Some(v) => {
                 let val = <usize>::from(v);
 
                 val
-            },
+            }
         };
 
-        flow_ctrl::HciLeUChannel::<I,Arc<Self>,M>::new_le_flow_controller(self,handle,max)
+        flow_ctrl::HciLeUChannel::<I, Arc<Self>, M>::new_le_flow_controller(self, handle, max)
     }
 }
 
 #[derive(Debug)]
 enum OutputErr<TargErr, CmdErr>
-where TargErr: Display + Debug,
-      CmdErr: Display + Debug,
+where
+    TargErr: Display + Debug,
+    CmdErr: Display + Debug,
 {
     /// An error occurred at the target specific HCI implementation
     TargetSpecificErr(TargErr),
@@ -925,25 +975,29 @@ where TargErr: Display + Debug,
 }
 
 impl<TargErr, CmdErr> Display for OutputErr<TargErr, CmdErr>
-where TargErr: Display + Debug,
-      CmdErr: Display + Debug,
+where
+    TargErr: Display + Debug,
+    CmdErr: Display + Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             OutputErr::TargetSpecificErr(reason) => {
                 core::write!(f, "{}", reason)
-            },
+            }
             OutputErr::CommandDataConversionError(reason) => {
                 core::write!(f, "{}", reason)
-            },
+            }
             OutputErr::ReceivedIncorrectEvent(expected_event) => {
-                core::write!(f, "Received unexpected event '{:?}'", expected_event )
-            },
+                core::write!(f, "Received unexpected event '{:?}'", expected_event)
+            }
             OutputErr::ResponseHasNoAssociatedCommand => {
-                core::write!(f,"Event Response contains no data and is not associated with \
+                core::write!(
+                    f,
+                    "Event Response contains no data and is not associated with \
                     a HCI command. This should have been handled by the driver and not received \
-                    here")
-            },
+                    here"
+                )
+            }
             OutputErr::CommandStatusErr(reason) => {
                 core::write!(f, "{}", reason)
             }
@@ -958,7 +1012,6 @@ where TargErr: Display + Debug,
 /// is instead implemented on the return of those methods for the user to get the flow control
 /// information.
 pub trait FlowControlInfo {
-
     /// Get the number of HCI command packets that can be set to the controller
     ///
     /// This function returns the Num_HCI_Command_Packets parameter of the Command Complete and
@@ -977,7 +1030,9 @@ pub trait FlowControlInfo {
 struct StatusFlowControlInfo(usize);
 
 impl FlowControlInfo for StatusFlowControlInfo {
-    fn packet_space(&self) -> usize { self.0 }
+    fn packet_space(&self) -> usize {
+        self.0
+    }
 }
 
 macro_rules! event_pattern_creator {
@@ -988,30 +1043,32 @@ macro_rules! event_pattern_creator {
 macro_rules! impl_returned_future {
     // these inputs match the inputs from crate::hci::events::impl_get_data_for_command
     ($return_type: ty, $event:path, $data:pat, $error:ty, $to_do: block) => {
-
-        struct ReturnedFuture<'a, I, CD, P>( CommandFutureReturn<'a, I, CD, P> )
-        where I: HostControllerInterface,
-              CD: CommandParameter + Unpin,
-              P: EventMatcher + Send + Sync + 'static;
+        struct ReturnedFuture<'a, I, CD, P>(CommandFutureReturn<'a, I, CD, P>)
+        where
+            I: HostControllerInterface,
+            CD: CommandParameter + Unpin,
+            P: EventMatcher + Send + Sync + 'static;
 
         impl<'a, I, CD, P> core::future::Future for ReturnedFuture<'a, I, CD, P>
-        where I: HostControllerInterface,
-              CD: CommandParameter + Unpin,
-              P: EventMatcher + Send + Sync + 'static,
+        where
+            I: HostControllerInterface,
+            CD: CommandParameter + Unpin,
+            P: EventMatcher + Send + Sync + 'static,
         {
-            type Output = core::result::Result< $return_type, crate::hci::OutputErr<SendCommandError<I>,$error>>;
+            type Output = core::result::Result<$return_type, crate::hci::OutputErr<SendCommandError<I>, $error>>;
 
             fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
                 if let core::task::Poll::Ready(result) = self.get_mut().0.fut_poll(cx) {
                     match result {
-                        Ok( event_pattern_creator!($event, $data) ) => $to_do,
+                        Ok(event_pattern_creator!($event, $data)) => $to_do,
                         Ok(event @ _) => {
-                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(event.get_event_name()));
+                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(
+                                event.get_event_name(),
+                            ));
 
                             core::task::Poll::Ready(ret)
-                        },
-                        Err(reason) =>
-                            core::task::Poll::Ready(Err(crate::hci::OutputErr::TargetSpecificErr(reason))),
+                        }
+                        Err(reason) => core::task::Poll::Ready(Err(crate::hci::OutputErr::TargetSpecificErr(reason))),
                     }
                 } else {
                     core::task::Poll::Pending
@@ -1019,7 +1076,6 @@ macro_rules! impl_returned_future {
             }
         }
     };
-
 }
 
 /// A Future for the command complete event.
@@ -1035,29 +1091,24 @@ macro_rules! impl_command_complete_future {
             data,
             crate::hci::events::CommandDataErr<$try_from_err_ty>,
             {
-                use crate::hci::OutputErr::{
-                    ResponseHasNoAssociatedCommand,
-                    CommandDataConversionError
-                };
+                use crate::hci::OutputErr::{CommandDataConversionError, ResponseHasNoAssociatedCommand};
 
-                match unsafe {
-                    crate::hci::events::GetDataForCommand::<$data_type>::get_return(&data)
-                } {
+                match unsafe { crate::hci::events::GetDataForCommand::<$data_type>::get_return(&data) } {
                     Ok(Some(ret_val)) => core::task::Poll::Ready(Ok(ret_val)),
-                    Ok(None) =>
-                        core::task::Poll::Ready(Err(ResponseHasNoAssociatedCommand)),
-                    Err(reason) =>
-                        core::task::Poll::Ready(Err(CommandDataConversionError(reason))),
+                    Ok(None) => core::task::Poll::Ready(Err(ResponseHasNoAssociatedCommand)),
+                    Err(reason) => core::task::Poll::Ready(Err(CommandDataConversionError(reason))),
                 }
             }
         );
     };
-    ($data: ty, $try_from_err_ty:ty) => { impl_command_complete_future!($data, $data, $try_from_err_ty); };
+    ($data: ty, $try_from_err_ty:ty) => {
+        impl_command_complete_future!($data, $data, $try_from_err_ty);
+    };
 }
 
 macro_rules! impl_command_status_future {
     () => {
-        impl_returned_future!{
+        impl_returned_future! {
             StatusFlowControlInfo,
             crate::hci::events::EventsData::CommandStatus,
             data,
@@ -1086,18 +1137,18 @@ macro_rules! impl_status_return {
         struct ReturnType(usize);
 
         impl crate::hci::FlowControlInfo for ReturnType {
-            fn packet_space(&self) -> usize { self.0 }
+            fn packet_space(&self) -> usize {
+                self.0
+            }
         }
 
         impl ReturnData {
-            fn try_from( (raw, packet_cnt): (u8, u8) ) -> Result<ReturnType, error::Error> {
-
+            fn try_from((raw, packet_cnt): (u8, u8)) -> Result<ReturnType, error::Error> {
                 let status = error::Error::from(raw);
 
                 if let error::Error::NoError = status {
                     Ok(ReturnType(packet_cnt.into()))
-                }
-                else {
+                } else {
                     Err(status)
                 }
             }
@@ -1106,14 +1157,14 @@ macro_rules! impl_status_return {
         impl_get_data_for_command!($command, u8, ReturnData, ReturnType, error::Error);
 
         impl_command_complete_future!(ReturnData, ReturnType, error::Error);
-    }
+    };
 }
 
 // All these are down here for the macros
+pub mod cb;
+pub mod info_params;
 pub mod le;
 pub mod link_control;
 pub mod link_policy;
-pub mod cb;
-pub mod info_params;
 pub mod status_prams;
 pub mod testing;

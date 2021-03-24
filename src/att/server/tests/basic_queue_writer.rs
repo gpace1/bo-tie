@@ -1,16 +1,15 @@
 //! Tests for the [`BasicQueuedWriter`](crate::att::server::BasicQueuedWriter)
 
+use super::{pdu_into_acl_data, AMutex, PayloadConnection};
 use crate::att::{
     pdu,
-    server::{BasicQueuedWriter, ServerAttributes, Server},
+    server::{BasicQueuedWriter, Server, ServerAttributes},
     TransferFormatTryFrom,
 };
-use crate::l2cap::{ConnectionChannel, AclData};
-use super::{AMutex, PayloadConnection, pdu_into_acl_data};
+use crate::l2cap::{AclData, ConnectionChannel};
 
 #[test]
 fn prepare_write_with_exec_test() {
-
     use pdu::ExecuteWriteFlag::WriteAllPreparedWrites;
 
     use crate::att::{Attribute, FULL_WRITE_PERMISSIONS};
@@ -28,7 +27,7 @@ fn prepare_write_with_exec_test() {
 
     let att_val = AMutex::from(String::new());
 
-    let att = Attribute::new( 1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
+    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
 
     let att_handle = server.push(att);
 
@@ -41,14 +40,9 @@ fn prepare_write_with_exec_test() {
             et dictum justo. Donec iaculis consequat sem, sed laoreet nulla. Cras sed nunc et \
             augue auctor laoreet vitae quis quam. Praesent condimentum fringilla finibus.";
 
-    let prepared_write_requests = pdu::PreparedWriteRequests::new(
-        att_handle,
-        &test_data,
-        cc.get_mtu()
-    );
+    let prepared_write_requests = pdu::PreparedWriteRequests::new(att_handle, &test_data, cc.get_mtu());
 
-    prepared_write_requests.iter().for_each( |request| {
-
+    prepared_write_requests.iter().for_each(|request| {
         let request_handle = request.get_parameters().get_handle();
 
         let request_offset = request.get_parameters().get_prepared_offset() as usize;
@@ -57,29 +51,27 @@ fn prepare_write_with_exec_test() {
 
         let acl_data = pdu_into_acl_data(request);
 
-        block_on( server.process_acl_data(&acl_data) ).unwrap();
+        block_on(server.process_acl_data(&acl_data)).unwrap();
 
         let server_sent_response: pdu::Pdu<pdu::PreparedWriteResponse> =
             TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
 
-        assert_eq!(request_handle, server_sent_response.get_parameters().handle );
-        assert_eq!(request_offset, server_sent_response.get_parameters().offset );
-        assert_eq!(request_data, server_sent_response.get_parameters().data );
+        assert_eq!(request_handle, server_sent_response.get_parameters().handle);
+        assert_eq!(request_offset, server_sent_response.get_parameters().offset);
+        assert_eq!(request_data, server_sent_response.get_parameters().data);
     });
 
     let exec_write_request = pdu::execute_write_request(WriteAllPreparedWrites);
 
-    block_on( server.process_acl_data(&pdu_into_acl_data(exec_write_request)) ).unwrap();
+    block_on(server.process_acl_data(&pdu_into_acl_data(exec_write_request))).unwrap();
 
-    <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take())
-        .unwrap();
+    <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
-    assert_eq!( &*block_on( att_val.0.lock() ), test_data );
+    assert_eq!(&*block_on(att_val.0.lock()), test_data);
 }
 
 #[test]
 fn prepare_write_with_cancel_test() {
-
     use pdu::ExecuteWriteFlag::CancelAllPreparedWrites;
 
     use crate::att::{Attribute, FULL_WRITE_PERMISSIONS};
@@ -97,7 +89,7 @@ fn prepare_write_with_cancel_test() {
 
     let att_val = AMutex::from(String::new());
 
-    let att = Attribute::new( 1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
+    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
 
     let att_handle = server.push(att);
 
@@ -110,29 +102,23 @@ fn prepare_write_with_cancel_test() {
             et dictum justo. Donec iaculis consequat sem, sed laoreet nulla. Cras sed nunc et \
             augue auctor laoreet vitae quis quam. Praesent condimentum fringilla finibus.";
 
-    let prepared_write_requests = pdu::PreparedWriteRequests::new(
-        att_handle,
-        &test_data,
-        cc.get_mtu()
-    );
+    let prepared_write_requests = pdu::PreparedWriteRequests::new(att_handle, &test_data, cc.get_mtu());
 
-    prepared_write_requests.iter().for_each( |request|
-        block_on( server.process_acl_data(&pdu_into_acl_data(request)) ).unwrap()
-    );
+    prepared_write_requests
+        .iter()
+        .for_each(|request| block_on(server.process_acl_data(&pdu_into_acl_data(request))).unwrap());
 
     let cancel_write_request = pdu::execute_write_request(CancelAllPreparedWrites);
 
-    block_on( server.process_acl_data(&pdu_into_acl_data(cancel_write_request)) ).unwrap();
+    block_on(server.process_acl_data(&pdu_into_acl_data(cancel_write_request))).unwrap();
 
-    <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take())
-        .unwrap();
+    <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
-    assert_ne!( &*block_on( att_val.0.lock() ), test_data );
+    assert_ne!(&*block_on(att_val.0.lock()), test_data);
 }
 
 #[test]
 fn prepare_write_over_flow() {
-
     use crate::att::{Attribute, FULL_WRITE_PERMISSIONS};
     use futures::executor::block_on;
 
@@ -153,7 +139,7 @@ fn prepare_write_over_flow() {
 
     let att_val = AMutex::from(String::new());
 
-    let att = Attribute::new( 1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
+    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
 
     let att_handle = server.push(att);
 
@@ -166,31 +152,27 @@ fn prepare_write_over_flow() {
             et dictum justo. Donec iaculis consequat sem, sed laoreet nulla. Cras sed nunc et \
             augue auctor laoreet vitae quis quam. Praesent condimentum fringilla finibus.";
 
-    let prepared_write_requests = pdu::PreparedWriteRequests::new(
-        att_handle,
-        &test_data,
-        cc.get_mtu()
-    );
+    let prepared_write_requests = pdu::PreparedWriteRequests::new(att_handle, &test_data, cc.get_mtu());
 
-    let rslt = prepared_write_requests.iter().enumerate().try_for_each( |(cnt,request)| {
+    let rslt = prepared_write_requests
+        .iter()
+        .enumerate()
+        .try_for_each(|(cnt, request)| {
+            block_on(server.process_acl_data(&pdu_into_acl_data(request))).unwrap();
 
-        block_on(server.process_acl_data(&pdu_into_acl_data(request))).unwrap();
+            if (cnt + 1) * prepared_request_max_payload_size > queue_size {
+                let pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
 
-        if (cnt + 1) * prepared_request_max_payload_size > queue_size {
+                assert_eq!(att_handle, pdu.get_parameters().requested_handle);
+                assert_eq!(pdu::Error::PrepareQueueFull, pdu.get_parameters().error);
 
-            let pdu: pdu::Pdu<pdu::ErrorResponse> =
-                TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
+                None
+            } else {
+                Some(())
+            }
+        });
 
-            assert_eq!(att_handle, pdu.get_parameters().requested_handle);
-            assert_eq!(pdu::Error::PrepareQueueFull, pdu.get_parameters().error);
-
-            None
-        } else {
-            Some(())
-        }
-    });
-
-    assert!( rslt.is_none() )
+    assert!(rslt.is_none())
 }
 
 #[test]
@@ -225,13 +207,11 @@ fn prepare_write_bad_offset() {
 
     let exec_req = pdu::execute_write_request(pdu::ExecuteWriteFlag::WriteAllPreparedWrites);
 
-    <pdu::Pdu<pdu::PreparedWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take())
-        .unwrap();
+    <pdu::Pdu<pdu::PreparedWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
     block_on(server.process_acl_data(&pdu_into_acl_data(exec_req))).unwrap();
 
-    let rsp: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&cc.sent.take())
-        .unwrap();
+    let rsp: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
 
     assert_eq!(pdu::Error::InvalidOffset, rsp.get_parameters().error);
 }

@@ -12,7 +12,7 @@ impl PeerIdentityAddressType {
     fn val(&self) -> u8 {
         match self {
             Self::PublicIdentityAddress => 0x0,
-            Self::RandomStaticIdentityAddress => 0x1
+            Self::RandomStaticIdentityAddress => 0x1,
         }
     }
 }
@@ -20,66 +20,83 @@ impl PeerIdentityAddressType {
 pub mod set_resolvable_private_address_timeout {
     use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetResolvablePrivateAddressTimeout);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::SetResolvablePrivateAddressTimeout);
 
     #[repr(packed)]
-    #[derive(Clone,Copy)]
+    #[derive(Clone, Copy)]
     struct Parameter {
-        time_out: u16
+        time_out: u16,
     }
 
     impl CommandParameter for Parameter {
         type Parameter = u16;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { self.time_out.to_le() }
+        fn get_parameter(&self) -> Self::Parameter {
+            self.time_out.to_le()
+        }
     }
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, I: 'static>(hci: &'a HostInterface<I>, time_out: u16)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where I: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, I: 'static>(
+        hci: &'a HostInterface<I>,
+        time_out: u16,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        I: HostControllerInterface,
     {
         let parameter = Parameter { time_out };
 
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
 pub mod set_address_resolution_enable {
     use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAddressResolutionEnable);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::SetAddressResolutionEnable);
 
     struct Parameter {
-        enable: bool
+        enable: bool,
     }
 
     impl CommandParameter for Parameter {
         type Parameter = u8;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { if self.enable { 1 } else { 0 } }
+        fn get_parameter(&self) -> Self::Parameter {
+            if self.enable {
+                1
+            } else {
+                0
+            }
+        }
     }
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, I: 'static>(hci: &'a HostInterface<I>, enable: bool)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where I: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, I: 'static>(
+        hci: &'a HostInterface<I>,
+        enable: bool,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        I: HostControllerInterface,
     {
         let parameter = Parameter { enable };
 
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
 pub mod add_device_to_resolving_list {
-    use crate::hci::*;
     pub use super::PeerIdentityAddressType;
+    use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::AddDeviceToResolvingList);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::AddDeviceToResolvingList);
 
     #[repr(packed)]
     #[doc(hidden)]
@@ -112,20 +129,24 @@ pub mod add_device_to_resolving_list {
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, I: 'static>(hci: &'a HostInterface<I>, parameter: Parameter)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where I: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, I: 'static>(
+        hci: &'a HostInterface<I>,
+        parameter: Parameter,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        I: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
 pub mod remove_device_from_resolving_list {
-    use crate::hci::*;
     pub use super::PeerIdentityAddressType;
+    use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::RemoveDeviceFromResolvingList);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::RemoveDeviceFromResolvingList);
 
     #[repr(packed)]
     #[doc(hidden)]
@@ -151,12 +172,15 @@ pub mod remove_device_from_resolving_list {
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, I: 'static>(hci: &'a HostInterface<I>, parameter: Parameter)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where I: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, I: 'static>(
+        hci: &'a HostInterface<I>,
+        parameter: Parameter,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        I: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
@@ -171,29 +195,33 @@ pub mod clear_resolving_list {
     impl CommandParameter for Parameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, I: 'static>(hci: &'a HostInterface<I>)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where I: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, I: 'static>(
+        hci: &'a HostInterface<I>,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        I: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
 }
 
 pub mod set_privacy_mode {
-    use crate::hci::*;
     pub use super::PeerIdentityAddressType;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetPrivacyMode);
 
     pub enum PrivacyMode {
         NetworkPrivacy,
-        DevicePrivacy
+        DevicePrivacy,
     }
 
     impl PrivacyMode {
@@ -233,11 +261,14 @@ pub mod set_privacy_mode {
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, I: 'static>(hci: &'a HostInterface<I>, parameter: Parameter )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where I: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, I: 'static>(
+        hci: &'a HostInterface<I>,
+        parameter: Parameter,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        I: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }

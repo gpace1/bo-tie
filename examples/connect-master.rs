@@ -4,36 +4,40 @@ use bo_tie::hci;
 use bo_tie::hci::events::EventsData;
 use std::time::Duration;
 
-fn is_desired_device<T> (expcted: T, to_compare: T ) -> bool where T: PartialEq + ::std::fmt::Display {
+fn is_desired_device<T>(expcted: T, to_compare: T) -> bool
+where
+    T: PartialEq + ::std::fmt::Display,
+{
     if expcted == to_compare {
         println!("Found the device");
         true
-    }
-    else {
-        println!(r#"Found a device with local name "{}", expected "{}""#, to_compare, expcted);
+    } else {
+        println!(
+            r#"Found a device with local name "{}", expected "{}""#,
+            to_compare, expcted
+        );
         false
     }
 }
 
 async fn remove_from_white_list(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    address: bo_tie::BluetoothDeviceAddress)
-{
-    use bo_tie::hci::le::mandatory::remove_device_from_white_list::send;
+    address: bo_tie::BluetoothDeviceAddress,
+) {
     use bo_tie::hci::le::common::AddressType::RandomDeviceAddress;
+    use bo_tie::hci::le::mandatory::remove_device_from_white_list::send;
 
     send(&hi, RandomDeviceAddress, address).await.unwrap();
 }
 
 async fn scan_for_local_name<'a>(
     hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    name: &'a str )
-    -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>>
-{
+    name: &'a str,
+) -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>> {
     use bo_tie::gap::advertise::{local_name, TryFromRaw};
     use bo_tie::hci::events::{Events, LEMeta, LEMetaData};
     use bo_tie::hci::le::mandatory::set_event_mask;
-    use bo_tie::hci::le::receiver::{ set_scan_parameters, set_scan_enable };
+    use bo_tie::hci::le::receiver::{set_scan_enable, set_scan_parameters};
 
     let mut scan_prms = set_scan_parameters::ScanningParameters::default();
 
@@ -53,22 +57,20 @@ async fn scan_for_local_name<'a>(
     let awaited_event = Some(Events::from(le_event));
 
     // This will stop 15 seconds after the last advertising packet is received
-    while let Ok(event) = hi.wait_for_event( awaited_event).await
-    {
+    while let Ok(event) = hi.wait_for_event(awaited_event).await {
         if let EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) = event {
             for report_result in reports.iter() {
                 match report_result {
                     Ok(report) => {
                         for data_rsl in report.data_iter() {
-                            if let Ok(local_name) = local_name::LocalName::try_from_raw(data_rsl.unwrap())
-                            {
-                                if is_desired_device( name, local_name.as_ref()) {
+                            if let Ok(local_name) = local_name::LocalName::try_from_raw(data_rsl.unwrap()) {
+                                if is_desired_device(name, local_name.as_ref()) {
                                     set_scan_enable::send(&hi, false, false).await.unwrap();
                                     return Some(Box::new(report.clone()));
                                 }
                             }
                         }
-                    },
+                    }
                     Err(err_msg) => println!("Bad advertising data: {}", err_msg),
                 }
             }
@@ -83,12 +85,11 @@ async fn scan_for_local_name<'a>(
 
 async fn connect(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    address: bo_tie::BluetoothDeviceAddress)
-    -> Result<EventsData, impl std::fmt::Debug>
-{
+    address: bo_tie::BluetoothDeviceAddress,
+) -> Result<EventsData, impl std::fmt::Debug> {
     use bo_tie::hci::common;
     use bo_tie::hci::events::{Events, LEMeta};
-    use bo_tie::hci::le::common::{OwnAddressType, ConnectionEventLength};
+    use bo_tie::hci::le::common::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::le::connection;
     use bo_tie::hci::le::connection::create_connection;
     use bo_tie::hci::le::mandatory::set_event_mask;
@@ -109,7 +110,8 @@ async fn connect(
         connection::ConnectionIntervalBounds::try_from(
             connection::ConnectionInterval::try_from_duration(min_connection_interval).unwrap(),
             connection::ConnectionInterval::try_from_duration(max_connection_interval).unwrap(),
-        ).unwrap(),
+        )
+        .unwrap(),
         common::ConnectionLatency::try_from(slave_latency).unwrap(),
         common::SupervisionTimeout::try_from_duration(supervision_timeout).unwrap(),
         ConnectionEventLength::default(),
@@ -127,7 +129,7 @@ async fn connect(
     hi.wait_for_event(awaited_event).await
 }
 
-async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter> ) {
+async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
     use bo_tie::hci::le::connection::create_connection_cancel;
 
     create_connection_cancel::send(&hi).await.unwrap();
@@ -135,8 +137,8 @@ async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter> ) {
 
 async fn disconnect(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    connection_handle: hci::common::ConnectionHandle )
-{
+    connection_handle: hci::common::ConnectionHandle,
+) {
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {
@@ -148,10 +150,10 @@ async fn disconnect(
 }
 
 fn main() {
+    use bo_tie::hci::events::LEMetaData;
+    use futures::executor;
     use std::io::stdin;
     use std::io::BufRead;
-    use bo_tie::hci::events::{LEMetaData};
-    use futures::executor;
 
     let host_interface = hci::HostInterface::default();
 
@@ -161,7 +163,10 @@ fn main() {
 
     let stdin = stdin();
 
-    stdin.lock().read_line(&mut name).expect("Couldn't read input from terminal");
+    stdin
+        .lock()
+        .read_line(&mut name)
+        .expect("Couldn't read input from terminal");
 
     name = name.trim().to_string();
 
@@ -175,8 +180,7 @@ fn main() {
         executor::block_on(remove_from_white_list(&host_interface, address));
 
         match executor::block_on(connect(&host_interface, address)) {
-            Ok(EventsData::LEMeta(LEMetaData::ConnectionComplete(data))) =>  {
-
+            Ok(EventsData::LEMeta(LEMetaData::ConnectionComplete(data))) => {
                 println!("Connected! ... waiting 5 seconds then disconnecting");
 
                 ::std::thread::sleep(::std::time::Duration::from_secs(5));

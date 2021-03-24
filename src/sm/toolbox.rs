@@ -33,13 +33,13 @@ const PUB_KEY_X_RANGE: core::ops::Range<usize> = 1..33;
 const PUB_KEY_Y_RANGE: core::ops::Range<usize> = 33..65;
 
 /// The Diffie-Hellman shared secret
-pub(super) type DHSharedSecret = [u8;32];
+pub(super) type DHSharedSecret = [u8; 32];
 
 impl super::GetXOfP256Key for PubKey {
-    fn x(&self) -> [u8;32] {
-        let mut ret = [0;32];
+    fn x(&self) -> [u8; 32] {
+        let mut ret = [0; 32];
 
-        ret.copy_from_slice( self.x().as_slice() );
+        ret.copy_from_slice(self.x().as_slice());
 
         ret
     }
@@ -49,7 +49,6 @@ impl super::CommandData for PubKey {
     /// # Panics
     /// This will panic if `PubKey` is compressed
     fn into_icd(self) -> alloc::vec::Vec<u8> {
-
         let mut key = alloc::vec::Vec::with_capacity(64);
 
         key.extend_from_slice(&self.x().as_slice());
@@ -63,7 +62,6 @@ impl super::CommandData for PubKey {
     }
 
     fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
-
         // The icd doesn't contain the compression byte indicator in Bluetooth's Security Manager
         // PDUs.
         if icd.len() == PUB_KEY_BYTE_LEN - 1 {
@@ -79,24 +77,20 @@ impl super::CommandData for PubKey {
 
             PubKey::from_bytes(&pub_key).map_err(|_| super::Error::Format)
         } else {
-            Err( super::Error::Size )
+            Err(super::Error::Size)
         }
     }
-
 }
 
 /// 24-bit hash function
 ///
 /// Used in random address creation and resolution.
-pub fn ah(k: u128, r: [u8;3]) -> [u8; 3]{
-    let r_padded =
-        <u128>::from( r[0] ) |
-            <u128>::from(r[1]) << (1 * 8) |
-            <u128>::from(r[2]) << (2 * 8);
+pub fn ah(k: u128, r: [u8; 3]) -> [u8; 3] {
+    let r_padded = <u128>::from(r[0]) | <u128>::from(r[1]) << (1 * 8) | <u128>::from(r[2]) << (2 * 8);
 
-    let cypher_text = e(k,r_padded ) ;
+    let cypher_text = e(k, r_padded);
 
-    [ cypher_text as u8 , (cypher_text >> 8) as u8 , (cypher_text >> 16) as u8 ]
+    [cypher_text as u8, (cypher_text >> 8) as u8, (cypher_text >> 16) as u8]
 }
 
 /// Phase 2 (LE legacy) confirm value function
@@ -113,28 +107,17 @@ pub fn ah(k: u128, r: [u8;3]) -> [u8; 3]{
 ///
 /// ## Note
 /// All inputs are masked down to the size stated above
-pub fn c1(
-    k: u128,
-    r: u128,
-    pres: u128,
-    preq: u128,
-    iat: bool,
-    ia: u128,
-    rat: bool,
-    ra: u128,
-) -> u128
-{
+pub fn c1(k: u128, r: u128, pres: u128, preq: u128, iat: bool, ia: u128, rat: bool, ra: u128) -> u128 {
     let p1 = c1_p1(pres, preq, iat, rat);
 
     let p2 = c1_p2(ia, ra);
 
-    e( k, e(k, r ^ p1 ) ^ p2 )
+    e(k, e(k, r ^ p1) ^ p2)
 }
 
 fn c1_p1(pres: u128, preq: u128, iat: bool, rat: bool) -> u128 {
-
-    let iat_p= if iat {1} else {0};
-    let rat_p = (if rat {1} else {0}) << (1 * 8);
+    let iat_p = if iat { 1 } else { 0 };
+    let rat_p = (if rat { 1 } else { 0 }) << (1 * 8);
 
     let pres_m = (0xFF_FFFF_FFFF_FFFF & pres) << (9 * 8);
     let preq_m = (0xFF_FFFF_FFFF_FFFF & preq) << (2 * 8);
@@ -151,11 +134,10 @@ fn c1_p2(ia: u128, ra: u128) -> u128 {
 
 /// Phase 2 (LE legacy) short term key (STK) function
 pub fn s1(k: u128, r1: u128, r2: u128) -> u128 {
-
     let r1_p = (0x0000_0000_0000_0000_FFFF_FFFF_FFFF_FFFF & r1) << 64;
     let r2_p = 0x0000_0000_0000_0000_FFFF_FFFF_FFFF_FFFF & r2;
 
-    e(k, r1_p | r2_p )
+    e(k, r1_p | r2_p)
 }
 
 /// Phase 2 (LE Secure) confirm value function
@@ -223,7 +205,6 @@ pub fn s1(k: u128, r1: u128, r2: u128) -> u128 {
 /// * x = Nbi
 /// * z = rbi
 pub fn f4(u: [u8; 32], v: [u8; 32], x: u128, z: u8) -> u128 {
-
     let mut m = [0u8; 65];
 
     m[..32].copy_from_slice(&u);
@@ -254,7 +235,6 @@ pub fn f4(u: [u8; 32], v: [u8; 32], x: u128, z: u8) -> u128 {
 ///
 /// The returned value is ( MacKey , LTK )
 pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddress) -> (u128, u128) {
-
     const SALT: u128 = 0x6C888391_AAF5A538_60370BDB_5A6083BE;
 
     let key_t = aes_cmac_generate(SALT, &w);
@@ -271,7 +251,6 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddres
 
     // The range is the 'Counter' values
     let mut keys = (0u8..=1).map(|counter| {
-
         let mut m = [0u8; 53];
 
         m[0] = counter;
@@ -295,7 +274,7 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddres
 
     let ltk = keys.next().unwrap();
 
-    ( mac_key, ltk )
+    (mac_key, ltk)
 }
 
 /// Phase 2 (LE Secure) check value generator function
@@ -383,10 +362,9 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddres
 /// * a1 = B
 /// * a2 = A
 pub fn f6(w: u128, n1: u128, n2: u128, r: u128, io_cap: [u8; 3], a1: PairingAddress, a2: PairingAddress) -> u128 {
-
     let mut m = [0u8; 65];
 
-    m[ 0..16].copy_from_slice(&n1.to_be_bytes());
+    m[0..16].copy_from_slice(&n1.to_be_bytes());
     m[16..32].copy_from_slice(&n2.to_be_bytes());
     m[32..48].copy_from_slice(&r.to_be_bytes());
     m[48..51].copy_from_slice(&io_cap);
@@ -410,10 +388,10 @@ pub fn f6(w: u128, n1: u128, n2: u128, r: u128, io_cap: [u8; 3], a1: PairingAddr
 /// #
 /// # Inputs
 /// * g2 and v must be in little endian order
-pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
-    let mut m = [0u8;80];
+pub fn g2(u: [u8; 32], v: [u8; 32], x: u128, y: u128) -> u32 {
+    let mut m = [0u8; 80];
 
-    m[ 0..32].copy_from_slice(&u);
+    m[0..32].copy_from_slice(&u);
     m[32..64].copy_from_slice(&v);
     m[64..80].copy_from_slice(&y.to_be_bytes());
 
@@ -437,18 +415,17 @@ pub fn g2(u: [u8;32], v: [u8;32], x: u128, y: u128) -> u32 {
 /// recommended to leave to controller to perform a connection channels encryption. This function
 /// main purpose is for use with the security manager's pairing, and as a result it is inefficient
 /// to call it constantly as it initializes a new AES cypher on each call.
-pub fn e(key: u128, plain_text: u128 ) -> u128 {
-
+pub fn e(key: u128, plain_text: u128) -> u128 {
     use aes::cipher::generic_array::GenericArray;
     use aes::cipher::{BlockCipher, NewBlockCipher};
 
     let key_bytes = key.to_be_bytes();
 
-    let cipher = aes::Aes128::new( GenericArray::from_slice(&key_bytes) );
+    let cipher = aes::Aes128::new(GenericArray::from_slice(&key_bytes));
 
     let mut block = plain_text.to_be_bytes();
 
-    cipher.encrypt_block( GenericArray::from_mut_slice(&mut block) ) ;
+    cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
 
     <u128>::from_be_bytes(block)
 }
@@ -457,16 +434,11 @@ pub fn e(key: u128, plain_text: u128 ) -> u128 {
 ///
 /// Derived from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
 fn aes_cmac_subkey_gen(k: u128) -> (u128, u128) {
-
     const RB: u128 = 0x87;
 
     let l = e(k, 0);
 
-    let k1 = if (l & (1 << 127)) == 0 {
-        l << 1
-    } else {
-        (l << 1) ^ RB
-    };
+    let k1 = if (l & (1 << 127)) == 0 { l << 1 } else { (l << 1) ^ RB };
 
     let k2 = if (k1 & (1 << 127)) == 0 {
         k1 << 1
@@ -478,10 +450,12 @@ fn aes_cmac_subkey_gen(k: u128) -> (u128, u128) {
 }
 
 fn aes_cmac_padding(r: &[u8]) -> u128 {
+    let unpad = r
+        .iter()
+        .enumerate()
+        .fold(0u128, |p, (i, v)| p | (<u128>::from(*v) << (8 * (15 - i))));
 
-    let unpad = r.iter().enumerate().fold( 0u128, |p, (i, v)| p | (<u128>::from(*v) << (8 * (15 - i))) );
-
-    unpad | ( 1 << (127 - (8 * r.len())) )
+    unpad | (1 << (127 - (8 * r.len())))
 }
 
 /// Convert a slice of *plain text* with a length of 16 into a u128, big endian value.
@@ -504,22 +478,22 @@ fn to_u128_be(chunk_16_bytes: &[u8]) -> u128 {
 /// # Note
 /// Derived from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493) and the Tlen
 /// is 16.
-pub fn aes_cmac_generate( key: u128, msg: &[u8] ) -> u128 {
-
+pub fn aes_cmac_generate(key: u128, msg: &[u8]) -> u128 {
     let (k1, k2) = aes_cmac_subkey_gen(key);
 
-    let mut chunks = msg.chunks( 16 );
+    let mut chunks = msg.chunks(16);
 
     let chunks_len = chunks.len();
 
-    let x = chunks.by_ref()
-        .take( if chunks_len == 0 {0} else {chunks_len - 1} )
-        .fold(0u128, |y, chunk| e( key, y ^ to_u128_be(chunk) ) );
+    let x = chunks
+        .by_ref()
+        .take(if chunks_len == 0 { 0 } else { chunks_len - 1 })
+        .fold(0u128, |y, chunk| e(key, y ^ to_u128_be(chunk)));
 
     let y = match chunks.rfind(|_| true).map(|last| (last, last.len())) {
-        None              => aes_cmac_padding(&[]) ^ k2 ^ x,
+        None => aes_cmac_padding(&[]) ^ k2 ^ x,
         Some((bytes, 16)) => to_u128_be(bytes) ^ k1 ^ x,
-        Some((bytes, _))  => aes_cmac_padding(bytes) ^ k2 ^ x,
+        Some((bytes, _)) => aes_cmac_padding(bytes) ^ k2 ^ x,
     };
 
     e(key, y)
@@ -533,12 +507,11 @@ pub fn aes_cmac_verify(key: u128, msg: &[u8], auth_code: u128) -> bool {
 ///
 /// This will return an error if the random number generation failed.
 pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
-
-    let ephemeral_secret = PriKey::random( &mut rand_core::OsRng );
+    let ephemeral_secret = PriKey::random(&mut rand_core::OsRng);
 
     let public_key = PubKey::from(&ephemeral_secret);
 
-    Ok( (ephemeral_secret, public_key) ) as Result<_, ()>
+    Ok((ephemeral_secret, public_key)) as Result<_, ()>
 }
 
 /// Calculate the elliptic curve Diffie-Hellman shared secret from the provided public key
@@ -548,16 +521,15 @@ pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 ///
 /// The `raw_remote_public_key` needs to be in the byte order as shown in the Security Manager's
 /// 'Pairing Public Key' PDU.
-pub fn ecdh(this_private_key: PriKey, peer_public_key: &PubKey) -> Result<DHSharedSecret, impl core::fmt::Debug>
-{
-    let shared_secret = match this_private_key.diffie_hellman(peer_public_key){
+pub fn ecdh(this_private_key: PriKey, peer_public_key: &PubKey) -> Result<DHSharedSecret, impl core::fmt::Debug> {
+    let shared_secret = match this_private_key.diffie_hellman(peer_public_key) {
         Ok(s) => s,
         Err(e) => return Err(e),
     };
 
     let mut secret_bytes = DHSharedSecret::default();
 
-    secret_bytes.copy_from_slice( shared_secret.as_bytes().as_slice() );
+    secret_bytes.copy_from_slice(shared_secret.as_bytes().as_slice());
 
     Ok(secret_bytes)
 }
@@ -566,7 +538,7 @@ pub fn ecdh(this_private_key: PriKey, peer_public_key: &PubKey) -> Result<DHShar
 pub fn rand_u128() -> u128 {
     use rand_core::{OsRng, RngCore};
 
-    let mut bytes = [0u8;16];
+    let mut bytes = [0u8; 16];
 
     OsRng.fill_bytes(&mut bytes);
 
@@ -580,11 +552,11 @@ pub fn nonce() -> u128 {
 
 /// A structure used to create the address structures used in pairing function [`f5`] and [`f6`]
 #[derive(Clone, Debug)]
-pub struct PairingAddress([u8;7]);
+pub struct PairingAddress([u8; 7]);
 
 impl PairingAddress {
     pub fn new(addr: &crate::BluetoothDeviceAddress, is_random_address: bool) -> Self {
-        let init_byte: u8 = if is_random_address {1} else {0};
+        let init_byte: u8 = if is_random_address { 1 } else { 0 };
 
         let mut p_addr = [0, 0, 0, 0, 0, 0, init_byte];
 
@@ -619,10 +591,9 @@ mod tests {
     /// Would translate to
     ///  spec_data      "6bc1bee2 2e409f96 e93d7e11 7393172a ae2d8a57 1e03ac9c 9eb76fac 45af8e51 30c81c46 a35ce411"
     fn parse_spec_test_data(spec_data: &str) -> Vec<u8> {
-
         let mut m = true;
 
-        let mut m_mode = | &c: &char | {
+        let mut m_mode = |&c: &char| {
             if c.is_whitespace() {
                 m = true // reset m
             } else if c.is_ascii_uppercase() || !c.is_ascii_hexdigit() {
@@ -634,8 +605,8 @@ mod tests {
 
         spec_data
             .chars()
-            .filter(|c| m_mode(c) )
-            .filter(|&c| !c.is_whitespace() )
+            .filter(|c| m_mode(c))
+            .filter(|&c| !c.is_whitespace())
             .enumerate()
             .fold(String::new(), |mut msg, (i, c)| {
                 match i & 1 {
@@ -646,7 +617,7 @@ mod tests {
             })
             .trim()
             .split(' ')
-            .map(|str_byte| <u8>::from_str_radix(str_byte, 16).unwrap() )
+            .map(|str_byte| <u8>::from_str_radix(str_byte, 16).unwrap())
             .collect::<Vec<u8>>()
     }
 
@@ -661,11 +632,14 @@ mod tests {
         let ia = 0xA1A2A3A4A5A6;
         let ra = 0xB1B2B3B4B5B6;
 
-        assert_eq!( 0x05000800000302070710000001010001, c1_p1(pres, preq, iat, rat));
+        assert_eq!(0x05000800000302070710000001010001, c1_p1(pres, preq, iat, rat));
 
-        assert_eq!( 0x00000000A1A2A3A4A5A6B1B2B3B4B5B6, c1_p2(ia, ra));
+        assert_eq!(0x00000000A1A2A3A4A5A6B1B2B3B4B5B6, c1_p2(ia, ra));
 
-        assert_eq!( 0x1e1e3fef878988ead2a74dc5bef13b86u128, c1(k,r,pres,preq,iat,ia,rat,ra) );
+        assert_eq!(
+            0x1e1e3fef878988ead2a74dc5bef13b86u128,
+            c1(k, r, pres, preq, iat, ia, rat, ra)
+        );
     }
 
     #[test]
@@ -674,14 +648,14 @@ mod tests {
         let r1 = 0x000F0E0D0C0B0A091122334455667788;
         let r2 = 0x010203040506070899AABBCCDDEEFF00;
 
-        assert_eq!( 0x9a1fe1f0e8b0f49b5b4216ae796da062, s1(k, r1, r2) );
+        assert_eq!(0x9a1fe1f0e8b0f49b5b4216ae796da062, s1(k, r1, r2));
     }
 
     #[test]
     fn aes_cmac_padding_test() {
         let b = [0x11, 0x22, 0x33];
 
-        assert_eq!( 0x1122_3380_0000_0000_0000_0000_0000_0000u128, aes_cmac_padding(&b) );
+        assert_eq!(0x1122_3380_0000_0000_0000_0000_0000_0000u128, aes_cmac_padding(&b));
     }
 
     /// The tests data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
@@ -703,20 +677,16 @@ mod tests {
         let k = 0x2b7e1516_28aed2a6_abf71588_09cf4f3c;
 
         let m = [
-            0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96,
-            0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
-            0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c,
-            0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
-            0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11,
-            0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
-            0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17,
-            0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10
+            0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a, 0xae, 0x2d,
+            0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51, 0x30, 0xc8, 0x1c, 0x46,
+            0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef, 0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f,
+            0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10,
         ];
 
-        assert_eq!(0xbb1d6929_e9593728_7fa37d12_9b756746, aes_cmac_generate(k, &m[..0] ));
+        assert_eq!(0xbb1d6929_e9593728_7fa37d12_9b756746, aes_cmac_generate(k, &m[..0]));
         assert_eq!(0x070a16b4_6b4d4144_f79bdd9d_d04a287c, aes_cmac_generate(k, &m[..16]));
         assert_eq!(0xdfa66747_de9ae630_30ca3261_1497c827, aes_cmac_generate(k, &m[..40]));
-        assert_eq!(0x51f0bebf_7e3b9d92_fc497417_79363cfe, aes_cmac_generate(k, &m      ));
+        assert_eq!(0x51f0bebf_7e3b9d92_fc497417_79363cfe, aes_cmac_generate(k, &m));
     }
 
     /// Data is from section D.2 (Bluetooth Spec. v5.0 | Vol 3, Part H, Appendix D)
@@ -724,23 +694,27 @@ mod tests {
     fn f4_test() {
         let mut u = [0u8; 32];
 
-        u.copy_from_slice( &parse_spec_test_data("
+        u.copy_from_slice(&parse_spec_test_data(
+            "
             U              20b003d2 f297be2c 5e2c83a7 e9f9a5b9
                            eff49111 acf4fddb cc030148 0e359de6
-        "));
+        ",
+        ));
 
         let mut v = [0u8; 32];
 
-        v.copy_from_slice( &parse_spec_test_data("
+        v.copy_from_slice(&parse_spec_test_data(
+            "
             V              55188b3d 32f6bb9a 900afcfb eed4e72a
                            59cb9ac2 f19d7cfb 6b4fdd49 f47fc5fd
-        "));
+        ",
+        ));
 
         let x = 0xd5cb8454_d177733e_ffffb2ec_712baeab;
 
         let z = 0;
 
-        assert_eq!( f4(u, v, x, z), 0xf2c916f1_07a9bd1c_f1eda1be_a974872d);
+        assert_eq!(f4(u, v, x, z), 0xf2c916f1_07a9bd1c_f1eda1be_a974872d);
     }
 
     /// Data is from section D.3 (Bluetooth Spec. v5.0 | Vol 3, Part H, Appendix D)
@@ -748,10 +722,12 @@ mod tests {
     fn f5_test() {
         let mut dh_key = [0u8; 32];
 
-        dh_key.copy_from_slice(& parse_spec_test_data("
+        dh_key.copy_from_slice(&parse_spec_test_data(
+            "
             DHKey(W)       ec0234a3 57c8ad05 341010a6 0a397d9b
                            99796b13 b4f866f1 868d34f3 73bfa698
-        "));
+        ",
+        ));
 
         let n1 = 0xd5cb8454_d177733e_ffffb2ec_712baeab;
 
@@ -775,61 +751,70 @@ mod tests {
 
         let rslt = f5(dh_key, n1, n2, a1, a2);
 
-        assert_eq!( rslt , (mac_key, ltk),
-                    "\n left in hex: `{:x?}`\nright in hex : `{:x?}`", rslt, (mac_key, ltk) );
+        assert_eq!(
+            rslt,
+            (mac_key, ltk),
+            "\n left in hex: `{:x?}`\nright in hex : `{:x?}`",
+            rslt,
+            (mac_key, ltk)
+        );
     }
 
     #[test]
     fn f6_test() {
-
         let n1 = 0xd5cb8454_d177733e_ffffb2ec_712baeab;
 
         let n2 = 0xa6e8e7cc_25a75f6e_216583f7_ff3dc4cf;
 
         let mac_key = 0x2965f176_a1084a02_fd3f6a20_ce636e20;
 
-        let r =  0x12a3343b_b453bb54_08da42d2_0c2d0fc8;
+        let r = 0x12a3343b_b453bb54_08da42d2_0c2d0fc8;
 
         let mut io_cap = [0u8; 3];
 
-        io_cap.copy_from_slice( &parse_spec_test_data("IOcap          010102"));
+        io_cap.copy_from_slice(&parse_spec_test_data("IOcap          010102"));
 
         let mut a1_raw = [0u8; 7];
 
-        a1_raw.copy_from_slice( &parse_spec_test_data("A1             00561237 37bfce"));
+        a1_raw.copy_from_slice(&parse_spec_test_data("A1             00561237 37bfce"));
 
-        let mut a2_raw= [0u8; 7];
+        let mut a2_raw = [0u8; 7];
 
-        a2_raw.copy_from_slice( &parse_spec_test_data("A2             00a71370 2dcfc1"));
+        a2_raw.copy_from_slice(&parse_spec_test_data("A2             00a71370 2dcfc1"));
 
         let a1 = PairingAddress(a1_raw);
 
         let a2 = PairingAddress(a2_raw);
 
-        assert_eq!(0xe3c47398_9cd0e8c5_d26c0b09_da958f61, f6(mac_key, n1, n2, r, io_cap, a1, a2));
+        assert_eq!(
+            0xe3c47398_9cd0e8c5_d26c0b09_da958f61,
+            f6(mac_key, n1, n2, r, io_cap, a1, a2)
+        );
     }
 
     #[test]
     fn g2_test() {
-        let mut u = [0u8;32];
+        let mut u = [0u8; 32];
 
-        u.copy_from_slice( &parse_spec_test_data("\
+        u.copy_from_slice(&parse_spec_test_data(
+            "\
             U              20b003d2 f297be2c 5e2c83a7 e9f9a5b9               \
-                           eff49111 acf4fddb cc030148 0e359de6"
+                           eff49111 acf4fddb cc030148 0e359de6",
         ));
 
-        let mut v = [0u8;32];
+        let mut v = [0u8; 32];
 
-        v.copy_from_slice( &parse_spec_test_data("\
+        v.copy_from_slice(&parse_spec_test_data(
+            "\
             V              55188b3d 32f6bb9a 900afcfb eed4e72a               \
-                           59cb9ac2 f19d7cfb 6b4fdd49 f47fc5fd"
+                           59cb9ac2 f19d7cfb 6b4fdd49 f47fc5fd",
         ));
 
         let x = 0xd5cb8454_d177733e_ffffb2ec_712baeab;
 
         let y = 0xa6e8e7cc_25a75f6e_216583f7_ff3dc4cf;
 
-        assert_eq!( 0x2f9ed5ba, g2(u, v, x, y) );
+        assert_eq!(0x2f9ed5ba, g2(u, v, x, y));
     }
 
     #[test]
@@ -841,11 +826,12 @@ mod tests {
         // This is the x and y of the public key specified in the Bluetooth Specification v5.0 | Vol
         // 3, Part H, Section 2.3.5.6.1
 
-        let mut raw_peer_key = [0x20, 0xb0, 0x03, 0xd2, 0xf2, 0x97, 0xbe, 0x2c, 0x5e, 0x2c,
-            0x83, 0xa7, 0xe9, 0xf9, 0xa5, 0xb9, 0xef, 0xf4, 0x91, 0x11, 0xac, 0xf4, 0xfd, 0xdb,
-            0xcc, 0x03, 0x01, 0x48, 0x0e, 0x35, 0x9d, 0xe6, 0xdc, 0x80, 0x9c, 0x49, 0x65, 0x2a,
-            0xeb, 0x6d, 0x63, 0x32, 0x9a, 0xbf, 0x5a, 0x52, 0x15, 0x5c, 0x76, 0x63, 0x45, 0xc2,
-            0x8f, 0xed, 0x30, 0x24, 0x74, 0x1c, 0x8e, 0xd0, 0x15, 0x89, 0xd2, 0x8b];
+        let mut raw_peer_key = [
+            0x20, 0xb0, 0x03, 0xd2, 0xf2, 0x97, 0xbe, 0x2c, 0x5e, 0x2c, 0x83, 0xa7, 0xe9, 0xf9, 0xa5, 0xb9, 0xef, 0xf4,
+            0x91, 0x11, 0xac, 0xf4, 0xfd, 0xdb, 0xcc, 0x03, 0x01, 0x48, 0x0e, 0x35, 0x9d, 0xe6, 0xdc, 0x80, 0x9c, 0x49,
+            0x65, 0x2a, 0xeb, 0x6d, 0x63, 0x32, 0x9a, 0xbf, 0x5a, 0x52, 0x15, 0x5c, 0x76, 0x63, 0x45, 0xc2, 0x8f, 0xed,
+            0x30, 0x24, 0x74, 0x1c, 0x8e, 0xd0, 0x15, 0x89, 0xd2, 0x8b,
+        ];
 
         // Matching the Peer Key to the little endian format as specified in the key exchange PDU
         raw_peer_key[..32].reverse();

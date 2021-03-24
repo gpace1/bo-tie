@@ -1,23 +1,19 @@
 //! Tests of permissions checks of the attribute server
 
+use super::DummyConnection;
 use crate::{
-    att::{
-        *,
-        server::*
-    },
+    att::{server::*, *},
     UUID,
 };
-use tinymt::TinyMT64;
 use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     sync::{
-        Arc,
-        Mutex,
         atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
     },
 };
-use super::DummyConnection;
+use tinymt::TinyMT64;
 
 const ALL_ATT_PERM_SIZE: usize = 12;
 
@@ -25,14 +21,19 @@ const MAX_VEC_SIZE: usize = 10_000;
 
 type AllAttributePermissions = [AttributePermissions; ALL_ATT_PERM_SIZE];
 
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 struct PermVec {
     len: usize,
     permissions: MaybeUninit<AllAttributePermissions>,
 }
 
 impl PermVec {
-    fn new() -> Self { Self { len: 0, permissions: MaybeUninit::uninit() } }
+    fn new() -> Self {
+        Self {
+            len: 0,
+            permissions: MaybeUninit::uninit(),
+        }
+    }
 
     /// Push an item, panics if `self.len > size_of<AllAttributePermissions>()`
     fn push(&mut self, p: AttributePermissions) {
@@ -49,7 +50,10 @@ impl From<&'_ [AttributePermissions]> for PermVec {
 
         perm_ref[..ap.len()].copy_from_slice(ap);
 
-        Self { len: ap.len(), permissions }
+        Self {
+            len: ap.len(),
+            permissions,
+        }
     }
 }
 
@@ -68,9 +72,13 @@ impl DerefMut for PermVec {
 }
 
 /// Calculate factorial, panics on overflow
-fn factorial(v: usize) -> usize { (2..=v).fold(1, |c, v| c * v) }
+fn factorial(v: usize) -> usize {
+    (2..=v).fold(1, |c, v| c * v)
+}
 
-fn permutations(n: usize, r: usize) -> usize { factorial(n) / factorial(n - r) }
+fn permutations(n: usize, r: usize) -> usize {
+    factorial(n) / factorial(n - r)
+}
 
 fn all_sized_permutations_cnt(list_size: usize) -> usize {
     (0..=list_size).fold(0, |c, k| c + permutations(list_size, k))
@@ -115,13 +123,11 @@ fn do_recursion_branch(
 
     // the exponent for calculating the odds that no members of a branch are added to the
     // eventual tests list.
-    let exponent =
-        (1..=(perms_size-step_size))
-            .fold(0usize, |exp, s_size| exp + permutations(perms_size, s_size) );
+    let exponent = (1..=(perms_size - step_size)).fold(0usize, |exp, s_size| exp + permutations(perms_size, s_size));
 
     let v = match std::convert::TryFrom::try_from(exponent) {
         Ok(exp) => do_not_add_chance_max.powi(exp),
-        Err(_)  => do_not_add_chance_max.powf(exponent as f64),
+        Err(_) => do_not_add_chance_max.powf(exponent as f64),
     };
 
     if v <= 1000f64 {
@@ -148,8 +154,9 @@ fn permutation_step(
     use rayon::prelude::*;
 
     perms.par_iter().enumerate().for_each(|(cnt, permission)| {
-
-        if added_cnt.load(Ordering::Acquire) >= MAX_VEC_SIZE { return }
+        if added_cnt.load(Ordering::Acquire) >= MAX_VEC_SIZE {
+            return;
+        }
 
         let step_permutation = {
             let mut s = PermVec::from(step);
@@ -161,8 +168,8 @@ fn permutation_step(
             rand_generator.clone(),
             do_not_add_chance_max,
             ALL_ATT_PERM_SIZE,
-            step_permutation.len())
-        {
+            step_permutation.len(),
+        ) {
             let rotated_perms = {
                 let mut v = PermVec::from(perms);
                 v.rotate_left(cnt);
@@ -180,8 +187,8 @@ fn permutation_step(
             );
         }
 
-        if add_permission_set(rand_generator.clone(), add_chance_max) &&
-            added_cnt.fetch_add(1, Ordering::Release) < MAX_VEC_SIZE
+        if add_permission_set(rand_generator.clone(), add_chance_max)
+            && added_cnt.fetch_add(1, Ordering::Release) < MAX_VEC_SIZE
         {
             permutations.lock().unwrap().push(step_permutation);
         }
@@ -193,11 +200,9 @@ fn permissions_permutations(all_permissions: &AllAttributePermissions) -> Vec<Pe
 
     let all_permutations = all_sized_permutations_cnt(all_permissions.len());
 
-
     let add_chance_max = all_permutations / MAX_VEC_SIZE;
 
-    let do_not_add_chance_max =
-        all_permutations as f64 / (all_permutations - MAX_VEC_SIZE) as f64;
+    let do_not_add_chance_max = all_permutations as f64 / (all_permutations - MAX_VEC_SIZE) as f64;
 
     let output = Arc::new(Mutex::new(Vec::with_capacity(MAX_VEC_SIZE)));
 
@@ -229,55 +234,52 @@ fn expected_permissions_result(
     operation_permissions: &[AttributePermissions],
     attribute_permissions: &[AttributePermissions],
     client_permissions: &[AttributePermissions],
-) -> Result<(), pdu::Error>
-{
+) -> Result<(), pdu::Error> {
     use AttributePermissions::*;
-    use AttributeRestriction::{Encryption, Authorization, Authentication};
+    use AttributeRestriction::{Authentication, Authorization, Encryption};
     use EncryptionKeySize::*;
 
-    match operation_permissions.iter().find(|&&op|
-        attribute_permissions.iter().find(|&&ap| ap == op).is_some() &&
-            client_permissions.iter().find(|&&cp| cp == op).is_some()
-    ) {
+    match operation_permissions.iter().find(|&&op| {
+        attribute_permissions.iter().find(|&&ap| ap == op).is_some()
+            && client_permissions.iter().find(|&&cp| cp == op).is_some()
+    }) {
         Some(_) => Ok(()),
-        None =>
-            Err(match operation_permissions.iter()
+        None => Err(
+            match operation_permissions
+                .iter()
                 .find(|&p| attribute_permissions.contains(p))
             {
                 Some(Read(AttributeRestriction::None)) => pdu::Error::ReadNotPermitted,
 
                 Some(Write(AttributeRestriction::None)) => pdu::Error::WriteNotPermitted,
 
-                Some(Read(Encryption(_))) =>
-                    if client_permissions.contains(&Read(Encryption(Bits128))) ||
-                        client_permissions.contains(&Read(Encryption(Bits192))) ||
-                        client_permissions.contains(&Read(Encryption(Bits256)))
+                Some(Read(Encryption(_))) => {
+                    if client_permissions.contains(&Read(Encryption(Bits128)))
+                        || client_permissions.contains(&Read(Encryption(Bits192)))
+                        || client_permissions.contains(&Read(Encryption(Bits256)))
                     {
                         pdu::Error::InsufficientEncryptionKeySize
                     } else {
                         pdu::Error::InsufficientEncryption
-                    },
+                    }
+                }
 
-                Some(Write(Encryption(_))) =>
-                    if client_permissions.contains(&Write(Encryption(Bits128))) ||
-                        client_permissions.contains(&Write(Encryption(Bits192))) ||
-                        client_permissions.contains(&Write(Encryption(Bits256)))
+                Some(Write(Encryption(_))) => {
+                    if client_permissions.contains(&Write(Encryption(Bits128)))
+                        || client_permissions.contains(&Write(Encryption(Bits192)))
+                        || client_permissions.contains(&Write(Encryption(Bits256)))
                     {
                         pdu::Error::InsufficientEncryptionKeySize
                     } else {
                         pdu::Error::InsufficientEncryption
-                    },
+                    }
+                }
 
-                Some(Read(Authentication)) |
-                Some(Write(Authentication)) =>
-                    pdu::Error::InsufficientAuthentication,
+                Some(Read(Authentication)) | Some(Write(Authentication)) => pdu::Error::InsufficientAuthentication,
 
-                Some(Read(Authorization)) |
-                Some(Write(Authorization)) |
-                None =>
-                    pdu::Error::InsufficientAuthorization,
-            }
-            ),
+                Some(Read(Authorization)) | Some(Write(Authorization)) | None => pdu::Error::InsufficientAuthorization,
+            },
+        ),
     }
 }
 
@@ -291,10 +293,10 @@ fn expected_permissions_result(
 #[cfg(target_pointer_width = "64")]
 #[ignore]
 fn check_permissions_entropy_test() {
+    use rayon::prelude::*;
     use AttributePermissions::*;
     use AttributeRestriction::*;
     use EncryptionKeySize::*;
-    use rayon::prelude::*;
 
     let all_permissions: AllAttributePermissions = [
         Read(None),
@@ -314,7 +316,6 @@ fn check_permissions_entropy_test() {
     let all_tested_permission_permutations = &permissions_permutations(&all_permissions);
 
     all_tested_permission_permutations.par_iter().for_each(|perm_client| {
-
         let mut server_attributes = ServerAttributes::default();
 
         all_tested_permission_permutations.iter().for_each(|permissions| {
@@ -329,28 +330,29 @@ fn check_permissions_entropy_test() {
 
         server.give_permissions_to_client(perm_client.as_ref());
 
-        all_tested_permission_permutations.iter().for_each( move |perm_op| {
+        all_tested_permission_permutations.iter().for_each(move |perm_op| {
+            all_tested_permission_permutations
+                .iter()
+                .enumerate()
+                .for_each(|(cnt, perm_att)| {
+                    // 'cnt + 1' because attributes start at handle 1
+                    let calculated = server.check_permissions((cnt + 1) as u16, perm_op);
 
-            all_tested_permission_permutations.iter().enumerate().for_each(|(cnt, perm_att)| {
+                    let expected = expected_permissions_result(&perm_op, &perm_att, &perm_client);
 
-                // 'cnt + 1' because attributes start at handle 1
-                let calculated = server.check_permissions((cnt + 1) as u16, perm_op);
-
-                let expected = expected_permissions_result(&perm_op, &perm_att, &perm_client);
-
-                assert_eq!(
-                    expected,
-                    calculated,
-                    "Permissions check failed, mismatch in return\n\
+                    assert_eq!(
+                        expected,
+                        calculated,
+                        "Permissions check failed, mismatch in return\n\
                             (Please note: this tests is a comparison between two algorithms, and the \
                             expected result may be incorrect)\n\n\
                             Operation permissions {:#?}\nAttribute permissions {:#?}\n\
                             Client permissions {:#?}",
-                    perm_op.to_vec(),
-                    perm_att.to_vec(),
-                    perm_client.to_vec()
-                );
-            });
+                        perm_op.to_vec(),
+                        perm_att.to_vec(),
+                        perm_client.to_vec()
+                    );
+                });
         });
     })
 }

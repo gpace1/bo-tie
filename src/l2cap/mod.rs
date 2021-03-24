@@ -1,10 +1,8 @@
 //! L2CAP protocol
 
+use alloc::vec::Vec;
 /// Logical Link Control and Adaption protocol (L2CAP)
 use core::future::Future;
-use alloc::{
-    vec::Vec,
-};
 
 /// A trait containing a constant for the smallest maximum transfer unit for a logical link
 pub trait MinimumMtu {
@@ -14,7 +12,7 @@ pub trait MinimumMtu {
 /// LE-U L2CAP logical link type
 ///
 /// This is a marker type for a LE-U L2CAP logical link.
-#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LeU;
 
 impl MinimumMtu for LeU {
@@ -25,7 +23,7 @@ impl MinimumMtu for LeU {
 ///
 /// This is a marker type for a ACL-U L2CAP logical link. This is not the MTU for ACL-U with support
 /// for the Extended Flow Rate feature.
-#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AclU;
 
 impl MinimumMtu for AclU {
@@ -40,13 +38,13 @@ impl MinimumMtu for AclU {
 ///
 /// # Specification Reference
 /// See Bluetooth Specification V5 | Vol 3, Part A Section 2.1
-#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChannelIdentifier {
     NullIdentifier,
     /// ACL-U identifiers
     ACL(AclUserChannelIdentifier),
     /// LE-U identifiers
-    LE(LeUserChannelIdentifier)
+    LE(LeUserChannelIdentifier),
 }
 
 impl ChannelIdentifier {
@@ -73,27 +71,30 @@ impl ChannelIdentifier {
 }
 
 impl From<LeUserChannelIdentifier> for ChannelIdentifier {
-    fn from( le: LeUserChannelIdentifier ) -> Self {
+    fn from(le: LeUserChannelIdentifier) -> Self {
         ChannelIdentifier::LE(le)
     }
 }
 
 impl From<AclUserChannelIdentifier> for ChannelIdentifier {
-    fn from( acl: AclUserChannelIdentifier ) -> Self {
+    fn from(acl: AclUserChannelIdentifier) -> Self {
         ChannelIdentifier::ACL(acl)
     }
 }
 
 /// Dynamically created L2CAP channel
-#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DynChannelId<T> {
     channel_id: u16,
-    _p: core::marker::PhantomData<T>
+    _p: core::marker::PhantomData<T>,
 }
 
 impl<T> DynChannelId<T> {
     fn new(channel_id: u16) -> Self {
-        DynChannelId { channel_id, _p: core::marker::PhantomData }
+        DynChannelId {
+            channel_id,
+            _p: core::marker::PhantomData,
+        }
     }
 
     /// Get the value of the dynamic channel identifier
@@ -103,7 +104,6 @@ impl<T> DynChannelId<T> {
 }
 
 impl DynChannelId<LeU> {
-
     pub const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
 
     /// Create a new Dynamic Channel identifier for the LE-U CID name space
@@ -116,7 +116,9 @@ impl DynChannelId<LeU> {
     /// returned containing the infringing input value.
     pub fn new_le(channel_id: u16) -> Result<LeUserChannelIdentifier, u16> {
         if Self::LE_BOUNDS.contains(&channel_id) {
-            Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(channel_id)))
+            Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
+                channel_id,
+            )))
         } else {
             Err(channel_id)
         }
@@ -124,19 +126,20 @@ impl DynChannelId<LeU> {
 }
 
 impl DynChannelId<AclU> {
-
     pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
 
-    pub fn new_acl( channel_id: u16 ) -> Result<AclUserChannelIdentifier, u16> {
+    pub fn new_acl(channel_id: u16) -> Result<AclUserChannelIdentifier, u16> {
         if Self::ACL_BOUNDS.contains(&channel_id) {
-            Ok( AclUserChannelIdentifier::DynamicallyAllocated( DynChannelId::new(channel_id) ) )
+            Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
+                channel_id,
+            )))
         } else {
-            Err( channel_id )
+            Err(channel_id)
         }
     }
 }
 
-#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AclUserChannelIdentifier {
     SignalingChannel,
     ConnectionlessChannel,
@@ -147,7 +150,6 @@ pub enum AclUserChannelIdentifier {
 }
 
 impl AclUserChannelIdentifier {
-
     fn to_val(&self) -> u16 {
         match self {
             AclUserChannelIdentifier::SignalingChannel => 0x1,
@@ -161,14 +163,15 @@ impl AclUserChannelIdentifier {
 
     fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
-            0x1  => Ok(AclUserChannelIdentifier::SignalingChannel),
-            0x2  => Ok(AclUserChannelIdentifier::ConnectionlessChannel),
-            0x3  => Ok(AclUserChannelIdentifier::AmpManagerProtocol),
-            0x7  => Ok(AclUserChannelIdentifier::BrEdrSecurityManager),
+            0x1 => Ok(AclUserChannelIdentifier::SignalingChannel),
+            0x2 => Ok(AclUserChannelIdentifier::ConnectionlessChannel),
+            0x3 => Ok(AclUserChannelIdentifier::AmpManagerProtocol),
+            0x7 => Ok(AclUserChannelIdentifier::BrEdrSecurityManager),
             0x3F => Ok(AclUserChannelIdentifier::AmpTestManager),
-            val if DynChannelId::<AclU>::ACL_BOUNDS.contains(&val) =>
-                Ok(AclUserChannelIdentifier::DynamicallyAllocated( DynChannelId::new(val) )),
-            _ => Err(())
+            val if DynChannelId::<AclU>::ACL_BOUNDS.contains(&val) => {
+                Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
+            }
+            _ => Err(()),
         }
     }
 }
@@ -176,7 +179,7 @@ impl AclUserChannelIdentifier {
 /// LE User (LE-U) Channel Identifiers
 ///
 /// These are the channel identifiers for a LE
-#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LeUserChannelIdentifier {
     /// Channel for the Attribute Protocol
     ///
@@ -197,11 +200,10 @@ pub enum LeUserChannelIdentifier {
     /// To make a `DynamicallyAllocated` variant, use the function
     /// [`new_le`](../DynChannelId/index.html)
     /// of the struct `DynChannelId`
-    DynamicallyAllocated(DynChannelId<LeU>)
+    DynamicallyAllocated(DynChannelId<LeU>),
 }
 
 impl LeUserChannelIdentifier {
-
     fn to_val(&self) -> u16 {
         match self {
             LeUserChannelIdentifier::AttributeProtocol => 0x4,
@@ -211,13 +213,14 @@ impl LeUserChannelIdentifier {
         }
     }
 
-    fn try_from_raw(val: u16) -> Result<Self, ()>  {
+    fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
-            0x4 => Ok( LeUserChannelIdentifier::AttributeProtocol ),
-            0x5 => Ok( LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel ),
-            0x6 => Ok( LeUserChannelIdentifier::SecurityManagerProtocol),
-            _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) =>
-                Ok( LeUserChannelIdentifier::DynamicallyAllocated( DynChannelId::new(val) ) ),
+            0x4 => Ok(LeUserChannelIdentifier::AttributeProtocol),
+            0x5 => Ok(LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel),
+            0x6 => Ok(LeUserChannelIdentifier::SecurityManagerProtocol),
+            _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
+                Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
+            }
             _ => Err(()),
         }
     }
@@ -233,18 +236,24 @@ pub enum AclDataError {
     /// Invalid Channel Id
     InvalidChannelId,
     /// Expected A start Fragment
-    ExpectedStartFragment
+    ExpectedStartFragment,
 }
 
 impl core::fmt::Display for AclDataError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             AclDataError::RawDataTooSmall => write!(f, "Raw data is too small for an ACL frame"),
-            AclDataError::PayloadLengthIncorrect => write!(f, "Specified payload length didn't \
-                match the actual payload length"),
+            AclDataError::PayloadLengthIncorrect => write!(
+                f,
+                "Specified payload length didn't \
+                match the actual payload length"
+            ),
             AclDataError::InvalidChannelId => write!(f, "Invalid Channel Id"),
-            AclDataError::ExpectedStartFragment => write!(f, "Expected start fragment, received a \
-                continuation fragment"),
+            AclDataError::ExpectedStartFragment => write!(
+                f,
+                "Expected start fragment, received a \
+                continuation fragment"
+            ),
         }
     }
 }
@@ -269,7 +278,7 @@ impl core::fmt::Display for AclDataError {
 /// # Mtu
 /// Usage this MTU. However if the MTU value is less than the the minimum MTU for the logical link
 /// or larger than the channel's MTU, it will not be used.
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum AclDataSuggestedMtu {
     Channel,
     Minimum,
@@ -300,7 +309,7 @@ impl Default for AclDataSuggestedMtu {
 /// it is not a requirement of implementors of a `ConnectionChannel` to use a `AclData`'s MTU over
 /// the connection channels MTU*, but this library's implementations of `ConnectionChannel` do take
 /// into account this MTU when deciding if fragmentation is necessary.
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct AclData {
     channel_id: ChannelIdentifier,
     data: Vec<u8>,
@@ -308,13 +317,12 @@ pub struct AclData {
 }
 
 impl AclData {
-
     pub const HEADER_SIZE: usize = 4;
 
     /// Create a new `AclData`
     ///
     /// The channel identifier field
-    pub fn new( payload: Vec<u8>, channel_id: ChannelIdentifier) -> Self {
+    pub fn new(payload: Vec<u8>, channel_id: ChannelIdentifier) -> Self {
         AclData {
             channel_id,
             data: payload,
@@ -335,14 +343,18 @@ impl AclData {
     /// bytes for ACL-U and 23 bytes for LE-U.
     pub fn use_mtu<Mtu: Into<Option<u16>>>(&mut self, mtu: Mtu) {
         self.mtu = match mtu.into() {
-            None    => AclDataSuggestedMtu::Minimum,
+            None => AclDataSuggestedMtu::Minimum,
             Some(v) => AclDataSuggestedMtu::Mtu(v.into()),
         }
     }
 
-    pub fn get_channel_id(&self) -> ChannelIdentifier { self.channel_id }
+    pub fn get_channel_id(&self) -> ChannelIdentifier {
+        self.channel_id
+    }
 
-    pub fn get_payload(&self) -> &[u8] { &self.data }
+    pub fn get_payload(&self) -> &[u8] {
+        &self.data
+    }
 
     /// This create a complete L2CAP data packet in its raw form
     ///
@@ -354,11 +366,11 @@ impl AclData {
 
         let len: u16 = self.data.len().try_into().expect("Couldn't convert into u16");
 
-        v.extend_from_slice( &len.to_le_bytes() );
+        v.extend_from_slice(&len.to_le_bytes());
 
-        v.extend_from_slice( &self.channel_id.to_val().to_le_bytes() );
+        v.extend_from_slice(&self.channel_id.to_val().to_le_bytes());
 
-        v.extend_from_slice( &self.data );
+        v.extend_from_slice(&self.data);
 
         v
     }
@@ -374,26 +386,26 @@ impl AclData {
     /// * The channel id must be valid
     pub fn from_raw_data(data: &[u8]) -> Result<Self, AclDataError> {
         if data.len() >= 4 {
-            let len: usize = <u16>::from_le_bytes( [data[0], data[1]] ).into();
+            let len: usize = <u16>::from_le_bytes([data[0], data[1]]).into();
 
-            let raw_channel_id = <u16>::from_le_bytes( [data[2], data[3]] );
+            let raw_channel_id = <u16>::from_le_bytes([data[2], data[3]]);
 
             let payload = &data[4..];
 
             if len <= payload.len() {
-                Ok( Self {
+                Ok(Self {
                     mtu: AclDataSuggestedMtu::Channel,
                     channel_id: ChannelIdentifier::LE(
-                        LeUserChannelIdentifier::try_from_raw(raw_channel_id).or(Err(AclDataError::InvalidChannelId))?
+                        LeUserChannelIdentifier::try_from_raw(raw_channel_id)
+                            .or(Err(AclDataError::InvalidChannelId))?,
                     ),
                     data: payload[..len].to_vec(),
                 })
             } else {
-                Err( AclDataError::PayloadLengthIncorrect )
+                Err(AclDataError::PayloadLengthIncorrect)
             }
-        }
-        else {
-            Err( AclDataError::RawDataTooSmall )
+        } else {
+            Err(AclDataError::RawDataTooSmall)
         }
     }
 
@@ -410,14 +422,13 @@ impl AclData {
 /// into a single 'AclData' through the use of 'FromIterator' for AclData.
 pub struct AclDataFragment {
     start_fragment: bool,
-    data: Vec<u8>
+    data: Vec<u8>,
 }
 
 impl AclDataFragment {
-
     /// Crate a 'AclDataFragment'
     pub(crate) fn new(start_fragment: bool, data: Vec<u8>) -> Self {
-        Self {start_fragment, data}
+        Self { start_fragment, data }
     }
 
     /// Get the length of the payload as specified in the ACL data
@@ -425,15 +436,19 @@ impl AclDataFragment {
     /// This returns None if this packet doesn't contain the full length field
     pub fn get_acl_len(&self) -> Option<usize> {
         if self.start_fragment && self.data.len() > 2 {
-            Some( <u16>::from_le_bytes([ self.data[0], self.data[1] ]) as usize )
+            Some(<u16>::from_le_bytes([self.data[0], self.data[1]]) as usize)
         } else {
             None
         }
     }
 
-    pub fn is_start_fragment(&self) -> bool { self.start_fragment }
+    pub fn is_start_fragment(&self) -> bool {
+        self.start_fragment
+    }
 
-    pub fn fragment_data(&self) -> &[u8] { &self.data }
+    pub fn fragment_data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 /// A L2CAP Logical Link Connection channel
@@ -449,12 +464,11 @@ impl AclDataFragment {
 /// [`HostInterface`](crate::hci::HostInterface), but it can also be implemented directly for
 /// systems that do not support a host controller interface.
 pub trait ConnectionChannel {
-
     /// Sending future
     ///
     /// The controller will probably have limits on the number of L2CAP PDU's that can be sent. This
     /// future is used for awaiting the sending process until the entire L2CAP PDU is sent.
-    type SendFut: Future<Output=Result<(), Self::SendFutErr>>;
+    type SendFut: Future<Output = Result<(), Self::SendFutErr>>;
 
     type SendFutErr: core::fmt::Debug;
 
@@ -570,22 +584,27 @@ pub trait ConnectionChannel {
 /// fragments to make complete L2CAP packets then `Poll::Ready` is returned with all the L2CAP
 /// packets (saved and newly assembled).  Otherwise `Poll::Pending` is returned and the process
 /// repeats itself.
-pub struct ConChanFutureRx<'a, C> where C: ?Sized {
+pub struct ConChanFutureRx<'a, C>
+where
+    C: ?Sized,
+{
     cc: &'a C,
     full_acl_data: Vec<AclData>,
     carryover_fragments: Vec<u8>,
     length: Option<usize>,
 }
 
-impl<'a, C> ConChanFutureRx<'a, C> where C: ?Sized {
-
+impl<'a, C> ConChanFutureRx<'a, C>
+where
+    C: ?Sized,
+{
     /// Get the complete, de-fragmented, received ACL Data
     ///
     /// This is useful when resulting `poll` may contain many complete packets, but still returns
     /// `Poll::Pending` because there were also incomplete fragments received. This should be used
     /// when
     pub fn get_received_packets(&mut self) -> Vec<AclData> {
-        core::mem::replace(&mut self.full_acl_data, Vec::new() )
+        core::mem::replace(&mut self.full_acl_data, Vec::new())
     }
 
     /// Drop all fragments
@@ -602,19 +621,19 @@ impl<'a, C> ConChanFutureRx<'a, C> where C: ?Sized {
     /// This function doesn't need to be called if polling returns the error
     /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment).
     pub fn drop_fragments(&mut self) {
-        let _dropped = core::mem::replace(&mut self.carryover_fragments, Vec::new() );
+        let _dropped = core::mem::replace(&mut self.carryover_fragments, Vec::new());
     }
 }
 
-impl<'a,C> Future for ConChanFutureRx<'a,C>
-where C: ConnectionChannel
+impl<'a, C> Future for ConChanFutureRx<'a, C>
+where
+    C: ConnectionChannel,
 {
     type Output = Result<Vec<AclData>, AclDataError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
-
         // The size of the L2CAP data header
-        const HEADER_SIZE:usize = 4;
+        const HEADER_SIZE: usize = 4;
 
         use core::task::Poll;
 
@@ -624,83 +643,81 @@ where C: ConnectionChannel
             if let Some(ret) = match this.cc.receive(cx.waker()) {
                 None => return Poll::Pending,
                 Some(fragments) => {
-                    match fragments.into_iter().try_for_each( |mut f| {
-        
+                    match fragments.into_iter().try_for_each(|mut f| {
                         // Continue `try_for_each` if f is an empty fragment, empty fragments can
                         // be ignored.
-                        if f.data.len() == 0 { return Ok(()) }
-        
-                        if this.carryover_fragments.is_empty()
-                        {
+                        if f.data.len() == 0 {
+                            return Ok(());
+                        }
+
+                        if this.carryover_fragments.is_empty() {
                             if !f.is_start_fragment() {
-                                return Err(AclDataError::ExpectedStartFragment)
+                                return Err(AclDataError::ExpectedStartFragment);
                             }
 
                             match f.get_acl_len() {
-                                Some(l) if (l + HEADER_SIZE) <= f.data.len() => {
-                                    match AclData::from_raw_data(&f.data) {
-                                        Ok(data) => this.full_acl_data.push(data),
-                                        Err(e) => return Err(e)
-                                    }
+                                Some(l) if (l + HEADER_SIZE) <= f.data.len() => match AclData::from_raw_data(&f.data) {
+                                    Ok(data) => this.full_acl_data.push(data),
+                                    Err(e) => return Err(e),
                                 },
                                 len @ Some(_) => {
                                     this.carryover_fragments.append(&mut f.data);
                                     this.length = len;
-                                },
+                                }
                                 None => {
                                     this.carryover_fragments.append(&mut f.data);
-                                },
+                                }
                             }
                         } else {
                             this.carryover_fragments.append(&mut f.data);
-        
+
                             let acl_len = match this.length {
                                 None => {
                                     // There will always be at least 2 items to take because a starting
                                     // fragment and a proceeding fragment have been received and empty
                                     // fragments are not added to `self.carryover_fragments`.
-                                    let len_bytes = this.carryover_fragments.iter()
-                                        .take(2)
-                                        .enumerate()
-                                        .fold([0u8;2], |mut a, (i, &v)| { a[i] = v; a });
-        
+                                    let len_bytes = this.carryover_fragments.iter().take(2).enumerate().fold(
+                                        [0u8; 2],
+                                        |mut a, (i, &v)| {
+                                            a[i] = v;
+                                            a
+                                        },
+                                    );
+
                                     let len = <u16>::from_le_bytes(len_bytes) as usize;
-        
+
                                     this.length = Some(len);
-        
+
                                     len
-                                },
+                                }
                                 Some(len) => len,
                             };
-        
+
                             if (acl_len + HEADER_SIZE) <= this.carryover_fragments.len() {
                                 match AclData::from_raw_data(&this.carryover_fragments) {
                                     Ok(data) => {
                                         this.full_acl_data.push(data);
                                         this.carryover_fragments.clear();
-                                    },
+                                    }
                                     Err(e) => return Err(e),
                                 }
                             }
                         }
-        
+
                         Ok(())
                     }) {
                         // Body of match statement
-
                         Ok(_) => {
-                            if this.carryover_fragments.is_empty() &&
-                                !this.full_acl_data.is_empty()
-                            {
-                                Some( Ok(core::mem::replace(&mut this.full_acl_data, Vec::new())) )
+                            if this.carryover_fragments.is_empty() && !this.full_acl_data.is_empty() {
+                                Some(Ok(core::mem::replace(&mut this.full_acl_data, Vec::new())))
                             } else {
                                 None
                             }
-                        },
-                        Err(e) => Some( Err(e) )
+                        }
+                        Err(e) => Some(Err(e)),
                     }
                 }
-            } { 
+            } {
                 // Block of `if Some(ret) = match ...`
                 return Poll::Ready(ret);
 
@@ -717,10 +734,11 @@ where C: ConnectionChannel
 /// [`PsmAssignedNum`](PsmAssignedNum)
 /// into this, the other way is to create a dynamic PSM with the function
 /// [`new_dyn`](#method.new_dyn).
-pub struct Psm { val: u16 }
+pub struct Psm {
+    val: u16,
+}
 
 impl Psm {
-
     /// Get the value of the PSM
     ///
     /// The returned value is in *native byte order*
@@ -737,19 +755,18 @@ impl Psm {
     /// For now extended dynamic PSM's are not supported as I do not know how to support them (
     /// see
     /// [`DynPsmIssue`](DynPsmIssue) for why)
-    pub fn new_dyn( dyn_psm: u16 ) -> Result<Self, DynPsmIssue> {
+    pub fn new_dyn(dyn_psm: u16) -> Result<Self, DynPsmIssue> {
         match dyn_psm {
-            _ if dyn_psm <= 0x1000 => Err( DynPsmIssue::NotDynamicRange ),
-            _ if dyn_psm & 0x1 == 0 => Err( DynPsmIssue::NotOdd ),
-            _ if dyn_psm & 0x100 != 0 => Err( DynPsmIssue::Extended ),
-            _ => Ok( Psm { val: dyn_psm } )
+            _ if dyn_psm <= 0x1000 => Err(DynPsmIssue::NotDynamicRange),
+            _ if dyn_psm & 0x1 == 0 => Err(DynPsmIssue::NotOdd),
+            _ if dyn_psm & 0x100 != 0 => Err(DynPsmIssue::Extended),
+            _ => Ok(Psm { val: dyn_psm }),
         }
     }
 }
 
 impl From<PsmAssignedNum> for Psm {
-    fn from( pan: PsmAssignedNum ) -> Psm {
-
+    fn from(pan: PsmAssignedNum) -> Psm {
         let val = match pan {
             PsmAssignedNum::Sdp => 0x1,
             PsmAssignedNum::Rfcomm => 0x3,
@@ -834,12 +851,9 @@ pub enum DynPsmIssue {
 impl core::fmt::Display for DynPsmIssue {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            DynPsmIssue::NotDynamicRange =>
-                write!(f, "Dynamic PSM not within allocated range"),
-            DynPsmIssue::NotOdd =>
-                write!(f, "Dynamic PSM value is not odd"),
-            DynPsmIssue::Extended =>
-                write!(f, "Dynamic PSM has extended bit set"),
+            DynPsmIssue::NotDynamicRange => write!(f, "Dynamic PSM not within allocated range"),
+            DynPsmIssue::NotOdd => write!(f, "Dynamic PSM value is not odd"),
+            DynPsmIssue::Extended => write!(f, "Dynamic PSM has extended bit set"),
         }
     }
 }

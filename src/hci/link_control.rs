@@ -2,43 +2,48 @@
 
 pub mod read_remote_version_information {
 
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LinkControl(opcodes::LinkControl::ReadRemoteVersionInformation);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LinkControl(opcodes::LinkControl::ReadRemoteVersionInformation);
 
     #[repr(packed)]
-    #[derive( Clone, Copy)]
+    #[derive(Clone, Copy)]
     struct CmdParameter {
-        _connection_handle: u16
+        _connection_handle: u16,
     }
 
     impl CommandParameter for CmdParameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
     impl_command_status_future!();
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        handle: ConnectionHandle,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-
         let parameter = CmdParameter {
-            _connection_handle: handle.get_raw_handle()
+            _connection_handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus ) )
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandStatus))
     }
 }
 
 // TODO when BR/EDR is enabled move this to a module for common features and import here
 pub mod disconnect {
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LinkControl(opcodes::LinkControl::Disconnect);
 
@@ -57,17 +62,12 @@ pub mod disconnect {
     }
 
     impl DisconnectReason {
-
         // TODO implement when HCI error codes are added, and add parameter for the
         // error enumeration name
-        pub fn try_from_hci_error( error: error::Error ) -> Result<DisconnectReason, &'static str> {
+        pub fn try_from_hci_error(error: error::Error) -> Result<DisconnectReason, &'static str> {
             match error {
-                error::Error::AuthenticationFailure => {
-                    Ok(DisconnectReason::AuthenticationFailure)
-                }
-                error::Error::RemoteUserTerminatedConnection => {
-                    Ok(DisconnectReason::RemoteUserTerminatedConnection)
-                }
+                error::Error::AuthenticationFailure => Ok(DisconnectReason::AuthenticationFailure),
+                error::Error::RemoteUserTerminatedConnection => Ok(DisconnectReason::RemoteUserTerminatedConnection),
                 error::Error::RemoteDeviceTerminatedConnectionDueToLowResources => {
                     Ok(DisconnectReason::RemoteDeviceTerminatedConnectionDueToLowResources)
                 }
@@ -77,15 +77,11 @@ pub mod disconnect {
                 error::Error::UnsupportedRemoteFeatureOrUnsupportedLMPFeature => {
                     Ok(DisconnectReason::UnsupportedRemoteFeature)
                 }
-                error::Error::PairingWithUnitKeyNotSupported => {
-                    Ok(DisconnectReason::PairingWithUnitKeyNotSupported)
-                }
+                error::Error::PairingWithUnitKeyNotSupported => Ok(DisconnectReason::PairingWithUnitKeyNotSupported),
                 error::Error::UnacceptableConnectionParameters => {
                     Ok(DisconnectReason::UnacceptableConnectionParameters)
                 }
-                _ => {
-                    Err("No Disconnect reason for error")
-                }
+                _ => Err("No Disconnect reason for error"),
             }
         }
 
@@ -127,12 +123,14 @@ pub mod disconnect {
 
     impl_command_status_future!();
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, dp: DisconnectParameters )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        dp: DisconnectParameters,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command(dp, events::Events::CommandStatus ) )
+        ReturnedFuture(hci.send_command(dp, events::Events::CommandStatus))
     }
-
 }

@@ -1,17 +1,9 @@
 //! Host Controller Interface Events
 
 use crate::hci::common::{
-    ConnectionHandle,
-    ConnectionInterval,
-    ConnectionLatency,
-    EnabledExtendedFeaturesItr,
-    EnabledFeaturesIter,
-    EnabledLeFeaturesItr,
-    EncryptionLevel,
-    ExtendedAdvertisingAndScanResponseDataItr,
-    ExtendedInquiryResponseDataItr,
-    LEAddressType,
-    SupervisionTimeout,
+    ConnectionHandle, ConnectionInterval, ConnectionLatency, EnabledExtendedFeaturesItr, EnabledFeaturesIter,
+    EnabledLeFeaturesItr, EncryptionLevel, ExtendedAdvertisingAndScanResponseDataItr, ExtendedInquiryResponseDataItr,
+    LEAddressType, SupervisionTimeout,
 };
 use crate::hci::error::Error;
 use crate::hci::le;
@@ -20,54 +12,52 @@ use core::convert::From;
 
 macro_rules! make_u16 {
     ( $packet:ident, $start:expr ) => {
-        u16::from_le( $packet[$start] as u16 | ($packet[$start + 1] as u16) << 8 )
+        u16::from_le($packet[$start] as u16 | ($packet[$start + 1] as u16) << 8)
     };
 }
 
 macro_rules! make_u32 {
     ( $packet:ident, $start:expr) => {
         u32::from_le(
-            ($packet[$start] as u32)           |
-            ($packet[$start + 1] as u32) << 8  |
-            ($packet[$start + 2] as u32) << 16 |
-            ($packet[$start + 3] as u32) << 24
+            ($packet[$start] as u32)
+                | ($packet[$start + 1] as u32) << 8
+                | ($packet[$start + 2] as u32) << 16
+                | ($packet[$start + 3] as u32) << 24,
         )
-    }
+    };
 }
 
 macro_rules! make_u64 {
     ( $packet:ident, $start:expr) => {
         u64::from_le(
-            ($packet[$start] as u64)           |
-            ($packet[$start + 1] as u64) << 8  |
-            ($packet[$start + 2] as u64) << 16 |
-            ($packet[$start + 3] as u64) << 24 |
-            ($packet[$start + 4] as u64) << 32 |
-            ($packet[$start + 5] as u64) << 40 |
-            ($packet[$start + 6] as u64) << 48 |
-            ($packet[$start + 7] as u64) << 56
+            ($packet[$start] as u64)
+                | ($packet[$start + 1] as u64) << 8
+                | ($packet[$start + 2] as u64) << 16
+                | ($packet[$start + 3] as u64) << 24
+                | ($packet[$start + 4] as u64) << 32
+                | ($packet[$start + 5] as u64) << 40
+                | ($packet[$start + 6] as u64) << 48
+                | ($packet[$start + 7] as u64) << 56,
         )
-    }
+    };
 }
 
 macro_rules! make_baddr {
-    ( $packet:ident, $start:expr ) => {
-        {
-            let mut address = [0u8;6];
-            address.copy_from_slice(&$packet[$start..($start + 6)]);
-            BluetoothDeviceAddress::from(address)
-        }
-    }
+    ( $packet:ident, $start:expr ) => {{
+        let mut address = [0u8; 6];
+        address.copy_from_slice(&$packet[$start..($start + 6)]);
+        BluetoothDeviceAddress::from(address)
+    }};
 }
 
 macro_rules! make_handle {
     ( $packet:ident, $start:expr ) => {
-        ConnectionHandle::try_from(make_u16!($packet,$start)).unwrap()
-    }
+        ConnectionHandle::try_from(make_u16!($packet, $start)).unwrap()
+    };
 }
 
 struct RawData<'a> {
-    raw_data: &'a [u8]
+    raw_data: &'a [u8],
 }
 
 impl<'a> From<&'a [u8]> for RawData<'a> {
@@ -88,18 +78,16 @@ impl core::convert::AsRef<[u8]> for RawData<'_> {
 /// $inner is the contents of the from method.
 macro_rules! impl_try_from_for_raw_packet {
     ( $name:ty, $param:tt, $inner:block ) => {
-
         #[allow(unused_assignments)]
         #[allow(unused_mut)]
         impl core::convert::TryFrom<RawData<'_>> for $name {
             type Error = alloc::string::String;
-            fn try_from( param: RawData<'_> ) -> Result<Self, Self::Error> {
+            fn try_from(param: RawData<'_>) -> Result<Self, Self::Error> {
                 let mut $param = param.as_ref();
                 $inner
             }
         }
-
-    }
+    };
 }
 
 /// "chews-off" and returns a slice of size $size from the beginning of $packet.
@@ -107,86 +95,87 @@ macro_rules! impl_try_from_for_raw_packet {
 /// Invoking this with only one parameter returns an u8, otherwise a reference to a slice is
 /// returned.
 macro_rules! chew {
-    ( $packet:ident, $start:expr, $size:expr) => {
-        {
-            let chewed = &$packet[$start..($size as usize)];
-            $packet = &$packet[($start as usize) + ($size as usize)..];
-            chewed
-        }
+    ( $packet:ident, $start:expr, $size:expr) => {{
+        let chewed = &$packet[$start..($size as usize)];
+        $packet = &$packet[($start as usize) + ($size as usize)..];
+        chewed
+    }};
+    ( $packet:ident, $size:expr ) => {
+        chew!($packet, 0, $size)
     };
-    ( $packet:ident, $size:expr ) => { chew!($packet,0,$size)};
-    ( $packet:ident ) => {
-        {
-            let chewed_byte = $packet[0];
-            $packet = &$packet[1..];
-            chewed_byte
-        }
-    };
+    ( $packet:ident ) => {{
+        let chewed_byte = $packet[0];
+        $packet = &$packet[1..];
+        chewed_byte
+    }};
 }
 
 macro_rules! chew_u16 {
-    ($packet:ident, $start:expr) => {
-        {
-            let chewed = make_u16!($packet,$start as usize);
-            $packet = &$packet[$start as usize + 2..];
-            chewed
-        }
+    ($packet:ident, $start:expr) => {{
+        let chewed = make_u16!($packet, $start as usize);
+        $packet = &$packet[$start as usize + 2..];
+        chewed
+    }};
+    ($packet:ident) => {
+        chew_u16!($packet, 0)
     };
-    ($packet:ident) => { chew_u16!($packet,0) };
 }
 
 macro_rules! chew_u32 {
-    ($packet:ident, $start:expr) => {
-        {
-            let chewed = make_u32!($packet,$start as usize);
-            $packet = &$packet[$start as usize + 4..];
-            chewed
-        }
+    ($packet:ident, $start:expr) => {{
+        let chewed = make_u32!($packet, $start as usize);
+        $packet = &$packet[$start as usize + 4..];
+        chewed
+    }};
+    ($packet:ident) => {
+        chew_u32!($packet, 0)
     };
-    ($packet:ident) => { chew_u32!($packet,0) };
 }
 
 macro_rules! chew_u64 {
-    ($packet:ident, $start:expr) => {
-        {
-            let chewed = make_u64!($packet,$start as usize);
-            $packet = &$packet[$start as usize + 8..];
-            chewed
-        }
+    ($packet:ident, $start:expr) => {{
+        let chewed = make_u64!($packet, $start as usize);
+        $packet = &$packet[$start as usize + 8..];
+        chewed
+    }};
+    ($packet:ident) => {
+        chew_u64!($packet, 0)
     };
-    ($packet:ident) => { chew_u64!($packet, 0)};
 }
 
 macro_rules! chew_baddr {
-    ($packet:ident, $start:expr ) => {
-        {
-            let chewed = make_baddr!($packet,$start as usize);
-            $packet = &$packet[$start as usize + 6..];
-            chewed
-        }
+    ($packet:ident, $start:expr ) => {{
+        let chewed = make_baddr!($packet, $start as usize);
+        $packet = &$packet[$start as usize + 6..];
+        chewed
+    }};
+    ($packet:ident) => {
+        chew_baddr!($packet, 0)
     };
-    ($packet:ident) => { chew_baddr!($packet,0)}
 }
 
 macro_rules! chew_handle {
-    ($packet:ident, $start:expr) => {
-        {
-            let chewed = make_handle!($packet,$start as usize);
-            $packet = &$packet[$start as usize + 2..];
-            chewed
-        }
+    ($packet:ident, $start:expr) => {{
+        let chewed = make_handle!($packet, $start as usize);
+        $packet = &$packet[$start as usize + 2..];
+        chewed
+    }};
+    ($packet:ident) => {
+        chew_handle!($packet, 0)
     };
-    ($packet:ident) => { chew_handle!($packet,0)};
 }
 
 type BufferType<T> = alloc::vec::Vec<T>;
 
 #[derive(Clone)]
-pub struct Multiple<T>{
-    data: BufferType<T>
+pub struct Multiple<T> {
+    data: BufferType<T>,
 }
 
-impl<T,C> From<C> for Multiple<T> where C: Into<BufferType<T>>{
+impl<T, C> From<C> for Multiple<T>
+where
+    C: Into<BufferType<T>>,
+{
     fn from(c: C) -> Self {
         Multiple { data: c.into() }
     }
@@ -217,7 +206,7 @@ pub enum PageScanRepetitionMode {
 }
 
 impl PageScanRepetitionMode {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         use self::PageScanRepetitionMode::*;
 
         match raw {
@@ -239,16 +228,14 @@ pub enum ClassOfDevice {
 ///
 /// The tuple consists of the lower 16 bits of the data and the upper 8 bits of the data
 impl ClassOfDevice {
-    fn from(raw : [u8;3]) -> Self {
+    fn from(raw: [u8; 3]) -> Self {
         use self::ClassOfDevice::*;
 
         match raw {
-            [0,0,0] => Unknown,
-            _       => Class( u32::from_le(
-                (raw[2] as u32) << 16 |
-                (raw[1] as u32) << 8 |
-                (raw[0] as u32)
-            ))
+            [0, 0, 0] => Unknown,
+            _ => Class(u32::from_le(
+                (raw[2] as u32) << 16 | (raw[1] as u32) << 8 | (raw[0] as u32),
+            )),
         }
     }
 }
@@ -257,11 +244,11 @@ impl ClassOfDevice {
 pub enum LinkType {
     SCOConnection,
     ACLConnection,
-    ESCOConnection
+    ESCOConnection,
 }
 
 impl LinkType {
-    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         use self::LinkType::*;
 
         match raw {
@@ -280,7 +267,7 @@ pub enum LinkLevelEncryptionEnabled {
 }
 
 impl LinkLevelEncryptionEnabled {
-    fn try_from(raw:u8) -> core::result::Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> core::result::Result<Self, alloc::string::String> {
         use self::LinkLevelEncryptionEnabled::*;
 
         match raw {
@@ -297,12 +284,10 @@ pub struct EncryptionEnabled {
 }
 
 impl EncryptionEnabled {
-
     pub fn get_for_le(&self) -> EncryptionLevel {
         if self.raw == 0x01 {
             EncryptionLevel::AESCCM
-        }
-        else {
+        } else {
             EncryptionLevel::Off
         }
     }
@@ -312,17 +297,14 @@ impl EncryptionEnabled {
             0x00 => EncryptionLevel::Off,
             0x01 => EncryptionLevel::E0,
             0x02 => EncryptionLevel::AESCCM,
-            _    => EncryptionLevel::Off,
+            _ => EncryptionLevel::Off,
         }
     }
-
 }
 
 impl From<u8> for EncryptionEnabled {
     fn from(raw: u8) -> Self {
-        EncryptionEnabled {
-            raw,
-        }
+        EncryptionEnabled { raw }
     }
 }
 
@@ -333,13 +315,13 @@ pub enum KeyFlag {
 }
 
 impl KeyFlag {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         use self::KeyFlag::*;
 
-        match raw  {
+        match raw {
             0x00 => Ok(SemiPermanentLinkKey),
             0x01 => Ok(TemporaryLinkKey),
-            _    => Err(alloc::format!("Unknown Key Flag: {}", raw)),
+            _ => Err(alloc::format!("Unknown Key Flag: {}", raw)),
         }
     }
 }
@@ -352,13 +334,13 @@ pub enum ServiceType {
 }
 
 impl ServiceType {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         use self::ServiceType::*;
         match raw {
             0x00 => Ok(NoTrafficAvailable),
             0x01 => Ok(BestEffortAvailable),
             0x02 => Ok(GuaranteedAvailable),
-            _    => Err(alloc::format!("Unknown Service Type: {}", raw)),
+            _ => Err(alloc::format!("Unknown Service Type: {}", raw)),
         }
     }
 }
@@ -368,7 +350,7 @@ pub struct InquiryCompleteData {
     pub status: Error,
 }
 
-impl_try_from_for_raw_packet!{
+impl_try_from_for_raw_packet! {
     InquiryCompleteData,
     packet,
     {
@@ -384,7 +366,7 @@ pub struct InquiryResultData {
     pub clock_offset: u16,
 }
 
-impl_try_from_for_raw_packet!{
+impl_try_from_for_raw_packet! {
     Multiple<Result<InquiryResultData, alloc::string::String>>,
     packet,
     {
@@ -470,7 +452,7 @@ impl_try_from_for_raw_packet! {
 pub struct DisconnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
-    pub reason: u8
+    pub reason: u8,
 }
 
 impl_try_from_for_raw_packet! {
@@ -532,7 +514,6 @@ pub struct EncryptionChangeData {
     pub encryption_enabled: EncryptionEnabled,
 }
 
-
 impl_try_from_for_raw_packet! {
     EncryptionChangeData,
     packet,
@@ -566,7 +547,7 @@ impl_try_from_for_raw_packet! {
 pub struct MasterLinkKeyCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
-    pub key: KeyFlag
+    pub key: KeyFlag,
 }
 
 impl_try_from_for_raw_packet! {
@@ -585,7 +566,7 @@ impl_try_from_for_raw_packet! {
 pub struct ReadRemoteSupportedFeaturesCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
-    pub lmp_features: EnabledFeaturesIter
+    pub lmp_features: EnabledFeaturesIter,
 }
 
 impl_try_from_for_raw_packet! {
@@ -659,27 +640,36 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone,Copy,PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: core::fmt::Debug
+where
+    UnpackErrorType: core::fmt::Debug,
 {
     /// If the api doesn't have a bug in it, then the controller is faulty if this error occurs
     RawDataLenTooSmall,
     /// The first value is the expected ocf the second value is the actual ocf given in the event
-    IncorrectOCF(u16,u16),
+    IncorrectOCF(u16, u16),
     UnpackError(UnpackErrorType),
 }
 
 impl<UnpackErrorType> core::fmt::Display for CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: core::fmt::Debug
+where
+    UnpackErrorType: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
         match *self {
             CommandDataErr::RawDataLenTooSmall => {
-                write!(f, "Command complete data error, the size of the data was too small for type")
+                write!(
+                    f,
+                    "Command complete data error, the size of the data was too small for type"
+                )
             }
-            CommandDataErr::IncorrectOCF(exp,act) => {
-                write!(f, "Command complete data error, expected opcode is 0x{:X}, actual opcode is 0x{:X}",exp,act)
+            CommandDataErr::IncorrectOCF(exp, act) => {
+                write!(
+                    f,
+                    "Command complete data error, expected opcode is 0x{:X}, actual opcode is 0x{:X}",
+                    exp, act
+                )
             }
             CommandDataErr::UnpackError(ref e) => {
                 write!(f, "Command complete contained error code for '{:?}'", e)
@@ -689,15 +679,17 @@ impl<UnpackErrorType> core::fmt::Display for CommandDataErr<UnpackErrorType>
 }
 
 impl<UnpackErrorType> core::fmt::Debug for CommandDataErr<UnpackErrorType>
-    where UnpackErrorType: core::fmt::Debug
+where
+    UnpackErrorType: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
-        (self as & dyn core::fmt::Display).fmt(f)
+        (self as &dyn core::fmt::Display).fmt(f)
     }
 }
 
 pub(crate) trait DataResult
-where <Self as crate::hci::events::DataResult>::UnpackErrorType: core::fmt::Debug + core::fmt::Display
+where
+    <Self as crate::hci::events::DataResult>::UnpackErrorType: core::fmt::Debug + core::fmt::Display,
 {
     type ReturnData;
     type UnpackErrorType;
@@ -712,7 +704,8 @@ where <Self as crate::hci::events::DataResult>::UnpackErrorType: core::fmt::Debu
 /// There is a case where there is no associated data. This happens when the controller is only
 /// telling the host the number of hci commands it can now process.
 pub(crate) trait GetDataForCommand<T>
-where T : DataResult
+where
+    T: DataResult,
 {
     /// Get the return parameter
     ///
@@ -728,7 +721,7 @@ where T : DataResult
     /// # Errors
     /// - The command data doesn't match the return type
     /// - The buffered data is smaller then the size of the parameter data (packed, as in the spec)
-    unsafe fn get_return(&self) -> Result<Option<T::ReturnData>,CommandDataErr<T::UnpackErrorType>>;
+    unsafe fn get_return(&self) -> Result<Option<T::ReturnData>, CommandDataErr<T::UnpackErrorType>>;
 
     /// Get the return parameter without checking the OpCode
     ///
@@ -736,14 +729,16 @@ where T : DataResult
     /// event was sent from the controller with the correct opcode. Use this only if you're absolutely
     /// positive that the controller is returning incorrect OpCode values only because the
     /// controller is implemented incorrectly.
-    unsafe fn get_return_unchecked(&self) -> Result<Option<T::ReturnData>,CommandDataErr<T::UnpackErrorType>>;
+    unsafe fn get_return_unchecked(&self) -> Result<Option<T::ReturnData>, CommandDataErr<T::UnpackErrorType>>;
 
     fn no_opcode(&self) -> bool {
         // This logic is safe because if there is no op_code then there is no unsafe data
-        unsafe { match self.get_return() {
-            Ok(None) => true,
-            _ => false,
-        } }
+        unsafe {
+            match self.get_return() {
+                Ok(None) => true,
+                _ => false,
+            }
+        }
     }
 }
 
@@ -755,12 +750,12 @@ macro_rules! impl_get_data_for_event_data {
         }
 
         impl crate::hci::events::GetDataForCommand<$data> for $event_data {
-            unsafe fn get_return(&self) ->
-                core::result::Result<
-                    core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
-                    crate::hci::events::CommandDataErr< <$data as crate::hci::events::DataResult>::UnpackErrorType >
-                >
-            {
+            unsafe fn get_return(
+                &self,
+            ) -> core::result::Result<
+                core::option::Option<<$data as crate::hci::events::DataResult>::ReturnData>,
+                crate::hci::events::CommandDataErr<<$data as crate::hci::events::DataResult>::UnpackErrorType>,
+            > {
                 let oc_pair = $command.as_opcode_pair();
 
                 let expected_opcode = oc_pair.ocf | (oc_pair.ogf << 10);
@@ -772,20 +767,21 @@ macro_rules! impl_get_data_for_event_data {
                 } else {
                     Err(crate::hci::events::CommandDataErr::IncorrectOCF(
                         oc_pair.ocf | (oc_pair.ogf << 10),
-                        self.command_opcode.unwrap()))
+                        self.command_opcode.unwrap(),
+                    ))
                 }
             }
 
-            unsafe fn get_return_unchecked(&self) ->
-                core::result::Result<
-                    core::option::Option< <$data as crate::hci::events::DataResult>::ReturnData >,
-                    crate::hci::events::CommandDataErr< <$data as crate::hci::events::DataResult>::UnpackErrorType >
-                >
-            {
+            unsafe fn get_return_unchecked(
+                &self,
+            ) -> core::result::Result<
+                core::option::Option<<$data as crate::hci::events::DataResult>::ReturnData>,
+                crate::hci::events::CommandDataErr<<$data as crate::hci::events::DataResult>::UnpackErrorType>,
+            > {
                 use core::mem::size_of;
 
                 if self.raw_data.len() >= core::mem::size_of::<$packed_data>() {
-                    let mut buffer = [0u8;size_of::<$packed_data>()];
+                    let mut buffer = [0u8; size_of::<$packed_data>()];
 
                     buffer.copy_from_slice(&(*self.raw_data));
 
@@ -793,17 +789,23 @@ macro_rules! impl_get_data_for_event_data {
 
                     match <$data>::try_from((p_data, self.number_of_hci_command_packets)) {
                         Ok(val) => Ok(Some(val)),
-                        Err(e)  => Err(crate::hci::events::CommandDataErr::UnpackError(e))
+                        Err(e) => Err(crate::hci::events::CommandDataErr::UnpackError(e)),
                     }
-                }
-                else {
+                } else {
                     Err(crate::hci::events::CommandDataErr::RawDataLenTooSmall)
                 }
             }
         }
     };
     ( $event_data:path, $command:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty ) => {
-        impl_get_data_for_event_data!($event_data, $command, $packed_data, $data, $data, $try_from_err_ty);
+        impl_get_data_for_event_data!(
+            $event_data,
+            $command,
+            $packed_data,
+            $data,
+            $data,
+            $try_from_err_ty
+        );
     };
 }
 
@@ -879,7 +881,7 @@ macro_rules! impl_get_data_for_command {
             $data,
             $try_from_err_ty
         }
-    }
+    };
 }
 
 impl_try_from_for_raw_packet! {
@@ -911,7 +913,7 @@ impl_try_from_for_raw_packet! {
 pub struct CommandStatusData {
     pub status: Error,
     pub number_of_hci_command_packets: u8,
-    pub command_opcode: Option<u16>
+    pub command_opcode: Option<u16>,
 }
 
 impl_try_from_for_raw_packet! {
@@ -967,13 +969,13 @@ pub enum NewRole {
 }
 
 impl NewRole {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         use self::NewRole::*;
 
         match raw {
             0x00 => Ok(NowMaster),
             0x01 => Ok(NowSlave),
-            _    => Err(alloc::format!("Unknown New Role: {}", raw)),
+            _ => Err(alloc::format!("Unknown New Role: {}", raw)),
         }
     }
 }
@@ -1034,23 +1036,23 @@ pub enum CurrentMode {
 }
 
 impl CurrentMode {
-    fn try_from( raw: &[u8] ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: &[u8]) -> Result<Self, alloc::string::String> {
         match raw[0] {
             0x00 => Ok(CurrentMode::ActiveMode),
-            0x01 => Ok(CurrentMode::HoldMode (
-                CurrentModeInterval::try_from ( u16::from_le( raw[1] as u16 | (raw[2] as u16) << 8 ) )? )
-            ),
-            0x02 => Ok(CurrentMode::SniffMode (
-                CurrentModeInterval::try_from ( u16::from_le( raw[1] as u16 | (raw[2] as u16) << 8 ) )? )
-            ),
-            _    => Err(alloc::format!("Unknown Current Mode: {}", raw[0])),
+            0x01 => Ok(CurrentMode::HoldMode(CurrentModeInterval::try_from(u16::from_le(
+                raw[1] as u16 | (raw[2] as u16) << 8,
+            ))?)),
+            0x02 => Ok(CurrentMode::SniffMode(CurrentModeInterval::try_from(u16::from_le(
+                raw[1] as u16 | (raw[2] as u16) << 8,
+            ))?)),
+            _ => Err(alloc::format!("Unknown Current Mode: {}", raw[0])),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct CurrentModeInterval {
-    pub interval: u16
+    pub interval: u16,
 }
 
 impl CurrentModeInterval {
@@ -1058,19 +1060,16 @@ impl CurrentModeInterval {
     const MAX: u16 = 0xFFFE;
     const CVT: u64 = 625; // conversion between raw to ms
 
-    fn try_from( raw: u16 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u16) -> Result<Self, alloc::string::String> {
         if raw >= Self::MIN && raw <= Self::MAX {
-            Ok(CurrentModeInterval {
-                interval: raw
-            })
-        }
-        else {
+            Ok(CurrentModeInterval { interval: raw })
+        } else {
             Err(alloc::string::String::from("Current Mode Interval out of bounds"))
         }
     }
 
     pub fn get_interval_as_duration(&self) -> core::time::Duration {
-        core::time::Duration::from_millis( self.interval as u64 * Self::CVT )
+        core::time::Duration::from_millis(self.interval as u64 * Self::CVT)
     }
 }
 
@@ -1103,7 +1102,7 @@ impl_try_from_for_raw_packet! {
 #[derive(Clone)]
 pub struct ReturnLinkKeysData {
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub link_key: [u8;16],
+    pub link_key: [u8; 16],
 }
 
 impl_try_from_for_raw_packet! {
@@ -1173,7 +1172,7 @@ pub enum LinkKeyType {
 }
 
 impl LinkKeyType {
-    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         use self::LinkKeyType::*;
 
         match raw {
@@ -1186,7 +1185,7 @@ impl LinkKeyType {
             0x06 => Ok(ChangedCombinationKey),
             0x07 => Ok(UnauthenticatedCombinationKeyGeneratedFromP256),
             0x08 => Ok(AuthenticatedCombinationKeyGeneratedFromP256),
-            _    => Err(alloc::format!("Unknown Link Key Type {}", raw)),
+            _ => Err(alloc::format!("Unknown Link Key Type {}", raw)),
         }
     }
 }
@@ -1194,7 +1193,7 @@ impl LinkKeyType {
 #[derive(Clone)]
 pub struct LinkKeyNotificationData {
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub link_key: [u8;16],
+    pub link_key: [u8; 16],
     pub link_key_type: LinkKeyType,
 }
 
@@ -1240,11 +1239,11 @@ pub enum LinkTypeOverflow {
 }
 
 impl LinkTypeOverflow {
-    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LinkTypeOverflow::SynchronousBufferOverflow),
             0x01 => Ok(LinkTypeOverflow::ACLBufferOverflow),
-            _    => Err(alloc::format!("Unknown Link Type (buffer) Overflow {}", raw)),
+            _ => Err(alloc::format!("Unknown Link Type (buffer) Overflow {}", raw)),
         }
     }
 }
@@ -1271,20 +1270,20 @@ pub enum LMPMaxSlots {
 }
 
 impl LMPMaxSlots {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x01 => Ok(LMPMaxSlots::One),
             0x03 => Ok(LMPMaxSlots::Three),
             0x05 => Ok(LMPMaxSlots::Five),
-            _    => Err(alloc::format!("Unknown LMP Max Slots: {}", raw))
+            _ => Err(alloc::format!("Unknown LMP Max Slots: {}", raw)),
         }
     }
 
-    pub fn val( &self ) -> u8 {
+    pub fn val(&self) -> u8 {
         match *self {
-            LMPMaxSlots::One   => 0x01,
+            LMPMaxSlots::One => 0x01,
             LMPMaxSlots::Three => 0x03,
-            LMPMaxSlots::Five  => 0x05,
+            LMPMaxSlots::Five => 0x05,
         }
     }
 }
@@ -1310,7 +1309,7 @@ pub struct ReadClockOffsetCompleteData {
     status: Error,
     connection_handle: ConnectionHandle,
     /// Bits 16-2 of CLKNslave-CLK
-    clock_offset: u32
+    clock_offset: u32,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1348,7 +1347,7 @@ pub enum AclPacketType {
 }
 
 impl AclPacketType {
-    fn try_from( raw: u16 ) -> Result<Self, &'static str> {
+    fn try_from(raw: u16) -> Result<Self, &'static str> {
         match raw {
             0x0002 => Ok(AclPacketType::TwoDH1ShallNotBeUsed),
             0x0004 => Ok(AclPacketType::ThreeDH1ShallNotBeUsed),
@@ -1362,7 +1361,7 @@ impl AclPacketType {
             0x2000 => Ok(AclPacketType::ThreeDH5ShallNotBeUsed),
             0x4000 => Ok(AclPacketType::DM5MayBeUsed),
             0x8000 => Ok(AclPacketType::DH5MayBeUsed),
-            _      => Err("Packet type not matched for ACLConnection"),
+            _ => Err("Packet type not matched for ACLConnection"),
         }
     }
 }
@@ -1375,12 +1374,12 @@ pub enum ScoPacketType {
 }
 
 impl ScoPacketType {
-    fn try_from( raw: u16 ) -> Result<Self, &'static str> {
+    fn try_from(raw: u16) -> Result<Self, &'static str> {
         match raw {
             0x0020 => Ok(ScoPacketType::HV1),
             0x0040 => Ok(ScoPacketType::HV2),
             0x0080 => Ok(ScoPacketType::HV3),
-            _      => Err("Packet type not matched for SCOConnection")
+            _ => Err("Packet type not matched for SCOConnection"),
         }
     }
 }
@@ -1397,7 +1396,7 @@ impl ConnectionPacketTypeChangedData {
     ///
     /// Returns an error if link type is not SCOConnection or ACLConnection or if the value cannot
     /// be converted to a packet type from the proveded link type
-    pub fn get_packet_type( &self, link_type: LinkType ) -> Result<PacketType, &'static str> {
+    pub fn get_packet_type(&self, link_type: LinkType) -> Result<PacketType, &'static str> {
         match link_type {
             LinkType::ACLConnection => Ok(PacketType::Acl(AclPacketType::try_from(self.packet_type)?)),
             LinkType::SCOConnection => Ok(PacketType::Sco(ScoPacketType::try_from(self.packet_type)?)),
@@ -1463,7 +1462,7 @@ impl FlowDirection {
         match raw {
             0x00 => Ok(FlowDirection::OutgoingFlow),
             0x01 => Ok(FlowDirection::IncomingFlow),
-            _    => Err(alloc::format!("Unknown {}", raw)),
+            _ => Err(alloc::format!("Unknown {}", raw)),
         }
     }
 }
@@ -1582,13 +1581,13 @@ pub enum AirMode {
 }
 
 impl AirMode {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(AirMode::MicroLawLog),
             0x01 => Ok(AirMode::ALawLog),
             0x02 => Ok(AirMode::CVSD),
             0x03 => Ok(AirMode::TransparentData),
-            _    => Err(alloc::format!("Unknown Air Mode: {}", raw)),
+            _ => Err(alloc::format!("Unknown Air Mode: {}", raw)),
         }
     }
 }
@@ -1656,7 +1655,7 @@ pub struct SniffSubratingData {
     pub maximum_transmit_latency: u16,
     pub maximum_receive_latency: u16,
     pub minimum_transmit_latency: u16,
-    pub minimum_receive_latency: u16
+    pub minimum_receive_latency: u16,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1744,13 +1743,13 @@ pub enum IOCapability {
 }
 
 impl IOCapability {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(IOCapability::DisplayOnly),
             0x01 => Ok(IOCapability::DisplayYesNo),
             0x02 => Ok(IOCapability::KeyboardOnly),
             0x03 => Ok(IOCapability::NoInputNoOutput),
-            _    => Err(alloc::format!("Unknown IO Capability: {}", raw)),
+            _ => Err(alloc::format!("Unknown IO Capability: {}", raw)),
         }
     }
 }
@@ -1766,7 +1765,7 @@ impl OOBDataPresent {
         match raw {
             0x00 => Ok(OOBDataPresent::OOBAuthenticationDataNotPresent),
             0x01 => Ok(OOBDataPresent::OOBAuthenticationDataFromRemoteDevicePresent),
-            _    => Err(alloc::format!("Unknown OOB Data Present: {}", raw)),
+            _ => Err(alloc::format!("Unknown OOB Data Present: {}", raw)),
         }
     }
 }
@@ -1782,7 +1781,7 @@ pub enum AuthenticationRequirements {
 }
 
 impl AuthenticationRequirements {
-    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(AuthenticationRequirements::MITMProtectionNotRequiredNoBonding),
             0x01 => Ok(AuthenticationRequirements::MITMProtectionRequiredNoBonding),
@@ -1790,7 +1789,7 @@ impl AuthenticationRequirements {
             0x03 => Ok(AuthenticationRequirements::MITMProtectionRequiredDedicatedBonding),
             0x04 => Ok(AuthenticationRequirements::MITMProtectionNotRequiredGeneralBonding),
             0x05 => Ok(AuthenticationRequirements::MITMProtectionRequiredGeneralBonding),
-            _    => Err(alloc::format!("Unknown Authentication Requirement: {}", raw)),
+            _ => Err(alloc::format!("Unknown Authentication Requirement: {}", raw)),
         }
     }
 }
@@ -1882,7 +1881,7 @@ impl_try_from_for_raw_packet! {
 #[derive(Clone)]
 pub struct LinkSupervisionTimeoutChangedData {
     pub connection_handle: ConnectionHandle,
-    pub link_supervision_timeout: u16
+    pub link_supervision_timeout: u16,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1938,7 +1937,7 @@ pub enum KeypressNotificationType {
 }
 
 impl KeypressNotificationType {
-    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(KeypressNotificationType::PasskeyEntrystarted),
             1 => Ok(KeypressNotificationType::PasskeyDigitEntered),
@@ -2007,7 +2006,7 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Clone)]
 pub struct ChannelSelectedData {
-    pub physical_link_handle: u8
+    pub physical_link_handle: u8,
 }
 
 impl_try_from_for_raw_packet! {
@@ -2049,7 +2048,7 @@ pub enum LinkLossReason {
 }
 
 impl LinkLossReason {
-    fn try_from(raw:u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(LinkLossReason::Unknown),
             1 => Ok(LinkLossReason::RangeRelated),
@@ -2160,11 +2159,10 @@ pub enum ControllerBlocks {
 }
 
 impl ControllerBlocks {
-    fn from( raw: u16 ) -> Self {
+    fn from(raw: u16) -> Self {
         if raw == 0 {
             ControllerBlocks::RequestingReadDataBlockSize
-        }
-        else {
+        } else {
             ControllerBlocks::FreeBlockBuffers(raw)
         }
     }
@@ -2214,7 +2212,7 @@ impl_try_from_for_raw_packet! {
 #[derive(Clone)]
 pub enum ShortRangeModeState {
     Enabled,
-    Disabled
+    Disabled,
 }
 
 impl ShortRangeModeState {
@@ -2231,7 +2229,7 @@ impl ShortRangeModeState {
 pub struct ShortRangeModeChangeCompleteData {
     pub status: Error,
     pub physical_link_handle: u8,
-    pub short_range_mode_state: ShortRangeModeState
+    pub short_range_mode_state: ShortRangeModeState,
 }
 
 impl_try_from_for_raw_packet! {
@@ -2352,12 +2350,12 @@ impl LERole {
         match raw {
             0x00 => Ok(LERole::Master),
             0x01 => Ok(LERole::Slave),
-            _    => Err(alloc::format!("Unknown Le Role: {}", raw)),
+            _ => Err(alloc::format!("Unknown Le Role: {}", raw)),
         }
     }
 }
 
-#[derive(Clone,Copy,PartialEq,Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LEConnectionAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
@@ -2368,7 +2366,7 @@ impl LEConnectionAddressType {
         match raw {
             0x00 => Ok(LEConnectionAddressType::PublicDeviceAddress),
             0x01 => Ok(LEConnectionAddressType::RandomDeviceAddress),
-            _    => Err(alloc::format!("Unknown Le Connection Address Type: {}", raw)),
+            _ => Err(alloc::format!("Unknown Le Connection Address Type: {}", raw)),
         }
     }
 }
@@ -2396,7 +2394,7 @@ impl ClockAccuracy {
             0x05 => Ok(ClockAccuracy::_50ppm),
             0x06 => Ok(ClockAccuracy::_30ppm),
             0x07 => Ok(ClockAccuracy::_20ppm),
-            _    => Err(alloc::format!("Unknown Clock Accuracy: {}", raw)),
+            _ => Err(alloc::format!("Unknown Clock Accuracy: {}", raw)),
         }
     }
 }
@@ -2416,7 +2414,7 @@ pub struct LEConnectionCompleteData {
 
 impl LEConnectionCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self,alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
         Ok(LEConnectionCompleteData {
             status: Error::from(chew!(packet)),
@@ -2442,20 +2440,20 @@ pub enum LEAdvEventType {
 }
 
 impl LEAdvEventType {
-    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LEAdvEventType::ConnectableAndScannableUndirectedAdvertising),
             0x01 => Ok(LEAdvEventType::ConnectableDirectedAdvertising),
             0x02 => Ok(LEAdvEventType::ScannableUndirectedAdvertising),
             0x03 => Ok(LEAdvEventType::NonConnectableUndirectedAdvertising),
             0x04 => Ok(LEAdvEventType::ScanResponse),
-            _    => Err(alloc::format!("Unknown LE Event Type: {}", raw)),
+            _ => Err(alloc::format!("Unknown LE Event Type: {}", raw)),
         }
     }
 }
 
 pub struct ReportDataIter<'a> {
-    data: &'a [u8]
+    data: &'a [u8],
 }
 
 impl<'a> core::iter::Iterator for ReportDataIter<'a> {
@@ -2474,19 +2472,16 @@ impl<'a> core::iter::Iterator for ReportDataIter<'a> {
                     // No need to include the length byte because the length is included in the slice
                     // fat pointer.
                     Some(Ok(&ret[1..]))
-                }
-                else {
+                } else {
                     // short data so that None is returned the next iteration
                     self.data = &self.data[self.data.len()..];
 
                     Some(Err(crate::gap::advertise::Error::IncorrectLength))
                 }
-            }
-            else {
+            } else {
                 None
             }
-        }
-        else {
+        } else {
             None
         }
     }
@@ -2503,38 +2498,39 @@ pub struct LEAdvertisingReportData {
 }
 
 impl LEAdvertisingReportData {
-
     pub fn data_iter(&self) -> ReportDataIter<'_> {
-        ReportDataIter {
-            data: &self.data,
-        }
+        ReportDataIter { data: &self.data }
     }
 
     fn buf_from(data: &[u8]) -> BufferType<Result<Self, alloc::string::String>> {
         let mut packet = data;
 
         // The value of 127 indicates no rssi functionality
-        fn get_rssi( val: u8 ) -> Option<i8> { if val != 127 { Some(val as i8) } else { None } }
+        fn get_rssi(val: u8) -> Option<i8> {
+            if val != 127 {
+                Some(val as i8)
+            } else {
+                None
+            }
+        }
 
-        let mut reports =alloc::vec::Vec::with_capacity(chew!(packet) as usize);
+        let mut reports = alloc::vec::Vec::with_capacity(chew!(packet) as usize);
 
         for _ in 0..reports.capacity() {
             // packet[index + 8] is the data length value as given by the controller
-            reports.push(
-                match LEAdvEventType::try_from(chew!(packet)) {
-                    Ok(e_type) => Ok(LEAdvertisingReportData {
-                            event_type: e_type,
-                            address_type: LEAddressType::from(chew!(packet)),
-                            address: chew_baddr!(packet),
-                            data: {
-                                let size = chew!(packet);
-                                chew!(packet, size).to_vec()
-                            },
-                            rssi: get_rssi(chew!(packet)),
-                        }),
-                    Err(err) => Err(err),
-                }
-            );
+            reports.push(match LEAdvEventType::try_from(chew!(packet)) {
+                Ok(e_type) => Ok(LEAdvertisingReportData {
+                    event_type: e_type,
+                    address_type: LEAddressType::from(chew!(packet)),
+                    address: chew_baddr!(packet),
+                    data: {
+                        let size = chew!(packet);
+                        chew!(packet, size).to_vec()
+                    },
+                    rssi: get_rssi(chew!(packet)),
+                }),
+                Err(err) => Err(err),
+            });
         }
 
         reports
@@ -2552,7 +2548,7 @@ pub struct LEConnectionUpdateCompleteData {
 
 impl LEConnectionUpdateCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEConnectionUpdateCompleteData {
@@ -2560,7 +2556,7 @@ impl LEConnectionUpdateCompleteData {
             connection_handle: chew_handle!(packet),
             connection_interval: ConnectionInterval::try_from_received(chew_u16!(packet))?,
             connection_latency: ConnectionLatency::from(chew_u16!(packet)),
-            supervision_timeout: SupervisionTimeout::from(chew_u16!(packet))
+            supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
         })
     }
 }
@@ -2574,15 +2570,15 @@ pub struct LEReadRemoteFeaturesCompleteData {
 
 impl LEReadRemoteFeaturesCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEReadRemoteFeaturesCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
             features: EnabledLeFeaturesItr::from({
-                let mut features = [0u8;8];
-                features.copy_from_slice(chew!(packet,8));
+                let mut features = [0u8; 8];
+                features.copy_from_slice(chew!(packet, 8));
                 features
             }),
         })
@@ -2611,19 +2607,17 @@ impl LELongTermKeyRequestData {
 
 #[derive(Clone)]
 pub struct LEConnectionTimeout {
-    timeout: u16
+    timeout: u16,
 }
 
 impl LEConnectionTimeout {
     const CNV: u64 = 10; // unit: milliseconds
 
     /// Raw is a pair for (minimum, maximum)
-    fn from(raw: u16 ) -> Self {
-        debug_assert!( raw >= 0x000A && raw <= 0x0C80 );
+    fn from(raw: u16) -> Self {
+        debug_assert!(raw >= 0x000A && raw <= 0x0C80);
 
-        LEConnectionTimeout {
-            timeout: raw,
-        }
+        LEConnectionTimeout { timeout: raw }
     }
 
     /// Get the maximum interval value as a duration
@@ -2643,48 +2637,46 @@ pub struct LERemoteConnectionParameterRequestData {
 
 impl LERemoteConnectionParameterRequestData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LERemoteConnectionParameterRequestData {
             connection_handle: chew_handle!(packet),
-            minimum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).map_err(|e| alloc::string::String::from(e))?,
-            maximum_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).map_err(|e| alloc::string::String::from(e))?,
-            latency: ConnectionLatency::from( chew_u16!(packet) ),
-            timeout: LEConnectionTimeout::from( chew_u16!(packet) ),
+            minimum_interval: le::connection::ConnectionInterval::try_from_raw(chew_u16!(packet))
+                .map_err(|e| alloc::string::String::from(e))?,
+            maximum_interval: le::connection::ConnectionInterval::try_from_raw(chew_u16!(packet))
+                .map_err(|e| alloc::string::String::from(e))?,
+            latency: ConnectionLatency::from(chew_u16!(packet)),
+            timeout: LEConnectionTimeout::from(chew_u16!(packet)),
         })
     }
 }
 
 #[derive(Clone)]
 pub struct LEMaxOctets {
-    pub octets: u16
+    pub octets: u16,
 }
 
 impl LEMaxOctets {
     /// Raw is a pair for (minimum, maximum)
-    fn from(raw: u16 ) -> Self {
-        debug_assert!( raw >= 0x001B && raw <= 0x00FB );
+    fn from(raw: u16) -> Self {
+        debug_assert!(raw >= 0x001B && raw <= 0x00FB);
 
-        LEMaxOctets {
-            octets: raw,
-        }
+        LEMaxOctets { octets: raw }
     }
 }
 
 #[derive(Clone)]
 pub struct LEMaxTime {
-    pub time: u16
+    pub time: u16,
 }
 
 impl LEMaxTime {
     /// Raw is a pair for (minimum, maximum)
-    fn from(raw: u16 ) -> Self {
-        debug_assert!( raw >= 0x0148 && raw <= 0x4290 );
+    fn from(raw: u16) -> Self {
+        debug_assert!(raw >= 0x0148 && raw <= 0x4290);
 
-        LEMaxTime {
-            time: raw,
-        }
+        LEMaxTime { time: raw }
     }
 }
 
@@ -2699,35 +2691,35 @@ pub struct LEDataLengthChangeData {
 
 impl LEDataLengthChangeData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEDataLengthChangeData {
             connection_handle: chew_handle!(packet),
-            max_tx_octets: LEMaxOctets::from( chew_u16!(packet) ),
-            max_tx_time: LEMaxTime::from( chew_u16!(packet) ),
-            max_rx_octets: LEMaxOctets::from( chew_u16!(packet) ),
-            max_rx_time: LEMaxTime::from( chew_u16!(packet) ),
+            max_tx_octets: LEMaxOctets::from(chew_u16!(packet)),
+            max_tx_time: LEMaxTime::from(chew_u16!(packet)),
+            max_rx_octets: LEMaxOctets::from(chew_u16!(packet)),
+            max_rx_time: LEMaxTime::from(chew_u16!(packet)),
         })
     }
 }
 
 #[derive(Clone)]
-pub struct LEReadLocalP256PublicKeyCompleteData{
+pub struct LEReadLocalP256PublicKeyCompleteData {
     pub status: Error,
-    pub key: [u8;64],
+    pub key: [u8; 64],
 }
 
 impl LEReadLocalP256PublicKeyCompleteData {
     #[allow(unused_assignments)]
-    fn from( data: &[u8] ) -> Self {
+    fn from(data: &[u8]) -> Self {
         let mut packet = data;
 
         LEReadLocalP256PublicKeyCompleteData {
             status: Error::from(chew!(packet)),
             key: {
-                let mut pub_key = [0u8;64];
-                pub_key.copy_from_slice(chew!(packet,256));
+                let mut pub_key = [0u8; 64];
+                pub_key.copy_from_slice(chew!(packet, 256));
                 pub_key
             },
         }
@@ -2738,18 +2730,18 @@ impl LEReadLocalP256PublicKeyCompleteData {
 /// DHKey stands for diffie Hellman Key
 pub struct LEGenerateDHKeyCompleteData {
     status: Error,
-    key: [u8;32],
+    key: [u8; 32],
 }
 
 impl LEGenerateDHKeyCompleteData {
     #[allow(unused_assignments)]
-    fn from( data: &[u8] ) -> Self {
+    fn from(data: &[u8]) -> Self {
         let mut packet = data;
 
         LEGenerateDHKeyCompleteData {
             status: Error::from(chew!(packet)),
             key: {
-                let mut dh_key = [0u8;32];
+                let mut dh_key = [0u8; 32];
                 dh_key.copy_from_slice(&packet[2..34]);
                 dh_key
             },
@@ -2774,7 +2766,7 @@ pub struct LEEnhancedConnectionCompleteData {
 
 impl LEEnhancedConnectionCompleteData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         let peer_address_type: LEAddressType;
@@ -2784,20 +2776,19 @@ impl LEEnhancedConnectionCompleteData {
                 let bdaddr = chew_baddr!(packet);
                 if match peer_address_type {
                     LEAddressType::PublicIdentityAddress | LEAddressType::RandomIdentityAddress => true,
-                    _ => false
+                    _ => false,
                 } {
                     Some(bdaddr)
-                }
-                else {
+                } else {
                     None
                 }
-            }}
+            }};
         }
 
         Ok(LEEnhancedConnectionCompleteData {
-            status: Error::from( chew!(packet) ),
+            status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
-            role: LERole::try_from( chew!(packet) )?,
+            role: LERole::try_from(chew!(packet))?,
             peer_address_type: {
                 peer_address_type = LEAddressType::from(chew!(packet));
                 peer_address_type.clone()
@@ -2805,21 +2796,21 @@ impl LEEnhancedConnectionCompleteData {
             peer_address: chew_baddr!(packet),
             local_resolvable_private_address: if_rpa_is_used!(),
             peer_resolvable_private_address: if_rpa_is_used!(),
-            connection_interval: le::connection::ConnectionInterval::try_from_raw( chew_u16!(packet) ).unwrap(),
-            connection_latency: ConnectionLatency::from( chew_u16!(packet) ),
-            supervision_timeout: SupervisionTimeout::from( chew_u16!(packet) ),
-            master_clock_accuracy: ClockAccuracy::try_from( chew!(packet) )?,
+            connection_interval: le::connection::ConnectionInterval::try_from_raw(chew_u16!(packet)).unwrap(),
+            connection_latency: ConnectionLatency::from(chew_u16!(packet)),
+            supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
+            master_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,
         })
     }
 }
 
 #[derive(Clone)]
 pub enum LEAdvertisingEventType {
-    ConnectableDirectedLegacyAdvertising
+    ConnectableDirectedLegacyAdvertising,
 }
 
 impl LEAdvertisingEventType {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x01 => Ok(LEAdvertisingEventType::ConnectableDirectedLegacyAdvertising),
             _ => Err(alloc::format!("Unknown LE Advertising Event Type: {}", raw)),
@@ -2837,7 +2828,7 @@ pub enum LEDirectAddressType {
 }
 
 impl LEDirectAddressType {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LEDirectAddressType::PublicDeviceAddress),
             0x01 => Ok(LEDirectAddressType::RandomDeviceAddress),
@@ -2861,27 +2852,32 @@ pub struct LEDirectedAdvertisingReportData {
 
 impl LEDirectedAdvertisingReportData {
     #[allow(unused_assignments)]
-    fn buf_from( data: &[u8] ) -> BufferType<Result<Self, alloc::string::String>> {
+    fn buf_from(data: &[u8]) -> BufferType<Result<Self, alloc::string::String>> {
         let mut packet = data;
 
         let report_count = chew!(packet) as usize;
 
-        let mut vec = packet.chunks_exact(16)
-        .map( |mut chunk| {
-            Ok(LEDirectedAdvertisingReportData {
-                event_type: LEAdvertisingEventType::try_from( chew!(chunk) )?,
-                address_type: LEAddressType::from( chew!(chunk) ),
-                address: chew_baddr!(chunk),
-                direct_address_type: LEDirectAddressType::try_from( chew!(chunk) )?,
-                direct_address: chew_baddr!(chunk),
-                rssi: {
-                    let rssi_val = chew!(chunk) as i8;
+        let mut vec = packet
+            .chunks_exact(16)
+            .map(|mut chunk| {
+                Ok(LEDirectedAdvertisingReportData {
+                    event_type: LEAdvertisingEventType::try_from(chew!(chunk))?,
+                    address_type: LEAddressType::from(chew!(chunk)),
+                    address: chew_baddr!(chunk),
+                    direct_address_type: LEDirectAddressType::try_from(chew!(chunk))?,
+                    direct_address: chew_baddr!(chunk),
+                    rssi: {
+                        let rssi_val = chew!(chunk) as i8;
 
-                    if rssi_val != 127 {Some(rssi_val)} else {None}
-                }
+                        if rssi_val != 127 {
+                            Some(rssi_val)
+                        } else {
+                            None
+                        }
+                    },
+                })
             })
-        })
-        .collect::<alloc::vec::Vec<Result<Self, alloc::string::String>>>();
+            .collect::<alloc::vec::Vec<Result<Self, alloc::string::String>>>();
 
         vec.truncate(report_count);
 
@@ -2897,7 +2893,7 @@ pub enum LEPhy {
 }
 
 impl LEPhy {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x01 => Ok(LEPhy::_1M),
             0x02 => Ok(LEPhy::_2M),
@@ -2939,7 +2935,7 @@ pub enum LEDataStatus {
 }
 
 impl LEDataStatus {
-    fn try_from( raw: u8 ) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0 => Ok(LEDataStatus::Complete),
             1 => Ok(LEDataStatus::Incomplete),
@@ -2973,9 +2969,7 @@ pub struct LEExtAdvEventType {
 
 impl LEExtAdvEventType {
     fn from(raw: u16) -> Self {
-        LEExtAdvEventType {
-            raw: raw
-        }
+        LEExtAdvEventType { raw: raw }
     }
 
     pub fn is_advertising_connectable(&self) -> bool {
@@ -2999,7 +2993,7 @@ impl LEExtAdvEventType {
     }
 
     pub fn data_status(&self) -> Result<LEDataStatus, alloc::string::String> {
-        LEDataStatus::try_from( ((self.raw >> 5) & 3) as u8)
+        LEDataStatus::try_from(((self.raw >> 5) & 3) as u8)
     }
 
     /// Returns the Legacy PDU type if the event type indicates the PDU type is legacy
@@ -3011,26 +3005,24 @@ impl LEExtAdvEventType {
             0b0010000 => Some(LELegacyExtAdvEventTypePDUType::AdvertisingNonConnectableNonScannableInd),
             0b0011011 => Some(LELegacyExtAdvEventTypePDUType::ScanResponseToAdvertisingInd),
             0b0011010 => Some(LELegacyExtAdvEventTypePDUType::ScanResponseToAdvertisingScanInd),
-            _         => None
+            _ => None,
         }
     }
 }
 
 #[derive(Clone)]
 pub struct LEAdvertiseInterval {
-    interval: u16
+    interval: u16,
 }
 
 impl LEAdvertiseInterval {
     const CNV: u64 = 1250; // unit: microseconds
 
     /// Raw is a pair for (minimum, maximum)
-    fn from(raw: u16 ) -> Self {
-        debug_assert!( raw >= 0x0006 );
+    fn from(raw: u16) -> Self {
+        debug_assert!(raw >= 0x0006);
 
-        LEAdvertiseInterval {
-            interval: raw,
-        }
+        LEAdvertiseInterval { interval: raw }
     }
 
     /// Get the minimum interval value as a duration
@@ -3066,13 +3058,13 @@ pub struct LEExtendedAdvertisingReportData {
 }
 
 impl LEExtendedAdvertisingReportData {
-    fn buf_from( data: &[u8] ) -> BufferType<Result<LEExtendedAdvertisingReportData, alloc::string::String>> {
+    fn buf_from(data: &[u8]) -> BufferType<Result<LEExtendedAdvertisingReportData, alloc::string::String>> {
         let mut packet = data;
 
-        let mut reports =alloc::vec::Vec::with_capacity(chew!(packet) as usize);
+        let mut reports = alloc::vec::Vec::with_capacity(chew!(packet) as usize);
 
         let mut process_packet = || {
-            Ok( LEExtendedAdvertisingReportData {
+            Ok(LEExtendedAdvertisingReportData {
                 event_type: LEExtAdvEventType::from(chew_u16!(packet)),
                 address_type: {
                     let val = chew!(packet);
@@ -3142,13 +3134,13 @@ impl LEExtendedAdvertisingReportData {
                 data: {
                     let data_len = chew!(packet);
 
-                    ExtendedAdvertisingAndScanResponseDataItr::from(chew!(packet,data_len))
-                }
+                    ExtendedAdvertisingAndScanResponseDataItr::from(chew!(packet, data_len))
+                },
             })
         };
 
         for _ in 0..reports.capacity() {
-            reports.push( process_packet() );
+            reports.push(process_packet());
         }
 
         reports
@@ -3169,7 +3161,7 @@ pub struct LEPeriodicAdvertisingSyncEstablishedData {
 
 impl LEPeriodicAdvertisingSyncEstablishedData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEPeriodicAdvertisingSyncEstablishedData {
@@ -3195,7 +3187,7 @@ pub struct LEPeriodicAdvertisingReportData {
 }
 
 impl LEPeriodicAdvertisingReportData {
-    fn try_from( data: &[u8]) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
         Ok(LEPeriodicAdvertisingReportData {
             sync_handle: chew_handle!(packet),
@@ -3216,11 +3208,11 @@ impl LEPeriodicAdvertisingReportData {
                 }
             },
             // There is a unused byte here, so the next chew needs to account for that
-            data_status: LEDataStatus::try_from(chew!(packet,1,1)[0])?,
+            data_status: LEDataStatus::try_from(chew!(packet, 1, 1)[0])?,
             data: {
                 let len = chew!(packet) as usize;
                 packet[..len].to_vec()
-            }
+            },
         })
     }
 }
@@ -3232,14 +3224,13 @@ pub struct LEPeriodicAdvertisingSyncLostData {
 
 impl LEPeriodicAdvertisingSyncLostData {
     #[allow(unused_assignments)]
-    fn from( data: &[u8] ) -> Self {
+    fn from(data: &[u8]) -> Self {
         let mut packet = data;
         LEPeriodicAdvertisingSyncLostData {
-            sync_handle: chew_handle!(packet)
+            sync_handle: chew_handle!(packet),
         }
     }
 }
-
 
 #[derive(Clone)]
 pub struct LEAdvertisingSetTerminatedData {
@@ -3251,7 +3242,7 @@ pub struct LEAdvertisingSetTerminatedData {
 
 impl LEAdvertisingSetTerminatedData {
     #[allow(unused_assignments)]
-    fn from( data: &[u8] ) -> Self {
+    fn from(data: &[u8]) -> Self {
         let mut packet = data;
 
         LEAdvertisingSetTerminatedData {
@@ -3272,7 +3263,7 @@ pub struct LEScanRequestReceivedData {
 
 impl LEScanRequestReceivedData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEScanRequestReceivedData {
@@ -3290,7 +3281,7 @@ pub enum LEChannelSelectionAlgorithm {
 }
 
 impl LEChannelSelectionAlgorithm {
-    fn try_from( raw: u8) -> Result<Self, alloc::string::String> {
+    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
             0x00 => Ok(LEChannelSelectionAlgorithm::Algorithm1),
             0x01 => Ok(LEChannelSelectionAlgorithm::Algorithm2),
@@ -3302,12 +3293,12 @@ impl LEChannelSelectionAlgorithm {
 #[derive(Clone)]
 pub struct LEChannelSelectionAlgorithmData {
     pub connection_handle: ConnectionHandle,
-    pub channel_selection_algorithm: LEChannelSelectionAlgorithm
+    pub channel_selection_algorithm: LEChannelSelectionAlgorithm,
 }
 
 impl LEChannelSelectionAlgorithmData {
     #[allow(unused_assignments)]
-    fn try_from( data: &[u8] ) -> Result<Self, alloc::string::String> {
+    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
         Ok(LEChannelSelectionAlgorithmData {
@@ -3362,7 +3353,7 @@ enumerate_split! {
 }
 
 impl LEMeta {
-    pub fn try_from( raw: u8 ) -> Result<LEMeta, alloc::string::String> {
+    pub fn try_from(raw: u8) -> Result<LEMeta, alloc::string::String> {
         match raw {
             0x01 => Ok(LEMeta::ConnectionComplete),
             0x02 => Ok(LEMeta::AdvertisingReport),
@@ -3384,7 +3375,7 @@ impl LEMeta {
             0x12 => Ok(LEMeta::AdvertisingSetTerminated),
             0x13 => Ok(LEMeta::ScanRequestReceived),
             0x14 => Ok(LEMeta::ChannelSelectionAlgorithm),
-            _    => Err(alloc::format!("Unknown LE Meta: {}", raw)),
+            _ => Err(alloc::format!("Unknown LE Meta: {}", raw)),
         }
     }
 }
@@ -3454,7 +3445,7 @@ impl From<LEMeta> for Events {
 }
 
 #[derive(Clone)]
-pub struct TriggeredClockCaptureData { }
+pub struct TriggeredClockCaptureData {}
 
 impl_try_from_for_raw_packet! {
     TriggeredClockCaptureData,
@@ -3465,7 +3456,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct SynchronizationTrainCompleteData { }
+pub struct SynchronizationTrainCompleteData {}
 
 impl_try_from_for_raw_packet! {
     SynchronizationTrainCompleteData,
@@ -3476,7 +3467,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct SynchronizationTrainReceivedData { }
+pub struct SynchronizationTrainReceivedData {}
 
 impl_try_from_for_raw_packet! {
     SynchronizationTrainReceivedData,
@@ -3487,7 +3478,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct ConnectionlessSlaveBroadcastReceiveData { }
+pub struct ConnectionlessSlaveBroadcastReceiveData {}
 
 impl_try_from_for_raw_packet! {
     ConnectionlessSlaveBroadcastReceiveData,
@@ -3498,7 +3489,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct ConnectionlessSlaveBroadcastTimeoutData { }
+pub struct ConnectionlessSlaveBroadcastTimeoutData {}
 
 impl_try_from_for_raw_packet! {
     ConnectionlessSlaveBroadcastTimeoutData,
@@ -3509,7 +3500,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct TruncatedPageCompleteData { }
+pub struct TruncatedPageCompleteData {}
 
 impl_try_from_for_raw_packet! {
     TruncatedPageCompleteData,
@@ -3520,7 +3511,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct SlavePageRespoinseTimeoutData { }
+pub struct SlavePageRespoinseTimeoutData {}
 
 impl_try_from_for_raw_packet! {
     SlavePageRespoinseTimeoutData,
@@ -3531,7 +3522,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct ConnectionlessSlaveBroadcastChannelMapChangeData { }
+pub struct ConnectionlessSlaveBroadcastChannelMapChangeData {}
 
 impl_try_from_for_raw_packet! {
     ConnectionlessSlaveBroadcastChannelMapChangeData,
@@ -3542,7 +3533,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct InquiryResponseNotificationData { }
+pub struct InquiryResponseNotificationData {}
 
 impl_try_from_for_raw_packet! {
     InquiryResponseNotificationData,
@@ -3554,7 +3545,7 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Clone)]
 pub struct AuthenticatedPayloadTimeoutExpiredData {
-    connection_handle: ConnectionHandle
+    connection_handle: ConnectionHandle,
 }
 
 impl_try_from_for_raw_packet! {
@@ -3568,7 +3559,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Clone)]
-pub struct SAMStatusChangeData { }
+pub struct SAMStatusChangeData {}
 
 impl_try_from_for_raw_packet! {
     SAMStatusChangeData,
@@ -3578,9 +3569,17 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-macro_rules! put_ { ( $t:tt ) => { _ } }
+macro_rules! put_ {
+    ( $t:tt ) => {
+        _
+    };
+}
 
-macro_rules! data_into_simple { ($unused_rpt:tt, $data_var:expr) => { $data_var.into_simple() } }
+macro_rules! data_into_simple {
+    ($unused_rpt:tt, $data_var:expr) => {
+        $data_var.into_simple()
+    };
+}
 
 macro_rules! events_markup {
     ( pub enum $EnumName:tt ( $EnumDataName:tt ) {
@@ -3767,7 +3766,7 @@ impl Events {
             Events::CommandComplete => false,
             Events::CommandStatus => false,
             Events::NumberOfCompletedPackets => false,
-            _ => true
+            _ => true,
         }
     }
 }

@@ -43,28 +43,21 @@
 //! This is implemented only to support LE-U. See the note for `setup_completed_packets_callback`
 //! for what needs to changed when implementing ACL-U buffer support.
 
-use alloc::{
-    sync::Arc,
-    boxed::Box,
-};
-use core::{
-    future::Future,
-    pin::Pin,
-    sync::atomic::{Ordering, AtomicPtr, AtomicBool, AtomicUsize},
-    task::{Waker,Poll,Context},
-};
+use crate::hci::{AclBroadcastFlag, AsyncLock, EventMatcher};
 use crate::{
     hci::{
-        AclPacketBoundary,
-        common::ConnectionHandle,
-        HciAclData,
-        HciAclDataInterface,
+        common::ConnectionHandle, AclPacketBoundary, HciAclData, HciAclDataInterface, HostControllerInterface,
         HostInterface,
-        HostControllerInterface,
     },
     l2cap::AclData,
 };
-use crate::hci::{AclBroadcastFlag, EventMatcher, AsyncLock};
+use alloc::{boxed::Box, sync::Arc};
+use core::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
+    task::{Context, Poll, Waker},
+};
 
 /// Monitoring information of a controllers buffers
 #[derive(Default)]
@@ -80,7 +73,6 @@ struct BufferMonitorInfo {
 }
 
 impl BufferMonitorInfo {
-
     /// Create the matcher
     ///
     /// Only one matcher should be created per `BufferMonitorInfo` (not for every
@@ -88,37 +80,32 @@ impl BufferMonitorInfo {
     fn create_matcher(self: Arc<Self>) -> Pin<Arc<impl EventMatcher>> {
         use crate::hci::events::EventsData;
 
-        Arc::pin( move |e_data: &EventsData| {
-            match e_data {
+        Arc::pin(move |e_data: &EventsData| match e_data {
+            EventsData::NumberOfCompletedPackets(info) => {
+                let freed = info.iter().map(|d| <usize>::from(d.number_of_completed_packets)).sum();
 
-                EventsData::NumberOfCompletedPackets(info) => {
-                    let freed = info.iter()
-                        .map(|d| <usize>::from(d.number_of_completed_packets))
-                        .sum();
+                loop {
+                    let old = self.used_space.load(Ordering::Relaxed);
 
-                    loop {
-                        let old = self.used_space.load(Ordering::Relaxed);
-
-                        match self.used_space.compare_exchange_weak(
-                            old,
-                            old.checked_sub(freed).unwrap_or_default(),
-                            Ordering::SeqCst,
-                            Ordering::Acquire,
-                        ) {
-                            Ok(_) => break,
-                            _ => ()
-                        }
+                    match self.used_space.compare_exchange_weak(
+                        old,
+                        old.checked_sub(freed).unwrap_or_default(),
+                        Ordering::SeqCst,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        _ => (),
                     }
+                }
 
-                    let waker_ptr = self.current_waker.load(Ordering::Relaxed);
+                let waker_ptr = self.current_waker.load(Ordering::Relaxed);
 
-                    unsafe {waker_ptr.as_ref()}.map( |waker| waker.wake_by_ref() );
+                unsafe { waker_ptr.as_ref() }.map(|waker| waker.wake_by_ref());
 
-                    self.match_flag.load(Ordering::Relaxed)
-                },
-
-                _ => false,
+                self.match_flag.load(Ordering::Relaxed)
             }
+
+            _ => false,
         })
         .into()
     }
@@ -148,17 +135,16 @@ pub struct HciDataPacketFlowManager<M> {
     /// Information used for monitoring the receive buffer on the bluetooth controller
     controller_buffer_info: Arc<BufferMonitorInfo>,
     /// A reference to the matcher, used only to up the strong count for the lifetime of `Self`
-    _matcher: Option<Pin<Arc<dyn EventMatcher>>>
+    _matcher: Option<Pin<Arc<dyn EventMatcher>>>,
 }
 
 impl<M> HciDataPacketFlowManager<M> {
-
     /// Get the maximum **L2CAP** ACL data payload that the controller can receive.
     ///
     /// This is the same as the maximum HCI ACL data payload size minus the header size of a L2CAP
     /// packet.
     pub fn get_max_payload_size(&self) -> usize {
-            self.max_packet_payload_size - crate::l2cap::AclData::HEADER_SIZE
+        self.max_packet_payload_size - crate::l2cap::AclData::HEADER_SIZE
     }
 
     /// Non-flush-able data fragmentation
@@ -170,32 +156,37 @@ impl<M> HciDataPacketFlowManager<M> {
     /// # Panic
     /// If data has a packet boundary flag indicating a complete L2CAP PDU and the payload is larger
     /// then the controller's accepted payload size, this function produces a panic.
-    fn fragment(&self, mtu: usize, data: &AclData, connection_handle: ConnectionHandle)
-    -> Result<alloc::vec::Vec<HciAclData>, HciAclData>
-    {
+    fn fragment(
+        &self,
+        mtu: usize,
+        data: &AclData,
+        connection_handle: ConnectionHandle,
+    ) -> Result<alloc::vec::Vec<HciAclData>, HciAclData> {
         if data.get_payload().len() > mtu {
-
             let mut first_packet = true;
 
-            let fragments = data.into_raw_data().chunks(mtu)
-                .map(|chunk| HciAclData::new(
-                    connection_handle,
-                    if first_packet {
-                        first_packet = false;
+            let fragments = data
+                .into_raw_data()
+                .chunks(mtu)
+                .map(|chunk| {
+                    HciAclData::new(
+                        connection_handle,
+                        if first_packet {
+                            first_packet = false;
 
-                        AclPacketBoundary::FirstNonFlushable
-                    } else {
-                        AclPacketBoundary::ContinuingFragment
-                    },
-                    AclBroadcastFlag::NoBroadcast,
-                    chunk.to_vec(),
-                ))
+                            AclPacketBoundary::FirstNonFlushable
+                        } else {
+                            AclPacketBoundary::ContinuingFragment
+                        },
+                        AclBroadcastFlag::NoBroadcast,
+                        chunk.to_vec(),
+                    )
+                })
                 .collect();
 
             Ok(fragments)
-
         } else {
-            Err( HciAclData::new(
+            Err(HciAclData::new(
                 connection_handle,
                 AclPacketBoundary::FirstNonFlushable,
                 AclBroadcastFlag::NoBroadcast,
@@ -211,16 +202,18 @@ impl<M> HciDataPacketFlowManager<M> {
     /// consuming the box into a raw pointer, and setting the member `current_waker`. The method
     /// `clear_waker` can be called after
     async fn set_waker(&self) {
+        struct WakerSetter<'a, T>(&'a HciDataPacketFlowManager<T>);
 
-        struct WakerSetter<'a,T>(&'a HciDataPacketFlowManager<T>);
-
-        impl<T> Future for WakerSetter<'_,T> {
+        impl<T> Future for WakerSetter<'_, T> {
             type Output = ();
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                let waker_ptr = Box::into_raw( Box::new(cx.waker().clone()) );
+                let waker_ptr = Box::into_raw(Box::new(cx.waker().clone()));
 
-                self.get_mut().0.controller_buffer_info.current_waker
+                self.get_mut()
+                    .0
+                    .controller_buffer_info
+                    .current_waker
                     .store(waker_ptr, Ordering::Relaxed);
 
                 Poll::Ready(())
@@ -239,46 +232,43 @@ impl<M> HciDataPacketFlowManager<M> {
     /// # WARNING
     /// This function **must** be called within the same context as the method `set_waker`. This
     /// function relies on the waker set by `set_waker` to continue polling.
-    async fn wait_for_controller<I,D>(&self, interface: &I, data: D)
-    -> Result<(), FlowControllerError<I>>
-    where I: HciAclDataInterface,
-          D: core::iter::IntoIterator<Item=HciAclData>
+    async fn wait_for_controller<I, D>(&self, interface: &I, data: D) -> Result<(), FlowControllerError<I>>
+    where
+        I: HciAclDataInterface,
+        D: core::iter::IntoIterator<Item = HciAclData>,
     {
         /// A future that returns Ready when one HCI data packet can be sent to the controller.
         ///
         /// This future, when polled to completion will only indicate that one packet can be sent,
         /// it will not determine if multiple packets may be sent.
-        struct FreedFut<'a,T>(&'a HciDataPacketFlowManager<T>);
+        struct FreedFut<'a, T>(&'a HciDataPacketFlowManager<T>);
 
-        impl<T> Future for FreedFut<'_,T> {
+        impl<T> Future for FreedFut<'_, T> {
             type Output = ();
 
             fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-
                 let this = self.get_mut().0;
 
                 loop {
                     let used_buff = this.controller_buffer_info.used_space.load(Ordering::Relaxed);
 
                     if used_buff >= this.controller_buffer_size {
-                        break Poll::Pending
-                    } else if this.controller_buffer_info.used_space.compare_exchange_weak(
-                        used_buff,
-                        used_buff + 1,
-                        Ordering::SeqCst,
-                        Ordering::Acquire
-                    ).is_ok()
+                        break Poll::Pending;
+                    } else if this
+                        .controller_buffer_info
+                        .used_space
+                        .compare_exchange_weak(used_buff, used_buff + 1, Ordering::SeqCst, Ordering::Acquire)
+                        .is_ok()
                     {
-                        break Poll::Ready(())
+                        break Poll::Ready(());
                     } else {
-                        continue
+                        continue;
                     }
                 }
             }
         }
 
         for packet in data.into_iter() {
-
             FreedFut(self).await;
 
             interface.send(packet)?;
@@ -288,8 +278,7 @@ impl<M> HciDataPacketFlowManager<M> {
     }
 }
 
-impl<M> HciDataPacketFlowManager<M>
-{
+impl<M> HciDataPacketFlowManager<M> {
     /// Initialize the HCI data packet flow manager for LE data.
     ///
     /// This performs a series of steps to get the information from the controller and process the
@@ -303,14 +292,12 @@ impl<M> HciDataPacketFlowManager<M>
     /// # Panic
     /// Input `hi` must be the only reference to the inner `HostInterface` as a mutable reference
     /// must be made to the inner `HostInterface`.
-    pub async fn initialize<I>(hi: &mut HostInterface<I,M> )
-    where I: HostControllerInterface + HciAclDataInterface + 'static,
-          M: 'static
+    pub async fn initialize<I>(hi: &mut HostInterface<I, M>)
+    where
+        I: HostControllerInterface + HciAclDataInterface + 'static,
+        M: 'static,
     {
-        use crate::hci::{
-            le::mandatory::read_buffer_size as le_read_buffer_size,
-            info_params::read_buffer_size
-        };
+        use crate::hci::{info_params::read_buffer_size, le::mandatory::read_buffer_size as le_read_buffer_size};
 
         // Check the controller for a LE data buffer, if it doesn't exist then use the ACL data
         // buffer.
@@ -319,16 +306,20 @@ impl<M> HciDataPacketFlowManager<M>
         //       plus the payload)
         // pc -> The size of the data buffer in the controller.
         let (pl, pc) = match le_read_buffer_size::send(&hi).await.unwrap() {
-
-            le_read_buffer_size::BufferSize{ packet_len: Some(pl), packet_cnt: Some(pc), .. } => {
-                (pl as usize, pc as usize)
-            },
+            le_read_buffer_size::BufferSize {
+                packet_len: Some(pl),
+                packet_cnt: Some(pc),
+                ..
+            } => (pl as usize, pc as usize),
 
             _ => {
                 let buff_info = read_buffer_size::send(&hi).await.unwrap();
 
-                (buff_info.hc_acl_data_packet_len, buff_info.hc_total_num_acl_data_packets)
-            },
+                (
+                    buff_info.hc_acl_data_packet_len,
+                    buff_info.hc_total_num_acl_data_packets,
+                )
+            }
         };
 
         log::info!("Maximum HCI ACL data size: {}", pl);
@@ -336,13 +327,13 @@ impl<M> HciDataPacketFlowManager<M>
 
         hi.flow_controller.max_packet_payload_size = pl.into();
 
-        hi.flow_controller.controller_buffer_size  = pc.into();
+        hi.flow_controller.controller_buffer_size = pc.into();
 
         let matcher = hi.flow_controller.controller_buffer_info.clone().create_matcher();
 
         Self::setup_completed_packets_callback(hi.as_ref(), matcher.clone());
 
-        hi.flow_controller._matcher = Some( matcher as Pin<Arc<dyn EventMatcher>> );
+        hi.flow_controller._matcher = Some(matcher as Pin<Arc<dyn EventMatcher>>);
     }
 
     /// Create a matcher that will be used to set the available data buffer space.
@@ -368,29 +359,30 @@ impl<M> HciDataPacketFlowManager<M>
     /// As this is currently implemented, it doesn't differentiate between the ACL controller buffer
     /// and the LE controller buffer when counting the number of freed space. When implementing ACL
     /// the 'freed' count needs to be divided between ACL-U and LE-U.
-    fn setup_completed_packets_callback<I>(
-        interface: &I,
-        matcher: Pin<Arc<impl EventMatcher + 'static>>
-    ) where I: HostControllerInterface
+    fn setup_completed_packets_callback<I>(interface: &I, matcher: Pin<Arc<impl EventMatcher + 'static>>)
+    where
+        I: HostControllerInterface,
     {
-        use core::task::{RawWakerVTable, RawWaker};
-        fn c_wake(_: *const ()) -> RawWaker { RawWaker::new(core::ptr::null(), &WAKER_V_TABLE) }
+        use core::task::{RawWaker, RawWakerVTable};
+        fn c_wake(_: *const ()) -> RawWaker {
+            RawWaker::new(core::ptr::null(), &WAKER_V_TABLE)
+        }
         fn n_wake(_: *const ()) {}
         fn r_wake(_: *const ()) {}
         fn d_wake(_: *const ()) {}
 
         const WAKER_V_TABLE: RawWakerVTable = RawWakerVTable::new(c_wake, n_wake, r_wake, d_wake);
 
-        let dummy_waker = unsafe {
-            Waker::from_raw(RawWaker::new(core::ptr::null(), &WAKER_V_TABLE))
-        };
+        let dummy_waker = unsafe { Waker::from_raw(RawWaker::new(core::ptr::null(), &WAKER_V_TABLE)) };
 
         let event = Some(crate::hci::events::Events::NumberOfCompletedPackets);
 
         // Attach the matcher to the device specific base crate of the HCI
         if interface.receive_event(event, &dummy_waker, matcher).is_some() {
-            panic!("Received an event result when expected `None` from call to receive_event in \
-                HciDataPacketFlowManager::setup_completed_packets_callback")
+            panic!(
+                "Received an event result when expected `None` from call to receive_event in \
+                HciDataPacketFlowManager::setup_completed_packets_callback"
+            )
         }
     }
 
@@ -408,8 +400,9 @@ impl<M> HciDataPacketFlowManager<M>
         connection_handle: ConnectionHandle,
         mtu: usize,
     ) -> Result<(), FlowControllerError<I>>
-    where I: HciAclDataInterface,
-          M: for<'a> AsyncLock<'a>
+    where
+        I: HciAclDataInterface,
+        M: for<'a> AsyncLock<'a>,
     {
         match self.fragment(mtu, &data, connection_handle) {
             Ok(vec_data) => {
@@ -418,29 +411,30 @@ impl<M> HciDataPacketFlowManager<M>
 
                 self.set_waker().await;
 
-                let buffer_used_space = self.controller_buffer_info.used_space.load(
-                    Ordering::SeqCst
-                );
+                let buffer_used_space = self.controller_buffer_info.used_space.load(Ordering::SeqCst);
 
-                if self.controller_buffer_size > (vec_data.len() + buffer_used_space)
-                {
-                    self.controller_buffer_info.used_space.fetch_add(
-                        vec_data.len(),
-                        Ordering::Acquire
-                    );
+                if self.controller_buffer_size > (vec_data.len() + buffer_used_space) {
+                    self.controller_buffer_info
+                        .used_space
+                        .fetch_add(vec_data.len(), Ordering::Acquire);
 
-                    vec_data.into_iter().try_for_each(|data| interface.send(data).map(|_| ()))
+                    vec_data
+                        .into_iter()
+                        .try_for_each(|data| interface.send(data).map(|_| ()))
                 } else {
-                    let send_amount = self.controller_buffer_size
+                    let send_amount = self
+                        .controller_buffer_size
                         .checked_sub(buffer_used_space)
                         .unwrap_or_default();
 
-                    self.controller_buffer_info.used_space
+                    self.controller_buffer_info
+                        .used_space
                         .fetch_add(send_amount, Ordering::Acquire);
 
                     let mut data_itr = vec_data.into_iter();
 
-                    data_itr.by_ref()
+                    data_itr
+                        .by_ref()
                         .enumerate()
                         .take_while(|(i, _)| i < &send_amount)
                         .try_for_each(|(_, data)| interface.send(data).map(|_| ()))?;
@@ -453,9 +447,7 @@ impl<M> HciDataPacketFlowManager<M>
 
                 self.set_waker().await;
 
-                let buffer_used_space = self.controller_buffer_info.used_space.load(
-                    Ordering::SeqCst
-                );
+                let buffer_used_space = self.controller_buffer_info.used_space.load(Ordering::SeqCst);
 
                 if self.controller_buffer_size < buffer_used_space {
                     interface.send(single_data).map(|_| ())
@@ -476,78 +468,73 @@ impl<M> Drop for HciDataPacketFlowManager<M> {
 pub(super) type FlowControllerError<I> = <I as HciAclDataInterface>::SendAclDataError;
 
 /// A future for sending HCI data packets to the controller
-pub struct SendFuture<Hci,I> where I: HciAclDataInterface {
+pub struct SendFuture<Hci, I>
+where
+    I: HciAclDataInterface,
+{
     hi: Hci,
     mtu: usize,
     data: Option<AclData>,
     handle: ConnectionHandle,
-    fut: Option<Pin<Box<dyn Future<Output=Result<(), FlowControllerError<I>>>>>>,
+    fut: Option<Pin<Box<dyn Future<Output = Result<(), FlowControllerError<I>>>>>>,
 }
 
-impl<Hci,I> SendFuture<Hci,I> where I: HciAclDataInterface {
-    pub fn new(
-        hi: Hci,
-        mtu: usize,
-        data: AclData,
-        handle: ConnectionHandle
-    ) -> Self {
+impl<Hci, I> SendFuture<Hci, I>
+where
+    I: HciAclDataInterface,
+{
+    pub fn new(hi: Hci, mtu: usize, data: AclData, handle: ConnectionHandle) -> Self {
         SendFuture {
             hi,
             mtu,
             data: Some(data),
             handle,
-            fut: None
+            fut: None,
         }
     }
 }
 
-impl<M,Hci,I> Future for SendFuture<Hci,I>
-where Hci: core::ops::Deref<Target = HostInterface<I,M>> + Clone + Unpin + 'static,
-      I: HciAclDataInterface + Unpin,
-      M: for<'a> AsyncLock<'a>,
+impl<M, Hci, I> Future for SendFuture<Hci, I>
+where
+    Hci: core::ops::Deref<Target = HostInterface<I, M>> + Clone + Unpin + 'static,
+    I: HciAclDataInterface + Unpin,
+    M: for<'a> AsyncLock<'a>,
 {
     type Output = Result<(), FlowControllerError<I>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-
         let this = self.get_mut();
 
         match this.fut.as_mut() {
             None => {
                 let hi_clone = this.hi.clone();
-                let data     = this.data.take().unwrap();
-                let handle   = this.handle;
-                let mtu      = this.mtu;
+                let data = this.data.take().unwrap();
+                let handle = this.handle;
+                let mtu = this.mtu;
 
-                this.fut = Some( Box::pin( async move {
-                    hi_clone.flow_controller.send_hci_data(
-                        &hi_clone.interface,
-                        data,
-                        handle,
-                        mtu
-                    ).await
+                this.fut = Some(Box::pin(async move {
+                    hi_clone
+                        .flow_controller
+                        .send_hci_data(&hi_clone.interface, data, handle, mtu)
+                        .await
                 }));
 
                 this.fut.as_mut().unwrap()
-            },
+            }
             Some(fut) => fut,
-        }.as_mut().poll(cx)
+        }
+        .as_mut()
+        .poll(cx)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hci::events::{Events, EventsData, Multiple, NumberOfCompletedPacketsData};
     use crate::hci::{
-        HostInterface,
-        HostControllerInterface,
-        HciAclDataInterface,
-        CommandParameter,
-        EventMatcher,
-        events,
-        opcodes
+        events, opcodes, CommandParameter, EventMatcher, HciAclDataInterface, HostControllerInterface, HostInterface,
     };
-    use crate::hci::events::{EventsData, Events, NumberOfCompletedPacketsData, Multiple};
     use std::sync::Mutex;
 
     #[derive(Clone)]
@@ -570,29 +557,33 @@ mod tests {
             let mut rand = rand_core::OsRng::default();
 
             loop {
-                std::thread::sleep( std::time::Duration::from_millis( rand.next_u64() % 100 ) );
+                std::thread::sleep(std::time::Duration::from_millis(rand.next_u64() % 100));
 
                 let cnt = self.sent_cnt.load(Ordering::Relaxed) as u64;
 
-                let mod_cnt = if cnt == 1 { 2 } else if cnt == 0 { 1 } else { cnt };
+                let mod_cnt = if cnt == 1 {
+                    2
+                } else if cnt == 0 {
+                    1
+                } else {
+                    cnt
+                };
 
                 let sub_amount = rand.next_u64() % mod_cnt;
 
                 self.sent_cnt.fetch_sub(sub_amount as usize, Ordering::Relaxed);
 
-                let event_data = EventsData::NumberOfCompletedPackets( Multiple::from(
-                    &[
-                        NumberOfCompletedPacketsData {
-                            connection_handle: ConnectionHandle::try_from(1).unwrap(),
-                            number_of_completed_packets: sub_amount as u16,
-                        }
-                    ] as &[_]
-                ));
+                let event_data = EventsData::NumberOfCompletedPackets(Multiple::from(&[NumberOfCompletedPacketsData {
+                    connection_handle: ConnectionHandle::try_from(1).unwrap(),
+                    number_of_completed_packets: sub_amount as u16,
+                }] as &[_]));
 
                 if let Some(matcher) = self.matcher.lock().unwrap().as_ref() {
                     // When the match returns true, the flow controller is using this to indicate
                     // that the matching is finished.
-                    if matcher.match_event(&event_data) { break }
+                    if matcher.match_event(&event_data) {
+                        break;
+                    }
                 }
             }
         }
@@ -614,36 +605,34 @@ mod tests {
         }
     }
 
-
     impl HostControllerInterface for TestInterface {
         type SendCommandError = usize;
         type ReceiveEventError = usize;
 
         fn send_command<D, W>(&self, _: &D, _: W) -> Result<bool, Self::SendCommandError>
-        where D: CommandParameter,
-              W: Into<Option<Waker>>
+        where
+            D: CommandParameter,
+            W: Into<Option<Waker>>,
         {
             match D::COMMAND {
                 opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize) => {
-
                     let packet_len = Self::MAX_PAYLOAD_SIZE.to_le_bytes();
 
-                    *self.e_data.lock().unwrap() = Some(events::EventsData::CommandComplete(
-                        events::CommandCompleteData {
+                    *self.e_data.lock().unwrap() =
+                        Some(events::EventsData::CommandComplete(events::CommandCompleteData {
                             number_of_hci_command_packets: 10,
-                            command_opcode: Some( opcodes::HCICommand::LEController(
-                                opcodes::LEController::ReadBufferSize
-                            ).as_opcode_pair().as_opcode() ),
-                            raw_data: vec![0, packet_len[0], packet_len[1], Self::BUFFER_SIZE]
-                        }
-                    ));
-                },
+                            command_opcode: Some(
+                                opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize)
+                                    .as_opcode_pair()
+                                    .as_opcode(),
+                            ),
+                            raw_data: vec![0, packet_len[0], packet_len[1], Self::BUFFER_SIZE],
+                        }));
+                }
 
-                opcodes::HCICommand::InformationParameters(
-                    opcodes::InformationParameters::ReadBufferSize
-                ) => {
+                opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBufferSize) => {
                     unimplemented!("Reading the BR/EDR buffer size isn't not implemented")
-                },
+                }
 
                 opcode => panic!("Received unexpected command {:?}", opcode),
             };
@@ -651,9 +640,14 @@ mod tests {
             Ok(true)
         }
 
-        fn receive_event<P>(&self, event: Option<Events>, _: &Waker, matcher: Pin<Arc<P>>)
-        -> Option<Result<EventsData, Self::ReceiveEventError>>
-        where P: EventMatcher + Send + Sync + 'static
+        fn receive_event<P>(
+            &self,
+            event: Option<Events>,
+            _: &Waker,
+            matcher: Pin<Arc<P>>,
+        ) -> Option<Result<EventsData, Self::ReceiveEventError>>
+        where
+            P: EventMatcher + Send + Sync + 'static,
         {
             if event == Some(events::Events::NumberOfCompletedPackets) {
                 *self.matcher.lock().unwrap() = Some(matcher);
@@ -668,16 +662,18 @@ mod tests {
         type ReceiveAclDataError = usize;
 
         fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError> {
-
-            assert!( data.get_payload().len() <= Self::MAX_PAYLOAD_SIZE as usize, "{} !<= {}",
+            assert!(
+                data.get_payload().len() <= Self::MAX_PAYLOAD_SIZE as usize,
+                "{} !<= {}",
                 data.get_payload().len(),
-                 Self::MAX_PAYLOAD_SIZE,
+                Self::MAX_PAYLOAD_SIZE,
             );
 
             let loaded = self.sent_cnt.fetch_add(1, Ordering::Relaxed);
 
             // `<` comparison instead of `<=` as this is a fetch_add return.
-            assert!( loaded < Self::BUFFER_SIZE as usize,
+            assert!(
+                loaded < Self::BUFFER_SIZE as usize,
                 "{} !< {}",
                 loaded,
                 Self::BUFFER_SIZE,
@@ -690,15 +686,18 @@ mod tests {
 
         fn stop_receiver(&self, _: &ConnectionHandle) {}
 
-        fn receive(&self, _: &ConnectionHandle, _: &Waker)
-        -> Option<Result<Vec<HciAclData>, Self::ReceiveAclDataError>> {
+        fn receive(
+            &self,
+            _: &ConnectionHandle,
+            _: &Waker,
+        ) -> Option<Result<Vec<HciAclData>, Self::ReceiveAclDataError>> {
             None
         }
     }
 
     #[derive(Default)]
     struct TestLock {
-        mux: futures::lock::Mutex<()>
+        mux: futures::lock::Mutex<()>,
     }
 
     impl<'a> AsyncLock<'a> for TestLock {
@@ -712,10 +711,10 @@ mod tests {
 
     #[test]
     fn flow_manager_test() {
+        use crate::l2cap::{ChannelIdentifier, ConnectionChannel};
         use futures::executor::block_on;
-        use crate::l2cap::{ConnectionChannel, ChannelIdentifier};
 
-        let hci = block_on( HostInterface::<TestInterface, TestLock>::new() );
+        let hci = block_on(HostInterface::<TestInterface, TestLock>::new());
 
         let handle = ConnectionHandle::try_from(0x11).unwrap();
 
@@ -723,12 +722,12 @@ mod tests {
 
         const TEST_DATA_CNT: usize = 1000;
 
-        let mut test_data = Vec::from([0;TEST_DATA_CNT]);
+        let mut test_data = Vec::from([0; TEST_DATA_CNT]);
 
         rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut test_data);
 
         let data = AclData::new(test_data, ChannelIdentifier::NullIdentifier);
 
-        block_on( cc.send(data) ).unwrap();
+        block_on(cc.send(data)).unwrap();
     }
 }

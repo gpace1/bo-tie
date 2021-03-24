@@ -66,29 +66,22 @@
 //! The client does not need to send 'Read Blob Requests' until the entire blob is received by the
 //! client.
 
-#[cfg(test)] mod tests;
+#[cfg(test)]
+mod tests;
 
-use alloc::{
-    vec::Vec,
-    boxed::Box,
+use super::{
+    client::ClientPduName, pdu, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
+    TransferFormatTryFrom,
 };
+use crate::l2cap;
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
-use super::{
-    AttributePermissions,
-    AttributeRestriction,
-    client::ClientPduName,
-    pdu,
-    TransferFormatError,
-    TransferFormatInto,
-    TransferFormatTryFrom,
-};
-use crate::l2cap;
 
-#[derive(Debug,Clone,Copy,PartialEq,PartialOrd,Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ServerPduName {
     ErrorResponse,
     ExchangeMTUResponse,
@@ -146,14 +139,14 @@ impl core::convert::TryFrom<u8> for ServerPduName {
 
     fn try_from(val: u8) -> Result<Self, Self::Error> {
         match val {
-            0x1  => Ok(ServerPduName::ErrorResponse),
-            0x3  => Ok(ServerPduName::ExchangeMTUResponse),
-            0x5  => Ok(ServerPduName::FindInformationResponse),
-            0x7  => Ok(ServerPduName::FindByTypeValueResponse),
-            0x9  => Ok(ServerPduName::ReadByTypeResponse),
-            0xB  => Ok(ServerPduName::ReadResponse),
-            0xD  => Ok(ServerPduName::ReadBlobResponse),
-            0xF  => Ok(ServerPduName::ReadMultipleResponse),
+            0x1 => Ok(ServerPduName::ErrorResponse),
+            0x3 => Ok(ServerPduName::ExchangeMTUResponse),
+            0x5 => Ok(ServerPduName::FindInformationResponse),
+            0x7 => Ok(ServerPduName::FindByTypeValueResponse),
+            0x9 => Ok(ServerPduName::ReadByTypeResponse),
+            0xB => Ok(ServerPduName::ReadResponse),
+            0xD => Ok(ServerPduName::ReadBlobResponse),
+            0xF => Ok(ServerPduName::ReadMultipleResponse),
             0x11 => Ok(ServerPduName::ReadByGroupTypeResponse),
             0x13 => Ok(ServerPduName::WriteResponse),
             0x17 => Ok(ServerPduName::PrepareWriteResponse),
@@ -187,58 +180,50 @@ impl core::fmt::Display for ServerPduName {
 }
 
 impl ServerPduName {
-
     /// Check that the given raw pdu is this response pdu
     ///
     /// This will loosly check that the size of the pdu is correct and that the opcode value
     /// matches this response. The size of the packet will only be checked for the minimum possible
     /// size and not the maximum allowable size by the connection's ATT_MTU.
-    pub(super) fn is_convertible_from(&self, raw_pdu: &[u8] ) -> bool {
-
+    pub(super) fn is_convertible_from(&self, raw_pdu: &[u8]) -> bool {
         // Each of these check that the size of the packet is correct and the opcode matches
         match self {
-            ServerPduName::ErrorResponse => {
-                ( raw_pdu.len() == 5 ) && ( raw_pdu[0] == ServerPduName::ErrorResponse.into() )
-            },
+            ServerPduName::ErrorResponse => (raw_pdu.len() == 5) && (raw_pdu[0] == ServerPduName::ErrorResponse.into()),
             ServerPduName::ExchangeMTUResponse => {
-                ( raw_pdu.len() == 3 ) && ( raw_pdu[0] == ServerPduName::ExchangeMTUResponse.into() )
-            },
+                (raw_pdu.len() == 3) && (raw_pdu[0] == ServerPduName::ExchangeMTUResponse.into())
+            }
             ServerPduName::FindInformationResponse => {
-                ( raw_pdu.len() >= 6 ) && ( raw_pdu[0] == ServerPduName::FindInformationResponse.into() )
-            },
+                (raw_pdu.len() >= 6) && (raw_pdu[0] == ServerPduName::FindInformationResponse.into())
+            }
             ServerPduName::FindByTypeValueResponse => {
-                ( raw_pdu.len() >= 5 ) && ( raw_pdu[0] == ServerPduName::FindByTypeValueResponse.into() )
-            },
+                (raw_pdu.len() >= 5) && (raw_pdu[0] == ServerPduName::FindByTypeValueResponse.into())
+            }
             ServerPduName::ReadByTypeResponse => {
-                ( raw_pdu.len() >= 4 ) && ( raw_pdu[0] == ServerPduName::ReadByTypeResponse.into() )
-            },
-            ServerPduName::ReadResponse => {
-                ( raw_pdu.len() >= 1 ) && ( raw_pdu[0] == ServerPduName::ReadResponse.into() )
-            },
+                (raw_pdu.len() >= 4) && (raw_pdu[0] == ServerPduName::ReadByTypeResponse.into())
+            }
+            ServerPduName::ReadResponse => (raw_pdu.len() >= 1) && (raw_pdu[0] == ServerPduName::ReadResponse.into()),
             ServerPduName::ReadBlobResponse => {
-                ( raw_pdu.len() >= 1 ) && ( raw_pdu[0] == ServerPduName::ReadBlobResponse.into() )
-            },
+                (raw_pdu.len() >= 1) && (raw_pdu[0] == ServerPduName::ReadBlobResponse.into())
+            }
             ServerPduName::ReadMultipleResponse => {
-                ( raw_pdu.len() >= 1 ) && ( raw_pdu[0] == ServerPduName::ReadMultipleResponse.into() )
-            },
+                (raw_pdu.len() >= 1) && (raw_pdu[0] == ServerPduName::ReadMultipleResponse.into())
+            }
             ServerPduName::ReadByGroupTypeResponse => {
-                ( raw_pdu.len() >= 6 ) && ( raw_pdu[0] == ServerPduName::ReadByGroupTypeResponse.into() )
-            },
-            ServerPduName::WriteResponse => {
-                ( raw_pdu.len() == 1 ) && ( raw_pdu[0] == ServerPduName::WriteResponse.into() )
-            },
+                (raw_pdu.len() >= 6) && (raw_pdu[0] == ServerPduName::ReadByGroupTypeResponse.into())
+            }
+            ServerPduName::WriteResponse => (raw_pdu.len() == 1) && (raw_pdu[0] == ServerPduName::WriteResponse.into()),
             ServerPduName::PrepareWriteResponse => {
-                ( raw_pdu.len() >= 5 ) && ( raw_pdu[0] == ServerPduName::PrepareWriteResponse.into() )
-            },
+                (raw_pdu.len() >= 5) && (raw_pdu[0] == ServerPduName::PrepareWriteResponse.into())
+            }
             ServerPduName::ExecuteWriteResponse => {
-                ( raw_pdu.len() == 1 ) && ( raw_pdu[0] == ServerPduName::ExecuteWriteResponse.into() )
-            },
+                (raw_pdu.len() == 1) && (raw_pdu[0] == ServerPduName::ExecuteWriteResponse.into())
+            }
             ServerPduName::HandleValueNotification => {
-                ( raw_pdu.len() >= 3 ) && ( raw_pdu[0] == ServerPduName::HandleValueNotification.into() )
-            },
+                (raw_pdu.len() >= 3) && (raw_pdu[0] == ServerPduName::HandleValueNotification.into())
+            }
             ServerPduName::HandleValueIndication => {
-                ( raw_pdu.len() >= 3 ) && ( raw_pdu[0] == ServerPduName::HandleValueIndication.into() )
-            },
+                (raw_pdu.len() >= 3) && (raw_pdu[0] == ServerPduName::HandleValueIndication.into())
+            }
         }
     }
 }
@@ -277,8 +262,7 @@ struct MultiReqData {
 /// [`ServerAttributeValue`](crate::att::server::ServerAttributeValue)
 /// can be implemented on the container to perform concurrency safe reading or writing on the
 /// contained value.
-pub struct Server<'c, C, Q>
-{
+pub struct Server<'c, C, Q> {
     /// The connection channel for sending and receiving data from the Bluetooth controller
     connection_channel: &'c C,
     /// The attributes of the server
@@ -304,18 +288,19 @@ pub struct Server<'c, C, Q>
 }
 
 impl<'c, C, Q> Server<'c, C, Q>
-where C: l2cap::ConnectionChannel,
-      Q: QueuedWriter
+where
+    C: l2cap::ConnectionChannel,
+    Q: QueuedWriter,
 {
-
     /// Create a new Server
     ///
     /// Creates an attribute server for a client connected with the logical link `connection`, the
     /// attributes of the server are optionally initialized with input `server_attributes`, and the
     /// `queued_writer` is the manager for queued writes. If `server_attributes` is set to `None`
     /// then a server with no attributes is created.
-    pub fn new<A>( connection: &'c C, server_attributes: A, queued_writer: Q) -> Self
-        where A: Into<Option<ServerAttributes>>,
+    pub fn new<A>(connection: &'c C, server_attributes: A, queued_writer: Q) -> Self
+    where
+        A: Into<Option<ServerAttributes>>,
     {
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
@@ -342,44 +327,56 @@ where C: l2cap::ConnectionChannel,
     /// # Panic
     /// If you manage to push 65535 attributes onto this server, the next pushed attribute will
     /// cause this function to panic.
-    pub fn push<X,V>(&mut self, attribute: super::Attribute<X>) -> u16
-    where X: ServerAttributeValue<Value = V> + Send + Sized + 'static,
-          V: TransferFormatTryFrom + TransferFormatInto + 'static,
+    pub fn push<X, V>(&mut self, attribute: super::Attribute<X>) -> u16
+    where
+        X: ServerAttributeValue<Value = V> + Send + Sized + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + 'static,
     {
         use core::convert::TryInto;
 
-        let ret = self.attributes.len().try_into().expect("Exceeded attribute handle limit");
+        let ret = self
+            .attributes
+            .len()
+            .try_into()
+            .expect("Exceeded attribute handle limit");
 
-        self.attributes.push( attribute );
+        self.attributes.push(attribute);
 
         ret
     }
 
     /// Return the next unused handle
-    pub fn next_handle(&self) -> u16 { self.attributes.len() as u16 }
+    pub fn next_handle(&self) -> u16 {
+        self.attributes.len() as u16
+    }
 
     /// Give a permission to the client
     ///
     /// This doesn't check that the client is qualified to receive the permission, it just adds an
     /// indication on the server that the client has it.
-    pub fn give_permissions_to_client<P>(&mut self, permissions: P )
-    where P: core::borrow::Borrow<[AttributePermissions]>,
+    pub fn give_permissions_to_client<P>(&mut self, permissions: P)
+    where
+        P: core::borrow::Borrow<[AttributePermissions]>,
     {
-        permissions.borrow().iter()
-            .for_each(|p| if let Err(pos) = self.given_permissions.binary_search(&p) {
-                    self.given_permissions.insert(pos, *p);
-                }
-            )
+        permissions.borrow().iter().for_each(|p| {
+            if let Err(pos) = self.given_permissions.binary_search(&p) {
+                self.given_permissions.insert(pos, *p);
+            }
+        })
     }
 
     /// Remove one or more permission given to the client
     ///
     /// This will remove every permission in `permissions` from the client.
     pub fn revoke_permissions_of_client<P>(&mut self, permissions: P)
-    where P: core::borrow::Borrow<[AttributePermissions]>
+    where
+        P: core::borrow::Borrow<[AttributePermissions]>,
     {
-        self.given_permissions = self.given_permissions.clone().into_iter()
-            .filter(|p| !permissions.borrow().contains(p) )
+        self.given_permissions = self
+            .given_permissions
+            .clone()
+            .into_iter()
+            .filter(|p| !permissions.borrow().contains(p))
             .collect();
     }
 
@@ -427,9 +424,8 @@ where C: l2cap::ConnectionChannel,
     pub fn check_permissions(
         &self,
         handle: u16,
-        permissions: &[super::AttributePermissions])
-    -> Result<(), pdu::Error>
-    {
+        permissions: &[super::AttributePermissions],
+    ) -> Result<(), pdu::Error> {
         let att = self.attributes.get(handle).ok_or(super::pdu::Error::InvalidHandle)?;
 
         match self.validate_permissions(att.get_permissions(), permissions) {
@@ -454,18 +450,18 @@ where C: l2cap::ConnectionChannel,
     fn validate_permissions(
         &self,
         attribute_permissions: &[super::AttributePermissions],
-        operation_permissions: &[super::AttributePermissions]
-    ) -> Option<pdu::Error>
-    {
-        match self.given_permissions.iter()
-            .skip_while(|&p| {
-                !attribute_permissions.contains(p) || !operation_permissions.contains(p)
-            })
+        operation_permissions: &[super::AttributePermissions],
+    ) -> Option<pdu::Error> {
+        match self
+            .given_permissions
+            .iter()
+            .skip_while(|&p| !attribute_permissions.contains(p) || !operation_permissions.contains(p))
             .nth(0)
         {
             Some(_) => None,
-            None => operation_permissions.iter()
-                .find(|&p| attribute_permissions.contains(p) )
+            None => operation_permissions
+                .iter()
+                .find(|&p| attribute_permissions.contains(p))
                 .map(|&p| // Map the invalid permission to it's corresponding error
                     match p {
                         AttributePermissions::Read(AttributeRestriction::None) =>
@@ -503,23 +499,22 @@ where C: l2cap::ConnectionChannel,
                         AttributePermissions::Read(AttributeRestriction::Authentication) |
                         AttributePermissions::Write(AttributeRestriction::Authentication) =>
                             pdu::Error::InsufficientAuthentication,
-                    }
-                )
-                .or( Some(pdu::Error::InsufficientAuthorization) )
+                    })
+                .or(Some(pdu::Error::InsufficientAuthorization)),
         }
     }
 
     /// Check if a client can read the given attribute
     ///
     /// Returns the error as to why the client couldn't read the attribute
-    fn client_can_read_attribute<V>(&self, att: &super::Attribute<V> ) -> Option<pdu::Error> {
+    fn client_can_read_attribute<V>(&self, att: &super::Attribute<V>) -> Option<pdu::Error> {
         self.validate_permissions(att.get_permissions(), super::FULL_READ_PERMISSIONS)
     }
 
     /// Check if a client can write the given attribute
     ///
     /// Returns the error as to why the client couldn't read the attribute
-    fn client_can_write_attribute<V>(&self, att: &super::Attribute<V> ) -> Option<pdu::Error> {
+    fn client_can_write_attribute<V>(&self, att: &super::Attribute<V>) -> Option<pdu::Error> {
         self.validate_permissions(att.get_permissions(), super::FULL_WRITE_PERMISSIONS)
     }
 
@@ -534,9 +529,7 @@ where C: l2cap::ConnectionChannel,
     /// [`process_parsed_acl_data`](crate::att::server::Server::process_parsed_acl_data). It is
     /// recommended to use this function over those two functions when this `Server` is at the top
     /// of your server stack (you're not using GATT or some other custom higher layer protocol).
-    pub async fn process_acl_data(&mut self, acl_packet: &crate::l2cap::AclData )
-    -> Result<(), super::Error>
-    {
+    pub async fn process_acl_data(&mut self, acl_packet: &crate::l2cap::AclData) -> Result<(), super::Error> {
         let (pdu_type, payload) = self.parse_acl_packet(acl_packet)?;
 
         self.process_parsed_acl_data(pdu_type, payload).await
@@ -554,27 +547,27 @@ where C: l2cap::ConnectionChannel,
     /// the attribute protocol. Use
     /// [`process_acl_data`](crate::att::server::Server::process_acl_data) when directly using this
     /// server for communication with a client device.
-    pub fn parse_acl_packet<'a>(&self, acl_packet: &'a crate::l2cap::AclData)
-    -> Result<(super::client::ClientPduName, &'a [u8]), super::Error>
-    {
+    pub fn parse_acl_packet<'a>(
+        &self,
+        acl_packet: &'a crate::l2cap::AclData,
+    ) -> Result<(super::client::ClientPduName, &'a [u8]), super::Error> {
         use crate::l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
         use core::convert::TryFrom;
 
         match acl_packet.get_channel_id() {
-            ChannelIdentifier::LE( LeUserChannelIdentifier::AttributeProtocol ) => {
-
+            ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) => {
                 let (att_type, payload) = acl_packet.get_payload().split_at(1);
 
                 if att_type.len() > 0 {
                     let pdu_type = super::client::ClientPduName::try_from(att_type[0])
-                        .or( Err(super::Error::UnknownOpcode(att_type[0])) )?;
+                        .or(Err(super::Error::UnknownOpcode(att_type[0])))?;
 
-                    Ok( (pdu_type, payload) )
+                    Ok((pdu_type, payload))
                 } else {
-                    Err( super::Error::Empty )
+                    Err(super::Error::Empty)
                 }
             }
-            _ => Err( super::Error::IncorrectChannelId )
+            _ => Err(super::Error::IncorrectChannelId),
         }
     }
 
@@ -591,47 +584,59 @@ where C: l2cap::ConnectionChannel,
     /// the attribute protocol. Use
     /// [`process_acl_data`](crate::att::server::Server::process_acl_data) when directly using this
     /// server for communication with a client device.
-    pub async fn process_parsed_acl_data(&mut self, pdu_type: super::client::ClientPduName, payload: &[u8])
-    -> Result<(), super::Error>
-    {
+    pub async fn process_parsed_acl_data(
+        &mut self,
+        pdu_type: super::client::ClientPduName,
+        payload: &[u8],
+    ) -> Result<(), super::Error> {
         log::info!("(ATT) processing '{:?}'", pdu_type);
 
         match pdu_type {
-            super::client::ClientPduName::ExchangeMtuRequest =>
-                self.process_exchange_mtu_request( TransferFormatTryFrom::try_from( &payload)? ).await,
+            super::client::ClientPduName::ExchangeMtuRequest => {
+                self.process_exchange_mtu_request(TransferFormatTryFrom::try_from(&payload)?)
+                    .await
+            }
 
-            super::client::ClientPduName::WriteRequest =>
-                self.process_write_request( &payload ).await,
+            super::client::ClientPduName::WriteRequest => self.process_write_request(&payload).await,
 
-            super::client::ClientPduName::ReadRequest =>
-                self.process_read_request( TransferFormatTryFrom::try_from(&payload)? ).await,
+            super::client::ClientPduName::ReadRequest => {
+                self.process_read_request(TransferFormatTryFrom::try_from(&payload)?)
+                    .await
+            }
 
-            super::client::ClientPduName::FindInformationRequest =>
-                self.process_find_information_request( TransferFormatTryFrom::try_from(&payload)? )
-                    .await,
+            super::client::ClientPduName::FindInformationRequest => {
+                self.process_find_information_request(TransferFormatTryFrom::try_from(&payload)?)
+                    .await
+            }
 
-            super::client::ClientPduName::FindByTypeValueRequest =>
-                self.process_find_by_type_value_request( &payload ).await,
+            super::client::ClientPduName::FindByTypeValueRequest => {
+                self.process_find_by_type_value_request(&payload).await
+            }
 
-            super::client::ClientPduName::ReadByTypeRequest =>
-                self.process_read_by_type_request( TransferFormatTryFrom::try_from(&payload)? )
-                    .await,
+            super::client::ClientPduName::ReadByTypeRequest => {
+                self.process_read_by_type_request(TransferFormatTryFrom::try_from(&payload)?)
+                    .await
+            }
 
-            super::client::ClientPduName::ReadBlobRequest =>
-                self.process_read_blob_request( TransferFormatTryFrom::try_from(&payload)? ).await,
+            super::client::ClientPduName::ReadBlobRequest => {
+                self.process_read_blob_request(TransferFormatTryFrom::try_from(&payload)?)
+                    .await
+            }
 
-            super::client::ClientPduName::PrepareWriteRequest =>
-                self.process_prepare_write_request( &payload ).await,
+            super::client::ClientPduName::PrepareWriteRequest => self.process_prepare_write_request(&payload).await,
 
-            super::client::ClientPduName::ExecuteWriteRequest =>
-                self.process_execute_write_request(TransferFormatTryFrom::try_from(&payload)?).await,
+            super::client::ClientPduName::ExecuteWriteRequest => {
+                self.process_execute_write_request(TransferFormatTryFrom::try_from(&payload)?)
+                    .await
+            }
 
-            pdu @ super::client::ClientPduName::ReadMultipleRequest |
-            pdu @ super::client::ClientPduName::WriteCommand |
-            pdu @ super::client::ClientPduName::HandleValueConfirmation |
-            pdu @ super::client::ClientPduName::SignedWriteCommand |
-            pdu @ super::client::ClientPduName::ReadByGroupTypeRequest =>
-                self.send_error(0, pdu.into(), pdu::Error::RequestNotSupported).await,
+            pdu @ super::client::ClientPduName::ReadMultipleRequest
+            | pdu @ super::client::ClientPduName::WriteCommand
+            | pdu @ super::client::ClientPduName::HandleValueConfirmation
+            | pdu @ super::client::ClientPduName::SignedWriteCommand
+            | pdu @ super::client::ClientPduName::ReadByGroupTypeRequest => {
+                self.send_error(0, pdu.into(), pdu::Error::RequestNotSupported).await
+            }
         }
     }
 
@@ -641,8 +646,15 @@ where C: l2cap::ConnectionChannel,
     ///
     /// If the handle doesn't exist, then the notification isn't sent and false is returned
     pub async fn send_notification(&self, handle: u16) -> bool {
-        match self.attributes.get(handle).map( | att | att.get_value().notification(handle) ) {
-            Some(f) => { f.await; true },
+        match self
+            .attributes
+            .get(handle)
+            .map(|att| att.get_value().notification(handle))
+        {
+            Some(f) => {
+                f.await;
+                true
+            }
             None => false,
         }
     }
@@ -652,18 +664,25 @@ where C: l2cap::ConnectionChannel,
     /// This takes a complete Attribute PDU in its transfer byte form. This will package it into
     /// a L2CAP PDU and send it using the `ConnectionChannel`.
     async fn send_raw_tf(&self, intf_data: Vec<u8>) -> Result<(), super::Error> {
-        let acl_data = l2cap::AclData::new( intf_data, super::L2CAP_CHANNEL_ID );
+        let acl_data = l2cap::AclData::new(intf_data, super::L2CAP_CHANNEL_ID);
 
-        self.connection_channel.send(acl_data).await.map_err(|e| super::Error::send_error::<C>(e) )
+        self.connection_channel
+            .send(acl_data)
+            .await
+            .map_err(|e| super::Error::send_error::<C>(e))
     }
 
-    async fn send<D>(&self, data: D) -> Result<(), super::Error> where D: TransferFormatInto {
-        self.send_raw_tf( TransferFormatInto::into(&data) ).await
+    async fn send<D>(&self, data: D) -> Result<(), super::Error>
+    where
+        D: TransferFormatInto,
+    {
+        self.send_raw_tf(TransferFormatInto::into(&data)).await
     }
 
     /// Send an attribute PDU to the client
-    pub async fn send_pdu<D>(&self, pdu: pdu::Pdu<D> ) -> Result<(), super::Error>
-    where D: TransferFormatInto
+    pub async fn send_pdu<D>(&self, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
+    where
+        D: TransferFormatInto,
     {
         log::trace!("Sending {}", pdu.get_opcode());
 
@@ -675,35 +694,36 @@ where C: l2cap::ConnectionChannel,
         &self,
         handle: u16,
         received_opcode: ClientPduName,
-        pdu_error: pdu::Error
-    ) -> Result<(), super::Error>
-    {
-        log::info!("Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
-            Into::<u8>::into(received_opcode), handle, pdu_error);
+        pdu_error: pdu::Error,
+    ) -> Result<(), super::Error> {
+        log::info!(
+            "Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
+            Into::<u8>::into(received_opcode),
+            handle,
+            pdu_error
+        );
 
-        self.send_pdu( pdu::error_response(received_opcode.into(),handle,pdu_error) ).await
+        self.send_pdu(pdu::error_response(received_opcode.into(), handle, pdu_error))
+            .await
     }
 
     /// Get an arc clone to an attribute value
-    fn get_att(&self, handle: u16)
-    -> Result<&super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error>
-    {
+    fn get_att(&self, handle: u16) -> Result<&super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error> {
         if pdu::is_valid_handle(handle) {
             self.attributes.get(handle).ok_or(pdu::Error::InvalidHandle)
-        }
-        else {
+        } else {
             Err(pdu::Error::InvalidHandle)
         }
     }
 
     /// Get a arc to an attribute value
-    fn get_att_mut(&mut self, handle: u16)
-    -> Result<&mut super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error>
-    {
+    fn get_att_mut(
+        &mut self,
+        handle: u16,
+    ) -> Result<&mut super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error> {
         if pdu::is_valid_handle(handle) {
             self.attributes.get_mut(handle).ok_or(pdu::Error::InvalidHandle)
-        }
-        else {
+        } else {
             Err(pdu::Error::InvalidHandle)
         }
     }
@@ -724,9 +744,10 @@ where C: l2cap::ConnectionChannel,
     ///
     /// Returns an error if the client doesn't have the adequate permissions or the handle is
     /// invalid.
-    async fn read_att_and<'s,F,A,O>(&'s self, handle: u16, job: F) -> Result<O, pdu::Error>
-    where F: FnOnce(&'s (dyn ServerAttribute + Send) ) -> A + 's,
-          A: Future<Output=O> + 's,
+    async fn read_att_and<'s, F, A, O>(&'s self, handle: u16, job: F) -> Result<O, pdu::Error>
+    where
+        F: FnOnce(&'s (dyn ServerAttribute + Send)) -> A + 's,
+        A: Future<Output = O> + 's,
     {
         let attribute = self.get_att(handle)?;
 
@@ -742,96 +763,89 @@ where C: l2cap::ConnectionChannel,
     /// Returns an error if the client doesn't have the adequate permissions or the handle is
     /// invalid.
     async fn write_att(&mut self, handle: u16, intf_data: &[u8]) -> Result<(), pdu::Error> {
-
-        if let Some(err) = self.client_can_write_attribute( self.get_att(handle)? ) {
+        if let Some(err) = self.client_can_write_attribute(self.get_att(handle)?) {
             Err(err.into())
         } else {
-            match self.get_att_mut(handle){
-                Ok(att) => {
-                    match att.get_mut_value().try_set_value_from_transfer_format(intf_data).await {
-                        Ok(_) => Ok(()),
-                        Err(e) => Err(e.pdu_err)
-                    }
+            match self.get_att_mut(handle) {
+                Ok(att) => match att.get_mut_value().try_set_value_from_transfer_format(intf_data).await {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e.pdu_err),
                 },
-                Err(_) => Err(pdu::Error::InvalidPDU.into())
+                Err(_) => Err(pdu::Error::InvalidPDU.into()),
             }
         }
     }
 
     /// Process a exchange MTU request from the client
     async fn process_exchange_mtu_request(&mut self, client_mtu: u16) -> Result<(), super::Error> {
-
         self.connection_channel.set_mtu(client_mtu);
 
-        self.send_pdu(pdu::exchange_mtu_response(self.connection_channel.get_mtu() as u16)).await
+        self.send_pdu(pdu::exchange_mtu_response(self.connection_channel.get_mtu() as u16))
+            .await
     }
 
     /// Process a Read Request from the client
     async fn process_read_request(&mut self, handle: u16) -> Result<(), super::Error> {
-
-        match self.read_att_and(handle, |att_tf| att_tf.read_response() ).await {
+        match self.read_att_and(handle, |att_tf| att_tf.read_response()).await {
             Ok(mut tf) => {
-
                 // Amount of data that can be sent is the MTU minus the read response header size
-                if tf.get_parameters().0.len() > ( self.get_mtu() - 1 ) {
+                if tf.get_parameters().0.len() > (self.get_mtu() - 1) {
                     use core::mem::replace;
 
                     let sent = tf.get_parameters().0[..(self.get_mtu() - 1)].to_vec();
 
-                    self.set_blob_data( replace(&mut tf.get_mut_parameters().0, sent), handle);
+                    self.set_blob_data(replace(&mut tf.get_mut_parameters().0, sent), handle);
                 }
 
                 self.send_pdu(tf).await
-            },
+            }
             Err(e) => self.send_error(handle, ClientPduName::ReadRequest, e).await,
         }
     }
 
     /// Process a Write Request from the client
     async fn process_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
-
         // Need to split the handle from the raw data as the data type is not known
-        let handle = TransferFormatTryFrom::try_from( &payload[..2] ).unwrap();
+        let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
 
-        match self.write_att( handle, &payload[2..]).await {
+        match self.write_att(handle, &payload[2..]).await {
             Ok(_) => self.send_pdu(pdu::write_response()).await,
             Err(e) => self.send_error(handle, ClientPduName::WriteRequest, e).await,
         }
     }
 
     /// Process a Find Information Request form the client
-    async fn process_find_information_request(&mut self, handle_range: pdu::HandleRange)
-    -> Result<(), super::Error>
-    {
+    async fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) -> Result<(), super::Error> {
         /// Handle with UUID iterator
         ///
         /// The boolean is used to indicate whether or not the iterator is over short or long UUIDs.
-        struct HandleUuidItr<I: Iterator<Item=(u16,crate::UUID)> + Clone>(bool, I);
+        struct HandleUuidItr<I: Iterator<Item = (u16, crate::UUID)> + Clone>(bool, I);
 
-        impl<I: Iterator<Item=(u16,crate::UUID)> + Clone> TransferFormatInto for HandleUuidItr<I>
-        {
+        impl<I: Iterator<Item = (u16, crate::UUID)> + Clone> TransferFormatInto for HandleUuidItr<I> {
             fn len_of_into(&self) -> usize {
-                1 + self.1.clone().fold(0usize, |acc, (h,u)| acc + h.len_of_into() + u.len_of_into() )
+                1 + self
+                    .1
+                    .clone()
+                    .fold(0usize, |acc, (h, u)| acc + h.len_of_into() + u.len_of_into())
             }
 
-            fn build_into_ret(&self, into_ret: &mut [u8] ) {
-
+            fn build_into_ret(&self, into_ret: &mut [u8]) {
                 const SHORT_FORMAT: u8 = 1;
                 const LONG_FORMAT: u8 = 2;
 
                 let mut offset = 1;
 
-                into_ret[0] = if self.0 {SHORT_FORMAT} else {LONG_FORMAT};
+                into_ret[0] = if self.0 { SHORT_FORMAT } else { LONG_FORMAT };
 
-                self.1.clone().for_each( |(h,u)| {
+                self.1.clone().for_each(|(h, u)| {
                     let h_len = h.len_of_into();
                     let u_len = u.len_of_into();
 
-                    h.build_into_ret(&mut into_ret[offset..(offset + h_len)] );
+                    h.build_into_ret(&mut into_ret[offset..(offset + h_len)]);
 
                     offset += h_len;
 
-                    u.build_into_ret(&mut into_ret[offset..(offset + u_len)] );
+                    u.build_into_ret(&mut into_ret[offset..(offset + u_len)]);
 
                     offset += u_len;
                 })
@@ -842,8 +856,8 @@ where C: l2cap::ConnectionChannel,
             use core::cmp::min;
 
             // Both the start and ending handles cannot be past the actual length of the attributes
-            let start = min( handle_range.starting_handle as usize, self.attributes.len() );
-            let stop  = min( handle_range.ending_handle   as usize, self.attributes.len() );
+            let start = min(handle_range.starting_handle as usize, self.attributes.len());
+            let stop = min(handle_range.ending_handle as usize, self.attributes.len());
 
             let payload_max = self.get_mtu() - 2;
 
@@ -857,16 +871,15 @@ where C: l2cap::ConnectionChannel,
                 false,
                 self.attributes.attributes[start..stop]
                     .iter()
-                    .filter(|att| att.get_uuid().is_16_bit() )
-                    .take_while(|att| self.client_can_write_attribute(att).is_none() )
+                    .filter(|att| att.get_uuid().is_16_bit())
+                    .take_while(|att| self.client_can_write_attribute(att).is_none())
                     .enumerate()
-                    .take_while(|(cnt, _)| (cnt + 1) * item_size_16 < payload_max )
-                    .map(|(_,att)| (att.get_handle().unwrap(), *att.get_uuid()) )
-                    .peekable()
+                    .take_while(|(cnt, _)| (cnt + 1) * item_size_16 < payload_max)
+                    .map(|(_, att)| (att.get_handle().unwrap(), *att.get_uuid()))
+                    .peekable(),
             );
 
             if let None = handle_uuids_16_bit_itr.1.peek() {
-
                 // If there is no 16 bit UUIDs then the UUIDs must be sent in the full 128 bit form.
 
                 // Size of each handle + 128-bit uuid responded pair
@@ -874,51 +887,46 @@ where C: l2cap::ConnectionChannel,
 
                 // Collect all UUIDs until the PDU is full or the first unreadable attribute is
                 // found.
-                let mut handle_uuids_128_bit_itr = HandleUuidItr(true, self.attributes.attributes[start..start]
-                    .iter()
-                    .take_while(|att| self.client_can_read_attribute(att).is_none() )
-                    .enumerate()
-                    .take_while(|(cnt, _)| (cnt + 1) * item_size_128 < payload_max )
-                    .map(|(_,att)| (att.get_handle().unwrap(), *att.get_uuid()) )
-                    .peekable()
+                let mut handle_uuids_128_bit_itr = HandleUuidItr(
+                    true,
+                    self.attributes.attributes[start..start]
+                        .iter()
+                        .take_while(|att| self.client_can_read_attribute(att).is_none())
+                        .enumerate()
+                        .take_while(|(cnt, _)| (cnt + 1) * item_size_128 < payload_max)
+                        .map(|(_, att)| (att.get_handle().unwrap(), *att.get_uuid()))
+                        .peekable(),
                 );
 
                 if let None = handle_uuids_128_bit_itr.1.peek() {
-
                     // If there are still no UUIDs then there are no UUIDs within the given range
                     // or none had the required read permissions for this operation.
 
                     self.send_error(
                         start as u16,
                         ClientPduName::FindInformationRequest,
-                        pdu::Error::AttributeNotFound
-                    ).await
-
+                        pdu::Error::AttributeNotFound,
+                    )
+                    .await
                 } else {
-                    let pdu = pdu::Pdu::new(
-                        ServerPduName::FindInformationResponse.into(),
-                        handle_uuids_128_bit_itr,
-                    );
+                    let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_128_bit_itr);
 
-                    self.send_pdu( pdu ).await
+                    self.send_pdu(pdu).await
                 }
             } else {
-
                 // Send the 16 bit UUIDs
 
-                let pdu = pdu::Pdu::new(
-                    ServerPduName::FindInformationResponse.into(),
-                    handle_uuids_16_bit_itr,
-                );
+                let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_16_bit_itr);
 
-                self.send_pdu( pdu ).await
+                self.send_pdu(pdu).await
             }
         } else {
             self.send_error(
                 handle_range.starting_handle,
                 ClientPduName::FindInformationRequest,
-                pdu::Error::InvalidHandle
-            ).await
+                pdu::Error::InvalidHandle,
+            )
+            .await
         }
     }
 
@@ -928,22 +936,19 @@ where C: l2cap::ConnectionChannel,
     ///
     /// Because the Attribute Protocol doesn't define what a 'group' is this returns the group
     /// end handle with the same found attribute handle.
-    async fn process_find_by_type_value_request(&mut self, payload: &[u8] )
-    -> Result<(), super::Error>
-    {
+    async fn process_find_by_type_value_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
         if payload.len() >= 6 {
+            let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4]).unwrap();
 
-            let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from( &payload[..4] ).unwrap();
-
-            let att_type: crate::UUID = TransferFormatTryFrom::try_from( &payload[4..6] ).unwrap();
+            let att_type: crate::UUID = TransferFormatTryFrom::try_from(&payload[4..6]).unwrap();
 
             let raw_value = &payload[6..];
 
             if handle_range.is_valid() {
                 use core::cmp::min;
 
-                let start = min( handle_range.starting_handle as usize, self.attributes.len() );
-                let end   = min( handle_range.ending_handle   as usize, self.attributes.len() );
+                let start = min(handle_range.starting_handle as usize, self.attributes.len());
+                let end = min(handle_range.ending_handle as usize, self.attributes.len());
 
                 let payload_max = self.get_mtu() - 1;
 
@@ -952,21 +957,18 @@ where C: l2cap::ConnectionChannel,
                 let mut transfer = Vec::new();
 
                 for att in self.attributes.attributes[start..end].iter() {
-                    if att.get_uuid().is_16_bit() &&
-                       att.get_uuid() == &att_type &&
-                       att.get_value().cmp_value_to_raw_transfer_format(raw_value).await
+                    if att.get_uuid().is_16_bit()
+                        && att.get_uuid() == &att_type
+                        && att.get_value().cmp_value_to_raw_transfer_format(raw_value).await
                     {
                         cnt += 1;
 
                         if cnt * 4 < payload_max {
-
                             // See function doc for why group handle is same as found handle.
-                            let response = pdu::TypeValueResponse::new(
-                                att.get_handle().unwrap(),
-                                att.get_handle().unwrap()
-                            );
+                            let response =
+                                pdu::TypeValueResponse::new(att.get_handle().unwrap(), att.get_handle().unwrap());
 
-                            transfer.push( response );
+                            transfer.push(response);
                         } else {
                             break;
                         }
@@ -974,36 +976,32 @@ where C: l2cap::ConnectionChannel,
                 }
 
                 if transfer.is_empty() {
-
                     self.send_error(
                         handle_range.starting_handle,
                         ClientPduName::FindByTypeValueRequest,
-                        pdu::Error::AttributeNotFound
-                    ).await
-
+                        pdu::Error::AttributeNotFound,
+                    )
+                    .await
                 } else {
-
-                    self.send_pdu(
-                        pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer)
-                    ).await
-
+                    self.send_pdu(pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer))
+                        .await
                 }
             } else {
                 self.send_error(
                     handle_range.starting_handle,
                     ClientPduName::FindByTypeValueRequest,
-                    pdu::Error::AttributeNotFound
-                ).await
+                    pdu::Error::AttributeNotFound,
+                )
+                .await
             }
         } else {
-            self.send_error(0, ClientPduName::FindInformationRequest, pdu::Error::InvalidPDU).await
+            self.send_error(0, ClientPduName::FindInformationRequest, pdu::Error::InvalidPDU)
+                .await
         }
     }
 
     /// Process Read By Type Request
-    async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest )
-    -> Result<(), super::Error>
-    {
+    async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest) -> Result<(), super::Error> {
         use core::cmp::min;
 
         let handle_range = type_request.handle_range;
@@ -1011,33 +1009,31 @@ where C: l2cap::ConnectionChannel,
         let desired_att_type = type_request.attr_type;
 
         if handle_range.is_valid() {
-            let start = min( handle_range.starting_handle as usize, self.attributes.len() );
-            let end   = min( handle_range.ending_handle   as usize, self.attributes.len() );
+            let start = min(handle_range.starting_handle as usize, self.attributes.len());
+            let end = min(handle_range.ending_handle as usize, self.attributes.len());
 
             let payload_max = self.get_mtu() - 2;
 
             let single_payload_size = |cnt, size| (cnt + 1) * (size + 2) < payload_max;
 
-            let mut init_iter = self.attributes.attributes[start..end].iter()
+            let mut init_iter = self.attributes.attributes[start..end]
+                .iter()
                 .filter(|att| att.get_uuid() == &desired_att_type);
 
             match init_iter.by_ref().next() {
-                None =>
+                None => {
                     self.send_error(
                         handle_range.starting_handle,
                         ClientPduName::ReadByTypeRequest,
-                        pdu::Error::AttributeNotFound
-                    ).await,
+                        pdu::Error::AttributeNotFound,
+                    )
+                    .await
+                }
 
                 Some(first_match) => {
                     if let Some(e) = self.client_can_read_attribute(first_match) {
-
-                        self.send_error(
-                            handle_range.starting_handle,
-                            ClientPduName::ReadByTypeRequest,
-                            e
-                        ).await
-
+                        self.send_error(handle_range.starting_handle, ClientPduName::ReadByTypeRequest, e)
+                            .await
                     } else {
                         let first_val = first_match.get_value();
 
@@ -1048,7 +1044,6 @@ where C: l2cap::ConnectionChannel,
                         let mut responses = Vec::new();
 
                         if !single_payload_size(0, first_size) {
-
                             use core::mem::replace;
 
                             // This is where the data to be transferred of the first found attribute
@@ -1061,43 +1056,40 @@ where C: l2cap::ConnectionChannel,
                             // size for the data is the payload - 2
                             let max_size = payload_max - 2;
 
-                            let mut rsp = first_val.single_read_by_type_response( first_handle ).await;
+                            let mut rsp = first_val.single_read_by_type_response(first_handle).await;
 
                             let sent = rsp[0..max_size].to_vec();
 
                             // Move the complete data to a blob data while replacing it with the
                             // sent amount
-                            self.set_blob_data( replace(&mut *rsp, sent), rsp.get_handle() );
+                            self.set_blob_data(replace(&mut *rsp, sent), rsp.get_handle());
 
-                            responses.push( rsp );
-
+                            responses.push(rsp);
                         } else {
-
-                            let fst_rsp = first_val.single_read_by_type_response( first_handle ).await;
+                            let fst_rsp = first_val.single_read_by_type_response(first_handle).await;
 
                             responses.push(fst_rsp);
 
-                            for (cnt,att) in init_iter.enumerate() {
-
+                            for (cnt, att) in init_iter.enumerate() {
                                 let val = att.get_value();
                                 let handle = att.get_handle().unwrap();
 
                                 // Break if att doesn't have the same transfer size as the
                                 // first value or if adding the value would exceed the MTU for
                                 // the attribute payload
-                                if !single_payload_size(cnt + 1, first_size) ||
-                                   first_size != val.value_transfer_format_size().await
+                                if !single_payload_size(cnt + 1, first_size)
+                                    || first_size != val.value_transfer_format_size().await
                                 {
                                     break;
                                 }
 
-                                let response = val.single_read_by_type_response( handle ).await;
+                                let response = val.single_read_by_type_response(handle).await;
 
-                                responses.push( response );
+                                responses.push(response);
                             }
                         }
 
-                        self.send_pdu( pdu::read_by_type_response(responses) ).await
+                        self.send_pdu(pdu::read_by_type_response(responses)).await
                     }
                 }
             }
@@ -1105,45 +1097,43 @@ where C: l2cap::ConnectionChannel,
             self.send_error(
                 handle_range.starting_handle,
                 ClientPduName::ReadByTypeRequest,
-                pdu::Error::InvalidHandle
-            ).await
+                pdu::Error::InvalidHandle,
+            )
+            .await
         }
     }
 
     /// Process read blob request
-    async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest)
-    -> Result<(), super::Error>
-    {
+    async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest) -> Result<(), super::Error> {
         // Check the permissions (`check_permission` also validates the handle)
-        match match self.check_permissions(blob_request.handle, super::FULL_READ_PERMISSIONS)
-        {
+        match match self.check_permissions(blob_request.handle, super::FULL_READ_PERMISSIONS) {
             Ok(_) => {
-
                 // Make a new blob if blob data doesn't exist or the blob handle does not match the
                 // requested for handle
-                let use_old_blob = self.blob_data.as_ref()
+                let use_old_blob = self
+                    .blob_data
+                    .as_ref()
                     .map(|bd| bd.handle == blob_request.handle)
                     .unwrap_or_default();
 
                 match (use_old_blob, blob_request.offset) {
-
                     // No prior blob or start of new blob
-                    (false, _) | (_, 0) =>
-                        self.create_blob_send_response(&blob_request).await,
+                    (false, _) | (_, 0) => self.create_blob_send_response(&blob_request).await,
 
                     // Continuing reading prior blob
-                    (true, offset) =>
-                        self.use_blob_send_response(offset).await,
+                    (true, offset) => self.use_blob_send_response(offset).await,
                 }
-            },
+            }
 
             Err(e) => Err(e.into()),
         } {
             Err(e) => match e {
-                super::Error::PduError(e) =>
-                    self.send_error(blob_request.handle, ClientPduName::ReadBlobRequest, e).await,
+                super::Error::PduError(e) => {
+                    self.send_error(blob_request.handle, ClientPduName::ReadBlobRequest, e)
+                        .await
+                }
 
-                _ => Err(e)
+                _ => Err(e),
             },
 
             _ => Ok(()),
@@ -1161,20 +1151,20 @@ where C: l2cap::ConnectionChannel,
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// the handle requested is valid
     #[inline]
-    async fn create_blob_send_response(&mut self, br: &pdu::ReadBlobRequest)
-    -> Result<(), super::Error>
-    {
+    async fn create_blob_send_response(&mut self, br: &pdu::ReadBlobRequest) -> Result<(), super::Error> {
         let data = self.attributes.get(br.handle).unwrap().get_value().read().await;
 
         let rsp = match self.new_read_blob_response(&data, br.offset)? {
-
             // when true is returned the data is blobbed
             (rsp, true) => {
-
-                self.blob_data = MultiReqData { handle: br.handle, tf_data: data.clone(), }.into();
+                self.blob_data = MultiReqData {
+                    handle: br.handle,
+                    tf_data: data.clone(),
+                }
+                .into();
 
                 rsp
-            },
+            }
 
             (rsp, false) => rsp,
         };
@@ -1193,14 +1183,11 @@ where C: l2cap::ConnectionChannel,
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// that `blob_data` is `Some(_)`
     #[inline]
-    async fn use_blob_send_response(&mut self, offset: u16) -> Result<(), super::Error>
-    {
+    async fn use_blob_send_response(&mut self, offset: u16) -> Result<(), super::Error> {
         let data = self.blob_data.as_ref().unwrap();
 
         match self.new_read_blob_response(&data.tf_data, offset)? {
-
             (rsp, false) => {
-
                 self.send_pdu(rsp).await?;
 
                 // This is the final piece of the blob
@@ -1218,43 +1205,44 @@ where C: l2cap::ConnectionChannel,
     /// This return is the Read Blob Response with a boolean to indicate if the response payload was
     /// completely filled with data bytes.
     #[inline]
-    fn new_read_blob_response<'a>(&self, data: &'a [u8], offset: u16)
-    -> Result< (pdu::Pdu<pdu::LocalReadBlobResponse<'a>>, bool), pdu::Error>
-    {
+    fn new_read_blob_response<'a>(
+        &self,
+        data: &'a [u8],
+        offset: u16,
+    ) -> Result<(pdu::Pdu<pdu::LocalReadBlobResponse<'a>>, bool), pdu::Error> {
         let max_payload = self.get_mtu() - 1;
 
         match offset as usize {
             o if o > data.len() => Err(pdu::Error::InvalidOffset),
 
-            o if o + max_payload <= data.len() =>
-                Ok( (pdu::LocalReadBlobResponse::new(&data[o..(o + max_payload)]).into(), true) ),
+            o if o + max_payload <= data.len() => Ok((
+                pdu::LocalReadBlobResponse::new(&data[o..(o + max_payload)]).into(),
+                true,
+            )),
 
-            o => Ok( (pdu::LocalReadBlobResponse::new(&data[o..]).into(), false) )
+            o => Ok((pdu::LocalReadBlobResponse::new(&data[o..]).into(), false)),
         }
     }
 
-    async fn process_prepare_write_request(&mut self, payload: &[u8] ) -> Result<(), super::Error> {
+    async fn process_prepare_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
+        if let Err((h, e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
+            Ok(request) => match self.check_permissions(request.get_handle(), super::FULL_WRITE_PERMISSIONS) {
+                Ok(_) => match self.queued_writer.process_prepared(&request) {
+                    Err(e) => Err((request.get_handle(), e)),
 
-        if let Err((h,e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
-            Ok(request) =>
-                match self.check_permissions(request.get_handle(), super::FULL_WRITE_PERMISSIONS)
-                {
-                    Ok(_) => match self.queued_writer.process_prepared(&request) {
-                        Err(e) => Err((request.get_handle(), e)),
+                    Ok(_) => {
+                        let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
 
-                        Ok(_) => {
-                            let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
+                        self.send_pdu(response).await?;
 
-                            self.send_pdu(response).await?;
-
-                            Ok(())
-                        }
+                        Ok(())
                     }
+                },
 
-                    Err(e) => Err((request.get_handle(),e))
-                }
+                Err(e) => Err((request.get_handle(), e)),
+            },
 
-            Err(e) => Err((0, e.pdu_err))
+            Err(e) => Err((0, e.pdu_err)),
         } {
             self.send_error(h, ClientPduName::PrepareWriteRequest, e).await
         } else {
@@ -1262,14 +1250,10 @@ where C: l2cap::ConnectionChannel,
         }
     }
 
-    async fn process_execute_write_request(&mut self, request_flag : pdu::ExecuteWriteFlag)
-    -> Result<(), super::Error>
-    {
-
+    async fn process_execute_write_request(&mut self, request_flag: pdu::ExecuteWriteFlag) -> Result<(), super::Error> {
         match match self.queued_writer.process_execute(request_flag) {
-
-            Ok(Some(iter)) => async {
-
+            Ok(Some(iter)) => {
+                async {
                     for queued_data in iter.into_iter() {
                         self.check_permissions(queued_data.0, super::FULL_WRITE_PERMISSIONS)?;
 
@@ -1277,12 +1261,13 @@ where C: l2cap::ConnectionChannel,
                     }
 
                     Ok(())
+                }
+                .await
+            }
 
-                }.await,
+            Ok(None) => Ok(()),
 
-            Ok(None) =>  Ok(()),
-
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         } {
             Err(e) => self.send_error(0, ClientPduName::ExecuteWriteRequest, e).await,
 
@@ -1296,24 +1281,27 @@ where C: l2cap::ConnectionChannel,
     pub fn iter_attr_info(&self) -> impl Iterator<Item = AttributeInfo<'_>> {
         self.attributes.iter_info()
     }
-
 }
 
-impl<C,Q> AsRef<C> for Server<'_, C,Q> where C: l2cap::ConnectionChannel {
+impl<C, Q> AsRef<C> for Server<'_, C, Q>
+where
+    C: l2cap::ConnectionChannel,
+{
     fn as_ref(&self) -> &C {
         &self.connection_channel
     }
 }
 
 pub struct ServerAttributes {
-    attributes: Vec<super::Attribute<Box<dyn ServerAttribute + Send>>>
+    attributes: Vec<super::Attribute<Box<dyn ServerAttribute + Send>>>,
 }
 
 impl ServerAttributes {
-
     /// Create a new `ServiceAttributes`
     pub fn new() -> Self {
-        Self { attributes: alloc::vec![ ReservedHandle.into() ] }
+        Self {
+            attributes: alloc::vec![ReservedHandle.into()],
+        }
     }
 
     /// Push an attribute to `ServiceAttributes`
@@ -1323,22 +1311,27 @@ impl ServerAttributes {
     ///
     /// # Panic
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
-    pub fn push<C,V>(&mut self, attribute: super::Attribute<C>) -> u16
-        where C: ServerAttributeValue<Value = V> + Send + Sized + 'static,
-              V: TransferFormatTryFrom + TransferFormatInto + 'static,
+    pub fn push<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
+    where
+        C: ServerAttributeValue<Value = V> + Send + Sized + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + 'static,
     {
         use core::convert::TryInto;
 
-        let handle = self.attributes.len().try_into().expect("Exceeded attribute handle limit");
+        let handle = self
+            .attributes
+            .len()
+            .try_into()
+            .expect("Exceeded attribute handle limit");
 
         let pushed_att = super::Attribute {
             ty: attribute.ty,
             handle: Some(handle),
             permissions: attribute.permissions,
-            value: Box::from(attribute.value) as Box<dyn ServerAttribute + Send + 'static>
+            value: Box::from(attribute.value) as Box<dyn ServerAttribute + Send + 'static>,
         };
 
-        self.attributes.push( pushed_att );
+        self.attributes.push(pushed_att);
 
         handle
     }
@@ -1369,11 +1362,13 @@ impl ServerAttributes {
     ///
     /// This will return an iterator to get the type, permissions, and handle for each attribute
     pub fn iter_info(&self) -> impl Iterator<Item = AttributeInfo<'_>> {
-        self.attributes[1..].iter().map(|att| AttributeInfo::from_att(att) )
+        self.attributes[1..].iter().map(|att| AttributeInfo::from_att(att))
     }
 
     /// Attributes length
-    pub fn len(&self) -> usize { self.attributes.len() }
+    pub fn len(&self) -> usize {
+        self.attributes.len()
+    }
 
     /// Get attribute with the given handle
     ///
@@ -1381,19 +1376,17 @@ impl ServerAttributes {
     fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttribute + Send>>> {
         match handle {
             0 => None,
-            h => self.attributes.get( <usize>::from(h) )
+            h => self.attributes.get(<usize>::from(h)),
         }
     }
 
     /// Get a mutable reference to the attribute with the given handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
-    fn get_mut(&mut self, handle: u16)
-    -> Option<&mut super::Attribute<Box<dyn ServerAttribute + Send>>>
-    {
+    fn get_mut(&mut self, handle: u16) -> Option<&mut super::Attribute<Box<dyn ServerAttribute + Send>>> {
         match handle {
             0 => None,
-            h => self.attributes.get_mut( <usize>::from(h) )
+            h => self.attributes.get_mut(<usize>::from(h)),
         }
     }
 }
@@ -1404,7 +1397,7 @@ impl Default for ServerAttributes {
     }
 }
 
-pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output=O> + 'a >>;
+pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + 'a>>;
 
 /// Server Attributes
 ///
@@ -1472,29 +1465,28 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output=O> + 'a >>;
 /// server_attributes.push(att_msg);
 /// ```
 pub trait ServerAttributeValue {
-
     type Value;
 
     /// Read the value and call `f` with a reference to it.
-    fn read_and<'a,F,T>(&'a self, f: F ) -> PinnedFuture<'a,T>
-    where F: FnOnce(&Self::Value) -> T + Unpin + 'a;
+    fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
+    where
+        F: FnOnce(&Self::Value) -> T + Unpin + 'a;
 
     /// Write to the value
-    fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_,()>;
+    fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_, ()>;
 
     /// Compare the value to 'other'
-    fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a,bool>;
+    fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a, bool>;
 }
 
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct AttributeInfo<'a> {
     ty: &'a crate::UUID,
     handle: u16,
-    permissions: &'a [super::AttributePermissions]
+    permissions: &'a [super::AttributePermissions],
 }
 
 impl<'a> AttributeInfo<'a> {
-
     fn from_att<T>(att: &'a super::Attribute<T>) -> Self {
         AttributeInfo {
             ty: att.get_uuid(),
@@ -1506,11 +1498,17 @@ impl<'a> AttributeInfo<'a> {
     /// Get the attribute's UUID
     ///
     /// This is the UUID that is assigned for this
-    pub fn get_uuid(&self) -> &crate::UUID { self.ty }
+    pub fn get_uuid(&self) -> &crate::UUID {
+        self.ty
+    }
 
-    pub fn get_handle(&self) -> u16 { self.handle }
+    pub fn get_handle(&self) -> u16 {
+        self.handle
+    }
 
-    pub fn get_permissions(&self) -> &[super::AttributePermissions] { self.permissions }
+    pub fn get_permissions(&self) -> &[super::AttributePermissions] {
+        self.permissions
+    }
 }
 
 /// A future that never pends
@@ -1521,36 +1519,44 @@ impl<'a> AttributeInfo<'a> {
 struct NoPend<T>(Option<T>);
 
 impl<T> NoPend<T> {
-    fn new(f: T) -> Self { NoPend( Some(f) ) }
+    fn new(f: T) -> Self {
+        NoPend(Some(f))
+    }
 }
 
-impl<T,O> Future for NoPend<T> where T: FnOnce() -> O + Unpin{
+impl<T, O> Future for NoPend<T>
+where
+    T: FnOnce() -> O + Unpin,
+{
     type Output = O;
 
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready( self.get_mut().0.take().expect("NoPend polled multiple times")() )
+        Poll::Ready(self.get_mut().0.take().expect("NoPend polled multiple times")())
     }
 }
 
 /// The trivial implementation for ServerAttributeValue
-impl<V> ServerAttributeValue for V where V: PartialEq + Unpin {
-
+impl<V> ServerAttributeValue for V
+where
+    V: PartialEq + Unpin,
+{
     type Value = V;
 
-    fn read_and<'a,F,T>(&'a self, f: F ) -> PinnedFuture<'a,T>
-    where F: FnOnce(&V) -> T + Unpin + 'a
+    fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
+    where
+        F: FnOnce(&V) -> T + Unpin + 'a,
     {
-        Box::pin(NoPend::new( move || f( self ) ) )
+        Box::pin(NoPend::new(move || f(self)))
     }
 
-    fn write_val(&mut self, val: V) -> PinnedFuture<'_,()>{
-        Box::pin(NoPend::new( move || *self = val ) )
+    fn write_val(&mut self, val: V) -> PinnedFuture<'_, ()> {
+        Box::pin(NoPend::new(move || *self = val))
     }
 
-    fn eq<'a>(&'a self, other: &'a V) -> PinnedFuture<'a,bool> {
+    fn eq<'a>(&'a self, other: &'a V) -> PinnedFuture<'a, bool> {
         let cmp = <Self as PartialEq>::eq(self, other);
 
-        Box::pin(NoPend::new( move || cmp ) )
+        Box::pin(NoPend::new(move || cmp))
     }
 }
 
@@ -1560,7 +1566,6 @@ impl<V> ServerAttributeValue for V where V: PartialEq + Unpin {
 /// functions are designed to abstract away from the type of the attribute value so a
 /// `ServerAttributes` can have a list of boxed `dyn ServerAttribute`.
 trait ServerAttribute {
-
     /// Read the data
     ///
     /// The returned data is in its transfer format
@@ -1577,8 +1582,7 @@ trait ServerAttribute {
     ///
     /// # Panic
     /// This should panic if the attribute has not been assigned a handle
-    fn notification(&self, handle: u16)
-    -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>;
+    fn notification(&self, handle: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>;
 
     /// Generate a 'Read by Type Response'
     ///
@@ -1591,41 +1595,39 @@ trait ServerAttribute {
     ///
     /// # Panic
     /// This should panic if the attribute has not been assigned a handle
-    fn single_read_by_type_response(&self, handle: u16)
-    -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
+    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
 
     /// Try to convert raw data from the interface and write to the attribute value
-    fn try_set_value_from_transfer_format<'a>(&'a mut self, tf_data: &'a [u8])
-    -> PinnedFuture<'a,Result<(), super::TransferFormatError>>;
+    fn try_set_value_from_transfer_format<'a>(
+        &'a mut self,
+        tf_data: &'a [u8],
+    ) -> PinnedFuture<'a, Result<(), super::TransferFormatError>>;
 
     /// The number of bytes in the interface format
-    fn value_transfer_format_size(&self) -> PinnedFuture<'_,usize>;
+    fn value_transfer_format_size(&self) -> PinnedFuture<'_, usize>;
 
     /// Compare the value with the data received from the interface
-    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8] ) -> PinnedFuture<'a,bool>;
+    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool>;
 }
 
 impl<C, V> ServerAttribute for C
-where C: ServerAttributeValue<Value = V>,
-      V: TransferFormatTryFrom + TransferFormatInto,
+where
+    C: ServerAttributeValue<Value = V>,
+    V: TransferFormatTryFrom + TransferFormatInto,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
-        self.read_and( |v| TransferFormatInto::into(v) )
+        self.read_and(|v| TransferFormatInto::into(v))
     }
 
     fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
-        self.read_and( |v| pdu::read_response( TransferFormatInto::into(v) ) )
+        self.read_and(|v| pdu::read_response(TransferFormatInto::into(v)))
     }
 
-    fn notification(&self, handle: u16)
-    -> PinnedFuture<'_,pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>
-    {
-        self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v)) )
+    fn notification(&self, handle: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
+        self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v)))
     }
 
-    fn single_read_by_type_response(&self, handle: u16)
-    -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
-    {
+    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>> {
         self.read_and(move |v| {
             let tf = TransferFormatInto::into(v);
 
@@ -1633,31 +1635,30 @@ where C: ServerAttributeValue<Value = V>,
         })
     }
 
-    fn try_set_value_from_transfer_format<'a>(&'a mut self, raw: &'a [u8] )
-    -> PinnedFuture<'a, Result<(), super::TransferFormatError>>
-    {
-        Box::pin( async move {
+    fn try_set_value_from_transfer_format<'a>(
+        &'a mut self,
+        raw: &'a [u8],
+    ) -> PinnedFuture<'a, Result<(), super::TransferFormatError>> {
+        Box::pin(async move {
             self.write_val(TransferFormatTryFrom::try_from(raw)?).await;
 
             Ok(())
-        } )
+        })
     }
 
-    fn value_transfer_format_size(&self) -> PinnedFuture<'_,usize> {
-        Box::pin( async move { self.read_and(|v: &V| v.len_of_into() ).await } )
+    fn value_transfer_format_size(&self) -> PinnedFuture<'_, usize> {
+        Box::pin(async move { self.read_and(|v: &V| v.len_of_into()).await })
     }
 
-    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'_,bool>
-    {
-        Box::pin( async move {
+    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
+        Box::pin(async move {
             match <V as TransferFormatTryFrom>::try_from(raw) {
                 Err(_) => false,
-                Ok(cmp_val) => self.eq(&cmp_val).await
+                Ok(cmp_val) => self.eq(&cmp_val).await,
             }
-        } )
+        })
     }
 }
-
 
 /// The Reserved Handle
 ///
@@ -1666,67 +1667,59 @@ where C: ServerAttributeValue<Value = V>,
 struct ReservedHandle;
 
 impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send>> {
-
     fn from(_: ReservedHandle) -> Self {
-
-        super::Attribute::new(
-            crate::UUID::from_u128(0u128),
-            Vec::new(),
-            Box::new( ReservedHandle )
-        )
+        super::Attribute::new(crate::UUID::from_u128(0u128), Vec::new(), Box::new(ReservedHandle))
     }
 }
 
 impl ServerAttribute for ReservedHandle {
-
     fn read(&self) -> PinnedFuture<Vec<u8>> {
         log::error!("Tried to read the reserved handle");
 
-        Box::pin( async { Vec::new() } )
+        Box::pin(async { Vec::new() })
     }
 
-    fn read_response(&self) -> PinnedFuture<'_,pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
-        Box::pin( async {
+    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
+        Box::pin(async {
             log::error!("Tried to read the reserved handle for a read response");
 
             pdu::read_response(Vec::new())
-        } )
+        })
     }
 
-    fn notification(&self, _: u16)
-    -> PinnedFuture<'_,pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>
-    {
-        Box::pin( async {
+    fn notification(&self, _: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
+        Box::pin(async {
             log::error!("Tried to used the reserved handle as a notification");
 
             pdu::handle_value_notification(0, Vec::new())
-        } )
+        })
     }
 
-    fn single_read_by_type_response(&self, _: u16)
-    -> PinnedFuture<'_,pdu::ReadTypeResponse<Vec<u8>>>
-    {
-        Box::pin( async {
+    fn single_read_by_type_response(&self, _: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>> {
+        Box::pin(async {
             log::error!("Tried to read the reserved handle for a read by type response");
 
             pdu::ReadTypeResponse::new(0, Vec::new())
-        } )
+        })
     }
 
-    fn try_set_value_from_transfer_format(&mut self, _: &[u8] )
-    -> PinnedFuture<'_,Result<(), super::TransferFormatError>>
-    {
-        Box::pin( async {
+    fn try_set_value_from_transfer_format(
+        &mut self,
+        _: &[u8],
+    ) -> PinnedFuture<'_, Result<(), super::TransferFormatError>> {
+        Box::pin(async {
             log::error!("Tried to write to reserved attribute handle");
 
-            Err( TransferFormatError::from("ReservedHandle cannot be set from raw data") )
-        } )
+            Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
+        })
     }
 
-    fn value_transfer_format_size(&self) -> PinnedFuture<'_,usize> { Box::pin( async {0} ) }
+    fn value_transfer_format_size(&self) -> PinnedFuture<'_, usize> {
+        Box::pin(async { 0 })
+    }
 
-    fn cmp_value_to_raw_transfer_format(&self, _: &[u8] ) -> PinnedFuture<'_,bool> {
-        Box::pin( async { false } )
+    fn cmp_value_to_raw_transfer_format(&self, _: &[u8]) -> PinnedFuture<'_, bool> {
+        Box::pin(async { false })
     }
 }
 
@@ -1738,13 +1731,11 @@ impl ServerAttribute for ReservedHandle {
 /// All permission checks for prepare and execute write requests are not dealt with by the
 /// implementor of this trait.
 pub trait QueuedWriter {
-
     /// An iterator over attribute handles with transfer formatted data
-    type Iter: core::iter::IntoIterator<Item=(u16, Vec<u8>)>;
+    type Iter: core::iter::IntoIterator<Item = (u16, Vec<u8>)>;
 
     /// Process a prepared write request
-    fn process_prepared(&mut self, request: &pdu::PreparedWriteRequest<'_> )
-    -> Result<(), pdu::Error>;
+    fn process_prepared(&mut self, request: &pdu::PreparedWriteRequest<'_>) -> Result<(), pdu::Error>;
 
     /// Process an execute request request
     ///
@@ -1755,8 +1746,7 @@ pub trait QueuedWriter {
     ///
     /// If the request contains the `Cancel all prepared writes` flag, then this function must
     /// return `Ok(None)` and all queued writes must be dropped.
-    fn process_execute(&mut self, request_flag: pdu::ExecuteWriteFlag)
-    -> Result<Option<Self::Iter>, pdu::Error>;
+    fn process_execute(&mut self, request_flag: pdu::ExecuteWriteFlag) -> Result<Option<Self::Iter>, pdu::Error>;
 }
 
 /// The state of a `BasicQueuedWriter`
@@ -1786,7 +1776,6 @@ pub struct BasicQueuedWriter {
 }
 
 impl BasicQueuedWriter {
-
     /// Create a new BasicQueuedWriter
     ///
     /// The input `buffer_cap` is the capacity of the data buffer used for queuing writes.
@@ -1797,81 +1786,56 @@ impl BasicQueuedWriter {
         }
     }
 
-    fn prepared_nothing_queued(&mut self, request: &pdu::PreparedWriteRequest<'_>)
-    -> Result<(), pdu::Error>
-    {
+    fn prepared_nothing_queued(&mut self, request: &pdu::PreparedWriteRequest<'_>) -> Result<(), pdu::Error> {
         if request.get_prepared_offset() == 0 {
-
             if request.get_prepared_data().len() <= self.data.capacity() {
-
                 self.state = BasicQueuedWriterState::QueuedWrites(request.get_handle());
 
                 // Data must be already cleared
                 self.data.extend_from_slice(request.get_prepared_data());
 
                 Ok(())
-
             } else {
-
                 Err(pdu::Error::PrepareQueueFull)
-
             }
-
         } else {
-
             self.state = BasicQueuedWriterState::InvalidOffset;
 
             Ok(())
-
         }
     }
 
-    fn prepared_queued(&mut self, request: &pdu::PreparedWriteRequest<'_>, self_handle: u16)
-    -> Result<(), pdu::Error>
-    {
+    fn prepared_queued(&mut self, request: &pdu::PreparedWriteRequest<'_>, self_handle: u16) -> Result<(), pdu::Error> {
         if self.data.len() != request.get_prepared_offset().into() {
-
             self.state = BasicQueuedWriterState::InvalidOffset;
 
             Ok(())
-
         } else if self_handle != request.get_handle() {
-
             Err(pdu::Error::InvalidHandle)
-
         } else if self.data.len() + request.get_prepared_data().len() > self.data.capacity() {
-
             Err(pdu::Error::PrepareQueueFull)
-
         } else {
-
             self.data.extend_from_slice(request.get_prepared_data());
 
             Ok(())
-
         }
     }
 
     /// Cancel the queued write
-    fn cancel_queued_writes(&mut self)
-    -> Result<Option<<Self as QueuedWriter>::Iter>, pdu::Error>
-    {
+    fn cancel_queued_writes(&mut self) -> Result<Option<<Self as QueuedWriter>::Iter>, pdu::Error> {
         self.data.clear();
         self.state = BasicQueuedWriterState::NoQueuedWrites;
         Ok(None)
     }
 
     /// Write the queued prepared write to the attribute
-    fn exec_queued_writes(&mut self)
-    -> Result<Option<<Self as QueuedWriter>::Iter>, pdu::Error>
-    {
+    fn exec_queued_writes(&mut self) -> Result<Option<<Self as QueuedWriter>::Iter>, pdu::Error> {
         match core::mem::replace(&mut self.state, BasicQueuedWriterState::NoQueuedWrites) {
+            BasicQueuedWriterState::NoQueuedWrites => Ok(self.empty_iter().into()),
 
-            BasicQueuedWriterState::NoQueuedWrites => Ok( self.empty_iter().into() ),
+            BasicQueuedWriterState::QueuedWrites(h) => Ok(self.create_once_iter(h).into()),
 
-            BasicQueuedWriterState::QueuedWrites(h) => Ok( self.create_once_iter(h).into() ),
-
-            BasicQueuedWriterState::InvalidOffset => Err( pdu::Error::InvalidOffset ),
+            BasicQueuedWriterState::InvalidOffset => Err(pdu::Error::InvalidOffset),
         }
     }
 
@@ -1889,31 +1853,25 @@ impl BasicQueuedWriter {
     /// This should only be called when the current state is `QueuedWrites` as this resets both the
     /// state and data
     fn create_once_iter(&mut self, handle: u16) -> <Self as QueuedWriter>::Iter {
-        core::iter::once( (handle, core::mem::replace(&mut self.data, Vec::new())) ).into()
+        core::iter::once((handle, core::mem::replace(&mut self.data, Vec::new()))).into()
     }
 }
 
 impl QueuedWriter for BasicQueuedWriter {
-
     type Iter = core::iter::Once<(u16, Vec<u8>)>;
 
-    fn process_prepared(&mut self, request: &pdu::PreparedWriteRequest<'_>)
-    -> Result<(), pdu::Error>
-    {
+    fn process_prepared(&mut self, request: &pdu::PreparedWriteRequest<'_>) -> Result<(), pdu::Error> {
         match self.state {
             BasicQueuedWriterState::NoQueuedWrites => self.prepared_nothing_queued(request),
 
             BasicQueuedWriterState::QueuedWrites(handle) => self.prepared_queued(request, handle),
 
             // Error states, client needs to send execute
-
             BasicQueuedWriterState::InvalidOffset => Ok(()),
         }
     }
 
-    fn process_execute(&mut self, flag: pdu::ExecuteWriteFlag)
-    -> Result<Option<Self::Iter>, pdu::Error>
-    {
+    fn process_execute(&mut self, flag: pdu::ExecuteWriteFlag) -> Result<Option<Self::Iter>, pdu::Error> {
         match flag {
             pdu::ExecuteWriteFlag::CancelAllPreparedWrites => self.cancel_queued_writes(),
             pdu::ExecuteWriteFlag::WriteAllPreparedWrites => self.exec_queued_writes(),
@@ -1938,9 +1896,7 @@ impl QueuedWriter for NoQueuedWrites {
         Err(pdu::Error::RequestNotSupported)
     }
 
-    fn process_execute(&mut self, _: pdu::ExecuteWriteFlag)
-    -> Result<Option<Self::Iter>, pdu::Error>
-    {
+    fn process_execute(&mut self, _: pdu::ExecuteWriteFlag) -> Result<Option<Self::Iter>, pdu::Error> {
         Err(pdu::Error::RequestNotSupported)
     }
 }

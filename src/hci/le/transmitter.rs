@@ -2,42 +2,41 @@ pub mod read_advertising_channel_tx_power {
 
     use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadAdvertisingChannelTxPower);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::ReadAdvertisingChannelTxPower);
 
     #[repr(packed)]
     pub(crate) struct CmdReturn {
         status: u8,
-        tx_power_level: i8
+        tx_power_level: i8,
     }
 
     /// The LE Read Advertising Channel Tx Power Command returns dBm, a unit of power
     /// provided to the radio antenna.
     #[derive(Debug)]
-    pub struct TxPower{
+    pub struct TxPower {
         pub power: i8,
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
 
     impl TxPower {
-
         fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok(TxPower{
+                Ok(TxPower {
                     power: packed.tx_power_level,
                     completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
 
         pub fn as_milli_watts(&self) -> f32 {
             use core::f32;
-            10f32.powf( self.power as f32 / 10f32 )
+            10f32.powf(self.power as f32 / 10f32)
         }
     }
 
@@ -47,50 +46,48 @@ pub mod read_advertising_channel_tx_power {
         }
     }
 
-    impl_get_data_for_command!(
-        COMMAND,
-        CmdReturn,
-        TxPower,
-        error::Error
-    );
+    impl_get_data_for_command!(COMMAND, CmdReturn, TxPower, error::Error);
 
     impl_command_complete_future!(TxPower, error::Error);
 
-    #[derive(Clone,Copy)]
+    #[derive(Clone, Copy)]
     struct Parameter;
 
     impl CommandParameter for Parameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {*self}
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T> )
-    -> impl Future<Output=Result<TxPower, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+    ) -> impl Future<Output = Result<TxPower, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command(Parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
-
 }
 
-pub mod transmitter_test{
+pub mod transmitter_test {
 
-    use crate::hci::*;
     use crate::hci::le::common::Frequency;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TransmitterTest);
 
     #[repr(packed)]
-    #[derive( Clone, Copy)]
+    #[derive(Clone, Copy)]
     struct CmdParameter {
         _tx_channel: u8,
         _lenght_of_test_data: u8,
         _packet_payload: u8,
     }
 
-    #[cfg_attr(test,derive(Debug))]
+    #[cfg_attr(test, derive(Debug))]
     pub enum TestPayload {
         PRBS9Sequence,
         Repeat11110000,
@@ -106,7 +103,7 @@ pub mod transmitter_test{
         fn into_val(&self) -> u8 {
             use self::TestPayload::*;
             match *self {
-                PRBS9Sequence  => 0x00u8,
+                PRBS9Sequence => 0x00u8,
                 Repeat11110000 => 0x01u8,
                 Repeat10101010 => 0x02u8,
                 PRBS15Sequence => 0x03u8,
@@ -123,44 +120,45 @@ pub mod transmitter_test{
     impl CommandParameter for CmdParameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {*self}
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         channel: Frequency,
         payload: TestPayload,
-        payload_length: u8 )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+        payload_length: u8,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-
         let parameters = CmdParameter {
             _tx_channel: channel.get_val(),
             _lenght_of_test_data: payload_length,
             _packet_payload: payload.into_val(),
         };
 
-        ReturnedFuture( hci.send_command(parameters, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(parameters, events::Events::CommandComplete))
     }
-
 }
 
 pub mod set_advertising_data {
 
+    use crate::gap::advertise::{DataTooLargeError, IntoRaw};
     use crate::hci::*;
-    use crate::gap::advertise::{IntoRaw,DataTooLargeError};
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingData);
 
-    type Payload = [u8;31];
+    type Payload = [u8; 31];
 
     #[repr(packed)]
     #[doc(hidden)]
     pub struct CmdParameter {
         _length: u8,
-        _data: [u8;31],
+        _data: [u8; 31],
     }
 
     /// Advertising data
@@ -171,17 +169,16 @@ pub mod set_advertising_data {
     /// and 30 bytes for the AD structures. The data can consist of as many AD structs
     /// that can fit in it, but it must consist of at least one AD struct (unless
     /// early termination is desired).
-    #[derive(Debug,Clone,Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub struct AdvertisingData {
         length: usize,
         payload: Payload,
     }
 
     impl AdvertisingData {
-
         /// Create an empty advertising data
         pub fn new() -> Self {
-            AdvertisingData{
+            AdvertisingData {
                 length: 0,
                 payload: Payload::default(),
             }
@@ -194,9 +191,9 @@ pub mod set_advertising_data {
         /// # Error
         /// 'data' in its transmission form was too large for remaining free space in
         /// the advertising data.
-        pub fn try_push<T>(&mut self, data: T )
-                           -> Result<(), DataTooLargeError>
-            where T: IntoRaw
+        pub fn try_push<T>(&mut self, data: T) -> Result<(), DataTooLargeError>
+        where
+            T: IntoRaw,
         {
             let raw_data = data.into_raw();
 
@@ -208,8 +205,7 @@ pub mod set_advertising_data {
                 self.payload[old_len..self.length].copy_from_slice(&raw_data);
 
                 Ok(())
-            }
-            else {
+            } else {
                 Err(DataTooLargeError {
                     overflow: raw_data.len() + self.length - self.payload.len(),
                     remaining: self.payload.len() - self.length,
@@ -232,28 +228,30 @@ pub mod set_advertising_data {
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
                 _length: self.length as u8,
-                _data: self.payload
+                _data: self.payload,
             }
         }
     }
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static, A>( hci: &'a HostInterface<T>, adv_data: A )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface,
-          A: Into<Option<AdvertisingData>>,
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static, A>(
+        hci: &'a HostInterface<T>,
+        adv_data: A,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
+        A: Into<Option<AdvertisingData>>,
     {
         if let Some(data) = adv_data.into() {
-            ReturnedFuture( hci.send_command(data, events::Events::CommandComplete ) )
+            ReturnedFuture(hci.send_command(data, events::Events::CommandComplete))
         } else {
             let data = AdvertisingData::new();
 
-            ReturnedFuture( hci.send_command( data, events::Events::CommandComplete ) )
+            ReturnedFuture(hci.send_command(data, events::Events::CommandComplete))
         }
     }
-
 }
 
 pub mod set_advertising_enable {
@@ -264,44 +262,51 @@ pub mod set_advertising_enable {
 
     impl_status_return!(COMMAND);
 
-    #[derive(Clone,Copy)]
+    #[derive(Clone, Copy)]
     #[repr(packed)]
-    struct Parameter{
-        enable: bool
+    struct Parameter {
+        enable: bool,
     }
 
     impl CommandParameter for Parameter {
         type Parameter = u8;
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
-            if self.enable { 1u8 } else { 0u8 }
+            if self.enable {
+                1u8
+            } else {
+                0u8
+            }
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, enable: bool )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        enable: bool,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command(Parameter{ enable }, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(Parameter { enable }, events::Events::CommandComplete))
     }
-
 }
 
 pub mod set_advertising_parameters {
 
-    use crate::hci::*;
     use crate::hci::le::common::OwnAddressType;
+    use crate::hci::*;
     use core::default::Default;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingParameters);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingParameters);
 
-    interval!( AdvertisingInterval, 0x0020, 0x4000, SpecDef, 0x0800, 625);
+    interval!(AdvertisingInterval, 0x0020, 0x4000, SpecDef, 0x0800, 625);
 
     /// Advertising Type
     ///
     /// Enumeration for the 'Advertising Type' advertising parameter.
-    #[cfg_attr(test,derive(Debug))]
+    #[cfg_attr(test, derive(Debug))]
     pub enum AdvertisingType {
         ConnectableAndScannableUndirectedAdvertising,
         ConnectableHighDucyCycleDirectedAdvertising,
@@ -311,7 +316,6 @@ pub mod set_advertising_parameters {
     }
 
     impl AdvertisingType {
-
         fn into_val(&self) -> u8 {
             match *self {
                 AdvertisingType::ConnectableAndScannableUndirectedAdvertising => 0x00,
@@ -334,7 +338,7 @@ pub mod set_advertising_parameters {
     /// # Notes (from core 5.0 specification)
     /// - PublicAddress -> Public Device Address (default) or Public Identity Address
     /// - RandomAddress -> Random Device Address or Random (static) Identity Address
-    #[cfg_attr(test,derive(Debug))]
+    #[cfg_attr(test, derive(Debug))]
     pub enum PeerAddressType {
         PublicAddress,
         RandomAddress,
@@ -356,7 +360,7 @@ pub mod set_advertising_parameters {
     }
 
     /// Advertising channels
-    #[cfg_attr(test,derive(Debug))]
+    #[cfg_attr(test, derive(Debug))]
     pub enum AdvertisingChannel {
         Channel37,
         Channel38,
@@ -381,7 +385,7 @@ pub mod set_advertising_parameters {
         }
     }
 
-    #[cfg_attr(test,derive(Debug))]
+    #[cfg_attr(test, derive(Debug))]
     pub enum AdvertisingFilterPolicy {
         AllDevices,
         AllConnectionRequestsWhitlistedDeviceScanRequests,
@@ -413,7 +417,7 @@ pub mod set_advertising_parameters {
     ///
     /// While most members are public, the only way to set the minimum and maximum
     /// advertising interval is through method calls.
-    #[cfg_attr(test,derive(Debug))]
+    #[cfg_attr(test, derive(Debug))]
     pub struct AdvertisingParameters<'a> {
         pub minimum_advertising_interval: AdvertisingInterval,
         pub maximum_advertising_interval: AdvertisingInterval,
@@ -421,12 +425,11 @@ pub mod set_advertising_parameters {
         pub own_address_type: OwnAddressType,
         pub peer_address_type: PeerAddressType,
         pub peer_address: crate::BluetoothDeviceAddress,
-        pub advertising_channel_map: &'a[AdvertisingChannel],
+        pub advertising_channel_map: &'a [AdvertisingChannel],
         pub advertising_filter_policy: AdvertisingFilterPolicy,
     }
 
     impl<'a> Default for AdvertisingParameters<'a> {
-
         /// Create an AdvertisingParameters object with the default parameters (except
         /// for the peer_address member).
         ///
@@ -441,7 +444,7 @@ pub mod set_advertising_parameters {
                 advertising_type: AdvertisingType::default(),
                 own_address_type: OwnAddressType::default(),
                 peer_address_type: PeerAddressType::default(),
-                peer_address: [0u8;6].into(),
+                peer_address: [0u8; 6].into(),
                 advertising_channel_map: AdvertisingChannel::default_channels(),
                 advertising_filter_policy: AdvertisingFilterPolicy::default(),
             }
@@ -449,12 +452,9 @@ pub mod set_advertising_parameters {
     }
 
     impl<'a> AdvertisingParameters<'a> {
-
         /// Create the default parameters except use the specified bluetooth device
         /// address for the peer_address member
-        pub fn default_with_peer_address( addr: &'a crate::BluetoothDeviceAddress) ->
-        AdvertisingParameters
-        {
+        pub fn default_with_peer_address(addr: &'a crate::BluetoothDeviceAddress) -> AdvertisingParameters {
             let mut ap = AdvertisingParameters::default();
 
             ap.peer_address = *addr;
@@ -464,7 +464,7 @@ pub mod set_advertising_parameters {
     }
 
     #[repr(packed)]
-    #[derive( Clone, Copy)]
+    #[derive(Clone, Copy)]
     struct CmdParameter {
         _advertising_interval_min: u16,
         _advertising_interval_max: u16,
@@ -476,22 +476,25 @@ pub mod set_advertising_parameters {
         _advertising_filter_policy: u8,
     }
 
-    impl CommandParameter for CmdParameter{
+    impl CommandParameter for CmdParameter {
         type Parameter = CmdParameter;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, params: AdvertisingParameters )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        params: AdvertisingParameters,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-
         let parameter = CmdParameter {
-
             _advertising_interval_min: params.minimum_advertising_interval.get_raw_val(),
 
             _advertising_interval_max: params.maximum_advertising_interval.get_raw_val(),
@@ -509,7 +512,7 @@ pub mod set_advertising_parameters {
             _advertising_filter_policy: params.advertising_filter_policy.into_val(),
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
@@ -524,7 +527,7 @@ pub mod set_random_address {
     #[repr(packed)]
     #[derive(Clone)]
     struct Parameter {
-        rand_address: crate::BluetoothDeviceAddress
+        rand_address: crate::BluetoothDeviceAddress,
     }
 
     impl CommandParameter for Parameter {
@@ -535,14 +538,18 @@ pub mod set_random_address {
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, rand_addr: crate::BluetoothDeviceAddress )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        rand_addr: crate::BluetoothDeviceAddress,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        let parameter = Parameter{ rand_address: rand_addr };
+        let parameter = Parameter {
+            rand_address: rand_addr,
+        };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
-
 }

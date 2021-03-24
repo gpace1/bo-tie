@@ -18,7 +18,7 @@ pub mod hci {
     const HCI_RAW: usize = 6;
 
     fn test_flag(bit: usize, field: &[u32]) -> bool {
-        1 == (field[bit >> 5] >> (bit as u32 & 31 ))
+        1 == (field[bit >> 5] >> (bit as u32 & 31))
     }
 
     /// Get a file descriptor to a bluetooth controller
@@ -36,8 +36,9 @@ pub mod hci {
     /// in line with the PAGE_SCAN, specifically ( PAGE_SCAN * 2 ) / size_of(hci_dev_req) in
     /// hci_get_dev_list in /net/bluetooth/hci_core.c. When `const_generics` is stable, this
     /// function should be implemented to accept a const generic for the device count.
-    pub fn get_dev_id<A>(device_address: A ) -> Result<usize, nix::Error>
-        where A: Into<Option<bo_tie::BluetoothDeviceAddress>>
+    pub fn get_dev_id<A>(device_address: A) -> Result<usize, nix::Error>
+    where
+        A: Into<Option<bo_tie::BluetoothDeviceAddress>>,
     {
         use nix::libc;
         use std::os::raw::c_int;
@@ -45,10 +46,14 @@ pub mod hci {
         let mut hci_dev_list = super::hci_dev_list_req::default();
 
         let sock = unsafe {
-            let raw_fd = libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, super::BTPROTO_HCI);
+            let raw_fd = libc::socket(
+                libc::AF_BLUETOOTH,
+                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
+                super::BTPROTO_HCI,
+            );
 
             if raw_fd < 0 {
-                return Err( nix::errno::Errno::last().into() )
+                return Err(nix::errno::Errno::last().into());
             }
 
             crate::FileDescriptor(raw_fd)
@@ -58,25 +63,25 @@ pub mod hci {
 
         let device_address_opt = device_address.into();
 
-        hci_dev_list.dev_req.iter()
+        hci_dev_list
+            .dev_req
+            .iter()
             .map(|dev_req| dev_req.dev_id)
             .find_map(|id| {
                 let mut dev_info = super::hci_dev_info::default();
 
                 dev_info.dev_id = id;
 
-                let di_rslt = unsafe {
-                    super::hci_get_dev_info(sock.0, &mut dev_info as *mut _ as *mut c_int)
-                };
+                let di_rslt = unsafe { super::hci_get_dev_info(sock.0, &mut dev_info as *mut _ as *mut c_int) };
 
                 if di_rslt.is_err() || test_flag(HCI_RAW, &[dev_info.flags]) {
-                    return None
+                    return None;
                 }
 
                 match device_address_opt {
                     None => Some(<usize>::from(id)),
-                    Some(addr) if addr == dev_info.bdaddr => Some(<usize>::from(id)) ,
-                    _ => None
+                    Some(addr) if addr == dev_info.bdaddr => Some(<usize>::from(id)),
+                    _ => None,
                 }
             })
             .ok_or(nix::Error::from_errno(nix::errno::Errno::ENODEV))
@@ -84,10 +89,11 @@ pub mod hci {
 
     /// Send a command to the bluetooth controller
     pub fn send_command<P>(dev: &crate::FileDescriptor, parameter: &P) -> nix::Result<usize>
-        where P: bo_tie::hci::CommandParameter
+    where
+        P: bo_tie::hci::CommandParameter,
     {
-        use nix::Error;
         use nix::errno::Errno;
+        use nix::Error;
 
         let mut command_packet = parameter.as_command_packet();
 
@@ -117,9 +123,9 @@ pub struct hci_filter {
 #[repr(C)]
 #[derive(Default)]
 pub struct sockaddr_hci {
-  pub hci_family: nix::libc::sa_family_t,
-  pub hci_dev: u16,
-  pub hci_channel: u16,
+    pub hci_family: nix::libc::sa_family_t,
+    pub hci_dev: u16,
+    pub hci_channel: u16,
 }
 
 #[repr(C)]
@@ -148,11 +154,11 @@ impl Default for hci_dev_list_req {
 #[derive(Default)]
 pub struct hci_dev_info {
     dev_id: u16,
-    name: [std::os::raw::c_char;8],
+    name: [std::os::raw::c_char; 8],
     bdaddr: bo_tie::BluetoothDeviceAddress,
     flags: u32,
     r#type: u8,
-    features: [u8;8],
+    features: [u8; 8],
     pkt_type: u32,
     link_policy: u32,
     link_mod: u32,
@@ -160,7 +166,7 @@ pub struct hci_dev_info {
     acl_pkts: u16,
     sco_mtu: u16,
     sco_pkts: u16,
-    stat: hci_dev_stats
+    stat: hci_dev_stats,
 }
 
 #[repr(C)]
@@ -174,11 +180,11 @@ pub struct hci_dev_stats {
     acl_rx: u32,
     sco_rx: u32,
     byte_rx: u32,
-    byte_tx: u32
+    byte_tx: u32,
 }
 
 // ioclt magic for the IOCTL values
-const HCI_IOC_MAGIC:u8 = b'H';
+const HCI_IOC_MAGIC: u8 = b'H';
 
 const HCI_IOC_HCIDEVUP: u8 = 201;
 const HCI_IOC_HCIDEVDOWN: u8 = 202;
@@ -187,5 +193,15 @@ const HCI_IOC_HCIGETDEVINFO: u8 = 211;
 
 nix::ioctl_write_int!(hci_dev_up, HCI_IOC_MAGIC, HCI_IOC_HCIDEVUP);
 nix::ioctl_write_int!(hci_dev_down, HCI_IOC_MAGIC, HCI_IOC_HCIDEVDOWN);
-nix::ioctl_read!(hci_get_dev_list, HCI_IOC_MAGIC, HCI_IOC_HCIGETDEVLIST, std::os::raw::c_int);
-nix::ioctl_read!(hci_get_dev_info, HCI_IOC_MAGIC, HCI_IOC_HCIGETDEVINFO, std::os::raw::c_int);
+nix::ioctl_read!(
+    hci_get_dev_list,
+    HCI_IOC_MAGIC,
+    HCI_IOC_HCIGETDEVLIST,
+    std::os::raw::c_int
+);
+nix::ioctl_read!(
+    hci_get_dev_info,
+    HCI_IOC_MAGIC,
+    HCI_IOC_HCIGETDEVINFO,
+    std::os::raw::c_int
+);

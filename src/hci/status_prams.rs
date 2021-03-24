@@ -1,8 +1,8 @@
 //! Status Parameter Commands
 
 pub mod read_rssi {
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::StatusParameters(opcodes::StatusParameters::ReadRSSI);
 
@@ -10,17 +10,19 @@ pub mod read_rssi {
     pub(crate) struct CmdReturn {
         status: u8,
         handle: u16,
-        rssi: i8
+        rssi: i8,
     }
 
     struct Parameter {
-        handle: u16
+        handle: u16,
     }
 
     impl CommandParameter for Parameter {
         type Parameter = u16;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { self.handle }
+        fn get_parameter(&self) -> Self::Parameter {
+            self.handle
+        }
     }
 
     pub struct RSSIInfo {
@@ -31,17 +33,16 @@ pub mod read_rssi {
     }
 
     impl RSSIInfo {
-        fn try_from((packed,cnt): (CmdReturn,u8)) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self {
+                Ok(Self {
                     handle: ConnectionHandle::try_from(packed.handle)?,
                     rssi: packed.rssi,
                     completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -53,24 +54,22 @@ pub mod read_rssi {
         }
     }
 
-    impl_get_data_for_command!(
-            COMMAND,
-            CmdReturn,
-            RSSIInfo,
-            error::Error
-        );
+    impl_get_data_for_command!(COMMAND, CmdReturn, RSSIInfo, error::Error);
 
     impl_command_complete_future!(RSSIInfo, error::Error);
 
     #[cfg(not(feature = "flow-ctrl"))]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
-    -> impl Future<Output=Result<RSSIInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        handle: ConnectionHandle,
+    ) -> impl Future<Output = Result<RSSIInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
         let parameter = Parameter {
-            handle: handle.get_raw_handle()
+            handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }

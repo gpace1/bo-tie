@@ -5,16 +5,12 @@
 
 pub mod remote_connection_parameter_request_reply {
 
-    use crate::hci::*;
-    use crate::hci::common::{
-        ConnectionHandle,
-        ConnectionInterval,
-        ConnectionLatency,
-        SupervisionTimeout,
-    };
+    use crate::hci::common::{ConnectionHandle, ConnectionInterval, ConnectionLatency, SupervisionTimeout};
     use crate::hci::le::common::ConnectionEventLength;
+    use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadConnectionParameterRequestReply);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::ReadConnectionParameterRequestReply);
 
     #[repr(packed)]
     struct CommandReturn {
@@ -72,16 +68,15 @@ pub mod remote_connection_parameter_request_reply {
     }
 
     impl Return {
-        fn try_from((packed,cnt): (CommandReturn,u8)) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self {
+                Ok(Self {
                     connection_handle: ConnectionHandle::try_from(packed.connection_handle)?,
-                    completed_packets_cnt: cnt.into()
+                    completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -93,21 +88,19 @@ pub mod remote_connection_parameter_request_reply {
         }
     }
 
-    impl_get_data_for_command!(
-        COMMAND,
-        CommandReturn,
-        Return,
-        error::Error
-    );
+    impl_get_data_for_command!(COMMAND, CommandReturn, Return, error::Error);
 
     impl_command_complete_future!(Return, error::Error);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, parameter: CommandParameters)
-    -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        parameter: CommandParameters,
+    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }
 
@@ -122,15 +115,16 @@ pub mod remote_connection_parameter_request_reply {
 /// as they are translated into the value of 0 on the interface.
 pub mod remote_connection_parameter_request_negative_reply {
 
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
     struct CommandReturn {
         status: u8,
         connection_handle: u16,
     }
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadConnectionParameterRequestNegativeReply);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::ReadConnectionParameterRequestNegativeReply);
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
@@ -139,16 +133,15 @@ pub mod remote_connection_parameter_request_negative_reply {
     }
 
     impl Return {
-        fn try_from((packed,cnt): (CommandReturn, u8)) -> Result<Self, error::Error > {
+        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-                Ok( Self {
+                Ok(Self {
                     connection_handle: ConnectionHandle::try_from(packed.connection_handle)?,
-                    completed_packets_cnt: cnt.into()
+                    completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -160,12 +153,7 @@ pub mod remote_connection_parameter_request_negative_reply {
         }
     }
 
-    impl_get_data_for_command!(
-        COMMAND,
-        CommandReturn,
-        Return,
-        error::Error
-    );
+    impl_get_data_for_command!(COMMAND, CommandReturn, Return, error::Error);
 
     impl_command_complete_future!(Return, error::Error);
 
@@ -179,21 +167,25 @@ pub mod remote_connection_parameter_request_negative_reply {
     impl CommandParameter for Parameter {
         type Parameter = Parameter;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>,
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
         handle: ConnectionHandle,
-        reason: error::Error
-    ) -> impl Future<Output=Result<Return, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+        reason: error::Error,
+    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
         let parameter = Parameter {
             _handle: handle.get_raw_handle().to_le(),
             _reason: reason.into(),
         };
 
-        ReturnedFuture( hci.send_command( parameter, events::Events::CommandComplete, ))
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
 }

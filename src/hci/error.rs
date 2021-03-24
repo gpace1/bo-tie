@@ -7,7 +7,6 @@ use core::fmt::{Debug, Display, Formatter, Result};
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub enum Error {
-
     /// NoError is not part of the official error list in the Bluetooth Spec (v5 | Vol 2, Part D
     /// Sect 2). Its just a placeholder for when there is no error generated
     NoError,
@@ -107,11 +106,9 @@ impl Debug for Error {
             MemoryCapacityExceeded => write!(f, "MemoryCapacityExceeded (0x{:X})", 0x07),
             ConnectionTimeout => write!(f, "ConnectionTimeout (0x{:X})", 0x08),
             ConnectionLimitExceeded => write!(f, "ConnectionLimitExceeded (0x{:X})", 0x09),
-            SynchronousConnectionLimitToADeviceExceeded => write!(
-                f,
-                "SynchronousConnectionLimitToADeviceExceeded (0x{:X})",
-                0x0a
-            ),
+            SynchronousConnectionLimitToADeviceExceeded => {
+                write!(f, "SynchronousConnectionLimitToADeviceExceeded (0x{:X})", 0x0a)
+            }
             ConnectionAlreadyExists => write!(f, "ConnectionAlreadyExists (0x{:X})", 0x0b),
             CommandDisallowed => write!(f, "CommandDisallowed (0x{:X})", 0x0c),
             ConnectionRejectedDueToLimitedResources => {
@@ -120,11 +117,9 @@ impl Debug for Error {
             ConnectionRejectedDueToSecurityReasons => {
                 write!(f, "ConnectionRejectedDueToSecurityReasons (0x{:X})", 0x0e)
             }
-            ConnectionRejectedDueToUnacceptableBluetoothAddress => write!(
-                f,
-                "ConnectionRejectedDueToUnacceptableBluetoothAddress (0x{:X})",
-                0x0f
-            ),
+            ConnectionRejectedDueToUnacceptableBluetoothAddress => {
+                write!(f, "ConnectionRejectedDueToUnacceptableBluetoothAddress (0x{:X})", 0x0f)
+            }
             ConnectionAcceptTimeoutExceeded => {
                 write!(f, "ConnectionAcceptTimeoutExceeded (0x{:X})", 0x10)
             }
@@ -135,35 +130,27 @@ impl Debug for Error {
             RemoteUserTerminatedConnection => {
                 write!(f, "RemoteUserTerminatedConnection (0x{:X})", 0x13)
             }
-            RemoteDeviceTerminatedConnectionDueToLowResources => write!(
-                f,
-                "RemoteDeviceTerminatedConnectionDueToLowResources (0x{:X})",
-                0x14
-            ),
-            RemoteDeviceTerminatedConnectionDueToPowerOff => write!(
-                f,
-                "RemoteDeviceTerminatedConnectionDueToPowerOff (0x{:X})",
-                0x15
-            ),
+            RemoteDeviceTerminatedConnectionDueToLowResources => {
+                write!(f, "RemoteDeviceTerminatedConnectionDueToLowResources (0x{:X})", 0x14)
+            }
+            RemoteDeviceTerminatedConnectionDueToPowerOff => {
+                write!(f, "RemoteDeviceTerminatedConnectionDueToPowerOff (0x{:X})", 0x15)
+            }
             ConnectionTerminatedByLocalHost => {
                 write!(f, "ConnectionTerminatedByLocalHost (0x{:X})", 0x16)
             }
             RepeatedAttempts => write!(f, "RepeatedAttempts (0x{:X})", 0x17),
             PairingNotAllowed => write!(f, "PairingNotAllowed (0x{:X})", 0x18),
             UnknownLMPPDU => write!(f, "UnknownLMPPDU (0x{:X})", 0x19),
-            UnsupportedRemoteFeatureOrUnsupportedLMPFeature => write!(
-                f,
-                "UnsupportedRemoteFeatureOrUnsupportedLMPFeature (0x{:X})",
-                0x1a
-            ),
+            UnsupportedRemoteFeatureOrUnsupportedLMPFeature => {
+                write!(f, "UnsupportedRemoteFeatureOrUnsupportedLMPFeature (0x{:X})", 0x1a)
+            }
             SCOOffsetRejected => write!(f, "SCOOffsetRejected (0x{:X})", 0x1b),
             SCOIntervalRejected => write!(f, "SCOIntervalRejected (0x{:X})", 0x1c),
             SCOAirModeRejected => write!(f, "SCOAirModeRejected (0x{:X})", 0x1d),
-            InvalidLMPParametersOrInvalidLLParameters => write!(
-                f,
-                "InvalidLMPParametersOrInvalidLLParameters (0x{:X})",
-                0x1e
-            ),
+            InvalidLMPParametersOrInvalidLLParameters => {
+                write!(f, "InvalidLMPParametersOrInvalidLLParameters (0x{:X})", 0x1e)
+            }
             UnspecifiedError => write!(f, "UnspecifiedError (0x{:X})", 0x1f),
             UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue => write!(
                 f,
@@ -174,11 +161,9 @@ impl Debug for Error {
             LMPResponseTimeoutOrLLResponseTimeout => {
                 write!(f, "LMPResponseTimeoutOrLLResponseTimeout (0x{:X})", 0x22)
             }
-            LPMErrorTransationCollisionOrLLProcedureColision => write!(
-                f,
-                "LPMErrorTransationCollisionOrLLProcedureColision (0x{:X})",
-                0x23
-            ),
+            LPMErrorTransationCollisionOrLLProcedureColision => {
+                write!(f, "LPMErrorTransationCollisionOrLLProcedureColision (0x{:X})", 0x23)
+            }
             LMPPDUNotAllowed => write!(f, "LMPPDUNotAllowed (0x{:X})", 0x24),
             EncryptionModeNotAcceptable => write!(f, "EncryptionModeNotAcceptable (0x{:X})", 0x25),
             LinkKeyCannotBeChanged => write!(f, "LinkKeyCannotBeChanged (0x{:X})", 0x26),
@@ -207,11 +192,9 @@ impl Debug for Error {
                 write!(f, "SimplePairingNotSupportedByHost (0x{:X})", 0x37)
             }
             HostBusyBecausePairing => write!(f, "HostBusyBecausePairing (0x{:X})", 0x38),
-            ConnectionRejectedDueToNoSuitableChannelFound => write!(
-                f,
-                "ConnectionRejectedDueToNoSuitableChannelFound (0x{:X})",
-                0x39
-            ),
+            ConnectionRejectedDueToNoSuitableChannelFound => {
+                write!(f, "ConnectionRejectedDueToNoSuitableChannelFound (0x{:X})", 0x39)
+            }
             ControllerBusy => write!(f, "ControllerBusy (0x{:X})", 0x3a),
             UnacceptableConnectionParameters => {
                 write!(f, "UnacceptableConnectionParameters (0x{:X})", 0x3b)
@@ -241,7 +224,9 @@ impl Debug for Error {
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "HCI Error: {}. See the error code section of the Bluetooth Specification \
+        write!(
+            f,
+            "HCI Error: {}. See the error code section of the Bluetooth Specification \
             (Version 5, Vol 2, Part D) for more information",
             match self {
                 Error::NoError => {
@@ -249,148 +234,91 @@ impl Display for Error {
                     return write!(f, "No Error");
                 }
                 Error::Unknown(val) => {
-                    return write!(f, "Unknown Error Code (0x{:X})", val)
+                    return write!(f, "Unknown Error Code (0x{:X})", val);
                 }
                 Error::Message(msg) => {
-                    return write!(f, "{}", msg)
+                    return write!(f, "{}", msg);
                 }
-                Error::UnknownHCICommand =>
-                    "Unknown HCI Command",
-                Error::UnknownConnectionIdentifier =>
-                    "Unknown Connection Identifier",
-                Error::HardwareFailure =>
-                    "Hardware Failure",
-                Error::PageTimeout =>
-                    "Page Timeout",
-                Error::AuthenticationFailure =>
-                    "Authentication Failure",
-                Error::PINorKeyMissing =>
-                    "PIN or Key Missing",
-                Error::MemoryCapacityExceeded =>
-                    "Memory Capacity Exceeded",
-                Error::ConnectionTimeout =>
-                    "Connection Timeout",
-                Error::ConnectionLimitExceeded =>
-                    "Connection Limit Exceeded",
+                Error::UnknownHCICommand => "Unknown HCI Command",
+                Error::UnknownConnectionIdentifier => "Unknown Connection Identifier",
+                Error::HardwareFailure => "Hardware Failure",
+                Error::PageTimeout => "Page Timeout",
+                Error::AuthenticationFailure => "Authentication Failure",
+                Error::PINorKeyMissing => "PIN or Key Missing",
+                Error::MemoryCapacityExceeded => "Memory Capacity Exceeded",
+                Error::ConnectionTimeout => "Connection Timeout",
+                Error::ConnectionLimitExceeded => "Connection Limit Exceeded",
                 Error::SynchronousConnectionLimitToADeviceExceeded =>
                     "Synchronous Connection Limit To A Device Exceeded",
-                Error::ConnectionAlreadyExists =>
-                    "Connection Already Exists",
-                Error::CommandDisallowed =>
-                    "Command Disallowed",
-                Error::ConnectionRejectedDueToLimitedResources =>
-                    "Connection Rejected Due To Limited Resources",
-                Error::ConnectionRejectedDueToSecurityReasons =>
-                    "Connection Rejected Due To Security Reasons",
+                Error::ConnectionAlreadyExists => "Connection Already Exists",
+                Error::CommandDisallowed => "Command Disallowed",
+                Error::ConnectionRejectedDueToLimitedResources => "Connection Rejected Due To Limited Resources",
+                Error::ConnectionRejectedDueToSecurityReasons => "Connection Rejected Due To Security Reasons",
                 Error::ConnectionRejectedDueToUnacceptableBluetoothAddress =>
                     "Connection Rejected Due To Unacceptable Bluetooth Address",
-                Error::ConnectionAcceptTimeoutExceeded =>
-                    "Connection Accept Timeout Exceeded",
-                Error::UnsupportedFeatureOrParameterValue =>
-                    "Unsupported Feature Or Parameter Value",
-                Error::InvalidHCICommandParameters =>
-                    "Invalid HCI Command Parameters",
-                Error::RemoteUserTerminatedConnection =>
-                    "Remote User Terminated Connection",
+                Error::ConnectionAcceptTimeoutExceeded => "Connection Accept Timeout Exceeded",
+                Error::UnsupportedFeatureOrParameterValue => "Unsupported Feature Or Parameter Value",
+                Error::InvalidHCICommandParameters => "Invalid HCI Command Parameters",
+                Error::RemoteUserTerminatedConnection => "Remote User Terminated Connection",
                 Error::RemoteDeviceTerminatedConnectionDueToLowResources =>
                     "Remote Device Terminated Connection Due To Low Resources",
                 Error::RemoteDeviceTerminatedConnectionDueToPowerOff =>
                     "Remote Device Terminated Connection Due To Power Off",
-                Error::ConnectionTerminatedByLocalHost =>
-                    "Connection Terminated By Local Host",
-                Error::RepeatedAttempts =>
-                    "Repeated Attempts",
-                Error::PairingNotAllowed =>
-                    "Pairing Not Allowed",
-                Error::UnknownLMPPDU =>
-                    "Unknown LMP PDU",
+                Error::ConnectionTerminatedByLocalHost => "Connection Terminated By Local Host",
+                Error::RepeatedAttempts => "Repeated Attempts",
+                Error::PairingNotAllowed => "Pairing Not Allowed",
+                Error::UnknownLMPPDU => "Unknown LMP PDU",
                 Error::UnsupportedRemoteFeatureOrUnsupportedLMPFeature =>
                     "Unsupported Remote Feature / Unsupported LMP Feature",
-                Error::SCOOffsetRejected =>
-                    "SCO Offset Rejected",
-                Error::SCOIntervalRejected =>
-                    "SCO Interval Rejected",
-                Error::SCOAirModeRejected =>
-                    "SCO Air Mode Rejected",
-                Error::InvalidLMPParametersOrInvalidLLParameters =>
-                    "Invalid LMP Parameters / Invalid LL Parameters",
-                Error::UnspecifiedError =>
-                    "Unspecified Error",
+                Error::SCOOffsetRejected => "SCO Offset Rejected",
+                Error::SCOIntervalRejected => "SCO Interval Rejected",
+                Error::SCOAirModeRejected => "SCO Air Mode Rejected",
+                Error::InvalidLMPParametersOrInvalidLLParameters => "Invalid LMP Parameters / Invalid LL Parameters",
+                Error::UnspecifiedError => "Unspecified Error",
                 Error::UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue =>
                     "Unspported LMP Parameter Value / Unsupported LL Parameter V Alue",
-                Error::RoleChangeNotAllowed =>
-                    "Role Change Not Allowed",
-                Error::LMPResponseTimeoutOrLLResponseTimeout =>
-                    "LMP Response Timeout / LL Response Timeout",
+                Error::RoleChangeNotAllowed => "Role Change Not Allowed",
+                Error::LMPResponseTimeoutOrLLResponseTimeout => "LMP Response Timeout / LL Response Timeout",
                 Error::LPMErrorTransationCollisionOrLLProcedureColision =>
                     "LPM Error Transation Collision / LL Procedure Colision",
-                Error::LMPPDUNotAllowed =>
-                    "LMP PDU Not Allowed",
-                Error::EncryptionModeNotAcceptable =>
-                    "Encryption Mode Not Acceptable",
-                Error::LinkKeyCannotBeChanged =>
-                    "Link Key Cannot Be Changed",
-                Error::RequestedQosNosSupported =>
-                    "Requested Qos Nos Supported",
-                Error::InstantPassed =>
-                    "Instant Passed",
-                Error::PairingWithUnitKeyNotSupported =>
-                    "Pairing With Unit Key Not Supported",
-                Error::DifferentTransactionCollision =>
-                    "Different Transaction Collision",
-                Error::QosUnacceptableParameter =>
-                    "Qos Unacceptable Parameter",
-                Error::QosRejected =>
-                    "Qos Rejected",
-                Error::ChannelAssessmetNotSupported =>
-                    "Channel Assessmet Not Supported",
-                Error::InsufficientSecurity =>
-                    "Insufficient Security",
-                Error::ParameterOutOfMandatorRange =>
-                    "Parameter Out Of Mandator Range",
-                Error::RoleSwitchPending =>
-                    "Role Switch Pending",
-                Error::ReservedSlotViolation =>
-                    "Reserved Slot Violation",
-                Error::RoleSwithFailed =>
-                    "Role Swith Failed",
-                Error::ExtendedInquiryResponseTooLarge =>
-                    "Extended Inquiry Response Too Large",
-                Error::SimplePairingNotSupportedByHost =>
-                    "Simple Pairing Not Supported By Host",
-                Error::HostBusyBecausePairing =>
-                    "Host Busy Because Pairing",
+                Error::LMPPDUNotAllowed => "LMP PDU Not Allowed",
+                Error::EncryptionModeNotAcceptable => "Encryption Mode Not Acceptable",
+                Error::LinkKeyCannotBeChanged => "Link Key Cannot Be Changed",
+                Error::RequestedQosNosSupported => "Requested Qos Nos Supported",
+                Error::InstantPassed => "Instant Passed",
+                Error::PairingWithUnitKeyNotSupported => "Pairing With Unit Key Not Supported",
+                Error::DifferentTransactionCollision => "Different Transaction Collision",
+                Error::QosUnacceptableParameter => "Qos Unacceptable Parameter",
+                Error::QosRejected => "Qos Rejected",
+                Error::ChannelAssessmetNotSupported => "Channel Assessmet Not Supported",
+                Error::InsufficientSecurity => "Insufficient Security",
+                Error::ParameterOutOfMandatorRange => "Parameter Out Of Mandator Range",
+                Error::RoleSwitchPending => "Role Switch Pending",
+                Error::ReservedSlotViolation => "Reserved Slot Violation",
+                Error::RoleSwithFailed => "Role Swith Failed",
+                Error::ExtendedInquiryResponseTooLarge => "Extended Inquiry Response Too Large",
+                Error::SimplePairingNotSupportedByHost => "Simple Pairing Not Supported By Host",
+                Error::HostBusyBecausePairing => "Host Busy Because Pairing",
                 Error::ConnectionRejectedDueToNoSuitableChannelFound =>
                     "Connection Rejected Due To No Suitable Channel Found",
-                Error::ControllerBusy =>
-                    "Controller Busy",
-                Error::UnacceptableConnectionParameters =>
-                    "Unacceptable Connection Parameters",
-                Error::AdvertisingTimeout =>
-                    "Advertising Timeout",
-                Error::ConnectionTerminatedDueToMICFailure =>
-                    "Connection Terminated Due To MIC Failure",
-                Error::ConnectionFailedToBeEstablished =>
-                    "Connection Failed To Be Established",
-                Error::MACConnectionFailed =>
-                    "MAC Connection Failed",
+                Error::ControllerBusy => "Controller Busy",
+                Error::UnacceptableConnectionParameters => "Unacceptable Connection Parameters",
+                Error::AdvertisingTimeout => "Advertising Timeout",
+                Error::ConnectionTerminatedDueToMICFailure => "Connection Terminated Due To MIC Failure",
+                Error::ConnectionFailedToBeEstablished => "Connection Failed To Be Established",
+                Error::MACConnectionFailed => "MAC Connection Failed",
                 Error::CoarseClockAdjustmentRejectedButWillTryToAdjustUsingClockDragging =>
                     "Coarse Clock Adjustment Rejected But Will Try To Adjust Using Clock Dragging",
-                Error::Type0SubmapNotDefined =>
-                    "Type0 Submap Not Defined",
-                Error::UnknownAdvertisingIdentifier =>
-                    "Unknown Advertising Identifier",
-                Error::LimitReached =>
-                    "Limit Reached",
-                Error::OperationCancelledByHost =>
-                    "Operation Cancelled By Host",
+                Error::Type0SubmapNotDefined => "Type0 Submap Not Defined",
+                Error::UnknownAdvertisingIdentifier => "Unknown Advertising Identifier",
+                Error::LimitReached => "Limit Reached",
+                Error::OperationCancelledByHost => "Operation Cancelled By Host",
             }
         )
     }
 }
 
 impl core::convert::From<u8> for Error {
-
     fn from(raw: u8) -> Self {
         use crate::hci::error::Error::*;
 
@@ -461,7 +389,7 @@ impl core::convert::From<u8> for Error {
             0x42 => UnknownAdvertisingIdentifier,
             0x43 => LimitReached,
             0x44 => OperationCancelledByHost,
-               _ => Unknown(raw),
+            _ => Unknown(raw),
         }
     }
 }

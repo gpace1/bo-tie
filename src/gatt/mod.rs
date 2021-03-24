@@ -1,5 +1,5 @@
+use crate::{att, l2cap, UUID};
 use alloc::vec::Vec;
-use crate::{ att, l2cap, UUID};
 
 pub mod characteristic;
 
@@ -38,12 +38,18 @@ impl att::TransferFormatTryFrom for ServiceInclude {
                 } else if raw[4..].len() == 0 {
                     None
                 } else {
-                    return Err(att::TransferFormatError::from(
-                        concat!("Invalid short service type in ", stringify!("ServiceInclude"))))
+                    return Err(att::TransferFormatError::from(concat!(
+                        "Invalid short service type in ",
+                        stringify!("ServiceInclude")
+                    )));
                 },
             })
         } else {
-            Err(att::TransferFormatError::bad_min_size(stringify!(ServiceInclude), 6, raw.len()))
+            Err(att::TransferFormatError::bad_min_size(
+                stringify!(ServiceInclude),
+                6,
+                raw.len(),
+            ))
         }
     }
 }
@@ -53,13 +59,13 @@ impl att::TransferFormatInto for ServiceInclude {
         4 + if self.short_service_type.is_some() { 2 } else { 0 }
     }
 
-    fn build_into_ret(&self, into_ret: &mut [u8] ) {
-        into_ret[..2].copy_from_slice( &self.service_handle.to_le_bytes() );
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret[..2].copy_from_slice(&self.service_handle.to_le_bytes());
 
-        into_ret[2..4].copy_from_slice( &self.end_group_handle.to_le_bytes() );
+        into_ret[2..4].copy_from_slice(&self.end_group_handle.to_le_bytes());
 
         if let Some(ty) = self.short_service_type {
-            into_ret[4..].copy_from_slice( &ty.to_le_bytes() );
+            into_ret[4..].copy_from_slice(&ty.to_le_bytes());
         }
     }
 }
@@ -88,8 +94,7 @@ impl ServiceInclude {
 /// added. All other characteristics are added with the `CharacteristicAdder`. This is done to
 /// enforce all include definition to come after the service definition but before any other
 /// characteristics.
-pub struct ServiceBuilder<'a>
-{
+pub struct ServiceBuilder<'a> {
     service_type: UUID,
     is_primary: bool,
     server_builder: &'a mut ServerBuilder,
@@ -97,9 +102,8 @@ pub struct ServiceBuilder<'a>
     definition_handle: Option<u16>,
 }
 
-impl<'a> ServiceBuilder<'a>
-{
-    fn new( server_builder: &'a mut ServerBuilder, service_type: UUID, is_primary: bool ) -> Self {
+impl<'a> ServiceBuilder<'a> {
+    fn new(server_builder: &'a mut ServerBuilder, service_type: UUID, is_primary: bool) -> Self {
         ServiceBuilder {
             service_type,
             is_primary,
@@ -114,18 +118,21 @@ impl<'a> ServiceBuilder<'a>
     /// This will create and add the service definition to the Attribute Server and return the
     /// handle to it.
     fn set_service_definition(&mut self) {
-        self.definition_handle = self.server_builder.attributes.push(
-            att::Attribute::new(
+        self.definition_handle = self
+            .server_builder
+            .attributes
+            .push(att::Attribute::new(
                 if self.is_primary {
                     ServiceDefinition::PRIMARY_SERVICE_TYPE
                 } else {
                     ServiceDefinition::SECONDARY_SERVICE_TYPE
                 },
-                self.default_permissions.unwrap_or(ServiceDefinition::DEFAULT_PERMISSIONS).into(),
-                self.service_type
-            )
-        )
-        .into();
+                self.default_permissions
+                    .unwrap_or(ServiceDefinition::DEFAULT_PERMISSIONS)
+                    .into(),
+                self.service_type,
+            ))
+            .into();
     }
 
     /// Start including other services
@@ -182,27 +189,24 @@ impl<'a> ServiceBuilder<'a>
     /// default permissions of every other characteristic of this service. While this is the only
     /// way to set the permissions of the service definition characteristic, the other
     /// characteristics can have their permissions set with their respective builders.
-    pub fn set_att_permissions<P>(mut self, permissions: P ) -> Self
-    where P: Into<Option<&'a [att::AttributePermissions]>>
+    pub fn set_att_permissions<P>(mut self, permissions: P) -> Self
+    where
+        P: Into<Option<&'a [att::AttributePermissions]>>,
     {
         self.default_permissions = permissions.into();
         self
     }
 
-    fn make_service(&mut self, end_service_handle: u16 ) -> Service {
+    fn make_service(&mut self, end_service_handle: u16) -> Service {
+        let service = Service::new(self.definition_handle.unwrap(), end_service_handle, self.service_type);
 
-        let service = Service::new(
-            self.definition_handle.unwrap(),
-            end_service_handle,
-            self.service_type
-        );
-
-        if self.is_primary { self.server_builder.add_primary_service(service) }
+        if self.is_primary {
+            self.server_builder.add_primary_service(service)
+        }
 
         service
     }
 }
-
 
 /// Add Include Definition(s) to the service
 ///
@@ -212,17 +216,13 @@ impl<'a> ServiceBuilder<'a>
 /// This is created by the
 /// `[into_includes_adder](../ServiceBuilder/index.html#into_includes_adder)`
 /// function.
-pub struct IncludesAdder<'a>
-{
+pub struct IncludesAdder<'a> {
     service_builder: ServiceBuilder<'a>,
-    end_group_handle: u16
+    end_group_handle: u16,
 }
 
-impl<'a> IncludesAdder<'a>
-{
-    fn new( service_builder: ServiceBuilder<'a>, service_definition_handle: u16 )
-    -> Self
-    {
+impl<'a> IncludesAdder<'a> {
+    fn new(service_builder: ServiceBuilder<'a>, service_definition_handle: u16) -> Self {
         IncludesAdder {
             service_builder,
             end_group_handle: service_definition_handle,
@@ -234,25 +234,27 @@ impl<'a> IncludesAdder<'a>
     /// This takes a reference to the service to include with an optional permissions for the
     /// include definition. If no permissions are given, then it uses the default permissions of the
     /// service.
-    pub fn include_service<P: Into<Option<&'a [att::AttributePermissions]>>> (
+    pub fn include_service<P: Into<Option<&'a [att::AttributePermissions]>>>(
         mut self,
         service: &Service,
-        permissions: P
+        permissions: P,
     ) -> Self {
         use core::convert::TryInto;
 
         let include = ServiceInclude {
             service_handle: service.service_handle,
             end_group_handle: service.end_group_handle,
-            short_service_type: service.service_type.try_into().ok()
+            short_service_type: service.service_type.try_into().ok(),
         };
 
         let attribute = att::Attribute::new(
             ServiceInclude::TYPE,
-            permissions.into().or(self.service_builder.default_permissions)
+            permissions
+                .into()
+                .or(self.service_builder.default_permissions)
                 .unwrap_or(ServiceInclude::DEFAULT_PERMISSIONS)
                 .into(),
-            include
+            include,
         );
 
         self.end_group_handle = self.service_builder.server_builder.attributes.push(attribute);
@@ -262,10 +264,7 @@ impl<'a> IncludesAdder<'a>
 
     /// Convert to a CharacteristicAdder
     pub fn into_characteristics_adder(self) -> CharacteristicAdder<'a> {
-        CharacteristicAdder::new(
-            self.service_builder,
-            self.end_group_handle
-        )
+        CharacteristicAdder::new(self.service_builder, self.end_group_handle)
     }
 
     /// Finish the service
@@ -273,7 +272,6 @@ impl<'a> IncludesAdder<'a>
     /// This will create a service that only has the service definition and service includes (if
     /// any). There will be no characteristics added to the service.
     pub fn finish_service(mut self) -> Service {
-
         self.service_builder.make_service(self.end_group_handle)
     }
 }
@@ -288,52 +286,43 @@ impl<'a> IncludesAdder<'a>
 /// or
 /// [`IncludesAdder::into_characteristics_adder`](crate::gatt::IncludesAdder::into_characteristics_adder)
 /// functions.
-pub struct CharacteristicAdder<'a>
-{
+pub struct CharacteristicAdder<'a> {
     service_builder: ServiceBuilder<'a>,
-    end_group_handle: u16
+    end_group_handle: u16,
 }
 
-impl<'a> CharacteristicAdder<'a>
-{
-
-    fn new(
-        service_builder: ServiceBuilder<'a>,
-        end_group_handle: u16,
-    ) -> Self
-    {
-        CharacteristicAdder { service_builder, end_group_handle }
+impl<'a> CharacteristicAdder<'a> {
+    fn new(service_builder: ServiceBuilder<'a>, end_group_handle: u16) -> Self {
+        CharacteristicAdder {
+            service_builder,
+            end_group_handle,
+        }
     }
 
-    pub fn build_characteristic<'c,C,V,P>(
+    pub fn build_characteristic<'c, C, V, P>(
         self,
         properties: Vec<characteristic::Properties>,
         uuid: UUID,
         value: C,
-        value_permissions: P )
-    -> characteristic::CharacteristicBuilder<'a,'c, C, V>
-        where C: att::server::ServerAttributeValue<Value = V> + Send + Sized  + 'static,
-              V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
-              P: Into<Option<&'c [att::AttributePermissions]>>
+        value_permissions: P,
+    ) -> characteristic::CharacteristicBuilder<'a, 'c, C, V>
+    where
+        C: att::server::ServerAttributeValue<Value = V> + Send + Sized + 'static,
+        V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
+        P: Into<Option<&'c [att::AttributePermissions]>>,
     {
         let permissions = value_permissions.into();
 
-        characteristic::CharacteristicBuilder::new(
-            self,
-            properties,
-            uuid,
-            value,
-            permissions
-        )
+        characteristic::CharacteristicBuilder::new(self, properties, uuid, value, permissions)
     }
 
     /// Finish the service
     pub fn finish_service(mut self) -> Service {
-        self.service_builder.make_service( self.end_group_handle )
+        self.service_builder.make_service(self.end_group_handle)
     }
 }
 
-#[derive(Clone,Copy,PartialEq,PartialOrd,Eq,Ord,Debug)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub struct Service {
     /// The handle of the Service declaration attribute
     service_handle: u16,
@@ -345,10 +334,12 @@ pub struct Service {
 }
 
 impl Service {
-
-    fn new( service_handle: u16, end_group_handle: u16, service_type: UUID ) -> Self
-    {
-        Service { service_handle, end_group_handle, service_type }
+    fn new(service_handle: u16, end_group_handle: u16, service_type: UUID) -> Self {
+        Service {
+            service_handle,
+            end_group_handle,
+            service_type,
+        }
     }
 }
 
@@ -374,14 +365,10 @@ impl<'a> GapServiceBuilder<'a> {
     const DEFAULT_ATTRIBUTE_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 
     /// Device Name characteristic properties
-    const DEVICE_NAME_PROPERTIES: &'static [characteristic::Properties] = & [
-        characteristic::Properties::Read,
-    ];
+    const DEVICE_NAME_PROPERTIES: &'static [characteristic::Properties] = &[characteristic::Properties::Read];
 
     /// Device Appearance characteristic properties
-    const DEVICE_APPEARANCE_PROPERTIES: &'static [characteristic::Properties] = &[
-        characteristic::Properties::Read,
-    ];
+    const DEVICE_APPEARANCE_PROPERTIES: &'static [characteristic::Properties] = &[characteristic::Properties::Read];
 
     /// Default Appearance
     pub const UNKNOWN_APPEARANCE: u16 = 0;
@@ -391,15 +378,16 @@ impl<'a> GapServiceBuilder<'a> {
     /// The `device_name` is a readable string for the client. The appearance is an assigned number
     /// to indicate to the client the external appearance of the device. Both these fields are
     /// optional with `device_name` defaulting to an empty string and appearance as 'unknown appearance'
-    pub fn new<D,A>(device_name: D, appearance: A) -> Self
-    where D: Into<Option<&'a str>>,
-          A: Into<Option<u16>>
+    pub fn new<D, A>(device_name: D, appearance: A) -> Self
+    where
+        D: Into<Option<&'a str>>,
+        A: Into<Option<u16>>,
     {
         GapServiceBuilder {
             service_permissions: None,
             device_name: device_name.into().unwrap_or(""),
             device_name_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
-            device_appearance: appearance.into().unwrap_or( Self::UNKNOWN_APPEARANCE ),
+            device_appearance: appearance.into().unwrap_or(Self::UNKNOWN_APPEARANCE),
             device_appearance_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
         }
     }
@@ -419,28 +407,30 @@ impl<'a> GapServiceBuilder<'a> {
     }
 
     /// Set the attribute permissions for the device appearance characteristic
-    pub fn set_appearance_permissions(&mut self, permissions: &'a [att::AttributePermissions] ) {
+    pub fn set_appearance_permissions(&mut self, permissions: &'a [att::AttributePermissions]) {
         self.device_appearance_permissions = permissions
     }
 
     fn into_gatt_service(self) -> ServerBuilder {
-
         let mut server_builder = ServerBuilder::new_empty();
 
-        server_builder.new_service_constructor(Self::GAP_SERVICE_TYPE, true)
+        server_builder
+            .new_service_constructor(Self::GAP_SERVICE_TYPE, true)
             .set_att_permissions(self.service_permissions)
             .into_characteristics_adder()
             .build_characteristic(
                 Self::DEVICE_NAME_PROPERTIES.to_vec(),
                 Self::DEVICE_NAME_TYPE,
                 alloc::string::String::from(self.device_name),
-                self.device_name_permissions)
+                self.device_name_permissions,
+            )
             .finish_characteristic()
             .build_characteristic(
                 Self::DEVICE_APPEARANCE_PROPERTIES.to_vec(),
                 Self::DEVICE_APPEARANCE_TYPE,
                 self.device_appearance,
-                self.device_appearance_permissions)
+                self.device_appearance_permissions,
+            )
             .finish_characteristic()
             .finish_service();
 
@@ -463,15 +453,12 @@ impl Default for GapServiceBuilder<'_> {
 /// Constructor of a GATT server
 ///
 /// This will construct a GATT server for use with BR/EDR/LE bluetooth operation.
-pub struct ServerBuilder
-{
+pub struct ServerBuilder {
     primary_services: Vec<Service>,
     attributes: att::server::ServerAttributes,
 }
 
-impl ServerBuilder
-{
-
+impl ServerBuilder {
     /// Construct an empty `ServerBuilder`
     ///
     /// This creates a `ServerBuilder` without the specification required GAP service.
@@ -488,8 +475,7 @@ impl ServerBuilder
     /// server will only contain a *GAP* service with the characteristics *Device Name* and
     /// *Appearance*, but both of these characteristics contain no information. The permissions for
     /// the GAP attributes will be the default read attributes.
-    pub fn new() -> Self
-    {
+    pub fn new() -> Self {
         GapServiceBuilder::default().into()
     }
 
@@ -502,9 +488,7 @@ impl ServerBuilder
     }
 
     /// Create a service constructor
-    pub fn new_service_constructor(&mut self, service_type: UUID, is_primary: bool)
-    -> ServiceBuilder<'_>
-    {
+    pub fn new_service_constructor(&mut self, service_type: UUID, is_primary: bool) -> ServiceBuilder<'_> {
         ServiceBuilder::new(self, service_type, is_primary)
     }
 
@@ -516,20 +500,20 @@ impl ServerBuilder
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C,Q>(self, connection_channel: &'_ C, queue_writer: Q) -> Server<C,Q>
-    where C: l2cap::ConnectionChannel,
-          Q: crate::att::server::QueuedWriter,
+    pub fn make_server<C, Q>(self, connection_channel: &'_ C, queue_writer: Q) -> Server<C, Q>
+    where
+        C: l2cap::ConnectionChannel,
+        Q: crate::att::server::QueuedWriter,
     {
-        let server = att::server::Server::new(
-            connection_channel,
-            Some(self.attributes),
-            queue_writer,
-        );
+        let server = att::server::Server::new(connection_channel, Some(self.attributes), queue_writer);
 
-        Server { primary_services: self.primary_services, server }
+        Server {
+            primary_services: self.primary_services,
+            server,
+        }
     }
 
-    fn add_primary_service(&mut self, service: Service ) {
+    fn add_primary_service(&mut self, service: Service) {
         self.primary_services.push(service)
     }
 }
@@ -540,47 +524,53 @@ impl From<GapServiceBuilder<'_>> for ServerBuilder {
     }
 }
 
-pub struct Server<'c,C,Q>
-{
+pub struct Server<'c, C, Q> {
     primary_services: Vec<Service>,
-    server: att::server::Server<'c,C,Q>
+    server: att::server::Server<'c, C, Q>,
 }
 
-impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::QueuedWriter
+impl<'c, C, Q> Server<'c, C, Q>
+where
+    C: l2cap::ConnectionChannel,
+    Q: att::server::QueuedWriter,
 {
-    pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData)
-    -> Result<(), crate::att::Error>
-    {
+    pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData) -> Result<(), crate::att::Error> {
         let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
 
         match pdu_type {
             att::client::ClientPduName::ReadByGroupTypeRequest => {
-                log::info!("(GATT) processing '{}'", att::client::ClientPduName::ReadByGroupTypeRequest );
+                log::info!(
+                    "(GATT) processing '{}'",
+                    att::client::ClientPduName::ReadByGroupTypeRequest
+                );
 
                 self.process_read_by_group_type_request(payload).await
             }
-            _ => self.server.process_parsed_acl_data(pdu_type, payload).await
+            _ => self.server.process_parsed_acl_data(pdu_type, payload).await,
         }
     }
 
     /// 'Read by group type' permission check
     fn rbgt_permission_check(&self, service: &Service) -> Result<(), att::pdu::Error> {
-        self.server.check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
+        self.server
+            .check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
     }
 
     async fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
-
         match att::TransferFormatTryFrom::try_from(payload) {
             Ok(att::pdu::TypeRequest {
-                   handle_range,
-                   attr_type: ServiceDefinition::PRIMARY_SERVICE_TYPE,
-               }) =>
-            {
-                use att::pdu::{ReadGroupTypeData, ReadByGroupTypeResponse};
+                handle_range,
+                attr_type: ServiceDefinition::PRIMARY_SERVICE_TYPE,
+            }) => {
+                use att::pdu::{ReadByGroupTypeResponse, ReadGroupTypeData};
 
-                let mut service_iter = self.primary_services.iter()
-                    .filter(|s| s.service_handle >= handle_range.starting_handle &&
-                        s.service_handle <= handle_range.ending_handle)
+                let mut service_iter = self
+                    .primary_services
+                    .iter()
+                    .filter(|s| {
+                        s.service_handle >= handle_range.starting_handle
+                            && s.service_handle <= handle_range.ending_handle
+                    })
                     .map(|s| self.rbgt_permission_check(s).map(|_| s))
                     .peekable();
 
@@ -597,9 +587,8 @@ impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::Q
                         let payload_size = self.server.get_mtu() - 2;
                         let is_16_bit = first_service.service_type.is_16_bit();
 
-                        let build_response_iter = service_iter
-                            .take_while(|rslt| rslt.is_ok())
-                            .map(|rslt| rslt.unwrap());
+                        let build_response_iter =
+                            service_iter.take_while(|rslt| rslt.is_ok()).map(|rslt| rslt.unwrap());
 
                         // Each data_size is 4 bytes for the attribute handle + the end group handle
                         // and either 2 bytes for short UUIDs or 16 bytes for full UUIDs
@@ -607,101 +596,103 @@ impl<'c,C,Q> Server<'c,C,Q> where C: l2cap::ConnectionChannel, Q: att::server::Q
                         // Each collection is made to take while the *current* iteration does not
                         // overrun the maximum payload size.
                         let response = if is_16_bit {
-                            build_response_iter.take_while(|s| s.service_type.is_16_bit())
+                            build_response_iter
+                                .take_while(|s| s.service_type.is_16_bit())
                                 .enumerate()
                                 .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 2))
                                 .by_ref()
-                                .map(|(_, s)|
-                                    ReadGroupTypeData::new(
-                                        s.service_handle,
-                                        s.end_group_handle,
-                                        s.service_type
-                                    )
-                                )
+                                .map(|(_, s)| {
+                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_type)
+                                })
                                 .collect()
                         } else {
-                            build_response_iter.enumerate()
+                            build_response_iter
+                                .enumerate()
                                 .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 16))
                                 .by_ref()
-                                .map(|(_, s)|
-                                    ReadGroupTypeData::new(
-                                        s.service_handle,
-                                        s.end_group_handle,
-                                        s.service_type
-                                    )
-                                )
+                                .map(|(_, s)| {
+                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_type)
+                                })
                                 .collect()
                         };
 
                         let pdu = att::pdu::read_by_group_type_response(ReadByGroupTypeResponse::new(response));
 
                         self.server.send_pdu(pdu).await
-                    },
+                    }
 
                     // Client didn't have adequate permissions to access the first service
                     Some(Err(e)) => {
-                        self.server.send_error(
-                            handle_range.starting_handle,
-                            att::client::ClientPduName::ReadByGroupTypeRequest,
-                            (*e).into()
-                        ).await?;
+                        self.server
+                            .send_error(
+                                handle_range.starting_handle,
+                                att::client::ClientPduName::ReadByGroupTypeRequest,
+                                (*e).into(),
+                            )
+                            .await?;
 
-                        return Err((*e).into())
-                    },
+                        return Err((*e).into());
+                    }
 
                     // No service attributes found within the requested range
                     None => {
-                        self.server.send_error(
-                            handle_range.starting_handle,
-                            att::client::ClientPduName::ReadByGroupTypeRequest,
-                            att::pdu::Error::AttributeNotFound
-                        ).await
-                    },
+                        self.server
+                            .send_error(
+                                handle_range.starting_handle,
+                                att::client::ClientPduName::ReadByGroupTypeRequest,
+                                att::pdu::Error::AttributeNotFound,
+                            )
+                            .await
+                    }
                 }
-            },
-            Ok(att::pdu::TypeRequest { handle_range, .. } ) => {
-                self.server.send_error(
-                    handle_range.starting_handle,
-                    att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnsupportedGroupType
-                ).await?;
+            }
+            Ok(att::pdu::TypeRequest { handle_range, .. }) => {
+                self.server
+                    .send_error(
+                        handle_range.starting_handle,
+                        att::client::ClientPduName::ReadByGroupTypeRequest,
+                        att::pdu::Error::UnsupportedGroupType,
+                    )
+                    .await?;
 
                 Err(att::pdu::Error::UnsupportedGroupType.into())
-            },
+            }
             _ => {
-                self.server.send_error(
-                    0,
-                    att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnlikelyError
-                ).await?;
+                self.server
+                    .send_error(
+                        0,
+                        att::client::ClientPduName::ReadByGroupTypeRequest,
+                        att::pdu::Error::UnlikelyError,
+                    )
+                    .await?;
 
                 Err(att::pdu::Error::UnlikelyError.into())
-            },
+            }
         }
     }
 }
 
-impl<'c,C,Q> AsRef<att::server::Server<'c,C,Q>> for Server<'c,C,Q> {
-    fn as_ref(&self) -> &att::server::Server<'c,C,Q> {
+impl<'c, C, Q> AsRef<att::server::Server<'c, C, Q>> for Server<'c, C, Q> {
+    fn as_ref(&self) -> &att::server::Server<'c, C, Q> {
         &self.server
     }
 }
 
-impl<'c,C,Q> AsMut<att::server::Server<'c,C,Q>> for Server<'c,C,Q> {
-    fn as_mut(&mut self) -> &mut att::server::Server<'c,C,Q> {
+impl<'c, C, Q> AsMut<att::server::Server<'c, C, Q>> for Server<'c, C, Q> {
+    fn as_mut(&mut self) -> &mut att::server::Server<'c, C, Q> {
         &mut self.server
     }
 }
 
-impl<'c,C,Q> core::ops::Deref for Server<'c,C,Q> {
-    type Target = att::server::Server<'c,C,Q>;
+impl<'c, C, Q> core::ops::Deref for Server<'c, C, Q> {
+    type Target = att::server::Server<'c, C, Q>;
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-impl<'c,C,Q> core::ops::DerefMut for Server<'c,C,Q> {
+impl<'c, C, Q> core::ops::DerefMut for Server<'c, C, Q> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }
@@ -711,15 +702,15 @@ impl<'c,C,Q> core::ops::DerefMut for Server<'c,C,Q> {
 mod tests {
 
     use super::*;
-    use alloc::boxed::Box;
-    use crate::l2cap::{ConnectionChannel, AclDataFragment, MinimumMtu};
-    use crate::UUID;
-    use att::TransferFormatInto;
     use crate::att::server::NoQueuedWrites;
+    use crate::l2cap::{AclDataFragment, ConnectionChannel, MinimumMtu};
+    use crate::UUID;
+    use alloc::boxed::Box;
+    use att::TransferFormatInto;
     use std::{
         future::Future,
-        task::{Poll,Waker,Context},
-        pin::Pin
+        pin::Pin,
+        task::{Context, Poll, Waker},
     };
 
     struct DummySendFut;
@@ -744,46 +735,55 @@ mod tests {
 
         fn set_mtu(&self, _: u16) {}
 
-        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn get_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn max_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn min_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> { None }
+        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
+            None
+        }
     }
 
     #[test]
     fn create_gatt_attributes() {
-
         let test_att_permissions: &[att::AttributePermissions] = &[
             att::AttributePermissions::Read(att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128)),
-            att::AttributePermissions::Write(att::AttributeRestriction::Authentication)
+            att::AttributePermissions::Write(att::AttributeRestriction::Authentication),
         ];
 
-        let mut gap_service = GapServiceBuilder::new(None,None);
+        let mut gap_service = GapServiceBuilder::new(None, None);
 
         gap_service.set_permissions(test_att_permissions);
 
         let mut server_builder = ServerBuilder::new_with_gap(gap_service);
 
-        let test_service_1 = server_builder.new_service_constructor( UUID::from_u16(0x1234), false )
+        let test_service_1 = server_builder
+            .new_service_constructor(UUID::from_u16(0x1234), false)
             .set_att_permissions(test_att_permissions)
             .into_characteristics_adder()
             .build_characteristic(
-                vec!(characteristic::Properties::Read),
+                vec![characteristic::Properties::Read],
                 UUID::from(0x1234u16),
                 Box::new(0usize),
-                None
+                None,
             )
-            .set_extended_properties( vec!(characteristic::ExtendedProperties::ReliableWrite), None )
-            .set_user_description( characteristic::UserDescription::new("Test 1", None ) )
-            .set_client_configuration( vec!(characteristic::ClientConfiguration::Notification), None )
-            .set_server_configuration( vec!(characteristic::ServerConfiguration::Broadcast), None )
+            .set_extended_properties(vec![characteristic::ExtendedProperties::ReliableWrite], None)
+            .set_user_description(characteristic::UserDescription::new("Test 1", None))
+            .set_client_configuration(vec![characteristic::ClientConfiguration::Notification], None)
+            .set_server_configuration(vec![characteristic::ServerConfiguration::Broadcast], None)
             .finish_characteristic()
             .finish_service();
 
-        let _test_service_2 = server_builder.new_service_constructor( UUID::from_u16(0x3456), true )
+        let _test_service_2 = server_builder
+            .new_service_constructor(UUID::from_u16(0x3456), true)
             .set_att_permissions(test_att_permissions)
             .into_includes_adder()
             .include_service(&test_service_1, None)
@@ -791,13 +791,19 @@ mod tests {
 
         let server = server_builder.make_server(&DummyConnection, NoQueuedWrites);
 
-        server.iter_attr_info()
-            .for_each(|info| assert_eq!(info.get_permissions(), test_att_permissions,
-                "failing UUID: {:#x}, handle: {}", info.get_uuid(), info.get_handle() ) )
+        server.iter_attr_info().for_each(|info| {
+            assert_eq!(
+                info.get_permissions(),
+                test_att_permissions,
+                "failing UUID: {:#x}, handle: {}",
+                info.get_uuid(),
+                info.get_handle()
+            )
+        })
     }
 
     struct TestChannel {
-        last_sent_pdu: std::cell::Cell<Option<Vec<u8>>>
+        last_sent_pdu: std::cell::Cell<Option<Vec<u8>>>,
     }
 
     impl l2cap::ConnectionChannel for TestChannel {
@@ -812,11 +818,17 @@ mod tests {
 
         fn set_mtu(&self, _: u16) {}
 
-        fn get_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn get_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn max_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn max_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
-        fn min_mtu(&self) -> usize { crate::l2cap::LeU::MIN_MTU }
+        fn min_mtu(&self) -> usize {
+            crate::l2cap::LeU::MIN_MTU
+        }
 
         fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> {
             unimplemented!()
@@ -825,7 +837,6 @@ mod tests {
 
     #[test]
     fn gatt_services_read_by_group_type() {
-
         use futures::executor::block_on;
 
         let mut server_builder = ServerBuilder::new();
@@ -833,103 +844,80 @@ mod tests {
         let first_test_uuid = UUID::from(0x1000u16);
         let second_test_uuid = UUID::from(0x1001u128);
 
-        server_builder.new_service_constructor( first_test_uuid, true)
+        server_builder
+            .new_service_constructor(first_test_uuid, true)
             .into_characteristics_adder()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
                 UUID::from(0x2000u16),
                 Box::new(0usize),
-                None
+                None,
             )
             .finish_characteristic()
             .finish_service();
 
-        server_builder.new_service_constructor( second_test_uuid, true)
+        server_builder
+            .new_service_constructor(second_test_uuid, true)
             .into_characteristics_adder()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
                 UUID::from(0x2001u16),
                 Box::new(0usize),
-                None
+                None,
             )
             .finish_characteristic()
             .finish_service();
 
-        let test_channel = TestChannel { last_sent_pdu: None.into() };
+        let test_channel = TestChannel {
+            last_sent_pdu: None.into(),
+        };
 
         let mut server = server_builder.make_server(&test_channel, NoQueuedWrites);
 
-        server.give_permissions_to_client([
-            att::AttributePermissions::Read(att::AttributeRestriction::None)
+        server.give_permissions_to_client([att::AttributePermissions::Read(att::AttributeRestriction::None)]);
+
+        let client_pdu = att::pdu::read_by_group_type_request(1.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
+
+        let acl_client_pdu = l2cap::AclData::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+
+        assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)),);
+
+        let expected_response = att::pdu::ReadByGroupTypeResponse::new(vec![
+            // Gap Service
+            att::pdu::ReadGroupTypeData::new(1, 5, GapServiceBuilder::GAP_SERVICE_TYPE),
+            att::pdu::ReadGroupTypeData::new(6, 8, first_test_uuid),
         ]);
 
-        let client_pdu = att::pdu::read_by_group_type_request(
-            1..,
-            ServiceDefinition::PRIMARY_SERVICE_TYPE
+        assert_eq!(
+            Some(att::pdu::read_by_group_type_response(expected_response)),
+            test_channel.last_sent_pdu.take().map(|data| {
+                let acl_data = l2cap::AclData::from_raw_data(&data).unwrap();
+                att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
+            }),
         );
 
-        let acl_client_pdu = l2cap::AclData::new(
-            TransferFormatInto::into(&client_pdu),
-            att::L2CAP_CHANNEL_ID
-        );
+        let client_pdu = att::pdu::read_by_group_type_request(9.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        assert_eq!( Ok(()), block_on(server.process_acl_data(&acl_client_pdu)), );
+        let acl_client_pdu = l2cap::AclData::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
-        let expected_response = att::pdu::ReadByGroupTypeResponse::new(
-            vec![
-                // Gap Service
-                att::pdu::ReadGroupTypeData::new(1,5, GapServiceBuilder::GAP_SERVICE_TYPE),
-                att::pdu::ReadGroupTypeData::new(6,8, first_test_uuid),
-            ]
-        );
+        assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)),);
+
+        let expected_response =
+            att::pdu::ReadByGroupTypeResponse::new(vec![att::pdu::ReadGroupTypeData::new(9, 11, second_test_uuid)]);
 
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
-            test_channel.last_sent_pdu.take()
-                .map(|data| {
-                    let acl_data = l2cap::AclData::from_raw_data(&data).unwrap();
-                    att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
-                } ),
+            test_channel.last_sent_pdu.take().map(|data| {
+                let acl_data = l2cap::AclData::from_raw_data(&data).unwrap();
+                att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
+            }),
         );
 
-        let client_pdu = att::pdu::read_by_group_type_request(
-            9..,
-            ServiceDefinition::PRIMARY_SERVICE_TYPE
-        );
+        let client_pdu = att::pdu::read_by_group_type_request(12.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::AclData::new(
-            TransferFormatInto::into(&client_pdu),
-            att::L2CAP_CHANNEL_ID
-        );
-
-        assert_eq!( Ok(()), block_on(server.process_acl_data(&acl_client_pdu)), );
-
-        let expected_response = att::pdu::ReadByGroupTypeResponse::new(
-            vec![
-                att::pdu::ReadGroupTypeData::new(9,11, second_test_uuid)
-            ]
-        );
-
-        assert_eq!(
-            Some(att::pdu::read_by_group_type_response(expected_response)),
-            test_channel.last_sent_pdu.take()
-                .map(|data| {
-                    let acl_data = l2cap::AclData::from_raw_data(&data).unwrap();
-                    att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
-                } ),
-        );
-
-        let client_pdu = att::pdu::read_by_group_type_request(
-            12..,
-            ServiceDefinition::PRIMARY_SERVICE_TYPE
-        );
-
-        let acl_client_pdu = l2cap::AclData::new(
-            TransferFormatInto::into(&client_pdu),
-            att::L2CAP_CHANNEL_ID
-        );
+        let acl_client_pdu = l2cap::AclData::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         // Request was made for for a attribute that was out of range
-        assert_eq!( Ok(()), block_on(server.process_acl_data(&acl_client_pdu)) );
+        assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)));
     }
 }

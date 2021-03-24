@@ -24,19 +24,17 @@
 //! bluetooth on the device to connect with, but please note this will git rid of all information
 //! associated with the bluetooth and other devices will need to be reconnected.
 
-use bo_tie:: {
+use bo_tie::{
     att,
     gap::advertise,
-    gatt,
-    hci,
+    gatt, hci,
     hci::events,
-    hci::le::transmitter::{
-        set_advertising_data,
-        set_advertising_parameters,
-        set_advertising_enable,
-    },
+    hci::le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters},
 };
-use std::sync::{Arc, atomic::{AtomicU16, Ordering}};
+use std::sync::{
+    atomic::{AtomicU16, Ordering},
+    Arc,
+};
 
 /// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
 /// from the controller to the user.
@@ -48,7 +46,7 @@ async fn events_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
     use events::LEMeta;
 
     let enabled_events = &[EventMask::LEMeta, EventMask::DisconnectionComplete];
-    
+
     let enabled_le_events = &[LEMeta::ConnectionComplete];
 
     set_event_mask::send(hi, enabled_events).await.unwrap();
@@ -57,20 +55,27 @@ async fn events_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
 }
 
 /// This sets up the advertising and waits for the connection complete event
-async fn advertise_setup(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    local_name: &str )
-{
+async fn advertise_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>, local_name: &str) {
     let adv_name = advertise::local_name::LocalName::new(local_name, false);
 
     let mut adv_flags = advertise::flags::Flags::new();
 
     // This is the flag specification for a LE-only, limited discoverable advertising
-    adv_flags.get_core(advertise::flags::CoreFlags::LELimitedDiscoverableMode).enable();
-    adv_flags.get_core(advertise::flags::CoreFlags::LEGeneralDiscoverableMode).disable();
-    adv_flags.get_core(advertise::flags::CoreFlags::BREDRNotSupported).enable();
-    adv_flags.get_core(advertise::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR).disable();
-    adv_flags.get_core(advertise::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR).disable();
+    adv_flags
+        .get_core(advertise::flags::CoreFlags::LELimitedDiscoverableMode)
+        .enable();
+    adv_flags
+        .get_core(advertise::flags::CoreFlags::LEGeneralDiscoverableMode)
+        .disable();
+    adv_flags
+        .get_core(advertise::flags::CoreFlags::BREDRNotSupported)
+        .enable();
+    adv_flags
+        .get_core(advertise::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR)
+        .disable();
+    adv_flags
+        .get_core(advertise::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR)
+        .disable();
 
     let mut adv_data = set_advertising_data::AdvertisingData::new();
 
@@ -92,9 +97,9 @@ async fn advertise_setup(
 
 // For simplicity, I've left the race condition in here. There could be a case where the connection
 // is made and the ConnectionComplete event isn't propicated & processed
-async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
--> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display>
-{
+async fn wait_for_connection(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
     let waited_event = Some(events::Events::from(events::LEMeta::ConnectionComplete));
@@ -103,26 +108,22 @@ async fn wait_for_connection(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>)
 
     match evt_rsl {
         Ok(event) => {
-            use bo_tie::hci::events::{EventsData,LEMetaData};
+            use bo_tie::hci::events::{EventsData, LEMetaData};
 
             if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
-
                 Ok(event_data)
-            }
-            else {
+            } else {
                 Err(format!("Received the incorrect event {:?}", event))
             }
         }
-        Err(e) => {
-            Err(format!("Timeout Occured: {:?}", e))
-        }
+        Err(e) => Err(format!("Timeout Occured: {:?}", e)),
     }
 }
 
 async fn disconnect(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
-    connection_handle: hci::common::ConnectionHandle )
-{
+    connection_handle: hci::common::ConnectionHandle,
+) {
     use bo_tie::hci::le::connection::disconnect;
 
     let prams = disconnect::DisconnectParameters {
@@ -130,8 +131,8 @@ async fn disconnect(
         disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
     };
 
-    if let Err(e) = disconnect::send(&hi, prams).await { 
-        println!("Failed to disconnect: {}", e) 
+    if let Err(e) = disconnect::send(&hi, prams).await {
+        println!("Failed to disconnect: {}", e)
     }
 }
 
@@ -141,7 +142,8 @@ async fn disconnect(
 /// to a client and not about featuring the attribue server, so only the minimalistic gatt server
 /// is present.
 fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> gatt::Server<'c, C>
-where C: bo_tie::l2cap::ConnectionChannel
+where
+    C: bo_tie::l2cap::ConnectionChannel,
 {
     let att_mtu = 256;
 
@@ -155,7 +157,8 @@ where C: bo_tie::l2cap::ConnectionChannel
 }
 
 fn att_server_loop<C>(connection_channel: C, local_name: &str) -> !
-where C: bo_tie::l2cap::ConnectionChannel + std::marker::Unpin
+where
+    C: bo_tie::l2cap::ConnectionChannel + std::marker::Unpin,
 {
     use futures::executor::block_on;
 
@@ -163,51 +166,46 @@ where C: bo_tie::l2cap::ConnectionChannel + std::marker::Unpin
 
     loop {
         block_on(connection_channel.future_receiver())
-            .map(|l2cap_pdus| l2cap_pdus.iter().for_each( |l2cap_pdu|{
-                match block_on(server.process_acl_data(l2cap_pdu)) {
-                    Ok(_) => (),
-                    Err(e) => println!("Cannot process acl data, '{}'", e),
-                }
-            }))
+            .map(|l2cap_pdus| {
+                l2cap_pdus
+                    .iter()
+                    .for_each(|l2cap_pdu| match block_on(server.process_acl_data(l2cap_pdu)) {
+                        Ok(_) => (),
+                        Err(e) => println!("Cannot process acl data, '{}'", e),
+                    })
+            })
             .expect("l2cap pdu")
     }
 }
 
-fn handle_sig(
-    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>,
-    raw_handle: Arc<AtomicU16> )
-{
-    simple_signal::set_handler(
-        &[simple_signal::Signal::Int, simple_signal::Signal::Term],
-        move |_| {
-            // Cancel advertising if advertising (there is no consequence if not advertising)
-            futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
+fn handle_sig(hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>, raw_handle: Arc<AtomicU16>) {
+    simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
+        // Cancel advertising if advertising (there is no consequence if not advertising)
+        futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
 
-            let handle_val = raw_handle.load(Ordering::SeqCst);
+        let handle_val = raw_handle.load(Ordering::SeqCst);
 
-            if handle_val != INVALID_CONNECTION_HANDLE {
+        if handle_val != INVALID_CONNECTION_HANDLE {
+            let handle = bo_tie::hci::common::ConnectionHandle::try_from(handle_val).expect("Incorrect Handle");
 
-                let handle = bo_tie::hci::common::ConnectionHandle::try_from(handle_val).expect("Incorrect Handle");
+            futures::executor::block_on(disconnect(&hi, handle));
 
-                futures::executor::block_on(disconnect(&hi, handle));
-
-                println!("Bluetooth connection terminated")
-            }
-
-            println!("Exiting example");
-
-            std::process::exit(0);
+            println!("Bluetooth connection terminated")
         }
-    );
+
+        println!("Exiting example");
+
+        std::process::exit(0);
+    });
 }
 
 fn main() {
     use futures::executor;
-    use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
+    use simplelog::{Config, LevelFilter, TermLogger, TerminalMode};
 
     let local_name = "Connection Test";
 
-    TermLogger::init( LevelFilter::Trace, Config::default(), TerminalMode::Mixed ).unwrap();
+    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
@@ -227,8 +225,7 @@ fn main() {
 
             let interface_clone = interface.clone();
 
-            std::thread::spawn( move || {
-
+            std::thread::spawn(move || {
                 let connection_channel = interface_clone.new_connection_channel(event_data.connection_handle);
 
                 att_server_loop(connection_channel, local_name);
@@ -239,7 +236,7 @@ fn main() {
             println!("Device Connected! (use ctrl-c to disconnect and exit)");
 
             executor::block_on(interface.wait_for_event(events::Events::DisconnectionComplete)).ok();
-        },
+        }
         Err(err) => println!("Error: {}", err),
     };
 }

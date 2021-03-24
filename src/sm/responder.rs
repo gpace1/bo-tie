@@ -1,21 +1,12 @@
+use super::{
+    encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, KeyGenerationMethod, PairingData,
+};
+use crate::l2cap::ConnectionChannel;
 /// Responder side of the Security Manager
 ///
 /// A responder is used by a device to to 'respond' to the security manager requests of an
 /// initiating device.
-
 use alloc::vec::Vec;
-use crate::l2cap::ConnectionChannel;
-use super::{
-    Command,
-    CommandData,
-    CommandType,
-    encrypt_info,
-    Error,
-    KeyGenerationMethod,
-    pairing,
-    PairingData,
-    toolbox,
-};
 
 pub struct SlaveSecurityManagerBuilder<'a, C> {
     connection_channel: &'a C,
@@ -29,8 +20,9 @@ pub struct SlaveSecurityManagerBuilder<'a, C> {
     this_address_is_random: bool,
 }
 
-impl<'a,C> SlaveSecurityManagerBuilder<'a,C>
-where C: ConnectionChannel
+impl<'a, C> SlaveSecurityManagerBuilder<'a, C>
+where
+    C: ConnectionChannel,
 {
     pub fn new(
         connection_channel: &'a C,
@@ -53,16 +45,13 @@ where C: ConnectionChannel
     }
 
     pub fn build(&self) -> SlaveSecurityManager<'a, C> {
-
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
             encrypt_info::AuthRequirements::ManInTheMiddleProtection,
             encrypt_info::AuthRequirements::Sc,
         ];
 
-        let key_dist = alloc::vec![
-            pairing::KeyDistributions::IdKey,
-        ];
+        let key_dist = alloc::vec![pairing::KeyDistributions::IdKey,];
 
         SlaveSecurityManager {
             connection_channel: self.connection_channel,
@@ -79,12 +68,12 @@ where C: ConnectionChannel
             initiator_address_is_random: self.remote_address_is_random,
             responder_address_is_random: self.this_address_is_random,
             pairing_data: None,
-            link_encrypted: false
+            link_encrypted: false,
         }
     }
 }
 
-pub struct SlaveSecurityManager<'a,  C> {
+pub struct SlaveSecurityManager<'a, C> {
     connection_channel: &'a C,
     io_capability: pairing::IOCapability,
     oob_data: Option<u128>,
@@ -98,11 +87,12 @@ pub struct SlaveSecurityManager<'a,  C> {
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
     pairing_data: Option<PairingData>,
-    link_encrypted: bool
+    link_encrypted: bool,
 }
 
 impl<'a, C> SlaveSecurityManager<'a, C>
-where C: ConnectionChannel,
+where
+    C: ConnectionChannel,
 {
     /// Save the key details to `security_manager``
     ///
@@ -111,7 +101,7 @@ where C: ConnectionChannel,
     /// if it doesn't contain the required keys (either peer_irk or peer_addr)
     pub fn save_to_security_manager(&self, security_manager: &mut super::SecurityManager) {
         match self.pairing_data {
-            Some( PairingData{
+            Some(PairingData {
                 db_keys: Some(ref db_keys),
                 ..
             }) => {
@@ -128,7 +118,9 @@ where C: ConnectionChannel,
     /// This is used to indicate to the `SlaveSecurityManager` that it is safe to send a Key to the
     /// peer device. This is a deliberate extra step to ensure that the functions `send_irk`,
     /// `send_csrk`, `send_pub_addr`, and `send_rand_addr` are only used when the link is encrypted.
-    pub fn set_encrypted(&mut self, is_encrypted: bool) { self.link_encrypted = is_encrypted }
+    pub fn set_encrypted(&mut self, is_encrypted: bool) {
+        self.link_encrypted = is_encrypted
+    }
 
     /// Send a new Identity Resolving Key to the Master Device
     ///
@@ -142,17 +134,24 @@ where C: ConnectionChannel,
     /// If the encryption flag is true, the return value is either input `irk` or the generated IRK.
     /// `None` is returned if the encryption flag is not set and an error is returned when sending
     /// the PDU fails.
-    pub async fn send_new_irk<Irk>(&mut self, irk: Irk) -> Result<Option<u128>, Error> where Irk: Into<Option<u128>>{
+    pub async fn send_new_irk<Irk>(&mut self, irk: Irk) -> Result<Option<u128>, Error>
+    where
+        Irk: Into<Option<u128>>,
+    {
         if self.link_encrypted {
-
             // using or_else because it will only generate a random number if needed
-            let irk_opt = irk.into().or_else(|| Some(toolbox::rand_u128()) );
+            let irk_opt = irk.into().or_else(|| Some(toolbox::rand_u128()));
 
-            if let Some( PairingData { db_keys: Some( super::KeyDBEntry { ref mut irk, ..}), .. }) = self.pairing_data {
+            if let Some(PairingData {
+                db_keys: Some(super::KeyDBEntry { ref mut irk, .. }),
+                ..
+            }) = self.pairing_data
+            {
                 *irk = irk_opt
             }
 
-            self.send(encrypt_info::IdentityInformation::new(irk_opt.unwrap())).await?;
+            self.send(encrypt_info::IdentityInformation::new(irk_opt.unwrap()))
+                .await?;
 
             Ok(irk_opt)
         } else {
@@ -173,17 +172,24 @@ where C: ConnectionChannel,
     /// If the encryption flag is true, the return value is either input 'csrk' the generated CSRK.
     /// `None` is returned if the encryption flag is not set and an error is returned when sending
     /// the PDU fails.
-    pub async fn send_new_csrk<Csrk>(&mut self, csrk: Csrk) -> Result<Option<u128>, Error> where Csrk: Into<Option<u128>> {
+    pub async fn send_new_csrk<Csrk>(&mut self, csrk: Csrk) -> Result<Option<u128>, Error>
+    where
+        Csrk: Into<Option<u128>>,
+    {
         if self.link_encrypted {
-
             // using or_else because it will only generate a random number if needed
-            let csrk_opt = csrk.into().or_else(|| Some(toolbox::rand_u128()) );
+            let csrk_opt = csrk.into().or_else(|| Some(toolbox::rand_u128()));
 
-            if let Some( PairingData { db_keys: Some( super::KeyDBEntry { ref mut csrk, ..}), .. }) = self.pairing_data {
-                *csrk = csrk_opt.map(|csrk| (csrk, 0) );
+            if let Some(PairingData {
+                db_keys: Some(super::KeyDBEntry { ref mut csrk, .. }),
+                ..
+            }) = self.pairing_data
+            {
+                *csrk = csrk_opt.map(|csrk| (csrk, 0));
             }
 
-            self.send(encrypt_info::SigningInformation::new(csrk_opt.unwrap())).await?;
+            self.send(encrypt_info::SigningInformation::new(csrk_opt.unwrap()))
+                .await?;
 
             Ok(csrk_opt)
         } else {
@@ -202,9 +208,11 @@ where C: ConnectionChannel,
     /// return false. If the function returns false then the IRK isn't sent to the Master Device.
     pub async fn resend_irk(&self) -> Result<bool, Error> {
         if self.link_encrypted {
-            if let Some(irk) = self.pairing_data.as_ref()
-                .and_then(|pd| pd.db_keys.as_ref() )
-                .and_then(|db_key| db_key.irk.clone() )
+            if let Some(irk) = self
+                .pairing_data
+                .as_ref()
+                .and_then(|pd| pd.db_keys.as_ref())
+                .and_then(|db_key| db_key.irk.clone())
             {
                 self.send(encrypt_info::IdentityInformation::new(irk)).await?;
 
@@ -228,9 +236,11 @@ where C: ConnectionChannel,
     /// return false. If the function returns false then the CSRK isn't sent to the Master Device.
     pub async fn resend_csrk(&self) -> Result<bool, Error> {
         if self.link_encrypted {
-            if let Some(csrk) = self.pairing_data.as_ref()
-                .and_then(|pd| pd.db_keys.as_ref() )
-                .and_then(|db_key| db_key.csrk.clone() )
+            if let Some(csrk) = self
+                .pairing_data
+                .as_ref()
+                .and_then(|pd| pd.db_keys.as_ref())
+                .and_then(|db_key| db_key.csrk.clone())
             {
                 self.send(encrypt_info::SigningInformation::new(csrk.0)).await?;
 
@@ -251,7 +261,8 @@ where C: ConnectionChannel,
     /// If the function returns false then `addr` isn't sent to the Master Device.
     pub async fn send_pub_addr(&self, addr: crate::BluetoothDeviceAddress) -> Result<bool, Error> {
         if self.link_encrypted {
-            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr)).await?;
+            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr))
+                .await?;
             Ok(true)
         } else {
             Ok(false)
@@ -271,7 +282,8 @@ where C: ConnectionChannel,
     /// Part B, section 1.3.2.1).
     pub async fn send_static_rand_addr(&self, addr: crate::BluetoothDeviceAddress) -> Result<bool, Error> {
         if self.link_encrypted {
-            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr)).await?;
+            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr))
+                .await?;
             Ok(true)
         } else {
             Ok(false)
@@ -295,16 +307,17 @@ where C: ConnectionChannel,
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub async fn process_command<'s>(&'s mut self, acl_data: &'s crate::l2cap::AclData )
-    -> Result<Option<&'s mut super::KeyDBEntry>, Error>
-    {
+    pub async fn process_command<'s>(
+        &'s mut self,
+        acl_data: &'s crate::l2cap::AclData,
+    ) -> Result<Option<&'s mut super::KeyDBEntry>, Error> {
         use core::convert::TryFrom;
 
         let command = match CommandType::try_from(acl_data) {
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
                 return Err(e);
-            },
+            }
             Ok(cmd) => cmd,
         };
 
@@ -326,16 +339,19 @@ where C: ConnectionChannel,
         }
     }
 
-    async fn send<Cmd,P>(&self, command: Cmd) -> Result<(), Error>
-        where Cmd: Into<Command<P>>,
-              P: CommandData
+    async fn send<Cmd, P>(&self, command: Cmd) -> Result<(), Error>
+    where
+        Cmd: Into<Command<P>>,
+        P: CommandData,
     {
         use crate::l2cap::AclData;
 
-        let acl_data = AclData::new( command.into().into_icd(), super::L2CAP_CHANNEL_ID);
+        let acl_data = AclData::new(command.into().into_icd(), super::L2CAP_CHANNEL_ID);
 
-        self.connection_channel.send(acl_data).await
-            .map_err( |e| Error::DataSend(alloc::format!("{:?}", e)) )
+        self.connection_channel
+            .send(acl_data)
+            .await
+            .map_err(|e| Error::DataSend(alloc::format!("{:?}", e)))
     }
 
     async fn send_err(&mut self, fail_reason: pairing::PairingFailedReason) -> Result<(), Error> {
@@ -351,7 +367,6 @@ where C: ConnectionChannel,
     }
 
     async fn p_pairing_request<'z>(&'z mut self, data: &'z [u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
-
         log::trace!("(SM) Processing pairing request");
 
         let request = match pairing::PairingRequest::try_from_icd(data) {
@@ -359,7 +374,7 @@ where C: ConnectionChannel,
             Err(_) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey))
+                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey));
             }
         };
 
@@ -368,7 +383,6 @@ where C: ConnectionChannel,
 
             Err(Error::PairingFailed(pairing::PairingFailedReason::EncryptionKeySize))
         } else {
-
             let response = pairing::PairingResponse::new(
                 self.io_capability,
                 if self.oob_data.is_some() {
@@ -387,7 +401,7 @@ where C: ConnectionChannel,
                 response.get_oob_data_flag(),
                 request.get_io_capability(),
                 response.get_io_capability(),
-                false
+                false,
             );
 
             let initiator_io_cap = request.get_io_cap();
@@ -395,8 +409,7 @@ where C: ConnectionChannel,
 
             self.send(response).await?;
 
-            let (private_key, public_key) = toolbox::ecc_gen()
-                .expect("Failed to fill bytes for generated random");
+            let (private_key, public_key) = toolbox::ecc_gen().expect("Failed to fill bytes for generated random");
 
             log::info!("Pairing Method: {:?}", pairing_method);
 
@@ -420,7 +433,6 @@ where C: ConnectionChannel,
     }
 
     async fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
-
         use super::GetXOfP256Key;
 
         log::trace!("(SM) Processing pairing public Key");
@@ -430,12 +442,12 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
         match self.pairing_data {
-            Some( PairingData{
+            Some(PairingData {
                 ref public_key,
                 ref nonce,
                 ref mut private_key,
@@ -446,7 +458,7 @@ where C: ConnectionChannel,
                 let raw_pub_key = {
                     let key_bytes = public_key.clone().into_icd();
 
-                    let mut raw_key = [0u8;64];
+                    let mut raw_key = [0u8; 64];
 
                     raw_key.copy_from_slice(&key_bytes);
 
@@ -457,32 +469,25 @@ where C: ConnectionChannel,
 
                 log::trace!("remote public key: {:x?}", remote_public_key.as_ref());
 
-                let peer_pub_key = match toolbox::PubKey::try_from_icd(&remote_public_key)
-                {
+                let peer_pub_key = match toolbox::PubKey::try_from_icd(&remote_public_key) {
                     Ok(k) => k,
                     Err(e) => {
                         self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                        return Err(e)
+                        return Err(e);
                     }
                 };
 
                 // Calculate the shared secret key
-                let secret_key_rslt = toolbox::ecdh(
-                    private_key.take().expect("Private key doesn't exist"),
-                    &peer_pub_key
-                );
+                let secret_key_rslt =
+                    toolbox::ecdh(private_key.take().expect("Private key doesn't exist"), &peer_pub_key);
 
                 match secret_key_rslt {
                     Ok(key) => {
                         *secret_key = Some(key);
 
-                        let confirm_value = toolbox::f4(
-                            GetXOfP256Key::x(public_key),
-                            GetXOfP256Key::x(&peer_pub_key),
-                            *nonce,
-                            0
-                        );
+                        let confirm_value =
+                            toolbox::f4(GetXOfP256Key::x(public_key), GetXOfP256Key::x(&peer_pub_key), *nonce, 0);
 
                         *peer_public_key = peer_pub_key.into();
 
@@ -493,7 +498,7 @@ where C: ConnectionChannel,
                         self.send(pairing::PairingConfirm::new(confirm_value)).await?;
 
                         Ok(None)
-                    },
+                    }
                     Err(e) => {
                         // Generating the dh key failed
 
@@ -504,7 +509,7 @@ where C: ConnectionChannel,
                         Err(Error::Value)
                     }
                 }
-            },
+            }
             _ => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
@@ -514,7 +519,6 @@ where C: ConnectionChannel,
     }
 
     async fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
-
         log::trace!("(SM) Processing pairing confirm");
 
         let _initiator_confirm = match pairing::PairingConfirm::try_from_icd(payload) {
@@ -522,38 +526,37 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
         match self.pairing_data.as_ref() {
-            Some( PairingData{
+            Some(PairingData {
                 key_gen_method: KeyGenerationMethod::JustWorks,
                 ..
-            }) |
-            Some( PairingData{
+            })
+            | Some(PairingData {
                 key_gen_method: KeyGenerationMethod::NumbComp,
                 ..
-            }) => /* Just Works or Number Comparison */
+            }) =>
+            /* Just Works or Number Comparison */
             {
                 // Neither the Just Works method or Number Comparison should have the responder
                 // receiving the pairing confirm PDU
                 self.send_err(pairing::PairingFailedReason::InvalidParameters).await?;
 
                 Err(Error::PairingFailed(pairing::PairingFailedReason::InvalidParameters))
-            },
+            }
             // The pairing methods OOB and Passkey are not supported yet
             _ => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
                 Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
-            },
+            }
         }
     }
 
-    async fn p_pairing_random(&mut self, payload: &[u8])
-    -> Result<Option<&mut super::KeyDBEntry>, Error>
-    {
+    async fn p_pairing_random(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
         log::trace!("(SM) Processing pairing random");
 
         let initiator_random = match pairing::PairingRandom::try_from_icd(payload) {
@@ -561,26 +564,26 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
         match self.pairing_data {
-            Some( PairingData {
+            Some(PairingData {
                 key_gen_method: KeyGenerationMethod::JustWorks,
                 ref mut peer_nonce,
                 nonce,
                 ..
-            } ) |
-            Some( PairingData {
+            })
+            | Some(PairingData {
                 key_gen_method: KeyGenerationMethod::NumbComp,
                 ref mut peer_nonce,
                 nonce,
                 ..
-            } ) => {
+            }) => {
                 *peer_nonce = initiator_random.get_value().into();
 
-                self.send( pairing::PairingRandom::new(nonce) ).await?;
+                self.send(pairing::PairingRandom::new(nonce)).await?;
 
                 Ok(None)
             }
@@ -600,7 +603,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
@@ -609,10 +612,7 @@ where C: ConnectionChannel,
         Err(Error::PairingFailed(initiator_fail.get_reason()))
     }
 
-    async fn p_pairing_dh_key_check(&mut self, payload: &[u8])
-    -> Result<Option<&mut super::KeyDBEntry>, Error>
-    {
-
+    async fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
         log::trace!("(SM) Processing pairing dh key check");
 
         let initiator_dh_key_check = match pairing::PairingDHKeyCheck::try_from_icd(payload) {
@@ -620,31 +620,24 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
         let pd = self.pairing_data.as_ref();
 
         match pd {
-            Some( PairingData {
-                secret_key: Some( dh_key ),
+            Some(PairingData {
+                secret_key: Some(dh_key),
                 nonce,
-                peer_nonce: Some( peer_nonce ),
+                peer_nonce: Some(peer_nonce),
                 initiator_io_cap,
                 responder_io_cap,
                 ..
             }) => {
+                let a_addr = toolbox::PairingAddress::new(&self.initiator_address, self.initiator_address_is_random);
 
-                let a_addr = toolbox::PairingAddress::new(
-                    &self.initiator_address,
-                    self.initiator_address_is_random
-                );
-
-                let b_addr = toolbox::PairingAddress::new(
-                    &self.responder_address,
-                    self.responder_address_is_random
-                );
+                let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
 
                 log::trace!("secret key: {:x?}", dh_key);
                 log::trace!("remote nonce: {:x?}", peer_nonce);
@@ -652,13 +645,7 @@ where C: ConnectionChannel,
                 log::trace!("remote address: {:x?}", a_addr);
                 log::trace!("this address: {:x?}", b_addr);
 
-                let (mac_key, ltk) = toolbox::f5(
-                    *dh_key,
-                    *peer_nonce,
-                    *nonce,
-                    a_addr.clone(),
-                    b_addr.clone(),
-                );
+                let (mac_key, ltk) = toolbox::f5(*dh_key, *peer_nonce, *nonce, a_addr.clone(), b_addr.clone());
 
                 log::trace!("mac_key: {:x?}", mac_key);
                 log::trace!("ltk: {:x?}", ltk);
@@ -677,38 +664,30 @@ where C: ConnectionChannel,
                 let received_ea = initiator_dh_key_check.get_key_check();
 
                 if received_ea == ea {
-
                     log::trace!("responder_io_cap: {:x?}", responder_io_cap);
 
-                    let eb = toolbox::f6(
-                        mac_key,
-                        *nonce,
-                        *peer_nonce,
-                        0,
-                        *responder_io_cap,
-                        b_addr,
-                        a_addr,
-                    );
+                    let eb = toolbox::f6(mac_key, *nonce, *peer_nonce, 0, *responder_io_cap, b_addr, a_addr);
 
                     self.send(pairing::PairingDHKeyCheck::new(eb)).await?;
 
                     let db_keys = &mut self.pairing_data.as_mut().unwrap().db_keys;
 
-                    *db_keys = super::KeyDBEntry{
+                    *db_keys = super::KeyDBEntry {
                         ltk: ltk.into(),
                         irk: None,
                         csrk: None,
                         peer_irk: None,
                         peer_addr: if self.initiator_address_is_random {
-                                super::BluAddr::StaticRandom(self.initiator_address)
-                            } else {
-                                super::BluAddr::Public(self.initiator_address)
-                            }.into(),
+                            super::BluAddr::StaticRandom(self.initiator_address)
+                        } else {
+                            super::BluAddr::Public(self.initiator_address)
+                        }
+                        .into(),
                         peer_csrk: None,
-                    }.into();
+                    }
+                    .into();
 
-                    Ok( db_keys.as_mut() )
-
+                    Ok(db_keys.as_mut())
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed).await?;
 
@@ -734,7 +713,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
@@ -747,17 +726,17 @@ where C: ConnectionChannel,
                     db_key.peer_irk = Some(identity_info.get_irk());
 
                     Ok(Some(db_key))
-                },
+                }
                 _ => {
                     self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
                 }
             }
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-            return Err(Error::UnknownIfLinkIsEncrypted)
+            return Err(Error::UnknownIfLinkIsEncrypted);
         }
     }
 
@@ -769,7 +748,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
@@ -786,13 +765,13 @@ where C: ConnectionChannel,
                 _ => {
                     self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
                 }
             }
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-            return Err(Error::UnknownIfLinkIsEncrypted)
+            return Err(Error::UnknownIfLinkIsEncrypted);
         }
     }
 
@@ -804,7 +783,7 @@ where C: ConnectionChannel,
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                return Err(e)
+                return Err(e);
             }
         };
 
@@ -821,13 +800,13 @@ where C: ConnectionChannel,
                 _ => {
                     self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
                 }
             }
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-            return Err(Error::UnknownIfLinkIsEncrypted)
+            return Err(Error::UnknownIfLinkIsEncrypted);
         }
     }
 }

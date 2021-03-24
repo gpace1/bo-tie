@@ -1,6 +1,14 @@
 pub use crate::hci::link_control::disconnect;
 
-interval!( #[derive(Clone, Copy)] ConnectionInterval, 0x0006, 0x0C80, ApiDef, 0x0006, 1250);
+interval!(
+    #[derive(Clone, Copy)]
+    ConnectionInterval,
+    0x0006,
+    0x0C80,
+    ApiDef,
+    0x0006,
+    1250
+);
 
 /// ConnectionUpdateInterval contaings the minimum and maximum connection intervals for
 /// the le connection update
@@ -14,16 +22,10 @@ impl ConnectionIntervalBounds {
     ///
     /// # Errors
     /// An error is returned if the minimum is greater then the maximum
-    pub fn try_from(min: ConnectionInterval, max: ConnectionInterval)
-                    -> Result<Self,&'static str>
-    {
+    pub fn try_from(min: ConnectionInterval, max: ConnectionInterval) -> Result<Self, &'static str> {
         if min.get_raw_val() <= max.get_raw_val() {
-            Ok( Self {
-                min,
-                max,
-            })
-        }
-        else {
+            Ok(Self { min, max })
+        } else {
             Err("'min' is greater than 'max'")
         }
     }
@@ -31,13 +33,10 @@ impl ConnectionIntervalBounds {
 
 /// LE Connection Update Command
 pub mod connection_update {
-    use crate::hci::*;
-    use crate::hci::common::{
-        ConnectionHandle,
-        SupervisionTimeout,
-    };
-    use crate::hci::le::common::ConnectionEventLength;
     use super::ConnectionIntervalBounds;
+    use crate::hci::common::{ConnectionHandle, SupervisionTimeout};
+    use crate::hci::le::common::ConnectionEventLength;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ConnectionUpdate);
 
@@ -61,71 +60,73 @@ pub mod connection_update {
         pub connection_event_len: ConnectionEventLength,
     }
 
-
     impl CommandParameter for ConnectionUpdate {
         type Parameter = CmdParameter;
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
-                _handle:              self.handle.get_raw_handle(),
-                _conn_interval_min:   self.interval.min.get_raw_val(),
-                _conn_interval_max:   self.interval.max.get_raw_val(),
-                _conn_latency:        self.latency,
+                _handle: self.handle.get_raw_handle(),
+                _conn_interval_min: self.interval.min.get_raw_val(),
+                _conn_interval_max: self.interval.max.get_raw_val(),
+                _conn_latency: self.latency,
                 _supervision_timeout: self.supervision_timeout.get_timeout(),
-                _minimum_ce_length:   self.connection_event_len.minimum,
-                _maximum_ce_length:   self.connection_event_len.maximum,
-             }
+                _minimum_ce_length: self.connection_event_len.minimum,
+                _maximum_ce_length: self.connection_event_len.maximum,
+            }
         }
     }
 
     impl_command_status_future!();
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cu: ConnectionUpdate)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        cu: ConnectionUpdate,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command(cu, events::Events::CommandStatus ) )
+        ReturnedFuture(hci.send_command(cu, events::Events::CommandStatus))
     }
-
 }
 
 pub mod create_connection_cancel {
 
     use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnectionCancel);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::CreateConnectionCancel);
 
     impl_status_return!(COMMAND);
 
-    #[derive(Clone,Copy)]
+    #[derive(Clone, Copy)]
     struct Parameter;
 
     impl CommandParameter for Parameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>)
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( Parameter, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
-
 }
 
 pub mod create_connection {
 
     use super::ConnectionIntervalBounds;
+    use crate::hci::common::{ConnectionLatency, LEAddressType, SupervisionTimeout};
+    use crate::hci::le::common::{ConnectionEventLength, OwnAddressType};
     use crate::hci::*;
-    use crate::hci::common::{
-        ConnectionLatency,
-        LEAddressType,
-        SupervisionTimeout,
-    };
-    use crate::hci::le::common::{OwnAddressType, ConnectionEventLength};
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::CreateConnection);
 
@@ -147,8 +148,8 @@ pub mod create_connection {
     }
 
     pub struct ConnectionParameters {
-        scan_interval : ScanningInterval,
-        scan_window : ScanningWindow,
+        scan_interval: ScanningInterval,
+        scan_window: ScanningWindow,
         initiator_filter_policy: InitiatorFilterPolicy,
         peer_address_type: LEAddressType,
         peer_address: crate::BluetoothDeviceAddress,
@@ -181,28 +182,27 @@ pub mod create_connection {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
             CmdParameter {
-                _scan_interval:           self.scan_interval.get_raw_val(),
-                _scan_window:             self.scan_window.get_raw_val(),
+                _scan_interval: self.scan_interval.get_raw_val(),
+                _scan_window: self.scan_window.get_raw_val(),
                 _initiator_filter_policy: self.initiator_filter_policy.val(),
-                _peer_address_type:       self.peer_address_type.into_raw(),
-                _peer_address:            self.peer_address,
-                _own_address_type:        self.own_address_type.into_val(),
-                _conn_interval_min:       self.connection_interval.min.get_raw_val(),
-                _conn_interval_max:       self.connection_interval.max.get_raw_val(),
-                _conn_latency:            self.connection_latency.get_latency(),
-                _supervision_timeout:     self.supervision_timeout.get_timeout(),
-                _minimum_ce_length:       self.connection_event_len.minimum,
-                _maximum_ce_length:       self.connection_event_len.maximum,
+                _peer_address_type: self.peer_address_type.into_raw(),
+                _peer_address: self.peer_address,
+                _own_address_type: self.own_address_type.into_val(),
+                _conn_interval_min: self.connection_interval.min.get_raw_val(),
+                _conn_interval_max: self.connection_interval.max.get_raw_val(),
+                _conn_latency: self.connection_latency.get_latency(),
+                _supervision_timeout: self.supervision_timeout.get_timeout(),
+                _minimum_ce_length: self.connection_event_len.minimum,
+                _maximum_ce_length: self.connection_event_len.maximum,
             }
         }
     }
 
     impl ConnectionParameters {
-
         /// Command Parameters for connecting without the white list
         pub fn new_without_whitelist(
-            scan_interval : ScanningInterval,
-            scan_window : ScanningWindow,
+            scan_interval: ScanningInterval,
+            scan_window: ScanningWindow,
             peer_address_type: LEAddressType,
             peer_address: crate::BluetoothDeviceAddress,
             own_address_type: OwnAddressType,
@@ -227,8 +227,8 @@ pub mod create_connection {
 
         /// Command parameters for connecting with the white list
         pub fn new_with_whitelist(
-            scan_interval : ScanningInterval,
-            scan_window : ScanningWindow,
+            scan_interval: ScanningInterval,
+            scan_window: ScanningWindow,
             own_address_type: OwnAddressType,
             connection_interval: ConnectionIntervalBounds,
             connection_latency: ConnectionLatency,
@@ -239,8 +239,8 @@ pub mod create_connection {
                 scan_interval,
                 scan_window,
                 initiator_filter_policy: InitiatorFilterPolicy::UseWhiteList,
-                peer_address_type : LEAddressType::PublicDeviceAddress, // This is not used (see spec)
-                peer_address : [0u8;6], // This is not used (see spec)
+                peer_address_type: LEAddressType::PublicDeviceAddress, // This is not used (see spec)
+                peer_address: [0u8; 6],                                // This is not used (see spec)
                 own_address_type,
                 connection_interval,
                 connection_latency,
@@ -248,24 +248,25 @@ pub mod create_connection {
                 connection_event_len,
             }
         }
-
     }
 
     impl_command_status_future!();
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, cp: ConnectionParameters )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        cp: ConnectionParameters,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command(cp, events::Events::CommandStatus ) )
+        ReturnedFuture(hci.send_command(cp, events::Events::CommandStatus))
     }
-
 }
 pub mod read_channel_map {
 
-    use crate::hci::*;
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadChannelMap);
 
@@ -273,7 +274,7 @@ pub mod read_channel_map {
     pub(crate) struct CmdReturn {
         status: u8,
         connection_handle: u16,
-        channel_map: [u8;5]
+        channel_map: [u8; 5],
     }
 
     pub struct ChannelMapInfo {
@@ -289,13 +290,12 @@ pub mod read_channel_map {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
-
                 // 37 is the number of channels (as of bluetooth 5.0)
                 let channel_count = 37;
 
                 let mut count = 0;
 
-                let mut mapped_channels =alloc::vec::Vec::with_capacity(channel_count);
+                let mut mapped_channels = alloc::vec::Vec::with_capacity(channel_count);
 
                 'outer: for byte in packed.channel_map.iter() {
                     for bit in 0..8 {
@@ -304,20 +304,18 @@ pub mod read_channel_map {
                                 mapped_channels.push(count);
                                 count += 1;
                             }
-                        }
-                        else {
+                        } else {
                             break 'outer;
                         }
                     }
                 }
 
-                Ok( Self {
+                Ok(Self {
                     handle: ConnectionHandle::try_from(packed.connection_handle).unwrap(),
                     channel_map: mapped_channels.into_boxed_slice(),
-                    completed_packets_cnt: cnt.into()
+                    completed_packets_cnt: cnt.into(),
                 })
-            }
-            else {
+            } else {
                 Err(status)
             }
         }
@@ -330,92 +328,94 @@ pub mod read_channel_map {
     }
 
     #[repr(packed)]
-    #[derive( Clone, Copy)]
+    #[derive(Clone, Copy)]
     struct CmdParameter {
-        _connection_handle: u16
+        _connection_handle: u16,
     }
 
     impl CommandParameter for CmdParameter {
         type Parameter = Self;
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
     }
 
-    impl_get_data_for_command!(
-            COMMAND,
-            CmdReturn,
-            ChannelMapInfo,
-            error::Error
-        );
+    impl_get_data_for_command!(COMMAND, CmdReturn, ChannelMapInfo, error::Error);
 
     impl_command_complete_future!(ChannelMapInfo, error::Error);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
-    -> impl Future<Output=Result<ChannelMapInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        handle: ConnectionHandle,
+    ) -> impl Future<Output = Result<ChannelMapInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-
-        let parameter = CmdParameter {
-            _connection_handle: handle.get_raw_handle()
-        };
-
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandComplete ) )
-    }
-
-}
-
-pub mod read_remote_features {
-
-    use crate::hci::*;
-    use crate::hci::common::ConnectionHandle;
-
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadRemoteFeatures);
-
-    #[repr(packed)]
-    #[derive( Clone, Copy)]
-    struct CmdParameter {
-        _connection_handle: u16
-    }
-
-    impl CommandParameter for CmdParameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter { *self }
-    }
-
-    impl_command_status_future!();
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, handle: ConnectionHandle )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
-    {
-
         let parameter = CmdParameter {
             _connection_handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture( hci.send_command(parameter, events::Events::CommandStatus ) )
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+    }
+}
+
+pub mod read_remote_features {
+
+    use crate::hci::common::ConnectionHandle;
+    use crate::hci::*;
+
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadRemoteFeatures);
+
+    #[repr(packed)]
+    #[derive(Clone, Copy)]
+    struct CmdParameter {
+        _connection_handle: u16,
     }
 
+    impl CommandParameter for CmdParameter {
+        type Parameter = Self;
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> Self::Parameter {
+            *self
+        }
+    }
+
+    impl_command_status_future!();
+
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        handle: ConnectionHandle,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
+    {
+        let parameter = CmdParameter {
+            _connection_handle: handle.get_raw_handle(),
+        };
+
+        ReturnedFuture(hci.send_command(parameter, events::Events::CommandStatus))
+    }
 }
 
 pub mod set_host_channel_classification {
     use crate::hci::*;
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetHostChannelClassification);
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::SetHostChannelClassification);
 
     #[repr(packed)]
     #[doc(hidden)]
     pub struct CmdParemeter {
-        _channel_map: [u8;5]
+        _channel_map: [u8; 5],
     }
 
     const CHANNEL_MAP_MAX: usize = 37;
 
     pub struct ChannelMap {
-        channels: [bool;CHANNEL_MAP_MAX]
+        channels: [bool; CHANNEL_MAP_MAX],
     }
 
     impl ChannelMap {
@@ -428,21 +428,19 @@ pub mod set_host_channel_classification {
         ///
         /// # Error
         /// A value in the parameter was found to be larger then CHANNEL_MAP_MAX
-        pub fn try_from<'a>(channels: &'a[usize]) -> Result<Self, usize> {
-
-            let mut channel_flags = [false;CHANNEL_MAP_MAX];
+        pub fn try_from<'a>(channels: &'a [usize]) -> Result<Self, usize> {
+            let mut channel_flags = [false; CHANNEL_MAP_MAX];
 
             for val in channels {
                 if *val < CHANNEL_MAP_MAX {
                     channel_flags[*val] = true;
-                }
-                else {
+                } else {
                     return Err(*val);
                 }
             }
 
-            Ok( Self {
-                channels: channel_flags
+            Ok(Self {
+                channels: channel_flags,
             })
         }
     }
@@ -451,8 +449,7 @@ pub mod set_host_channel_classification {
         type Parameter = CmdParemeter;
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> Self::Parameter {
-
-            let mut raw = [0u8;5];
+            let mut raw = [0u8; 5];
 
             for val in 0..CHANNEL_MAP_MAX {
                 if self.channels[val] {
@@ -460,23 +457,24 @@ pub mod set_host_channel_classification {
                 }
             }
 
-            CmdParemeter {
-                _channel_map : raw
-            }
+            CmdParemeter { _channel_map: raw }
         }
     }
 
     impl_status_return!(COMMAND);
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds= "'static")]
-    pub fn send<'a, T: 'static>( hci: &'a HostInterface<T>, map: ChannelMap )
-    -> impl Future<Output=Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
-    where T: HostControllerInterface
+    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
+    pub fn send<'a, T: 'static>(
+        hci: &'a HostInterface<T>,
+        map: ChannelMap,
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    where
+        T: HostControllerInterface,
     {
-        ReturnedFuture( hci.send_command( map, events::Events::CommandComplete ) )
+        ReturnedFuture(hci.send_command(map, events::Events::CommandComplete))
     }
 }
 
 pub use super::super::cb::read_transmit_power_level;
-pub use super::super::status_prams::read_rssi;
 pub use super::super::link_control::read_remote_version_information;
+pub use super::super::status_prams::read_rssi;
