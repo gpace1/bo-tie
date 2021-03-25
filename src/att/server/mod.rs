@@ -786,7 +786,7 @@ where
 
     /// Process a Read Request from the client
     async fn process_read_request(&mut self, handle: u16) -> Result<(), super::Error> {
-        log::info!("Processing PDU ATT_READ_REQ {{ handle: {} }}", handle);
+        log::info!("Processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
 
         match self.read_att_and(handle, |att_tf| att_tf.read_response()).await {
             Ok(mut tf) => {
@@ -810,7 +810,7 @@ where
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
 
-        log::info!("Processing PDU ATT_WRITE_REQ {{ handle: {} }}", handle);
+        log::info!("Processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
 
         match self.write_att(handle, &payload[2..]).await {
             Ok(_) => self.send_pdu(pdu::write_response()).await,
@@ -952,8 +952,8 @@ where
 
             let att_type: crate::UUID = TransferFormatTryFrom::try_from(&payload[4..6]).unwrap();
 
-            log::info!("Processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {}, end handle: \
-                {}, type: {:?}}}",
+            log::info!("Processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
+                handle: {:#X}, type: {:?}}}",
                 handle_range.starting_handle,
                 handle_range.ending_handle,
                 att_type
@@ -1019,8 +1019,8 @@ where
 
     /// Process Read By Type Request
     async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest) -> Result<(), super::Error> {
-        log::info!("Processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {}, end handle: {}, type: \
-            {:?} }}",
+        log::info!("Processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
+            type: {:?} }}",
             type_request.handle_range.starting_handle,
             type_request.handle_range.ending_handle,
             type_request.attr_type
@@ -1129,7 +1129,7 @@ where
 
     /// Process read blob request
     async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest) -> Result<(), super::Error> {
-        log::info!("Processing PDU ATT_READ_BLOB_REQ {{ handle: {}, offset {} }}",
+        log::info!("Processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
             blob_request.handle,
             blob_request.offset
         );
@@ -1256,7 +1256,7 @@ where
     async fn process_prepare_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
         if let Err((h, e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => {
-                log::info!("Processing ATT_PREPARE_WRITE_REQ {{ handle: {}, offset {} }}",
+                log::info!("Processing ATT_PREPARE_WRITE_REQ {{ handle: {:#X}, offset {} }}",
                     request.get_handle(),
                     request.get_prepared_offset()
                 );
