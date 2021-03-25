@@ -382,7 +382,7 @@ impl core::fmt::Display for Error {
             Error::AttributeNotFound => {
                 write!(
                     f,
-                    "Attribute not foundL: no attribute found within the given attribute \
+                    "Attribute not found: no attribute found within the given attribute \
                 handle range"
                 )
             }
