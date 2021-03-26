@@ -593,9 +593,9 @@ impl_transfer_format_for_number! {u128}
 impl_transfer_format_for_number! {f32}
 impl_transfer_format_for_number! {f64}
 
-impl TransferFormatTryFrom for alloc::string::String {
+impl TransferFormatTryFrom for String {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
-        alloc::string::String::from_utf8(raw.to_vec()).map_err(|e| TransferFormatError::from(format!("{:?}", e)))
+        String::from_utf8(raw.to_vec()).map_err(|e| TransferFormatError::from(format!("{:?}", e)))
     }
 }
 
@@ -609,7 +609,7 @@ impl TransferFormatInto for &str {
     }
 }
 
-impl TransferFormatInto for alloc::string::String {
+impl TransferFormatInto for String {
     fn len_of_into(&self) -> usize {
         (self as &str).len_of_into()
     }
