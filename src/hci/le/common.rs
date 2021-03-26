@@ -139,7 +139,7 @@ macro_rules! interval {
             $name,
             $raw_low,
             $raw_hi,
-            #[doc("This is a Bluetooth Specification defined default value")],
+            #[doc = "This is a Bluetooth Specification defined default value"],
             $raw_default,
             $micro_sec_conv
         );
@@ -152,8 +152,8 @@ macro_rules! interval {
             $name,
             $raw_low,
             $raw_hi,
-            #[doc("This is a default value defined by the API, the Bluetooth Specification")]
-            #[doc("does not specify a default for this interval")],
+            #[doc = "This is a default value defined by the API, the Bluetooth Specification"]
+            #[doc = "does not specify a default for this interval"],
             $raw_default,
             $micro_sec_conv
         );
