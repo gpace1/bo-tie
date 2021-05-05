@@ -50,7 +50,7 @@ pub fn bluetooth_address_from_string(addr: &str) -> Result<BluetoothDeviceAddres
     }
 }
 
-pub fn bluetooth_address_into_string(addr: BluetoothDeviceAddress) -> alloc::string::String {
+pub fn bluetooth_address_into_string(addr: &BluetoothDeviceAddress) -> alloc::string::String {
     alloc::format!(
         "{:X}:{:X}:{:X}:{:X}:{:X}:{:X}",
         addr[5],
