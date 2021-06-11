@@ -93,7 +93,7 @@ macro_rules! impl_raw {
 
                     if raw.len() >= 3 {
                         let (uuid_raw, data) = raw.split_at(core::mem::size_of::<$type>());
-                        let err = crate::gap::advertise::Error::LeBytesConversionError;
+                        let err = crate::gap::assigned::Error::LeBytesConversionError;
 
                         ServiceData {
                             uuid: $type::from_le_bytes(uuid_raw.try_into().or(Err(err))?),
@@ -101,7 +101,7 @@ macro_rules! impl_raw {
                         }
                     }
                     else {
-                        return Err(crate::gap::advertise::Error::RawTooSmall)
+                        return Err(crate::gap::assigned::Error::RawTooSmall)
                     }
                 }}
             }
