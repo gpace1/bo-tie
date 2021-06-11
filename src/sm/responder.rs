@@ -1,17 +1,19 @@
+//! Responder side of the Security Manager
+//!
+//! A responder is used by a device to to 'respond' to the security manager requests of an
+//! initiating device.
+
 use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, KeyGenerationMethod, PairingData,
 };
 use crate::l2cap::ConnectionChannel;
-/// Responder side of the Security Manager
-///
-/// A responder is used by a device to to 'respond' to the security manager requests of an
-/// initiating device.
 use alloc::vec::Vec;
 
+/// A builder for a [`SlaveSecurityManager`]
 pub struct SlaveSecurityManagerBuilder<'a, C> {
     connection_channel: &'a C,
     io_capabilities: pairing::IOCapability,
-    oob_data: Option<u128>,
+    oob: bool,
     encryption_key_min: usize,
     encryption_key_max: usize,
     remote_address: &'a crate::BluetoothDeviceAddress,
@@ -24,6 +26,7 @@ impl<'a, C> SlaveSecurityManagerBuilder<'a, C>
 where
     C: ConnectionChannel,
 {
+    /// Create a new SlaveSecurityManagerBuilder
     pub fn new(
         connection_channel: &'a C,
         connected_device_address: &'a crate::BluetoothDeviceAddress,
@@ -34,7 +37,7 @@ where
         Self {
             connection_channel,
             io_capabilities: pairing::IOCapability::NoInputNoOutput,
-            oob_data: None,
+            oob: false,
             encryption_key_min: super::ENCRYPTION_KEY_MAX_SIZE,
             encryption_key_max: super::ENCRYPTION_KEY_MAX_SIZE,
             remote_address: connected_device_address,
@@ -42,6 +45,15 @@ where
             remote_address_is_random: is_connected_devices_address_random,
             this_address_is_random: is_this_device_address_random,
         }
+    }
+
+    /// Use an out-of-band method for pairing
+    ///
+    /// This takes
+    pub fn use_oob<S, R>(&'a mut self) -> OutOfBandMethod<'a, C, S, R> {
+        self.oob = true;
+
+        OutOfBandMethod::new(self)
     }
 
     pub fn build(&self) -> SlaveSecurityManager<'a, C> {
@@ -56,7 +68,7 @@ where
         SlaveSecurityManager {
             connection_channel: self.connection_channel,
             io_capability: self.io_capabilities,
-            oob_data: self.oob_data,
+            oob: self.oob,
             // passkey: None,
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
@@ -76,7 +88,7 @@ where
 pub struct SlaveSecurityManager<'a, C> {
     connection_channel: &'a C,
     io_capability: pairing::IOCapability,
-    oob_data: Option<u128>,
+    oob: bool,
     auth_req: Vec<encrypt_info::AuthRequirements>,
     encryption_key_size_min: usize,
     encryption_key_size_max: usize,
@@ -385,7 +397,7 @@ where
         } else {
             let response = pairing::PairingResponse::new(
                 self.io_capability,
-                if self.oob_data.is_some() {
+                if self.oob {
                     pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
                 } else {
                     pairing::OOBDataFlag::AuthenticationDataNotPresent
@@ -808,6 +820,127 @@ where
 
             return Err(Error::UnknownIfLinkIsEncrypted);
         }
+    }
+}
+
+/// Out of Band pairing method setup
+///
+/// Things that implement this trait can be used as the out-of-band (OOB) process for pairing. Any
+/// communication process that is outside of the direct Bluetooth communication between the two
+/// pairing devices can be considered a valid OOB. However the OOB must have no man-in-the-middle in
+/// order for OOB to be secure form of pairing.
+///
+/// The methods [`set_send_method`] and [`set_receive_method`] determine how data is sent and
+/// received through the OOB interface. At least one of them must be called before an
+/// [`OutOfBandSlaveSecurityManager`] can be built (with [`build`]). When `set_send_method` the
+/// responder will send OOB data to the initiator, and if `set_receive_method` is called then this
+/// responder will await for an OOB message from the initiator. It is recommended to match the
+/// methods to the capability of the OOB interface.
+pub struct OutOfBandMethod<'a, C, S, R> {
+    builder: &'a mut SlaveSecurityManagerBuilder<'a, C>,
+    send_method: core::cell::Cell<Option<S>>,
+    receive_method: core::cell::Cell<Option<R>>,
+}
+
+impl<'a, C, S, R> OutOfBandMethod<'a, C, S, R>
+where
+    C: ConnectionChannel,
+{
+    fn new(builder: &'a mut SlaveSecurityManagerBuilder<'a, C>) -> Self {
+        OutOfBandMethod {
+            builder,
+            send_method: core::cell::Cell::new(None),
+            receive_method: core::cell::Cell::new(None),
+        }
+    }
+
+    /// Set the method for sending
+    ///
+    /// Input `send_method` is a function for generating a future used for sending data across the
+    /// OOB interface. The purpose of the future is to allow for situations where sending may
+    /// be an asynchronous process.
+    pub fn set_send_method<F>(&mut self, send_method: S) -> &mut Self
+    where
+        S: Fn(&[u8]) -> F,
+        F: core::future::Future,
+    {
+        self.send_method.set(Some(send_method));
+
+        self
+    }
+
+    /// Set the method for receiving
+    ///
+    /// Input `send_method` is a function for generating a future for receiving over the OOB
+    /// interface.
+    pub fn set_receive_method<F>(&mut self, receive_method: R) -> &mut Self
+    where
+        R: Fn() -> F,
+        F: core::future::Future<Output = Vec<u8>>,
+    {
+        self.receive_method.set(Some(receive_method));
+
+        self
+    }
+
+    pub fn build(&self) -> Result<OutOfBandSlaveSecurityManager<'a, C, S, R>, OobBuildError> {
+        let send_method = self.send_method.take();
+
+        let receive_method = self.receive_method.take();
+
+        Ok(OutOfBandSlaveSecurityManager::new(
+            self.builder.build(),
+            send_method,
+            receive_method,
+        ))
+    }
+}
+
+impl<'a, C, S, R> core::ops::Deref for OutOfBandMethod<'a, C, S, R> {
+    type Target = SlaveSecurityManagerBuilder<'a, C>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.builder
+    }
+}
+
+#[derive(Debug)]
+pub struct OobBuildError;
+
+impl core::fmt::Display for OobBuildError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str("No send or receive methods were set for OOB data")
+    }
+}
+
+/// A slave security manager that uses an out-of-band process of pairing
+pub struct OutOfBandSlaveSecurityManager<'a, C, S, R> {
+    sm: SlaveSecurityManager<'a, C>,
+    send_method: Option<S>,
+    receive_method: Option<R>,
+}
+
+impl<'a, C, S, R> OutOfBandSlaveSecurityManager<'a, C, S, R> {
+    fn new(sm: SlaveSecurityManager<'a, C>, send_method: Option<S>, receive_method: Option<R>) -> Self {
+        OutOfBandSlaveSecurityManager {
+            sm,
+            send_method,
+            receive_method,
+        }
+    }
+}
+
+impl<'a, C, S, R> core::ops::Deref for OutOfBandSlaveSecurityManager<'a, C, S, R> {
+    type Target = SlaveSecurityManager<'a, C>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sm
+    }
+}
+
+impl<'a, C, S, R> core::ops::DerefMut for OutOfBandSlaveSecurityManager<'a, C, S, R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.sm
     }
 }
 
