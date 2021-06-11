@@ -3,7 +3,7 @@
 //! This is used to encapsulate data sent as part of the out of band process in either Simple
 //! Pairing, or Secure Connections
 
-use crate::gap::advertise::IntoRaw;
+use crate::gap::assigned::IntoRaw;
 
 /// The minimum length for an OOB data block
 const MIN_LEN: usize = 8;
@@ -21,7 +21,7 @@ impl OobDataBlockBuilder {
 
     /// Create the OOB data block
     ///
-    /// This takes an iterator of types that implement [`IntoRaw`](crate::gap::advertise::IntoRaw).
+    /// This takes an iterator of types that implement [`IntoRaw`](crate::gap::assigned::IntoRaw).
     /// These are considered 'optional' as part of the OOB data block specification, but higher
     /// layer protocols usually have specific types that need to be sent.
     ///
@@ -30,7 +30,7 @@ impl OobDataBlockBuilder {
     /// (u16::MAX - 8) bytes.
     pub fn build<'a, I>(&self, optional: I) -> alloc::vec::Vec<u8>
     where
-        I: Iterator<Item = &'a dyn IntoRaw>,
+        I: IntoIterator<Item = &'a &'a dyn IntoRaw>,
     {
         let mut data = [0; MIN_LEN].to_vec();
 
@@ -39,7 +39,7 @@ impl OobDataBlockBuilder {
         // set the address
         data[2..].copy_from_slice(&self.address);
 
-        for raw_ad in optional.map(|i| i.into_raw()) {
+        for raw_ad in optional.into_iter().map(|i| i.into_raw()) {
             len += raw_ad.len();
 
             debug_assert!(len < <u16>::MAX.into());
@@ -88,16 +88,17 @@ impl OobDataBlockIter {
 
     /// Iterator over the EIR Data (or AD)
     ///
-    /// This iterators over the EIR data structures within the OOB data block.
+    /// This iterators over the EIR data structures within the OOB data block. The return is a pair
+    /// containing the assigned number and the data.
     ///
     /// # Note
     /// 1) EIR data structures are in the same format as advertising data
     /// 2) This provides no validation of the raw data.
-    pub fn iter(&self) -> impl Iterator<Item = &[u8]> {
+    pub fn iter(&self) -> impl Iterator<Item = (u8, &[u8])> {
         struct EirIterator<'a>(&'a [u8]);
 
         impl<'a> Iterator for EirIterator<'a> {
-            type Item = &'a [u8];
+            type Item = (u8, &'a [u8]);
 
             fn next(&mut self) -> Option<Self::Item> {
                 if self.0.len() == 0 {
@@ -107,13 +108,14 @@ impl OobDataBlockIter {
 
                     let ad_len = 1 + data_len;
 
-                    // Prevent panics by short circuiting
-                    if ad_len <= self.0.len() {
-                        let ret = &self.0[1..ad_len];
+                    // Prevent panics by short circuiting the iterator if the length is invalid or 0
+                    if ad_len <= self.0.len() && ad_len > 0 {
+                        let ret_type = self.0[1];
+                        let ret_vec = &self.0[2..ad_len];
 
                         self.0 = &self.0[ad_len..];
 
-                        Some(ret)
+                        Some((ret_type, ret_vec))
                     } else {
                         self.0 = &[];
 

@@ -1,10 +1,11 @@
-//! Advertising, Periodic Advertising, and Scanning Data
+//! Assigned numbers and data formats for Advertising, Periodic Advertising, Scanning, and security
+//! data.
 //!
-//! Advertising is a sequence of AD types. Data is packaged under a assigned number and given a
-//! format defined by the Bluetooth SIG. The assigned numbers can be found in the *Generic Access
-//! Profile* assigned number document, and formats for the data are found in the *Bluetooth
-//! Supplement to the Core*. The assigned number and format are wrapped in an *AD* type defined in
-//! the Bluetooth Core Specification (v5.2 | Vol 3, Part C| sec. 11).
+//! The data format is the same for all assigned types. Data is packaged under a assigned number and
+//! given a format defined by the Bluetooth SIG. The assigned numbers can be found in the *Generic
+//! Access Profile* assigned number document, and formats for the data are found in the *Bluetooth
+//! Supplement to the Core*. The assigned number and format are wrapped in the format for an *AD*
+//! type defined in the Bluetooth Core Specification (v5.2 | Vol 3, Part C| sec. 11).
 use core::fmt;
 
 /// Helper macro for implementing TryFromRaw
@@ -21,10 +22,10 @@ macro_rules! from_raw {
         }
         else {
             if $arr.len() == 0 {
-                Err(crate::gap::advertise::Error::RawTooSmall)
+                Err(crate::gap::assigned::Error::RawTooSmall)
             }
             else {
-                Err(crate::gap::advertise::Error::IncorrectDataType)
+                Err(crate::gap::assigned::Error::IncorrectDataType)
             }
         }
     };
@@ -87,7 +88,7 @@ pub enum AssignedTypes {
 }
 
 impl AssignedTypes {
-    fn val(&self) -> u8 {
+    pub const fn val(&self) -> u8 {
         match *self {
             AssignedTypes::Flags => 0x01,
             AssignedTypes::IncompleteListOf16bitServiceClassUUIDs => 0x02,

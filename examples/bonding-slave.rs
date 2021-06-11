@@ -125,31 +125,31 @@ impl Bonder {
     /// This advertising is for connecting with a bluetooth device that has not been bonded with
     /// this device (or lost bonding information).
     async fn start_advertising(self, advertised_address: bo_tie::BluetoothDeviceAddress, advertised_name: &str) {
-        use bo_tie::gap::advertise;
+        use bo_tie::gap::assigned;
         use hci::le::transmitter::{
             set_advertising_data, set_advertising_enable, set_advertising_parameters, set_random_address,
         };
 
-        let adv_name = advertise::local_name::LocalName::new(advertised_name, false);
+        let adv_name = assigned::local_name::LocalName::new(advertised_name, false);
 
-        let mut adv_flags = advertise::flags::Flags::new();
+        let mut adv_flags = assigned::flags::Flags::new();
 
         // This is the flag specification for a LE-only, limited discoverable advertising.
         // All core flags are deliberately set here, but the default is disabled.
         adv_flags
-            .get_core(advertise::flags::CoreFlags::LELimitedDiscoverableMode)
+            .get_core(assigned::flags::CoreFlags::LELimitedDiscoverableMode)
             .enable();
         adv_flags
-            .get_core(advertise::flags::CoreFlags::LEGeneralDiscoverableMode)
+            .get_core(assigned::flags::CoreFlags::LEGeneralDiscoverableMode)
             .disable();
         adv_flags
-            .get_core(advertise::flags::CoreFlags::BREDRNotSupported)
+            .get_core(assigned::flags::CoreFlags::BREDRNotSupported)
             .enable();
         adv_flags
-            .get_core(advertise::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR)
+            .get_core(assigned::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR)
             .disable();
         adv_flags
-            .get_core(advertise::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR)
+            .get_core(assigned::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR)
             .disable();
 
         let mut adv_data = set_advertising_data::AdvertisingData::new();

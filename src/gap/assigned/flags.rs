@@ -63,7 +63,7 @@ pub enum FlagType {
 /// for the resulting transmission of Flags data.
 ///
 /// ```rust
-/// # use bo_tie::gap::advertise::flags;
+/// # use bo_tie::gap::assigned::flags;
 /// let mut flags = flags::Flags::new();
 ///
 /// // enable the bluetooth specified flag 'LE limited discoverable mode'

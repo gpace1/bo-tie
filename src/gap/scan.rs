@@ -21,9 +21,9 @@ impl<'a, T> ScanPayloadIter<'a, T> {
 
 impl<T> Iterator for ScanPayloadIter<'_, T>
 where
-    T: super::advertise::TryFromRaw,
+    T: super::assigned::TryFromRaw,
 {
-    type Item = Result<T, super::advertise::Error>;
+    type Item = Result<T, super::assigned::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.bytes.split_first().map(|(first, rest)| {
@@ -40,7 +40,7 @@ where
 
                 self.bytes = &[];
 
-                Err(super::advertise::Error::IncorrectLength)
+                Err(super::assigned::Error::IncorrectLength)
             }
         })
     }

@@ -4,7 +4,8 @@
 //! initiating device.
 
 use super::{
-    encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, KeyGenerationMethod, PairingData,
+    encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, KeyGenerationMethod,
+    PairingData,
 };
 use crate::l2cap::ConnectionChannel;
 use alloc::vec::Vec;
@@ -445,8 +446,6 @@ where
     }
 
     async fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<Option<&mut super::KeyDBEntry>, Error> {
-        use super::GetXOfP256Key;
-
         log::trace!("(SM) Processing pairing public Key");
 
         let initiator_pub_key = match pairing::PairingPubKey::try_from_icd(data) {
@@ -926,6 +925,91 @@ impl<'a, C, S, R> OutOfBandSlaveSecurityManager<'a, C, S, R> {
             sm,
             send_method,
             receive_method,
+        }
+    }
+}
+
+impl<'a, C, S, R, F> OutOfBandSlaveSecurityManager<'a, C, S, R>
+where
+    S: Fn(&[u8]) -> F,
+    F: core::future::Future,
+{
+    /// Send the OOB confirm information if sending is enabled
+    ///
+    /// This will create the confirm information and send the information to the initiator if the
+    /// sender function was set. If no sender was set, this method does nothing.
+    ///
+    /// # Note
+    /// The information generated is wrapped in a OOB data block and then sent to the initiator.
+    ///
+    /// # Panic
+    /// This method will panic if the pairing information and public keys were not already generated
+    /// in the pairing process.
+    async fn send(&self) {
+        use crate::gap::{
+            assigned::{sc_confirm_value, sc_random_value, IntoRaw},
+            oob_block,
+        };
+
+        if let Some(sender) = self.send_method.as_ref() {
+            let rb = toolbox::rand_u128();
+
+            let paring_data = self.sm.pairing_data.as_ref().unwrap();
+
+            let pka = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
+
+            let pkb = GetXOfP256Key::x(&paring_data.public_key);
+
+            let address = self.sm.responder_address;
+
+            let random = &sc_random_value::ScRandomValue::new(rb) as &dyn IntoRaw;
+
+            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pkb, rb, 0)) as &dyn IntoRaw;
+
+            let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
+
+            sender(&oob_block).await;
+        }
+    }
+}
+
+impl<'a, C, S, R, F> OutOfBandSlaveSecurityManager<'a, C, S, R>
+where
+    R: Fn() -> F,
+    F: core::future::Future<Output = Vec<u8>>,
+{
+    /// Receive OOB information from the initiator
+    ///
+    /// This will await for the OOB data block containing the initiator's confirm information and
+    /// return a boolean indicating if the information was verified. If no receive function was set,
+    /// this method will return true.
+    ///
+    /// # Panic
+    /// This method will panic if the pairing information and public keys were not already generated
+    /// in the pairing process.
+    async fn receive(&self) -> bool {
+        use crate::gap::{
+            assigned::{sc_confirm_value, sc_random_value, AssignedTypes, IntoRaw},
+            oob_block,
+        };
+
+        if let Some(receive) = self.receive_method.as_ref() {
+            let oob_info = oob_block::OobDataBlockIter::new(receive().await);
+
+            for (ty, data) in oob_info.iter() {
+                const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
+                const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
+
+                match ty {
+                    RANDOM_TYPE => todo!(),
+                    CONFIRM_TYPE => todo!(),
+                    _ => (),
+                }
+            }
+
+            true
+        } else {
+            true
         }
     }
 }

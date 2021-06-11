@@ -26,7 +26,7 @@
 
 use bo_tie::{
     att,
-    gap::advertise,
+    gap::assigned,
     gatt, hci,
     hci::events,
     hci::le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters},
@@ -56,25 +56,25 @@ async fn events_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
 
 /// This sets up the advertising and waits for the connection complete event
 async fn advertise_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>, local_name: &str) {
-    let adv_name = advertise::local_name::LocalName::new(local_name, false);
+    let adv_name = assigned::local_name::LocalName::new(local_name, false);
 
-    let mut adv_flags = advertise::flags::Flags::new();
+    let mut adv_flags = assigned::flags::Flags::new();
 
     // This is the flag specification for a LE-only, limited discoverable advertising
     adv_flags
-        .get_core(advertise::flags::CoreFlags::LELimitedDiscoverableMode)
+        .get_core(assigned::flags::CoreFlags::LELimitedDiscoverableMode)
         .enable();
     adv_flags
-        .get_core(advertise::flags::CoreFlags::LEGeneralDiscoverableMode)
+        .get_core(assigned::flags::CoreFlags::LEGeneralDiscoverableMode)
         .disable();
     adv_flags
-        .get_core(advertise::flags::CoreFlags::BREDRNotSupported)
+        .get_core(assigned::flags::CoreFlags::BREDRNotSupported)
         .enable();
     adv_flags
-        .get_core(advertise::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR)
+        .get_core(assigned::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR)
         .disable();
     adv_flags
-        .get_core(advertise::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR)
+        .get_core(assigned::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR)
         .disable();
 
     let mut adv_data = set_advertising_data::AdvertisingData::new();

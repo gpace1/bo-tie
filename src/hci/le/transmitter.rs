@@ -147,7 +147,7 @@ pub mod transmitter_test {
 
 pub mod set_advertising_data {
 
-    use crate::gap::advertise::{DataTooLargeError, IntoRaw};
+    use crate::gap::assigned::{DataTooLargeError, IntoRaw};
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingData);

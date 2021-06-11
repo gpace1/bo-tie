@@ -8,7 +8,7 @@
 //! Super User privileges may be required to interact with your bluetooth peripheral. To do will
 //! probably require the full path to cargo. The cargo binary is usually locacted in your home
 //! directory at `.cargo/bin/cargo`.
-use bo_tie::gap::advertise;
+use bo_tie::gap::assigned;
 use bo_tie::hci;
 use bo_tie::hci::le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters};
 use std::sync::{
@@ -101,7 +101,7 @@ fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
 
         // Add service UUIDs to the advertising data
         let services_128 = matches.opt_strs("s").into_iter().fold(
-            bo_tie::gap::advertise::service_uuids::new_128(true),
+            bo_tie::gap::assigned::service_uuids::new_128(true),
             |mut services, str_uuid| {
                 use std::convert::TryFrom;
 
@@ -133,7 +133,7 @@ fn main() {
 
     let interface = hci::HostInterface::default();
 
-    let adv_name = advertise::local_name::LocalName::new("Adv Test", false);
+    let adv_name = assigned::local_name::LocalName::new("Adv Test", false);
 
     let mut adv_data = match parse_args(std::env::args()) {
         Some(parse_args) => parse_args.advertising_data,

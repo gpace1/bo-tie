@@ -2457,7 +2457,7 @@ pub struct ReportDataIter<'a> {
 }
 
 impl<'a> core::iter::Iterator for ReportDataIter<'a> {
-    type Item = Result<&'a [u8], crate::gap::advertise::Error>;
+    type Item = Result<&'a [u8], crate::gap::assigned::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.len() > 0 {
@@ -2476,7 +2476,7 @@ impl<'a> core::iter::Iterator for ReportDataIter<'a> {
                     // short data so that None is returned the next iteration
                     self.data = &self.data[self.data.len()..];
 
-                    Some(Err(crate::gap::advertise::Error::IncorrectLength))
+                    Some(Err(crate::gap::assigned::Error::IncorrectLength))
                 }
             } else {
                 None

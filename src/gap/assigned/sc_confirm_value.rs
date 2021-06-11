@@ -5,7 +5,7 @@
 //! confirmation value to the peer pairing device (Bluetooth Core Spec. v5.2 | Vol. 3, Part H |
 //! Sec. 2.3.5.6.4).
 
-use crate::gap::advertise::{new_raw_type, AssignedTypes, Error, IntoRaw, TryFromRaw};
+use crate::gap::assigned::{new_raw_type, AssignedTypes, Error, IntoRaw, TryFromRaw};
 use alloc::prelude::v1::Vec;
 
 pub struct ScConfirmValue(u128);

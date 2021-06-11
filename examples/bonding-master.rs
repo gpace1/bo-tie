@@ -70,8 +70,8 @@ async fn start_scanning_for_addr(
 }
 
 fn match_report(report: &&hci::events::LEAdvertisingReportData, name: &str) -> bool {
-    use bo_tie::gap::advertise::local_name::LocalName;
-    use bo_tie::gap::advertise::TryFromRaw;
+    use bo_tie::gap::assigned::local_name::LocalName;
+    use bo_tie::gap::assigned::TryFromRaw;
 
     let mut data: &[u8] = &report.data;
 
