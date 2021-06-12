@@ -134,7 +134,7 @@ where
 
             Err(Error::PairingFailed(pairing::PairingFailedReason::EncryptionKeySize))
         } else {
-            let pairing_method = KeyGenerationMethod::determine_method(
+            let pairing_method = KeyGenerationMethod::determine_method_secure_connection(
                 self.pairing_request.get_oob_data_flag(),
                 response.get_oob_data_flag(),
                 self.pairing_request.get_io_capability(),

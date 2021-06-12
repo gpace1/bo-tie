@@ -8,7 +8,7 @@
 use crate::gap::assigned::{new_raw_type, AssignedTypes, Error, IntoRaw, TryFromRaw};
 use alloc::prelude::v1::Vec;
 
-pub struct ScConfirmValue(u128);
+pub struct ScConfirmValue(pub u128);
 
 impl ScConfirmValue {
     const ASSIGNED_TYPE: AssignedTypes = AssignedTypes::LESecureConnectionsConfirmationValue;

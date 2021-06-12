@@ -231,7 +231,7 @@ where
 #[derive(Debug)]
 enum KeyGenerationMethod {
     /// Out of Bound
-    Oob,
+    Oob(OobDirection),
     PassKeyEntry,
     JustWorks,
     /// Numeric comparison
@@ -240,38 +240,40 @@ enum KeyGenerationMethod {
 
 impl KeyGenerationMethod {
     /// Used to determine the pairing method to be executed between the initiator and responder
+    /// under the secure connection process.
     ///
     /// # Note
     /// `is_legacy` must be false as the security manager doesn't support legacy. It is only left
     /// here in case that changes (which is unlikely).
-    fn determine_method(
+    fn determine_method_secure_connection(
         initiator_oob_data: pairing::OOBDataFlag,
         responder_oob_data: pairing::OOBDataFlag,
         initiator_io_capability: pairing::IOCapability,
         responder_io_capability: pairing::IOCapability,
         is_legacy: bool,
     ) -> Self {
-        use pairing::{IOCapability, OOBDataFlag};
+        use pairing::{
+            IOCapability::*, OOBDataFlag::AuthenticationDataFromRemoteDevicePresent as Present,
+            OOBDataFlag::AuthenticationDataNotPresent as Unavailable,
+        };
 
         // This match should match Table 2.8 in the Bluetooth Specification v5.0 | Vol 3, Part H,
         // section 2.3.5.1
         match (initiator_oob_data, responder_oob_data) {
-            (
-                OOBDataFlag::AuthenticationDataFromRemoteDevicePresent,
-                OOBDataFlag::AuthenticationDataFromRemoteDevicePresent,
-            ) => KeyGenerationMethod::Oob,
+            (Present, Present) => KeyGenerationMethod::Oob(OobDirection::BothSendOob),
+
+            (Present, Unavailable) => KeyGenerationMethod::Oob(OobDirection::OnlyReceiverSendsOob),
+
+            (Unavailable, Present) => KeyGenerationMethod::Oob(OobDirection::OnlyInitiatorSendsOob),
 
             (_, _) => match (initiator_io_capability, responder_io_capability) {
-                (IOCapability::DisplayOnly, IOCapability::KeyboardOnly)
-                | (IOCapability::DisplayOnly, IOCapability::KeyboardDisplay) => KeyGenerationMethod::PassKeyEntry,
+                (DisplayOnly, KeyboardOnly) | (DisplayOnly, KeyboardDisplay) => KeyGenerationMethod::PassKeyEntry,
 
-                (IOCapability::DisplayWithYesOrNo, IOCapability::DisplayWithYesOrNo) if !is_legacy => {
-                    KeyGenerationMethod::NumbComp
-                }
+                (DisplayWithYesOrNo, DisplayWithYesOrNo) if !is_legacy => KeyGenerationMethod::NumbComp,
 
-                (IOCapability::DisplayWithYesOrNo, IOCapability::KeyboardOnly) => KeyGenerationMethod::PassKeyEntry,
+                (DisplayWithYesOrNo, KeyboardOnly) => KeyGenerationMethod::PassKeyEntry,
 
-                (IOCapability::DisplayWithYesOrNo, IOCapability::KeyboardDisplay) => {
+                (DisplayWithYesOrNo, KeyboardDisplay) => {
                     if is_legacy {
                         KeyGenerationMethod::PassKeyEntry
                     } else {
@@ -279,16 +281,14 @@ impl KeyGenerationMethod {
                     }
                 }
 
-                (IOCapability::KeyboardOnly, IOCapability::DisplayOnly)
-                | (IOCapability::KeyboardOnly, IOCapability::DisplayWithYesOrNo)
-                | (IOCapability::KeyboardOnly, IOCapability::KeyboardOnly)
-                | (IOCapability::KeyboardOnly, IOCapability::KeyboardDisplay) => KeyGenerationMethod::PassKeyEntry,
+                (KeyboardOnly, DisplayOnly)
+                | (KeyboardOnly, DisplayWithYesOrNo)
+                | (KeyboardOnly, KeyboardOnly)
+                | (KeyboardOnly, KeyboardDisplay) => KeyGenerationMethod::PassKeyEntry,
 
-                (IOCapability::KeyboardDisplay, IOCapability::DisplayOnly)
-                | (IOCapability::KeyboardDisplay, IOCapability::KeyboardOnly) => KeyGenerationMethod::PassKeyEntry,
+                (KeyboardDisplay, DisplayOnly) | (KeyboardDisplay, KeyboardOnly) => KeyGenerationMethod::PassKeyEntry,
 
-                (IOCapability::KeyboardDisplay, IOCapability::DisplayWithYesOrNo)
-                | (IOCapability::KeyboardDisplay, IOCapability::KeyboardDisplay) => {
+                (KeyboardDisplay, DisplayWithYesOrNo) | (KeyboardDisplay, KeyboardDisplay) => {
                     if is_legacy {
                         KeyGenerationMethod::PassKeyEntry
                     } else {
@@ -302,6 +302,12 @@ impl KeyGenerationMethod {
     }
 }
 
+#[derive(Debug)]
+enum OobDirection {
+    OnlyReceiverSendsOob,
+    OnlyInitiatorSendsOob,
+    BothSendOob,
+}
 /// Data that is gathered in the process of pairing
 ///
 /// This data is unique for each pairing attempt and must be dropped after a successful or failed

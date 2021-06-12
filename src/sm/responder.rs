@@ -9,12 +9,18 @@ use super::{
 };
 use crate::l2cap::ConnectionChannel;
 use alloc::vec::Vec;
+use core::future::Future;
 
 /// A builder for a [`SlaveSecurityManager`]
+///
+/// This is used to construct a `SlaveSecurityManager`. However building requires the
+///
+/// # Out of Band Support
+/// A `SlaveSecurityManager` will only support OOB if method `use_oob` of this build is called. It
+///
 pub struct SlaveSecurityManagerBuilder<'a, C> {
     connection_channel: &'a C,
     io_capabilities: pairing::IOCapability,
-    oob: bool,
     encryption_key_min: usize,
     encryption_key_max: usize,
     remote_address: &'a crate::BluetoothDeviceAddress,
@@ -48,16 +54,29 @@ where
         }
     }
 
-    /// Use an out-of-band method for pairing
+    /// Use or support an out-of-band (OOB) method for pairing
     ///
-    /// This takes
-    pub fn use_oob<S, R>(&'a mut self) -> OutOfBandMethod<'a, C, S, R> {
+    /// This creates an `OutOfBandMethodBuilder` for creating a `SlaveSecurityManager` that supports
+    /// OOB.data transfer.
+    pub fn use_oob<S, R>(&'a mut self) -> OutOfBandMethodBuilder<'a, C, S, R> {
         self.oob = true;
 
-        OutOfBandMethod::new(self)
+        OutOfBandMethodBuilder::new(self)
     }
 
-    pub fn build(&self) -> SlaveSecurityManager<'a, C> {
+    /// Create the `SlaveSecurityManager`
+    ///
+    /// # Note
+    /// This will create a `SlaveSecurityManager` that does not support OOB. The hidden type that
+    /// implements `OutOfBand` in the return is a dummy type.
+    pub fn build(&'a self) -> SlaveSecurityManager<'a, C, impl OutOfBand> {
+        self.make(OutOfBandMethod::new((), ()))
+    }
+
+    /// Method for making a `SlaveSecurityManager`
+    ///
+    /// This is here to facilitate the tricks done around OOB type implementations.
+    fn make<S, R>(&self, oob: OutOfBandMethod<S, R>) -> SlaveSecurityManager<C, OutOfBandMethod<S, R>> {
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
             encrypt_info::AuthRequirements::ManInTheMiddleProtection,
@@ -69,8 +88,7 @@ where
         SlaveSecurityManager {
             connection_channel: self.connection_channel,
             io_capability: self.io_capabilities,
-            oob: self.oob,
-            // passkey: None,
+            oob,
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
             auth_req,
@@ -86,10 +104,10 @@ where
     }
 }
 
-pub struct SlaveSecurityManager<'a, C> {
+pub struct SlaveSecurityManager<'a, C, O> {
     connection_channel: &'a C,
     io_capability: pairing::IOCapability,
-    oob: bool,
+    oob: O,
     auth_req: Vec<encrypt_info::AuthRequirements>,
     encryption_key_size_min: usize,
     encryption_key_size_max: usize,
@@ -103,9 +121,10 @@ pub struct SlaveSecurityManager<'a, C> {
     link_encrypted: bool,
 }
 
-impl<'a, C> SlaveSecurityManager<'a, C>
+impl<'a, C, O> SlaveSecurityManager<'a, C, O>
 where
     C: ConnectionChannel,
+    O: OutOfBand,
 {
     /// Save the key details to `security_manager``
     ///
@@ -373,6 +392,101 @@ where
         self.send(pairing::PairingFailed::new(fail_reason)).await
     }
 
+    /// Send the OOB confirm information if sending is enabled
+    ///
+    /// This will create the confirm information and send the information to the initiator if the
+    /// sender function was set. If no sender was set, this method does nothing.
+    ///
+    /// # Note
+    /// The information generated is wrapped in a OOB data block and then sent to the initiator.
+    ///
+    /// # Panic
+    /// This method will panic if the pairing information and public keys were not already generated
+    /// in the pairing process.
+    async fn send_oob(&self) {
+        use crate::gap::{
+            assigned::{sc_confirm_value, sc_random_value, IntoRaw},
+            oob_block,
+        };
+
+        if O::can_send() {
+            let rb = toolbox::rand_u128();
+
+            let paring_data = self.pairing_data.as_ref().unwrap();
+
+            let pka = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
+
+            let pkb = GetXOfP256Key::x(&paring_data.public_key);
+
+            let address = self.responder_address;
+
+            let random = &sc_random_value::ScRandomValue::new(rb) as &dyn IntoRaw;
+
+            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pkb, rb, 0)) as &dyn IntoRaw;
+
+            let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
+
+            self.oob.send(&oob_block).await;
+        }
+    }
+
+    /// Receive OOB information from the initiator
+    ///
+    /// This will await for the OOB data block containing the initiator's confirm information and
+    /// return a boolean indicating if the information was verified. If no receive function was set,
+    /// this method will return true.
+    ///
+    /// # Error
+    /// An error is returned if the initiator's random and confirm values cannot be converted
+    ///
+    /// # Panic
+    /// This method will panic if the pairing information and public keys were not already generated
+    /// in the pairing process.
+    async fn receive_oob(&self) -> bool {
+        use crate::gap::{
+            assigned::{sc_confirm_value, sc_random_value, AssignedTypes, TryFromRaw},
+            oob_block,
+        };
+
+        if O::can_receive() {
+            let raw = self.oob.receive().await;
+
+            let oob_info = oob_block::OobDataBlockIter::new(raw);
+
+            let mut ra = None;
+            let mut ca = None;
+
+            for (ty, data) in oob_info.iter() {
+                const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
+                const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
+
+                match ty {
+                    RANDOM_TYPE => ra = sc_random_value::ScRandomValue::try_from_raw(data).ok(),
+                    CONFIRM_TYPE => ca = sc_confirm_value::ScConfirmValue::try_from_raw(data).ok(),
+                    _ => (),
+                }
+            }
+
+            if let (Some(ra), Some(ca)) = (ra, ca) {
+                let paring_data = self.pairing_data.as_ref().unwrap();
+
+                let pka = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
+
+                let pkb = GetXOfP256Key::x(&paring_data.public_key);
+
+                if ca.0 == toolbox::f4(pka, pkb, ra.0, 0) {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+
     async fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<Option<&mut super::KeyDBEntry>, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported).await?;
 
@@ -398,7 +512,7 @@ where
         } else {
             let response = pairing::PairingResponse::new(
                 self.io_capability,
-                if self.oob {
+                if O::can_receive() {
                     pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
                 } else {
                     pairing::OOBDataFlag::AuthenticationDataNotPresent
@@ -409,7 +523,7 @@ where
                 self.responder_key_distribution.clone(),
             );
 
-            let pairing_method = KeyGenerationMethod::determine_method(
+            let pairing_method = KeyGenerationMethod::determine_method_secure_connection(
                 request.get_oob_data_flag(),
                 response.get_oob_data_flag(),
                 request.get_io_capability(),
@@ -459,6 +573,7 @@ where
 
         match self.pairing_data {
             Some(PairingData {
+                ref key_gen_method,
                 ref public_key,
                 ref nonce,
                 ref mut private_key,
@@ -830,39 +945,50 @@ where
 /// order for OOB to be secure form of pairing.
 ///
 /// The methods [`set_send_method`] and [`set_receive_method`] determine how data is sent and
-/// received through the OOB interface. At least one of them must be called before an
-/// [`OutOfBandSlaveSecurityManager`] can be built (with [`build`]). When `set_send_method` the
-/// responder will send OOB data to the initiator, and if `set_receive_method` is called then this
-/// responder will await for an OOB message from the initiator. It is recommended to match the
-/// methods to the capability of the OOB interface.
-pub struct OutOfBandMethod<'a, C, S, R> {
+/// received through the OOB interface. Both of them must be called before an
+/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
+/// used to set a factory function for generating a future to process sending data over the OOB
+/// interface. Correspondingly `set_receive_method` is for setting the factory function for
+/// generating a future for receiving data over the OOB interface.
+///
+/// If it is desired to only support one direction of OOB data transfer, the methods
+/// [`set_send_only`] and [`set_receive_only`] can be used for facilitate this, however it is
+/// recommended to only use these methods when the OOB interface only supports a single direction of
+/// data transfer. Using these methods will mean that the initiator must support the counterpart
+/// direction of data transfer or OOB authentication will fail.
+pub struct OutOfBandMethodBuilder<'a, C, S, R> {
     builder: &'a mut SlaveSecurityManagerBuilder<'a, C>,
     send_method: core::cell::Cell<Option<S>>,
     receive_method: core::cell::Cell<Option<R>>,
 }
 
-impl<'a, C, S, R> OutOfBandMethod<'a, C, S, R>
-where
-    C: ConnectionChannel,
-{
+impl<'a, C, S, R> OutOfBandMethodBuilder<'a, C, S, R> {
     fn new(builder: &'a mut SlaveSecurityManagerBuilder<'a, C>) -> Self {
-        OutOfBandMethod {
+        OutOfBandMethodBuilder {
             builder,
             send_method: core::cell::Cell::new(None),
             receive_method: core::cell::Cell::new(None),
         }
     }
+}
 
+impl<'a, C, S, R, F1, F2> OutOfBandMethodBuilder<'a, C, S, R>
+where
+    C: ConnectionChannel,
+    S: Fn(&[u8]) -> F1,
+    F1: Future,
+    R: Fn() -> F2,
+    F2: Future<Output = Vec<u8>>,
+{
     /// Set the method for sending
     ///
     /// Input `send_method` is a function for generating a future used for sending data across the
     /// OOB interface. The purpose of the future is to allow for situations where sending may
     /// be an asynchronous process.
-    pub fn set_send_method<F>(&mut self, send_method: S) -> &mut Self
-    where
-        S: Fn(&[u8]) -> F,
-        F: core::future::Future,
-    {
+    ///
+    /// # Note
+    /// Using this method requires calling method `set_receive_method`
+    pub fn set_send_method(&mut self, send_method: S) -> &mut Self {
         self.send_method.set(Some(send_method));
 
         self
@@ -872,30 +998,56 @@ where
     ///
     /// Input `send_method` is a function for generating a future for receiving over the OOB
     /// interface.
-    pub fn set_receive_method<F>(&mut self, receive_method: R) -> &mut Self
-    where
-        R: Fn() -> F,
-        F: core::future::Future<Output = Vec<u8>>,
-    {
+    ///
+    /// # Note
+    /// Using this method requires calling method `set_send_method`
+    pub fn set_receive_method(&mut self, receive_method: R) -> &mut Self {
         self.receive_method.set(Some(receive_method));
 
         self
     }
 
-    pub fn build(&self) -> Result<OutOfBandSlaveSecurityManager<'a, C, S, R>, OobBuildError> {
-        let send_method = self.send_method.take();
+    /// Create the OOB supporting `SlaveSecurityManager`
+    pub fn build(&self) -> Result<SlaveSecurityManager<C, impl OutOfBand>, OobBuildError> {
+        let send_method = self.send_method.take().ok_or(OobBuildError::Send)?;
 
-        let receive_method = self.receive_method.take();
+        let receive_method = self.receive_method.take().ok_or(OobBuildError::Receive)?;
 
-        Ok(OutOfBandSlaveSecurityManager::new(
-            self.builder.build(),
-            send_method,
-            receive_method,
-        ))
+        Ok(self.builder.make(OutOfBandMethod::new(send_method, receive_method)))
     }
 }
 
-impl<'a, C, S, R> core::ops::Deref for OutOfBandMethod<'a, C, S, R> {
+impl<'a, C, S, F> OutOfBandMethodBuilder<'a, C, S, ()>
+where
+    C: ConnectionChannel,
+    S: Fn(&[u8]) -> F,
+    F: Future,
+{
+    /// Build a security manager responder that only supports sending OOB data
+    ///
+    /// This creates an OOB supporting security manager where the initiators OOB data is never
+    /// validated.
+    pub fn build_oob_send_only(&mut self, send_method: S) -> SlaveSecurityManager<C, impl OutOfBand> {
+        self.builder.make(OutOfBandMethod::new(send_method, ()))
+    }
+}
+
+impl<'a, C, R, F> OutOfBandMethodBuilder<'a, C, (), R>
+where
+    C: ConnectionChannel,
+    R: Fn() -> F,
+    F: Future<Output = Vec<u8>>,
+{
+    /// When only the security manager responder sends OOB data
+    ///
+    /// This creates an OOB supporting security manager where only the initiator will send OOB data
+    /// to this security manager.
+    pub fn build_oob_receive_only(&mut self, receive_method: R) -> SlaveSecurityManager<C, impl OutOfBand> {
+        self.builder.make(OutOfBandMethod::new((), receive_method))
+    }
+}
+
+impl<'a, C, S, R> core::ops::Deref for OutOfBandMethodBuilder<'a, C, S, R> {
     type Target = SlaveSecurityManagerBuilder<'a, C>;
 
     fn deref(&self) -> &Self::Target {
@@ -903,128 +1055,178 @@ impl<'a, C, S, R> core::ops::Deref for OutOfBandMethod<'a, C, S, R> {
     }
 }
 
-#[derive(Debug)]
-pub struct OobBuildError;
+pub enum OobBuildError {
+    Send,
+    Receive,
+}
 
-impl core::fmt::Display for OobBuildError {
+impl core::fmt::Debug for OobBuildError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        f.write_str("No send or receive methods were set for OOB data")
+        <Self as core::fmt::Display>::fmt(self, f)
     }
 }
 
-/// A slave security manager that uses an out-of-band process of pairing
-pub struct OutOfBandSlaveSecurityManager<'a, C, S, R> {
-    sm: SlaveSecurityManager<'a, C>,
-    send_method: Option<S>,
-    receive_method: Option<R>,
+impl core::fmt::Display for OobBuildError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            OobBuildError::Send => f.write_str("Send method not set for OOB data"),
+            OobBuildError::Receive => f.write_str("Receive method not set for OOB data"),
+        }
+    }
 }
 
-impl<'a, C, S, R> OutOfBandSlaveSecurityManager<'a, C, S, R> {
-    fn new(sm: SlaveSecurityManager<'a, C>, send_method: Option<S>, receive_method: Option<R>) -> Self {
-        OutOfBandSlaveSecurityManager {
-            sm,
+/// A slave security manager that uses an out-of-band process of pairing.
+///
+/// The main purpose of the `OutOfBandMethod` type is to use some tricks around generics in order to
+/// not force the user to create types that implement `Future` for a Security Manager. Thanks to
+/// this, when constructing a Security Manager with one of the builders, the user can choose whether
+/// to implement OOB functionality or ignore it.
+pub struct OutOfBandMethod<S, R> {
+    send_method: S,
+    receive_method: R,
+}
+
+impl<S, R> OutOfBandMethod<S, R> {
+    fn new(send_method: S, receive_method: R) -> Self {
+        OutOfBandMethod {
             send_method,
             receive_method,
         }
     }
 }
 
-impl<'a, C, S, R, F> OutOfBandSlaveSecurityManager<'a, C, S, R>
+/// Trait for setting out of band support
+///
+/// # Note
+/// This trait is internally implemented
+#[doc(hidden)]
+pub trait OutOfBand {
+    type SendFuture: Future;
+    type ReceiveFuture: Future<Output = Vec<u8>>;
+
+    /// A boolean to indicate if this out of band method can sending OOB data to the other device
+    fn can_send() -> bool;
+
+    /// A boolean to indicate if this out of band method can receive OOB data from the other device
+    fn can_receive() -> bool;
+
+    /// Send OOB data to the other device
+    fn send(&self, raw: &[u8]) -> Self::SendFuture;
+
+    /// Receive OOB data from teh other device
+    fn receive(&self) -> Self::ReceiveFuture;
+}
+
+impl<S, R, SF, RF> OutOfBand for OutOfBandMethod<S, R>
+where
+    S: Fn(&[u8]) -> SF,
+    SF: Future,
+    R: Fn() -> RF,
+    RF: Future<Output = Vec<u8>>,
+{
+    type SendFuture = SF;
+    type ReceiveFuture = RF;
+
+    fn can_send() -> bool {
+        true
+    }
+
+    fn can_receive() -> bool {
+        true
+    }
+
+    fn send(&self, raw: &[u8]) -> Self::SendFuture {
+        (self.send_method)(raw)
+    }
+
+    fn receive(&self) -> Self::ReceiveFuture {
+        (self.receive_method)()
+    }
+}
+
+impl<S, F> OutOfBand for OutOfBandMethod<S, ()>
 where
     S: Fn(&[u8]) -> F,
-    F: core::future::Future,
+    F: Future,
 {
-    /// Send the OOB confirm information if sending is enabled
-    ///
-    /// This will create the confirm information and send the information to the initiator if the
-    /// sender function was set. If no sender was set, this method does nothing.
-    ///
-    /// # Note
-    /// The information generated is wrapped in a OOB data block and then sent to the initiator.
-    ///
-    /// # Panic
-    /// This method will panic if the pairing information and public keys were not already generated
-    /// in the pairing process.
-    async fn send(&self) {
-        use crate::gap::{
-            assigned::{sc_confirm_value, sc_random_value, IntoRaw},
-            oob_block,
-        };
+    type SendFuture = F;
+    type ReceiveFuture = NeverUnusedOobInterface<Vec<u8>>;
 
-        if let Some(sender) = self.send_method.as_ref() {
-            let rb = toolbox::rand_u128();
+    fn can_send() -> bool {
+        true
+    }
 
-            let paring_data = self.sm.pairing_data.as_ref().unwrap();
+    fn can_receive() -> bool {
+        false
+    }
 
-            let pka = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
+    fn send(&self, raw: &[u8]) -> Self::SendFuture {
+        (self.send_method)(raw)
+    }
 
-            let pkb = GetXOfP256Key::x(&paring_data.public_key);
-
-            let address = self.sm.responder_address;
-
-            let random = &sc_random_value::ScRandomValue::new(rb) as &dyn IntoRaw;
-
-            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pkb, rb, 0)) as &dyn IntoRaw;
-
-            let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
-
-            sender(&oob_block).await;
-        }
+    fn receive(&self) -> Self::ReceiveFuture {
+        panic!("Tried to receive OOB data on unavailable interface")
     }
 }
 
-impl<'a, C, S, R, F> OutOfBandSlaveSecurityManager<'a, C, S, R>
+impl<R, F> OutOfBand for OutOfBandMethod<(), R>
 where
     R: Fn() -> F,
-    F: core::future::Future<Output = Vec<u8>>,
+    F: Future<Output = Vec<u8>>,
 {
-    /// Receive OOB information from the initiator
-    ///
-    /// This will await for the OOB data block containing the initiator's confirm information and
-    /// return a boolean indicating if the information was verified. If no receive function was set,
-    /// this method will return true.
-    ///
-    /// # Panic
-    /// This method will panic if the pairing information and public keys were not already generated
-    /// in the pairing process.
-    async fn receive(&self) -> bool {
-        use crate::gap::{
-            assigned::{sc_confirm_value, sc_random_value, AssignedTypes, IntoRaw},
-            oob_block,
-        };
+    type SendFuture = NeverUnusedOobInterface<()>;
+    type ReceiveFuture = F;
 
-        if let Some(receive) = self.receive_method.as_ref() {
-            let oob_info = oob_block::OobDataBlockIter::new(receive().await);
+    fn can_send() -> bool {
+        false
+    }
 
-            for (ty, data) in oob_info.iter() {
-                const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
-                const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
+    fn can_receive() -> bool {
+        true
+    }
 
-                match ty {
-                    RANDOM_TYPE => todo!(),
-                    CONFIRM_TYPE => todo!(),
-                    _ => (),
-                }
-            }
+    fn send(&self, _: &[u8]) -> Self::SendFuture {
+        panic!("Tried to send OOB data on unavailable interface")
+    }
 
-            true
-        } else {
-            true
-        }
+    fn receive(&self) -> Self::ReceiveFuture {
+        (self.receive_method)()
     }
 }
 
-impl<'a, C, S, R> core::ops::Deref for OutOfBandSlaveSecurityManager<'a, C, S, R> {
-    type Target = SlaveSecurityManager<'a, C>;
+impl OutOfBand for OutOfBandMethod<(), ()> {
+    type SendFuture = NeverUnusedOobInterface<()>;
+    type ReceiveFuture = NeverUnusedOobInterface<Vec<u8>>;
 
-    fn deref(&self) -> &Self::Target {
-        &self.sm
+    fn can_send() -> bool {
+        false
+    }
+
+    fn can_receive() -> bool {
+        false
+    }
+
+    fn send(&self, _: &[u8]) -> Self::SendFuture {
+        panic!("Tried to send OOB data on unavailable interface")
+    }
+
+    fn receive(&self) -> Self::ReceiveFuture {
+        panic!("Tried to receive OOB data on unavailable interface")
     }
 }
 
-impl<'a, C, S, R> core::ops::DerefMut for OutOfBandSlaveSecurityManager<'a, C, S, R> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.sm
+/// Never used interface
+///
+/// This is just a type for easily creating a future that will never be awaited upon. This is
+/// effectively the same as the [`!`](https://doc.rust-lang.org/std/primitive.never.html) type
+/// except it implements `Future<Output=V>`.
+#[doc(hidden)]
+pub struct NeverUnusedOobInterface<V>(core::marker::PhantomData<V>);
+
+impl<V> Future for NeverUnusedOobInterface<V> {
+    type Output = V;
+    fn poll(self: core::pin::Pin<&mut Self>, _: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
+        unreachable!()
     }
 }
 

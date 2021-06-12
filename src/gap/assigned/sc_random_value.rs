@@ -8,7 +8,7 @@
 use crate::gap::assigned::{new_raw_type, AssignedTypes, Error, IntoRaw, TryFromRaw};
 use alloc::prelude::v1::Vec;
 
-pub struct ScRandomValue(u128);
+pub struct ScRandomValue(pub u128);
 
 impl ScRandomValue {
     const ASSIGNED_TYPE: AssignedTypes = AssignedTypes::LESecureConnectionsRandomValue;
