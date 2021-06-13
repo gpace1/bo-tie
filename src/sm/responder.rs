@@ -8,6 +8,7 @@ use super::{
     PairingData,
 };
 use crate::l2cap::ConnectionChannel;
+use crate::sm::OobDirection;
 use alloc::vec::Vec;
 use core::future::Future;
 
@@ -44,7 +45,6 @@ where
         Self {
             connection_channel,
             io_capabilities: pairing::IOCapability::NoInputNoOutput,
-            oob: false,
             encryption_key_min: super::ENCRYPTION_KEY_MAX_SIZE,
             encryption_key_max: super::ENCRYPTION_KEY_MAX_SIZE,
             remote_address: connected_device_address,
@@ -59,8 +59,6 @@ where
     /// This creates an `OutOfBandMethodBuilder` for creating a `SlaveSecurityManager` that supports
     /// OOB.data transfer.
     pub fn use_oob<S, R>(&'a mut self) -> OutOfBandMethodBuilder<'a, C, S, R> {
-        self.oob = true;
-
         OutOfBandMethodBuilder::new(self)
     }
 
@@ -620,8 +618,29 @@ where
                         // Send the public key of this device
                         self.send(pairing::PairingPubKey::new(raw_pub_key)).await?;
 
-                        // Send the confirm value
-                        self.send(pairing::PairingConfirm::new(confirm_value)).await?;
+                        // Process what to do next based on the key generation method
+                        match key_gen_method {
+                            KeyGenerationMethod::JustWorks | KeyGenerationMethod::NumbComp => {
+                                // Send the confirm value
+                                self.send(pairing::PairingConfirm::new(confirm_value)).await?;
+                            }
+                            KeyGenerationMethod::Oob(OobDirection::OnlyReceiverSendsOob) => self.send_oob().await,
+                            KeyGenerationMethod::Oob(OobDirection::BothSendOob) => {
+                                self.send_oob().await;
+
+                                if !self.receive_oob().await {
+                                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
+                                }
+                            }
+                            KeyGenerationMethod::Oob(OobDirection::OnlyInitiatorSendsOob) => {
+                                if !self.receive_oob().await {
+                                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
+                                }
+                            }
+                            KeyGenerationMethod::PassKeyEntry => {
+                                todo!("Key generation method 'Pass Key Entry' is not supported yet")
+                            }
+                        }
 
                         Ok(None)
                     }
