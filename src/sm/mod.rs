@@ -10,18 +10,74 @@
 //! initializing the pairing process and for re-establishing encryption to the slave device.
 //! `SlaveSecurityManger` is used by the slave device as the responder to pairing requests.
 //!
-//! # Async
-//! Both the `Async` and non-`Async` prepended Managers utilize asynchronous operations for I/O
-//! to the Bluetooth Radio. What the `Async` versions do is further use the Bluetooth Controller for
-//! the encryption calculations that require either AES or the generation of a elliptic curve
-//! Diffie-Hellman key pair.
+//! # Out of Band Pairing Support
+//! OOB data is sent though a method outside of the Bluetooth logical link use to initialize
+//! pairing, but the builders for the initializer or responder Security Managers must explicitly
+//! enable it. The main problem with OOB is that the interface is out of scope for this library (and
+//! the Bluetooth Spec.). When enabling OOB, the methods for sending or receiving data over the OOB
+//! interface must be provided. For Secure Connection, only one of these methods is required, but
+//! it is recommended to implement at least the receiver if you do not trust the Security Manager
+//! implementation of the the peer Device. This is because the confirm value (the validation that
+//! public keys are not compromised by a man in the middle attack) is only checked when a Securty
+//! Manager receives OOB data.
 //!
-//! The ['AsyncMasterSecurityManager'] and ['AsyncSlaveSecurityManager'] are versions of
-//! ['MasterSecurityManager'] or a ['SlaveSecurityManager'] which can be used when it desired for
-//! the controller to perform the encryption of the cleartext and to generate the Diffie-Hellman
-//! Key, but make sure that the controller supports both of these Host Controller Interface commands
-//! ( See the Bluetooth Specification v5.0 | Vol 2, Part E, sections 7.8.22-26 and 7.8.37). These
-//! may not
+//! ```
+//! # // example initialization boilerplate
+//! # let this_address = bo_tie::BluetoothDeviceAddress::default();
+//! # let peer_address = bo_tie::BluetoothDeviceAddress::default();
+//! # struct StubConnectionChannel;
+//! # impl bo_tie::l2cap::ConnectionChannel for StubConnectionChannel {
+//! #     type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
+//! #     type SendFutErr = usize;
+//! #     fn send(&self,data: AclData) -> Self::SendFut { unimplemented!() }
+//! #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
+//! #     fn get_mtu(&self) -> usize { unimplemented!() }
+//! #     fn max_mtu(&self) -> usize { unimplemented!() }
+//! #     fn min_mtu(&self) -> usize { unimplemented!() }
+//! #     fn receive(&self,waker: &Waker) -> Option<Vec<AclDataFragment>> { unimplemented!() }
+//! # }
+//! # let connection_channel = StubConnectionChannel;
+//!
+//! // An example of setting up a receiver that support oob
+//! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
+//! use bo_tie::l2cap::{AclData, ConnectionChannel, AclDataFragment};
+//! use std::task::Waker;
+//! use std::future::Future;
+//!
+//! async fn send(data: &[u8]) {
+//!     todo!("your method for sending")
+//! }
+//!
+//! async fn receive() -> Vec<u8> {
+//!     todo!("your method for receiving")
+//! }
+//!
+//! let security_manager = SlaveSecurityManagerBuilder::new(
+//!         &connection_channel,
+//!         &this_address,
+//!         &peer_address,
+//!         false,
+//!         false
+//!     ).use_oob()
+//!     .only_send_oob(send)
+//!     .build_oob()
+//!     .unwrap();
+//! ```
+//!
+// todo: this talks about how to integrate HCI calculated ECDH and AES
+// //! # HCI
+// //! Both the `Async` and non-`Async` prepended Managers utilize asynchronous operations for I/O
+// //! to the Bluetooth Radio. What the `Async` versions do is further use the Bluetooth Controller for
+// //! the encryption calculations that require either AES or the generation of a elliptic curve
+// //! Diffie-Hellman key pair.
+// //!
+// //! The ['AsyncMasterSecurityManager'] and ['AsyncSlaveSecurityManager'] are versions of
+// //! ['MasterSecurityManager'] or a ['SlaveSecurityManager'] which can be used when it desired for
+// //! the controller to perform the encryption of the cleartext and to generate the Diffie-Hellman
+// //! Key, but make sure that the controller supports both of these Host Controller Interface commands
+// //! ( See the Bluetooth Specification v5.0 | Vol 2, Part E, sections 7.8.22-26 and 7.8.37). These
+// //! may not
+// //!
 //!
 //! # Note
 //! This module uses the following crates for parts of the encryption process.
@@ -779,7 +835,7 @@ impl GetXOfP256Key for [u8; 64] {
     }
 }
 
-/// Error for when a function for sending or receiving out of band (OOB) data is not set.
+/// Error for method [`OutOfBandMethodBuilder::build`](OutOfBandMethodBuilder::build)
 ///
 /// When initializing bi-directional OOB support for a Security Manager, a method for sending
 /// and a method for receiving must be set. If either of these methods are not set, then this error
@@ -814,7 +870,8 @@ impl core::fmt::Display for OobBuildError {
 /// not have a different Security Managers for when OOB is enabled. Thanks to this and trait
 /// [`OutOfBand`], the user of a Security Manager can selectively choose the OOB implementation
 /// based on the methods within the Security Manager builders.
-struct OutOfBandMethod<S, R> {
+#[doc(hidden)]
+pub struct OutOfBandMethod<S, R> {
     send_method: S,
     receive_method: R,
 }
@@ -962,3 +1019,188 @@ impl<V> Future for NeverUnusedOobInterface<V> {
         unreachable!()
     }
 }
+
+/// Out of Band pairing method setup
+///
+/// Security Managers that implement this trait can be used as the out-of-band (OOB) process for
+/// pairing. Any communication process that is outside of the direct Bluetooth communication between
+/// the two pairing devices can be considered a valid OOB. However the OOB link must have
+/// man in the middle protection in order for the OOB method to be secure form of pairing.
+///
+/// # Bidirectional confirm validation
+/// The methods [`set_send_method`](OutOfBandMethodBuilder::set_send_method) and
+/// [`set_receive_method`]((OutOfBandMethodBuilder::set_receive_method) determine how data is sent
+/// and received through the OOB interface. Both of them must be called before an
+/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
+/// used to set a factory function for generating a future to process sending data over the OOB
+/// interface. Correspondingly `set_receive_method` is for setting the factory function for
+/// generating a future for receiving data over the OOB interface.
+///
+/// # Single Direction confirm validation
+/// If it is desired to only support one direction of OOB data transfer, the methods
+/// [`only_send_oob`](OutOfBandMethodBuilder::only_send_oob) and
+/// [`only_receive_oob`](OutOfBandMethodBuilder::only_receive_oob) can be used for facilitate this,
+/// however it is recommended to only use these methods when the OOB interface only supports a
+/// single direction of data transfer. Using these methods will mean that the initiator must support
+/// the counterpart direction of data transfer or OOB authentication will fail.
+pub struct OutOfBandMethodBuilder<'a, B, S, R> {
+    builder: &'a mut B,
+    send_method: core::cell::Cell<Option<S>>,
+    receive_method: core::cell::Cell<Option<R>>,
+}
+
+impl<'a, B, S, R> OutOfBandMethodBuilder<'a, B, S, R> {
+    fn new(builder: &'a mut B) -> Self {
+        OutOfBandMethodBuilder {
+            builder,
+            send_method: core::cell::Cell::new(None),
+            receive_method: core::cell::Cell::new(None),
+        }
+    }
+
+    /// Build the OOB supporting Security Manager
+    pub fn build_oob(&'a self) -> Result<B::SecurityManager, OobBuildError>
+    where
+        B: BuildOutOfBand<'a, S, R>,
+    {
+        let send = self.send_method.take().ok_or(OobBuildError::Send)?;
+
+        let receive = self.receive_method.take().ok_or(OobBuildError::Receive)?;
+
+        Ok(self.builder.build_security_manager(send, receive))
+    }
+
+    /// Set the method for sending
+    ///
+    /// Input `send_method` is a function for generating a future used for sending data across the
+    /// OOB interface. The purpose of the future is to allow for situations where sending may
+    /// be an asynchronous process.
+    ///
+    /// # Note
+    /// Using this method requires calling method `set_receive_method`
+    pub fn set_send_method<F>(&'a mut self, send_method: S) -> &mut Self
+    where
+        S: Fn(&[u8]) -> F,
+        F: Future,
+    {
+        self.send_method.set(Some(send_method));
+
+        self
+    }
+
+    /// Set the method for receiving
+    ///
+    /// Input `send_method` is a function for generating a future for receiving over the OOB
+    /// interface.
+    ///
+    /// # Note
+    /// Using this method requires calling method `set_send_method`
+    pub fn set_receive_method<F>(&'a mut self, receive_method: R) -> &mut Self
+    where
+        R: Fn() -> F,
+        F: Future<Output = Vec<u8>>,
+    {
+        self.receive_method.set(Some(receive_method));
+
+        self
+    }
+}
+
+impl<B, S, F> OutOfBandMethodBuilder<'_, B, S, ()>
+where
+    S: Fn(&[u8]) -> F,
+    F: Future,
+{
+    /// Make the security manager to only support sending OOB data
+    ///
+    /// This creates an OOB supporting security manager where the initiators OOB data is never
+    /// validated.
+    pub fn only_send_oob(&mut self, send_method: S) -> &mut Self {
+        self.send_method.set(Some(send_method));
+        self.receive_method.set(Some(()));
+        self
+    }
+}
+
+impl<B, R, F> OutOfBandMethodBuilder<'_, B, (), R>
+where
+    R: Fn() -> F,
+    F: Future<Output = Vec<u8>>,
+{
+    /// Make the security manager to only support receiving OOB data
+    ///
+    /// This creates an OOB supporting security manager where only the initiator will send OOB data
+    /// to this security manager.
+    pub fn only_receive_oob(&mut self, receive_method: R) -> &mut Self {
+        self.send_method.set(Some(()));
+        self.receive_method.set(Some(receive_method));
+        self
+    }
+}
+
+impl<B, S, R> core::ops::Deref for OutOfBandMethodBuilder<'_, B, S, R> {
+    type Target = B;
+
+    fn deref(&self) -> &Self::Target {
+        &self.builder
+    }
+}
+
+/// Trait for building the the Security Manager with OOB support
+///
+/// This is a helper trait to get around some generic limitations.
+#[doc(hidden)]
+pub trait BuildOutOfBand<'a, S, R> {
+    type SecurityManager;
+
+    fn build_security_manager(&'a self, send: S, receive: R) -> Self::SecurityManager;
+}
+
+// fn unused() {
+//     // An example of setting up a receiver that support oob
+//     use crate::l2cap::{AclData, AclDataFragment, ConnectionChannel};
+//     use crate::sm::responder::SlaveSecurityManagerBuilder;
+//     use core::future::Future;
+//     use core::task::Waker;
+//
+//     // example initialization boilerplate
+//     let this_address = crate::BluetoothDeviceAddress::default();
+//     let peer_address = crate::BluetoothDeviceAddress::default();
+//     struct StubConnectionChannel;
+//     impl ConnectionChannel for StubConnectionChannel {
+//         type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
+//         type SendFutErr = usize;
+//         fn send(&self, _: AclData) -> Self::SendFut {
+//             unimplemented!()
+//         }
+//         fn set_mtu(&self, mtu: u16) {
+//             unimplemented!()
+//         }
+//         fn get_mtu(&self) -> usize {
+//             unimplemented!()
+//         }
+//         fn max_mtu(&self) -> usize {
+//             unimplemented!()
+//         }
+//         fn min_mtu(&self) -> usize {
+//             unimplemented!()
+//         }
+//         fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> {
+//             unimplemented!()
+//         }
+//     }
+//     let connection_channel = StubConnectionChannel;
+//
+//     async fn send(data: &[u8]) {
+//         todo!("your method for sending")
+//     }
+//     async fn receive() -> Vec<u8> {
+//         todo!("your method for receiving")
+//     }
+//     let security_manager =
+//         SlaveSecurityManagerBuilder::new(&connection_channel, &this_address, &peer_address, false, false)
+//             .use_oob()
+//             .only_send_oob(send)
+//             .build_oob()
+//             .unwrap();
+// }

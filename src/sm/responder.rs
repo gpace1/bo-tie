@@ -7,7 +7,7 @@ use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, KeyGenerationMethod,
     PairingData,
 };
-use super::{OobBuildError, OobDirection, OutOfBand, OutOfBandMethod};
+use super::{BuildOutOfBand, OobDirection, OutOfBand, OutOfBandMethod, OutOfBandMethodBuilder};
 use crate::l2cap::ConnectionChannel;
 use alloc::vec::Vec;
 use core::future::Future;
@@ -58,7 +58,7 @@ where
     ///
     /// This creates an `OutOfBandMethodBuilder` for creating a `SlaveSecurityManager` that supports
     /// OOB.data transfer.
-    pub fn use_oob<S, R>(&'a mut self) -> OutOfBandMethodBuilder<'a, C, S, R> {
+    pub fn use_oob<S, R>(&'a mut self) -> OutOfBandMethodBuilder<'a, Self, S, R> {
         OutOfBandMethodBuilder::new(self)
     }
 
@@ -68,13 +68,13 @@ where
     /// This will create a `SlaveSecurityManager` that does not support OOB. The hidden type that
     /// implements `OutOfBand` in the return is a dummy type.
     pub fn build(&'a self) -> SlaveSecurityManager<'a, C, impl OutOfBand> {
-        self.make(OutOfBandMethod::new((), ()))
+        self.make((), ())
     }
 
     /// Method for making a `SlaveSecurityManager`
     ///
     /// This is here to facilitate the tricks done around OOB type implementations.
-    fn make<S, R>(&self, oob: OutOfBandMethod<S, R>) -> SlaveSecurityManager<C, OutOfBandMethod<S, R>> {
+    fn make<S, R>(&self, s: S, r: R) -> SlaveSecurityManager<C, OutOfBandMethod<S, R>> {
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
             encrypt_info::AuthRequirements::ManInTheMiddleProtection,
@@ -82,6 +82,8 @@ where
         ];
 
         let key_dist = alloc::vec![pairing::KeyDistributions::IdKey,];
+
+        let oob = OutOfBandMethod::new(s, r);
 
         SlaveSecurityManager {
             connection_channel: self.connection_channel,
@@ -99,6 +101,47 @@ where
             pairing_data: None,
             link_encrypted: false,
         }
+    }
+}
+
+impl<'a, C, S, R, F1, F2> BuildOutOfBand<'a, S, R> for SlaveSecurityManagerBuilder<'a, C>
+where
+    C: ConnectionChannel,
+    S: Fn(&[u8]) -> F1,
+    F1: Future,
+    R: Fn() -> F2,
+    F2: Future<Output = Vec<u8>>,
+{
+    type SecurityManager = SlaveSecurityManager<'a, C, OutOfBandMethod<S, R>>;
+
+    fn build_security_manager(&'a self, s: S, r: R) -> Self::SecurityManager {
+        self.make(s, r)
+    }
+}
+
+impl<'a, C, S, F> BuildOutOfBand<'a, S, ()> for SlaveSecurityManagerBuilder<'a, C>
+where
+    C: ConnectionChannel,
+    S: Fn(&[u8]) -> F,
+    F: Future,
+{
+    type SecurityManager = SlaveSecurityManager<'a, C, OutOfBandMethod<S, ()>>;
+
+    fn build_security_manager(&'a self, s: S, r: ()) -> Self::SecurityManager {
+        self.make(s, r)
+    }
+}
+
+impl<'a, C, R, F> BuildOutOfBand<'a, (), R> for SlaveSecurityManagerBuilder<'a, C>
+where
+    C: ConnectionChannel,
+    R: Fn() -> F,
+    F: Future<Output = Vec<u8>>,
+{
+    type SecurityManager = SlaveSecurityManager<'a, C, OutOfBandMethod<(), R>>;
+
+    fn build_security_manager(&'a self, s: (), r: R) -> Self::SecurityManager {
+        self.make(s, r)
     }
 }
 
@@ -953,124 +996,6 @@ where
 
             return Err(Error::UnknownIfLinkIsEncrypted);
         }
-    }
-}
-
-/// Out of Band pairing method setup
-///
-/// Things that implement this trait can be used as the out-of-band (OOB) process for pairing. Any
-/// communication process that is outside of the direct Bluetooth communication between the two
-/// pairing devices can be considered a valid OOB. However the OOB must have no man-in-the-middle in
-/// order for OOB to be secure form of pairing.
-///
-/// The methods [`set_send_method`] and [`set_receive_method`] determine how data is sent and
-/// received through the OOB interface. Both of them must be called before an
-/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
-/// used to set a factory function for generating a future to process sending data over the OOB
-/// interface. Correspondingly `set_receive_method` is for setting the factory function for
-/// generating a future for receiving data over the OOB interface.
-///
-/// If it is desired to only support one direction of OOB data transfer, the methods
-/// [`set_send_only`] and [`set_receive_only`] can be used for facilitate this, however it is
-/// recommended to only use these methods when the OOB interface only supports a single direction of
-/// data transfer. Using these methods will mean that the initiator must support the counterpart
-/// direction of data transfer or OOB authentication will fail.
-pub struct OutOfBandMethodBuilder<'a, C, S, R> {
-    builder: &'a mut SlaveSecurityManagerBuilder<'a, C>,
-    send_method: core::cell::Cell<Option<S>>,
-    receive_method: core::cell::Cell<Option<R>>,
-}
-
-impl<'a, C, S, R> OutOfBandMethodBuilder<'a, C, S, R> {
-    fn new(builder: &'a mut SlaveSecurityManagerBuilder<'a, C>) -> Self {
-        OutOfBandMethodBuilder {
-            builder,
-            send_method: core::cell::Cell::new(None),
-            receive_method: core::cell::Cell::new(None),
-        }
-    }
-}
-
-impl<'a, C, S, R, F1, F2> OutOfBandMethodBuilder<'a, C, S, R>
-where
-    C: ConnectionChannel,
-    S: Fn(&[u8]) -> F1,
-    F1: Future,
-    R: Fn() -> F2,
-    F2: Future<Output = Vec<u8>>,
-{
-    /// Set the method for sending
-    ///
-    /// Input `send_method` is a function for generating a future used for sending data across the
-    /// OOB interface. The purpose of the future is to allow for situations where sending may
-    /// be an asynchronous process.
-    ///
-    /// # Note
-    /// Using this method requires calling method `set_receive_method`
-    pub fn set_send_method(&mut self, send_method: S) -> &mut Self {
-        self.send_method.set(Some(send_method));
-
-        self
-    }
-
-    /// Set the method for receiving
-    ///
-    /// Input `send_method` is a function for generating a future for receiving over the OOB
-    /// interface.
-    ///
-    /// # Note
-    /// Using this method requires calling method `set_send_method`
-    pub fn set_receive_method(&mut self, receive_method: R) -> &mut Self {
-        self.receive_method.set(Some(receive_method));
-
-        self
-    }
-
-    /// Create the OOB supporting `SlaveSecurityManager`
-    pub fn build(&self) -> Result<SlaveSecurityManager<C, impl OutOfBand>, OobBuildError> {
-        let send_method = self.send_method.take().ok_or(OobBuildError::Send)?;
-
-        let receive_method = self.receive_method.take().ok_or(OobBuildError::Receive)?;
-
-        Ok(self.builder.make(OutOfBandMethod::new(send_method, receive_method)))
-    }
-}
-
-impl<'a, C, S, F> OutOfBandMethodBuilder<'a, C, S, ()>
-where
-    C: ConnectionChannel,
-    S: Fn(&[u8]) -> F,
-    F: Future,
-{
-    /// Build a security manager responder that only supports sending OOB data
-    ///
-    /// This creates an OOB supporting security manager where the initiators OOB data is never
-    /// validated.
-    pub fn build_oob_send_only(&mut self, send_method: S) -> SlaveSecurityManager<C, impl OutOfBand> {
-        self.builder.make(OutOfBandMethod::new(send_method, ()))
-    }
-}
-
-impl<'a, C, R, F> OutOfBandMethodBuilder<'a, C, (), R>
-where
-    C: ConnectionChannel,
-    R: Fn() -> F,
-    F: Future<Output = Vec<u8>>,
-{
-    /// When only the security manager responder sends OOB data
-    ///
-    /// This creates an OOB supporting security manager where only the initiator will send OOB data
-    /// to this security manager.
-    pub fn build_oob_receive_only(&mut self, receive_method: R) -> SlaveSecurityManager<C, impl OutOfBand> {
-        self.builder.make(OutOfBandMethod::new((), receive_method))
-    }
-}
-
-impl<'a, C, S, R> core::ops::Deref for OutOfBandMethodBuilder<'a, C, S, R> {
-    type Target = SlaveSecurityManagerBuilder<'a, C>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.builder
     }
 }
 
