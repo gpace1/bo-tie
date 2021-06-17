@@ -626,57 +626,43 @@ where
                 };
 
                 // Calculate the shared secret key
-                let secret_key_rslt =
-                    toolbox::ecdh(private_key.take().expect("Private key doesn't exist"), &peer_pub_key);
+                let private_key = private_key.take().expect("Private key doesn't exist");
 
-                match secret_key_rslt {
-                    Ok(key) => {
-                        *secret_key = Some(key);
+                *secret_key = toolbox::ecdh(private_key, &peer_pub_key).into();
 
-                        let confirm_value =
-                            toolbox::f4(GetXOfP256Key::x(public_key), GetXOfP256Key::x(&peer_pub_key), *nonce, 0);
+                let confirm_value =
+                    toolbox::f4(GetXOfP256Key::x(public_key), GetXOfP256Key::x(&peer_pub_key), *nonce, 0);
 
-                        *peer_public_key = peer_pub_key.into();
+                *peer_public_key = peer_pub_key.into();
 
-                        // Send the public key of this device
-                        self.send(pairing::PairingPubKey::new(raw_pub_key)).await?;
+                // Send the public key of this device
+                self.send(pairing::PairingPubKey::new(raw_pub_key)).await?;
 
-                        // Process what to do next based on the key generation method
-                        match key_gen_method {
-                            KeyGenerationMethod::JustWorks | KeyGenerationMethod::NumbComp => {
-                                // Send the confirm value
-                                self.send(pairing::PairingConfirm::new(confirm_value)).await?;
-                            }
-                            KeyGenerationMethod::Oob(OobDirection::OnlyReceiverSendsOob) => self.send_oob().await,
-                            KeyGenerationMethod::Oob(OobDirection::BothSendOob) => {
-                                self.send_oob().await;
-
-                                if !self.receive_oob().await {
-                                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
-                                }
-                            }
-                            KeyGenerationMethod::Oob(OobDirection::OnlyInitiatorSendsOob) => {
-                                if !self.receive_oob().await {
-                                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
-                                }
-                            }
-                            KeyGenerationMethod::PassKeyEntry => {
-                                todo!("Key generation method 'Pass Key Entry' is not supported yet")
-                            }
-                        }
-
-                        Ok(None)
+                // Process what to do next based on the key generation method
+                match key_gen_method {
+                    KeyGenerationMethod::JustWorks | KeyGenerationMethod::NumbComp => {
+                        // Send the confirm value
+                        self.send(pairing::PairingConfirm::new(confirm_value)).await?;
                     }
-                    Err(e) => {
-                        // Generating the dh key failed
+                    KeyGenerationMethod::Oob(OobDirection::OnlyReceiverSendsOob) => self.send_oob().await,
+                    KeyGenerationMethod::Oob(OobDirection::BothSendOob) => {
+                        self.send_oob().await;
 
-                        log::error!("(SM) Secret Key failed, '{:?}'", e);
-
-                        self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
-
-                        Err(Error::Value)
+                        if !self.receive_oob().await {
+                            self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
+                        }
+                    }
+                    KeyGenerationMethod::Oob(OobDirection::OnlyInitiatorSendsOob) => {
+                        if !self.receive_oob().await {
+                            self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
+                        }
+                    }
+                    KeyGenerationMethod::PassKeyEntry => {
+                        todo!("Key generation method 'Pass Key Entry' is not supported yet")
                     }
                 }
+
+                Ok(None)
             }
             _ => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;

@@ -215,7 +215,7 @@ where
 
                 let this_pri_key = private_key.take().unwrap();
 
-                *secret_key = toolbox::ecdh(this_pri_key, &remote_pub_key).ok();
+                *secret_key = toolbox::ecdh(this_pri_key, &remote_pub_key).into();
 
                 *peer_public_key = remote_pub_key.into();
 

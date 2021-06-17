@@ -16,7 +16,7 @@
 //! order.
 
 /// The public key type for the P-256 curve
-pub(super) type PubKey = p256::EncodedPoint;
+pub(super) type PubKey = p256::PublicKey;
 
 /// The private (Ephemeral Secret) key type for the P-256 curve
 pub(super) type PriKey = p256::ecdh::EphemeralSecret;
@@ -37,9 +37,11 @@ pub(super) type DHSharedSecret = [u8; 32];
 
 impl super::GetXOfP256Key for PubKey {
     fn x(&self) -> [u8; 32] {
+        let encoded_point = elliptic_curve::sec1::EncodedPoint::from(self);
+
         let mut ret = [0; 32];
 
-        ret.copy_from_slice(self.x().as_slice());
+        ret.copy_from_slice(encoded_point.x().unwrap().as_slice());
 
         ret
     }
@@ -49,10 +51,12 @@ impl super::CommandData for PubKey {
     /// # Panics
     /// This will panic if `PubKey` is compressed
     fn into_icd(self) -> alloc::vec::Vec<u8> {
+        let encoded_point = elliptic_curve::sec1::EncodedPoint::from(&self);
+
         let mut key = alloc::vec::Vec::with_capacity(64);
 
-        key.extend_from_slice(&self.x().as_slice());
-        key.extend_from_slice(&self.y().unwrap().as_slice());
+        key.extend_from_slice(encoded_point.x().unwrap().as_slice());
+        key.extend_from_slice(encoded_point.y().unwrap().as_slice());
 
         // Reverse the keys from big endian to little endian
         key[..32].reverse(); // x
@@ -75,7 +79,7 @@ impl super::CommandData for PubKey {
             pub_key[PUB_KEY_X_RANGE].reverse();
             pub_key[PUB_KEY_Y_RANGE].reverse();
 
-            PubKey::from_bytes(&pub_key).map_err(|_| super::Error::Format)
+            PubKey::from_sec1_bytes(&pub_key).map_err(|_| super::Error::Format)
         } else {
             Err(super::Error::Size)
         }
@@ -417,7 +421,8 @@ pub fn g2(u: [u8; 32], v: [u8; 32], x: u128, y: u128) -> u32 {
 /// to call it constantly as it initializes a new AES cypher on each call.
 pub fn e(key: u128, plain_text: u128) -> u128 {
     use aes::cipher::generic_array::GenericArray;
-    use aes::cipher::{BlockCipher, NewBlockCipher};
+    use aes::cipher::NewBlockCipher;
+    use aes::BlockEncrypt;
 
     let key_bytes = key.to_be_bytes();
 
@@ -521,17 +526,14 @@ pub fn ecc_gen() -> Result<(PriKey, PubKey), impl core::fmt::Debug> {
 ///
 /// The `raw_remote_public_key` needs to be in the byte order as shown in the Security Manager's
 /// 'Pairing Public Key' PDU.
-pub fn ecdh(this_private_key: PriKey, peer_public_key: &PubKey) -> Result<DHSharedSecret, impl core::fmt::Debug> {
-    let shared_secret = match this_private_key.diffie_hellman(peer_public_key) {
-        Ok(s) => s,
-        Err(e) => return Err(e),
-    };
+pub fn ecdh(this_private_key: PriKey, peer_public_key: &PubKey) -> DHSharedSecret {
+    let shared_secret = this_private_key.diffie_hellman(peer_public_key);
 
     let mut secret_bytes = DHSharedSecret::default();
 
     secret_bytes.copy_from_slice(shared_secret.as_bytes().as_slice());
 
-    Ok(secret_bytes)
+    secret_bytes
 }
 
 /// Generate a random u128 value
