@@ -4,13 +4,11 @@
 //! initiating device.
 
 use super::{
-    encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, KeyGenerationMethod,
-    PairingData,
+    encrypt_info, pairing, toolbox, BuildOutOfBand, Command, CommandData, CommandType, Error, GetXOfP256Key,
+    KeyGenerationMethod, OobDirection, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend, PairingData,
 };
-use super::{BuildOutOfBand, OobDirection, OutOfBand, OutOfBandMethod, OutOfBandMethodBuilder};
 use crate::l2cap::ConnectionChannel;
 use alloc::vec::Vec;
-use core::future::Future;
 
 /// A builder for a [`SlaveSecurityManager`]
 ///
@@ -58,23 +56,31 @@ where
     ///
     /// This creates an `OutOfBandMethodBuilder` for creating a `SlaveSecurityManager` that supports
     /// OOB.data transfer.
-    pub fn use_oob<S, R>(&'a mut self) -> OutOfBandMethodBuilder<'a, Self, S, R> {
-        OutOfBandMethodBuilder::new(self)
+    pub fn use_oob<S, R>(self, send: S, receive: R) -> impl BuildOutOfBand + 'a
+    where
+        S: for<'i> OutOfBandSend<'i> + 'a,
+        R: OutOfBandReceive + 'a,
+    {
+        OutOfBandMethodBuilder::new(self, send, receive)
     }
 
     /// Create the `SlaveSecurityManager`
     ///
     /// # Note
-    /// This will create a `SlaveSecurityManager` that does not support OOB. The hidden type that
-    /// implements `OutOfBand` in the return is a dummy type.
-    pub fn build(&'a self) -> SlaveSecurityManager<'a, C, impl OutOfBand> {
+    /// This will create a `SlaveSecurityManager` that does not support the out of band pairing
+    /// method.
+    pub fn build(self) -> SlaveSecurityManager<'a, C, impl OutOfBandSend<'a>, impl OutOfBandReceive> {
         self.make((), ())
     }
 
     /// Method for making a `SlaveSecurityManager`
     ///
     /// This is here to facilitate the tricks done around OOB type implementations.
-    fn make<S, R>(&self, s: S, r: R) -> SlaveSecurityManager<C, OutOfBandMethod<S, R>> {
+    fn make<S, R>(self, oob_send: S, oob_receive: R) -> SlaveSecurityManager<'a, C, S, R>
+    where
+        S: OutOfBandSend<'a>,
+        R: OutOfBandReceive,
+    {
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
             encrypt_info::AuthRequirements::ManInTheMiddleProtection,
@@ -83,12 +89,11 @@ where
 
         let key_dist = alloc::vec![pairing::KeyDistributions::IdKey,];
 
-        let oob = OutOfBandMethod::new(s, r);
-
         SlaveSecurityManager {
             connection_channel: self.connection_channel,
             io_capability: self.io_capabilities,
-            oob,
+            oob_send,
+            oob_receive,
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
             auth_req,
@@ -104,51 +109,27 @@ where
     }
 }
 
-impl<'a, C, S, R, F1, F2> BuildOutOfBand<'a, S, R> for SlaveSecurityManagerBuilder<'a, C>
+impl<'a, C, S, R> BuildOutOfBand for OutOfBandMethodBuilder<SlaveSecurityManagerBuilder<'a, C>, S, R>
 where
     C: ConnectionChannel,
-    S: Fn(&[u8]) -> F1,
-    F1: Future,
-    R: Fn() -> F2,
-    F2: Future<Output = Vec<u8>>,
+    S: for<'i> OutOfBandSend<'i>,
+    R: OutOfBandReceive,
 {
-    type SecurityManager = SlaveSecurityManager<'a, C, OutOfBandMethod<S, R>>;
+    type Builder = SlaveSecurityManagerBuilder<'a, C>;
+    type SecurityManager = SlaveSecurityManager<'a, C, S, R>;
 
-    fn build_security_manager(&'a self, s: S, r: R) -> Self::SecurityManager {
-        self.make(s, r)
+    fn build(self) -> Self::SecurityManager {
+        let oob_send = self.send_method;
+        let oob_receive = self.receive_method;
+        self.builder.make(oob_send, oob_receive)
     }
 }
 
-impl<'a, C, S, F> BuildOutOfBand<'a, S, ()> for SlaveSecurityManagerBuilder<'a, C>
-where
-    C: ConnectionChannel,
-    S: Fn(&[u8]) -> F,
-    F: Future,
-{
-    type SecurityManager = SlaveSecurityManager<'a, C, OutOfBandMethod<S, ()>>;
-
-    fn build_security_manager(&'a self, s: S, r: ()) -> Self::SecurityManager {
-        self.make(s, r)
-    }
-}
-
-impl<'a, C, R, F> BuildOutOfBand<'a, (), R> for SlaveSecurityManagerBuilder<'a, C>
-where
-    C: ConnectionChannel,
-    R: Fn() -> F,
-    F: Future<Output = Vec<u8>>,
-{
-    type SecurityManager = SlaveSecurityManager<'a, C, OutOfBandMethod<(), R>>;
-
-    fn build_security_manager(&'a self, s: (), r: R) -> Self::SecurityManager {
-        self.make(s, r)
-    }
-}
-
-pub struct SlaveSecurityManager<'a, C, O> {
+pub struct SlaveSecurityManager<'a, C, S, R> {
     connection_channel: &'a C,
     io_capability: pairing::IOCapability,
-    oob: O,
+    oob_send: S,
+    oob_receive: R,
     auth_req: Vec<encrypt_info::AuthRequirements>,
     encryption_key_size_min: usize,
     encryption_key_size_max: usize,
@@ -162,17 +143,18 @@ pub struct SlaveSecurityManager<'a, C, O> {
     link_encrypted: bool,
 }
 
-impl<'a, C, O> SlaveSecurityManager<'a, C, O>
+impl<'a, C, S, R> SlaveSecurityManager<'a, C, S, R>
 where
     C: ConnectionChannel,
-    O: OutOfBand,
+    S: for<'i> OutOfBandSend<'i>,
+    R: OutOfBandReceive,
 {
     /// Save the key details to `security_manager``
     ///
     /// If the `SlaveSecurityManager` did not contain any key information , then this function will
     /// do nothing to `security_manager`. Also key information will not be added to `security_manager`
     /// if it doesn't contain the required keys (either peer_irk or peer_addr)
-    pub fn save_to_security_manager(&self, security_manager: &mut super::SecurityManager) {
+    pub fn save_to_security_manager(&self, security_manager: &mut super::SecurityManagerKeys) {
         match self.pairing_data {
             Some(PairingData {
                 db_keys: Some(ref db_keys),
@@ -183,8 +165,6 @@ where
             _ => {}
         }
     }
-
-    // pub fn set_oob_data(&mut self, val: u128) { self.oob_data = Some(val) }
 
     /// Indicate if the connection is encrypted
     ///
@@ -450,7 +430,7 @@ where
             oob_block,
         };
 
-        if O::can_send() {
+        if S::can_send() {
             let rb = toolbox::rand_u128();
 
             let paring_data = self.pairing_data.as_ref().unwrap();
@@ -467,7 +447,7 @@ where
 
             let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
 
-            self.oob.send(&oob_block).await;
+            self.oob_send.send(&oob_block).await;
         }
     }
 
@@ -489,8 +469,8 @@ where
             oob_block,
         };
 
-        if O::can_receive() {
-            let raw = self.oob.receive().await;
+        if R::can_receive() {
+            let raw = self.oob_receive.receive().await;
 
             let oob_info = oob_block::OobDataBlockIter::new(raw);
 
@@ -553,7 +533,7 @@ where
         } else {
             let response = pairing::PairingResponse::new(
                 self.io_capability,
-                if O::can_receive() {
+                if R::can_receive() {
                     pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
                 } else {
                     pairing::OOBDataFlag::AuthenticationDataNotPresent

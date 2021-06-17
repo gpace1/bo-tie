@@ -1,16 +1,36 @@
 //! Bluetooth Security Manager
 //!
-//! The Security Manager is used to manage the pairing process and key distribution between two
-//! connected devices. A [`SecurityManager`](crate::sm::SecurityManager) is used to contain
-//! the keys generated and used for encrypting messages between this device and the devices it is
-//! currently or was connected to.
+//! The Security Manager is used to manage the pairing process and key distribution (bonding)
+//! between two connected devices. There are seperate Security Managers for the initiating device
+//! and for the responding (non-initiating) device. These Security Managers can be found in the
+//! [`initiator`](initiator) and [`responder`](responder) modules. Both Security Managers are
+//! connection instance specific. They're only valid for a single connection and for the lifetime of
+//! that connection. The only purpose of the Security Managers are to manage the Security Manager
+//! protocol to achieve pairing and bonding, keys generated from pairing and bonding must be
+//! retreived and stored from the Security Managers in a seperate data base.
 //!
-//! For each connection either a ['MasterSecurityManager'] or a ['SlaveSecurityManager'] is created
-//! based on the role of this device in the connection. The `MasterSecurityManager` can be used for
-//! initializing the pairing process and for re-establishing encryption to the slave device.
-//! `SlaveSecurityManger` is used by the slave device as the responder to pairing requests.
+//! [`SecurityManagerKeys`](SecurityManagerKeys) is a very basic keys database is provided by this
+//! module, but it does not need to be used for keys management with this library. Keys can be
+//! retreived from the Security Managers after bonding has been completed (the secure key (LTK) is
+//! retreivable after pairing is completed).
 //!
-//! # Out of Band Pairing Support
+//! ## Pairing Methods
+//!
+//! # Just Works
+//! Just works is the simplest form of pairing as it provides no security against a man in the
+//! middle attack. Both Security Managers support Just Works pairing by default.
+//!
+//! # Number compareson
+//! Not implemented yet.
+//!
+//! # Passkey
+//! Not implemented yet.
+//!
+//! # Out of Band
+//! Out of band pairing is done by using a man in the middle protected data connection that is out
+//! of scope for the Bluetooth connection between the two devices. It is one of the methods of
+//! pairing to prevent  
+//!
 //! OOB data is sent though a method outside of the Bluetooth logical link use to initialize
 //! pairing, but the builders for the initializer or responder Security Managers must explicitly
 //! enable it. The main problem with OOB is that the interface is out of scope for this library (and
@@ -37,6 +57,8 @@
 //! #     fn receive(&self,waker: &Waker) -> Option<Vec<AclDataFragment>> { unimplemented!() }
 //! # }
 //! # let connection_channel = StubConnectionChannel;
+//! use bo_tie::sm::BuildOutOfBand;
+//! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
 //!
 //! // An example of setting up a receiver that support oob
 //! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
@@ -58,10 +80,9 @@
 //!         &peer_address,
 //!         false,
 //!         false
-//!     ).use_oob()
-//!     .only_send_oob(send)
-//!     .build_oob()
-//!     .unwrap();
+//!     )
+//!     .use_oob(send, receive)
+//!     .build();
 //! ```
 //!
 // todo: this talks about how to integrate HCI calculated ECDH and AES
@@ -81,17 +102,8 @@
 //!
 //! # Note
 //! This module uses the following crates for parts of the encryption process.
-//! * ['aes'](https://crates.io/crates/aes)
-//! * ['ring'](https://crates.io/crates/ring)
-//!
-//! The assumption was made that these crates are adequate for their required usage within this
-//! module, but no formal process was used to validate them for use with this library.
-//! ['MasterSecurityManagerAsync'] and ['AsyncSlaveSecurityManager'] can be used if you don't trust
-//! these crates, but they do require that the adequate functionality be present on the Bluetooth
-//! Controller.
-//!
-//! # Temporary Note
-//! For now passkey pairing is not supported. Only Numeric Comparison and Out Of Band are supported
+//! * ['aes'](https://lib.rs/crates/aes)
+//! * ['p256'](https://lib.rs/crates/p256)
 
 use crate::l2cap::AclData;
 use alloc::vec::Vec;
@@ -665,7 +677,7 @@ impl Default for KeyDB {
 
 /// A simple Security Manager
 ///
-/// The `SecurityManager` contains a database of encryption keys for with previously bonded
+/// A `SecurityManagerKeys` contains a database of encryption keys for with previously bonded
 /// devices. Its main purpose is for saving bonding information and to retrieve the correct
 /// encryption keys upon successful identification of the peer device.
 ///
@@ -675,15 +687,15 @@ impl Default for KeyDB {
 /// function. The database is mainly used for either retrieving keys by the peer device's Identity
 /// Resolving Key and/or the Identity Address.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-pub struct SecurityManager {
+pub struct SecurityManagerKeys {
     keys_db: KeyDB,
     static_irk: Option<u128>,
     static_csrk: Option<u128>,
 }
 
-impl SecurityManager {
+impl SecurityManagerKeys {
     pub fn new(keys: Vec<KeyDBEntry>) -> Self {
-        SecurityManager {
+        SecurityManagerKeys {
             keys_db: KeyDB::new(keys),
             static_irk: None,
             static_csrk: None,
@@ -752,7 +764,7 @@ impl SecurityManager {
     /// the [`find_map`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find_map)
     /// iterator method.
     /// ```
-    /// # let security_manager = bo_tie::sm::SecurityManager::default();
+    /// # let security_manager = bo_tie::sm::SecurityManagerKeys::default();
     /// # let resolvable_private_address = [0u8;6];
     ///
     /// security_manager.resolve_rpa_itr(resolvable_private_address).find_map(|keys_opt| keys_opt);
@@ -864,160 +876,34 @@ impl core::fmt::Display for OobBuildError {
     }
 }
 
-/// A implementation for the out-of-band process of pairing.
+/// Out of Band pairing method setup
 ///
-/// The main purpose of the `OutOfBandMethod` type is to use some tricks around generics in order to
-/// not have a different Security Managers for when OOB is enabled. Thanks to this and trait
-/// [`OutOfBand`], the user of a Security Manager can selectively choose the OOB implementation
-/// based on the methods within the Security Manager builders.
-#[doc(hidden)]
-pub struct OutOfBandMethod<S, R> {
-    send_method: S,
-    receive_method: R,
-}
-
-impl<S, R> OutOfBandMethod<S, R> {
-    fn new(send_method: S, receive_method: R) -> Self {
-        OutOfBandMethod {
-            send_method,
-            receive_method,
-        }
-    }
-}
-
-/// Trait for setting out of band support
+/// Security Managers that implement this trait can be used as the out-of-band (OOB) process for
+/// pairing. Any communication process that is outside of the direct Bluetooth communication between
+/// the two pairing devices can be considered a valid OOB. However the OOB link must have
+/// man in the middle protection in order for the OOB method to be secure form of pairing.
 ///
-/// # Note
-/// This trait is internally implemented
-#[doc(hidden)]
-pub trait OutOfBand {
-    type SendFuture: Future;
-    type ReceiveFuture: Future<Output = Vec<u8>>;
-
-    /// A boolean to indicate if this out of band method can sending OOB data to the other device
-    fn can_send() -> bool;
-
-    /// A boolean to indicate if this out of band method can receive OOB data from the other device
-    fn can_receive() -> bool;
-
-    /// Send OOB data to the other device
-    fn send(&self, raw: &[u8]) -> Self::SendFuture;
-
-    /// Receive OOB data from teh other device
-    fn receive(&self) -> Self::ReceiveFuture;
-}
-
-impl<S, R, SF, RF> OutOfBand for OutOfBandMethod<S, R>
-where
-    S: Fn(&[u8]) -> SF,
-    SF: Future,
-    R: Fn() -> RF,
-    RF: Future<Output = Vec<u8>>,
-{
-    type SendFuture = SF;
-    type ReceiveFuture = RF;
-
-    fn can_send() -> bool {
-        true
-    }
-
-    fn can_receive() -> bool {
-        true
-    }
-
-    fn send(&self, raw: &[u8]) -> Self::SendFuture {
-        (self.send_method)(raw)
-    }
-
-    fn receive(&self) -> Self::ReceiveFuture {
-        (self.receive_method)()
-    }
-}
-
-impl<S, F> OutOfBand for OutOfBandMethod<S, ()>
-where
-    S: Fn(&[u8]) -> F,
-    F: Future,
-{
-    type SendFuture = F;
-    type ReceiveFuture = NeverUnusedOobInterface<Vec<u8>>;
-
-    fn can_send() -> bool {
-        true
-    }
-
-    fn can_receive() -> bool {
-        false
-    }
-
-    fn send(&self, raw: &[u8]) -> Self::SendFuture {
-        (self.send_method)(raw)
-    }
-
-    fn receive(&self) -> Self::ReceiveFuture {
-        panic!("Tried to receive OOB data on unavailable interface")
-    }
-}
-
-impl<R, F> OutOfBand for OutOfBandMethod<(), R>
-where
-    R: Fn() -> F,
-    F: Future<Output = Vec<u8>>,
-{
-    type SendFuture = NeverUnusedOobInterface<()>;
-    type ReceiveFuture = F;
-
-    fn can_send() -> bool {
-        false
-    }
-
-    fn can_receive() -> bool {
-        true
-    }
-
-    fn send(&self, _: &[u8]) -> Self::SendFuture {
-        panic!("Tried to send OOB data on unavailable interface")
-    }
-
-    fn receive(&self) -> Self::ReceiveFuture {
-        (self.receive_method)()
-    }
-}
-
-impl OutOfBand for OutOfBandMethod<(), ()> {
-    type SendFuture = NeverUnusedOobInterface<()>;
-    type ReceiveFuture = NeverUnusedOobInterface<Vec<u8>>;
-
-    fn can_send() -> bool {
-        false
-    }
-
-    fn can_receive() -> bool {
-        false
-    }
-
-    fn send(&self, _: &[u8]) -> Self::SendFuture {
-        panic!("Tried to send OOB data on unavailable interface")
-    }
-
-    fn receive(&self) -> Self::ReceiveFuture {
-        panic!("Tried to receive OOB data on unavailable interface")
-    }
-}
-
-/// Never used interface
+/// # Bidirectional confirm validation
+/// The methods [`set_send_method`](OutOfBandMethodBuilder::set_send_method) and
+/// [`set_receive_method`]((OutOfBandMethodBuilder::set_receive_method) determine how data is sent
+/// and received through the OOB interface. Both of them must be called before an
+/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
+/// used to set a factory function for generating a future to process sending data over the OOB
+/// interface. Correspondingly `set_receive_method` is for setting the factory function for
+/// generating a future for receiving data over the OOB interface.
 ///
-/// This is just a type for easily creating a future that will never be awaited upon. This is
-/// effectively the same as the [`!`](https://doc.rust-lang.org/std/primitive.never.html) type
-/// except it implements `Future<Output=V>`.
-#[doc(hidden)]
-pub struct NeverUnusedOobInterface<V>(core::marker::PhantomData<V>);
+/// # Single Direction confirm validation
+/// If it is desired to only support one direction of OOB data transfer, the methods
+/// [`only_send_oob`](OutOfBandMethodBuilder::only_send_oob) and
+/// [`only_receive_oob`](OutOfBandMethodBuilder::only_receive_oob) can be used for facilitate this,
+/// however it is recommended to only use these methods when the OOB interface only supports a
+/// single direction of data transfer. Using these methods will mean that the initiator must support
+/// the counterpart direction of data transfer or OOB authentication will fail.
+pub trait BuildOutOfBand: core::ops::DerefMut<Target = Self::Builder> {
+    type Builder;
+    type SecurityManager;
 
-impl<V> Future for NeverUnusedOobInterface<V> {
-    type Output = V;
-    fn poll(self: core::pin::Pin<&mut Self>, _: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
-        unreachable!()
-    }
+    fn build(self) -> Self::SecurityManager;
 }
 
 /// Out of Band pairing method setup
@@ -1043,102 +929,28 @@ impl<V> Future for NeverUnusedOobInterface<V> {
 /// however it is recommended to only use these methods when the OOB interface only supports a
 /// single direction of data transfer. Using these methods will mean that the initiator must support
 /// the counterpart direction of data transfer or OOB authentication will fail.
-pub struct OutOfBandMethodBuilder<'a, B, S, R> {
-    builder: &'a mut B,
-    send_method: core::cell::Cell<Option<S>>,
-    receive_method: core::cell::Cell<Option<R>>,
+pub struct OutOfBandMethodBuilder<B, S, R> {
+    builder: B,
+    send_method: S,
+    receive_method: R,
 }
 
-impl<'a, B, S, R> OutOfBandMethodBuilder<'a, B, S, R> {
-    fn new(builder: &'a mut B) -> Self {
+impl<'a, B, S, R> OutOfBandMethodBuilder<B, S, R>
+where
+    B: 'a,
+    S: OutOfBandSend<'a>,
+    R: OutOfBandReceive,
+{
+    fn new(builder: B, send_method: S, receive_method: R) -> Self {
         OutOfBandMethodBuilder {
             builder,
-            send_method: core::cell::Cell::new(None),
-            receive_method: core::cell::Cell::new(None),
+            send_method,
+            receive_method,
         }
     }
-
-    /// Build the OOB supporting Security Manager
-    pub fn build_oob(&'a self) -> Result<B::SecurityManager, OobBuildError>
-    where
-        B: BuildOutOfBand<'a, S, R>,
-    {
-        let send = self.send_method.take().ok_or(OobBuildError::Send)?;
-
-        let receive = self.receive_method.take().ok_or(OobBuildError::Receive)?;
-
-        Ok(self.builder.build_security_manager(send, receive))
-    }
-
-    /// Set the method for sending
-    ///
-    /// Input `send_method` is a function for generating a future used for sending data across the
-    /// OOB interface. The purpose of the future is to allow for situations where sending may
-    /// be an asynchronous process.
-    ///
-    /// # Note
-    /// Using this method requires calling method `set_receive_method`
-    pub fn set_send_method<F>(&'a mut self, send_method: S) -> &mut Self
-    where
-        S: Fn(&[u8]) -> F,
-        F: Future,
-    {
-        self.send_method.set(Some(send_method));
-
-        self
-    }
-
-    /// Set the method for receiving
-    ///
-    /// Input `send_method` is a function for generating a future for receiving over the OOB
-    /// interface.
-    ///
-    /// # Note
-    /// Using this method requires calling method `set_send_method`
-    pub fn set_receive_method<F>(&'a mut self, receive_method: R) -> &mut Self
-    where
-        R: Fn() -> F,
-        F: Future<Output = Vec<u8>>,
-    {
-        self.receive_method.set(Some(receive_method));
-
-        self
-    }
 }
 
-impl<B, S, F> OutOfBandMethodBuilder<'_, B, S, ()>
-where
-    S: Fn(&[u8]) -> F,
-    F: Future,
-{
-    /// Make the security manager to only support sending OOB data
-    ///
-    /// This creates an OOB supporting security manager where the initiators OOB data is never
-    /// validated.
-    pub fn only_send_oob(&mut self, send_method: S) -> &mut Self {
-        self.send_method.set(Some(send_method));
-        self.receive_method.set(Some(()));
-        self
-    }
-}
-
-impl<B, R, F> OutOfBandMethodBuilder<'_, B, (), R>
-where
-    R: Fn() -> F,
-    F: Future<Output = Vec<u8>>,
-{
-    /// Make the security manager to only support receiving OOB data
-    ///
-    /// This creates an OOB supporting security manager where only the initiator will send OOB data
-    /// to this security manager.
-    pub fn only_receive_oob(&mut self, receive_method: R) -> &mut Self {
-        self.send_method.set(Some(()));
-        self.receive_method.set(Some(receive_method));
-        self
-    }
-}
-
-impl<B, S, R> core::ops::Deref for OutOfBandMethodBuilder<'_, B, S, R> {
+impl<B, S, R> core::ops::Deref for OutOfBandMethodBuilder<B, S, R> {
     type Target = B;
 
     fn deref(&self) -> &Self::Target {
@@ -1146,61 +958,97 @@ impl<B, S, R> core::ops::Deref for OutOfBandMethodBuilder<'_, B, S, R> {
     }
 }
 
-/// Trait for building the the Security Manager with OOB support
-///
-/// This is a helper trait to get around some generic limitations.
-#[doc(hidden)]
-pub trait BuildOutOfBand<'a, S, R> {
-    type SecurityManager;
-
-    fn build_security_manager(&'a self, send: S, receive: R) -> Self::SecurityManager;
+impl<B, S, R> core::ops::DerefMut for OutOfBandMethodBuilder<B, S, R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.builder
+    }
 }
 
-// fn unused() {
-//     // An example of setting up a receiver that support oob
-//     use crate::l2cap::{AclData, AclDataFragment, ConnectionChannel};
-//     use crate::sm::responder::SlaveSecurityManagerBuilder;
-//     use core::future::Future;
-//     use core::task::Waker;
-//
-//     // example initialization boilerplate
-//     let this_address = crate::BluetoothDeviceAddress::default();
-//     let peer_address = crate::BluetoothDeviceAddress::default();
-//     struct StubConnectionChannel;
-//     impl ConnectionChannel for StubConnectionChannel {
-//         type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
-//         type SendFutErr = usize;
-//         fn send(&self, _: AclData) -> Self::SendFut {
-//             unimplemented!()
-//         }
-//         fn set_mtu(&self, mtu: u16) {
-//             unimplemented!()
-//         }
-//         fn get_mtu(&self) -> usize {
-//             unimplemented!()
-//         }
-//         fn max_mtu(&self) -> usize {
-//             unimplemented!()
-//         }
-//         fn min_mtu(&self) -> usize {
-//             unimplemented!()
-//         }
-//         fn receive(&self, _: &Waker) -> Option<Vec<AclDataFragment>> {
-//             unimplemented!()
-//         }
-//     }
-//     let connection_channel = StubConnectionChannel;
-//
-//     async fn send(data: &[u8]) {
-//         todo!("your method for sending")
-//     }
-//     async fn receive() -> Vec<u8> {
-//         todo!("your method for receiving")
-//     }
-//     let security_manager =
-//         SlaveSecurityManagerBuilder::new(&connection_channel, &this_address, &peer_address, false, false)
-//             .use_oob()
-//             .only_send_oob(send)
-//             .build_oob()
-//             .unwrap();
-// }
+/// The trait to used by a Security Manager send data over an out of band (OOB) interface
+///
+/// This is auto implemented for anything that implements `Fn(&\[u8\]) -> impl Future`.
+pub trait OutOfBandSend<'a> {
+    type Future: Future + 'a;
+
+    fn can_send() -> bool;
+
+    fn send(&self, data: &'a [u8]) -> Self::Future;
+}
+
+impl<'a, S, F> OutOfBandSend<'a> for S
+where
+    S: Fn(&'a [u8]) -> F,
+    F: Future + 'a,
+{
+    type Future = F;
+
+    fn can_send() -> bool {
+        true
+    }
+
+    fn send(&self, data: &'a [u8]) -> Self::Future {
+        self(data)
+    }
+}
+
+impl OutOfBandSend<'_> for () {
+    type Future = UnusedOobInterface<()>;
+
+    fn can_send() -> bool {
+        false
+    }
+
+    fn send(&self, _: &[u8]) -> Self::Future {
+        panic!("Tried to send OOB data on a nonexistent interface")
+    }
+}
+
+/// The trait to used by a Security Manager send data over an out of band (OOB) interface
+///
+/// This is auto implemented for anything that implements `Fn() -> impl Future<Output = Vec<u8>>`.
+pub trait OutOfBandReceive {
+    type Future: Future<Output = Vec<u8>>;
+
+    fn can_receive() -> bool;
+
+    fn receive(&self) -> Self::Future;
+}
+
+impl<R, F> OutOfBandReceive for R
+where
+    R: Fn() -> F,
+    F: Future<Output = Vec<u8>>,
+{
+    type Future = F;
+
+    fn can_receive() -> bool {
+        true
+    }
+
+    fn receive(&self) -> Self::Future {
+        self()
+    }
+}
+
+impl OutOfBandReceive for () {
+    type Future = UnusedOobInterface<Vec<u8>>;
+
+    fn can_receive() -> bool {
+        false
+    }
+
+    fn receive(&self) -> Self::Future {
+        panic!("Tried to receive OOB data on a nonexistent interface")
+    }
+}
+
+/// Future used as the return for an unavailable OOB interface
+#[doc(hidden)]
+pub struct UnusedOobInterface<V>(core::marker::PhantomData<V>);
+
+impl<V> Future for UnusedOobInterface<V> {
+    type Output = V;
+    fn poll(self: core::pin::Pin<&mut Self>, _: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
+        unreachable!()
+    }
+}
