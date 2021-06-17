@@ -1,12 +1,10 @@
-use super::{
-    encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, KeyGenerationMethod, PairingData,
-};
+use super::{encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, PairingData, PairingMethod};
 use crate::l2cap::ConnectionChannel;
+use crate::sm::{BuildOutOfBand, GetXOfP256Key, OobDirection, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend};
 
 pub struct MasterSecurityManagerBuilder<'a, C> {
     connection_channel: &'a C,
     io_capabilities: pairing::IOCapability,
-    oob_data: Option<u128>,
     encryption_key_min: usize,
     encryption_key_max: usize,
     remote_address: &'a crate::BluetoothDeviceAddress,
@@ -26,7 +24,6 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
         Self {
             connection_channel,
             io_capabilities: pairing::IOCapability::NoInputNoOutput,
-            oob_data: None,
             encryption_key_min: super::ENCRYPTION_KEY_MAX_SIZE,
             encryption_key_max: super::ENCRYPTION_KEY_MAX_SIZE,
             remote_address: connected_device_address,
@@ -36,7 +33,31 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
         }
     }
 
-    pub fn build(self) -> MasterSecurityManager<'a, C> {
+    pub fn use_oob<S, R>(self, send: S, receive: R) -> impl BuildOutOfBand + 'a
+    where
+        S: for<'i> OutOfBandSend<'i> + 'a,
+        R: OutOfBandReceive + 'a,
+    {
+        OutOfBandMethodBuilder::new(self, send, receive)
+    }
+
+    /// Create the `MasterSecurityManager`
+    ///
+    /// # Note
+    /// This will create a `MasterSecurityManager` that does not support the out of band pairing
+    /// method.
+    pub fn build(self) -> MasterSecurityManager<'a, C, (), ()> {
+        self.make((), ())
+    }
+
+    /// Method for making a `MasterSecurityManager`
+    ///
+    /// This is here to facilitate the tricks done around OOB type implementations.
+    fn make<S, R>(self, oob_send: S, oob_receive: R) -> MasterSecurityManager<'a, C, S, R>
+    where
+        S: for<'i> OutOfBandSend<'i>,
+        R: OutOfBandReceive,
+    {
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
             encrypt_info::AuthRequirements::ManInTheMiddleProtection,
@@ -47,7 +68,7 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
 
         let pairing_request = pairing::PairingRequest::new(
             self.io_capabilities,
-            if self.oob_data.is_some() {
+            if R::can_receive() {
                 pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
             } else {
                 pairing::OOBDataFlag::AuthenticationDataNotPresent
@@ -60,13 +81,13 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
 
         MasterSecurityManager {
             connection_channel: self.connection_channel,
-            // oob_data: self.oob_data,
-            // passkey: None,
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
+            oob_send,
+            oob_receive,
             pairing_request,
-            initiator_address: self.this_address,
-            responder_address: self.remote_address,
+            initiator_address: *self.this_address,
+            responder_address: *self.remote_address,
             initiator_address_is_random: self.this_address_is_random,
             responder_address_is_random: self.remote_address_is_random,
             pairing_data: None,
@@ -76,14 +97,30 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
     }
 }
 
-pub struct MasterSecurityManager<'a, C> {
+impl<'a, C, S, R> BuildOutOfBand for OutOfBandMethodBuilder<MasterSecurityManagerBuilder<'a, C>, S, R>
+where
+    S: for<'i> OutOfBandSend<'i>,
+    R: OutOfBandReceive,
+{
+    type Builder = MasterSecurityManagerBuilder<'a, C>;
+    type SecurityManager = MasterSecurityManager<'a, C, S, R>;
+
+    fn build(self) -> Self::SecurityManager {
+        let oob_send = self.send_method;
+        let oob_receive = self.receive_method;
+        self.builder.make(oob_send, oob_receive)
+    }
+}
+
+pub struct MasterSecurityManager<'a, C, S, R> {
     connection_channel: &'a C,
-    // oob_data: Option<u128>,
+    oob_send: S,
+    oob_receive: R,
     pairing_request: pairing::PairingRequest,
     encryption_key_size_min: usize,
     encryption_key_size_max: usize,
-    initiator_address: &'a crate::BluetoothDeviceAddress,
-    responder_address: &'a crate::BluetoothDeviceAddress,
+    initiator_address: crate::BluetoothDeviceAddress,
+    responder_address: crate::BluetoothDeviceAddress,
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
     pairing_data: Option<PairingData>,
@@ -91,9 +128,11 @@ pub struct MasterSecurityManager<'a, C> {
     pairing_expected_cmd: Option<super::CommandType>,
 }
 
-impl<C> MasterSecurityManager<'_, C>
+impl<'a, C, S, R> MasterSecurityManager<'a, C, S, R>
 where
     C: ConnectionChannel,
+    S: for<'i> OutOfBandSend<'i>,
+    R: OutOfBandReceive,
 {
     async fn send<Cmd, P>(&self, command: Cmd) -> Result<(), Error>
     where
@@ -134,7 +173,7 @@ where
 
             Err(Error::PairingFailed(pairing::PairingFailedReason::EncryptionKeySize))
         } else {
-            let pairing_method = KeyGenerationMethod::determine_method_secure_connection(
+            let pairing_method = PairingMethod::determine_method_secure_connection(
                 self.pairing_request.get_oob_data_flag(),
                 response.get_oob_data_flag(),
                 self.pairing_request.get_io_capability(),
@@ -148,7 +187,7 @@ where
             let (private_key, public_key) = toolbox::ecc_gen().expect("Failed to fill bytes for generated random");
 
             self.pairing_data = Some(PairingData {
-                key_gen_method: pairing_method,
+                pairing_method,
                 public_key,
                 private_key: Some(private_key),
                 initiator_io_cap,
@@ -235,7 +274,7 @@ where
             (
                 Ok(responder_confirm),
                 Some(PairingData {
-                    key_gen_method: KeyGenerationMethod::JustWorks,
+                    pairing_method: PairingMethod::JustWorks,
                     responder_pairing_confirm,
                     ..
                 }),
@@ -243,7 +282,7 @@ where
             | (
                 Ok(responder_confirm),
                 Some(PairingData {
-                    key_gen_method: KeyGenerationMethod::NumbComp,
+                    pairing_method: PairingMethod::NumbComp,
                     responder_pairing_confirm,
                     ..
                 }),
@@ -273,16 +312,7 @@ where
     /// This will panic if the pairing response has not been received yet
     async fn send_pairing_random(&mut self) -> Result<(), Error> {
         match self.pairing_data {
-            Some(PairingData {
-                key_gen_method: KeyGenerationMethod::JustWorks,
-                nonce,
-                ..
-            })
-            | Some(PairingData {
-                key_gen_method: KeyGenerationMethod::NumbComp,
-                nonce,
-                ..
-            }) => {
+            Some(PairingData { nonce, .. }) => {
                 log::trace!("Initiator nonce: {:?}", nonce);
 
                 self.send(pairing::PairingRandom::new(nonce)).await?;
@@ -294,15 +324,13 @@ where
     }
 
     async fn process_responder_random(&mut self, payload: &[u8]) -> Result<(), Error> {
-        use super::GetXOfP256Key;
-
         let responder_random = pairing::PairingRandom::try_from_icd(payload);
 
         let check_result = match (&responder_random, &mut self.pairing_data) {
             (
                 Ok(random_pdu),
                 Some(PairingData {
-                    key_gen_method: KeyGenerationMethod::JustWorks,
+                    pairing_method: PairingMethod::JustWorks,
                     peer_nonce,
                     peer_public_key: Some(peer_public_key),
                     public_key,
@@ -313,7 +341,7 @@ where
             | (
                 Ok(random_pdu),
                 Some(PairingData {
-                    key_gen_method: KeyGenerationMethod::NumbComp,
+                    pairing_method: PairingMethod::NumbComp,
                     peer_nonce,
                     peer_public_key: Some(peer_public_key),
                     public_key,
@@ -364,7 +392,7 @@ where
     async fn send_initiator_dh_key_check(&mut self) -> Result<(), Error> {
         let ltk = match self.pairing_data {
             Some(PairingData {
-                key_gen_method: KeyGenerationMethod::JustWorks,
+                pairing_method: PairingMethod::JustWorks,
                 secret_key: Some(ref dh_key),
                 ref nonce,
                 peer_nonce: Some(ref peer_nonce),
@@ -373,7 +401,7 @@ where
                 ..
             })
             | Some(PairingData {
-                key_gen_method: KeyGenerationMethod::NumbComp,
+                pairing_method: PairingMethod::NumbComp,
                 secret_key: Some(ref dh_key),
                 ref nonce,
                 peer_nonce: Some(ref peer_nonce),
@@ -381,9 +409,9 @@ where
                 ref mut mac_key,
                 ..
             }) => {
-                let a_addr = toolbox::PairingAddress::new(self.initiator_address, self.initiator_address_is_random);
+                let a_addr = toolbox::PairingAddress::new(&self.initiator_address, self.initiator_address_is_random);
 
-                let b_addr = toolbox::PairingAddress::new(self.responder_address, self.responder_address_is_random);
+                let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
 
                 let (gen_mac_key, ltk) = toolbox::f5(*dh_key, *nonce, *peer_nonce, a_addr.clone(), b_addr.clone());
 
@@ -422,7 +450,7 @@ where
 
         let check = match self.pairing_data {
             Some(PairingData {
-                key_gen_method: KeyGenerationMethod::JustWorks,
+                pairing_method: PairingMethod::JustWorks,
                 ref nonce,
                 peer_nonce: Some(ref peer_nonce),
                 ref responder_io_cap,
@@ -430,16 +458,16 @@ where
                 ..
             })
             | Some(PairingData {
-                key_gen_method: KeyGenerationMethod::NumbComp,
+                pairing_method: PairingMethod::NumbComp,
                 ref nonce,
                 peer_nonce: Some(ref peer_nonce),
                 ref responder_io_cap,
                 mac_key: Some(ref mac_key),
                 ..
             }) => {
-                let a_addr = toolbox::PairingAddress::new(self.initiator_address, self.initiator_address_is_random);
+                let a_addr = toolbox::PairingAddress::new(&self.initiator_address, self.initiator_address_is_random);
 
-                let b_addr = toolbox::PairingAddress::new(self.responder_address, self.responder_address_is_random);
+                let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
 
                 let calc_eb = toolbox::f6(*mac_key, *peer_nonce, *nonce, 0, *responder_io_cap, b_addr, a_addr);
 
@@ -461,6 +489,118 @@ where
         }
     }
 
+    /// Send the OOB confirm information
+    ///
+    /// This will create the confirm information and send the information to the responder if the
+    /// sender function was set. If no sender was set, this method does nothing.
+    ///
+    /// # Notes
+    /// * This method does nothing if OOB sending is not enabled.
+    /// * The information generated is wrapped in a OOB data block and then sent to the initiator.
+    ///
+    /// # Panic
+    /// This method will panic if the pairing information and public keys were not already generated
+    /// in the pairing process.
+    async fn send_oob(&self) {
+        use crate::gap::{
+            assigned::{sc_confirm_value, sc_random_value, IntoRaw},
+            oob_block,
+        };
+
+        if S::can_send() {
+            let ra = toolbox::rand_u128();
+
+            let paring_data = self.pairing_data.as_ref().unwrap();
+
+            let pka = GetXOfP256Key::x(&paring_data.public_key);
+
+            let address = self.initiator_address;
+
+            let random = &sc_random_value::ScRandomValue::new(ra) as &dyn IntoRaw;
+
+            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pka, ra, 0)) as &dyn IntoRaw;
+
+            let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
+
+            self.oob_send.send(&oob_block).await;
+        }
+    }
+
+    /// Receive OOB information from the responder
+    ///
+    /// This will await for the OOB data block containing the initiator's confirm information and
+    /// return a boolean indicating if the information was verified. If no receive function was set,
+    /// this method will return true.
+    ///
+    /// # Error
+    /// An error is returned if the initiator's random and confirm values cannot be converted
+    ///
+    /// # Panic
+    /// This method will panic if the pairing information and public keys were not already generated
+    /// in the pairing process.
+    async fn receive_oob(&self) -> bool {
+        use crate::gap::{
+            assigned::{sc_confirm_value, sc_random_value, AssignedTypes, TryFromRaw},
+            oob_block,
+        };
+
+        if R::can_receive() {
+            let raw = self.oob_receive.receive().await;
+
+            let oob_info = oob_block::OobDataBlockIter::new(raw);
+
+            let mut rb = None;
+            let mut cb = None;
+
+            for (ty, data) in oob_info.iter() {
+                const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
+                const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
+
+                match ty {
+                    RANDOM_TYPE => rb = sc_random_value::ScRandomValue::try_from_raw(data).ok(),
+                    CONFIRM_TYPE => cb = sc_confirm_value::ScConfirmValue::try_from_raw(data).ok(),
+                    _ => (),
+                }
+            }
+
+            if let (Some(rb), Some(ca)) = (rb, cb) {
+                let paring_data = self.pairing_data.as_ref().unwrap();
+
+                let pkb = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
+
+                if ca.0 == toolbox::f4(pkb, pkb, rb.0, 0) {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+
+    /// Send and/or process the OOB confirm value
+    async fn oob_confirm(&mut self, oob_direction: OobDirection) -> Result<(), self::Error> {
+        match oob_direction {
+            OobDirection::OnlyInitiatorSendsOob => self.send_oob().await,
+            OobDirection::OnlyResponderSendsOob => {
+                self.send_oob().await;
+
+                if !self.receive_oob().await {
+                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
+                }
+            }
+            OobDirection::BothSendOob => {
+                if !self.receive_oob().await {
+                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
     /// Indicate if the connection is encrypted
     ///
     /// This is used to indicate to the `MasterSecurityManager` that it is safe to send a Key to the
@@ -566,6 +706,56 @@ where
         self.pairing_data.as_mut().and_then(|pd| pd.db_keys.as_mut())
     }
 
+    /// Pair to the slave device
+    ///
+    /// This will start and complete the pairing process to the slave device. Unlike the methods
+    /// `start_pairing` and `continue_pairing`, once this has been polled to completion either the
+    /// slave device has paired to this device or pairing has failed. The consequence of this is
+    /// that it will hold the l2cap connection channel until the pairing process is completed (or
+    /// failed). Any received data received that is not part of the security manager specification
+    /// are returned along the the generated keys (the long term key) once pairing is completed
+    pub async fn pair(
+        &'a mut self,
+    ) -> (
+        Result<&'a mut super::KeyDBEntry, super::Error>,
+        alloc::vec::Vec<crate::l2cap::AclData>,
+    ) {
+        let mut other_data = alloc::vec::Vec::new();
+
+        if let Err(e) = self.start_pairing().await {
+            return (Err(e), other_data);
+        }
+
+        'outer: loop {
+            let data = self.connection_channel.future_receiver().await;
+
+            match data {
+                Err(e) => return (Err(super::Error::AclData(e)), other_data),
+                Ok(acl_data_vec) => {
+                    for (index, acl_data) in acl_data_vec.iter().enumerate() {
+                        match acl_data.get_channel_id() {
+                            super::L2CAP_CHANNEL_ID => match self.continue_pairing(acl_data).await {
+                                Err(e) => return (Err(e), other_data),
+                                Ok(true) => {
+                                    other_data.extend_from_slice(&acl_data_vec[(index + 1)..]);
+
+                                    break 'outer;
+                                }
+                                Ok(false) => (),
+                            },
+                            _ => other_data.push(acl_data.clone()),
+                        }
+                    }
+                }
+            }
+        }
+
+        (
+            Ok(self.pairing_data.as_mut().unwrap().db_keys.as_mut().unwrap()),
+            other_data,
+        )
+    }
+
     /// Start pairing
     ///
     /// Initiate the pairing process and sends the request for the slave's pairing information.
@@ -582,12 +772,12 @@ where
     /// To continue pairing, the slaves next received security manager PDU needs to be received
     /// and then processed through `continue_pairing`. Pairing is completed when this function
     /// returns true.
-    pub async fn continue_pairing(&mut self, l2cap_data: crate::l2cap::AclData) -> Result<bool, super::Error>
+    pub async fn continue_pairing(&mut self, acl_data: &crate::l2cap::AclData) -> Result<bool, super::Error>
     where
         C: ConnectionChannel,
     {
-        if l2cap_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
-            self.proc_data(l2cap_data.get_payload()).await
+        if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
+            self.proc_data(acl_data.get_payload()).await
         } else {
             Err(Error::IncorrectL2capChannelId)
         }
@@ -638,11 +828,24 @@ where
                 Err(e) => self.step_err(e),
             },
             Some(super::CommandType::PairingPublicKey) => match self.process_responder_pub_key(payload).await {
-                Ok(_) => {
-                    self.pairing_expected_cmd = super::CommandType::PairingConfirm.into();
+                Ok(_) => match self.pairing_data.as_ref().unwrap().pairing_method {
+                    PairingMethod::JustWorks | PairingMethod::NumbComp => {
+                        self.pairing_expected_cmd = super::CommandType::PairingConfirm.into();
 
-                    Ok(false)
-                }
+                        Ok(false)
+                    }
+                    PairingMethod::Oob(direction) => {
+                        self.oob_confirm(direction).await?;
+
+                        self.pairing_expected_cmd = super::CommandType::PairingRandom.into();
+
+                        match self.send_pairing_random().await {
+                            Ok(_) => Ok(false),
+                            Err(e) => Err(e),
+                        }
+                    }
+                    PairingMethod::PassKeyEntry => unimplemented!(),
+                },
                 Err(e) => self.step_err(e),
             },
             Some(super::CommandType::PairingConfirm) => match self.process_responder_commitment(payload).await {

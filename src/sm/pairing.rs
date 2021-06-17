@@ -53,6 +53,12 @@ impl IOCapability {
     }
 }
 
+/// Flag if out of band data can be received
+///
+/// The names match the naming within the specification, but for this library
+/// `AuthenticationDataNotPresent` means that authentication data cannot be received and
+/// `AuthenticationDataFromRemoteDevicePresent` means that authentication data can be received. This
+/// flag is used internally within the security manager.
 #[derive(Debug, Clone, Copy)]
 pub enum OOBDataFlag {
     AuthenticationDataNotPresent,

@@ -5,7 +5,7 @@
 
 use super::{
     encrypt_info, pairing, toolbox, BuildOutOfBand, Command, CommandData, CommandType, Error, GetXOfP256Key,
-    KeyGenerationMethod, OobDirection, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend, PairingData,
+    OobDirection, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend, PairingData, PairingMethod,
 };
 use crate::l2cap::ConnectionChannel;
 use alloc::vec::Vec;
@@ -360,10 +360,10 @@ where
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub async fn process_command<'s>(
-        &'s mut self,
-        acl_data: &'s crate::l2cap::AclData,
-    ) -> Result<Option<&'s mut super::KeyDBEntry>, Error> {
+    pub async fn process_command(
+        &'a mut self,
+        acl_data: &'a crate::l2cap::AclData,
+    ) -> Result<Option<&'a mut super::KeyDBEntry>, Error> {
         use core::convert::TryFrom;
 
         let command = match CommandType::try_from(acl_data) {
@@ -413,13 +413,14 @@ where
         self.send(pairing::PairingFailed::new(fail_reason)).await
     }
 
-    /// Send the OOB confirm information if sending is enabled
+    /// Send the OOB confirm information
     ///
     /// This will create the confirm information and send the information to the initiator if the
     /// sender function was set. If no sender was set, this method does nothing.
     ///
-    /// # Note
-    /// The information generated is wrapped in a OOB data block and then sent to the initiator.
+    /// # Notes
+    /// * This method does nothing if OOB sending is not enabled.
+    /// * The information generated is wrapped in a OOB data block and then sent to the initiator.
     ///
     /// # Panic
     /// This method will panic if the pairing information and public keys were not already generated
@@ -435,15 +436,13 @@ where
 
             let paring_data = self.pairing_data.as_ref().unwrap();
 
-            let pka = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
-
             let pkb = GetXOfP256Key::x(&paring_data.public_key);
 
             let address = self.responder_address;
 
             let random = &sc_random_value::ScRandomValue::new(rb) as &dyn IntoRaw;
 
-            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pkb, rb, 0)) as &dyn IntoRaw;
+            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pkb, pkb, rb, 0)) as &dyn IntoRaw;
 
             let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
 
@@ -493,9 +492,7 @@ where
 
                 let pka = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
 
-                let pkb = GetXOfP256Key::x(&paring_data.public_key);
-
-                if ca.0 == toolbox::f4(pka, pkb, ra.0, 0) {
+                if ca.0 == toolbox::f4(pka, pka, ra.0, 0) {
                     true
                 } else {
                     false
@@ -544,7 +541,7 @@ where
                 self.responder_key_distribution.clone(),
             );
 
-            let pairing_method = KeyGenerationMethod::determine_method_secure_connection(
+            let pairing_method = PairingMethod::determine_method_secure_connection(
                 request.get_oob_data_flag(),
                 response.get_oob_data_flag(),
                 request.get_io_capability(),
@@ -562,7 +559,7 @@ where
             log::info!("Pairing Method: {:?}", pairing_method);
 
             self.pairing_data = Some(PairingData {
-                key_gen_method: pairing_method,
+                pairing_method,
                 public_key,
                 private_key: Some(private_key),
                 initiator_io_cap,
@@ -594,7 +591,7 @@ where
 
         match self.pairing_data {
             Some(PairingData {
-                ref key_gen_method,
+                pairing_method: ref key_gen_method,
                 ref public_key,
                 ref nonce,
                 ref mut private_key,
@@ -640,24 +637,24 @@ where
 
                 // Process what to do next based on the key generation method
                 match key_gen_method {
-                    KeyGenerationMethod::JustWorks | KeyGenerationMethod::NumbComp => {
+                    PairingMethod::JustWorks | PairingMethod::NumbComp => {
                         // Send the confirm value
                         self.send(pairing::PairingConfirm::new(confirm_value)).await?;
                     }
-                    KeyGenerationMethod::Oob(OobDirection::OnlyReceiverSendsOob) => self.send_oob().await,
-                    KeyGenerationMethod::Oob(OobDirection::BothSendOob) => {
+                    PairingMethod::Oob(OobDirection::OnlyResponderSendsOob) => self.send_oob().await,
+                    PairingMethod::Oob(OobDirection::BothSendOob) => {
                         self.send_oob().await;
 
                         if !self.receive_oob().await {
                             self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
                         }
                     }
-                    KeyGenerationMethod::Oob(OobDirection::OnlyInitiatorSendsOob) => {
+                    PairingMethod::Oob(OobDirection::OnlyInitiatorSendsOob) => {
                         if !self.receive_oob().await {
                             self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
                         }
                     }
-                    KeyGenerationMethod::PassKeyEntry => {
+                    PairingMethod::PassKeyEntry => {
                         todo!("Key generation method 'Pass Key Entry' is not supported yet")
                     }
                 }
@@ -686,11 +683,11 @@ where
 
         match self.pairing_data.as_ref() {
             Some(PairingData {
-                key_gen_method: KeyGenerationMethod::JustWorks,
+                pairing_method: PairingMethod::JustWorks,
                 ..
             })
             | Some(PairingData {
-                key_gen_method: KeyGenerationMethod::NumbComp,
+                pairing_method: PairingMethod::NumbComp,
                 ..
             }) =>
             /* Just Works or Number Comparison */
@@ -724,13 +721,13 @@ where
 
         match self.pairing_data {
             Some(PairingData {
-                key_gen_method: KeyGenerationMethod::JustWorks,
+                pairing_method: PairingMethod::JustWorks,
                 ref mut peer_nonce,
                 nonce,
                 ..
             })
             | Some(PairingData {
-                key_gen_method: KeyGenerationMethod::NumbComp,
+                pairing_method: PairingMethod::NumbComp,
                 ref mut peer_nonce,
                 nonce,
                 ..

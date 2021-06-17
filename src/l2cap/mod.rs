@@ -227,7 +227,7 @@ impl LeUserChannelIdentifier {
 }
 
 /// Acl Data Errors
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum AclDataError {
     /// Raw data is too small for an ACL frame
     RawDataTooSmall,
