@@ -57,11 +57,10 @@
 //! #     fn receive(&self,waker: &Waker) -> Option<Vec<AclDataFragment>> { unimplemented!() }
 //! # }
 //! # let connection_channel = StubConnectionChannel;
-//! use bo_tie::sm::BuildOutOfBand;
-//! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
-//!
 //! // An example of setting up a receiver that support oob
+//!
 //! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
+//! use bo_tie::sm::BuildOutOfBand;
 //! use bo_tie::l2cap::{AclData, ConnectionChannel, AclDataFragment};
 //! use std::task::Waker;
 //! use std::future::Future;
