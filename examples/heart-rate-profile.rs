@@ -214,7 +214,7 @@ mod heart_rate_service {
 
         server_builder
             .new_service_constructor(HEART_RATE_SERVICE_UUID, true)
-            .into_characteristics_adder()
+            .add_characteristics()
             .build_characteristic(
                 Vec::from(characteristics::HeartRateMeasurement::GATT_PERMISSIONS),
                 characteristics::HEART_RATE_MEASUREMENT_UUID,

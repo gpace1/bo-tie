@@ -1,3 +1,15 @@
+//! Generic Attribute Protocol
+//!
+//! GATT is a thin wrapper protocol above the attribute (ATT) protocol.
+//!
+//! The GATT is mainly an data organization protocol used to help clients to identify what is on
+//! the other device's attribute server. GATT organizes data into groups under a 'service'. Data
+//! within a service is organized into 'characteristic' which contain 'characteristic descriptors'
+//! that further provide meta explanation of the data. Each of these require attributes, so
+//! individual data will use multiple attribute handles in order to contain all the GATT information
+//! associated with it. However all this GATT information provides a standard way for the
+//! Bluetooth SIG to assign services to provide common data formats.
+
 use crate::{att, l2cap, UUID};
 use alloc::vec::Vec;
 
@@ -163,7 +175,7 @@ impl<'a> ServiceBuilder<'a> {
     /// `[into_includes_adder](#add_service_includes)`
     /// function. That function will return a `IncludesAdder` which can be then converted into
     /// a `CharacteristicAdder` for adding characteristics to the service.
-    pub fn into_characteristics_adder(mut self) -> CharacteristicAdder<'a> {
+    pub fn add_characteristics(mut self) -> CharacteristicAdder<'a> {
         self.set_service_definition();
 
         let end_handle = self.definition_handle.unwrap();
@@ -262,8 +274,14 @@ impl<'a> IncludesAdder<'a> {
         self
     }
 
-    /// Convert to a CharacteristicAdder
-    pub fn into_characteristics_adder(self) -> CharacteristicAdder<'a> {
+    /// Add characteristics to the server
+    ///
+    /// This finishes the included services section and begins the process of adding characteristics
+    /// to the service.
+    ///
+    /// # Note
+    /// Services cannot be included once this is called.
+    pub fn add_characteristics(self) -> CharacteristicAdder<'a> {
         CharacteristicAdder::new(self.service_builder, self.end_group_handle)
     }
 
@@ -282,9 +300,9 @@ impl<'a> IncludesAdder<'a> {
 /// constructing with ServiceBuilder.
 ///
 /// This is created by the
-/// [`ServiceBuilder::into_characteristics_adder`](crate::gatt::ServiceBuilder::into_characteristics_adder)
+/// [`ServiceBuilder::add_characteristics`](crate::gatt::ServiceBuilder::add_characteristics)
 /// or
-/// [`IncludesAdder::into_characteristics_adder`](crate::gatt::IncludesAdder::into_characteristics_adder)
+/// [`IncludesAdder::add_characteristics`](crate::gatt::IncludesAdder::add_characteristics)
 /// functions.
 pub struct CharacteristicAdder<'a> {
     service_builder: ServiceBuilder<'a>,
@@ -299,21 +317,11 @@ impl<'a> CharacteristicAdder<'a> {
         }
     }
 
-    pub fn build_characteristic<'c, C, V, P>(
-        self,
-        properties: Vec<characteristic::Properties>,
-        uuid: UUID,
-        value: C,
-        value_permissions: P,
-    ) -> characteristic::CharacteristicBuilder<'a, 'c, C, V>
-    where
-        C: att::server::ServerAttributeValue<Value = V> + Send + Sized + 'static,
-        V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
-        P: Into<Option<&'c [att::AttributePermissions]>>,
-    {
-        let permissions = value_permissions.into();
-
-        characteristic::CharacteristicBuilder::new(self, properties, uuid, value, permissions)
+    /// Create a new characteristic builder
+    ///
+    /// The created builder will be used for setting up and creating a new characteristic.
+    pub fn new_characteristic<'c, U, C, V>(self) -> characteristic::CharacteristicBuilder<'a, 'c, U, C, V> {
+        characteristic::CharacteristicBuilder::new(self)
     }
 
     /// Finish the service
@@ -415,23 +423,21 @@ impl<'a> GapServiceBuilder<'a> {
         let mut server_builder = ServerBuilder::new_empty();
 
         server_builder
-            .new_service_constructor(Self::GAP_SERVICE_TYPE, true)
+            .new_service(Self::GAP_SERVICE_TYPE, true)
             .set_att_permissions(self.service_permissions)
-            .into_characteristics_adder()
-            .build_characteristic(
-                Self::DEVICE_NAME_PROPERTIES.to_vec(),
-                Self::DEVICE_NAME_TYPE,
-                alloc::string::String::from(self.device_name),
-                self.device_name_permissions,
-            )
-            .finish_characteristic()
-            .build_characteristic(
-                Self::DEVICE_APPEARANCE_PROPERTIES.to_vec(),
-                Self::DEVICE_APPEARANCE_TYPE,
-                self.device_appearance,
-                self.device_appearance_permissions,
-            )
-            .finish_characteristic()
+            .add_characteristics()
+            .new_characteristic()
+            .set_properties(Self::DEVICE_NAME_PROPERTIES.to_vec())
+            .set_uuid(Self::DEVICE_NAME_TYPE)
+            .set_value(alloc::string::String::from(self.device_name))
+            .set_permissions(self.device_name_permissions)
+            .complete_characteristic()
+            .new_characteristic()
+            .set_properties(Self::DEVICE_APPEARANCE_PROPERTIES.to_vec())
+            .set_uuid(Self::DEVICE_APPEARANCE_TYPE)
+            .set_value(self.device_appearance)
+            .set_permissions(self.device_appearance_permissions)
+            .complete_characteristic()
             .finish_service();
 
         server_builder
@@ -450,9 +456,49 @@ impl Default for GapServiceBuilder<'_> {
     }
 }
 
-/// Constructor of a GATT server
+/// A GATT server builder
 ///
-/// This will construct a GATT server for use with BR/EDR/LE bluetooth operation.
+/// This is a builder of a GATT server. It provides a walk through process for creating the service
+/// architecture of the server before the server is created.
+///
+/// ```
+/// use bo_tie::gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
+/// use bo_tie::att::{FULL_PERMISSIONS, server::NoQueuedWrites};
+/// use bo_tie::l2cap::{AclData, ConnectionChannel, AclDataFragment};
+/// use std::task::Waker;
+/// use std::future::Future;
+///
+/// # const MY_SERVICE_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0);
+/// # const MY_CHARACTERISTIC_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0);
+/// # struct CC;
+/// # impl bo_tie::l2cap::ConnectionChannel for CC {
+/// #     type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
+/// #     type SendFutErr = usize;
+/// #     fn send(&self,data: AclData) -> Self::SendFut { unimplemented!() }
+/// #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
+/// #     fn get_mtu(&self) -> usize { unimplemented!() }
+/// #     fn max_mtu(&self) -> usize { unimplemented!() }
+/// #     fn min_mtu(&self) -> usize { unimplemented!() }
+/// #     fn receive(&self,waker: &Waker) -> Option<Vec<AclDataFragment>> { unimplemented!()}
+/// # }
+/// # let connection_channel = CC;
+///
+/// let gap_service = GapServiceBuilder::new("My Device", None);
+///
+/// let mut server_builder = ServerBuilder::from(gap_service);
+///
+/// server_builder.new_service(MY_SERVICE_UUID, true)
+///     .add_characteristics()
+///         .new_characteristic()
+///             .set_uuid(MY_CHARACTERISTIC_UUID)
+///             .set_value(0usize)
+///             .set_permissions(FULL_PERMISSIONS)
+///             .set_properties([Properties::Read, Properties::Write].to_vec())
+///             .complete_characteristic()
+///         .finish_service();
+///
+/// let server = server_builder.make_server(&connection_channel, NoQueuedWrites);
+/// ```
 pub struct ServerBuilder {
     primary_services: Vec<Service>,
     attributes: att::server::ServerAttributes,
@@ -469,26 +515,8 @@ impl ServerBuilder {
         }
     }
 
-    /// Construct a new `ServicesBuilder`
-    ///
-    /// This will make a `ServiceBuilder` with the basic requirements for a GATT server. This
-    /// server will only contain a *GAP* service with the characteristics *Device Name* and
-    /// *Appearance*, but both of these characteristics contain no information. The permissions for
-    /// the GAP attributes will be the default read attributes.
-    pub fn new() -> Self {
-        GapServiceBuilder::default().into()
-    }
-
-    /// Construct a new `ServiceBuilder` with the provided GAP service builder
-    ///
-    /// The provided GAP service builder will be used to construct the required GAP service for the
-    /// GATT server.
-    pub fn new_with_gap(gap: GapServiceBuilder) -> Self {
-        gap.into_gatt_service()
-    }
-
-    /// Create a service constructor
-    pub fn new_service_constructor(&mut self, service_type: UUID, is_primary: bool) -> ServiceBuilder<'_> {
+    /// Construct a new service
+    pub fn new_service(&mut self, service_type: UUID, is_primary: bool) -> ServiceBuilder<'_> {
         ServiceBuilder::new(self, service_type, is_primary)
     }
 
@@ -520,7 +548,7 @@ impl ServerBuilder {
 
 impl From<GapServiceBuilder<'_>> for ServerBuilder {
     fn from(gap: GapServiceBuilder) -> Self {
-        Self::new_with_gap(gap)
+        gap.into_gatt_service()
     }
 }
 
@@ -768,7 +796,7 @@ mod tests {
         let test_service_1 = server_builder
             .new_service_constructor(UUID::from_u16(0x1234), false)
             .set_att_permissions(test_att_permissions)
-            .into_characteristics_adder()
+            .add_characteristics()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
                 UUID::from(0x1234u16),
@@ -846,7 +874,7 @@ mod tests {
 
         server_builder
             .new_service_constructor(first_test_uuid, true)
-            .into_characteristics_adder()
+            .add_characteristics()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
                 UUID::from(0x2000u16),
@@ -858,7 +886,7 @@ mod tests {
 
         server_builder
             .new_service_constructor(second_test_uuid, true)
-            .into_characteristics_adder()
+            .add_characteristics()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
                 UUID::from(0x2001u16),

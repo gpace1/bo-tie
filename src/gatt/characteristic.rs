@@ -17,7 +17,7 @@ pub enum Properties {
 }
 
 impl Properties {
-    fn into_val(&self) -> u8 {
+    fn to_val(&self) -> u8 {
         match *self {
             Properties::Broadcast => 1 << 0,
             Properties::Read => 1 << 1,
@@ -30,8 +30,8 @@ impl Properties {
         }
     }
 
-    fn into_bit_field(properties: &[Self]) -> u8 {
-        properties.iter().fold(0u8, |u, p| u | p.into_val())
+    fn slice_to_bit_field(properties: &[Self]) -> u8 {
+        properties.iter().fold(0u8, |u, p| u | p.to_val())
     }
 
     fn from_bit_field(field: u8) -> Vec<Self> {
@@ -77,7 +77,7 @@ impl att::TransferFormatInto for Vec<Properties> {
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        into_ret[0] = Properties::into_bit_field(self);
+        into_ret[0] = Properties::slice_to_bit_field(self);
     }
 }
 
@@ -114,7 +114,7 @@ impl att::TransferFormatInto for Declaration {
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        into_ret[0] = Properties::into_bit_field(&self.properties);
+        into_ret[0] = Properties::slice_to_bit_field(&self.properties);
 
         into_ret[1..3].copy_from_slice(&self.value_handle.to_le_bytes());
 
@@ -372,10 +372,12 @@ impl ServerConfiguration {
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
-pub struct CharacteristicBuilder<'a, 'c, C, V> {
+pub struct CharacteristicBuilder<'a, 'c, U, C, V> {
     characteristic_adder: super::CharacteristicAdder<'a>,
-    declaration: Declaration,
-    value_decl: ValueDeclaration<'c, C>,
+    properties: Vec<Properties>,
+    uuid: Option<U>,
+    value: Option<C>,
+    value_permissions: &'c [att::AttributePermissions],
     ext_prop: Option<Vec<ExtendedProperties>>,
     ext_prop_permissions: Option<&'c [att::AttributePermissions]>,
     user_desc: Option<UserDescription<'c>>,
@@ -386,32 +388,14 @@ pub struct CharacteristicBuilder<'a, 'c, C, V> {
     pd: core::marker::PhantomData<V>,
 }
 
-impl<'a, 'c, C, V> CharacteristicBuilder<'a, 'c, C, V>
-where
-    C: att::server::ServerAttributeValue<Value = V> + Sized + Send + 'static,
-    V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
-{
-    pub(super) fn new<P>(
-        characteristic_adder: super::CharacteristicAdder<'a>,
-        properties: Vec<Properties>,
-        uuid: UUID,
-        value: C,
-        value_permissions: P,
-    ) -> Self
-    where
-        P: Into<Option<&'c [att::AttributePermissions]>>,
-    {
+impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V> {
+    pub(super) fn new(characteristic_adder: super::CharacteristicAdder<'a>) -> Self {
         CharacteristicBuilder {
-            declaration: Declaration {
-                properties,
-                value_handle: 0,
-                uuid,
-            },
-            value_decl: ValueDeclaration {
-                att_type: uuid,
-                value,
-                permissions: value_permissions.into(),
-            },
+            characteristic_adder,
+            properties: Vec::new(),
+            uuid: None,
+            value: None,
+            value_permissions: &[],
             ext_prop: None,
             ext_prop_permissions: None,
             user_desc: None,
@@ -419,9 +403,57 @@ where
             client_cfg_permissions: None,
             server_cfg: None,
             server_cfg_permissions: None,
-            characteristic_adder,
             pd: core::marker::PhantomData,
         }
+    }
+}
+
+impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V>
+where
+    U: Into<UUID>,
+    C: att::server::ServerAttributeValue<Value = V> + Sized + Send + 'static,
+    V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
+{
+    /// Set the value (Required)
+    ///
+    /// This is the value that is placed within the value descriptor.
+    ///
+    /// # Note
+    /// This function must be called before `build_characteristic`
+    pub fn set_value(mut self, value: C) -> Self {
+        self.value = Some(value);
+
+        self
+    }
+
+    /// Set the characteristic's UUID (Required)
+    ///
+    /// # Note
+    /// This function must be called before `build_characteristic`
+    pub fn set_uuid(mut self, uuid: U) -> Self {
+        self.uuid = Some(uuid);
+
+        self
+    }
+
+    /// Set the properties of the characteristic
+    pub fn set_properties(mut self, properties: Vec<Properties>) -> Self {
+        self.properties = properties;
+
+        self
+    }
+
+    /// Set the permissions for accessing the *value*
+    ///
+    /// These are the attribute permissions for a client to access the value in the characteristic.
+    ///
+    /// # Note
+    /// These permissions are assigned to the attribute containing the value characteristic
+    /// descriptor, not any other attribute of the characteristic.
+    pub fn set_permissions(mut self, permissions: &'c [att::AttributePermissions]) -> Self {
+        self.value_permissions = permissions;
+
+        self
     }
 
     /// Instruct the builder to create a `Extended Properties` characteristic descriptor
@@ -470,17 +502,27 @@ where
         self
     }
 
-    /// Finish constructing the Characteristic
+    /// Build constructing the Characteristic
     ///
     /// This will return the CharacteristicAdder that was used to make this CharacteristicBuilder.
-    ///
-    pub fn finish_characteristic(mut self) -> super::CharacteristicAdder<'a> {
+    pub fn complete_characteristic(mut self) -> super::CharacteristicAdder<'a> {
         use att::Attribute;
+
+        let uuid = self.uuid.unwrap().into();
 
         let attributes = &mut self.characteristic_adder.service_builder.server_builder.attributes;
 
-        // The value handle will be the handle after the declaration
-        self.declaration.value_handle = attributes.next_handle() + 1;
+        let characteristic_declaration = Declaration {
+            properties: self.properties,
+            value_handle: attributes.next_handle() + 1,
+            uuid,
+        };
+
+        let value_decl = ValueDeclaration {
+            att_type: uuid,
+            value: self.value.unwrap(),
+            permissions: self.value_permissions.into(),
+        };
 
         let declaration = Attribute::new(
             Declaration::TYPE,
@@ -489,19 +531,19 @@ where
                 .default_permissions
                 .unwrap_or(Declaration::DEFAULT_PERMISSIONS)
                 .into(),
-            self.declaration,
+            characteristic_declaration,
         );
 
         attributes.push(declaration);
 
         let value = Attribute::new(
-            self.value_decl.att_type,
-            self.value_decl
+            value_decl.att_type,
+            value_decl
                 .permissions
                 .or(self.characteristic_adder.service_builder.default_permissions)
                 .unwrap_or(ValueDeclaration::DEFAULT_VALUE_PERMISSIONS)
                 .into(),
-            self.value_decl.value,
+            value_decl.value,
         );
 
         // last_attr is handle value of the added attribute

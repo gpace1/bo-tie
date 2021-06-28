@@ -178,6 +178,7 @@ impl core::borrow::Borrow<[AttributePermissions]> for &AttributePermissions {
     }
 }
 
+/// Full read-only permissions
 pub const FULL_READ_PERMISSIONS: &'static [AttributePermissions] = &[
     AttributePermissions::Read(AttributeRestriction::None),
     AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
@@ -187,7 +188,24 @@ pub const FULL_READ_PERMISSIONS: &'static [AttributePermissions] = &[
     AttributePermissions::Read(AttributeRestriction::Authentication),
 ];
 
+/// Full write-only permissions
 pub const FULL_WRITE_PERMISSIONS: &'static [AttributePermissions] = &[
+    AttributePermissions::Write(AttributeRestriction::None),
+    AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
+    AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
+    AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits256)),
+    AttributePermissions::Write(AttributeRestriction::Authorization),
+    AttributePermissions::Write(AttributeRestriction::Authentication),
+];
+
+/// Full permissions for read and write
+pub const FULL_PERMISSIONS: &'static [AttributePermissions] = &[
+    AttributePermissions::Read(AttributeRestriction::None),
+    AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
+    AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
+    AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits256)),
+    AttributePermissions::Read(AttributeRestriction::Authorization),
+    AttributePermissions::Read(AttributeRestriction::Authentication),
     AttributePermissions::Write(AttributeRestriction::None),
     AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
     AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
