@@ -362,10 +362,10 @@ where
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub async fn process_command(
-        &'a mut self,
-        acl_data: &'a crate::l2cap::AclData,
-    ) -> Result<Option<&'a mut super::KeyDBEntry>, Error> {
+    pub async fn process_command<'z, 'y: 'z>(
+        &'z mut self,
+        acl_data: &'y crate::l2cap::AclData,
+    ) -> Result<Option<&'z mut super::KeyDBEntry>, Error> {
         use core::convert::TryFrom;
 
         let command = match CommandType::try_from(acl_data) {
