@@ -69,7 +69,9 @@ where
     /// # Note
     /// This will create a `SlaveSecurityManager` that does not support the out of band pairing
     /// method.
-    pub fn build(self) -> SlaveSecurityManager<'a, C, impl for<'i> OutOfBandSend<'i>, impl OutOfBandReceive> {
+    pub fn build(
+        self,
+    ) -> SlaveSecurityManager<'a, C, impl for<'i> OutOfBandSend<'i> + 'static, impl OutOfBandReceive + 'static> {
         self.make((), ())
     }
 

@@ -46,7 +46,9 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
     /// # Note
     /// This will create a `MasterSecurityManager` that does not support the out of band pairing
     /// method.
-    pub fn build(self) -> MasterSecurityManager<'a, C, impl for<'i> OutOfBandSend<'i>, impl OutOfBandReceive> {
+    pub fn build(
+        self,
+    ) -> MasterSecurityManager<'a, C, impl for<'i> OutOfBandSend<'i> + 'static, impl OutOfBandReceive + 'static> {
         self.make((), ())
     }
 
