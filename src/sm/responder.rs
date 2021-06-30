@@ -56,7 +56,14 @@ where
     ///
     /// This creates an `OutOfBandMethodBuilder` for creating a `SlaveSecurityManager` that supports
     /// OOB.data transfer.
-    pub fn use_oob<S, R>(self, send: S, receive: R) -> impl BuildOutOfBand + 'a
+    pub fn use_oob<S, R>(
+        self,
+        send: S,
+        receive: R,
+    ) -> impl BuildOutOfBand<
+        Builder = SlaveSecurityManagerBuilder<'a, C>,
+        SecurityManager = SlaveSecurityManager<'a, C, S, R>,
+    > + 'a
     where
         S: for<'i> OutOfBandSend<'i> + 'a,
         R: OutOfBandReceive + 'a,

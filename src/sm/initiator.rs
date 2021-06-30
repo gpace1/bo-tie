@@ -33,7 +33,14 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
         }
     }
 
-    pub fn use_oob<S, R>(self, send: S, receive: R) -> impl BuildOutOfBand + 'a
+    pub fn use_oob<S, R>(
+        self,
+        send: S,
+        receive: R,
+    ) -> impl BuildOutOfBand<
+        Builder = MasterSecurityManagerBuilder<'a, C>,
+        SecurityManager = MasterSecurityManager<'a, C, S, R>,
+    > + 'a
     where
         S: for<'i> OutOfBandSend<'i> + 'a,
         R: OutOfBandReceive + 'a,
