@@ -967,7 +967,7 @@ impl<B, S, R> core::ops::DerefMut for OutOfBandMethodBuilder<B, S, R> {
 
 /// The trait to used by a Security Manager send data over an out of band (OOB) interface
 ///
-/// This is auto implemented for anything that implements `Fn(&\[u8\]) -> impl Future`.
+/// This is auto implemented for anything that implements `Fn(&[u8]) -> impl Future`.
 pub trait OutOfBandSend<'a> {
     type Future: Future + 'a;
 
