@@ -936,10 +936,9 @@ pub struct OutOfBandMethodBuilder<B, S, R> {
     receive_method: R,
 }
 
-impl<'a, B, S, R> OutOfBandMethodBuilder<B, S, R>
+impl<B, S, R> OutOfBandMethodBuilder<B, S, R>
 where
-    B: 'a,
-    S: OutOfBandSend<'a>,
+    S: for<'a> OutOfBandSend<'a>,
     R: OutOfBandReceive,
 {
     fn new(builder: B, send_method: S, receive_method: R) -> Self {
