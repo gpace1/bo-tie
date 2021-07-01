@@ -598,6 +598,9 @@ impl<'a, C> ConChanFutureRx<'a, C>
 where
     C: ?Sized,
 {
+    // The size of the L2CAP data header
+    const HEADER_SIZE: usize = 4;
+
     /// Get the complete, de-fragmented, received ACL Data
     ///
     /// This is useful when resulting `poll` may contain many complete packets, but still returns
@@ -609,19 +612,111 @@ where
 
     /// Drop all fragments
     ///
-    /// **This will drop stored all fragments**. This should only be used when polling returns an
-    /// error (with exceptions, see the [Note](#Note)). All assembled L2CAP packets are untouched by
-    /// this function and can be retrieved with `get_received_packets`.
-    ///
-    /// Once this is called, it is likely that polling will return multiple
+    /// **This will drop all stored fragments**. This should only be used when polling returns an
+    /// error. However any fully assembled L2CAP packets are not touched by this function and they
+    /// can be retrieved with the method
+    /// [`get_received_packets`](ConChanFutureRx::get_received_packets). Once this is called, it is
+    /// likely that polling will return multiple
     /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment)
     /// errors before complete L2CAP packets are returned again.
     ///
+    /// The malformed L2CAP packet that caused the error is not retrievable and is effectively lost.
+    /// The payload is considered junk if a fragment causes an error, as returned errors generally
+    /// mean that the length of L2CAP packet is incorrect. It would be unsafe to convert the payload
+    /// into any valid higher level protocol packet. However and error can occur if an invalid
+    /// channel identifier is used. There is no special consideration for L2CAP packets with an
+    /// invalid channel identifier, so make sure only valid channel identifiers are used.
+    ///
     /// # Note
     /// This function doesn't need to be called if polling returns the error
-    /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment).
+    /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment), but only because there are
+    /// no fragments to be dropped.
     pub fn drop_fragments(&mut self) {
         let _dropped = core::mem::replace(&mut self.carryover_fragments, Vec::new());
+    }
+
+    /// Process a fragment
+    ///
+    /// This validate the fragment before adding it the the data to eventually be returned by the
+    /// future.
+    fn process(&mut self, fragment: &mut AclDataFragment) -> Result<(), AclDataError> {
+        // Return if `fragment` is an empty fragment, as empty fragments can be ignored.
+        if fragment.data.len() == 0 {
+            return Ok(());
+        }
+
+        if self.carryover_fragments.is_empty() {
+            // As there are no carryover fragments, `fragment` is expected to be the start of a
+            // new L2CAP packet.
+
+            if !fragment.is_start_fragment() {
+                return Err(AclDataError::ExpectedStartFragment);
+            }
+
+            match fragment.get_acl_len() {
+                // Check if `fragment` is a complete L2CAP payload
+                Some(l) if (l + Self::HEADER_SIZE) <= fragment.data.len() => {
+                    match AclData::from_raw_data(&fragment.data) {
+                        Ok(data) => self.full_acl_data.push(data),
+                        Err(e) => return Err(e),
+                    }
+                }
+
+                // The Length field in `fragment` is available, but `fragment` is just the starting
+                // fragment of a L2CAP packet split into multiple fragments.
+                len @ Some(_) => {
+                    self.carryover_fragments.append(&mut fragment.data);
+                    self.length = len;
+                }
+
+                // Length field is unavailable or incomplete, its debatable if this case ever
+                // happens, but `fragment` is definitely not a L2CAP complete packet.
+                None => self.carryover_fragments.append(&mut fragment.data),
+            }
+        } else {
+            // `fragment` is a continuing (not starting) fragment of a fragmented L2CAP payload
+
+            self.carryover_fragments.append(&mut fragment.data);
+
+            let acl_len = match self.length {
+                None => {
+                    // Fold the first two bytes of the received data into a length fields. As this
+                    // is the second fragment (with a data length greater than 1) received, the
+                    // length of `carryover_fragments` is guaranteed to be at least 2.
+
+                    let len_bytes =
+                        self.carryover_fragments
+                            .iter()
+                            .take(2)
+                            .enumerate()
+                            .fold([0u8; 2], |mut a, (i, &v)| {
+                                a[i] = v;
+                                a
+                            });
+
+                    let len = <u16>::from_le_bytes(len_bytes) as usize;
+
+                    self.length = Some(len);
+
+                    len
+                }
+                Some(len) => len,
+            };
+
+            // Assemble the carryover fragments into a complete L2CAP packet if the length of the
+            // fragments matches (or is greater than) the total length of the payload.
+            if (acl_len + Self::HEADER_SIZE) <= self.carryover_fragments.len() {
+                match AclData::from_raw_data(&self.carryover_fragments) {
+                    Ok(data) => {
+                        self.full_acl_data.push(data);
+                        self.carryover_fragments.clear();
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -632,96 +727,27 @@ where
     type Output = Result<Vec<AclData>, AclDataError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
-        // The size of the L2CAP data header
-        const HEADER_SIZE: usize = 4;
-
         use core::task::Poll;
 
         let this = self.get_mut();
 
         loop {
-            if let Some(ret) = match this.cc.receive(cx.waker()) {
-                None => return Poll::Pending,
+            match this.cc.receive(cx.waker()) {
+                None => break Poll::Pending,
                 Some(fragments) => {
-                    match fragments.into_iter().try_for_each(|mut f| {
-                        // Continue `try_for_each` if f is an empty fragment, empty fragments can
-                        // be ignored.
-                        if f.data.len() == 0 {
-                            return Ok(());
-                        }
-
-                        if this.carryover_fragments.is_empty() {
-                            if !f.is_start_fragment() {
-                                return Err(AclDataError::ExpectedStartFragment);
-                            }
-
-                            match f.get_acl_len() {
-                                Some(l) if (l + HEADER_SIZE) <= f.data.len() => match AclData::from_raw_data(&f.data) {
-                                    Ok(data) => this.full_acl_data.push(data),
-                                    Err(e) => return Err(e),
-                                },
-                                len @ Some(_) => {
-                                    this.carryover_fragments.append(&mut f.data);
-                                    this.length = len;
-                                }
-                                None => {
-                                    this.carryover_fragments.append(&mut f.data);
-                                }
-                            }
-                        } else {
-                            this.carryover_fragments.append(&mut f.data);
-
-                            let acl_len = match this.length {
-                                None => {
-                                    // There will always be at least 2 items to take because a starting
-                                    // fragment and a proceeding fragment have been received and empty
-                                    // fragments are not added to `self.carryover_fragments`.
-                                    let len_bytes = this.carryover_fragments.iter().take(2).enumerate().fold(
-                                        [0u8; 2],
-                                        |mut a, (i, &v)| {
-                                            a[i] = v;
-                                            a
-                                        },
-                                    );
-
-                                    let len = <u16>::from_le_bytes(len_bytes) as usize;
-
-                                    this.length = Some(len);
-
-                                    len
-                                }
-                                Some(len) => len,
-                            };
-
-                            if (acl_len + HEADER_SIZE) <= this.carryover_fragments.len() {
-                                match AclData::from_raw_data(&this.carryover_fragments) {
-                                    Ok(data) => {
-                                        this.full_acl_data.push(data);
-                                        this.carryover_fragments.clear();
-                                    }
-                                    Err(e) => return Err(e),
-                                }
-                            }
-                        }
-
-                        Ok(())
-                    }) {
-                        // Body of match statement
+                    match fragments.into_iter().try_for_each(|ref mut f| this.process(f)) {
                         Ok(_) => {
                             if this.carryover_fragments.is_empty() && !this.full_acl_data.is_empty() {
-                                Some(Ok(core::mem::replace(&mut this.full_acl_data, Vec::new())))
-                            } else {
-                                None
+                                // Break iff there are complete L2CAP packets
+
+                                let data = core::mem::replace(&mut this.full_acl_data, Vec::new());
+
+                                break Poll::Ready(Ok(data));
                             }
                         }
-                        Err(e) => Some(Err(e)),
+                        Err(e) => break Poll::Ready(Err(e)),
                     }
                 }
-            } {
-                // Block of `if Some(ret) = match ...`
-                return Poll::Ready(ret);
-
-                // Loop continues if None is returned by match statement
             }
         }
     }
