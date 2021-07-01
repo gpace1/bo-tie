@@ -439,19 +439,24 @@ where
         };
 
         if S::can_send() {
-            let rb = toolbox::rand_u128();
+            // doing things this way so the future returned by send_oob implements `Send`
+            let oob_block = {
+                let rb = toolbox::rand_u128();
 
-            let paring_data = self.pairing_data.as_ref().unwrap();
+                let paring_data = self.pairing_data.as_ref().unwrap();
 
-            let pkb = GetXOfP256Key::x(&paring_data.public_key);
+                let pkb = GetXOfP256Key::x(&paring_data.public_key);
 
-            let address = self.responder_address;
+                let address = self.responder_address;
 
-            let random = &sc_random_value::ScRandomValue::new(rb) as &dyn IntoRaw;
+                let random = &sc_random_value::ScRandomValue::new(rb);
 
-            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pkb, pkb, rb, 0)) as &dyn IntoRaw;
+                let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pkb, pkb, rb, 0));
 
-            let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
+                let items: &[&dyn IntoRaw] = &[random, confirm];
+
+                oob_block::OobDataBlockBuilder::new(address).build(items)
+            };
 
             self.oob_send.send(&oob_block).await;
         }

@@ -515,19 +515,24 @@ where
         };
 
         if S::can_send() {
-            let ra = toolbox::rand_u128();
+            // doing things this way so the future returned by send_oob implements `Send`
+            let oob_block = {
+                let ra = toolbox::rand_u128();
 
-            let paring_data = self.pairing_data.as_ref().unwrap();
+                let paring_data = self.pairing_data.as_ref().unwrap();
 
-            let pka = GetXOfP256Key::x(&paring_data.public_key);
+                let pka = GetXOfP256Key::x(&paring_data.public_key);
 
-            let address = self.initiator_address;
+                let address = self.initiator_address;
 
-            let random = &sc_random_value::ScRandomValue::new(ra) as &dyn IntoRaw;
+                let random = &sc_random_value::ScRandomValue::new(ra);
 
-            let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pka, ra, 0)) as &dyn IntoRaw;
+                let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pka, ra, 0));
 
-            let oob_block = oob_block::OobDataBlockBuilder::new(address).build(&[random, confirm]);
+                let items: &[&dyn IntoRaw] = &[random, confirm];
+
+                oob_block::OobDataBlockBuilder::new(address).build(items)
+            };
 
             self.oob_send.send(&oob_block).await;
         }
