@@ -611,6 +611,36 @@ impl_transfer_format_for_number! {u128}
 impl_transfer_format_for_number! {f32}
 impl_transfer_format_for_number! {f64}
 
+impl TransferFormatInto for bool {
+    fn len_of_into(&self) -> usize {
+        1
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        if *self {
+            into_ret[0] = 1
+        } else {
+            into_ret[0] = 0
+        }
+    }
+}
+
+impl TransferFormatTryFrom for bool {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        if raw.len() != 1 {
+            return Err(TransferFormatError::bad_size("bool", 1, raw.len()));
+        }
+        match raw[0] {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(TransferFormatError::from("Invalid raw value for bool")),
+        }
+    }
+}
+
 impl TransferFormatTryFrom for String {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         String::from_utf8(raw.to_vec()).map_err(|e| TransferFormatError::from(format!("{:?}", e)))
