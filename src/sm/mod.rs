@@ -434,9 +434,8 @@ struct PairingData {
 /// the peer device.
 ///
 /// # Equality, Ordering, and Hashing
-/// Comparisons and hashing are implemented for `KeyDBEntry`, but only the identity address and
-/// identity resolving key are used within those calculations. Only these two values are used for
-/// identifying the usage of the rest of the keys in a Security Manager.
+/// Comparisons and hashing are implemented for `KeyDBEntry`, but these operations only use the
+/// identity address within a `KeyDBEntry` for the calculations.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct KeyDBEntry {
     /// The Long Term Key (private key)
@@ -590,7 +589,7 @@ impl KeyDBEntry {
 
 impl PartialEq for KeyDBEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.compare_entry(other).is_eq()
+        self.peer_addr.eq(&other.peer_addr)
     }
 }
 
@@ -598,13 +597,13 @@ impl Eq for KeyDBEntry {}
 
 impl PartialOrd for KeyDBEntry {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.compare_entry(other))
+        self.peer_addr.partial_cmp(&other.peer_addr)
     }
 }
 
 impl Ord for KeyDBEntry {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.compare_entry(other)
+        self.peer_addr.cmp(&other.peer_addr)
     }
 }
 
@@ -613,7 +612,7 @@ impl core::hash::Hash for KeyDBEntry {
     where
         H: core::hash::Hasher,
     {
-        (self.peer_addr, self.irk).hash(state)
+        self.peer_addr.hash(state)
     }
 }
 
