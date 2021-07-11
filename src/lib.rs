@@ -93,7 +93,7 @@ pub fn new_non_resolvable_private_address() -> BluetoothDeviceAddress {
     }
 
     // tag for static random in address is 00 in most significant 2 bits
-    a[5] &= 0b0011_0000;
+    a[5] &= 0b0011_1111;
 
     a
 }
@@ -123,7 +123,7 @@ pub fn new_resolvable_private_address(irk: u128) -> BluetoothDeviceAddress {
     }
 
     // tag for static random in address is 01 in the most significant 2 bits
-    prand[2] = prand[2] & 0b0111_0000 | 0b0100_0000;
+    prand[2] = prand[2] & 0b0011_1111 | 0b0100_0000;
 
     hash.copy_from_slice(&sm::toolbox::ah(irk, [prand[0], prand[1], prand[2]]));
 
