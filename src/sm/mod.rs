@@ -432,6 +432,11 @@ struct PairingData {
 /// IRK and CSRK per `SecurityManager`, but any number of `KeyDBEntry`s can use them. If a static
 /// CSRK is used, the sign counter for this `KeyDBEntry` can only be used through the connection to
 /// the peer device.
+///
+/// # Equality, Ordering, and Hashing
+/// Comparisons and hashing are implemented for `KeyDBEntry`, but only the identity address and
+/// identity resolving key are used within those calculations. Only these two values are used for
+/// identifying the usage of the rest of the keys in a Security Manager.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct KeyDBEntry {
     /// The Long Term Key (private key)
@@ -455,7 +460,7 @@ pub struct KeyDBEntry {
     peer_addr: Option<BluAddr>,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 enum BluAddr {
     Public(crate::BluetoothDeviceAddress),
     StaticRandom(crate::BluetoothDeviceAddress),
@@ -465,16 +470,6 @@ impl KeyDBEntry {
     /// Construct a new `KeyDBEntry` with no keys
     pub fn new() -> Self {
         KeyDBEntry::default()
-    }
-
-    /// Returns a boolean indicating if the key entry can be added to a keys database
-    ///
-    /// For a `KeyDBEntry` to be databaseable, it needs to have either a peer address or a peer irk.
-    /// If neither is available, then there would be no way to associate any of the rest of the keys
-    /// in a `KeyDBEntry` to a device when the `KeyDBEntry` is retrieved from a database.
-    #[inline]
-    pub fn is_databaseable(&self) -> bool {
-        self.peer_addr != None || self.peer_irk != None
     }
 
     /// Compare entries by the peer keys irk and addr
@@ -593,9 +588,44 @@ impl KeyDBEntry {
     }
 }
 
-/// The Encryption Key "database"
+impl PartialEq for KeyDBEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.compare_entry(other).is_eq()
+    }
+}
+
+impl Eq for KeyDBEntry {}
+
+impl PartialOrd for KeyDBEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.compare_entry(other))
+    }
+}
+
+impl Ord for KeyDBEntry {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.compare_entry(other)
+    }
+}
+
+impl core::hash::Hash for KeyDBEntry {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: core::hash::Hasher,
+    {
+        (self.peer_addr, self.irk).hash(state)
+    }
+}
+
+/// The Bonding Keys "database"
 ///
-/// This contains a sorted list of `KeyDBEntry` sorted by the peer irk and peer address values.
+/// This is a simple `database` for storing bonding information of previously bonded devices. It is
+/// just a vector of `KeyDBEntry`s sorted by the identity address. `KeyDBEntry`s without an identity
+/// address are also resolvable but only if they contain an identity resolving key (IRK).
+///
+/// # Panics
+/// Trying to add `KeyDBEntry`s without an identity address or identity resolving key will incur a
+/// panic.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KeyDB {
     entries: Vec<KeyDBEntry>,
@@ -603,10 +633,6 @@ struct KeyDB {
 
 impl KeyDB {
     /// Create a new `KeyDB` from a vector of `KeyDBEntry`
-    ///
-    /// # Panic
-    /// All entries must have either a peer IRK or a peer Address set. A KeyDBEntry can be checked
-    /// to be valid if [`is_databaseable`](KeyDBEntry::is_databaseable) returns true.
     fn new(mut entries: Vec<KeyDBEntry>) -> Self {
         entries.sort_by(|rhs, lhs| rhs.compare_entry(lhs));
 
@@ -634,16 +660,11 @@ impl KeyDB {
 
     /// Add the keys with the provided KeyDBEntry
     ///
-    /// This will override keys that have the same ordering information ( the same
-    /// [`peer_irk`](KeyDBEntry::peer_irk) and [`peer_addr'](KeyDBEntry::peer_addr) ). If the entry
-    /// does not meed the requirements for 'peer_irk' and 'peer_addr', this will function will do
-    /// nothing.
+    /// This will override keys that have the same identity address and IRK.
     fn add(&mut self, entry: KeyDBEntry) {
-        if entry.is_databaseable() {
-            match self.entries.binary_search_by(|in_entry| in_entry.compare_entry(&entry)) {
-                Ok(idx) => self.entries[idx] = entry,
-                Err(idx) => self.entries.insert(idx, entry),
-            }
+        match self.entries.binary_search_by(|in_entry| in_entry.compare_entry(&entry)) {
+            Ok(idx) => self.entries[idx] = entry,
+            Err(idx) => self.entries.insert(idx, entry),
         }
     }
 
@@ -676,84 +697,31 @@ impl Default for KeyDB {
     }
 }
 
-/// A simple Security Manager
+/// A simple Security Manager keys database
 ///
 /// A `SecurityManagerKeys` contains a database of encryption keys for with previously bonded
 /// devices. Its main purpose is for saving bonding information and to retrieve the correct
 /// encryption keys upon successful identification of the peer device.
 ///
 /// This 'database' is nothing more than a glorified list of `KeyDBEntry`
-/// sorted by the
+/// sorted using the
 /// [compare_entry](crate::sm::KeyDBEntry::compare_entry)
-/// function. The database is mainly used for either retrieving keys by the peer device's Identity
-/// Resolving Key and/or the Identity Address.
+/// method.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct SecurityManagerKeys {
     keys_db: KeyDB,
-    static_irk: Option<u128>,
-    static_csrk: Option<u128>,
 }
 
 impl SecurityManagerKeys {
     pub fn new(keys: Vec<KeyDBEntry>) -> Self {
         SecurityManagerKeys {
             keys_db: KeyDB::new(keys),
-            static_irk: None,
-            static_csrk: None,
         }
     }
 
     /// Get an iterator over the keys
     pub fn iter(&self) -> impl Iterator<Item = &KeyDBEntry> {
         self.keys_db.iter()
-    }
-
-    /// Assign a static Identity Resolving Key (IRK)
-    ///
-    /// Assign's the value as the static IRK for this device and a returns it. A IRK is generated if
-    /// `None` is the input.
-    ///
-    /// The static IRK is used when a unique IRK is not generated by the bonding procedure. However
-    /// a this function must be called to set (or generate) a static IRK before it is used.
-    pub fn set_static_irk<I>(&mut self, irk: I) -> u128
-    where
-        I: Into<Option<u128>>,
-    {
-        match irk.into() {
-            None => {
-                let v = toolbox::rand_u128();
-                self.static_irk = Some(v);
-                v
-            }
-            Some(v) => {
-                self.static_irk = Some(v);
-                v
-            }
-        }
-    }
-
-    /// Assign a static Connection Signature Resolving Key (CSRK)
-    ///
-    /// Assign's the value as the static CSRK for this device and a returns it. A CSRK is generated
-    /// if `None` is the input.
-    ///
-    /// The static CSRK is used when a unique CSRK is not generated by the bonding procedure.
-    /// However a this function must be called to set (or generate) a static CSRK before it is used.
-    pub fn set_static_csrk<I>(&mut self, irk: I) -> u128
-    where
-        I: Into<Option<u128>>,
-    {
-        match irk.into() {
-            None => {
-                let v = toolbox::rand_u128();
-                self.static_csrk = Some(v);
-                v
-            }
-            Some(v) => {
-                self.static_csrk = Some(v);
-                v
-            }
-        }
     }
 
     /// Returns an iterator to resolve a resolvable private address from all peer devices'
@@ -770,6 +738,12 @@ impl SecurityManagerKeys {
     ///
     /// security_manager.resolve_rpa_itr(resolvable_private_address).find_map(|keys_opt| keys_opt);
     /// ```
+    ///
+    /// # Note
+    /// If you know the identity address of the device to be connected, then this method is
+    /// *probably* not needed. Most controllers can handle resolving a private address for a single
+    /// connectible device. See the HCI methods within the module
+    /// [`privacy`](crate::hci::le::privacy).
     pub fn resolve_rpa_itr(
         &self,
         addr: crate::BluetoothDeviceAddress,
