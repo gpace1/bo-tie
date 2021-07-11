@@ -70,8 +70,8 @@ pub fn new_static_random_bluetooth_address() -> BluetoothDeviceAddress {
 
     rand_core::OsRng.fill_bytes(&mut a);
 
-    // tag for static random in address 11 in last 2 bits
-    a[5] |= 0b1100;
+    // tag for static random in address is 11 in the most significant 2 bits
+    a[5] |= 0b1100_0000;
 
     a
 }
@@ -92,8 +92,8 @@ pub fn new_non_resolvable_private_address() -> BluetoothDeviceAddress {
         }
     }
 
-    // tag for static random in address is 00 in last 2 bits
-    a[5] &= 0b0011;
+    // tag for static random in address is 00 in most significant 2 bits
+    a[5] &= 0b0011_0000;
 
     a
 }
@@ -122,8 +122,8 @@ pub fn new_resolvable_private_address(irk: u128) -> BluetoothDeviceAddress {
         }
     }
 
-    // tag for static random in address is 01 in last 2 bits
-    prand[2] = prand[2] & 0b0111 | 0b0100;
+    // tag for static random in address is 01 in the most significant 2 bits
+    prand[2] = prand[2] & 0b0111_0000 | 0b0100_0000;
 
     hash.copy_from_slice(&sm::toolbox::ah(irk, [prand[0], prand[1], prand[2]]));
 
@@ -136,9 +136,11 @@ pub fn new_resolvable_private_address(irk: u128) -> BluetoothDeviceAddress {
 pub fn resolve_resolvable_private_address(irk: u128, address: BluetoothDeviceAddress) -> bool {
     let (peer_hash, prand) = address.split_at(3);
 
-    // Short circuit if the prand doesn't have the correct signature for a RPA (last 2 bits must be
-    // 01)
-    (prand[2] & 0b1100 == 0b0100) && (peer_hash == sm::toolbox::ah(irk, [prand[0], prand[1], prand[2]]))
+    let hash = sm::toolbox::ah(irk, [prand[0], prand[1], prand[2]]);
+
+    // Check if the prand has the correct signature for a RPA (most significant 2 bits are 01) and
+    // the hash matches
+    (prand[2] & 0b1100_0000 == 0b0100_0000) && (peer_hash == hash)
 }
 
 /// Universally Unique Identifier
