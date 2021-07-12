@@ -626,6 +626,15 @@ macro_rules! find_descriptor {
 }
 
 impl Characteristic<'_> {
+    /// Get the UUID of the characteristic's value
+    pub fn get_uuid(&self) -> crate::UUID {
+        *self
+            .server_attributes
+            .get_info(self.get_value_handle())
+            .unwrap()
+            .get_uuid()
+    }
+
     /// Get the handle to the declaration
     ///
     /// # Note
