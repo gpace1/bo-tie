@@ -12,7 +12,6 @@
 
 use crate::{att, l2cap, UUID};
 use alloc::vec::Vec;
-
 pub mod characteristic;
 
 struct ServiceDefinition;
@@ -107,17 +106,36 @@ impl ServiceInclude {
 /// enforce all include definition to come after the service definition but before any other
 /// characteristics.
 pub struct ServiceBuilder<'a> {
-    service_type: UUID,
+    service_uuid: UUID,
     is_primary: bool,
     server_builder: &'a mut ServerBuilder,
     default_permissions: Option<&'a [att::AttributePermissions]>,
     definition_handle: Option<u16>,
 }
 
+// Unfortunately this cannot be made into a method as the borrow checker would trip when this was
+// used within another method that moved self.
+macro_rules! make_service {
+    ($this:expr, $end_service_handle:expr) => {{
+        let service = Service::new(
+            &$this.server_builder.attributes,
+            $this.definition_handle.unwrap(),
+            $end_service_handle,
+            $this.service_uuid,
+        );
+
+        if $this.is_primary {
+            $this.server_builder.primary_services.push(service.group_data)
+        }
+
+        service
+    }};
+}
+
 impl<'a> ServiceBuilder<'a> {
-    fn new(server_builder: &'a mut ServerBuilder, service_type: UUID, is_primary: bool) -> Self {
+    fn new(server_builder: &'a mut ServerBuilder, service_uuid: UUID, is_primary: bool) -> Self {
         ServiceBuilder {
-            service_type,
+            service_uuid,
             is_primary,
             server_builder,
             default_permissions: None,
@@ -142,7 +160,7 @@ impl<'a> ServiceBuilder<'a> {
                 self.default_permissions
                     .unwrap_or(ServiceDefinition::DEFAULT_PERMISSIONS)
                     .into(),
-                self.service_type,
+                self.service_uuid,
             ))
             .into();
     }
@@ -187,12 +205,12 @@ impl<'a> ServiceBuilder<'a> {
     ///
     /// This will create a service with no include definitions or characteristics. The service will
     /// only contain the service definition characteristic.
-    pub fn make_empty(mut self) -> Service {
+    pub fn make_empty(mut self) -> Service<'a> {
         self.set_service_definition();
 
         // There is only one handle in an empty Service so both the service handle and end group
         // handle are the same
-        self.make_service(self.definition_handle.unwrap())
+        make_service!(self, self.definition_handle.unwrap())
     }
 
     /// Set the baseline attribute permissions for the service
@@ -207,16 +225,6 @@ impl<'a> ServiceBuilder<'a> {
     {
         self.default_permissions = permissions.into();
         self
-    }
-
-    fn make_service(&mut self, end_service_handle: u16) -> Service {
-        let service = Service::new(self.definition_handle.unwrap(), end_service_handle, self.service_type);
-
-        if self.is_primary {
-            self.server_builder.add_primary_service(service)
-        }
-
-        service
     }
 }
 
@@ -248,15 +256,15 @@ impl<'a> IncludesAdder<'a> {
     /// service.
     pub fn include_service<P: Into<Option<&'a [att::AttributePermissions]>>>(
         mut self,
-        service: &Service,
+        service: &Service<'_>,
         permissions: P,
     ) -> Self {
         use core::convert::TryInto;
 
         let include = ServiceInclude {
-            service_handle: service.service_handle,
-            end_group_handle: service.end_group_handle,
-            short_service_type: service.service_type.try_into().ok(),
+            service_handle: service.get_handle(),
+            end_group_handle: service.get_end_group_handle(),
+            short_service_type: service.get_uuid().try_into().ok(),
         };
 
         let attribute = att::Attribute::new(
@@ -289,8 +297,8 @@ impl<'a> IncludesAdder<'a> {
     ///
     /// This will create a service that only has the service definition and service includes (if
     /// any). There will be no characteristics added to the service.
-    pub fn finish_service(mut self) -> Service {
-        self.service_builder.make_service(self.end_group_handle)
+    pub fn finish_service(self) -> Service<'a> {
+        make_service!(self.service_builder, self.end_group_handle)
     }
 }
 
@@ -325,30 +333,82 @@ impl<'a> CharacteristicAdder<'a> {
     }
 
     /// Finish the service
-    pub fn finish_service(mut self) -> Service {
-        self.service_builder.make_service(self.end_group_handle)
+    pub fn finish_service(self) -> Service<'a> {
+        make_service!(self.service_builder, self.end_group_handle)
     }
 }
 
-#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
-pub struct Service {
-    /// The handle of the Service declaration attribute
-    service_handle: u16,
-    /// The handle of the last attribute in the service
-    end_group_handle: u16,
-    /// The UUID (also known as the attribute type) of the service. This is also the attribute
-    /// value in the service definition.
-    service_type: UUID,
+/// A GATT Service
+///
+/// This contains the information about the Service as it stands within the GATT server. It contains
+/// the handle and UUID of the
+#[derive(Clone, Copy)]
+pub struct Service<'a> {
+    /// The attributes list that this Service is in
+    server_attributes: &'a crate::att::server::ServerAttributes,
+    group_data: ServiceGroupData,
 }
 
-impl Service {
-    fn new(service_handle: u16, end_group_handle: u16, service_type: UUID) -> Self {
-        Service {
+impl<'a> Service<'a> {
+    fn new(
+        server_attributes: &'a crate::att::server::ServerAttributes,
+        service_handle: u16,
+        end_group_handle: u16,
+        service_uuid: UUID,
+    ) -> Self {
+        let group_data = ServiceGroupData {
             service_handle,
             end_group_handle,
-            service_type,
+            service_uuid,
+        };
+
+        Service {
+            server_attributes,
+            group_data,
         }
     }
+
+    /// Get the handle of the service
+    pub fn get_handle(&self) -> u16 {
+        self.group_data.service_handle
+    }
+
+    /// Get the service type
+    ///
+    /// This returns the UUID of the Service.
+    pub fn get_uuid(&self) -> crate::UUID {
+        self.group_data.service_uuid
+    }
+
+    /// Get the end handle within the Service
+    ///
+    /// This is handle of the last Attribute within the Service
+    pub fn get_end_group_handle(&self) -> u16 {
+        self.group_data.end_group_handle
+    }
+
+    /// Iterate over the Characteristics within this Service
+    pub fn iter_characteristics(&self) -> impl Iterator<Item = characteristic::Characteristic<'a>> + 'a {
+        characteristic::CharacteristicsIter::new(
+            self.server_attributes,
+            self.group_data.service_handle,
+            self.group_data.end_group_handle,
+        )
+    }
+}
+
+/// Group data about a service
+///
+/// This is the data used by the GATT server for quickly finding the Services within a GATT server
+/// with a attribute group related request from the Server.
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
+struct ServiceGroupData {
+    /// The handle of the Service declaration attribute.
+    service_handle: u16,
+    /// The handle of the last attribute in the service.
+    end_group_handle: u16,
+    /// The UUID of the service.
+    service_uuid: UUID,
 }
 
 pub struct GapServiceBuilder<'a> {
@@ -500,7 +560,7 @@ impl Default for GapServiceBuilder<'_> {
 /// let server = server_builder.make_server(&connection_channel, NoQueuedWrites);
 /// ```
 pub struct ServerBuilder {
-    primary_services: Vec<Service>,
+    primary_services: Vec<ServiceGroupData>,
     attributes: att::server::ServerAttributes,
 }
 
@@ -516,8 +576,8 @@ impl ServerBuilder {
     }
 
     /// Construct a new service
-    pub fn new_service(&mut self, service_type: UUID, is_primary: bool) -> ServiceBuilder<'_> {
-        ServiceBuilder::new(self, service_type, is_primary)
+    pub fn new_service(&mut self, service_uuid: UUID, is_primary: bool) -> ServiceBuilder<'_> {
+        ServiceBuilder::new(self, service_uuid, is_primary)
     }
 
     /// Get all the attributes of the server
@@ -540,10 +600,6 @@ impl ServerBuilder {
             server,
         }
     }
-
-    fn add_primary_service(&mut self, service: Service) {
-        self.primary_services.push(service)
-    }
 }
 
 impl From<GapServiceBuilder<'_>> for ServerBuilder {
@@ -553,7 +609,7 @@ impl From<GapServiceBuilder<'_>> for ServerBuilder {
 }
 
 pub struct Server<'c, C, Q> {
-    primary_services: Vec<Service>,
+    primary_services: Vec<ServiceGroupData>,
     server: att::server::Server<'c, C, Q>,
 }
 
@@ -579,7 +635,7 @@ where
     }
 
     /// 'Read by group type' permission check
-    fn rbgt_permission_check(&self, service: &Service) -> Result<(), att::pdu::Error> {
+    fn rbgt_permission_check(&self, service: &ServiceGroupData) -> Result<(), att::pdu::Error> {
         self.server
             .check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
     }
@@ -613,7 +669,7 @@ where
                     Some(Ok(first_service)) => {
                         // pdu header size is 2 bytes
                         let payload_size = self.server.get_mtu() - 2;
-                        let is_16_bit = first_service.service_type.is_16_bit();
+                        let is_16_bit = first_service.service_uuid.is_16_bit();
 
                         let build_response_iter =
                             service_iter.take_while(|rslt| rslt.is_ok()).map(|rslt| rslt.unwrap());
@@ -625,12 +681,12 @@ where
                         // overrun the maximum payload size.
                         let response = if is_16_bit {
                             build_response_iter
-                                .take_while(|s| s.service_type.is_16_bit())
+                                .take_while(|s| s.service_uuid.is_16_bit())
                                 .enumerate()
                                 .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 2))
                                 .by_ref()
                                 .map(|(_, s)| {
-                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_type)
+                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_uuid)
                                 })
                                 .collect()
                         } else {
@@ -639,7 +695,7 @@ where
                                 .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 16))
                                 .by_ref()
                                 .map(|(_, s)| {
-                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_type)
+                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_uuid)
                                 })
                                 .collect()
                         };

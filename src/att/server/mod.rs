@@ -336,7 +336,7 @@ where
 
         let ret = self
             .attributes
-            .len()
+            .count()
             .try_into()
             .expect("Exceeded attribute handle limit");
 
@@ -347,7 +347,7 @@ where
 
     /// Return the next unused handle
     pub fn next_handle(&self) -> u16 {
-        self.attributes.len() as u16
+        self.attributes.count() as u16
     }
 
     /// Give a permission to the client
@@ -866,8 +866,8 @@ where
             use core::cmp::min;
 
             // Both the start and ending handles cannot be past the actual length of the attributes
-            let start = min(handle_range.starting_handle as usize, self.attributes.len());
-            let stop = min(handle_range.ending_handle as usize, self.attributes.len());
+            let start = min(handle_range.starting_handle as usize, self.attributes.count());
+            let stop = min(handle_range.ending_handle as usize, self.attributes.count());
 
             let payload_max = self.get_mtu() - 2;
 
@@ -952,7 +952,8 @@ where
 
             let att_type: crate::UUID = TransferFormatTryFrom::try_from(&payload[4..6]).unwrap();
 
-            log::info!("Processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
+            log::info!(
+                "Processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
                 handle: {:#X}, type: {:?}}}",
                 handle_range.starting_handle,
                 handle_range.ending_handle,
@@ -964,8 +965,8 @@ where
             if handle_range.is_valid() {
                 use core::cmp::min;
 
-                let start = min(handle_range.starting_handle as usize, self.attributes.len());
-                let end = min(handle_range.ending_handle as usize, self.attributes.len());
+                let start = min(handle_range.starting_handle as usize, self.attributes.count());
+                let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
                 let payload_max = self.get_mtu() - 1;
 
@@ -1019,7 +1020,8 @@ where
 
     /// Process Read By Type Request
     async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest) -> Result<(), super::Error> {
-        log::info!("Processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
+        log::info!(
+            "Processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
             type: {:?} }}",
             type_request.handle_range.starting_handle,
             type_request.handle_range.ending_handle,
@@ -1033,8 +1035,8 @@ where
         let desired_att_type = type_request.attr_type;
 
         if handle_range.is_valid() {
-            let start = min(handle_range.starting_handle as usize, self.attributes.len());
-            let end = min(handle_range.ending_handle as usize, self.attributes.len());
+            let start = min(handle_range.starting_handle as usize, self.attributes.count());
+            let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
             let payload_max = self.get_mtu() - 2;
 
@@ -1129,7 +1131,8 @@ where
 
     /// Process read blob request
     async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest) -> Result<(), super::Error> {
-        log::info!("Processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
+        log::info!(
+            "Processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
             blob_request.handle,
             blob_request.offset
         );
@@ -1256,7 +1259,8 @@ where
     async fn process_prepare_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
         if let Err((h, e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => {
-                log::info!("Processing ATT_PREPARE_WRITE_REQ {{ handle: {:#X}, offset {} }}",
+                log::info!(
+                    "Processing ATT_PREPARE_WRITE_REQ {{ handle: {:#X}, offset {} }}",
                     request.get_handle(),
                     request.get_prepared_offset()
                 );
@@ -1276,7 +1280,7 @@ where
 
                     Err(e) => Err((request.get_handle(), e)),
                 }
-            },
+            }
 
             Err(e) => Err((0, e.pdu_err)),
         } {
@@ -1371,11 +1375,7 @@ impl ServerAttributes {
         handle
     }
 
-    /// Get the next available handle
-    ///
-    /// This is the handle that is assigned to the next attribute to be
-    /// [`push`](#method.push)ed to the `ServerAttributes`. This is generally used to get the
-    /// handle of the attribute that is about to be pushed to `ServerAttributes`
+    /// Get the handle assigned to the attribute to be added next.
     ///
     /// ```
     /// # use bo_tie::att::server::ServerAttributes;
@@ -1400,8 +1400,54 @@ impl ServerAttributes {
         self.attributes[1..].iter().map(|att| AttributeInfo::from_att(att))
     }
 
-    /// Attributes length
-    pub fn len(&self) -> usize {
+    /// Get an iterator within a range of attribute informational data
+    ///
+    /// This will return an iterator to get the type, permissions, and handle for each attribute
+    /// within the specified range.
+    ///
+    /// # Panics
+    /// The range must be within the valid range of attribute handles. This method will panic if the
+    /// range includes 0 or is larger than the number of attributes.
+    pub fn iter_info_ranged<R, I>(&self, range: R) -> impl Iterator<Item = AttributeInfo<'_>>
+    where
+        R: core::ops::RangeBounds<I>,
+        I: Into<usize> + Copy,
+    {
+        let start = match range.start_bound() {
+            core::ops::Bound::Unbounded => 1,
+            core::ops::Bound::Excluded(v) => (*v).into() + 1,
+            core::ops::Bound::Included(v) => {
+                let v = (*v).into();
+
+                assert_ne!(v, 0, "The start bound cannot be 0");
+
+                v
+            }
+        };
+
+        let end = match range.end_bound() {
+            core::ops::Bound::Unbounded => self.attributes.len(),
+            core::ops::Bound::Excluded(v) => (*v).into(),
+            core::ops::Bound::Included(v) => (*v).into() + 1,
+        };
+
+        self.attributes[start..end]
+            .iter()
+            .map(|att| AttributeInfo::from_att(att))
+    }
+
+    /// Get the attribute info for a specific handle
+    pub fn get_info<I>(&self, handle: I) -> Option<AttributeInfo<'_>>
+    where
+        I: Into<usize>,
+    {
+        let index = handle.into();
+
+        self.attributes.get(index).map(|a| AttributeInfo::from_att(a))
+    }
+
+    /// Get the number of Attributes
+    pub fn count(&self) -> usize {
         self.attributes.len()
     }
 

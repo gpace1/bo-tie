@@ -598,3 +598,129 @@ where
         self.characteristic_adder
     }
 }
+
+/// GATT Characteristic information
+///
+/// Information about a created Characteristic of a Service. This can be obtained with using the
+/// method `iter_characteristics` of [`Service`](super::Service).
+///
+/// This is mainly useful for getting the handle to the characteristic value
+pub struct Characteristic<'a> {
+    server_attributes: &'a crate::att::server::ServerAttributes,
+    handle: u16,
+    end_handle: u16,
+}
+
+macro_rules! find_descriptor {
+    ($characteristic:expr, $offset:expr, $attribute_type:path ) => {{
+        let possible_handles = $characteristic.handle + $offset;
+
+        let last_handle = core::cmp::min(possible_handles, $characteristic.end_handle);
+
+        // Iterates over the attributes, skipping characteristic declaration and value attributes.
+        $characteristic
+            .server_attributes
+            .iter_info_ranged(($characteristic.handle + 2)..last_handle)
+            .find_map(|a| (a.get_uuid() == &$attribute_type).then(|| a.get_handle()))
+    }};
+}
+
+impl Characteristic<'_> {
+    /// Get the handle to the declaration
+    ///
+    /// # Note
+    /// This is the starting handle for the characteristic
+    pub fn get_declaration_handle(&self) -> u16 {
+        self.handle
+    }
+
+    /// Get the handle to the last attribute within this characteristic
+    pub fn get_end_handle(&self) -> u16 {
+        self.end_handle
+    }
+
+    /// Get the handle to the characteristic value descriptor
+    pub fn get_value_handle(&self) -> u16 {
+        // The value declaration is always the next handle for this server implementation
+        self.handle + 1
+    }
+
+    /// Get the handle to the extended properties descriptor
+    ///
+    /// This returns a handle if a extended properties exists for this characteristic.
+    pub fn get_extended_properties_handle(&self) -> Option<u16> {
+        find_descriptor!(self, 2, ExtendedProperties::TYPE)
+    }
+
+    /// Get the handle to the user description descriptor
+    ///
+    /// This returns a handle if the user description exists for this characteristic.
+    pub fn get_user_description_handle(&self) -> Option<u16> {
+        find_descriptor!(self, 3, UserDescription::TYPE)
+    }
+
+    /// Get the handle to the client characteristic configuration descriptor
+    ///
+    /// This returns a handle if the client characteristic configuration exists for this
+    /// characteristic.
+    pub fn get_client_characteristic_configuration_handle(&self) -> Option<u16> {
+        find_descriptor!(self, 4, ClientConfiguration::TYPE)
+    }
+
+    /// Get the handle to the server characteristic configuration descriptor
+    ///
+    /// This returns a handle if the server characteristic configuration exists for this
+    /// characteristic.
+    pub fn get_server_characteristic_configuration_handle(&self) -> Option<u16> {
+        find_descriptor!(self, 5, ServerConfiguration::TYPE)
+    }
+}
+
+pub(super) struct CharacteristicsIter<'a> {
+    server_attributes: &'a crate::att::server::ServerAttributes,
+    start_handle: u16,
+    end_handle: u16,
+}
+
+impl<'a> CharacteristicsIter<'a> {
+    pub fn new(
+        server_attributes: &'a crate::att::server::ServerAttributes,
+        service_start_handle: u16,
+        service_end_handle: u16,
+    ) -> Self {
+        Self {
+            server_attributes,
+            start_handle: service_start_handle,
+            end_handle: service_end_handle,
+        }
+    }
+}
+
+impl<'a> Iterator for CharacteristicsIter<'a> {
+    type Item = Characteristic<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut start: Option<u16> = None;
+
+        while self.start_handle <= self.end_handle {
+            let attr_info = self.server_attributes.get_info(self.start_handle).unwrap();
+
+            if attr_info.get_uuid() == &Declaration::TYPE {
+                match start {
+                    None => start = Some(self.start_handle),
+                    Some(handle) => {
+                        return Some(Characteristic {
+                            server_attributes: self.server_attributes,
+                            handle,
+                            end_handle: self.start_handle,
+                        });
+                    }
+                };
+            } else {
+                self.start_handle += 1
+            }
+        }
+
+        None
+    }
+}
