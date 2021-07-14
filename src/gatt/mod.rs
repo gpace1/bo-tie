@@ -338,10 +338,10 @@ impl<'a> CharacteristicAdder<'a> {
     }
 }
 
-/// A GATT Service
+/// Information on a single GATT service.
 ///
-/// This contains the information about the Service as it stands within the GATT server. It contains
-/// the handle and UUID of the
+/// This contains the information about the Service as it stands within the GATT server. It also
+/// provides a way to iterate through the characteristics contained within the service.
 #[derive(Clone, Copy)]
 pub struct Service<'a> {
     /// The attributes list that this Service is in
@@ -618,6 +618,15 @@ where
     C: l2cap::ConnectionChannel,
     Q: att::server::QueuedWriter,
 {
+    /// Get information on the services within this GATT server
+    pub fn get_service_info(&self) -> impl Iterator<Item = Service> {
+        self.primary_services.iter().map(move |s| Service {
+            server_attributes: self.server.get_attributes(),
+            group_data: *s,
+        })
+    }
+
+    /// Process some ACL data as a ATT client message
     pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::AclData) -> Result<(), crate::att::Error> {
         let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
 

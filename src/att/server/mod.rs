@@ -313,6 +313,11 @@ where
         }
     }
 
+    /// Get the Attributes of the server
+    pub fn get_attributes(&self) -> &ServerAttributes {
+        &self.attributes
+    }
+
     /// Get the maximum transfer unit of the connection
     ///
     /// The is the current mtu as agreed upon by the client and server
