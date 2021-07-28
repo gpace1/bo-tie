@@ -47,10 +47,10 @@ pub enum Error {
     SCOAirModeRejected,
     InvalidLMPParametersOrInvalidLLParameters,
     UnspecifiedError,
-    UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue,
+    UnsupportedLMPParameterValueOrUnsupportedLLParameterValue,
     RoleChangeNotAllowed,
     LMPResponseTimeoutOrLLResponseTimeout,
-    LPMErrorTransationCollisionOrLLProcedureColision,
+    LPMErrorTransactionCollisionOrLLProcedureCollision,
     LMPPDUNotAllowed,
     EncryptionModeNotAcceptable,
     LinkKeyCannotBeChanged,
@@ -60,12 +60,12 @@ pub enum Error {
     DifferentTransactionCollision,
     QosUnacceptableParameter,
     QosRejected,
-    ChannelAssessmetNotSupported,
+    ChannelAssessmentNotSupported,
     InsufficientSecurity,
-    ParameterOutOfMandatorRange,
+    ParameterOutOfMandatoryRange,
     RoleSwitchPending,
     ReservedSlotViolation,
-    RoleSwithFailed,
+    RoleSwitchFailed,
     ExtendedInquiryResponseTooLarge,
     SimplePairingNotSupportedByHost,
     HostBusyBecausePairing,
@@ -152,7 +152,7 @@ impl Debug for Error {
                 write!(f, "InvalidLMPParametersOrInvalidLLParameters (0x{:X})", 0x1e)
             }
             UnspecifiedError => write!(f, "UnspecifiedError (0x{:X})", 0x1f),
-            UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue => write!(
+            UnsupportedLMPParameterValueOrUnsupportedLLParameterValue => write!(
                 f,
                 "UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue (0x{:X})",
                 0x20
@@ -161,7 +161,7 @@ impl Debug for Error {
             LMPResponseTimeoutOrLLResponseTimeout => {
                 write!(f, "LMPResponseTimeoutOrLLResponseTimeout (0x{:X})", 0x22)
             }
-            LPMErrorTransationCollisionOrLLProcedureColision => {
+            LPMErrorTransactionCollisionOrLLProcedureCollision => {
                 write!(f, "LPMErrorTransationCollisionOrLLProcedureColision (0x{:X})", 0x23)
             }
             LMPPDUNotAllowed => write!(f, "LMPPDUNotAllowed (0x{:X})", 0x24),
@@ -177,14 +177,14 @@ impl Debug for Error {
             }
             QosUnacceptableParameter => write!(f, "QosUnacceptableParameter (0x{:X})", 0x2c),
             QosRejected => write!(f, "QosRejected (0x{:X})", 0x2d),
-            ChannelAssessmetNotSupported => {
+            ChannelAssessmentNotSupported => {
                 write!(f, "ChannelAssessmetNotSupported (0x{:X})", 0x2e)
             }
             InsufficientSecurity => write!(f, "InsufficientSecurity (0x{:X})", 0x2f),
-            ParameterOutOfMandatorRange => write!(f, "ParameterOutOfMandatorRange (0x{:X})", 0x30),
+            ParameterOutOfMandatoryRange => write!(f, "ParameterOutOfMandatorRange (0x{:X})", 0x30),
             RoleSwitchPending => write!(f, "RoleSwitchPending (0x{:X})", 0x32),
             ReservedSlotViolation => write!(f, "ReservedSlotViolation (0x{:X})", 0x34),
-            RoleSwithFailed => write!(f, "RoleSwithFailed (0x{:X})", 0x35),
+            RoleSwitchFailed => write!(f, "RoleSwithFailed (0x{:X})", 0x35),
             ExtendedInquiryResponseTooLarge => {
                 write!(f, "ExtendedInquiryResponseTooLarge (0x{:X})", 0x36)
             }
@@ -275,11 +275,11 @@ impl Display for Error {
                 Error::SCOAirModeRejected => "SCO Air Mode Rejected",
                 Error::InvalidLMPParametersOrInvalidLLParameters => "Invalid LMP Parameters / Invalid LL Parameters",
                 Error::UnspecifiedError => "Unspecified Error",
-                Error::UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue =>
+                Error::UnsupportedLMPParameterValueOrUnsupportedLLParameterValue =>
                     "Unspported LMP Parameter Value / Unsupported LL Parameter V Alue",
                 Error::RoleChangeNotAllowed => "Role Change Not Allowed",
                 Error::LMPResponseTimeoutOrLLResponseTimeout => "LMP Response Timeout / LL Response Timeout",
-                Error::LPMErrorTransationCollisionOrLLProcedureColision =>
+                Error::LPMErrorTransactionCollisionOrLLProcedureCollision =>
                     "LPM Error Transation Collision / LL Procedure Colision",
                 Error::LMPPDUNotAllowed => "LMP PDU Not Allowed",
                 Error::EncryptionModeNotAcceptable => "Encryption Mode Not Acceptable",
@@ -290,12 +290,12 @@ impl Display for Error {
                 Error::DifferentTransactionCollision => "Different Transaction Collision",
                 Error::QosUnacceptableParameter => "Qos Unacceptable Parameter",
                 Error::QosRejected => "Qos Rejected",
-                Error::ChannelAssessmetNotSupported => "Channel Assessmet Not Supported",
+                Error::ChannelAssessmentNotSupported => "Channel Assessmet Not Supported",
                 Error::InsufficientSecurity => "Insufficient Security",
-                Error::ParameterOutOfMandatorRange => "Parameter Out Of Mandator Range",
+                Error::ParameterOutOfMandatoryRange => "Parameter Out Of Mandator Range",
                 Error::RoleSwitchPending => "Role Switch Pending",
                 Error::ReservedSlotViolation => "Reserved Slot Violation",
-                Error::RoleSwithFailed => "Role Swith Failed",
+                Error::RoleSwitchFailed => "Role Swith Failed",
                 Error::ExtendedInquiryResponseTooLarge => "Extended Inquiry Response Too Large",
                 Error::SimplePairingNotSupportedByHost => "Simple Pairing Not Supported By Host",
                 Error::HostBusyBecausePairing => "Host Busy Because Pairing",
@@ -355,10 +355,10 @@ impl core::convert::From<u8> for Error {
             0x1d => SCOAirModeRejected,
             0x1e => InvalidLMPParametersOrInvalidLLParameters,
             0x1f => UnspecifiedError,
-            0x20 => UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue,
+            0x20 => UnsupportedLMPParameterValueOrUnsupportedLLParameterValue,
             0x21 => RoleChangeNotAllowed,
             0x22 => LMPResponseTimeoutOrLLResponseTimeout,
-            0x23 => LPMErrorTransationCollisionOrLLProcedureColision,
+            0x23 => LPMErrorTransactionCollisionOrLLProcedureCollision,
             0x24 => LMPPDUNotAllowed,
             0x25 => EncryptionModeNotAcceptable,
             0x26 => LinkKeyCannotBeChanged,
@@ -368,12 +368,12 @@ impl core::convert::From<u8> for Error {
             0x2a => DifferentTransactionCollision,
             0x2c => QosUnacceptableParameter,
             0x2d => QosRejected,
-            0x2e => ChannelAssessmetNotSupported,
+            0x2e => ChannelAssessmentNotSupported,
             0x2f => InsufficientSecurity,
-            0x30 => ParameterOutOfMandatorRange,
+            0x30 => ParameterOutOfMandatoryRange,
             0x32 => RoleSwitchPending,
             0x34 => ReservedSlotViolation,
-            0x35 => RoleSwithFailed,
+            0x35 => RoleSwitchFailed,
             0x36 => ExtendedInquiryResponseTooLarge,
             0x37 => SimplePairingNotSupportedByHost,
             0x38 => HostBusyBecausePairing,
@@ -429,10 +429,10 @@ impl core::convert::From<Error> for u8 {
             Error::SCOAirModeRejected => 0x1d,
             Error::InvalidLMPParametersOrInvalidLLParameters => 0x1e,
             Error::UnspecifiedError => 0x1f,
-            Error::UnspportedLMPParameterValueOrUnsupportedLLParameterVAlue => 0x20,
+            Error::UnsupportedLMPParameterValueOrUnsupportedLLParameterValue => 0x20,
             Error::RoleChangeNotAllowed => 0x21,
             Error::LMPResponseTimeoutOrLLResponseTimeout => 0x22,
-            Error::LPMErrorTransationCollisionOrLLProcedureColision => 0x23,
+            Error::LPMErrorTransactionCollisionOrLLProcedureCollision => 0x23,
             Error::LMPPDUNotAllowed => 0x24,
             Error::EncryptionModeNotAcceptable => 0x25,
             Error::LinkKeyCannotBeChanged => 0x26,
@@ -442,12 +442,12 @@ impl core::convert::From<Error> for u8 {
             Error::DifferentTransactionCollision => 0x2a,
             Error::QosUnacceptableParameter => 0x2c,
             Error::QosRejected => 0x2d,
-            Error::ChannelAssessmetNotSupported => 0x2e,
+            Error::ChannelAssessmentNotSupported => 0x2e,
             Error::InsufficientSecurity => 0x2f,
-            Error::ParameterOutOfMandatorRange => 0x30,
+            Error::ParameterOutOfMandatoryRange => 0x30,
             Error::RoleSwitchPending => 0x32,
             Error::ReservedSlotViolation => 0x34,
-            Error::RoleSwithFailed => 0x35,
+            Error::RoleSwitchFailed => 0x35,
             Error::ExtendedInquiryResponseTooLarge => 0x36,
             Error::SimplePairingNotSupportedByHost => 0x37,
             Error::HostBusyBecausePairing => 0x38,
