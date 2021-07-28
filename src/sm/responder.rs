@@ -4,10 +4,10 @@
 //! initiating device.
 
 use super::{
-    encrypt_info, pairing, toolbox, BuildOutOfBand, Command, CommandData, CommandType, Error, GetXOfP256Key,
-    OobDirection, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend, PairingData, PairingMethod,
+    encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
 };
 use crate::l2cap::ConnectionChannel;
+use crate::sm::oob::{BuildOutOfBand, OobDirection, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend};
 use alloc::vec::Vec;
 
 /// A builder for a [`SlaveSecurityManager`]

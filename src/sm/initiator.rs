@@ -1,6 +1,9 @@
-use super::{encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, PairingData, PairingMethod};
+use super::oob::{BuildOutOfBand, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend};
+use super::{
+    encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
+};
 use crate::l2cap::ConnectionChannel;
-use crate::sm::{BuildOutOfBand, GetXOfP256Key, OobDirection, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend};
+use crate::sm::oob::OobDirection;
 
 pub struct MasterSecurityManagerBuilder<'a, C> {
     connection_channel: &'a C,

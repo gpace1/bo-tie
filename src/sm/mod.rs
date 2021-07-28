@@ -105,12 +105,13 @@
 //! * ['p256'](https://lib.rs/crates/p256)
 
 use crate::l2cap::AclData;
+use crate::sm::oob::OobDirection;
 use alloc::vec::Vec;
-use core::future::Future;
 use serde::{Deserialize, Serialize};
 
 pub mod encrypt_info;
 pub mod initiator;
+pub mod oob;
 pub mod pairing;
 pub mod responder;
 pub mod toolbox;
@@ -372,12 +373,6 @@ impl PairingMethod {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum OobDirection {
-    OnlyResponderSendsOob,
-    OnlyInitiatorSendsOob,
-    BothSendOob,
-}
 /// Data that is gathered in the process of pairing
 ///
 /// This data is unique for each pairing attempt and must be dropped after a successful or failed
@@ -818,210 +813,5 @@ impl GetXOfP256Key for [u8; 64] {
         x.copy_from_slice(&self[..32]);
 
         x
-    }
-}
-
-/// Error for method [`OutOfBandMethodBuilder::build`](OutOfBandMethodBuilder::build)
-///
-/// When initializing bi-directional OOB support for a Security Manager, a method for sending
-/// and a method for receiving must be set. If either of these methods are not set, then this error
-/// is returned when trying to build a Security Manager.
-///
-/// # Note
-/// If it was the intention not to set the method, then when constructing a Security Manager look
-/// for the `build_with
-pub enum OobBuildError {
-    Send,
-    Receive,
-}
-
-impl core::fmt::Debug for OobBuildError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        <Self as core::fmt::Display>::fmt(self, f)
-    }
-}
-
-impl core::fmt::Display for OobBuildError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            OobBuildError::Send => f.write_str("Send method not set for OOB data"),
-            OobBuildError::Receive => f.write_str("Receive method not set for OOB data"),
-        }
-    }
-}
-
-/// Out of Band pairing method setup
-///
-/// Security Managers that implement this trait can be used as the out-of-band (OOB) process for
-/// pairing. Any communication process that is outside of the direct Bluetooth communication between
-/// the two pairing devices can be considered a valid OOB. However the OOB link must have
-/// man in the middle protection in order for the OOB method to be secure form of pairing.
-///
-/// # Bidirectional confirm validation
-/// The methods [`set_send_method`](OutOfBandMethodBuilder::set_send_method) and
-/// [`set_receive_method`]((OutOfBandMethodBuilder::set_receive_method) determine how data is sent
-/// and received through the OOB interface. Both of them must be called before an
-/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
-/// used to set a factory function for generating a future to process sending data over the OOB
-/// interface. Correspondingly `set_receive_method` is for setting the factory function for
-/// generating a future for receiving data over the OOB interface.
-///
-/// # Single Direction confirm validation
-/// If it is desired to only support one direction of OOB data transfer, the methods
-/// [`only_send_oob`](OutOfBandMethodBuilder::only_send_oob) and
-/// [`only_receive_oob`](OutOfBandMethodBuilder::only_receive_oob) can be used for facilitate this,
-/// however it is recommended to only use these methods when the OOB interface only supports a
-/// single direction of data transfer. Using these methods will mean that the initiator must support
-/// the counterpart direction of data transfer or OOB authentication will fail.
-pub trait BuildOutOfBand: core::ops::DerefMut<Target = Self::Builder> {
-    type Builder;
-    type SecurityManager;
-
-    fn build(self) -> Self::SecurityManager;
-}
-
-/// Out of Band pairing method setup
-///
-/// Security Managers that implement this trait can be used as the out-of-band (OOB) process for
-/// pairing. Any communication process that is outside of the direct Bluetooth communication between
-/// the two pairing devices can be considered a valid OOB. However the OOB link must have
-/// man in the middle protection in order for the OOB method to be secure form of pairing.
-///
-/// # Bidirectional confirm validation
-/// The methods [`set_send_method`](OutOfBandMethodBuilder::set_send_method) and
-/// [`set_receive_method`]((OutOfBandMethodBuilder::set_receive_method) determine how data is sent
-/// and received through the OOB interface. Both of them must be called before an
-/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
-/// used to set a factory function for generating a future to process sending data over the OOB
-/// interface. Correspondingly `set_receive_method` is for setting the factory function for
-/// generating a future for receiving data over the OOB interface.
-///
-/// # Single Direction confirm validation
-/// If it is desired to only support one direction of OOB data transfer, the methods
-/// [`only_send_oob`](OutOfBandMethodBuilder::only_send_oob) and
-/// [`only_receive_oob`](OutOfBandMethodBuilder::only_receive_oob) can be used for facilitate this,
-/// however it is recommended to only use these methods when the OOB interface only supports a
-/// single direction of data transfer. Using these methods will mean that the initiator must support
-/// the counterpart direction of data transfer or OOB authentication will fail.
-pub struct OutOfBandMethodBuilder<B, S, R> {
-    builder: B,
-    send_method: S,
-    receive_method: R,
-}
-
-impl<B, S, R> OutOfBandMethodBuilder<B, S, R>
-where
-    S: for<'a> OutOfBandSend<'a>,
-    R: OutOfBandReceive,
-{
-    fn new(builder: B, send_method: S, receive_method: R) -> Self {
-        OutOfBandMethodBuilder {
-            builder,
-            send_method,
-            receive_method,
-        }
-    }
-}
-
-impl<B, S, R> core::ops::Deref for OutOfBandMethodBuilder<B, S, R> {
-    type Target = B;
-
-    fn deref(&self) -> &Self::Target {
-        &self.builder
-    }
-}
-
-impl<B, S, R> core::ops::DerefMut for OutOfBandMethodBuilder<B, S, R> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.builder
-    }
-}
-
-/// The trait to used by a Security Manager send data over an out of band (OOB) interface
-///
-/// This is auto implemented for anything that implements `Fn(&[u8]) -> impl Future`.
-pub trait OutOfBandSend<'a> {
-    type Future: Future + 'a;
-
-    fn can_send() -> bool;
-
-    fn send(&self, data: &'a [u8]) -> Self::Future;
-}
-
-impl<'a, S, F> OutOfBandSend<'a> for S
-where
-    S: Fn(&'a [u8]) -> F,
-    F: Future + 'a,
-{
-    type Future = F;
-
-    fn can_send() -> bool {
-        true
-    }
-
-    fn send(&self, data: &'a [u8]) -> Self::Future {
-        self(data)
-    }
-}
-
-impl OutOfBandSend<'_> for () {
-    type Future = UnusedOobInterface<()>;
-
-    fn can_send() -> bool {
-        false
-    }
-
-    fn send(&self, _: &[u8]) -> Self::Future {
-        panic!("Tried to send OOB data on a nonexistent interface")
-    }
-}
-
-/// The trait to used by a Security Manager send data over an out of band (OOB) interface
-///
-/// This is auto implemented for anything that implements `Fn() -> impl Future<Output = Vec<u8>>`.
-pub trait OutOfBandReceive {
-    type Future: Future<Output = Vec<u8>>;
-
-    fn can_receive() -> bool;
-
-    fn receive(&self) -> Self::Future;
-}
-
-impl<R, F> OutOfBandReceive for R
-where
-    R: Fn() -> F,
-    F: Future<Output = Vec<u8>>,
-{
-    type Future = F;
-
-    fn can_receive() -> bool {
-        true
-    }
-
-    fn receive(&self) -> Self::Future {
-        self()
-    }
-}
-
-impl OutOfBandReceive for () {
-    type Future = UnusedOobInterface<Vec<u8>>;
-
-    fn can_receive() -> bool {
-        false
-    }
-
-    fn receive(&self) -> Self::Future {
-        panic!("Tried to receive OOB data on a nonexistent interface")
-    }
-}
-
-/// Future used as the return for an unavailable OOB interface
-#[doc(hidden)]
-pub struct UnusedOobInterface<V>(core::marker::PhantomData<V>);
-
-impl<V> Future for UnusedOobInterface<V> {
-    type Output = V;
-    fn poll(self: core::pin::Pin<&mut Self>, _: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
-        unreachable!()
     }
 }
