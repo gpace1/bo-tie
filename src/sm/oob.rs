@@ -237,43 +237,30 @@ pub(super) mod sealed_receiver_type {
 
 /// The trait for receiving out of band data
 ///
-/// Because out of band data is received outside of the Bluetooth connection (or whatever other
-/// Bluetooth transmission process), it does not quite fit within the process of pairing. So there
-/// is two different ways for a security manager to receive the out of band data. The easiest and
-/// preferred way is for the Security Manager to directly await the reception of OOB data. The other
-/// way is to directly set the OOB data with a method in the Security Manager. This is much harder
-/// as it can only be called at the correct time during pairing or else the method will error.
+/// Because out of band data is received outside of the Bluetooth connection , it must be done by
+/// the user of this library, but still be done during the process of pairing. So there
+/// is two different ways for a security manager to get the out of band data from the other device.
+/// The easiest and preferred way is for the Security Manager to directly await the reception of OOB
+/// data as it goes about pairing. Essentially set how OOB data is received and forget about it. The
+/// other way is to directly set the OOB data with a method in the Security Manager. This is more
+/// difficult as it can only be called at the proper time during pairing or else the method will
+/// error.
 ///
-/// This is a sealed trait as there are specific types to facilitate the three types of OOB data
-/// reception. [`InternalOobReceiver`] is a marker type for the preferred method. Its contains a
-/// function used generate a future for awaiting OOB data. This function is internally called at the
-/// correct part of the pairing process to await the reception of the OOB data.
-/// [`ExternalOobReceiver`] is used when for whatever the internally used function to generate the
-/// OOB reception future cannot be used. In this case the Security Managers (initiator and
-/// responder) have a separate method that is called to provide the received OOB data to it. This
-/// issue is that these methods will error if they're not called at the proper time. This is why
-/// `InternalOobReceiver` is preferred as it is idiot proof in this regard. The last type to
-/// implement this trait is not a receiver at all, instead the `()` type is used to indicate that
-/// OOB data cannot be received by the Security Manager.
+/// This is a sealed trait as there are specific types to facilitate the three kinds of OOB data
+/// reception. Anything that implements [`OutOfBandReceive`] will work as the preferred method. This
+/// method is where the reception occurs within the security manager. The security manager will
+/// perform the await the reception of the OOB data at the correct part of the pairing process.
+///
+/// The type [`ExternalOobReceiver`] should only be used when an `OutOfBandReceive` cannot be used.
+/// In this case the Security Managers (initiator and responder) have a separate method that is
+/// must be called at the correct time in the pairing process to provide the received OOB data.
+/// These methods will error if they are not called at the proper time.
+///
+/// The last type to implement this trait is not a receiver at all, instead the `()` type is used to
+/// indicate that OOB data cannot be received by the Security Manager.
 pub trait OobReceiverType: sealed_receiver_type::SealedTrait {}
 
-/// Marker type for 'internally' resolving reception of OOB data
-///
-/// With this marker type, both types of Security Managers (initiator or responder) will call the
-/// method for receiving within their methods for pairing. Thus awaiting the reception of OOB data
-/// will always occur at the correct time withing the pairing process.
-pub struct InternalOobReceiver<F>(pub F);
-
-impl<F> From<F> for InternalOobReceiver<F>
-where
-    F: OutOfBandReceive,
-{
-    fn from(f: F) -> Self {
-        Self(f)
-    }
-}
-
-impl<F> sealed_receiver_type::SealedTrait for InternalOobReceiver<F>
+impl<F> sealed_receiver_type::SealedTrait for F
 where
     F: OutOfBandReceive,
 {
@@ -284,11 +271,11 @@ where
     type RxType = F::Future;
 
     fn receive(&self) -> Self::RxType {
-        self.0.receive()
+        OutOfBandReceive::receive(self)
     }
 }
 
-impl<F> OobReceiverType for InternalOobReceiver<F> where F: OutOfBandReceive {}
+impl<F> OobReceiverType for F where F: OutOfBandReceive {}
 
 /// Marker type for 'externally' resolving reception of OOB data
 ///
