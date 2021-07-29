@@ -140,12 +140,12 @@ pub trait OutOfBandSend<'a> {
 
     fn can_send() -> bool;
 
-    fn send(&self, data: &'a [u8]) -> Self::Future;
+    fn send(&mut self, data: &'a [u8]) -> Self::Future;
 }
 
 impl<'a, S, F> OutOfBandSend<'a> for S
 where
-    S: Fn(&'a [u8]) -> F,
+    S: FnMut(&'a [u8]) -> F,
     F: Future + 'a,
 {
     type Future = F;
@@ -154,7 +154,7 @@ where
         true
     }
 
-    fn send(&self, data: &'a [u8]) -> Self::Future {
+    fn send(&mut self, data: &'a [u8]) -> Self::Future {
         self(data)
     }
 }
@@ -166,7 +166,7 @@ impl OutOfBandSend<'_> for () {
         false
     }
 
-    fn send(&self, _: &[u8]) -> Self::Future {
+    fn send(&mut self, _: &[u8]) -> Self::Future {
         panic!("Tried to send OOB data on a nonexistent interface")
     }
 }
@@ -177,17 +177,17 @@ impl OutOfBandSend<'_> for () {
 pub trait OutOfBandReceive {
     type Future: Future<Output = Vec<u8>>;
 
-    fn receive(&self) -> Self::Future;
+    fn receive(&mut self) -> Self::Future;
 }
 
 impl<R, F> OutOfBandReceive for R
 where
-    R: Fn() -> F,
+    R: FnMut() -> F,
     F: Future<Output = Vec<u8>>,
 {
     type Future = F;
 
-    fn receive(&self) -> Self::Future {
+    fn receive(&mut self) -> Self::Future {
         self()
     }
 }
@@ -231,7 +231,7 @@ pub(super) mod sealed_receiver_type {
         type RxType: core::future::Future<Output = alloc::vec::Vec<u8>>;
 
         #[doc(hidden)]
-        fn receive(&self) -> Self::RxType;
+        fn receive(&mut self) -> Self::RxType;
     }
 }
 
@@ -270,7 +270,7 @@ where
 
     type RxType = F::Future;
 
-    fn receive(&self) -> Self::RxType {
+    fn receive(&mut self) -> Self::RxType {
         OutOfBandReceive::receive(self)
     }
 }
@@ -292,7 +292,7 @@ impl sealed_receiver_type::SealedTrait for ExternalOobReceiver {
 
     type RxType = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = alloc::vec::Vec<u8>>>>;
 
-    fn receive(&self) -> Self::RxType {
+    fn receive(&mut self) -> Self::RxType {
         unreachable!("Called receive on external receiver")
     }
 }
@@ -306,7 +306,7 @@ impl sealed_receiver_type::SealedTrait for () {
 
     type RxType = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = alloc::vec::Vec<u8>>>>;
 
-    fn receive(&self) -> Self::RxType {
+    fn receive(&mut self) -> Self::RxType {
         unreachable!("Called receive on external receiver")
     }
 }

@@ -435,7 +435,7 @@ where
     /// # Panic
     /// This method will panic if the pairing information and public keys were not already generated
     /// in the pairing process.
-    async fn send_oob(&self) {
+    async fn send_oob(&mut self) {
         use crate::gap::{
             assigned::{sc_confirm_value, sc_random_value, IntoRaw},
             oob_block,
@@ -479,7 +479,11 @@ where
     /// This method will panic if `DoesNotExist` is the receiver type or `pairing_data` is `None`
     async fn by_oob_receiver_type(&mut self) -> Result<(), Error> {
         match R::receiver_type() {
-            OobReceiverTypeVariant::Internal => self.oob_confirm_result(self.receive_oob().await).await,
+            OobReceiverTypeVariant::Internal => {
+                let confirm_result = self.receive_oob().await;
+
+                self.oob_confirm_result(confirm_result).await
+            }
             OobReceiverTypeVariant::External => Ok(()),
             OobReceiverTypeVariant::DoesNotExist => unreachable!(),
         }
@@ -521,8 +525,10 @@ where
     /// # Panic
     /// This method will panic if the pairing information and public keys were not already generated
     /// in the pairing process.
-    async fn receive_oob(&self) -> bool {
-        self.process_received_oob(self.oob_receive.receive().await)
+    async fn receive_oob(&mut self) -> bool {
+        let data = self.oob_receive.receive().await;
+
+        self.process_received_oob(data)
     }
 
     /// Process the received OOB
