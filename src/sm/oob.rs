@@ -3,6 +3,7 @@
 //! This contains the setup for enabling the usage of out of band pairing with the Security Manager
 //! implementations in this library.
 
+use crate::sm::oob::sealed_receiver_type::OobReceiverTypeVariant;
 use alloc::vec::Vec;
 use core::future::Future;
 
@@ -176,8 +177,6 @@ impl OutOfBandSend<'_> for () {
 pub trait OutOfBandReceive {
     type Future: Future<Output = Vec<u8>>;
 
-    fn can_receive() -> bool;
-
     fn receive(&self) -> Self::Future;
 }
 
@@ -188,24 +187,8 @@ where
 {
     type Future = F;
 
-    fn can_receive() -> bool {
-        true
-    }
-
     fn receive(&self) -> Self::Future {
         self()
-    }
-}
-
-impl OutOfBandReceive for () {
-    type Future = UnusedOobInterface<Vec<u8>>;
-
-    fn can_receive() -> bool {
-        false
-    }
-
-    fn receive(&self) -> Self::Future {
-        panic!("Tried to receive OOB data on a nonexistent interface")
     }
 }
 
@@ -220,8 +203,36 @@ impl<V> Future for UnusedOobInterface<V> {
     }
 }
 
-mod trait_sealer {
-    pub trait SealedTrait {}
+pub(super) mod sealed_receiver_type {
+
+    /// The type of implementor for the `OobReceiverType`. These correspond to the types
+    /// `InternalOobReceiver`, `ExternalOobReceiver`, and `()`.
+    #[doc(hidden)]
+    #[derive(Eq, PartialEq)]
+    pub enum OobReceiverTypeVariant {
+        Internal,
+        External,
+        DoesNotExist,
+    }
+
+    pub trait SealedTrait {
+        #[doc(hidden)]
+        fn receiver_type() -> OobReceiverTypeVariant;
+
+        #[doc(hidden)]
+        fn can_receive() -> bool {
+            match Self::receiver_type() {
+                OobReceiverTypeVariant::Internal | OobReceiverTypeVariant::External => true,
+                OobReceiverTypeVariant::DoesNotExist => false,
+            }
+        }
+
+        #[doc(hidden)]
+        type RxType: core::future::Future<Output = alloc::vec::Vec<u8>>;
+
+        #[doc(hidden)]
+        fn receive(&self) -> Self::RxType;
+    }
 }
 
 /// The trait for receiving out of band data
@@ -244,7 +255,7 @@ mod trait_sealer {
 /// `InternalOobReceiver` is preferred as it is idiot proof in this regard. The last type to
 /// implement this trait is not a receiver at all, instead the `()` type is used to indicate that
 /// OOB data cannot be received by the Security Manager.
-pub trait OobReceiverType: trait_sealer::SealedTrait {}
+pub trait OobReceiverType: sealed_receiver_type::SealedTrait {}
 
 /// Marker type for 'internally' resolving reception of OOB data
 ///
@@ -262,6 +273,23 @@ where
     }
 }
 
+impl<F> sealed_receiver_type::SealedTrait for InternalOobReceiver<F>
+where
+    F: OutOfBandReceive,
+{
+    fn receiver_type() -> sealed_receiver_type::OobReceiverTypeVariant {
+        sealed_receiver_type::OobReceiverTypeVariant::Internal
+    }
+
+    type RxType = F::Future;
+
+    fn receive(&self) -> Self::RxType {
+        self.0.receive()
+    }
+}
+
+impl<F> OobReceiverType for InternalOobReceiver<F> where F: OutOfBandReceive {}
+
 /// Marker type for 'externally' resolving reception of OOB data
 ///
 /// This should be used only when [`InternalOobReceiver`] cannot be used. The reason being that
@@ -269,3 +297,31 @@ where
 /// pairing. Both types of security manager have a method to set the received OOB data that is only
 /// available when this type is used.
 pub struct ExternalOobReceiver;
+
+impl sealed_receiver_type::SealedTrait for ExternalOobReceiver {
+    fn receiver_type() -> OobReceiverTypeVariant {
+        sealed_receiver_type::OobReceiverTypeVariant::External
+    }
+
+    type RxType = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = alloc::vec::Vec<u8>>>>;
+
+    fn receive(&self) -> Self::RxType {
+        unreachable!("Called receive on external receiver")
+    }
+}
+
+impl OobReceiverType for ExternalOobReceiver {}
+
+impl sealed_receiver_type::SealedTrait for () {
+    fn receiver_type() -> OobReceiverTypeVariant {
+        sealed_receiver_type::OobReceiverTypeVariant::DoesNotExist
+    }
+
+    type RxType = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = alloc::vec::Vec<u8>>>>;
+
+    fn receive(&self) -> Self::RxType {
+        unreachable!("Called receive on external receiver")
+    }
+}
+
+impl OobReceiverType for () {}

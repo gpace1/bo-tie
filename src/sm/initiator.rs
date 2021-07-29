@@ -1,9 +1,12 @@
-use super::oob::{BuildOutOfBand, OutOfBandMethodBuilder, OutOfBandReceive, OutOfBandSend};
+/// The initiator implementation of a Security Manager
+use super::oob::{BuildOutOfBand, OutOfBandMethodBuilder, OutOfBandSend};
 use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
 };
 use crate::l2cap::ConnectionChannel;
-use crate::sm::oob::OobDirection;
+use crate::sm::oob::sealed_receiver_type::OobReceiverTypeVariant;
+use crate::sm::oob::{ExternalOobReceiver, OobDirection, OobReceiverType};
+use alloc::vec::Vec;
 
 pub struct MasterSecurityManagerBuilder<'a, C> {
     connection_channel: &'a C,
@@ -46,7 +49,7 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
     > + 'a
     where
         S: for<'i> OutOfBandSend<'i> + 'b,
-        R: OutOfBandReceive + 'b,
+        R: OobReceiverType + 'b,
     {
         OutOfBandMethodBuilder::new(self, send, receive)
     }
@@ -66,7 +69,7 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
     fn make<S, R>(self, oob_send: S, oob_receive: R) -> MasterSecurityManager<'a, C, S, R>
     where
         S: for<'i> OutOfBandSend<'i>,
-        R: OutOfBandReceive,
+        R: OobReceiverType,
     {
         let auth_req = alloc::vec![
             encrypt_info::AuthRequirements::Bonding,
@@ -110,7 +113,7 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
 impl<'a, C, S, R> BuildOutOfBand for OutOfBandMethodBuilder<MasterSecurityManagerBuilder<'a, C>, S, R>
 where
     S: for<'i> OutOfBandSend<'i>,
-    R: OutOfBandReceive,
+    R: OobReceiverType,
 {
     type Builder = MasterSecurityManagerBuilder<'a, C>;
     type SecurityManager = MasterSecurityManager<'a, C, S, R>;
@@ -142,7 +145,7 @@ impl<'a, C, S, R> MasterSecurityManager<'a, C, S, R>
 where
     C: ConnectionChannel,
     S: for<'i> OutOfBandSend<'i>,
-    R: OutOfBandReceive,
+    R: OobReceiverType,
 {
     async fn send<Cmd, P>(&self, command: Cmd) -> Result<(), Error>
     where
@@ -209,6 +212,7 @@ where
                 responder_pairing_confirm: None,
                 mac_key: None,
                 db_keys: None,
+                external_oob_confirm_valid: false,
             });
 
             Ok(())
@@ -334,35 +338,26 @@ where
     }
 
     async fn process_responder_random(&mut self, payload: &[u8]) -> Result<(), Error> {
-        let responder_random = pairing::PairingRandom::try_from_icd(payload);
+        let responder_nonce = match pairing::PairingRandom::try_from_icd(payload) {
+            Ok(pairing_random) => pairing_random.get_value(),
+            _ => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-        let check_result = match (&responder_random, &mut self.pairing_data) {
-            (
-                Ok(random_pdu),
-                Some(PairingData {
-                    pairing_method: PairingMethod::JustWorks,
-                    peer_nonce,
-                    peer_public_key: Some(peer_public_key),
-                    public_key,
-                    responder_pairing_confirm: Some(responder_confirm),
-                    ..
-                }),
-            )
-            | (
-                Ok(random_pdu),
-                Some(PairingData {
-                    pairing_method: PairingMethod::NumbComp,
-                    peer_nonce,
-                    peer_public_key: Some(peer_public_key),
-                    public_key,
-                    responder_pairing_confirm: Some(responder_confirm),
-                    ..
-                }),
-            ) => {
-                let responder_nonce = random_pdu.get_value();
+                return Err(Error::Value);
+            }
+        };
 
-                log::trace!("Responder Nonce: {:?}", random_pdu.get_value());
+        log::trace!("Responder Nonce: {:?}", responder_nonce);
 
+        match &mut self.pairing_data {
+            Some(PairingData {
+                pairing_method: PairingMethod::JustWorks | PairingMethod::NumbComp,
+                peer_nonce,
+                peer_public_key: Some(peer_public_key),
+                public_key,
+                responder_pairing_confirm: Some(responder_confirm),
+                ..
+            }) => {
                 let initiator_confirm = toolbox::f4(
                     GetXOfP256Key::x(peer_public_key),
                     GetXOfP256Key::x(public_key),
@@ -372,30 +367,42 @@ where
 
                 *peer_nonce = responder_nonce.into();
 
-                *responder_confirm == initiator_confirm
-            }
-            (Err(_), _) => {
-                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
+                if *responder_confirm == initiator_confirm {
+                    Ok(())
+                } else {
+                    let reason = pairing::PairingFailedReason::ConfirmValueFailed;
 
-                return Err(Error::Value);
+                    self.send_err(reason).await?;
+
+                    Err(Error::PairingFailed(reason))
+                }
+            }
+            Some(PairingData {
+                pairing_method:
+                    PairingMethod::Oob(OobDirection::OnlyResponderSendsOob) | PairingMethod::Oob(OobDirection::BothSendOob),
+                external_oob_confirm_valid,
+                ..
+            }) if OobReceiverTypeVariant::External == R::receiver_type() && !*external_oob_confirm_valid => {
+                self.send_err(pairing::PairingFailedReason::OOBNotAvailable).await?;
+
+                Err(Error::ExternalOobNotProvided)
+            }
+            Some(PairingData {
+                peer_nonce,
+                pairing_method: PairingMethod::Oob(_),
+                ..
+            }) => {
+                *peer_nonce = responder_nonce.into();
+
+                Ok(())
             }
             _ => {
                 let reason = pairing::PairingFailedReason::UnspecifiedReason;
 
                 self.send_err(reason).await?;
 
-                return Err(Error::PairingFailed(reason));
+                Err(Error::PairingFailed(reason))
             }
-        };
-
-        if check_result {
-            Ok(())
-        } else {
-            let reason = pairing::PairingFailedReason::ConfirmValueFailed;
-
-            self.send_err(reason).await?;
-
-            Err(Error::PairingFailed(reason))
         }
     }
 
@@ -554,68 +561,118 @@ where
     /// This method will panic if the pairing information and public keys were not already generated
     /// in the pairing process.
     async fn receive_oob(&self) -> bool {
+        self.process_received_oob(self.oob_receive.receive().await)
+    }
+
+    /// Process the received OOB
+    ///
+    /// This will check the OOB to determine the validity of the raw data and the confirm within the
+    /// raw data. True is returned if everything within `raw` is validated.
+    fn process_received_oob(&self, raw: Vec<u8>) -> bool {
         use crate::gap::{
             assigned::{sc_confirm_value, sc_random_value, AssignedTypes, TryFromRaw},
             oob_block,
         };
 
-        if R::can_receive() {
-            let raw = self.oob_receive.receive().await;
+        let oob_info = oob_block::OobDataBlockIter::new(raw);
 
-            let oob_info = oob_block::OobDataBlockIter::new(raw);
+        let mut rb = None;
+        let mut cb = None;
 
-            let mut rb = None;
-            let mut cb = None;
+        for (ty, data) in oob_info.iter() {
+            const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
+            const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
 
-            for (ty, data) in oob_info.iter() {
-                const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
-                const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
-
-                match ty {
-                    RANDOM_TYPE => rb = sc_random_value::ScRandomValue::try_from_raw(data).ok(),
-                    CONFIRM_TYPE => cb = sc_confirm_value::ScConfirmValue::try_from_raw(data).ok(),
-                    _ => (),
-                }
+            match ty {
+                RANDOM_TYPE => rb = sc_random_value::ScRandomValue::try_from_raw(data).ok(),
+                CONFIRM_TYPE => cb = sc_confirm_value::ScConfirmValue::try_from_raw(data).ok(),
+                _ => (),
             }
+        }
 
-            if let (Some(rb), Some(ca)) = (rb, cb) {
-                let paring_data = self.pairing_data.as_ref().unwrap();
+        if let (Some(rb), Some(ca)) = (rb, cb) {
+            let paring_data = self.pairing_data.as_ref().unwrap();
 
-                let pkb = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
+            let pkb = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
 
-                if ca.0 == toolbox::f4(pkb, pkb, rb.0, 0) {
-                    true
-                } else {
-                    false
-                }
+            if ca.0 == toolbox::f4(pkb, pkb, rb.0, 0) {
+                true
             } else {
                 false
             }
         } else {
-            true
+            false
         }
     }
 
-    /// Send and/or process the OOB confirm value
-    async fn oob_confirm(&mut self, oob_direction: OobDirection) -> Result<(), self::Error> {
+    /// Receive OOB information by its type
+    ///
+    /// This will do one of two things depending on the type of receiver.
+    ///
+    /// For the `Internal` type of receiver it will await the data and send the nonce once it
+    /// receives and validated the OOB data.
+    ///
+    /// For the `External` it will just return Ok as the user needs to provide the OOB data with
+    /// the method `received_oob_data`.
+    ///
+    /// The method returns true if oob data is expected to be received externally from this
+    /// security manager.
+    ///
+    /// # Panic
+    /// This method will panic if `DoesNotExist` is the receiver type or `pairing_data` is `None`
+    async fn by_oob_receiver_type(&mut self) -> Result<bool, Error> {
+        match R::receiver_type() {
+            OobReceiverTypeVariant::Internal => self.oob_confirm_result(self.receive_oob().await).await.map(|_| true),
+            OobReceiverTypeVariant::External => Ok(false),
+            OobReceiverTypeVariant::DoesNotExist => unreachable!(),
+        }
+    }
+
+    /// Function for the validation result of the confirm value with an OOB data.
+    ///
+    /// # Note
+    /// If the `confirm_result` is true then this device's nonce is sent to the responder.
+    ///
+    /// # Panic
+    /// Member `pairing_data` must be `Some(_)`.
+    async fn oob_confirm_result(&mut self, confirm_result: bool) -> Result<(), Error> {
+        if confirm_result {
+            match self.pairing_data {
+                Some(PairingData {
+                    nonce,
+                    ref mut external_oob_confirm_valid,
+                    ..
+                }) => {
+                    *external_oob_confirm_valid = true;
+
+                    self.send(pairing::PairingRandom::new(nonce)).await
+                }
+                None => unreachable!("Pairing Data cannot be None"),
+            }
+        } else {
+            self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await
+        }
+    }
+
+    /// Deal with the oob confirm values
+    ///
+    /// This will return true if once the oob confirm value step is completed. False is only
+    /// returned when OOB data is to be externally set by the user.
+    async fn oob_confirm(&mut self, oob_direction: OobDirection) -> Result<bool, self::Error> {
         match oob_direction {
-            OobDirection::OnlyInitiatorSendsOob => self.send_oob().await,
-            OobDirection::OnlyResponderSendsOob => {
+            OobDirection::OnlyInitiatorSendsOob => {
+                self.send_oob().await;
+                Ok(true)
+            }
+            OobDirection::OnlyResponderSendsOob => self.by_oob_receiver_type().await,
+            OobDirection::BothSendOob => {
                 self.send_oob().await;
 
-                if !self.receive_oob().await {
-                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
-                }
-            }
-            OobDirection::BothSendOob => {
-                if !self.receive_oob().await {
-                    self.send_err(pairing::PairingFailedReason::ConfirmValueFailed).await?;
-                }
+                self.by_oob_receiver_type().await
             }
         }
-
-        Ok(())
     }
+
     /// Indicate if the connection is encrypted
     ///
     /// This is used to indicate to the `MasterSecurityManager` that it is safe to send a Key to the
@@ -784,9 +841,9 @@ where
 
     /// Continue Pairing
     ///
-    /// To continue pairing, the slaves next received security manager PDU needs to be received
-    /// and then processed through `continue_pairing`. Pairing is completed when this function
-    /// returns true.
+    /// This is used to continue pairing until pairing is either complete or fails. It must be
+    /// called for every received Security Manager ACL data. True is returned once pairing is
+    /// completed.
     pub async fn continue_pairing(&mut self, acl_data: &crate::l2cap::AclData) -> Result<bool, super::Error>
     where
         C: ConnectionChannel,
@@ -850,14 +907,13 @@ where
                         Ok(false)
                     }
                     PairingMethod::Oob(direction) => {
-                        self.oob_confirm(direction).await?;
-
-                        self.pairing_expected_cmd = super::CommandType::PairingRandom.into();
-
-                        match self.send_pairing_random().await {
-                            Ok(_) => Ok(false),
-                            Err(e) => Err(e),
+                        if self.oob_confirm(direction).await? {
+                            self.pairing_expected_cmd = super::CommandType::PairingRandom.into();
+                        } else {
+                            self.pairing_expected_cmd = None;
                         }
+
+                        Ok(true)
                     }
                     PairingMethod::PassKeyEntry => unimplemented!(),
                 },
@@ -890,7 +946,11 @@ where
 
                 self.process_responder_dh_key_check(payload).await.map(|_| true)
             }
-            _ => Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason)),
+            _ => {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
+
+                Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+            }
         }
     }
 
@@ -898,5 +958,89 @@ where
         self.pairing_expected_cmd = None;
 
         Err(e)
+    }
+}
+
+impl<'a, C, S> MasterSecurityManager<'a, C, S, ExternalOobReceiver>
+where
+    C: ConnectionChannel,
+    S: for<'i> OutOfBandSend<'i>,
+{
+    /// Set the received out of band data
+    ///
+    /// This method is required to be called when the OOB receiver type is `ExternalOobReceiver`.
+    /// Obviously it is not needed if the receiver type something other than `ExternalOobReceiver`
+    /// because you cannot call this method.
+    ///
+    /// This method is tricky as it may only be called at the correct time during the pairing
+    /// process with OOB, although the method
+    /// [`expecting_oob_data`](SlaveSecurityManager::expecting_oob_data) does make this easier. If
+    /// any other pairing process is being used, or this is called at the incorrect time, pairing is
+    /// canceled and must be restarted by the responder. The responder is also sent the error
+    /// `OOBNotAvailable`.
+    ///
+    /// This method must be called after the responder's pairing public key message is *processed*
+    /// but before the pairing random message is *processed*. Note *processed*, it is ok for this
+    /// device to receive the pairing random message, but do not call the method
+    /// [`process_command`](SlaveSecurityManager::process_command) until after this method is
+    /// called. The easiest way to know when this occurs is to call the method `expecting_oob_data`
+    /// after processing every security manager message, although this  procedure can be stopped
+    /// after this method is called.
+    ///
+    /// # Note
+    /// The error `ConfirmValueFailed` can also be returned, but that means that the method was
+    /// called at the correct time, just that pairing was going to fail because of the confirm value
+    /// check failing.
+    pub async fn received_oob_data(&mut self, data: Vec<u8>) -> Result<(), Error> {
+        match (&mut self.pairing_expected_cmd, &self.pairing_data) {
+            (
+                expected_command @ None,
+                Some(PairingData {
+                    pairing_method:
+                        PairingMethod::Oob(OobDirection::BothSendOob)
+                        | PairingMethod::Oob(OobDirection::OnlyResponderSendsOob),
+                    private_key: Some(_),
+                    peer_public_key: Some(_),
+                    secret_key: Some(_),
+                    peer_nonce: None,
+                    external_oob_confirm_valid: false,
+                    ..
+                }),
+            ) => {
+                *expected_command = super::CommandType::PairingRandom.into();
+
+                self.oob_confirm_result(self.process_received_oob(data)).await
+            }
+            _ => {
+                self.send_err(pairing::PairingFailedReason::OOBNotAvailable).await?;
+
+                Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+            }
+        }
+    }
+
+    /// Query the security manager if it is expecting some received OOB data
+    ///
+    /// This can be used to find the correct time to call the method `received_oob_data`. It is
+    /// recommended to call this after every processed security manager message to know the
+    /// correct time to call `received_oob_data`.
+    pub fn expecting_oob_data(&self) -> bool {
+        match (&self.pairing_expected_cmd, &self.pairing_data) {
+            (
+                None,
+                Some(PairingData {
+                    pairing_method:
+                        PairingMethod::Oob(OobDirection::BothSendOob)
+                        | PairingMethod::Oob(OobDirection::OnlyResponderSendsOob),
+                    private_key: Some(_),
+                    peer_public_key: Some(_),
+                    secret_key: Some(_),
+                    peer_nonce: None,
+                    external_oob_confirm_valid: false,
+                    ..
+                }),
+            ) => true,
+            _ => false,
+        }
     }
 }

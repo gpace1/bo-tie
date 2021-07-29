@@ -144,6 +144,10 @@ pub enum Error {
     DataSend(alloc::string::String),
     /// ACL Data related
     AclData(crate::l2cap::AclDataError),
+    /// Out of band data was not provided to the Security Manager via the `received_oob_data`
+    /// method of either the initiator or responder security manager before continuing the process
+    /// of pairing.
+    ExternalOobNotProvided,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -409,6 +413,15 @@ struct PairingData {
     mac_key: Option<u128>,
     /// The database key
     db_keys: Option<KeyDBEntry>,
+    /// External OOB check
+    ///
+    /// This is only need for the externally provided OOB data method of a Security Manager. Because
+    /// the external process interrupts the natural sequence of pairing, this value must be provided
+    /// to make sure that the long term key calculation is not done before the confirm value sent
+    /// within the OOB data from the peer is validated. Its used as a check to verify that the user
+    /// has provided OOB data via the method `received_oob_data` and that the data was validated
+    /// before the nonce is sent to the peer device.
+    external_oob_confirm_valid: bool,
 }
 
 /// Peer device Keying information
