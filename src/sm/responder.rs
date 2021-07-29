@@ -745,7 +745,7 @@ where
             // Only the pairing method Passkey will have confirm values sent through the logical
             // link
             Some(PairingData {
-                pairing_method: PairingMethod::PassKeyEntry,
+                pairing_method: PairingMethod::PassKeyEntry | PairingMethod::NumbComp | PairingMethod::Oob(_),
                 ..
             }) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
@@ -753,8 +753,8 @@ where
                 Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
             }
             _ => {
-                // Neither the Just Works method or Number Comparison should have the responder
-                // receiving the pairing confirm PDU
+                // Neither the Just Works method, Number Comparison, or out of band should have the
+                // responder receiving the pairing confirm PDU.
                 self.send_err(pairing::PairingFailedReason::InvalidParameters).await?;
 
                 Err(Error::PairingFailed(pairing::PairingFailedReason::InvalidParameters))
@@ -788,23 +788,26 @@ where
                 Ok(None)
             }
             Some(PairingData {
+                pairing_method:
+                    PairingMethod::Oob(OobDirection::OnlyInitiatorSendsOob) | PairingMethod::Oob(OobDirection::BothSendOob),
+                external_oob_confirm_valid,
+                ..
+            }) if OobReceiverTypeVariant::External == R::receiver_type() && !external_oob_confirm_valid => {
+                self.send_err(pairing::PairingFailedReason::OOBNotAvailable).await?;
+
+                Err(Error::ExternalOobNotProvided)
+            }
+            Some(PairingData {
                 pairing_method: PairingMethod::Oob(_),
                 ref mut peer_nonce,
                 nonce,
-                external_oob_confirm_valid,
                 ..
             }) => {
-                if OobReceiverTypeVariant::External == R::receiver_type() && !external_oob_confirm_valid {
-                    self.send_err(pairing::PairingFailedReason::OOBNotAvailable).await?;
+                *peer_nonce = initiator_random.get_value().into();
 
-                    Err(Error::ExternalOobNotProvided)
-                } else {
-                    *peer_nonce = initiator_random.get_value().into();
+                self.send(pairing::PairingRandom::new(nonce)).await?;
 
-                    self.send(pairing::PairingRandom::new(nonce)).await?;
-
-                    Ok(None)
-                }
+                Ok(None)
             }
             _ => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
