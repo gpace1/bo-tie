@@ -29,6 +29,10 @@ pub struct SlaveSecurityManagerBuilder<'a, C> {
     this_address: &'a crate::BluetoothDeviceAddress,
     remote_address_is_random: bool,
     this_address_is_random: bool,
+    distribute_ltk: bool,
+    distribute_csrk: bool,
+    accept_ltk: bool,
+    accept_csrk: bool,
 }
 
 impl<'a, C> SlaveSecurityManagerBuilder<'a, C>
@@ -52,13 +56,50 @@ where
             this_address: this_device_address,
             remote_address_is_random: is_connected_devices_address_random,
             this_address_is_random: is_this_device_address_random,
+            distribute_ltk: true,
+            distribute_csrk: false,
+            accept_ltk: true,
+            accept_csrk: true,
         }
+    }
+
+    /// Set the bonding keys to be distributed by the responder
+    ///
+    /// When this method is called all keys that can be distributed are set to *not* be distributed.
+    /// The return can then be used to specify what keys are to be distributed during the bonding
+    /// process.
+    ///
+    /// # Note
+    /// By default only the Identity Resolving Key (IRK) is distributed by the initiator
+    fn set_bonding_keys(&'a mut self) -> impl super::EnabledBondingKeys<'a, SlaveSecurityManagerBuilder<'a, C>> + 'a {
+        self.distribute_ltk = false;
+        self.distribute_csrk = false;
+
+        impl<'z, C> super::EnabledBondingKeys<'z, SlaveSecurityManagerBuilder<'z, C>>
+            for &'z mut SlaveSecurityManagerBuilder<'z, C>
+        {
+            fn distribute_ltk(&mut self) -> &mut Self {
+                self.distribute_ltk = true;
+                self
+            }
+
+            fn distribute_csrk(&mut self) -> &mut Self {
+                self.distribute_csrk = true;
+                self
+            }
+
+            fn finish_keys(self) -> &'z mut SlaveSecurityManagerBuilder<'z, C> {
+                self
+            }
+        }
+
+        self
     }
 
     /// Use or support an out-of-band (OOB) method for pairing
     ///
-    /// This creates an `OutOfBandMethodBuilder` for creating a `SlaveSecurityManager` that supports
-    /// OOB.data transfer.
+    /// This creates an implementor of `BuildOutOfBand` for creating a `SlaveSecurityManager` that
+    /// will support OOB data transfer. This method requires the ways to send and receive
     pub fn use_oob<'b: 'a, S, R>(
         self,
         send: S,
@@ -425,8 +466,8 @@ where
 
     /// Send the OOB confirm information
     ///
-    /// This will create the confirm information and send the information to the initiator if the
-    /// sender function was set. If no sender was set, this method does nothing.
+    /// This will create the confirm information and send it to the initiator if the out of band
+    /// send function was set. If no sender was set, this method does nothing.
     ///
     /// # Notes
     /// * This method does nothing if OOB sending is not enabled.

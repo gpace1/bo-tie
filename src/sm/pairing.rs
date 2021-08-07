@@ -130,8 +130,8 @@ pub struct PairingRequest {
     oob_data_flag: OOBDataFlag,
     auth_req: Vec<AuthRequirements>,
     max_encryption_size: usize,
-    initiator_key_distribution: Vec<KeyDistributions>,
-    responder_key_distribution: Vec<KeyDistributions>,
+    initiator_key_distribution: &'static [KeyDistributions],
+    responder_key_distribution: &'static [KeyDistributions],
     io_cap_f6: [u8; 3],
 }
 
@@ -177,8 +177,8 @@ impl PairingRequest {
         oob_data_flag: OOBDataFlag,
         auth_req: Vec<AuthRequirements>,
         max_encryption_size: usize,
-        initiator_key_distribution: Vec<KeyDistributions>,
-        responder_key_distribution: Vec<KeyDistributions>,
+        initiator_key_distribution: &'static [KeyDistributions],
+        responder_key_distribution: &'static [KeyDistributions],
     ) -> Self {
         Self {
             io_cap_f6: convert_io_cap(&auth_req, oob_data_flag, io_capability),
@@ -244,7 +244,7 @@ impl PairingRequest {
     /// Set the key distribution / generation for the initiator
     ///
     /// This function takes a list of the types of key distribution / generation types available
-    pub fn set_initiator_key_dis_gen(&mut self, dist_gen_types: Vec<KeyDistributions>) {
+    pub fn set_initiator_key_dis_gen(&mut self, dist_gen_types: &'static [KeyDistributions]) {
         self.initiator_key_distribution = dist_gen_types
     }
 
@@ -253,7 +253,7 @@ impl PairingRequest {
     ///
     /// This function takes a list of the types of key distribution / generation types if wants
     /// the responder to distribute.
-    pub fn set_responder_key_dis_gen(&mut self, dist_gen_types: Vec<KeyDistributions>) {
+    pub fn set_responder_key_dis_gen(&mut self, dist_gen_types: &'static [KeyDistributions]) {
         self.responder_key_distribution = dist_gen_types
     }
 

@@ -828,3 +828,38 @@ impl GetXOfP256Key for [u8; 64] {
         x
     }
 }
+
+/// Set which keys are distributed during bonding
+///
+/// This is used by the security manager builders to specify what keys are distributed during
+/// the bonding process.
+///
+/// # Note
+/// Legacy only keys are not distributable.
+pub trait EnabledBondingKeys<'a, B>
+where
+    Self: Sized,
+{
+    /// Enable the distribution of the identity resolving key (IRK)
+    ///
+    /// The identity resolving key is used to generate a resolvable private address. The device(s)
+    /// that contains this key can resolve that address and perform a connection to the device.
+    fn distribute_ltk(&mut self) -> &mut Self;
+
+    /// Enable the distribute of the Connection Signature Resolving Key (CSRK)
+    ///
+    /// A CSRK is used where data is sent, but verification of the sender needs to be performed
+    /// before the data can be accepted. A typical example of this is writing a value to a device.
+    fn distribute_csrk(&mut self) -> &mut Self;
+
+    fn finish_keys(self) -> &'a mut B;
+}
+
+fn get_keys(ltk: bool, csrk: bool) -> &'static [pairing::KeyDistributions] {
+    match (ltk, csrk) {
+        (true, true) => &[pairing::KeyDistributions::IdKey, pairing::KeyDistributions::SignKey],
+        (true, false) => &[pairing::KeyDistributions::IdKey],
+        (false, true) => &[pairing::KeyDistributions::SignKey],
+        (false, false) => &[],
+    }
+}

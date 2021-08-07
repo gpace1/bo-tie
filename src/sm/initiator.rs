@@ -17,9 +17,14 @@ pub struct MasterSecurityManagerBuilder<'a, C> {
     this_address: &'a crate::BluetoothDeviceAddress,
     remote_address_is_random: bool,
     this_address_is_random: bool,
+    distribute_ltk: bool,
+    distribute_csrk: bool,
+    accept_ltk: bool,
+    accept_csrk: bool,
 }
 
 impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
+    /// Create a new `MasterSecurityManagerBuilder`
     pub fn new(
         connection_channel: &'a C,
         connected_device_address: &'a crate::BluetoothDeviceAddress,
@@ -36,9 +41,87 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             this_address: this_device_address,
             remote_address_is_random: is_connected_devices_address_random,
             this_address_is_random: is_this_device_address_random,
+            distribute_ltk: false,
+            distribute_csrk: false,
+            accept_ltk: true,
+            accept_csrk: true,
         }
     }
 
+    /// Set the bonding keys to be distributed by the initiator
+    ///
+    /// When this method is called all keys that can be distributed are set to *not* be distributed.
+    /// The return can then be used to specify what keys are to be distributed during the bonding
+    /// process.
+    ///
+    /// # Note
+    /// By default no bonding keys are distributed by this initiator
+    pub fn set_bonding_keys(
+        &'a mut self,
+    ) -> impl super::EnabledBondingKeys<'a, MasterSecurityManagerBuilder<'a, C>> + 'a {
+        self.distribute_ltk = false;
+        self.distribute_csrk = false;
+
+        struct SentKeys<'z, C>(&'z mut MasterSecurityManagerBuilder<'z, C>);
+
+        impl<'z, C> super::EnabledBondingKeys<'z, MasterSecurityManagerBuilder<'z, C>> for SentKeys<'z, C> {
+            fn distribute_ltk(&mut self) -> &mut Self {
+                self.0.distribute_ltk = true;
+                self
+            }
+
+            fn distribute_csrk(&mut self) -> &mut Self {
+                self.0.distribute_csrk = true;
+                self
+            }
+
+            fn finish_keys(self) -> &'z mut MasterSecurityManagerBuilder<'z, C> {
+                self.0
+            }
+        }
+
+        SentKeys(self)
+    }
+
+    /// Set the bonding keys to be accepted by this initiator
+    ///
+    /// When this method is called all keys that can be accepted are set to *not* be accepted.
+    /// The return can then be used to specify what keys are to be accepted from the responder
+    /// during the bonding process.
+    ///
+    /// # Note
+    /// By default all bonding keys are accepted by this initiator
+    pub fn accepted_bonding_keys(
+        &'a mut self,
+    ) -> impl super::EnabledBondingKeys<'a, MasterSecurityManagerBuilder<'a, C>> + 'a {
+        self.accept_ltk = false;
+        self.accept_csrk = false;
+
+        struct ReceivedKeys<'z, C>(&'z mut MasterSecurityManagerBuilder<'z, C>);
+
+        impl<'z, C> super::EnabledBondingKeys<'z, MasterSecurityManagerBuilder<'z, C>> for ReceivedKeys<'z, C> {
+            fn distribute_ltk(&mut self) -> &mut Self {
+                self.0.accept_ltk = true;
+                self
+            }
+
+            fn distribute_csrk(&mut self) -> &mut Self {
+                self.0.accept_csrk = true;
+                self
+            }
+
+            fn finish_keys(self) -> &'z mut MasterSecurityManagerBuilder<'z, C> {
+                self.0
+            }
+        }
+
+        self
+    }
+
+    /// Enable the usage of out-of-band (OOB) pairing
+    ///
+    /// This creates an implementor of `BuildOutOfBand` for creating a `MasterSecurityManager` that
+    /// will support OOB data transfer.
     pub fn use_oob<'b: 'a, S, R>(
         self,
         send: S,
@@ -77,7 +160,9 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             encrypt_info::AuthRequirements::Sc,
         ];
 
-        let key_dist = alloc::vec![pairing::KeyDistributions::IdKey,];
+        let initiator_key_distribution = super::get_keys(self.distribute_ltk, self.distribute_csrk);
+
+        let responder_key_distribution = super::get_keys(self.accept_ltk, self.accept_csrk);
 
         let pairing_request = pairing::PairingRequest::new(
             self.io_capabilities,
@@ -88,8 +173,8 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             },
             auth_req,
             self.encryption_key_max,
-            key_dist.clone(),
-            key_dist,
+            initiator_key_distribution,
+            responder_key_distribution,
         );
 
         MasterSecurityManager {
