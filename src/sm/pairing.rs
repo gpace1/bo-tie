@@ -103,22 +103,17 @@ impl KeyDistributions {
         })
     }
 
-    fn vec_from_val(val: u8) -> Vec<Self> {
-        let mut v = Vec::new();
-
-        if 1 == val & (0x1 << 0) {
-            v.push(KeyDistributions::EncKey)
+    fn from_val(val: u8) -> &'static [Self] {
+        match (1 == val & (0x1 << 0), 1 == val & (0x1 << 1), 1 == val & (0x1 << 2)) {
+            (true, true, true) => &[Self::EncKey, Self::IdKey, Self::SignKey],
+            (true, true, false) => &[Self::EncKey, Self::IdKey],
+            (true, false, true) => &[Self::EncKey, Self::SignKey],
+            (true, false, false) => &[Self::EncKey],
+            (false, true, true) => &[Self::IdKey, Self::SignKey],
+            (false, true, false) => &[Self::IdKey],
+            (false, false, true) => &[Self::SignKey],
+            (false, false, false) => &[],
         }
-
-        if 1 == val & (0x1 << 1) {
-            v.push(KeyDistributions::IdKey)
-        }
-
-        if 1 == val & (0x1 << 2) {
-            v.push(KeyDistributions::SignKey)
-        }
-
-        v
     }
 }
 
@@ -159,8 +154,8 @@ impl CommandData for PairingRequest {
                 } else {
                     return Err(Error::Value);
                 },
-                initiator_key_distribution: KeyDistributions::vec_from_val(icd[4]),
-                responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
+                initiator_key_distribution: KeyDistributions::from_val(icd[4]),
+                responder_key_distribution: KeyDistributions::from_val(icd[5]),
                 io_cap_f6: [icd[2], icd[1], icd[0]],
             })
         } else {
@@ -277,8 +272,8 @@ pub struct PairingResponse {
     oob_data_flag: OOBDataFlag,
     auth_req: Vec<AuthRequirements>,
     max_encryption_size: usize,
-    initiator_key_distribution: Vec<KeyDistributions>,
-    responder_key_distribution: Vec<KeyDistributions>,
+    initiator_key_distribution: &'static [KeyDistributions],
+    responder_key_distribution: &'static [KeyDistributions],
     io_cap_f6: [u8; 3],
 }
 
@@ -305,8 +300,8 @@ impl CommandData for PairingResponse {
                 } else {
                     return Err(Error::Value);
                 },
-                initiator_key_distribution: KeyDistributions::vec_from_val(icd[4]),
-                responder_key_distribution: KeyDistributions::vec_from_val(icd[5]),
+                initiator_key_distribution: KeyDistributions::from_val(icd[4]),
+                responder_key_distribution: KeyDistributions::from_val(icd[5]),
                 io_cap_f6: [icd[2], icd[1], icd[0]],
             })
         } else {
@@ -323,8 +318,8 @@ impl PairingResponse {
         oob_data_flag: OOBDataFlag,
         auth_req: Vec<AuthRequirements>,
         max_encryption_size: usize,
-        initiator_key_distribution: Vec<KeyDistributions>,
-        responder_key_distribution: Vec<KeyDistributions>,
+        initiator_key_distribution: &'static [KeyDistributions],
+        responder_key_distribution: &'static [KeyDistributions],
     ) -> Self {
         Self {
             io_cap_f6: convert_io_cap(&auth_req, oob_data_flag, io_capability),
@@ -390,7 +385,7 @@ impl PairingResponse {
     /// Set the key distribution / generation for the initiator
     ///
     /// This function takes a list of the types of key distribution / generation types available
-    pub fn set_initiator_key_dis_gen(&mut self, dist_gen_types: Vec<KeyDistributions>) {
+    pub fn set_initiator_key_dis_gen(&mut self, dist_gen_types: &'static [KeyDistributions]) {
         self.initiator_key_distribution = dist_gen_types
     }
 
@@ -399,7 +394,7 @@ impl PairingResponse {
     ///
     /// This function takes a list of the types of key distribution / generation types if wants
     /// the responder to distribute.
-    pub fn set_responder_key_dis_gen(&mut self, dist_gen_types: Vec<KeyDistributions>) {
+    pub fn set_responder_key_dis_gen(&mut self, dist_gen_types: &'static [KeyDistributions]) {
         self.responder_key_distribution = dist_gen_types
     }
 

@@ -58,42 +58,91 @@ where
             this_address_is_random: is_this_device_address_random,
             distribute_ltk: true,
             distribute_csrk: false,
-            accept_ltk: true,
-            accept_csrk: true,
+            accept_ltk: false,
+            accept_csrk: false,
         }
     }
 
     /// Set the bonding keys to be distributed by the responder
     ///
-    /// When this method is called all keys that can be distributed are set to *not* be distributed.
-    /// The return can then be used to specify what keys are to be distributed during the bonding
-    /// process.
+    /// This is used to specify within the pairing request packet what bonding keys are going to be
+    /// distributed by the responder security manager.
     ///
     /// # Note
-    /// By default only the Identity Resolving Key (IRK) is distributed by the initiator
-    fn set_bonding_keys(&'a mut self) -> impl super::EnabledBondingKeys<'a, SlaveSecurityManagerBuilder<'a, C>> + 'a {
+    /// By default only the Identity Resolving Key (IRK) is distributed by the initiator. This
+    /// method does not need to be called if the default key configuration is desired.
+    pub fn sent_bonding_keys(
+        &'a mut self,
+    ) -> impl super::EnabledBondingKeys<'a, SlaveSecurityManagerBuilder<'a, C>> + 'a {
         self.distribute_ltk = false;
         self.distribute_csrk = false;
 
-        impl<'z, C> super::EnabledBondingKeys<'z, SlaveSecurityManagerBuilder<'z, C>>
-            for &'z mut SlaveSecurityManagerBuilder<'z, C>
-        {
+        struct SentKeys<'z, C>(&'z mut SlaveSecurityManagerBuilder<'z, C>);
+
+        impl<'z, C> super::EnabledBondingKeys<'z, SlaveSecurityManagerBuilder<'z, C>> for SentKeys<'z, C> {
             fn distribute_ltk(&mut self) -> &mut Self {
-                self.distribute_ltk = true;
+                self.0.distribute_ltk = true;
                 self
             }
 
             fn distribute_csrk(&mut self) -> &mut Self {
-                self.distribute_csrk = true;
+                self.0.distribute_csrk = true;
                 self
             }
 
             fn finish_keys(self) -> &'z mut SlaveSecurityManagerBuilder<'z, C> {
-                self
+                self.0
+            }
+
+            fn default(self) -> &'z mut SlaveSecurityManagerBuilder<'z, C> {
+                self.0.distribute_ltk = true;
+                self.0.distribute_csrk = false;
+                self.0
             }
         }
 
-        self
+        SentKeys(self)
+    }
+
+    /// Set the bonding keys to be accepted by this initiator
+    ///
+    /// This is used to specify within the pairing request packet what bonding keys can be received
+    /// by the initiator security manager.
+    ///
+    /// # Note
+    /// By default no bonding keys are accepted by this initiator. This method does not need to
+    /// be called if the default key configuration is desired.
+    pub fn accepted_bonding_keys(
+        &'a mut self,
+    ) -> impl super::EnabledBondingKeys<'a, SlaveSecurityManagerBuilder<'a, C>> + 'a {
+        self.accept_ltk = false;
+        self.accept_csrk = false;
+
+        struct ReceivedKeys<'z, C>(&'z mut SlaveSecurityManagerBuilder<'z, C>);
+
+        impl<'z, C> super::EnabledBondingKeys<'z, SlaveSecurityManagerBuilder<'z, C>> for ReceivedKeys<'z, C> {
+            fn distribute_ltk(&mut self) -> &mut Self {
+                self.0.accept_ltk = true;
+                self
+            }
+
+            fn distribute_csrk(&mut self) -> &mut Self {
+                self.0.accept_csrk = true;
+                self
+            }
+
+            fn finish_keys(self) -> &'z mut SlaveSecurityManagerBuilder<'z, C> {
+                self.0
+            }
+
+            fn default(self) -> &'z mut SlaveSecurityManagerBuilder<'z, C> {
+                self.0.accept_ltk = false;
+                self.0.accept_csrk = false;
+                self.0
+            }
+        }
+
+        ReceivedKeys(self)
     }
 
     /// Use or support an out-of-band (OOB) method for pairing
@@ -138,7 +187,9 @@ where
             encrypt_info::AuthRequirements::Sc,
         ];
 
-        let key_dist = alloc::vec![pairing::KeyDistributions::IdKey,];
+        let initiator_key_distribution = super::get_keys(self.accept_ltk, self.accept_csrk);
+
+        let responder_key_distribution = super::get_keys(self.distribute_ltk, self.distribute_csrk);
 
         SlaveSecurityManager {
             connection_channel: self.connection_channel,
@@ -148,8 +199,8 @@ where
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
             auth_req,
-            initiator_key_distribution: key_dist.clone(),
-            responder_key_distribution: key_dist,
+            initiator_key_distribution,
+            responder_key_distribution,
             initiator_address: *self.remote_address,
             responder_address: *self.this_address,
             initiator_address_is_random: self.remote_address_is_random,
@@ -184,8 +235,8 @@ pub struct SlaveSecurityManager<'a, C, S, R> {
     auth_req: Vec<encrypt_info::AuthRequirements>,
     encryption_key_size_min: usize,
     encryption_key_size_max: usize,
-    initiator_key_distribution: Vec<pairing::KeyDistributions>,
-    responder_key_distribution: Vec<pairing::KeyDistributions>,
+    initiator_key_distribution: &'static [pairing::KeyDistributions],
+    responder_key_distribution: &'static [pairing::KeyDistributions],
     initiator_address: crate::BluetoothDeviceAddress,
     responder_address: crate::BluetoothDeviceAddress,
     initiator_address_is_random: bool,
@@ -645,8 +696,8 @@ where
                 },
                 self.auth_req.clone(),
                 self.encryption_key_size_max,
-                self.initiator_key_distribution.clone(),
-                self.responder_key_distribution.clone(),
+                self.initiator_key_distribution,
+                self.responder_key_distribution,
             );
 
             let pairing_method = PairingMethod::determine_method_secure_connection(

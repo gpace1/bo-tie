@@ -50,13 +50,13 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
 
     /// Set the bonding keys to be distributed by the initiator
     ///
-    /// When this method is called all keys that can be distributed are set to *not* be distributed.
-    /// The return can then be used to specify what keys are to be distributed during the bonding
-    /// process.
+    /// This is used to specify within the pairing request packet what bonding keys are going to be
+    /// distributed by the initiator security manager.
     ///
     /// # Note
-    /// By default no bonding keys are distributed by this initiator
-    pub fn set_bonding_keys(
+    /// By default no bonding keys are distributed by this initiator. This method does not need to
+    /// be called if the default key configuration is desired.
+    pub fn sent_bonding_keys(
         &'a mut self,
     ) -> impl super::EnabledBondingKeys<'a, MasterSecurityManagerBuilder<'a, C>> + 'a {
         self.distribute_ltk = false;
@@ -78,6 +78,12 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             fn finish_keys(self) -> &'z mut MasterSecurityManagerBuilder<'z, C> {
                 self.0
             }
+
+            fn default(self) -> &'z mut MasterSecurityManagerBuilder<'z, C> {
+                self.0.distribute_ltk = false;
+                self.0.distribute_csrk = false;
+                self.0
+            }
         }
 
         SentKeys(self)
@@ -85,12 +91,12 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
 
     /// Set the bonding keys to be accepted by this initiator
     ///
-    /// When this method is called all keys that can be accepted are set to *not* be accepted.
-    /// The return can then be used to specify what keys are to be accepted from the responder
-    /// during the bonding process.
+    /// This is used to specify within the pairing request packet what bonding keys can be received
+    /// by the initiator security manager.
     ///
     /// # Note
-    /// By default all bonding keys are accepted by this initiator
+    /// By default all bonding keys are accepted by this initiator. This method does not need to
+    /// be called if the default key configuration is desired.
     pub fn accepted_bonding_keys(
         &'a mut self,
     ) -> impl super::EnabledBondingKeys<'a, MasterSecurityManagerBuilder<'a, C>> + 'a {
@@ -113,9 +119,15 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             fn finish_keys(self) -> &'z mut MasterSecurityManagerBuilder<'z, C> {
                 self.0
             }
+
+            fn default(self) -> &'z mut MasterSecurityManagerBuilder<'z, C> {
+                self.0.accept_ltk = true;
+                self.0.accept_csrk = true;
+                self.0
+            }
         }
 
-        self
+        ReceivedKeys(self)
     }
 
     /// Enable the usage of out-of-band (OOB) pairing

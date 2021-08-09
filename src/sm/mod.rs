@@ -852,7 +852,13 @@ where
     /// before the data can be accepted. A typical example of this is writing a value to a device.
     fn distribute_csrk(&mut self) -> &mut Self;
 
+    /// Finish setting the keys and return to the builder
     fn finish_keys(self) -> &'a mut B;
+
+    /// Set to the default specification
+    ///
+    /// This sets the keys to the default (which is specified by the bonding key methods)
+    fn default(self) -> &'a mut B;
 }
 
 fn get_keys(ltk: bool, csrk: bool) -> &'static [pairing::KeyDistributions] {
