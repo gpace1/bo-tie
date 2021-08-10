@@ -136,7 +136,8 @@ pub enum Error {
     UnsupportedFeature,
     /// Pairing Failed
     PairingFailed(pairing::PairingFailedReason),
-    /// The operation required encryption, but it is unknown if the connection is encrypted
+    /// The operation required encryption, but it is unknown if the connection is encrypted. The
+    /// security manager must be told that a link is encrypted with the method `set_encrypted`.
     UnknownIfLinkIsEncrypted,
     /// Incorrect L2CAP channel ID
     IncorrectL2capChannelId,

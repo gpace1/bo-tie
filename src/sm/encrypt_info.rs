@@ -171,6 +171,7 @@ impl From<IdentityInformation> for Command<IdentityInformation> {
     }
 }
 
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 enum AddressType {
     Public,
     StaticRandom,
@@ -234,6 +235,22 @@ impl IdentityAddressInformation {
             address,
         }
     }
+
+    pub fn is_address_public(&self) -> bool {
+        self.addr_type == AddressType::Public
+    }
+
+    pub fn get_address(&self) -> crate::BluetoothDeviceAddress {
+        self.address
+    }
+
+    pub(super) fn as_blu_addr(&self) -> BluAddr {
+        if self.is_address_public() {
+            BluAddr::Public(self.get_address())
+        } else {
+            BluAddr::StaticRandom(self.get_address())
+        }
+    }
 }
 
 impl From<IdentityAddressInformation> for BluAddr {
@@ -282,6 +299,10 @@ impl SigningInformation {
 
     pub fn get_signature_key(&self) -> u128 {
         self.signature_key
+    }
+
+    pub(super) fn to_new_csrk_key(&self) -> (u128, u32) {
+        (self.signature_key, 0)
     }
 }
 

@@ -238,6 +238,16 @@ pub struct MasterSecurityManager<'a, C, S, R> {
     pairing_expected_cmd: Option<super::CommandType>,
 }
 
+macro_rules! check_channel_id_and {
+    ($data:expr, async $job:block ) => {
+        if $data.get_channel_id() == super::L2CAP_CHANNEL_ID {
+            async { $job }.await
+        } else {
+            Err(Error::IncorrectL2capChannelId)
+        }
+    };
+}
+
 impl<'a, C, S, R> MasterSecurityManager<'a, C, S, R>
 where
     C: ConnectionChannel,
@@ -947,49 +957,34 @@ where
     /// This is used to continue pairing until pairing is either complete or fails. It must be
     /// called for every received Security Manager ACL data. True is returned once pairing is
     /// completed.
-    pub async fn continue_pairing(&mut self, acl_data: &crate::l2cap::AclData) -> Result<bool, super::Error>
-    where
-        C: ConnectionChannel,
-    {
-        if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
-            self.proc_data(acl_data.get_payload()).await
-        } else {
-            Err(Error::IncorrectL2capChannelId)
-        }
+    pub async fn continue_pairing(&mut self, acl_data: &crate::l2cap::AclData) -> Result<bool, super::Error> {
+        check_channel_id_and!(acl_data, async {
+            let (d_type, payload) = acl_data.get_payload().split_at(1);
+
+            match CommandType::try_from_val(d_type[0]) {
+                Ok(CommandType::PairingFailed) => {
+                    self.pairing_expected_cmd = super::CommandType::PairingFailed.into();
+
+                    Err(Error::PairingFailed(
+                        pairing::PairingFailed::try_from_icd(payload)?.get_reason(),
+                    ))
+                }
+                Ok(cmd) if Some(cmd) == self.pairing_expected_cmd => self.next_step(payload).await,
+                Ok(cmd) => {
+                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
+
+                    Err(Error::IncorrectCommand(cmd))
+                }
+                Err(e) => {
+                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
+
+                    Err(e)
+                }
+            }
+        })
     }
 
-    async fn proc_data(&mut self, received_data: &[u8]) -> Result<bool, super::Error>
-    where
-        C: ConnectionChannel,
-    {
-        let (d_type, payload) = received_data.split_at(1);
-
-        match CommandType::try_from_val(d_type[0]) {
-            Ok(cmd) if cmd == CommandType::PairingFailed => {
-                self.pairing_expected_cmd = super::CommandType::PairingFailed.into();
-
-                Err(Error::PairingFailed(
-                    pairing::PairingFailed::try_from_icd(payload)?.get_reason(),
-                ))
-            }
-            Ok(cmd) if Some(cmd) == self.pairing_expected_cmd => self.next_step(payload).await,
-            Ok(cmd) => {
-                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
-
-                Err(Error::IncorrectCommand(cmd))
-            }
-            Err(e) => {
-                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
-
-                Err(e)
-            }
-        }
-    }
-
-    async fn next_step(&mut self, payload: &[u8]) -> Result<bool, Error>
-    where
-        C: ConnectionChannel,
-    {
+    async fn next_step(&mut self, payload: &[u8]) -> Result<bool, Error> {
         match self.pairing_expected_cmd {
             Some(super::CommandType::PairingResponse) => match self.process_pairing_response(payload).await {
                 Ok(_) => {
@@ -1061,6 +1056,88 @@ where
         self.pairing_expected_cmd = None;
 
         Err(e)
+    }
+
+    /// Process non-response packets (bonding keys packets and pairing request)
+    ///
+    /// The responder can send packets containing bonding keys or the request pairing packet
+    /// unprompted to this security manager. These packets are not used as part of the pairing
+    /// process, but they can be sent at any time once the link is encrypted, with the pairing
+    /// request packet being sent at any time.
+    ///
+    /// # Errors
+    /// This cannot process any of the pairing response packets as well as any of the packets
+    /// containing security keys
+    pub async fn process_non_response(&mut self, acl_data: &crate::l2cap::AclData) -> Result<PromptType, Error> {
+        macro_rules! bonding_key {
+            ($this:expr, $payload:expr, $key:ident, $key_type:ident, $get_key_method:ident, $prompt_type:ident) => {
+                if self.link_encrypted {
+                    match $this.pairing_data {
+                        Some(PairingData {
+                            db_keys: Some(ref mut keys),
+                            ..
+                        }) => match encrypt_info::$key_type::try_from_icd($payload) {
+                            Ok(packet) => {
+                                keys.$key = Some(packet.$get_key_method());
+
+                                Ok(PromptType::$prompt_type)
+                            }
+                            Err(e) => {
+                                self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
+                                    .await?;
+
+                                Err(e)
+                            }
+                        },
+                        _ => {
+                            self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
+                                .await?;
+
+                            Err(Error::PairingFailed(
+                                pairing::PairingFailedReason::UnspecifiedReason,
+                            ))
+                        }
+                    }
+                } else {
+                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
+                        .await?;
+
+                    Err(Error::UnknownIfLinkIsEncrypted)
+                }
+            };
+        }
+
+        check_channel_id_and!(acl_data, async {
+            let (d_type, payload) = acl_data.get_payload().split_at(1);
+
+            match CommandType::try_from_val(d_type[0]) {
+                Ok(CommandType::IdentityInformation) => {
+                    bonding_key!(self, payload, ltk, IdentityInformation, get_irk, IdentityResolvingKey)
+                }
+                Ok(CommandType::SigningInformation) => {
+                    bonding_key!(
+                        self,
+                        payload,
+                        csrk,
+                        SigningInformation,
+                        to_new_csrk_key,
+                        ConnectionSignatureResolvingKey
+                    )
+                }
+                Ok(CommandType::IdentityAddressInformation) => {
+                    bonding_key!(
+                        self,
+                        payload,
+                        peer_addr,
+                        IdentityAddressInformation,
+                        as_blu_addr,
+                        IdentityAddress
+                    )
+                }
+                Ok(CommandType::SecurityRequest) => Ok(PromptType::PairingRequest),
+                _ => todo!(),
+            }
+        })
     }
 }
 
@@ -1146,4 +1223,12 @@ where
             _ => false,
         }
     }
+}
+
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub enum PromptType {
+    IdentityResolvingKey,
+    IdentityAddress,
+    ConnectionSignatureResolvingKey,
+    PairingRequest,
 }
