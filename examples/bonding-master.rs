@@ -182,7 +182,7 @@ async fn encrypt(hi: &hci::HostInterface<Base>, connection_handle: hci::common::
     use hci::cb::set_event_mask::{self, EventMask};
     use hci::common::EncryptionLevel;
     use hci::events::{Events, EventsData};
-    use hci::le::encryption::start_encryption::{self, Parameter};
+    use hci::le::encryption::enable_encryption::{self, Parameter};
 
     set_event_mask::send(hi, &[EventMask::DisconnectionComplete, EventMask::EncryptionChange])
         .await
@@ -198,7 +198,7 @@ async fn encrypt(hi: &hci::HostInterface<Base>, connection_handle: hci::common::
         long_term_key: ltk,
     };
 
-    start_encryption::send(hi, parameter).await.unwrap();
+    enable_encryption::send(hi, parameter).await.unwrap();
 
     match hi.wait_for_event(Events::EncryptionChange).await {
         Ok(EventsData::EncryptionChange(data)) => {

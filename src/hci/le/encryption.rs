@@ -332,7 +332,7 @@ pub mod rand {
 /// sending this command will instead cause the controller to issue the
 /// [Encryption Key Refresh](crate::hci::events::Events::EncryptionKeyRefreshComplete) event once the
 /// encryption is updated.
-pub mod start_encryption {
+pub mod enable_encryption {
     use crate::hci::common::ConnectionHandle;
     use crate::hci::*;
 
