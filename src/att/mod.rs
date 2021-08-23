@@ -856,6 +856,33 @@ where
     }
 }
 
+impl TransferFormatInto for crate::BluetoothDeviceAddress {
+    fn len_of_into(&self) -> usize {
+        6
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        into_ret.copy_from_slice(self)
+    }
+}
+
+impl TransferFormatTryFrom for crate::BluetoothDeviceAddress {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        let mut address = crate::BluetoothDeviceAddress::default();
+
+        if raw.len() != 6 {
+            Err(TransferFormatError::bad_size("BluetoothDeviceAddress", 6, raw.len()))
+        } else {
+            address.copy_from_slice(raw);
+
+            Ok(address)
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
 
