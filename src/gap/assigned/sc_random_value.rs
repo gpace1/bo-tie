@@ -6,7 +6,7 @@
 //! 2.3.5.6.4).
 
 use crate::gap::assigned::{new_raw_type, AssignedTypes, Error, IntoRaw, TryFromRaw};
-use alloc::prelude::v1::Vec;
+use alloc::vec::Vec;
 
 pub struct ScRandomValue(pub u128);
 
