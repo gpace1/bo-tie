@@ -279,9 +279,9 @@ where
 
     /// Send a new Identity Resolving Key to the Master Device
     ///
-    /// This function will generate and send a new CSRK to the master device if the internal
-    /// encryption flag is set to true by
-    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
+    /// This will send an IRK to the master device if the internal encryption flag is set to true
+    /// (by the method
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)).
     ///
     /// An IRK is generated if input `irk` is `None`.
     ///
@@ -316,9 +316,9 @@ where
 
     /// Send a new Connection Signature Resolving Key to the Master Device
     ///
-    /// This function will generate and send a new CSRK to the master device if the internal
-    /// encryption flag is set to true by
-    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
+    /// This will send an CSRK to the master device if the internal encryption flag is set to true
+    /// (by the method
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)).
     ///
     /// A CSRK is generated if input `csrk` is `None`. There is no input for the sign counter as
     /// the CSRK is considered a new value, thus the sign counter is 0.
