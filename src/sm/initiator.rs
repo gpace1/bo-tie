@@ -248,11 +248,27 @@ macro_rules! check_channel_id_and {
     };
 }
 
-impl<'a, C, S, R> MasterSecurityManager<'a, C, S, R>
+impl<C, S, R> MasterSecurityManager<'_, C, S, R> {
+    /// Indicate if the connection is encrypted
+    ///
+    /// This is used to indicate to the `MasterSecurityManager` that it is safe to send a Key to the
+    /// peer device. This is a deliberate extra step to ensure that the functions `send_irk`,
+    /// `send_csrk`, `send_pub_addr`, and `send_rand_addr` are only used when the link is encrypted.
+    pub fn set_encrypted(&mut self, is_encrypted: bool) {
+        self.link_encrypted = is_encrypted
+    }
+
+    /// Get the pairing keys
+    ///
+    /// Pairing must be completed before these keys are generated
+    pub fn get_keys(&self) -> Option<&super::Keys> {
+        self.pairing_data.as_ref().and_then(|pd| pd.db_keys.as_ref())
+    }
+}
+
+impl<C, S, R> MasterSecurityManager<'_, C, S, R>
 where
     C: ConnectionChannel,
-    S: for<'i> OutOfBandSend<'i>,
-    R: OobReceiverType,
 {
     async fn send<Cmd, P>(&self, command: Cmd) -> Result<(), Error>
     where
@@ -275,6 +291,102 @@ where
         self.send(pairing::PairingFailed::new(fail_reason)).await
     }
 
+    /// Send the Identity Resolving Key to the Master Device
+    ///
+    /// This function will send the IRK to the master device if the internal encryption flag is set
+    /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
+    /// and an IRK has been generated. An IRK is generated once the return of
+    /// [`start_pairing`](MasterSecurityManager::start_pairing)
+    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry). However, since the return is a
+    /// mutable, you can replace the IRK with `None` which would also cause this function to
+    /// return false. If the function returns false then the IRK isn't sent to the Master Device.
+    pub async fn send_irk(&self) -> Result<bool, Error> {
+        if self.link_encrypted {
+            if let Some(irk) = self
+                .pairing_data
+                .as_ref()
+                .and_then(|pd| pd.db_keys.as_ref())
+                .and_then(|db_key| db_key.irk.clone())
+            {
+                self.send(encrypt_info::IdentityInformation::new(irk)).await?;
+
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Send the Connection Signature Resolving Key to the Master Device
+    ///
+    /// This function will send the CSRK to the master device if the internal encryption flag is set
+    /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
+    /// and an CSRK has been generated. An IRK is generated once the return of
+    /// [`start_pairing`](MasterSecurityManager::start_pairing)
+    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry). However, since the return is a
+    /// mutable, you can replace the IRK with `None` which would also cause this function to
+    /// return false. If the function returns false then the IRK isn't sent to the Master Device.
+    pub async fn send_csrk(&self) -> Result<bool, Error> {
+        if self.link_encrypted {
+            if let Some(csrk) = self
+                .pairing_data
+                .as_ref()
+                .and_then(|pd| pd.db_keys.as_ref())
+                .and_then(|db_key| db_key.csrk.clone())
+            {
+                self.send(encrypt_info::SigningInformation::new(csrk.0)).await?;
+
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Send the public address to the Master Device.
+    ///
+    /// This will send `addr` as a Public Device Address to the Master Device if the internal
+    /// encryption flag is set to true by [`set_encrypted`](MasterSecurityManager::set_encrypted).
+    pub async fn send_pub_addr(&self, addr: crate::BluetoothDeviceAddress) -> Result<bool, Error> {
+        if self.link_encrypted {
+            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr))
+                .await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Send the static random address to the Master Device.
+    ///
+    /// This will send `addr` as a Static Random Device Address to the Master Device if the internal
+    /// encryption flag is set to true by [`set_encrypted`](MasterSecurityManager::set_encrypted).
+    ///
+    /// # Warning
+    /// This function doesn't validate that `address` is a valid static device address. The format
+    /// of a static random device address can be found in the Bluetooth Specification (v5.0 | Vol 6,
+    /// Part B, section 1.3.2.1).
+    pub async fn send_static_rand_addr(&self, addr: crate::BluetoothDeviceAddress) -> Result<bool, Error> {
+        if self.link_encrypted {
+            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr))
+                .await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+impl<'a, C, S, R> MasterSecurityManager<'a, C, S, R>
+where
+    C: ConnectionChannel,
+    S: for<'i> OutOfBandSend<'i>,
+    R: OobReceiverType,
+{
     /// Send the Pairing Request to the slave device
     ///
     /// This sends the pairing request security manage PDU to the slave which will initiate the
@@ -784,111 +896,6 @@ where
                 self.by_oob_receiver_type().await
             }
         }
-    }
-
-    /// Indicate if the connection is encrypted
-    ///
-    /// This is used to indicate to the `MasterSecurityManager` that it is safe to send a Key to the
-    /// peer device. This is a deliberate extra step to ensure that the functions `send_irk`,
-    /// `send_csrk`, `send_pub_addr`, and `send_rand_addr` are only used when the link is encrypted.
-    pub fn set_encrypted(&mut self, is_encrypted: bool) {
-        self.link_encrypted = is_encrypted
-    }
-
-    /// Send the Identity Resolving Key to the Master Device
-    ///
-    /// This function will send the IRK to the master device if the internal encryption flag is set
-    /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
-    /// and an IRK has been generated. An IRK is generated once the return of
-    /// [`start_pairing`](MasterSecurityManager::start_pairing)
-    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry). However, since the return is a
-    /// mutable, you can replace the IRK with `None` which would also cause this function to
-    /// return false. If the function returns false then the IRK isn't sent to the Master Device.
-    pub async fn send_irk(&self) -> Result<bool, Error> {
-        if self.link_encrypted {
-            if let Some(irk) = self
-                .pairing_data
-                .as_ref()
-                .and_then(|pd| pd.db_keys.as_ref())
-                .and_then(|db_key| db_key.irk.clone())
-            {
-                self.send(encrypt_info::IdentityInformation::new(irk)).await?;
-
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Send the Connection Signature Resolving Key to the Master Device
-    ///
-    /// This function will send the CSRK to the master device if the internal encryption flag is set
-    /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
-    /// and an CSRK has been generated. An IRK is generated once the return of
-    /// [`start_pairing`](MasterSecurityManager::start_pairing)
-    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry). However, since the return is a
-    /// mutable, you can replace the IRK with `None` which would also cause this function to
-    /// return false. If the function returns false then the IRK isn't sent to the Master Device.
-    pub async fn send_csrk(&self) -> Result<bool, Error> {
-        if self.link_encrypted {
-            if let Some(csrk) = self
-                .pairing_data
-                .as_ref()
-                .and_then(|pd| pd.db_keys.as_ref())
-                .and_then(|db_key| db_key.csrk.clone())
-            {
-                self.send(encrypt_info::SigningInformation::new(csrk.0)).await?;
-
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Send the public address to the Master Device.
-    ///
-    /// This will send `addr` as a Public Device Address to the Master Device if the internal
-    /// encryption flag is set to true by [`set_encrypted`](MasterSecurityManager::set_encrypted).
-    pub async fn send_pub_addr(&self, addr: crate::BluetoothDeviceAddress) -> Result<bool, Error> {
-        if self.link_encrypted {
-            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr))
-                .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Send the static random address to the Master Device.
-    ///
-    /// This will send `addr` as a Static Random Device Address to the Master Device if the internal
-    /// encryption flag is set to true by [`set_encrypted`](MasterSecurityManager::set_encrypted).
-    ///
-    /// # Warning
-    /// This function doesn't validate that `address` is a valid static device address. The format
-    /// of a static random device address can be found in the Bluetooth Specification (v5.0 | Vol 6,
-    /// Part B, section 1.3.2.1).
-    pub async fn send_static_rand_addr(&self, addr: crate::BluetoothDeviceAddress) -> Result<bool, Error> {
-        if self.link_encrypted {
-            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr))
-                .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Get the pairing keys
-    ///
-    /// Pairing must be completed before these keys are generated
-    pub fn get_keys(&self) -> Option<&super::Keys> {
-        self.pairing_data.as_ref().and_then(|pd| pd.db_keys.as_ref())
     }
 
     /// Pair to the slave device

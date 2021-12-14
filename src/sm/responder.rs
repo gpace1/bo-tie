@@ -245,29 +245,7 @@ pub struct SlaveSecurityManager<'a, C, S, R> {
     link_encrypted: bool,
 }
 
-impl<'a, C, S, R> SlaveSecurityManager<'a, C, S, R>
-where
-    C: ConnectionChannel,
-    S: for<'i> OutOfBandSend<'i>,
-    R: OobReceiverType,
-{
-    /// Save the key details to `security_manager``
-    ///
-    /// If the `SlaveSecurityManager` did not contain any key information , then this function will
-    /// do nothing to `security_manager`. Also key information will not be added to `security_manager`
-    /// if it doesn't contain the required keys (either peer_irk or peer_addr)
-    pub fn save_to_security_manager(&self, security_manager: &mut super::SecurityManagerKeys) {
-        match self.pairing_data {
-            Some(PairingData {
-                db_keys: Some(ref db_keys),
-                ..
-            }) => {
-                security_manager.add_keys(db_keys.clone());
-            }
-            _ => {}
-        }
-    }
-
+impl<C, S, R> SlaveSecurityManager<'_, C, S, R> {
     /// Indicate if the connection is encrypted
     ///
     /// This is used to indicate to the `SlaveSecurityManager` that it is safe to send a Key to the
@@ -284,7 +262,12 @@ where
     pub fn get_keys(&self) -> Option<&super::Keys> {
         self.pairing_data.as_ref().and_then(|pd| pd.db_keys.as_ref())
     }
+}
 
+impl<'a, C, S, R> SlaveSecurityManager<'a, C, S, R>
+where
+    C: ConnectionChannel,
+{
     /// Send the Identity Resolving Key
     ///
     /// This will add the IRK to the cypher keys and send it to the other device if the internal
@@ -397,6 +380,34 @@ where
         }
     }
 
+    async fn send<Cmd, P>(&self, command: Cmd) -> Result<(), Error>
+    where
+        Cmd: Into<Command<P>>,
+        P: CommandData,
+    {
+        use crate::l2cap::AclData;
+
+        let acl_data = AclData::new(command.into().into_icd(), super::L2CAP_CHANNEL_ID);
+
+        self.connection_channel
+            .send(acl_data)
+            .await
+            .map_err(|e| Error::DataSend(alloc::format!("{:?}", e)))
+    }
+
+    async fn send_err(&mut self, fail_reason: pairing::PairingFailedReason) -> Result<(), Error> {
+        self.pairing_data = None;
+
+        self.send(pairing::PairingFailed::new(fail_reason)).await
+    }
+}
+
+impl<'a, C, S, R> SlaveSecurityManager<'a, C, S, R>
+where
+    C: ConnectionChannel,
+    S: for<'i> OutOfBandSend<'i>,
+    R: OobReceiverType,
+{
     /// Process a request from a MasterSecurityManager
     ///
     /// This will return a response to a valid request that can be sent to the Master device.
@@ -441,27 +452,6 @@ where
             cmd @ CommandType::EncryptionInformation | // Legacy SM, not supported
             cmd => self.p_command_not_supported(cmd).await,
         }
-    }
-
-    async fn send<Cmd, P>(&self, command: Cmd) -> Result<(), Error>
-    where
-        Cmd: Into<Command<P>>,
-        P: CommandData,
-    {
-        use crate::l2cap::AclData;
-
-        let acl_data = AclData::new(command.into().into_icd(), super::L2CAP_CHANNEL_ID);
-
-        self.connection_channel
-            .send(acl_data)
-            .await
-            .map_err(|e| Error::DataSend(alloc::format!("{:?}", e)))
-    }
-
-    async fn send_err(&mut self, fail_reason: pairing::PairingFailedReason) -> Result<(), Error> {
-        self.pairing_data = None;
-
-        self.send(pairing::PairingFailed::new(fail_reason)).await
     }
 
     /// Send the OOB confirm information
