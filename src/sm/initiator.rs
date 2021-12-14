@@ -550,7 +550,7 @@ where
             _ => return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason)),
         };
 
-        self.pairing_data.as_mut().unwrap().db_keys = Some(super::KeyDBEntry {
+        self.pairing_data.as_mut().unwrap().db_keys = Some(super::Keys {
             ltk: ltk.into(),
             csrk: (toolbox::rand_u128(), 0).into(),
             irk: toolbox::rand_u128().into(),
@@ -887,7 +887,7 @@ where
     /// Get the pairing keys
     ///
     /// Pairing must be completed before these keys are generated
-    pub fn get_keys(&mut self) -> Option<&mut super::KeyDBEntry> {
+    pub fn get_keys(&mut self) -> Option<&mut super::Keys> {
         self.pairing_data.as_mut().and_then(|pd| pd.db_keys.as_mut())
     }
 
@@ -902,7 +902,7 @@ where
     pub async fn pair(
         &'a mut self,
     ) -> (
-        Result<&'a mut super::KeyDBEntry, super::Error>,
+        Result<&'a mut super::Keys, super::Error>,
         alloc::vec::Vec<crate::l2cap::AclData>,
     ) {
         let mut other_data = alloc::vec::Vec::new();

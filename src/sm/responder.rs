@@ -281,7 +281,7 @@ where
     ///
     /// This returns the encryption keys, if they exist. Keys will exist after they're generated
     /// once pairing completes, until then this method will return `None`.
-    pub fn get_keys(&self) -> Option<&super::KeyDBEntry> {
+    pub fn get_keys(&self) -> Option<&super::Keys> {
         self.pairing_data.as_ref().and_then(|pd| pd.db_keys.as_ref())
     }
 
@@ -303,7 +303,7 @@ where
             let irk = irk.into().unwrap_or(toolbox::rand_u128());
 
             if let Some(PairingData {
-                db_keys: Some(super::KeyDBEntry {
+                db_keys: Some(super::Keys {
                     irk: ref mut irk_opt, ..
                 }),
                 ..
@@ -343,7 +343,7 @@ where
             let csrk = csrk.into().unwrap_or(toolbox::rand_u128());
 
             if let Some(PairingData {
-                db_keys: Some(super::KeyDBEntry {
+                db_keys: Some(super::Keys {
                     csrk: ref mut csrk_opt, ..
                 }),
                 ..
@@ -414,10 +414,7 @@ where
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub async fn process_command(
-        &mut self,
-        acl_data: &crate::l2cap::AclData,
-    ) -> Result<Option<&super::KeyDBEntry>, Error> {
+    pub async fn process_command(&mut self, acl_data: &crate::l2cap::AclData) -> Result<Option<&super::Keys>, Error> {
         use core::convert::TryFrom;
 
         let command = match CommandType::try_from(acl_data) {
@@ -616,13 +613,13 @@ where
         }
     }
 
-    async fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_command_not_supported(&mut self, cmd: CommandType) -> Result<Option<&super::Keys>, Error> {
         self.send_err(pairing::PairingFailedReason::CommandNotSupported).await?;
 
         Err(Error::IncorrectCommand(cmd))
     }
 
-    async fn p_pairing_request(&mut self, data: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_pairing_request(&mut self, data: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing pairing request");
 
         let request = match pairing::PairingRequest::try_from_icd(data) {
@@ -689,7 +686,7 @@ where
         }
     }
 
-    async fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_pairing_public_key(&mut self, data: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing pairing public Key");
 
         let initiator_pub_key = match pairing::PairingPubKey::try_from_icd(data) {
@@ -779,7 +776,7 @@ where
         }
     }
 
-    async fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_pairing_confirm(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing pairing confirm");
 
         let _initiator_confirm = match pairing::PairingConfirm::try_from_icd(payload) {
@@ -812,7 +809,7 @@ where
         }
     }
 
-    async fn p_pairing_random(&mut self, payload: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_pairing_random(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing pairing random");
 
         let initiator_random = match pairing::PairingRandom::try_from_icd(payload) {
@@ -867,7 +864,7 @@ where
         }
     }
 
-    async fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing pairing failed");
 
         let initiator_fail = match pairing::PairingFailed::try_from_icd(payload) {
@@ -884,7 +881,7 @@ where
         Err(Error::PairingFailed(initiator_fail.get_reason()))
     }
 
-    async fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_pairing_dh_key_check(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing pairing dh key check");
 
         let initiator_dh_key_check = match pairing::PairingDHKeyCheck::try_from_icd(payload) {
@@ -944,7 +941,7 @@ where
 
                     let db_keys = &mut self.pairing_data.as_mut().unwrap().db_keys;
 
-                    *db_keys = super::KeyDBEntry {
+                    *db_keys = super::Keys {
                         ltk: ltk.into(),
                         irk: None,
                         csrk: None,
@@ -977,7 +974,7 @@ where
         }
     }
 
-    async fn p_identity_info(&mut self, payload: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_identity_info(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing peer IRK");
 
         let identity_info = match encrypt_info::IdentityInformation::try_from_icd(payload) {
@@ -1012,7 +1009,7 @@ where
         }
     }
 
-    async fn p_identity_address_info(&mut self, payload: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_identity_address_info(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing peer IRK");
 
         let identity_addr_info = match encrypt_info::IdentityAddressInformation::try_from_icd(payload) {
@@ -1047,7 +1044,7 @@ where
         }
     }
 
-    async fn p_signing_info(&mut self, payload: &[u8]) -> Result<Option<&super::KeyDBEntry>, Error> {
+    async fn p_signing_info(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
         log::trace!("(SM) Processing peer IRK");
 
         let signing_info = match encrypt_info::SigningInformation::try_from_icd(payload) {

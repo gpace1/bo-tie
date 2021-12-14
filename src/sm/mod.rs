@@ -413,7 +413,7 @@ struct PairingData {
     /// Mac Key
     mac_key: Option<u128>,
     /// The database key
-    db_keys: Option<KeyDBEntry>,
+    db_keys: Option<Keys>,
     /// External OOB check
     ///
     /// This is only need for the externally provided OOB data method of a Security Manager. Because
@@ -446,7 +446,7 @@ struct PairingData {
 /// Comparisons and hashing are implemented for `KeyDBEntry`, but these operations only use the
 /// identity address within a `KeyDBEntry` for the calculations.
 #[derive(Clone, Serialize, Deserialize, Default)]
-pub struct KeyDBEntry {
+pub struct Keys {
     /// The Long Term Key (private key)
     ///
     /// If this is `None` then the connection cannot be encrypted
@@ -474,10 +474,10 @@ enum BluAddr {
     StaticRandom(crate::BluetoothDeviceAddress),
 }
 
-impl KeyDBEntry {
+impl Keys {
     /// Construct a new `KeyDBEntry` with no keys
     pub fn new() -> Self {
-        KeyDBEntry::default()
+        Keys::default()
     }
 
     /// Compare entries by the peer keys irk and addr
@@ -596,27 +596,27 @@ impl KeyDBEntry {
     }
 }
 
-impl PartialEq for KeyDBEntry {
+impl PartialEq for Keys {
     fn eq(&self, other: &Self) -> bool {
         self.peer_addr.eq(&other.peer_addr)
     }
 }
 
-impl Eq for KeyDBEntry {}
+impl Eq for Keys {}
 
-impl PartialOrd for KeyDBEntry {
+impl PartialOrd for Keys {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         self.peer_addr.partial_cmp(&other.peer_addr)
     }
 }
 
-impl Ord for KeyDBEntry {
+impl Ord for Keys {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.peer_addr.cmp(&other.peer_addr)
     }
 }
 
-impl core::hash::Hash for KeyDBEntry {
+impl core::hash::Hash for Keys {
     fn hash<H>(&self, state: &mut H)
     where
         H: core::hash::Hasher,
@@ -636,12 +636,12 @@ impl core::hash::Hash for KeyDBEntry {
 /// panic.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct KeyDB {
-    entries: Vec<KeyDBEntry>,
+    entries: Vec<Keys>,
 }
 
 impl KeyDB {
     /// Create a new `KeyDB` from a vector of `KeyDBEntry`
-    fn new(mut entries: Vec<KeyDBEntry>) -> Self {
+    fn new(mut entries: Vec<Keys>) -> Self {
         entries.sort_by(|rhs, lhs| rhs.compare_entry(lhs));
 
         Self { entries }
@@ -651,7 +651,7 @@ impl KeyDB {
     ///
     /// Return the keys associated with the specified `irk` and/or `address`. `None` is
     /// returned if there is no entry associated with the given keys.
-    fn get<'s, 'a, I, A>(&'s self, irk: I, address: A) -> Option<&'s KeyDBEntry>
+    fn get<'s, 'a, I, A>(&'s self, irk: I, address: A) -> Option<&'s Keys>
     where
         I: Into<Option<&'a u128>>,
         A: Into<Option<&'a BluAddr>>,
@@ -669,14 +669,14 @@ impl KeyDB {
     /// Add the keys with the provided KeyDBEntry
     ///
     /// This will override keys that have the same identity address and IRK.
-    fn add(&mut self, entry: KeyDBEntry) {
+    fn add(&mut self, entry: Keys) {
         match self.entries.binary_search_by(|in_entry| in_entry.compare_entry(&entry)) {
             Ok(idx) => self.entries[idx] = entry,
             Err(idx) => self.entries.insert(idx, entry),
         }
     }
 
-    fn iter(&self) -> impl core::iter::Iterator<Item = &KeyDBEntry> {
+    fn iter(&self) -> impl core::iter::Iterator<Item = &Keys> {
         self.entries.iter()
     }
 
@@ -721,14 +721,14 @@ pub struct SecurityManagerKeys {
 }
 
 impl SecurityManagerKeys {
-    pub fn new(keys: Vec<KeyDBEntry>) -> Self {
+    pub fn new(keys: Vec<Keys>) -> Self {
         SecurityManagerKeys {
             keys_db: KeyDB::new(keys),
         }
     }
 
     /// Get an iterator over the keys
-    pub fn iter(&self) -> impl Iterator<Item = &KeyDBEntry> {
+    pub fn iter(&self) -> impl Iterator<Item = &Keys> {
         self.keys_db.iter()
     }
 
@@ -755,7 +755,7 @@ impl SecurityManagerKeys {
     pub fn resolve_rpa_itr(
         &self,
         addr: crate::BluetoothDeviceAddress,
-    ) -> impl core::iter::Iterator<Item = Option<KeyDBEntry>> + '_ {
+    ) -> impl core::iter::Iterator<Item = Option<Keys>> + '_ {
         let hash = [addr[0], addr[1], addr[2]];
         let prand = [addr[3], addr[4], addr[5]];
 
@@ -781,9 +781,9 @@ impl SecurityManagerKeys {
     /// the same peer IRK and peer address, that entry is overwritten.
     ///
     /// This function will return true if `keys` was added to the database.
-    pub fn add_keys(&mut self, keys: KeyDBEntry) -> bool {
+    pub fn add_keys(&mut self, keys: Keys) -> bool {
         match keys {
-            KeyDBEntry { peer_irk: Some(_), .. } | KeyDBEntry { peer_addr: Some(_), .. } => {
+            Keys { peer_irk: Some(_), .. } | Keys { peer_addr: Some(_), .. } => {
                 self.keys_db.add(keys);
                 true
             }
@@ -794,12 +794,12 @@ impl SecurityManagerKeys {
     /// Remove keys in the database
     ///
     /// Removes the entry that matches `keys` in the database
-    pub fn remove_keys(&mut self, keys: &KeyDBEntry) -> bool {
+    pub fn remove_keys(&mut self, keys: &Keys) -> bool {
         self.keys_db.remove(keys.peer_irk.as_ref(), keys.peer_addr.as_ref())
     }
 
     /// Get a specific `KeyDBEntry` from its peer IRK and peer Address
-    pub fn get_keys<I, A>(&self, peer_irk: I, peer_addr: A, peer_addr_is_pub: bool) -> Option<&KeyDBEntry>
+    pub fn get_keys<I, A>(&self, peer_irk: I, peer_addr: A, peer_addr_is_pub: bool) -> Option<&Keys>
     where
         I: Into<Option<u128>>,
         A: Into<Option<crate::BluetoothDeviceAddress>>,
