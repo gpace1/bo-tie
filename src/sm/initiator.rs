@@ -887,8 +887,8 @@ where
     /// Get the pairing keys
     ///
     /// Pairing must be completed before these keys are generated
-    pub fn get_keys(&mut self) -> Option<&mut super::Keys> {
-        self.pairing_data.as_mut().and_then(|pd| pd.db_keys.as_mut())
+    pub fn get_keys(&self) -> Option<&super::Keys> {
+        self.pairing_data.as_ref().and_then(|pd| pd.db_keys.as_ref())
     }
 
     /// Pair to the slave device
