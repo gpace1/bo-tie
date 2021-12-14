@@ -959,7 +959,7 @@ where
                     }
                     .into();
 
-                    Ok(db_keys.as_mut())
+                    Ok(db_keys.as_ref())
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed).await?;
 
