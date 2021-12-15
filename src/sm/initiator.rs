@@ -321,7 +321,7 @@ where
     /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
     /// and an IRK has been generated. An IRK is generated once the return of
     /// [`start_pairing`](MasterSecurityManager::start_pairing)
-    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry). However, since the return is a
+    /// returns a reference to a [`Keys`](super::Keys). However, since the return is a
     /// mutable, you can replace the IRK with `None` which would also cause this function to
     /// return false. If the function returns false then the IRK isn't sent to the Master Device.
     pub async fn send_irk(&self) -> Result<bool, Error> {
@@ -344,7 +344,7 @@ where
     /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
     /// and an CSRK has been generated. An IRK is generated once the return of
     /// [`start_pairing`](MasterSecurityManager::start_pairing)
-    /// returns a reference to a [`KeyDBEntry`](super::KeyDBEntry). However, since the return is a
+    /// returns a reference to a [`Keys`](super::Keys). However, since the return is a
     /// mutable, you can replace the IRK with `None` which would also cause this function to
     /// return false. If the function returns false then the IRK isn't sent to the Master Device.
     pub async fn send_csrk(&self) -> Result<bool, Error> {

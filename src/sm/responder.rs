@@ -432,10 +432,10 @@ where
     /// Errors will be returned if the request is not something that can be processed by the slave
     /// or there was something wrong with the request message.
     ///
-    /// This function will return a ['KeyDBEntry'](crate::sm::KeyDBEntry) with the newly generated
+    /// This function will return a ['Keys'](crate::sm::Keys) with the newly generated
     /// Long Term Key (LTK). **This key information will only last as long as the master does not
     /// retry pairing or the master causes this responder to return a pairing error to the master**.
-    /// *After pairing is complete*, the returned `KeyDBEntry` will only contain the LTK and the
+    /// *After pairing is complete*, the returned `Keys` will only contain the LTK and the
     /// peer address used during pairing as the peer identity address. The return will be updated
     /// further with peer keys only when `set_encryption` is used to indicate that the connection
     /// is encrypted.
