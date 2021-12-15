@@ -603,7 +603,7 @@ impl Keys {
     ///
     /// # Note
     /// if `ltk` is `None` the LTK is dropped.
-    pub fn set_ltk<K>(&mut self, ltk: K)
+    pub unsafe fn set_ltk<K>(&mut self, ltk: K)
     where
         K: Into<Option<K>>,
     {
