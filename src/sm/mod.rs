@@ -412,8 +412,6 @@ struct PairingData {
     responder_pairing_confirm: Option<u128>,
     /// Mac Key
     mac_key: Option<u128>,
-    /// The database key
-    db_keys: Option<Keys>,
     /// External OOB check
     ///
     /// This is only need for the externally provided OOB data method of a Security Manager. Because

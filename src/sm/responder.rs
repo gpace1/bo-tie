@@ -33,6 +33,7 @@ pub struct SlaveSecurityManagerBuilder<'a, C> {
     distribute_csrk: bool,
     accept_ltk: bool,
     accept_csrk: bool,
+    prior_keys: Option<super::Keys>,
 }
 
 impl<'a, C> SlaveSecurityManagerBuilder<'a, C>
@@ -60,7 +61,28 @@ where
             distribute_csrk: false,
             accept_ltk: false,
             accept_csrk: false,
+            prior_keys: None,
         }
+    }
+
+    /// Set the keys if the devices are already paired
+    ///
+    /// Assigns the keys that were previously generated after a successful pair. The long term key
+    /// must be present within `keys`. *This method allows for bonding keys to be distributed
+    /// without having to go through pairing.
+    pub fn set_already_paired<K: Into<Option<super::Keys>>>(&mut self, keys: K) -> Result<(), &'static str> {
+        self.prior_keys = keys
+            .into()
+            .map(|keys| {
+                if keys.get_ltk().is_some() {
+                    Ok(keys)
+                } else {
+                    Err("Missing LTK")
+                }
+            })
+            .transpose()?;
+
+        Ok(())
     }
 
     /// Set the bonding keys to be distributed by the responder
@@ -206,6 +228,7 @@ where
             initiator_address_is_random: self.remote_address_is_random,
             responder_address_is_random: self.this_address_is_random,
             pairing_data: None,
+            keys: self.prior_keys,
             link_encrypted: false,
         }
     }
@@ -242,6 +265,7 @@ pub struct SlaveSecurityManager<'a, C, S, R> {
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
     pairing_data: Option<PairingData>,
+    keys: Option<super::Keys>,
     link_encrypted: bool,
 }
 
@@ -260,7 +284,7 @@ impl<C, S, R> SlaveSecurityManager<'_, C, S, R> {
     /// This returns the encryption keys, if they exist. Keys will exist after they're generated
     /// once pairing completes, until then this method will return `None`.
     pub fn get_keys(&self) -> Option<&super::Keys> {
-        self.pairing_data.as_ref().and_then(|pd| pd.db_keys.as_ref())
+        self.keys.as_ref()
     }
 }
 
@@ -285,12 +309,9 @@ where
         if self.link_encrypted {
             let irk = irk.into().unwrap_or(toolbox::rand_u128());
 
-            if let Some(PairingData {
-                db_keys: Some(super::Keys {
-                    irk: ref mut irk_opt, ..
-                }),
-                ..
-            }) = self.pairing_data
+            if let Some(super::Keys {
+                irk: ref mut irk_opt, ..
+            }) = self.keys
             {
                 *irk_opt = Some(irk)
             }
@@ -325,12 +346,9 @@ where
         if self.link_encrypted {
             let csrk = csrk.into().unwrap_or(toolbox::rand_u128());
 
-            if let Some(PairingData {
-                db_keys: Some(super::Keys {
-                    csrk: ref mut csrk_opt, ..
-                }),
-                ..
-            }) = self.pairing_data
+            if let Some(super::Keys {
+                csrk: ref mut csrk_opt, ..
+            }) = self.keys
             {
                 *csrk_opt = Some((csrk, 0));
             }
@@ -668,7 +686,6 @@ where
                 peer_nonce: None,
                 responder_pairing_confirm: None,
                 mac_key: None,
-                db_keys: None,
                 external_oob_confirm_valid: false,
             });
 
@@ -929,9 +946,9 @@ where
 
                     self.send(pairing::PairingDHKeyCheck::new(eb)).await?;
 
-                    let db_keys = &mut self.pairing_data.as_mut().unwrap().db_keys;
+                    let keys = &mut self.keys;
 
-                    *db_keys = super::Keys {
+                    *keys = super::Keys {
                         ltk: ltk.into(),
                         irk: None,
                         csrk: None,
@@ -946,7 +963,7 @@ where
                     }
                     .into();
 
-                    Ok(db_keys.as_ref())
+                    Ok(keys.as_ref())
                 } else {
                     self.send_err(pairing::PairingFailedReason::DHKeyCheckFailed).await?;
 
@@ -977,20 +994,14 @@ where
         };
 
         if self.link_encrypted {
-            match self.pairing_data {
-                Some(PairingData {
-                    db_keys: Some(ref mut db_key),
-                    ..
-                }) => {
-                    db_key.peer_irk = Some(identity_info.get_irk());
+            if let Some(ref mut keys) = self.keys {
+                keys.peer_irk = Some(identity_info.get_irk());
 
-                    Ok(Some(db_key))
-                }
-                _ => {
-                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
+                Ok(Some(keys))
+            } else {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
-                }
+                return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
             }
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
@@ -1000,7 +1011,7 @@ where
     }
 
     async fn p_identity_address_info(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
-        log::trace!("(SM) Processing peer IRK");
+        log::trace!("(SM) Processing peer address info");
 
         let identity_addr_info = match encrypt_info::IdentityAddressInformation::try_from_icd(payload) {
             Ok(iai) => iai,
@@ -1012,20 +1023,14 @@ where
         };
 
         if self.link_encrypted {
-            match self.pairing_data {
-                Some(PairingData {
-                    db_keys: Some(ref mut db_key),
-                    ..
-                }) => {
-                    db_key.peer_addr = Some(identity_addr_info.into());
+            if let Some(ref mut keys) = self.keys {
+                keys.peer_addr = Some(identity_addr_info.into());
 
-                    Ok(Some(db_key))
-                }
-                _ => {
-                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
+                Ok(Some(keys))
+            } else {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
-                }
+                return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
             }
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
@@ -1035,7 +1040,7 @@ where
     }
 
     async fn p_signing_info(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
-        log::trace!("(SM) Processing peer IRK");
+        log::trace!("(SM) Processing peer signing info (CSRK)");
 
         let signing_info = match encrypt_info::SigningInformation::try_from_icd(payload) {
             Ok(si) => si,
@@ -1047,20 +1052,14 @@ where
         };
 
         if self.link_encrypted {
-            match self.pairing_data {
-                Some(PairingData {
-                    db_keys: Some(ref mut db_key),
-                    ..
-                }) => {
-                    db_key.peer_csrk = Some((signing_info.get_signature_key(), 0));
+            if let Some(ref mut keys) = self.keys {
+                keys.peer_csrk = Some((signing_info.get_signature_key(), 0));
 
-                    Ok(Some(db_key))
-                }
-                _ => {
-                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
+                Ok(Some(keys))
+            } else {
+                self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;
 
-                    return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
-                }
+                return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
             }
         } else {
             self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;

@@ -21,6 +21,7 @@ pub struct MasterSecurityManagerBuilder<'a, C> {
     distribute_csrk: bool,
     accept_ltk: bool,
     accept_csrk: bool,
+    prior_keys: Option<super::Keys>,
 }
 
 impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
@@ -45,7 +46,28 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             distribute_csrk: false,
             accept_ltk: true,
             accept_csrk: true,
+            prior_keys: None,
         }
+    }
+
+    /// Set the keys if the devices are already paired
+    ///
+    /// Assigns the keys that were previously generated after a successful pair. The long term key
+    /// must be present within `keys`. *This method allows for bonding keys to be distributed
+    /// without having to go through pairing.
+    pub fn set_already_paired<K: Into<Option<super::Keys>>>(&mut self, keys: K) -> Result<(), &'static str> {
+        self.prior_keys = keys
+            .into()
+            .map(|keys| {
+                if keys.get_ltk().is_some() {
+                    Ok(keys)
+                } else {
+                    Err("Missing LTK")
+                }
+            })
+            .transpose()?;
+
+        Ok(())
     }
 
     /// Set the bonding keys to be distributed by the initiator
@@ -201,6 +223,7 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
             initiator_address_is_random: self.this_address_is_random,
             responder_address_is_random: self.remote_address_is_random,
             pairing_data: None,
+            keys: self.prior_keys,
             link_encrypted: false,
             pairing_expected_cmd: None,
         }
@@ -234,6 +257,7 @@ pub struct MasterSecurityManager<'a, C, S, R> {
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
     pairing_data: Option<PairingData>,
+    keys: Option<super::Keys>,
     link_encrypted: bool,
     pairing_expected_cmd: Option<super::CommandType>,
 }
@@ -262,7 +286,7 @@ impl<C, S, R> MasterSecurityManager<'_, C, S, R> {
     ///
     /// Pairing must be completed before these keys are generated
     pub fn get_keys(&self) -> Option<&super::Keys> {
-        self.pairing_data.as_ref().and_then(|pd| pd.db_keys.as_ref())
+        self.keys.as_ref()
     }
 }
 
@@ -302,12 +326,7 @@ where
     /// return false. If the function returns false then the IRK isn't sent to the Master Device.
     pub async fn send_irk(&self) -> Result<bool, Error> {
         if self.link_encrypted {
-            if let Some(irk) = self
-                .pairing_data
-                .as_ref()
-                .and_then(|pd| pd.db_keys.as_ref())
-                .and_then(|db_key| db_key.irk.clone())
-            {
+            if let Some(irk) = self.keys.as_ref().and_then(|key| key.irk.clone()) {
                 self.send(encrypt_info::IdentityInformation::new(irk)).await?;
 
                 Ok(true)
@@ -330,12 +349,7 @@ where
     /// return false. If the function returns false then the IRK isn't sent to the Master Device.
     pub async fn send_csrk(&self) -> Result<bool, Error> {
         if self.link_encrypted {
-            if let Some(csrk) = self
-                .pairing_data
-                .as_ref()
-                .and_then(|pd| pd.db_keys.as_ref())
-                .and_then(|db_key| db_key.csrk.clone())
-            {
+            if let Some(csrk) = self.keys.as_ref().and_then(|key| key.csrk.clone()) {
                 self.send(encrypt_info::SigningInformation::new(csrk.0)).await?;
 
                 Ok(true)
@@ -430,7 +444,6 @@ where
                 peer_nonce: None,
                 responder_pairing_confirm: None,
                 mac_key: None,
-                db_keys: None,
                 external_oob_confirm_valid: false,
             });
 
@@ -662,7 +675,7 @@ where
             _ => return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason)),
         };
 
-        self.pairing_data.as_mut().unwrap().db_keys = Some(super::Keys {
+        self.keys = Some(super::Keys {
             ltk: ltk.into(),
             csrk: None,
             irk: None,
@@ -942,10 +955,7 @@ where
             }
         }
 
-        (
-            Ok(self.pairing_data.as_mut().unwrap().db_keys.as_mut().unwrap()),
-            other_data,
-        )
+        (Ok(self.keys.as_mut().unwrap()), other_data)
     }
 
     /// Start pairing
@@ -1079,11 +1089,8 @@ where
         macro_rules! bonding_key {
             ($this:expr, $payload:expr, $key:ident, $key_type:ident, $get_key_method:ident, $prompt_type:ident) => {
                 if self.link_encrypted {
-                    match $this.pairing_data {
-                        Some(PairingData {
-                            db_keys: Some(ref mut keys),
-                            ..
-                        }) => match encrypt_info::$key_type::try_from_icd($payload) {
+                    if let Some(ref mut keys) = $this.keys {
+                        match encrypt_info::$key_type::try_from_icd($payload) {
                             Ok(packet) => {
                                 keys.$key = Some(packet.$get_key_method());
 
@@ -1095,15 +1102,14 @@ where
 
                                 Err(e)
                             }
-                        },
-                        _ => {
-                            self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
-                                .await?;
-
-                            Err(Error::PairingFailed(
-                                pairing::PairingFailedReason::UnspecifiedReason,
-                            ))
                         }
+                    } else {
+                        self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
+                            .await?;
+
+                        Err(Error::PairingFailed(
+                            pairing::PairingFailedReason::UnspecifiedReason,
+                        ))
                     }
                 } else {
                     self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
