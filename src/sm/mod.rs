@@ -621,7 +621,7 @@ impl Eq for Keys {}
 
 impl PartialOrd for Keys {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.peer_addr.partial_cmp(&other.peer_addr)
+        self.compare_Keys(&other).into()
     }
 }
 
