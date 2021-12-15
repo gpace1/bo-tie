@@ -664,8 +664,8 @@ where
 
         self.pairing_data.as_mut().unwrap().db_keys = Some(super::Keys {
             ltk: ltk.into(),
-            csrk: (toolbox::rand_u128(), 0).into(),
-            irk: toolbox::rand_u128().into(),
+            csrk: None,
+            irk: None,
             peer_csrk: None,
             peer_irk: None,
             peer_addr: None,
