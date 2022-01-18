@@ -506,7 +506,7 @@ impl Bonder {
 
         let keys = self.privacy_info.lock().await.clone();
 
-        if let (Some(local_irk), Some(peer_irk), Some((peer_addr_is_pub, peer_addr))) = keys {
+        if let (Some(local_irk), peer_irk, Some((peer_addr_is_pub, peer_addr))) = keys {
             self.set_le_events(&[EnhancedConnectionComplete], true).await;
 
             set_advertising_enable::send(&self.hi, false).await.unwrap();
@@ -518,7 +518,7 @@ impl Bonder {
                     PeerIdentityAddressType::RandomStaticIdentityAddress
                 },
                 peer_identity_address: peer_addr,
-                peer_irk,
+                peer_irk: peer_irk.unwrap_or_default(),
                 local_irk,
             };
 
@@ -576,8 +576,6 @@ impl Bonder {
 
             event_data_opt
         } else {
-            log::error!("Bonding Information wasn't supplied, make sure to have the master initate bonding");
-
             None
         }
     }
