@@ -1,4 +1,9 @@
 [workspace]
+default-members = [
+    "bo-tie",
+    "bo-tie-macros",
+]
+
 members = [
     "bo-tie",
     "bo-tie-macros",

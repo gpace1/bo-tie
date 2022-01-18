@@ -103,8 +103,6 @@ fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
         let services_128 = matches.opt_strs("s").into_iter().fold(
             bo_tie::gap::assigned::service_uuids::new_128(true),
             |mut services, str_uuid| {
-                use std::convert::TryFrom;
-
                 let uuid = bo_tie::UUID::try_from(str_uuid.as_str()).expect("Invalid UUID");
 
                 services.add(uuid.into());
