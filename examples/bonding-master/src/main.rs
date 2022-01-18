@@ -22,9 +22,21 @@ type Base = bo_tie_linux::HCIAdapter;
 /// from the controller to the user.
 const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 
+#[derive(Default)]
+struct AsyncLock(futures::lock::Mutex<()>);
+
+impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
+    type Guard = futures::lock::MutexGuard<'a, ()>;
+    type Locker = futures::lock::MutexLockFuture<'a, ()>;
+
+    fn lock(&'a self) -> Self::Locker {
+        self.0.lock()
+    }
+}
+
 /// Scan for a specific address
-async fn start_scanning_for_addr(
-    hi: &hci::HostInterface<Base>,
+async fn start_scanning_for_addr<M: Send + 'static>(
+    hi: &hci::HostInterface<Base, M>,
     local_name: &str,
 ) -> bo_tie::hci::events::LEAdvertisingReportData {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
@@ -92,12 +104,12 @@ fn match_report(report: &&hci::events::LEAdvertisingReportData, name: &str) -> b
     false
 }
 
-async fn connect_to<'a>(
-    hi: &'a hci::HostInterface<Base>,
+async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
+    hi: Arc<hci::HostInterface<Base, M>>,
     peer_address: &bo_tie::BluetoothDeviceAddress,
     peer_address_type: bo_tie::hci::common::LEAddressType,
     raw_handle: Arc<AtomicU16>,
-) -> impl bo_tie::l2cap::ConnectionChannel + 'a {
+) -> impl bo_tie::l2cap::ConnectionChannel {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
     use bo_tie::hci::common::{ConnectionLatency, SupervisionTimeout};
     use bo_tie::hci::events::{Events, EventsData, LEMeta, LEMetaData};
@@ -108,11 +120,11 @@ async fn connect_to<'a>(
     };
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
 
-    set_event_mask::send(hi, &[EventMask::DisconnectionComplete, EventMask::LEMeta])
+    set_event_mask::send(&hi, &[EventMask::DisconnectionComplete, EventMask::LEMeta])
         .await
         .unwrap();
 
-    le_set_event_mask::send(hi, &[LEMeta::ConnectionComplete])
+    le_set_event_mask::send(&hi, &[LEMeta::ConnectionComplete])
         .await
         .unwrap();
 
@@ -135,7 +147,7 @@ async fn connect_to<'a>(
         },
     );
 
-    create_connection::send(hi, parameters).await.unwrap();
+    create_connection::send(&hi, parameters).await.unwrap();
 
     let awaited_event = Some(Events::from(LEMeta::ConnectionComplete));
 
@@ -143,7 +155,7 @@ async fn connect_to<'a>(
         EventsData::LEMeta(LEMetaData::ConnectionComplete(data)) => {
             raw_handle.store(data.connection_handle.get_raw_handle(), Ordering::Relaxed);
 
-            hi.new_connection_channel(data.connection_handle)
+            hi.flow_ctrl_channel(data.connection_handle, 512)
         }
         e => panic!("Received Unexpected event: {:?}", e),
     }
@@ -152,7 +164,7 @@ async fn connect_to<'a>(
 /// Start pairing
 ///
 /// Returns the long term key (LTK) if the pairing process succeeded.
-async fn pair<C>(cc: &C, msm: &mut bo_tie::sm::initiator::MasterSecurityManager<'_, C>) -> Option<u128>
+async fn pair<C>(cc: &C, msm: &mut bo_tie::sm::initiator::MasterSecurityManager<'_, C, (), ()>) -> Option<u128>
 where
     C: bo_tie::l2cap::ConnectionChannel,
 {
@@ -164,7 +176,7 @@ where
                 for data in vec_data {
                     // All data that is not Security Manager related is ignored for this example
                     if data.get_channel_id() == bo_tie::sm::L2CAP_CHANNEL_ID {
-                        match msm.continue_pairing(data).await {
+                        match msm.continue_pairing(&data).await {
                             Ok(true) => break 'outer msm.get_keys().and_then(|keys| keys.get_ltk()),
                             Ok(false) => {}
                             Err(e) => panic!("Pairing Error Occured: {:?}", e),
@@ -178,7 +190,11 @@ where
 }
 
 /// Start encryption
-async fn encrypt(hi: &hci::HostInterface<Base>, connection_handle: hci::common::ConnectionHandle, ltk: u128) {
+async fn encrypt<M: Send + 'static>(
+    hi: &hci::HostInterface<Base, M>,
+    connection_handle: hci::common::ConnectionHandle,
+    ltk: u128,
+) {
     use hci::cb::set_event_mask::{self, EventMask};
     use hci::common::EncryptionLevel;
     use hci::events::{Events, EventsData};
@@ -215,7 +231,10 @@ async fn encrypt(hi: &hci::HostInterface<Base>, connection_handle: hci::common::
     }
 }
 
-async fn disconnect(hi: &hci::HostInterface<Base>, connection_handle: hci::common::ConnectionHandle) {
+async fn disconnect<M: Send + 'static>(
+    hi: &hci::HostInterface<Base, M>,
+    connection_handle: hci::common::ConnectionHandle,
+) {
     use hci::link_control::disconnect::{self, DisconnectParameters, DisconnectReason};
 
     let dp = DisconnectParameters {
@@ -226,7 +245,7 @@ async fn disconnect(hi: &hci::HostInterface<Base>, connection_handle: hci::commo
     disconnect::send(hi, dp).await.ok();
 }
 
-fn handle_sig(hi: Arc<hci::HostInterface<Base>>, raw_handle: Arc<AtomicU16>) {
+fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::HostInterface<Base, M>>, raw_handle: Arc<AtomicU16>) {
     use hci::common::ConnectionHandle;
     use hci::le::connection::create_connection_cancel;
 
@@ -247,7 +266,7 @@ fn handle_sig(hi: Arc<hci::HostInterface<Base>>, raw_handle: Arc<AtomicU16>) {
         // bluetooth controller if the HCI is not closed cleanly, espically when running
         // with a superuser.
         unsafe {
-            let b = Box::from_raw(Arc::into_raw(hi.clone()) as *mut hci::HostInterface<Base>);
+            let b = Box::from_raw(Arc::into_raw(hi.clone()) as *mut hci::HostInterface<Base, M>);
 
             std::mem::drop(b)
         };
@@ -256,7 +275,11 @@ fn handle_sig(hi: Arc<hci::HostInterface<Base>>, raw_handle: Arc<AtomicU16>) {
     });
 }
 
-async fn bonding(interface: Arc<hci::HostInterface<Base>>, raw_ch: Arc<AtomicU16>, adv_local_name: &str) {
+async fn bonding<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
+    interface: Arc<hci::HostInterface<Base, M>>,
+    raw_ch: Arc<AtomicU16>,
+    adv_local_name: &str,
+) {
     use bo_tie::sm::initiator::MasterSecurityManagerBuilder;
 
     let this_addr = hci::info_params::read_bd_addr::send(&interface).await.unwrap();
@@ -267,7 +290,7 @@ async fn bonding(interface: Arc<hci::HostInterface<Base>>, raw_ch: Arc<AtomicU16
 
     let peer_addr_type = adv_info.address_type;
 
-    let cc = connect_to(&interface, &peer_addr, peer_addr_type, raw_ch.clone()).await;
+    let cc = connect_to(interface.clone(), &peer_addr, peer_addr_type, raw_ch.clone()).await;
 
     let connection_handle = hci::common::ConnectionHandle::try_from(raw_ch.load(Ordering::Relaxed)).unwrap();
 
@@ -302,16 +325,22 @@ struct Opts {
 
 fn main() {
     use futures::executor;
-    use simplelog::{Config, LevelFilter, TermLogger, TerminalMode};
+    use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
     use structopt::StructOpt;
 
     let args = Opts::from_args();
 
-    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
+    TermLogger::init(
+        LevelFilter::Trace,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )
+    .unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
-    let interface = Arc::new(hci::HostInterface::default());
+    let interface = futures::executor::block_on(hci::HostInterface::<_, AsyncLock>::new());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 

@@ -542,8 +542,9 @@ where
 /// concurrently) to the controller. The lock ensures that no other sender can send data while a
 /// HCI data packet is being sent.
 #[cfg(feature = "flow-ctrl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "flow-ctrl")))]
 pub trait AsyncLock<'a> {
-    type Guard: 'a;
+    type Guard: Send + Sync + 'a;
     type Locker: Future<Output = Self::Guard> + 'a;
 
     fn lock(&'a self) -> Self::Locker;
@@ -652,6 +653,16 @@ impl<I> AsMut<I> for HostInterface<I> {
 impl<I> From<I> for HostInterface<I> {
     fn from(interface: I) -> Self {
         HostInterface { interface }
+    }
+}
+
+#[cfg(feature = "flow-ctrl")]
+impl<I, M: Default> From<I> for HostInterface<I, M> {
+    fn from(interface: I) -> Self {
+        HostInterface {
+            interface,
+            flow_controller: Default::default(),
+        }
     }
 }
 
@@ -806,7 +817,8 @@ where
     }
 }
 
-#[cfg(not(feature = "flow-ctrl"))]
+#[cfg(all(not(feature = "flow-ctrl"), not(docsrs)))]
+#[cfg_attr(docsrs, doc(cfg(not(feature = "flow-ctrl"))))]
 impl<I> HostInterface<I>
 where
     I: HciAclDataInterface,
@@ -875,6 +887,7 @@ where
 }
 
 #[cfg(feature = "flow-ctrl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "flow-ctrl")))]
 impl<I, M> HostInterface<I, M>
 where
     I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,

@@ -7,15 +7,28 @@
 //! # Note
 //! In order to exit this example, a signal (ctrl-c) needs to be sent. Also
 
+use bo_tie::att::server::BasicQueuedWriter;
 use bo_tie::hci;
 use futures::lock::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Default)]
+struct AsyncLock(futures::lock::Mutex<()>);
+
+impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
+    type Guard = futures::lock::MutexGuard<'a, ()>;
+    type Locker = futures::lock::MutexLockFuture<'a, ()>;
+
+    fn lock(&'a self) -> Self::Locker {
+        self.0.lock()
+    }
+}
+
 #[derive(Clone)]
 struct Bonder {
-    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>,
+    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter, AsyncLock>>,
     event_mask: Arc<Mutex<HashSet<hci::cb::set_event_mask::EventMask>>>,
     le_event_mask: Arc<Mutex<HashSet<hci::events::LEMeta>>>,
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
@@ -30,9 +43,9 @@ struct Bonder {
 }
 
 impl Bonder {
-    fn new() -> Self {
+    async fn new() -> Self {
         Bonder {
-            hi: Arc::new(hci::HostInterface::default()),
+            hi: hci::HostInterface::new().await,
             handle: Arc::new(Mutex::new(None)),
             event_mask: Arc::new(Mutex::new(HashSet::new())),
             le_event_mask: Arc::new(Mutex::new(HashSet::new())),
@@ -257,8 +270,8 @@ impl Bonder {
     async fn process_acl_data<C>(
         &self,
         connection_channel: &C,
-        att_server: &mut bo_tie::gatt::Server<'_, C>,
-        slave_security_manager: &mut bo_tie::sm::responder::SlaveSecurityManager<'_, C>,
+        att_server: &mut bo_tie::gatt::Server<'_, C, BasicQueuedWriter>,
+        slave_security_manager: &mut bo_tie::sm::responder::SlaveSecurityManager<'_, C, (), ()>,
     ) -> Option<u128>
     where
         C: bo_tie::l2cap::ConnectionChannel,
@@ -382,7 +395,7 @@ impl Bonder {
         use hci::common::LEAddressType;
         use hci::events::Events::DisconnectionComplete;
 
-        let connection_channel = self.hi.new_connection_channel(handle);
+        let connection_channel = self.hi.clone().flow_ctrl_channel(handle, 512);
 
         let mut gatt_server = gatt_server_init(&connection_channel, local_name);
 
@@ -426,8 +439,11 @@ impl Bonder {
                 if encrypted && (irk_sent == false) {
                     println!("Sending IRK and Address to Master");
 
-                    if slave_sm.send_new_irk(None).await.is_some()
-                        && slave_sm.send_static_rand_addr(this_address.clone()).await
+                    if slave_sm.send_irk(None).await.is_ok()
+                        && slave_sm
+                            .send_static_rand_addr(this_address.clone())
+                            .await
+                            .expect("Cannot generate random (address) on this machine")
                     {
                         irk_sent = true;
                     } else {
@@ -605,8 +621,9 @@ impl Bonder {
             // bluetooth controller if the HCI is not closed cleanly, espically when running
             // with a superuser.
             unsafe {
-                let b =
-                    Box::from_raw(Arc::into_raw(self.hi.clone()) as *mut hci::HostInterface<bo_tie_linux::HCIAdapter>);
+                let b = Box::from_raw(
+                    Arc::into_raw(self.hi.clone()) as *mut hci::HostInterface<bo_tie_linux::HCIAdapter, AsyncLock>
+                );
 
                 std::mem::drop(b)
             };
@@ -617,7 +634,7 @@ impl Bonder {
 }
 
 /// Initialize a basic the GATT Server
-fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> bo_tie::gatt::Server<'c, C>
+fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> bo_tie::gatt::Server<'c, C, BasicQueuedWriter>
 where
     C: bo_tie::l2cap::ConnectionChannel,
 {
@@ -628,7 +645,7 @@ where
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
-    let mut server = gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, 256);
+    let mut server = gatt::ServerBuilder::from(gsb).make_server(channel, BasicQueuedWriter::new(2048));
 
     server
         .as_mut()
@@ -638,21 +655,30 @@ where
 }
 
 fn main() {
-    use futures::{executor::block_on, task::SpawnExt};
-    use simplelog::{Config, LevelFilter, TermLogger, TerminalMode};
+    use futures::{
+        executor::{block_on, ThreadPool},
+        task::SpawnExt,
+    };
+    use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
 
-    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
+    TermLogger::init(
+        LevelFilter::Trace,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )
+    .unwrap();
 
     let local_name = "Bonding Test";
 
     let advertise_address = [0x70, 0x92, 0x07, 0x23, 0xac, 0xc3];
 
     // Bonder is structure local to this example
-    let bonder = Bonder::new();
+    let bonder = block_on(Bonder::new());
 
     bonder.clone().setup_signal_handle();
 
-    let thread_pool = futures::executor::ThreadPool::new().expect("Failed to create ThreadPool");
+    let thread_pool = ThreadPool::new().expect("Failed to create ThreadPool");
 
     println!("This public address: {:x?}", advertise_address);
 

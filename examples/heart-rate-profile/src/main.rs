@@ -13,11 +13,24 @@ use std::sync::{
 /// from the controller to the user.
 const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 
+#[derive(Default)]
+struct AsyncLock(futures::lock::Mutex<()>);
+
+impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
+    type Guard = futures::lock::MutexGuard<'a, ()>;
+    type Locker = futures::lock::MutexLockFuture<'a, ()>;
+
+    fn lock(&'a self) -> Self::Locker {
+        self.0.lock()
+    }
+}
+
 /// Heart Rate Service
 ///
 /// Everything in here is unique for creating the heart rate profile. The only reason it's in its
 /// own module is to differentiate the GATT server portion from the normal lE bluetooth setup.
 mod heart_rate_service {
+    use bo_tie::att::server::BasicQueuedWriter;
     use bo_tie::gatt;
     use bo_tie::l2cap;
 
@@ -149,7 +162,7 @@ mod heart_rate_service {
 
             fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
             where
-                F: FnOnce(&Self::Value) -> T + Send + Sync + 'a,
+                F: FnOnce(&Self::Value) -> T + Unpin + 'a,
             {
                 Box::pin(async move { f(&HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed))) })
             }
@@ -205,35 +218,38 @@ mod heart_rate_service {
     pub fn build_server<C>(
         measurement: characteristics::HeartRateMeasurement,
         connection_chanel: &C,
-        mtu: Option<u16>,
-    ) -> gatt::Server<'_, C>
+    ) -> gatt::Server<'_, C, bo_tie::att::server::BasicQueuedWriter>
     where
         C: l2cap::ConnectionChannel,
     {
-        let mut server_builder = gatt::ServerBuilder::new();
+        let gsp = gatt::GapServiceBuilder::new("Heart Rate Example", 0);
+
+        let mut server_builder = gatt::ServerBuilder::from(gsp);
 
         server_builder
-            .new_service_constructor(HEART_RATE_SERVICE_UUID, true)
+            .new_service(HEART_RATE_SERVICE_UUID, true)
             .add_characteristics()
-            .build_characteristic(
-                Vec::from(characteristics::HeartRateMeasurement::GATT_PERMISSIONS),
-                characteristics::HEART_RATE_MEASUREMENT_UUID,
-                measurement,
-                characteristics::HeartRateMeasurement::ATT_PERMISSIONS,
-            )
+            .new_characteristic()
+            .set_properties(characteristics::HeartRateMeasurement::GATT_PERMISSIONS.to_vec())
+            .set_uuid(characteristics::HEART_RATE_MEASUREMENT_UUID)
+            .set_value(measurement)
+            .set_permissions(characteristics::HeartRateMeasurement::ATT_PERMISSIONS)
             .set_client_configuration(
                 vec![gatt::characteristic::ClientConfiguration::Notification],
                 [].as_ref(),
             )
-            .finish_characteristic()
+            .complete_characteristic()
             .finish_service();
 
-        server_builder.make_server(connection_chanel, mtu)
+        server_builder.make_server(connection_chanel, BasicQueuedWriter::new(2048))
     }
 }
 
 /// This sets up the advertising and waits for the connection complete event
-async fn advertise_setup<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>, local_name: &'a str) {
+async fn advertise_setup<'a, M: Send + 'static>(
+    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
+    local_name: &'a str,
+) {
     let adv_name = assigned::local_name::LocalName::new(local_name, false);
 
     let mut adv_flags = assigned::flags::Flags::new();
@@ -280,8 +296,8 @@ async fn advertise_setup<'a>(hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter
 
 // For simplicity, I've left the a race condition in here. There could be a case where the
 // connection is made and the ConnectionComplete event isn't propagated & processed
-async fn wait_for_connection(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+async fn wait_for_connection<M: Send + 'static>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
 ) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
@@ -307,8 +323,8 @@ async fn wait_for_connection(
     }
 }
 
-async fn disconnect(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+async fn disconnect<M: Send + 'static>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     connection_handle: hci::common::ConnectionHandle,
 ) {
     use bo_tie::hci::le::connection::disconnect;
@@ -321,7 +337,10 @@ async fn disconnect(
     disconnect::send(&hi, prams).await.expect("Failed to disconnect");
 }
 
-fn handle_sig(hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>, raw_handle: Arc<AtomicU16>) {
+fn handle_sig<M: Sync + Send + 'static>(
+    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter, M>>,
+    raw_handle: Arc<AtomicU16>,
+) {
     simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
         // Cancel advertising if advertising (there is no consequence if not advertising)
         futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
@@ -341,13 +360,19 @@ fn handle_sig(hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>, raw_handle:
 fn main() {
     use futures::executor;
 
-    use simplelog::{Config, LevelFilter, TermLogger, TerminalMode};
+    use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
 
-    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
+    TermLogger::init(
+        LevelFilter::Trace,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )
+    .unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
-    let interface = Arc::new(hci::HostInterface::default());
+    let interface = executor::block_on(hci::HostInterface::<_, AsyncLock>::new());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 
@@ -375,9 +400,9 @@ fn main() {
 
                 let hrm = heart_rate_service::characteristics::HeartRateMeasurement::new(heart_rate.clone());
 
-                let connection_channel = interface.new_connection_channel(connection_complete_event.connection_handle);
+                let connection_channel = interface.flow_ctrl_channel(connection_complete_event.connection_handle, 512);
 
-                let server = heart_rate_service::build_server(hrm, &connection_channel, None);
+                let server = heart_rate_service::build_server(hrm, &connection_channel);
 
                 thread::spawn(move || {
                     use rand::random;

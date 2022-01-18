@@ -1,7 +1,7 @@
 //! Connection state in the slave role example
 //!
 //! This example shows the basic way to form a connection with this device in the slave role. The
-//! only real imporant part to look at are the async funtions.
+//! only real important part to look at are the async functions.
 //!
 //! To fully execute this example you'll need another bluetooth enabled device that can run in the
 //! master role. If you have an android phone, you can use the 'nRF Connect' app to connect with
@@ -12,15 +12,15 @@
 //! when extending/using this example for your purposes.
 //!
 //! # Important Notes
-//! Super User privaleges may be required to interact with your bluetooth peripheral. To do will
-//! probably require the full path to cargo. The cargo binary is usually locacted in your home
+//! Super User privileges may be required to interact with your bluetooth peripheral. To do will
+//! probably require the full path to cargo. The cargo binary is usually located in your home
 //! directory at `.cargo/bin/cargo`.
 //!
 //! This example assumes there isn't any bonding/caching between the device that is to be connected
 //! with this example. This will cause the the example to get stuck and eventually time out waiting
 //! to connect to the device. If this occurs, using a different random address should work (or
 //! power cycle the bluetooth controller to get a newly generated default random address). If
-//! there are still problems, delete the cache, whitelist, and any other memory associted with the
+//! there are still problems, delete the cache, whitelist, and any other memory associated with the
 //! bluetooth on the device to connect with, but please note this will git rid of all information
 //! associated with the bluetooth and other devices will need to be reconnected.
 
@@ -31,6 +31,7 @@ use bo_tie::{
     hci::events,
     hci::le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters},
 };
+use simplelog::ColorChoice;
 use std::sync::{
     atomic::{AtomicU16, Ordering},
     Arc,
@@ -40,7 +41,19 @@ use std::sync::{
 /// from the controller to the user.
 const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
 
-async fn events_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
+#[derive(Default)]
+struct AsyncLock(futures::lock::Mutex<()>);
+
+impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
+    type Guard = futures::lock::MutexGuard<'a, ()>;
+    type Locker = futures::lock::MutexLockFuture<'a, ()>;
+
+    fn lock(&'a self) -> Self::Locker {
+        self.0.lock()
+    }
+}
+
+async fn events_setup<M: Send + 'static>(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>) {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
     use events::LEMeta;
@@ -55,7 +68,7 @@ async fn events_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
 }
 
 /// This sets up the advertising and waits for the connection complete event
-async fn advertise_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>, local_name: &str) {
+async fn advertise_setup<M: Send + 'static>(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>, local_name: &str) {
     let adv_name = assigned::local_name::LocalName::new(local_name, false);
 
     let mut adv_flags = assigned::flags::Flags::new();
@@ -96,9 +109,9 @@ async fn advertise_setup(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>, loca
 }
 
 // For simplicity, I've left the race condition in here. There could be a case where the connection
-// is made and the ConnectionComplete event isn't propicated & processed
-async fn wait_for_connection(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+// is made and the ConnectionComplete event isn't propagated & processed
+async fn wait_for_connection<M: Send + 'static>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
 ) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
@@ -120,8 +133,8 @@ async fn wait_for_connection(
     }
 }
 
-async fn disconnect(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+async fn disconnect<M: Send + 'static>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     connection_handle: hci::common::ConnectionHandle,
 ) {
     use bo_tie::hci::le::connection::disconnect;
@@ -141,15 +154,18 @@ async fn disconnect(
 /// The attribute server is organized via the gatt protocol. This example is about connecting
 /// to a client and not about featuring the attribue server, so only the minimalistic gatt server
 /// is present.
-fn gatt_server_init<'c, C>(channel: &'c C, local_name: &str) -> gatt::Server<'c, C>
+fn gatt_server_init<'c, C>(
+    connection_channel: &'c C,
+    local_name: &str,
+) -> gatt::Server<'c, C, bo_tie::att::server::BasicQueuedWriter>
 where
     C: bo_tie::l2cap::ConnectionChannel,
 {
-    let att_mtu = 256;
-
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
-    let mut server = gatt::ServerBuilder::new_with_gap(gsb).make_server(channel, att_mtu);
+    let queue_writer = bo_tie::att::server::BasicQueuedWriter::new(1024);
+
+    let mut server = gatt::ServerBuilder::from(gsb).make_server(connection_channel, queue_writer);
 
     server.give_permissions_to_client(att::AttributePermissions::Read(att::AttributeRestriction::None));
 
@@ -178,7 +194,10 @@ where
     }
 }
 
-fn handle_sig(hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter>>, raw_handle: Arc<AtomicU16>) {
+fn handle_sig<M: Sync + Send + 'static>(
+    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter, M>>,
+    raw_handle: Arc<AtomicU16>,
+) {
     simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
         // Cancel advertising if advertising (there is no consequence if not advertising)
         futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
@@ -205,11 +224,17 @@ fn main() {
 
     let local_name = "Connection Test";
 
-    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
+    TermLogger::init(
+        LevelFilter::Trace,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )
+    .unwrap();
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
-    let interface = Arc::new(hci::HostInterface::default());
+    let interface = futures::executor::block_on(hci::HostInterface::<_, AsyncLock>::new());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 
@@ -223,11 +248,9 @@ fn main() {
         Ok(event_data) => {
             raw_connection_handle.store(event_data.connection_handle.get_raw_handle(), Ordering::SeqCst);
 
-            let interface_clone = interface.clone();
+            let connection_channel = interface.clone().flow_ctrl_channel(event_data.connection_handle, 512);
 
             std::thread::spawn(move || {
-                let connection_channel = interface_clone.new_connection_channel(event_data.connection_handle);
-
                 att_server_loop(connection_channel, local_name);
             });
 

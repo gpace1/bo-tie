@@ -533,7 +533,7 @@ impl Keys {
     /// |    None    |     None    |     Some(C)    |       None      |   Less   |
     /// |    None    |     None    |      None      |     Some(D)     |  Greater |
     /// |    None    |     None    |      None      |       None      |   Equal  |
-    pub fn compare_Keys(&self, other: &Self) -> core::cmp::Ordering {
+    pub fn compare_keys(&self, other: &Self) -> core::cmp::Ordering {
         self.cmp_entry_by_keys(other.peer_irk.as_ref(), other.peer_addr.as_ref())
     }
 
@@ -621,7 +621,7 @@ impl Eq for Keys {}
 
 impl PartialOrd for Keys {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.compare_Keys(&other).into()
+        self.compare_keys(&other).into()
     }
 }
 
@@ -657,7 +657,7 @@ struct KeyDB {
 impl KeyDB {
     /// Create a new `KeyDB` from a vector of `Keys`
     fn new(mut entries: Vec<Keys>) -> Self {
-        entries.sort_by(|rhs, lhs| rhs.compare_Keys(lhs));
+        entries.sort_by(|rhs, lhs| rhs.compare_keys(lhs));
 
         Self { entries }
     }
@@ -685,7 +685,7 @@ impl KeyDB {
     ///
     /// This will override keys that have the same identity address and IRK.
     fn add(&mut self, entry: Keys) {
-        match self.entries.binary_search_by(|in_entry| in_entry.compare_Keys(&entry)) {
+        match self.entries.binary_search_by(|in_entry| in_entry.compare_keys(&entry)) {
             Ok(idx) => self.entries[idx] = entry,
             Err(idx) => self.entries.insert(idx, entry),
         }

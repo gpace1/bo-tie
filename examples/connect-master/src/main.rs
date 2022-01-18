@@ -4,6 +4,18 @@ use bo_tie::hci;
 use bo_tie::hci::events::EventsData;
 use std::time::Duration;
 
+#[derive(Default)]
+struct AsyncLock(futures::lock::Mutex<()>);
+
+impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
+    type Guard = futures::lock::MutexGuard<'a, ()>;
+    type Locker = futures::lock::MutexLockFuture<'a, ()>;
+
+    fn lock(&'a self) -> Self::Locker {
+        self.0.lock()
+    }
+}
+
 fn is_desired_device<T>(expcted: T, to_compare: T) -> bool
 where
     T: PartialEq + ::std::fmt::Display,
@@ -20,8 +32,8 @@ where
     }
 }
 
-async fn remove_from_white_list(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+async fn remove_from_white_list<M: Send + 'static>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     address: bo_tie::BluetoothDeviceAddress,
 ) {
     use bo_tie::hci::le::common::AddressType::RandomDeviceAddress;
@@ -30,8 +42,8 @@ async fn remove_from_white_list(
     send(&hi, RandomDeviceAddress, address).await.unwrap();
 }
 
-async fn scan_for_local_name<'a>(
-    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter>,
+async fn scan_for_local_name<'a, M: Send + 'static>(
+    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     name: &'a str,
 ) -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>> {
     use bo_tie::gap::assigned::{local_name, TryFromRaw};
@@ -83,8 +95,8 @@ async fn scan_for_local_name<'a>(
     None
 }
 
-async fn connect(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+async fn connect<M: Send + 'static>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     address: bo_tie::BluetoothDeviceAddress,
 ) -> Result<EventsData, impl std::fmt::Debug> {
     use bo_tie::hci::common;
@@ -129,14 +141,14 @@ async fn connect(
     hi.wait_for_event(awaited_event).await
 }
 
-async fn cancel_connect(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
+async fn cancel_connect<M: Send + 'static>(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>) {
     use bo_tie::hci::le::connection::create_connection_cancel;
 
     create_connection_cancel::send(&hi).await.unwrap();
 }
 
-async fn disconnect(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+async fn disconnect<M: Send + 'static>(
+    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     connection_handle: hci::common::ConnectionHandle,
 ) {
     use bo_tie::hci::le::connection::disconnect;
@@ -155,7 +167,7 @@ fn main() {
     use std::io::stdin;
     use std::io::BufRead;
 
-    let host_interface = hci::HostInterface::default();
+    let host_interface = futures::executor::block_on(hci::HostInterface::<_, AsyncLock>::new());
 
     let mut name = String::new();
 
@@ -175,7 +187,7 @@ fn main() {
     if let Some(adv_report) = executor::block_on(scan_for_local_name(&host_interface, &name)) {
         let address = adv_report.address;
 
-        // Since the example uses `new_whithout_whitelist` (in function `connect`) it needs to be
+        // Since the example uses `new_without_whitelist` (in function `connect`) it needs to be
         // removed from the whitelist in case it is already in the whitelist
         executor::block_on(remove_from_white_list(&host_interface, address));
 

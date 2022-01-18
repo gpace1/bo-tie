@@ -90,7 +90,7 @@ fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
 
     let matches = match options.parse(&args.collect::<Vec<_>>()) {
         Ok(all_match) => all_match,
-        Err(no_match) => panic!(no_match.to_string()),
+        Err(no_match) => panic!("{}", no_match.to_string()),
     };
 
     if matches.opt_present("h") {
@@ -125,9 +125,15 @@ fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
 
 fn main() {
     use futures::executor;
-    use simplelog::{Config, LevelFilter, TermLogger, TerminalMode};
+    use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
 
-    TermLogger::init(LevelFilter::Trace, Config::default(), TerminalMode::Mixed).unwrap();
+    TermLogger::init(
+        LevelFilter::Trace,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )
+    .unwrap();
 
     let adv_flag = Arc::new(AtomicBool::new(true));
 

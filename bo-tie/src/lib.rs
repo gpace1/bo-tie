@@ -10,6 +10,7 @@
 
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(not(test), no_std)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 // These crates are used all the time
 extern crate alloc;
