@@ -454,15 +454,21 @@ impl Bonder {
                 if encrypted && (irk_sent == false) {
                     println!("Sending IRK and Address to Master");
 
-                    if slave_sm.send_irk(None).await.is_ok()
-                        && slave_sm
-                            .send_static_rand_addr(this_address.clone())
-                            .await
-                            .expect("Cannot generate random (address) on this machine")
-                    {
-                        irk_sent = true;
-                    } else {
-                        eprintln!("Failed to send IRK");
+                    let result_irk = slave_sm.send_irk(None).await;
+
+                    let addr_sent = slave_sm
+                        .send_static_rand_addr(this_address.clone())
+                        .await
+                        .expect("Cannot generate random (address) on this machine");
+
+                    match (result_irk, addr_sent) {
+                        (Ok(irk), true) => {
+                            irk_sent = true;
+                            self.privacy_info.lock().await.this_irk = Some(irk);
+                        }
+                        _ => {
+                            eprintln!("Failed to send IRK and/or identity address");
+                        }
                     }
                 }
             }
