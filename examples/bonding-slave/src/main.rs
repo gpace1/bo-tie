@@ -26,12 +26,13 @@ impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
     }
 }
 
+#[derive(Clone, Copy)]
 struct AddressInfo {
     address: bo_tie::BluetoothDeviceAddress,
     is_pub: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Keys {
     bonding_successful: bool,
     this_irk: Option<u128>,
@@ -507,17 +508,32 @@ impl Bonder {
         println!("Starting Advertising and Connection with privacy");
 
         match self.privacy_info.lock().await.clone() {
-            (true, Some(local_irk), peer_irk, _) => self.reconnect_advertising(local_irk, peer_irk).await,
-            (false, _, _, _) => {
+            Keys {
+                bonding_successful: true,
+                this_irk: Some(this_irk),
+                peer_irk,
+                peer_address: Some(address_info),
+            } => self.reconnect_advertising(this_irk, peer_irk, address_info).await,
+            Keys {
+                bonding_successful: false,
+                ..
+            } => {
                 eprintln!("Failed bonding with peer device");
                 None
             }
-            (true, None, _, _) => {
+            Keys {
+                bonding_successful: true,
+                this_irk: None,
+                ..
+            } => {
                 eprintln!(
                     "This device has not distributed an IRK to the peer. Advertising cannot be \
                     done with a resolvable private address"
                 );
                 None
+            }
+            _ => {
+                unreachable!()
             }
         }
     }
@@ -525,8 +541,9 @@ impl Bonder {
     /// Reconnection advertising via private address
     async fn reconnect_advertising(
         &self,
-        local_irk: u128,
+        this_irk: u128,
         peer_irk: Option<u128>,
+        address_info: AddressInfo,
     ) -> Option<hci::events::LEEnhancedConnectionCompleteData> {
         use hci::events::EventsData;
         use hci::events::LEMeta::EnhancedConnectionComplete;
@@ -545,14 +562,14 @@ impl Bonder {
         set_advertising_enable::send(&self.hi, false).await.unwrap();
 
         let resolve_list_param = add_device_to_resolving_list::Parameter {
-            identity_address_type: if peer_addr_is_pub {
+            identity_address_type: if address_info.is_pub {
                 PeerIdentityAddressType::PublicIdentityAddress
             } else {
                 PeerIdentityAddressType::RandomStaticIdentityAddress
             },
-            peer_identity_address: peer_addr,
+            peer_identity_address: address_info.address,
             peer_irk: peer_irk.unwrap_or_default(),
-            local_irk,
+            local_irk: this_irk,
         };
 
         add_device_to_resolving_list::send(&self.hi, resolve_list_param)
@@ -565,9 +582,9 @@ impl Bonder {
 
         advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKRA;
 
-        advertise_param.peer_address = peer_addr;
+        advertise_param.peer_address = address_info.address;
 
-        advertise_param.peer_address_type = if peer_addr_is_pub {
+        advertise_param.peer_address_type = if address_info.is_pub {
             PeerAddressType::PublicAddress
         } else {
             PeerAddressType::RandomAddress
@@ -614,14 +631,18 @@ impl Bonder {
         use hci::le::privacy::remove_device_from_resolving_list::{send, Parameter};
         use hci::le::privacy::PeerIdentityAddressType;
 
-        if let (_, _, Some((peer_addr_is_pub, peer_addr))) = self.privacy_info.lock().await.clone() {
+        if let Keys {
+            peer_address: Some(address_info),
+            ..
+        } = self.privacy_info.lock().await.clone()
+        {
             let pram = Parameter {
-                identity_address_type: if peer_addr_is_pub {
+                identity_address_type: if address_info.is_pub {
                     PeerIdentityAddressType::PublicIdentityAddress
                 } else {
                     PeerIdentityAddressType::RandomStaticIdentityAddress
                 },
-                peer_identity_address: peer_addr,
+                peer_identity_address: address_info.address,
             };
 
             if let Err(e) = send(&self.hi, pram).await {
