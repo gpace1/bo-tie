@@ -26,6 +26,19 @@ impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
     }
 }
 
+struct AddressInfo {
+    address: bo_tie::BluetoothDeviceAddress,
+    is_pub: bool,
+}
+
+#[derive(Default)]
+struct Keys {
+    bonding_successful: bool,
+    this_irk: Option<u128>,
+    peer_irk: Option<u128>,
+    peer_address: Option<AddressInfo>,
+}
+
 #[derive(Clone)]
 struct Bonder {
     hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter, AsyncLock>>,
@@ -33,13 +46,7 @@ struct Bonder {
     le_event_mask: Arc<Mutex<HashSet<hci::events::LEMeta>>>,
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
     abort_server_handle: Arc<Mutex<Option<futures::future::AbortHandle>>>,
-    privacy_info: Arc<
-        Mutex<(
-            Option<u128>,
-            Option<u128>,
-            Option<(bool, bo_tie::BluetoothDeviceAddress)>,
-        )>,
-    >,
+    privacy_info: Arc<Mutex<Keys>>,
 }
 
 impl Bonder {
@@ -50,7 +57,7 @@ impl Bonder {
             event_mask: Arc::new(Mutex::new(HashSet::new())),
             le_event_mask: Arc::new(Mutex::new(HashSet::new())),
             abort_server_handle: Arc::new(Mutex::new(None)),
-            privacy_info: Arc::new(Mutex::new((None, None, None))),
+            privacy_info: Default::default(),
         }
     }
 }
@@ -213,9 +220,9 @@ impl Bonder {
                     send(&self.hi, cp)
                         .await
                         .err()
-                        .map(|e| log::error!("LE Connection Parameter Request Reply failed: {:?}", e));
+                        .map(|e| eprintln!("LE Connection Parameter Request Reply failed: {:?}", e));
                 }
-                e => log::error!("Received unexpected event or error: {:?}", e),
+                e => eprintln!("Received unexpected event or error: {:?}", e),
             }
         }
     }
@@ -263,7 +270,7 @@ impl Bonder {
             disconnect::send(&self.hi, prams)
                 .await
                 .err()
-                .map(|e| log::error!("Failed to disconnect: {:?}", e));
+                .map(|e| eprintln!("Failed to disconnect: {:?}", e));
         }
     }
 
@@ -287,21 +294,28 @@ impl Bonder {
                 ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) => {
                     match att_server.process_acl_data(&acl_data).await {
                         Ok(_) => (),
-                        Err(e) => log::error!("Cannot process acl data for ATT, '{}'", e),
+                        Err(e) => eprintln!("Cannot process acl data for ATT, '{}'", e),
                     }
                 }
                 ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) => {
                     match slave_security_manager.process_command(&acl_data).await {
                         Ok(None) => (),
-                        Err(e) => log::error!("Cannot process acl data for SM, '{:?}'", e),
+                        Err(e) => eprintln!("Cannot process acl data for SM, '{:?}'", e),
                         Ok(Some(db_entry)) => {
                             ret = db_entry.get_ltk();
 
-                            let local_irk = db_entry.get_irk();
-                            let peer_irk = db_entry.get_peer_irk();
-                            let peer_addr = db_entry.get_peer_addr();
+                            let peer_address = db_entry
+                                .get_peer_addr()
+                                .map(|(is_pub, address)| AddressInfo { address, is_pub });
 
-                            *self.privacy_info.lock().await = (local_irk, peer_irk, peer_addr)
+                            // IRKs are not distributed until the link is encrypted (see method
+                            // `await_encryption`)
+                            *self.privacy_info.lock().await = Keys {
+                                bonding_successful: true,
+                                this_irk: None,
+                                peer_irk: None,
+                                peer_address,
+                            }
                         }
                     }
                 }
@@ -318,7 +332,7 @@ impl Bonder {
 
         let event = self.hi.wait_for_event(Some(LEMeta::LongTermKeyRequest.into())).await;
 
-        log::trace!("Received Long Term Key Request");
+        println!("Received Long Term Key Request");
 
         match event {
             Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) if ltk_req.connection_handle == ch => true,
@@ -329,7 +343,7 @@ impl Bonder {
                 false
             }
             Ok(e) => {
-                log::error!("Received incorrect event {:?}", e);
+                eprintln!("Received incorrect event {:?}", e);
                 false
             }
             Err(e) => panic!("Event error: {:?}", e),
@@ -366,14 +380,14 @@ impl Bonder {
 
                     true
                 }
-                (Off, _) => (false),
+                (Off, _) => false,
                 (e, h) => {
-                    log::error!("Using encrypt {:?} for handle {:?}, expected {:?}", e, h, ch);
+                    eprintln!("Using encrypt {:?} for handle {:?}, expected {:?}", e, h, ch);
                     false
                 }
             },
             _ => {
-                log::error!("Expected EncryptinoChange event");
+                eprintln!("Expected EncryptionChange event");
                 false
             }
         }
@@ -447,7 +461,7 @@ impl Bonder {
                     {
                         irk_sent = true;
                     } else {
-                        log::error!("Failed to send IRK");
+                        eprintln!("Failed to send IRK");
                     }
                 }
             }
@@ -490,6 +504,30 @@ impl Bonder {
     /// This advertising will be used after the master disconnects. Only the master that previously
     /// connected *and bonded* to this device will be able to reestablish a connection.
     async fn advertising_and_connect_with_privacy(&self) -> Option<hci::events::LEEnhancedConnectionCompleteData> {
+        println!("Starting Advertising and Connection with privacy");
+
+        match self.privacy_info.lock().await.clone() {
+            (true, Some(local_irk), peer_irk, _) => self.reconnect_advertising(local_irk, peer_irk).await,
+            (false, _, _, _) => {
+                eprintln!("Failed bonding with peer device");
+                None
+            }
+            (true, None, _, _) => {
+                eprintln!(
+                    "This device has not distributed an IRK to the peer. Advertising cannot be \
+                    done with a resolvable private address"
+                );
+                None
+            }
+        }
+    }
+
+    /// Reconnection advertising via private address
+    async fn reconnect_advertising(
+        &self,
+        local_irk: u128,
+        peer_irk: Option<u128>,
+    ) -> Option<hci::events::LEEnhancedConnectionCompleteData> {
         use hci::events::EventsData;
         use hci::events::LEMeta::EnhancedConnectionComplete;
         use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
@@ -502,82 +540,74 @@ impl Bonder {
             },
         };
 
-        println!("Starting Advertising and Connection with privacy");
+        self.set_le_events(&[EnhancedConnectionComplete], true).await;
 
-        let keys = self.privacy_info.lock().await.clone();
+        set_advertising_enable::send(&self.hi, false).await.unwrap();
 
-        if let (Some(local_irk), peer_irk, Some((peer_addr_is_pub, peer_addr))) = keys {
-            self.set_le_events(&[EnhancedConnectionComplete], true).await;
-
-            set_advertising_enable::send(&self.hi, false).await.unwrap();
-
-            let resolve_list_param = add_device_to_resolving_list::Parameter {
-                identity_address_type: if peer_addr_is_pub {
-                    PeerIdentityAddressType::PublicIdentityAddress
-                } else {
-                    PeerIdentityAddressType::RandomStaticIdentityAddress
-                },
-                peer_identity_address: peer_addr,
-                peer_irk: peer_irk.unwrap_or_default(),
-                local_irk,
-            };
-
-            add_device_to_resolving_list::send(&self.hi, resolve_list_param)
-                .await
-                .unwrap();
-
-            set_address_resolution_enable::send(&self.hi, true).await.unwrap();
-
-            let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
-
-            advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKRA;
-
-            advertise_param.peer_address = peer_addr;
-
-            advertise_param.peer_address_type = if peer_addr_is_pub {
-                PeerAddressType::PublicAddress
+        let resolve_list_param = add_device_to_resolving_list::Parameter {
+            identity_address_type: if peer_addr_is_pub {
+                PeerIdentityAddressType::PublicIdentityAddress
             } else {
-                PeerAddressType::RandomAddress
-            };
+                PeerIdentityAddressType::RandomStaticIdentityAddress
+            },
+            peer_identity_address: peer_addr,
+            peer_irk: peer_irk.unwrap_or_default(),
+            local_irk,
+        };
 
-            set_advertising_parameters::send(&self.hi, advertise_param)
-                .await
-                .unwrap();
+        add_device_to_resolving_list::send(&self.hi, resolve_list_param)
+            .await
+            .unwrap();
 
-            set_advertising_enable::send(&self.hi, true).await.unwrap();
+        set_address_resolution_enable::send(&self.hi, true).await.unwrap();
 
-            let event_rslt = self.hi.wait_for_event(Some(EnhancedConnectionComplete.into())).await;
+        let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
 
-            let event_data_opt = match event_rslt {
-                Err(e) => {
-                    log::error!("Failed to receive EnhancedConnectionComplete: {:?}", e);
-                    None
-                }
-                Ok(EventsData::LEMeta(ECCData(event_data))) => {
-                    if event_data.status == hci::error::Error::NoError {
-                        *self.handle.lock().await = Some(event_data.connection_handle);
-                        Some(event_data)
-                    } else {
-                        log::error!("Received bad enhanced connection: {}", event_data.status);
-                        None
-                    }
-                }
-                Ok(e) => {
-                    log::error!("Received unexpected event: {:?}", e);
-                    None
-                }
-            };
+        advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKRA;
 
-            set_advertising_enable::send(&self.hi, false).await.unwrap();
+        advertise_param.peer_address = peer_addr;
 
-            self.set_le_events(&[EnhancedConnectionComplete], false).await;
-
-            set_address_resolution_enable::send(&self.hi, false).await.unwrap();
-
-            event_data_opt
+        advertise_param.peer_address_type = if peer_addr_is_pub {
+            PeerAddressType::PublicAddress
         } else {
-            None
-        }
+            PeerAddressType::RandomAddress
+        };
+
+        set_advertising_parameters::send(&self.hi, advertise_param)
+            .await
+            .unwrap();
+
+        set_advertising_enable::send(&self.hi, true).await.unwrap();
+
+        let event_rslt = self.hi.wait_for_event(Some(EnhancedConnectionComplete.into())).await;
+
+        let event_data_opt = match event_rslt {
+            Err(e) => {
+                eprintln!("Failed to receive EnhancedConnectionComplete: {:?}", e);
+                None
+            }
+            Ok(EventsData::LEMeta(ECCData(event_data))) => {
+                if event_data.status == hci::error::Error::NoError {
+                    *self.handle.lock().await = Some(event_data.connection_handle);
+                    Some(event_data)
+                } else {
+                    eprintln!("Received bad enhanced connection: {}", event_data.status);
+                    None
+                }
+            }
+            Ok(e) => {
+                eprintln!("Received unexpected event: {:?}", e);
+                None
+            }
+        };
+
+        set_advertising_enable::send(&self.hi, false).await.unwrap();
+
+        self.set_le_events(&[EnhancedConnectionComplete], false).await;
+
+        set_address_resolution_enable::send(&self.hi, false).await.unwrap();
+
+        event_data_opt
     }
 
     async fn remove_bonding_info(&self) {
@@ -595,7 +625,7 @@ impl Bonder {
             };
 
             if let Err(e) = send(&self.hi, pram).await {
-                log::debug!("Failed to remove bonding info: {:?}", e);
+                println!("Failed to remove bonding info: {:?}", e);
             }
         }
     }
@@ -606,7 +636,7 @@ impl Bonder {
         simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
             // Cancel advertising if advertising
             if let Err(e) = futures::executor::block_on(set_advertising_enable::send(&self.hi, false)) {
-                log::error!("Failed to stop advertising: {:?}", e);
+                eprintln!("Failed to stop advertising: {:?}", e);
             }
 
             futures::executor::block_on(self.disconnect());

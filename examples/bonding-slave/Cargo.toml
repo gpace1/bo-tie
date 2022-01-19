@@ -10,4 +10,3 @@ futures = { version = "0.3", features = ["thread-pool"] }
 simplelog = "0.11"
 simple-signal = "1"
 structopt = "0.3"
-log = "0.4"
