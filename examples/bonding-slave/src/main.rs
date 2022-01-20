@@ -586,7 +586,7 @@ impl Bonder {
 
         let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
 
-        advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKRA;
+        advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKOrPA;
 
         advertise_param.peer_address = address_info.address;
 

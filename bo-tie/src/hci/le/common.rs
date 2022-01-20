@@ -45,8 +45,8 @@ impl AddressType {
 pub enum OwnAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
-    RPAFromLocalIRKPA,
-    RPAFromLocalIRKRA,
+    RPAFromLocalIRKOrPA,
+    RPAFromLocalIRKOrRA,
 }
 
 impl OwnAddressType {
@@ -54,8 +54,8 @@ impl OwnAddressType {
         match *self {
             OwnAddressType::PublicDeviceAddress => 0x00,
             OwnAddressType::RandomDeviceAddress => 0x01,
-            OwnAddressType::RPAFromLocalIRKPA => 0x02,
-            OwnAddressType::RPAFromLocalIRKRA => 0x03,
+            OwnAddressType::RPAFromLocalIRKOrPA => 0x02,
+            OwnAddressType::RPAFromLocalIRKOrRA => 0x03,
         }
     }
 }
