@@ -242,9 +242,9 @@ pub mod set_privacy_mode {
     }
 
     pub struct Parameter {
-        peer_identity_address_type: PeerIdentityAddressType,
-        peer_identity_address: crate::BluetoothDeviceAddress,
-        privacy_mode: PrivacyMode,
+        pub peer_identity_address_type: PeerIdentityAddressType,
+        pub peer_identity_address: crate::BluetoothDeviceAddress,
+        pub privacy_mode: PrivacyMode,
     }
 
     impl CommandParameter for Parameter {
