@@ -556,16 +556,15 @@ impl Bonder {
         use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
         use hci::le::{
             common::OwnAddressType,
-            privacy::{add_device_to_resolving_list, set_address_resolution_enable, PeerIdentityAddressType},
+            privacy::{
+                add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
+                set_resolvable_private_address_timeout, PeerIdentityAddressType,
+            },
             transmitter::{
                 set_advertising_enable,
                 set_advertising_parameters::{self, PeerAddressType},
             },
         };
-
-        self.set_le_events(&[EnhancedConnectionComplete], true).await;
-
-        set_advertising_enable::send(&self.hi, false).await.unwrap();
 
         let resolve_list_param = add_device_to_resolving_list::Parameter {
             identity_address_type: if address_info.is_pub {
@@ -578,12 +577,6 @@ impl Bonder {
             local_irk: this_irk,
         };
 
-        add_device_to_resolving_list::send(&self.hi, resolve_list_param)
-            .await
-            .unwrap();
-
-        set_address_resolution_enable::send(&self.hi, true).await.unwrap();
-
         let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
 
         advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKOrPA;
@@ -595,6 +588,28 @@ impl Bonder {
         } else {
             PeerAddressType::RandomAddress
         };
+
+        let privacy_mode_param = set_privacy_mode::Parameter {
+            peer_identity_address: address_info.address,
+            peer_identity_address_type: if address_info.is_pub {
+                PeerIdentityAddressType::PublicIdentityAddress
+            } else {
+                PeerIdentityAddressType::RandomStaticIdentityAddress
+            },
+            privacy_mode: set_privacy_mode::PrivacyMode::DevicePrivacy,
+        };
+
+        self.set_le_events(&[EnhancedConnectionComplete], true).await;
+
+        set_advertising_enable::send(&self.hi, false).await.unwrap();
+
+        add_device_to_resolving_list::send(&self.hi, resolve_list_param)
+            .await
+            .unwrap();
+
+        set_address_resolution_enable::send(&self.hi, true).await.unwrap();
+
+        set_privacy_mode::send(&self.hi, privacy_mode_param).await.unwrap();
 
         set_advertising_parameters::send(&self.hi, advertise_param)
             .await
