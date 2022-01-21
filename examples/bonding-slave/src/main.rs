@@ -64,6 +64,11 @@ impl Bonder {
 }
 
 impl Bonder {
+    /// Reset the controller
+    async fn reset_controller(&self) {
+        hci::cb::reset::send(&self.hi).await.unwrap();
+    }
+
     /// Enable/Disable the provided events
     async fn set_events(&self, events: &[hci::cb::set_event_mask::EventMask], enable: bool) {
         use hci::cb::set_event_mask::{self, EventMask};
@@ -454,15 +459,8 @@ impl Bonder {
                 if encrypted && (irk_sent == false) {
                     println!("Sending IRK and Address to Master");
 
-                    let result_irk = slave_sm.send_irk(None).await;
-
-                    let addr_sent = slave_sm
-                        .send_static_rand_addr(this_address.clone())
-                        .await
-                        .expect("Cannot generate random (address) on this machine");
-
-                    match (result_irk, addr_sent) {
-                        (Ok(irk), true) => {
+                    match slave_sm.send_irk(None).await {
+                        Ok(irk) => {
                             irk_sent = true;
                             self.privacy_info.lock().await.this_irk = Some(irk);
                         }
@@ -741,16 +739,15 @@ fn main() {
 
     let local_name = "Bonding Test";
 
-    let advertise_address = [0x70, 0x92, 0x07, 0x23, 0xac, 0xc3];
-
-    // Bonder is structure local to this example
+    // Bonder is structure local to this example, its used for enabling privacy after bonding is
+    // completed.
     let bonder = block_on(Bonder::new());
 
     bonder.clone().setup_signal_handle();
 
     let thread_pool = ThreadPool::new().expect("Failed to create ThreadPool");
 
-    println!("This public address: {:x?}", advertise_address);
+    block_on(bonder.reset_controller());
 
     // Wait for events to be initialized before proceeding to the next steps.
     block_on(bonder.init_events());
