@@ -860,7 +860,7 @@ pub struct CommandCompleteData {
 ///     try_from can either be a result of "data" or the optional parameter "return_ty" with the
 ///     error type being try_from_err_ty
 ///   - This type should not be a packed data type.
-/// - (optionl) return_ty: If the type "data" doesn't need to be returned and it would make sense
+/// - (optional) return_ty: If the type "data" doesn't need to be returned and it would make sense
 /// - try_from_err_ty: The error type of the return of the try_from function implemented for "data"
 macro_rules! impl_get_data_for_command {
     ($command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty) => {
