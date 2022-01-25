@@ -48,6 +48,7 @@ struct Bonder {
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
     abort_server_handle: Arc<Mutex<Option<futures::future::AbortHandle>>>,
     privacy_info: Arc<Mutex<Keys>>,
+    this_address: Option<BluetoothDeviceAddress>,
 }
 
 impl Bonder {
@@ -59,6 +60,7 @@ impl Bonder {
             le_event_mask: Arc::new(Mutex::new(HashSet::new())),
             abort_server_handle: Arc::new(Mutex::new(None)),
             privacy_info: Default::default(),
+            this_address: None,
         }
     }
 }
@@ -69,9 +71,18 @@ impl Bonder {
         hci::cb::reset::send(&self.hi).await.unwrap();
     }
 
-    /// Get public address
-    async fn get_address(&self) -> BluetoothDeviceAddress {
-        *hci::info_params::read_bd_addr::send(&self.hi).await.unwrap()
+    /// Get the public address
+    async fn get_address(&mut self) -> BluetoothDeviceAddress {
+        match self.this_address {
+            Some(address) => address,
+            None => {
+                let address = *hci::info_params::read_bd_addr::send(&self.hi).await.unwrap();
+
+                self.this_address = Some(address);
+
+                address
+            }
+        }
     }
 
     /// Enable/Disable the provided events
@@ -487,7 +498,7 @@ impl Bonder {
     }
 
     async fn abortable_server_loop(
-        self,
+        mut self,
         local_name: &'static str,
         handle: hci::common::ConnectionHandle,
         peer_address: bo_tie::BluetoothDeviceAddress,
@@ -747,7 +758,12 @@ fn main() {
 
     // Bonder is structure local to this example, its used for enabling privacy after bonding is
     // completed.
-    let bonder = block_on(Bonder::new());
+    let mut bonder = block_on(Bonder::new());
+
+    println!(
+        "This address: {}",
+        bo_tie::bluetooth_address_into_string(&block_on(bonder.get_address()))
+    );
 
     bonder.clone().setup_signal_handle();
 
