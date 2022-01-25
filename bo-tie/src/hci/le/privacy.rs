@@ -1,4 +1,4 @@
-//! LE Privace Commands
+//! LE Privacy Commands
 
 /// Identity Address Type
 ///
@@ -19,6 +19,7 @@ impl PeerIdentityAddressType {
 
 pub mod set_resolvable_private_address_timeout {
     use crate::hci::*;
+    use core::time::Duration;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::LEController(opcodes::LEController::SetResolvablePrivateAddressTimeout);
@@ -39,14 +40,33 @@ pub mod set_resolvable_private_address_timeout {
 
     impl_status_return!(COMMAND);
 
+    /// Set the timeout until a new resolvable private address is generated
+    ///
+    /// The `time_out` is within the range of one second to one hour rounded down to the second. Any
+    /// value outside of that range will be bounded to the closest range end (see #Note for the
+    /// exception)
+    ///
+    /// # Note
+    /// Using the [`Default`](core::default::Default) value of `Duration` for the input `time_out`
+    /// will set the resolvable private address timeout to it's default value of 15 minutes.
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, I: 'static>(
         hci: &'a HostInterface<I>,
-        time_out: u16,
+        time_out: Duration,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
         I: HostControllerInterface,
     {
+        let time_out = if time_out == Duration::default() {
+            0x384
+        } else if time_out < Duration::from_secs(1) {
+            0x1
+        } else if time_out > Duration::from_secs(60 * 60) {
+            0xE10
+        } else {
+            time_out.as_secs() as u16
+        };
+
         let parameter = Parameter { time_out };
 
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
