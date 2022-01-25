@@ -42,9 +42,10 @@ pub mod set_resolvable_private_address_timeout {
 
     /// Set the timeout until a new resolvable private address is generated
     ///
-    /// The `time_out` is within the range of one second to one hour rounded down to the second. Any
-    /// value outside of that range will be bounded to the closest range end (see #Note for the
-    /// exception)
+    /// This is used to set the timeout in the controller to generate a new resolvable private
+    /// address. The input `time_out` is within the range of one second to one hour rounded down to
+    /// the second. Any value outside of that range will be bounded to the closest range end (see
+    /// #Note for the exception)
     ///
     /// # Note
     /// Using the [`Default`](core::default::Default) value of `Duration` for the input `time_out`
