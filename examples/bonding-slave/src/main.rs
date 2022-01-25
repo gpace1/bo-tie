@@ -8,7 +8,7 @@
 //! In order to exit this example, a signal (ctrl-c) needs to be sent. Also
 
 use bo_tie::att::server::BasicQueuedWriter;
-use bo_tie::hci;
+use bo_tie::{hci, BluetoothDeviceAddress};
 use futures::lock::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -67,6 +67,11 @@ impl Bonder {
     /// Reset the controller
     async fn reset_controller(&self) {
         hci::cb::reset::send(&self.hi).await.unwrap();
+    }
+
+    /// Get public address
+    async fn get_address(&self) -> BluetoothDeviceAddress {
+        *hci::info_params::read_bd_addr::send(&self.hi).await.unwrap()
     }
 
     /// Enable/Disable the provided events
@@ -150,11 +155,9 @@ impl Bonder {
     ///
     /// This advertising is for connecting with a bluetooth device that has not been bonded with
     /// this device (or lost bonding information).
-    async fn start_advertising(self, advertised_address: bo_tie::BluetoothDeviceAddress, advertised_name: &str) {
+    async fn start_advertising(self, advertised_name: &str) {
         use bo_tie::gap::assigned;
-        use hci::le::transmitter::{
-            set_advertising_data, set_advertising_enable, set_advertising_parameters, set_random_address,
-        };
+        use hci::le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters};
 
         let adv_name = assigned::local_name::LocalName::new(advertised_name, false);
 
@@ -185,13 +188,11 @@ impl Bonder {
 
         set_advertising_enable::send(&self.hi, false).await.unwrap();
 
-        set_random_address::send(&self.hi, advertised_address).await.unwrap();
-
         set_advertising_data::send(&self.hi, adv_data).await.unwrap();
 
         let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
-        adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress;
+        adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::PublicDeviceAddress;
 
         set_advertising_parameters::send(&self.hi, adv_prams).await.unwrap();
 
@@ -487,7 +488,6 @@ impl Bonder {
 
     async fn abortable_server_loop(
         self,
-        this_address: bo_tie::BluetoothDeviceAddress,
         local_name: &'static str,
         handle: hci::common::ConnectionHandle,
         peer_address: bo_tie::BluetoothDeviceAddress,
@@ -498,6 +498,8 @@ impl Bonder {
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
 
         *self.abort_server_handle.lock().await = Some(abort_handle);
+
+        let this_address = self.get_address().await;
 
         let server_loop = self.server_loop(this_address, local_name, handle, peer_address, peer_address_is_random);
 
@@ -602,6 +604,10 @@ impl Bonder {
         set_advertising_enable::send(&self.hi, false).await.unwrap();
 
         add_device_to_resolving_list::send(&self.hi, resolve_list_param)
+            .await
+            .unwrap();
+
+        set_resolvable_private_address_timeout::send(&self.hi, core::time::Duration::default())
             .await
             .unwrap();
 
@@ -756,9 +762,7 @@ fn main() {
     thread_pool.spawn(bonder.clone().connection_update_request()).unwrap();
 
     thread_pool
-        .spawn(Box::pin(
-            bonder.clone().start_advertising(advertise_address, local_name),
-        ))
+        .spawn(Box::pin(bonder.clone().start_advertising(local_name)))
         .unwrap();
 
     // Spawn the process to await a connection
@@ -770,7 +774,6 @@ fn main() {
 
             // Start the server
             block_on(bonder.clone().abortable_server_loop(
-                advertise_address.clone(),
                 local_name,
                 event_data.connection_handle,
                 event_data.peer_address,
