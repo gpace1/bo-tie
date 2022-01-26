@@ -48,11 +48,11 @@ struct Bonder {
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
     abort_server_handle: Arc<Mutex<Option<futures::future::AbortHandle>>>,
     privacy_info: Arc<Mutex<Keys>>,
-    this_address: Option<BluetoothDeviceAddress>,
+    this_address: Result<AddressInfo, bool>,
 }
 
 impl Bonder {
-    async fn new() -> Self {
+    async fn new(use_pub_address: bool) -> Self {
         Bonder {
             hi: hci::HostInterface::new().await,
             handle: Arc::new(Mutex::new(None)),
@@ -60,7 +60,7 @@ impl Bonder {
             le_event_mask: Arc::new(Mutex::new(HashSet::new())),
             abort_server_handle: Arc::new(Mutex::new(None)),
             privacy_info: Default::default(),
-            this_address: None,
+            this_address: Err(use_pub_address),
         }
     }
 }
@@ -71,22 +71,42 @@ impl Bonder {
         hci::cb::reset::send(&self.hi).await.unwrap();
     }
 
-    /// Get the public address
-    async fn get_address(&mut self) -> BluetoothDeviceAddress {
+    /// Get the address
+    ///
+    /// # Note
+    /// If the address is random, it will be randomly generated and set within the controller (once)
+    /// before `get_address` returns the address information. This method needs to be called before
+    /// advertising is enabled (or at least a connection occurs).
+    async fn get_address(&mut self) -> AddressInfo {
         match self.this_address {
-            Some(address) => address,
-            None => {
-                let address = *hci::info_params::read_bd_addr::send(&self.hi).await.unwrap();
+            Ok(address) => address,
+            Err(is_pub) => {
+                let address_info = if is_pub {
+                    let address = *hci::info_params::read_bd_addr::send(&self.hi).await.unwrap();
 
-                self.this_address = Some(address);
+                    AddressInfo { address, is_pub: true }
+                } else {
+                    let address = bo_tie::new_static_random_bluetooth_address();
 
-                address
+                    hci::le::transmitter::set_random_address::send(&self.hi, address)
+                        .await
+                        .unwrap();
+
+                    AddressInfo { address, is_pub: false }
+                };
+
+                self.this_address = Ok(address_info);
+
+                address_info
             }
         }
     }
 
-    fn is_this_address_random(&self) -> bool {
-        false
+    fn is_address_public(&self) -> bool {
+        match self.this_address {
+            Ok(AddressInfo { is_pub, .. }) => is_pub,
+            Err(is_pub) => is_pub,
+        }
     }
 
     /// Enable/Disable the provided events
@@ -207,7 +227,11 @@ impl Bonder {
 
         let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
-        adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::PublicDeviceAddress;
+        adv_prams.own_address_type = if self.is_address_public() {
+            bo_tie::hci::le::common::OwnAddressType::PublicDeviceAddress
+        } else {
+            bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress
+        };
 
         set_advertising_parameters::send(&self.hi, adv_prams).await.unwrap();
 
@@ -420,8 +444,7 @@ impl Bonder {
     /// # Note
     /// Does not return
     async fn server_loop(
-        self,
-        this_address: bo_tie::BluetoothDeviceAddress,
+        mut self,
         local_name: &'static str,
         mut handle: hci::common::ConnectionHandle,
         mut peer_address: bo_tie::BluetoothDeviceAddress,
@@ -439,13 +462,15 @@ impl Bonder {
         let mut encrypted = false;
         let mut irk_sent = false;
 
+        let this_address = self.get_address().await.address;
+
         'outer: loop {
             let mut slave_sm = bo_tie::sm::responder::SlaveSecurityManagerBuilder::new(
                 &connection_channel,
                 &peer_address,
                 &this_address,
                 peer_address_is_random,
-                self.is_this_address_random(),
+                !self.is_address_public(),
             )
             .build();
 
@@ -521,9 +546,7 @@ impl Bonder {
 
         *self.abort_server_handle.lock().await = Some(abort_handle);
 
-        let this_address = self.get_address().await;
-
-        let server_loop = self.server_loop(this_address, local_name, handle, peer_address, peer_address_is_random);
+        let server_loop = self.server_loop(local_name, handle, peer_address, peer_address_is_random);
 
         Abortable::new(server_loop, abort_registration).await.ok();
     }
@@ -571,7 +594,7 @@ impl Bonder {
         &self,
         this_irk: u128,
         peer_irk: Option<u128>,
-        address_info: AddressInfo,
+        peer_address_info: AddressInfo,
     ) -> Option<hci::events::LEEnhancedConnectionCompleteData> {
         use hci::events::EventsData;
         use hci::events::LEMeta::EnhancedConnectionComplete;
@@ -589,31 +612,35 @@ impl Bonder {
         };
 
         let resolve_list_param = add_device_to_resolving_list::Parameter {
-            identity_address_type: if address_info.is_pub {
+            identity_address_type: if peer_address_info.is_pub {
                 PeerIdentityAddressType::PublicIdentityAddress
             } else {
                 PeerIdentityAddressType::RandomStaticIdentityAddress
             },
-            peer_identity_address: address_info.address,
+            peer_identity_address: peer_address_info.address,
             peer_irk: peer_irk.unwrap_or_default(),
             local_irk: this_irk,
         };
 
         let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
 
-        advertise_param.own_address_type = OwnAddressType::RPAFromLocalIRKOrPA;
+        advertise_param.own_address_type = if self.is_address_public() {
+            OwnAddressType::RPAFromLocalIRKOrPA
+        } else {
+            OwnAddressType::RPAFromLocalIRKOrRA
+        };
 
-        advertise_param.peer_address = address_info.address;
+        advertise_param.peer_address = peer_address_info.address;
 
-        advertise_param.peer_address_type = if address_info.is_pub {
+        advertise_param.peer_address_type = if peer_address_info.is_pub {
             PeerAddressType::PublicAddress
         } else {
             PeerAddressType::RandomAddress
         };
 
         let privacy_mode_param = set_privacy_mode::Parameter {
-            peer_identity_address: address_info.address,
-            peer_identity_address_type: if address_info.is_pub {
+            peer_identity_address: peer_address_info.address,
+            peer_identity_address_type: if peer_address_info.is_pub {
                 PeerIdentityAddressType::PublicIdentityAddress
             } else {
                 PeerIdentityAddressType::RandomStaticIdentityAddress
@@ -769,11 +796,11 @@ fn main() {
 
     // Bonder is structure local to this example, its used for enabling privacy after bonding is
     // completed.
-    let mut bonder = block_on(Bonder::new());
+    let mut bonder = block_on(Bonder::new(true));
 
     println!(
         "This address: {}",
-        bo_tie::bluetooth_address_into_string(&block_on(bonder.get_address()))
+        bo_tie::bluetooth_address_into_string(&block_on(bonder.get_address()).address)
     );
 
     bonder.clone().setup_signal_handle();
