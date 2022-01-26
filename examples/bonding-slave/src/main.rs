@@ -8,7 +8,7 @@
 //! In order to exit this example, a signal (ctrl-c) needs to be sent. Also
 
 use bo_tie::att::server::BasicQueuedWriter;
-use bo_tie::{hci, BluetoothDeviceAddress};
+use bo_tie::hci;
 use futures::lock::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -534,7 +534,7 @@ impl Bonder {
     }
 
     async fn abortable_server_loop(
-        mut self,
+        self,
         local_name: &'static str,
         handle: hci::common::ConnectionHandle,
         peer_address: bo_tie::BluetoothDeviceAddress,
