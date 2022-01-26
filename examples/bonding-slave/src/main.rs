@@ -85,6 +85,10 @@ impl Bonder {
         }
     }
 
+    fn is_this_address_random(&self) -> bool {
+        false
+    }
+
     /// Enable/Disable the provided events
     async fn set_events(&self, events: &[hci::cb::set_event_mask::EventMask], enable: bool) {
         use hci::cb::set_event_mask::{self, EventMask};
@@ -441,7 +445,7 @@ impl Bonder {
                 &peer_address,
                 &this_address,
                 peer_address_is_random,
-                true, // this example used a random address for advertising
+                self.is_this_address_random(),
             )
             .build();
 
