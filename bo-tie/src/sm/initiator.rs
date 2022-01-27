@@ -53,8 +53,8 @@ impl<'a, C> MasterSecurityManagerBuilder<'a, C> {
     /// Set the keys if the devices are already paired
     ///
     /// Assigns the keys that were previously generated after a successful pair. The long term key
-    /// must be present within `keys`. *This method allows for bonding keys to be distributed
-    /// without having to go through pairing.
+    /// must be present within `keys` (unless `keys` is `None`). *This method allows for bonding
+    /// keys to be distributed without having to go through pairing.
     pub fn set_already_paired<K: Into<Option<super::Keys>>>(&mut self, keys: K) -> Result<(), &'static str> {
         self.prior_keys = keys
             .into()
