@@ -460,17 +460,17 @@ impl Bonder {
 
         let mut ltk = None;
         let mut encrypted = false;
-        let mut irk_sent = false;
+        let mut bonding_information_sent = false;
 
-        let this_address = self.get_address().await.address;
+        let this_address = self.get_address().await;
 
         'outer: loop {
             let mut slave_sm = bo_tie::sm::responder::SlaveSecurityManagerBuilder::new(
                 &connection_channel,
                 &peer_address,
-                &this_address,
+                &this_address.address,
                 peer_address_is_random,
-                !self.is_address_public(),
+                !this_address.is_pub,
             )
             .build();
 
@@ -497,19 +497,26 @@ impl Bonder {
 
                 slave_sm.set_encrypted(encrypted);
 
-                if encrypted && (irk_sent == false) {
+                if encrypted && (bonding_information_sent == false) {
                     println!("Sending IRK and Address to Master");
 
                     let result_irk = slave_sm.send_irk(None).await;
 
-                    let addr_sent = slave_sm
-                        .send_pub_addr(this_address.clone())
-                        .await
-                        .expect("Cannot generate random (address) on this machine");
+                    let addr_sent = if this_address.is_pub {
+                        slave_sm
+                            .send_pub_addr(this_address.address.clone())
+                            .await
+                            .expect("Cannot send public address on this machine")
+                    } else {
+                        slave_sm
+                            .send_static_rand_addr(this_address.address.clone())
+                            .await
+                            .expect("Cannot send static random address on this machine")
+                    };
 
                     match (result_irk, addr_sent) {
                         (Ok(irk), true) => {
-                            irk_sent = true;
+                            bonding_information_sent = true;
                             self.privacy_info.lock().await.this_irk = Some(irk);
                         }
                         _ => {
