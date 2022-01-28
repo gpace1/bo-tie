@@ -91,7 +91,7 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionInterval {
     interval: u16,
 }
@@ -142,7 +142,7 @@ impl ConnectionInterval {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LEAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
@@ -171,7 +171,7 @@ impl LEAddressType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionLatency {
     latency: u16,
 }
@@ -205,7 +205,7 @@ impl ConnectionLatency {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SupervisionTimeout {
     timeout: u16,
 }
@@ -604,7 +604,7 @@ impl fmt::Debug for EnabledExtendedFeaturesItr {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ExtendedInquiryResponseDataItr {
     /// Size is from spec. (v5 vol3, part C sec. 8)
     data: [u8; 240],
@@ -644,7 +644,7 @@ impl Iterator for ExtendedInquiryResponseDataItr {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ExtendedAdvertisingAndScanResponseDataItr {
     data: alloc::boxed::Box<[u8]>,
     indexer: usize,

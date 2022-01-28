@@ -1,7 +1,7 @@
 pub use crate::hci::link_control::disconnect;
 
 interval!(
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     ConnectionInterval,
     0x0006,
     0x0C80,

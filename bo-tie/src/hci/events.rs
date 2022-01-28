@@ -167,7 +167,7 @@ macro_rules! chew_handle {
 
 type BufferType<T> = alloc::vec::Vec<T>;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Multiple<T> {
     data: BufferType<T>,
 }
@@ -198,7 +198,7 @@ impl<T> core::iter::IntoIterator for Multiple<T> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum PageScanRepetitionMode {
     R0,
     R1,
@@ -218,7 +218,7 @@ impl PageScanRepetitionMode {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ClassOfDevice {
     Class(u32),
     Unknown,
@@ -240,7 +240,7 @@ impl ClassOfDevice {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LinkType {
     SCOConnection,
     ACLConnection,
@@ -260,7 +260,7 @@ impl LinkType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LinkLevelEncryptionEnabled {
     Yes,
     No,
@@ -278,7 +278,7 @@ impl LinkLevelEncryptionEnabled {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EncryptionEnabled {
     raw: u8,
 }
@@ -308,7 +308,7 @@ impl From<u8> for EncryptionEnabled {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum KeyFlag {
     SemiPermanentLinkKey,
     TemporaryLinkKey,
@@ -326,7 +326,7 @@ impl KeyFlag {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ServiceType {
     NoTrafficAvailable,
     BestEffortAvailable,
@@ -345,7 +345,7 @@ impl ServiceType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct InquiryCompleteData {
     pub status: Error,
 }
@@ -358,7 +358,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct InquiryResultData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub page_scan_repetition_mode: PageScanRepetitionMode,
@@ -402,7 +402,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -425,7 +425,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub class_of_device: ClassOfDevice,
@@ -448,7 +448,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DisconnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -467,7 +467,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AuthenticationCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -484,7 +484,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RemoteNameRequestCompleteData {
     pub status: Error,
     pub bluetooth_address: BluetoothDeviceAddress,
@@ -507,7 +507,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EncryptionChangeData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -526,7 +526,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ChangeConnectionLinkKeyCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -543,7 +543,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MasterLinkKeyCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -562,7 +562,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReadRemoteSupportedFeaturesCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -585,7 +585,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReadRemoteVersionInformationCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -608,7 +608,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct QosSetupCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -809,7 +809,7 @@ macro_rules! impl_get_data_for_event_data {
     };
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CommandCompleteData {
     pub number_of_hci_command_packets: u8,
     pub command_opcode: Option<u16>,
@@ -909,7 +909,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CommandStatusData {
     pub status: Error,
     pub number_of_hci_command_packets: u8,
@@ -932,7 +932,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct HardwareErrorData {
     pub hardware_error: u8,
 }
@@ -947,7 +947,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct FlushOccuredData {
     pub handle: ConnectionHandle,
 }
@@ -962,7 +962,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum NewRole {
     NowMaster,
     NowSlave,
@@ -980,7 +980,7 @@ impl NewRole {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RoleChangeData {
     pub status: Error,
     pub bluetooth_address: BluetoothDeviceAddress,
@@ -999,7 +999,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NumberOfCompletedPacketsData {
     pub connection_handle: ConnectionHandle,
     pub number_of_completed_packets: u16,
@@ -1028,7 +1028,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum CurrentMode {
     ActiveMode,
     HoldMode(CurrentModeInterval),
@@ -1050,7 +1050,7 @@ impl CurrentMode {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CurrentModeInterval {
     pub interval: u16,
 }
@@ -1073,7 +1073,7 @@ impl CurrentModeInterval {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ModeChangeData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1099,7 +1099,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReturnLinkKeysData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub link_key: [u8; 16],
@@ -1128,7 +1128,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PINCodeRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
@@ -1143,7 +1143,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LinkKeyRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
@@ -1158,7 +1158,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LinkKeyType {
     CombinationKey,
     LocalUnitKey,
@@ -1190,7 +1190,7 @@ impl LinkKeyType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LinkKeyNotificationData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub link_key: [u8; 16],
@@ -1213,7 +1213,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LoopbackCommandData {
     opcode: u16,
     hci_command_packet: BufferType<u8>,
@@ -1230,7 +1230,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LinkTypeOverflow {
     /// Voice channel overflow
     SynchronousBufferOverflow,
@@ -1247,7 +1247,7 @@ impl LinkTypeOverflow {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DataBufferOverflowData {
     pub link_type_overflow: LinkTypeOverflow,
 }
@@ -1262,7 +1262,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LMPMaxSlots {
     One,
     Three,
@@ -1287,7 +1287,7 @@ impl LMPMaxSlots {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MaxSlotsChangeData {
     pub connection_handle: ConnectionHandle,
     pub lmp_max_slots: LMPMaxSlots,
@@ -1304,7 +1304,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReadClockOffsetCompleteData {
     status: Error,
     connection_handle: ConnectionHandle,
@@ -1324,13 +1324,13 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum PacketType {
     Acl(AclPacketType),
     Sco(ScoPacketType),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AclPacketType {
     TwoDH1ShallNotBeUsed,
     ThreeDH1ShallNotBeUsed,
@@ -1366,7 +1366,7 @@ impl AclPacketType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ScoPacketType {
     HV1,
     HV2,
@@ -1384,7 +1384,7 @@ impl ScoPacketType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionPacketTypeChangedData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1417,7 +1417,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct QoSViolationData {
     connection_handle: ConnectionHandle,
 }
@@ -1432,7 +1432,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PageScanRepetitionModeChangeData {
     bluetooth_address: BluetoothDeviceAddress,
     page_scan_repition_mode: PageScanRepetitionMode,
@@ -1449,7 +1449,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum FlowDirection {
     /// Traffic sent over the ACL connection
     OutgoingFlow,
@@ -1467,7 +1467,7 @@ impl FlowDirection {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct FlowSpecificationCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1496,7 +1496,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct InquiryResultWithRSSIData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub page_scan_repition_mode: PageScanRepetitionMode,
@@ -1534,13 +1534,13 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum FeatureType {
     Features(EnabledFeaturesIter),
     ExtendedFeatures(EnabledExtendedFeaturesItr),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReadRemoteExtendedFeaturesCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1572,7 +1572,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AirMode {
     MicroLawLog,
     ALawLog,
@@ -1592,7 +1592,7 @@ impl AirMode {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SynchronousConnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1623,7 +1623,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SynchronousConnectionChangedData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1648,7 +1648,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SniffSubratingData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1673,7 +1673,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ExtendedInquiryResultData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub page_scan_repition_mode: PageScanRepetitionMode,
@@ -1702,7 +1702,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EncryptionKeyRefreshCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -1719,7 +1719,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct IOCapabilityRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
@@ -1734,7 +1734,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum IOCapability {
     DisplayOnly,
     DisplayYesNo,
@@ -1754,7 +1754,7 @@ impl IOCapability {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum OOBDataPresent {
     OOBAuthenticationDataNotPresent,
     OOBAuthenticationDataFromRemoteDevicePresent,
@@ -1770,7 +1770,7 @@ impl OOBDataPresent {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AuthenticationRequirements {
     MITMProtectionNotRequiredNoBonding,
     MITMProtectionRequiredNoBonding,
@@ -1793,7 +1793,7 @@ impl AuthenticationRequirements {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct IOCapabilityResponseData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub io_capability: IOCapability,
@@ -1814,7 +1814,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UserConfirmationRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub numeric_value: u32,
@@ -1831,7 +1831,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UserPasskeyRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
@@ -1846,7 +1846,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RemoteOOBDataRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
@@ -1861,7 +1861,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SimplePairingCompleteData {
     pub status: Error,
     pub bluetooth_address: BluetoothDeviceAddress,
@@ -1878,7 +1878,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LinkSupervisionTimeoutChangedData {
     pub connection_handle: ConnectionHandle,
     pub link_supervision_timeout: u16,
@@ -1895,7 +1895,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EnhancedFlushCompleteData {
     pub connection_handle: ConnectionHandle,
 }
@@ -1910,7 +1910,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UserPasskeyNotificationData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub passkey: u32,
@@ -1927,7 +1927,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum KeypressNotificationType {
     PasskeyEntrystarted,
     PasskeyDigitEntered,
@@ -1949,7 +1949,7 @@ impl KeypressNotificationType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct KeypressNotificationData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub notification_type: KeypressNotificationType,
@@ -1966,7 +1966,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RemoteHostSupportedFeaturesNotificationData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub host_supported_features: EnabledFeaturesIter,
@@ -1987,7 +1987,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PhysicalLinkCompleteData {
     pub status: Error,
     pub physical_link_handle: u8,
@@ -2004,7 +2004,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ChannelSelectedData {
     pub physical_link_handle: u8,
 }
@@ -2019,7 +2019,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DisconnectionPhysicalLinkCompleteData {
     pub status: Error,
     pub physical_link_handle: u8,
@@ -2038,7 +2038,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LinkLossReason {
     Unknown,
     RangeRelated,
@@ -2059,7 +2059,7 @@ impl LinkLossReason {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PhysicalLInkLossEarlyWarningData {
     pub physical_link_handle: u8,
     pub link_loss_reason: LinkLossReason,
@@ -2076,7 +2076,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PhysicalLinkRecoveryData {
     pub physical_link_handle: u8,
 }
@@ -2091,7 +2091,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LogicalLinkCompleteData {
     pub status: Error,
     pub logical_link_handle: ConnectionHandle,
@@ -2112,7 +2112,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DisconnectionLogicalLinkCompleteData {
     pub status: Error,
     pub logical_link_handle: ConnectionHandle,
@@ -2131,7 +2131,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct FlowSpecModifyCompleteData {
     pub status: Error,
     pub handle: ConnectionHandle,
@@ -2148,7 +2148,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ControllerBlocks {
     /// Requesting means that the controller is requesting the host to issue the Read Data Block
     /// Size Commmand to the controller. This is because the size of the buffer pool may have
@@ -2168,7 +2168,7 @@ impl ControllerBlocks {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CompletedDataPacketsAndBlocks {
     pub handle: ConnectionHandle,
     /// This is the number of completed packets (transmitted or flushed) since the last time
@@ -2179,7 +2179,7 @@ pub struct CompletedDataPacketsAndBlocks {
     pub completed_blocks: u16,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NumberOfCompletedDataBlocksData {
     pub total_data_blocks: ControllerBlocks,
     pub completed_packets_and_blocks: BufferType<CompletedDataPacketsAndBlocks>,
@@ -2209,7 +2209,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ShortRangeModeState {
     Enabled,
     Disabled,
@@ -2225,7 +2225,7 @@ impl ShortRangeModeState {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ShortRangeModeChangeCompleteData {
     pub status: Error,
     pub physical_link_handle: u8,
@@ -2244,7 +2244,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AMPStatusChangeData {
     pub status: Error,
     /// Look at the specification for this values meaning (v5 | vol 2, part E 7.7.61 )
@@ -2262,7 +2262,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AMPStartTestData {
     pub status: Error,
     pub test_scenario: u8,
@@ -2279,7 +2279,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AMPTestEndData {
     pub status: Error,
     pub test_scenario: u8,
@@ -2296,7 +2296,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AMPReceiverReportDataEventType {
     FramesReceivedReport,
     FramesReceivedAndBitsInRrrorReport,
@@ -2312,7 +2312,7 @@ impl AMPReceiverReportDataEventType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AMPReceiverReportData {
     controller_type: u8,
     reason: Error,
@@ -2339,7 +2339,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LERole {
     Master,
     Slave,
@@ -2355,7 +2355,7 @@ impl LERole {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LEConnectionAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
@@ -2371,7 +2371,7 @@ impl LEConnectionAddressType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ClockAccuracy {
     _500ppm,
     _250ppm,
@@ -2399,7 +2399,7 @@ impl ClockAccuracy {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEConnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -2487,7 +2487,7 @@ impl<'a> core::iter::Iterator for ReportDataIter<'a> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEAdvertisingReportData {
     pub event_type: LEAdvEventType,
     pub address_type: LEAddressType,
@@ -2537,7 +2537,7 @@ impl LEAdvertisingReportData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEConnectionUpdateCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -2561,7 +2561,7 @@ impl LEConnectionUpdateCompleteData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEReadRemoteFeaturesCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -2585,7 +2585,7 @@ impl LEReadRemoteFeaturesCompleteData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LELongTermKeyRequestData {
     pub connection_handle: ConnectionHandle,
     pub random_number: u64,
@@ -2605,7 +2605,7 @@ impl LELongTermKeyRequestData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEConnectionTimeout {
     timeout: u16,
 }
@@ -2626,7 +2626,7 @@ impl LEConnectionTimeout {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LERemoteConnectionParameterRequestData {
     pub connection_handle: ConnectionHandle,
     pub minimum_interval: le::connection::ConnectionInterval,
@@ -2652,7 +2652,7 @@ impl LERemoteConnectionParameterRequestData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEMaxOctets {
     pub octets: u16,
 }
@@ -2666,7 +2666,7 @@ impl LEMaxOctets {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEMaxTime {
     pub time: u16,
 }
@@ -2680,7 +2680,7 @@ impl LEMaxTime {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEDataLengthChangeData {
     pub connection_handle: ConnectionHandle,
     pub max_tx_octets: LEMaxOctets,
@@ -2704,7 +2704,7 @@ impl LEDataLengthChangeData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEReadLocalP256PublicKeyCompleteData {
     pub status: Error,
     pub key: [u8; 64],
@@ -2726,7 +2726,7 @@ impl LEReadLocalP256PublicKeyCompleteData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 /// DHKey stands for diffie Hellman Key
 pub struct LEGenerateDHKeyCompleteData {
     status: Error,
@@ -2749,7 +2749,7 @@ impl LEGenerateDHKeyCompleteData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEEnhancedConnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -2804,7 +2804,7 @@ impl LEEnhancedConnectionCompleteData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LEAdvertisingEventType {
     ConnectableDirectedLegacyAdvertising,
 }
@@ -2818,7 +2818,7 @@ impl LEAdvertisingEventType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LEDirectAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
@@ -2840,7 +2840,7 @@ impl LEDirectAddressType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEDirectedAdvertisingReportData {
     pub event_type: LEAdvertisingEventType,
     pub address_type: LEAddressType,
@@ -2885,7 +2885,7 @@ impl LEDirectedAdvertisingReportData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LEPhy {
     _1M,
     _2M,
@@ -2903,7 +2903,7 @@ impl LEPhy {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEPHYUpdateCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
@@ -2927,7 +2927,7 @@ impl LEPHYUpdateCompleteData {
 /// IncompleteTruncated means that the controller was not successfull of the reception of an
 /// AUX_CHAIN_IND (Secondary advertising channel fragmented data) PDU, where as Incomplete means
 /// that there is more data to come.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LEDataStatus {
     Complete,
     Incomplete,
@@ -2952,7 +2952,7 @@ impl LEDataStatus {
 /// AdvertisingNonConnectableNonScannableInd -- ADV_NONCONN_IND
 /// ScanResponseToAdvertisingInd             -- SCAN_RSP to an ADV_IND
 /// ScanResponseToAdvertisingScanInd         -- SCAN_RSP to an ADV_SCAN_IN
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LELegacyExtAdvEventTypePDUType {
     AdvertisingInd,
     ConnectableAdvertisingInd,
@@ -2962,7 +2962,7 @@ pub enum LELegacyExtAdvEventTypePDUType {
     ScanResponseToAdvertisingScanInd,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEExtAdvEventType {
     raw: u16,
 }
@@ -3010,7 +3010,7 @@ impl LEExtAdvEventType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEAdvertiseInterval {
     interval: u16,
 }
@@ -3041,7 +3041,7 @@ impl LEAdvertiseInterval {
 /// - If Tx_power is None, tx power is not available
 /// - If rssi is None, rssi is not available
 /// - If the periodic_advertising_interval is None, then there si no periodic advertising
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEExtendedAdvertisingReportData {
     pub event_type: LEExtAdvEventType,
     pub address_type: Option<LEAddressType>,
@@ -3147,7 +3147,7 @@ impl LEExtendedAdvertisingReportData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEPeriodicAdvertisingSyncEstablishedData {
     pub status: Error,
     pub sync_handle: ConnectionHandle,
@@ -3177,7 +3177,7 @@ impl LEPeriodicAdvertisingSyncEstablishedData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEPeriodicAdvertisingReportData {
     pub sync_handle: ConnectionHandle,
     pub tx_power: Option<i8>,
@@ -3217,7 +3217,7 @@ impl LEPeriodicAdvertisingReportData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEPeriodicAdvertisingSyncLostData {
     sync_handle: ConnectionHandle,
 }
@@ -3232,7 +3232,7 @@ impl LEPeriodicAdvertisingSyncLostData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEAdvertisingSetTerminatedData {
     pub status: Error,
     pub advertising_handle: u8,
@@ -3254,7 +3254,7 @@ impl LEAdvertisingSetTerminatedData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEScanRequestReceivedData {
     pub advertising_handle: u8,
     pub scanner_address_type: LEAddressType,
@@ -3274,7 +3274,7 @@ impl LEScanRequestReceivedData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum LEChannelSelectionAlgorithm {
     Algorithm1,
     Algorithm2,
@@ -3290,7 +3290,7 @@ impl LEChannelSelectionAlgorithm {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LEChannelSelectionAlgorithmData {
     pub connection_handle: ConnectionHandle,
     pub channel_selection_algorithm: LEChannelSelectionAlgorithm,
@@ -3328,7 +3328,7 @@ macro_rules! enumerate_split {
 
 enumerate_split! {
     #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
-    pub enum LEMeta ( #[derive(Clone)] enum LEMetaData ) {
+    pub enum LEMeta ( #[derive(Debug,Clone)] enum LEMetaData ) {
         ConnectionComplete{LEConnectionCompleteData},
         AdvertisingReport{BufferType<Result<LEAdvertisingReportData, alloc::string::String>>},
         ConnectionUpdateComplete{LEConnectionUpdateCompleteData},
@@ -3444,7 +3444,7 @@ impl From<LEMeta> for Events {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TriggeredClockCaptureData {}
 
 impl_try_from_for_raw_packet! {
@@ -3455,7 +3455,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SynchronizationTrainCompleteData {}
 
 impl_try_from_for_raw_packet! {
@@ -3466,7 +3466,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SynchronizationTrainReceivedData {}
 
 impl_try_from_for_raw_packet! {
@@ -3477,7 +3477,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionlessSlaveBroadcastReceiveData {}
 
 impl_try_from_for_raw_packet! {
@@ -3488,7 +3488,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionlessSlaveBroadcastTimeoutData {}
 
 impl_try_from_for_raw_packet! {
@@ -3499,7 +3499,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TruncatedPageCompleteData {}
 
 impl_try_from_for_raw_packet! {
@@ -3510,7 +3510,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SlavePageRespoinseTimeoutData {}
 
 impl_try_from_for_raw_packet! {
@@ -3521,7 +3521,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ConnectionlessSlaveBroadcastChannelMapChangeData {}
 
 impl_try_from_for_raw_packet! {
@@ -3532,7 +3532,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct InquiryResponseNotificationData {}
 
 impl_try_from_for_raw_packet! {
@@ -3543,7 +3543,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AuthenticatedPayloadTimeoutExpiredData {
     connection_handle: ConnectionHandle,
 }
@@ -3558,7 +3558,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SAMStatusChangeData {}
 
 impl_try_from_for_raw_packet! {
@@ -3588,7 +3588,7 @@ macro_rules! events_markup {
 
         enumerate_split! {
             #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
-            pub enum $EnumName ( enum $EnumDataName ){
+            pub enum $EnumName ( #[derive(Debug,Clone)] enum $EnumDataName ){
                 $( $name $(( $($enum_val),* ))* {$data $(< $type >)*}, )*
             }
         }
@@ -3638,7 +3638,7 @@ macro_rules! events_markup {
                 use core::convert::TryFrom;
 
                 debug_assert!( data.len() > 1 ,
-                    "Error occured in macro invocation of hci::events::events_markup");
+                    "Error occurred in macro invocation of hci::events::events_markup");
 
                 let mut packet = data;
 
@@ -3655,14 +3655,6 @@ macro_rules! events_markup {
                     )*
                     Err(err) => Err(err),
                 }
-            }
-        }
-
-        impl core::fmt::Debug for crate::hci::events::$EnumDataName {
-            fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
-                write!( f, "{}", match *self {
-                    $(crate::hci::events::$EnumDataName::$name(_) => stringify!(::hci::events::$EnumDataName::$name) ),*
-                })
             }
         }
     )
