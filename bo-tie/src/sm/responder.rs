@@ -390,7 +390,7 @@ where
     /// Part B, section 1.3.2.1).
     pub async fn send_static_rand_addr(&self, addr: crate::BluetoothDeviceAddress) -> Result<bool, Error> {
         if self.link_encrypted {
-            self.send(encrypt_info::IdentityAddressInformation::new_pub(addr))
+            self.send(encrypt_info::IdentityAddressInformation::new_static_rand(addr))
                 .await?;
             Ok(true)
         } else {

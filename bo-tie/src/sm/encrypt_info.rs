@@ -229,7 +229,7 @@ impl IdentityAddressInformation {
     /// This function doesn't validate that `address` is a valid static device address. The format
     /// of a static random device address can be found in the Bluetooth Specification (v5.0 | Vol 6,
     /// Part B, section 1.3.2.1).
-    pub fn new_static(address: crate::BluetoothDeviceAddress) -> Self {
+    pub fn new_static_rand(address: crate::BluetoothDeviceAddress) -> Self {
         Self {
             addr_type: AddressType::StaticRandom,
             address,
