@@ -748,7 +748,7 @@ impl Bonder {
             println!("Exiting example");
 
             // Force dropping the `HostInterface`. Not doing this may cause problems with your
-            // bluetooth controller if the HCI is not closed cleanly, espically when running
+            // bluetooth controller if the HCI is not closed cleanly, especially when running
             // with a superuser.
             unsafe {
                 let b = Box::from_raw(
