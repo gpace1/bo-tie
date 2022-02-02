@@ -316,7 +316,7 @@ impl<'a> core::fmt::Display for UUIDFormatError<'a> {
             }
             UUIDFormatError::IncorrectLength => write!(f, "Incorrect Length"),
             UUIDFormatError::IncorrectDigit(digits, field) => {
-                write!(f, "Ditigts '{}' in field '{}' are not hexidecimal", digits, field)
+                write!(f, "Digits '{}' in field '{}' are not hexadecimal", digits, field)
             }
         }
     }
