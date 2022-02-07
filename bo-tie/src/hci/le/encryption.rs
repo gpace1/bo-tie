@@ -18,8 +18,8 @@ pub mod encrypt {
     #[repr(packed)]
     #[derive(Clone)]
     struct Parameter {
-        key: [u8; 16],
-        plain_text: [u8; 16],
+        _key: [u8; 16],
+        _plain_text: [u8; 16],
     }
 
     impl CommandParameter for Parameter {
@@ -74,8 +74,8 @@ pub mod encrypt {
         T: HostControllerInterface,
     {
         let parameter = Parameter {
-            key: key.to_be_bytes(),
-            plain_text,
+            _key: key.to_be_bytes(),
+            _plain_text: plain_text,
         };
 
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))

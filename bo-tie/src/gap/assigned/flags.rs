@@ -54,9 +54,9 @@ pub enum FlagType {
 
 /// A flag in the `Flags` structure
 ///
-/// This is use d to enable/disable flags retreived from a `Flags` data type. By default
+/// This is use d to enable/disable flags retrieved from a `Flags` data type. By default
 /// a newly created flag is false, but calling `get` on a flags instance doesn't
-/// gaurentee that the flag is newly created. `enable`, `disable`, or `set` should be
+/// guarantee that the flag is newly created. `enable`, `disable`, or `set` should be
 /// called to explicitly set the state of the flag.
 ///
 /// The highest position *enabled* flag will determine the actual length of the data
@@ -75,35 +75,35 @@ pub enum FlagType {
 #[derive(Eq, Debug, Clone)]
 pub struct Flag {
     position: usize,
-    val: Cell<bool>,
+    enabled: Cell<bool>,
 }
 
 impl Flag {
     fn new(position: usize, state: bool) -> Flag {
         Flag {
             position,
-            val: Cell::new(state),
+            enabled: Cell::new(state),
         }
     }
 
     /// Set the state of the flag to enabled
     pub fn enable(&self) {
-        self.val.set(true);
+        self.enabled.set(true);
     }
 
     /// Set the state of the flag to disabled
     pub fn disable(&self) {
-        self.val.set(false);
+        self.enabled.set(false);
     }
 
     /// Set the state of the flag to `state`
     pub fn set(&self, state: bool) {
-        self.val.set(state)
+        self.enabled.set(state)
     }
 
     /// Get the state of the flag
     pub fn get(&self) -> bool where {
-        self.val.get()
+        self.enabled.get()
     }
 
     pub fn pos(&self) -> FlagType {
@@ -139,7 +139,7 @@ pub struct Flags {
 }
 
 impl Flags {
-    const AD_TYPE: AssignedTypes = AssignedTypes::Flags;
+    const ASSIGNED_TYPE: AssignedTypes = AssignedTypes::Flags;
 
     /// Creates a flags object with no enabled flag
     pub fn new() -> Self {
@@ -165,7 +165,7 @@ impl Flags {
     pub fn get_user(&mut self, pos: usize) -> &Flag {
         self.get(Flag {
             position: pos + CoreFlags::get_bit_cnt(),
-            val: Cell::new(false),
+            enabled: Cell::new(false),
         })
     }
 
@@ -175,7 +175,7 @@ impl Flags {
     pub fn get_core(&mut self, core: CoreFlags) -> &Flag {
         self.get(Flag {
             position: core.get_position(),
-            val: Cell::new(false),
+            enabled: Cell::new(false),
         })
     }
 
@@ -185,53 +185,55 @@ impl Flags {
     }
 }
 
-impl IntoRaw for Flags {
-    fn into_raw(&self) -> alloc::vec::Vec<u8> {
-        let mut raw = new_raw_type(Self::AD_TYPE.val());
+impl IntoStruct for Flags {
+    fn data_len(&self) -> Result<usize, usize> {
+        Ok(self.set.iter().map(|f| f.position / 8).max().unwrap_or_default())
+    }
 
-        // The first two octets are number of flag octets and ad type, so the '+ 2' is to
-        // compensate for that)
-        let flag_data_offset = 2;
+    fn convert_into<'a>(&self, b: &'a mut [u8]) -> Option<EirOrAdStruct<'a>> {
+        let mut raw = StructIntermediate::new(b, Self::ASSIGNED_TYPE.val())?;
+
+        let mut current_count = 0;
+        let mut current_byte = raw.next()?;
 
         // Iterate over only the currently enabled flags
-        for ref flag in self.set.iter().filter(|flag| flag.val.get()) {
+        for ref flag in self.set.iter().filter(|flag| flag.enabled.get()) {
             let octet = flag.position / 8;
             let bit = flag.position % 8;
 
-            // Fillout the vec until the octet is reached
-            while raw.len() <= (octet + flag_data_offset) {
-                raw.push(0);
+            // Skip until the octet is reached
+            while current_count < octet {
+                current_count += 1;
+                current_byte = raw.next()?;
             }
 
-            raw[octet + flag_data_offset] |= 1 << bit;
+            *current_byte |= 1 << bit;
         }
 
-        // Set the length
-        set_len(&mut raw);
-
-        raw
+        raw.finish()
     }
 }
 
-impl TryFromRaw for Flags {
-    fn try_from_raw(raw: &[u8]) -> Result<Flags, Error> {
-        let mut set = BTreeSet::new();
+impl TryFromStruct<'_> for Flags {
+    fn try_from_struct(st: EirOrAdStruct<'_>) -> Result<Self, Error>
+    where
+        Self: Sized,
+    {
+        if st.get_type() == Self::ASSIGNED_TYPE.val() {
+            let mut set = BTreeSet::new();
 
-        from_raw! { raw, AssignedTypes::Flags, {
-            let data = &raw[1..];
-
-            for octet in 0..data.len() {
+            for octet in 0..st.get_data().len() {
                 for bit in 0..8 {
-                    if 0 != data[octet] & (1 << bit) {
-                        set.insert(Flag::new( octet * 8 + (bit as usize), true ));
+                    if 0 != st.get_data()[octet] & (1 << bit) {
+                        set.insert(Flag::new(octet * 8 + (bit as usize), true));
                     }
                 }
             }
 
-            Flags {
-                set: set
-            }
-        }}
+            Ok(Flags { set })
+        } else {
+            Err(Error::IncorrectAssignedType)
+        }
     }
 }
 

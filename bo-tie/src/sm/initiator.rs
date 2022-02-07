@@ -751,32 +751,42 @@ where
     /// This method will panic if the pairing information and public keys were not already generated
     /// in the pairing process.
     async fn send_oob(&mut self) {
-        use crate::gap::{
-            assigned::{sc_confirm_value, sc_random_value, IntoRaw},
-            oob_block,
+        use crate::gap::assigned::{
+            le_device_address::LeDeviceAddress, le_role::LeRole, sc_confirm_value::ScConfirmValue,
+            sc_random_value::ScRandomValue, Sequence,
         };
 
         if S::can_send() {
-            // doing things this way so the future returned by send_oob implements `Send`
-            let oob_block = {
-                let ra = toolbox::rand_u128();
+            let data = &mut [0u8; LeDeviceAddress::STRUCT_SIZE
+                + LeRole::STRUCT_SIZE
+                + ScRandomValue::STRUCT_SIZE
+                + ScConfirmValue::STRUCT_SIZE];
 
-                let paring_data = self.pairing_data.as_ref().unwrap();
+            let ra = toolbox::rand_u128();
 
-                let pka = GetXOfP256Key::x(&paring_data.public_key);
+            let paring_data = self.pairing_data.as_ref().unwrap();
 
-                let address = self.initiator_address;
+            let pka = GetXOfP256Key::x(&paring_data.public_key);
 
-                let random = &sc_random_value::ScRandomValue::new(ra);
+            let address = LeDeviceAddress::from(self.initiator_address);
 
-                let confirm = &sc_confirm_value::ScConfirmValue::new(toolbox::f4(pka, pka, ra, 0));
+            let role = LeRole::OnlyCentral;
 
-                let items: &[&dyn IntoRaw] = &[random, confirm];
+            let random = ScRandomValue::new(ra);
 
-                oob_block::OobDataBlockBuilder::new(address).build(items)
-            };
+            let confirm = ScConfirmValue::new(toolbox::f4(pka, pka, ra, 0));
 
-            self.oob_send.send(&oob_block).await;
+            Sequence::new(data)
+                .try_add(&address)
+                .unwrap()
+                .try_add(&role)
+                .unwrap()
+                .try_add(&random)
+                .unwrap()
+                .try_add(&confirm)
+                .unwrap();
+
+            self.oob_send.send(data).await;
         }
     }
 
@@ -803,23 +813,18 @@ where
     /// This will check the OOB to determine the validity of the raw data and the confirm within the
     /// raw data. True is returned if everything within `raw` is validated.
     fn process_received_oob(&self, raw: Vec<u8>) -> bool {
-        use crate::gap::{
-            assigned::{sc_confirm_value, sc_random_value, AssignedTypes, TryFromRaw},
-            oob_block,
-        };
-
-        let oob_info = oob_block::OobDataBlockIter::new(raw);
+        use crate::gap::assigned::{sc_confirm_value, sc_random_value, AssignedTypes, EirOrAdIterator, TryFromStruct};
 
         let mut rb = None;
         let mut cb = None;
 
-        for (ty, data) in oob_info.iter() {
+        for ad in EirOrAdIterator::new(&raw).silent() {
             const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
             const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
 
-            match ty {
-                RANDOM_TYPE => rb = sc_random_value::ScRandomValue::try_from_raw(data).ok(),
-                CONFIRM_TYPE => cb = sc_confirm_value::ScConfirmValue::try_from_raw(data).ok(),
+            match ad.get_type() {
+                RANDOM_TYPE => rb = sc_random_value::ScRandomValue::try_from_struct(ad).ok(),
+                CONFIRM_TYPE => cb = sc_confirm_value::ScConfirmValue::try_from_struct(ad).ok(),
                 _ => (),
             }
         }

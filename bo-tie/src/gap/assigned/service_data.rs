@@ -30,7 +30,7 @@ pub fn new_128<Data>(uuid: u128, data: Data) -> ServiceData<u128, Data> {
 /// `[new_16]`(../fn.new_16.html),
 /// `[new_32]`(../fn.new_32.html), or
 /// `[new_128]` (../fn.new_128.html)
-/// to crunstruct a new, empty `ServiceData` (of 16, 32, or 128 bit UUIDs, respectively).
+/// to construct a new, empty `ServiceData` (of 16, 32, or 128 bit UUIDs, respectively).
 #[derive(Clone, Debug)]
 pub struct ServiceData<UuidType, Data> {
     uuid: UuidType,
@@ -53,57 +53,60 @@ impl<UuidType, Data> ServiceData<UuidType, Data> {
     pub fn get_data(&self) -> &Data {
         &self.data
     }
-
-    /// Get the data serialized
-    pub fn get_serialized_data(&self) -> alloc::vec::Vec<u8>
-    where
-        Data: crate::att::TransferFormatInto,
-    {
-        crate::att::TransferFormatInto::into(&self.data)
-    }
 }
 
 macro_rules! impl_raw {
-    ( $type:tt, $ad_type:path ) => {
-        impl<Data> IntoRaw for ServiceData<$type, Data>
+    ( $type:tt, $assigned_type:path ) => {
+        impl<Data> IntoStruct for ServiceData<$type, Data>
         where
             Data: crate::att::TransferFormatInto,
         {
-            fn into_raw(&self) -> alloc::vec::Vec<u8> {
-                let mut raw = new_raw_type($ad_type.val());
+            fn data_len(&self) -> Result<usize, usize> {
+                Ok(core::mem::size_of::<$type>() + crate::att::TransferFormatInto::len_of_into(&self.data))
+            }
 
-                raw.extend_from_slice(&self.uuid.to_le_bytes());
+            fn convert_into<'a>(&self, b: &'a mut [u8]) -> Option<EirOrAdStruct<'a>> {
+                let mut interm = StructIntermediate::new(b, $assigned_type.val())?;
 
-                raw.extend(crate::att::TransferFormatInto::into(&self.data));
+                self.uuid
+                    .to_le_bytes()
+                    .iter()
+                    .try_for_each(|b| interm.next().map(|r| *r = *b))?;
 
-                set_len(&mut raw);
+                interm.try_extend_by(&self.data)?;
 
-                raw
+                interm.finish()
             }
         }
 
-        impl<Data> TryFromRaw for ServiceData<$type, Data>
+        impl<Data> TryFromStruct<'_> for ServiceData<$type, Data>
         where
             Data: crate::att::TransferFormatTryFrom,
         {
-            fn try_from_raw(raw: &[u8]) -> Result<ServiceData<$type, Data>, Error> {
-                let ad_type = $ad_type;
-                from_raw! {raw, ad_type, {
-                    use core::convert::TryInto;
+            fn try_from_struct(st: EirOrAdStruct<'_>) -> Result<Self, Error>
+            where
+                Self: Sized,
+            {
+                if st.get_type() == $assigned_type.val() {
+                    let data = st.get_data();
 
-                    if raw.len() >= 3 {
-                        let (uuid_raw, data) = raw.split_at(core::mem::size_of::<$type>());
-                        let err = crate::gap::assigned::Error::LeBytesConversionError;
+                    if data.len() >= core::mem::size_of::<$type>() {
+                        let (uuid_raw, service_data) = data.split_at(core::mem::size_of::<$type>());
 
-                        ServiceData {
-                            uuid: $type::from_le_bytes(uuid_raw.try_into().or(Err(err))?),
-                            data: crate::att::TransferFormatTryFrom::try_from(data)?,
-                        }
+                        let mut bytes = [0u8; core::mem::size_of::<$type>()];
+
+                        bytes.copy_from_slice(uuid_raw);
+
+                        Ok(ServiceData {
+                            uuid: $type::from_le_bytes(bytes),
+                            data: crate::att::TransferFormatTryFrom::try_from(service_data)?,
+                        })
+                    } else {
+                        Err(Error::IncorrectLength)
                     }
-                    else {
-                        return Err(crate::gap::assigned::Error::RawTooSmall)
-                    }
-                }}
+                } else {
+                    Err(Error::IncorrectAssignedType)
+                }
             }
         }
     };

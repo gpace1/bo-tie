@@ -147,7 +147,7 @@ pub mod transmitter_test {
 
 pub mod set_advertising_data {
 
-    use crate::gap::assigned::{DataTooLargeError, IntoRaw};
+    use crate::gap::assigned::{DataTooLargeError, IntoStruct};
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetAdvertisingData);
@@ -193,23 +193,19 @@ pub mod set_advertising_data {
         /// the advertising data.
         pub fn try_push<T>(&mut self, data: T) -> Result<(), DataTooLargeError>
         where
-            T: IntoRaw,
+            T: IntoStruct,
         {
-            let raw_data = data.into_raw();
+            let payload_len = self.payload.len();
 
-            if raw_data.len() + self.length <= self.payload.len() {
-                let old_len = self.length;
-
-                self.length += raw_data.len();
-
-                self.payload[old_len..self.length].copy_from_slice(&raw_data);
-
-                Ok(())
-            } else {
-                Err(DataTooLargeError {
-                    overflow: raw_data.len() + self.length - self.payload.len(),
-                    remaining: self.payload.len() - self.length,
-                })
+            match data.convert_into(&mut self.payload[self.length..]) {
+                Some(ad_struct) => {
+                    self.length = payload_len - ad_struct.size();
+                    Ok(())
+                }
+                None => Err(DataTooLargeError {
+                    overflow: payload_len + data.data_len().unwrap_or_default() - self.length,
+                    remaining: payload_len - self.length,
+                }),
             }
         }
 
@@ -527,7 +523,7 @@ pub mod set_random_address {
     #[repr(packed)]
     #[derive(Clone)]
     struct Parameter {
-        rand_address: crate::BluetoothDeviceAddress,
+        _rand_address: crate::BluetoothDeviceAddress,
     }
 
     impl CommandParameter for Parameter {
@@ -547,7 +543,7 @@ pub mod set_random_address {
         T: HostControllerInterface,
     {
         let parameter = Parameter {
-            rand_address: rand_addr,
+            _rand_address: rand_addr,
         };
 
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))

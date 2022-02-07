@@ -46,7 +46,7 @@ async fn scan_for_local_name<'a, M: Send + 'static>(
     hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     name: &'a str,
 ) -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>> {
-    use bo_tie::gap::assigned::{local_name, TryFromRaw};
+    use bo_tie::gap::assigned::{local_name, TryFromRawAdvData};
     use bo_tie::hci::events::{Events, LEMeta, LEMetaData};
     use bo_tie::hci::le::mandatory::set_event_mask;
     use bo_tie::hci::le::receiver::{set_scan_enable, set_scan_parameters};

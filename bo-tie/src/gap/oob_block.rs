@@ -3,7 +3,8 @@
 //! This is used to encapsulate data sent as part of the out of band process in either Simple
 //! Pairing, or Secure Connections
 
-use crate::gap::assigned::IntoRaw;
+use crate::gap::assigned::{EirOrAdStruct, IntoStruct};
+use alloc::vec::Vec;
 
 /// The minimum length for an OOB data block
 const MIN_LEN: usize = 8;
@@ -25,34 +26,55 @@ impl OobDataBlockBuilder {
     /// These are considered 'optional' as part of the OOB data block specification, but higher
     /// layer protocols usually have specific types that need to be sent.
     ///
+    /// # Note
+    /// An OOB data block is made up of extended inquiry response (EIR) structures which happen to
+    /// be the exact same thing as an advertising data (AD) structure. They just happen to be used
+    /// in either an extended inquiry response (which is part of BR/EDR) or an out of band data
+    /// block.
+    ///
     /// # Panic
     /// An overflow will occur if data within the iterator generates a payload greater than
     /// (u16::MAX - 8) bytes.
-    pub fn build<'a, I>(&self, optional: I) -> alloc::vec::Vec<u8>
+    pub fn build<'a, I>(&self, optional: &'a I) -> alloc::vec::Vec<u8>
     where
-        I: IntoIterator<Item = &'a &'a dyn IntoRaw>,
+        I: 'a + ?Sized,
+        &'a I: IntoIterator<Item = &'a &'a dyn IntoStruct>,
     {
-        let mut data = [0; MIN_LEN].to_vec();
+        let optional_size: usize = optional
+            .into_iter()
+            .map(|d| match d.data_len() {
+                Ok(len) => len,
+                Err(len) => len,
+            })
+            .sum();
 
-        let mut len = MIN_LEN;
+        let size = MIN_LEN + optional_size;
+
+        assert!(size <= <u16>::MAX as usize, "Out of Band data block is too large");
+
+        let mut data = Vec::new();
+
+        data.resize(size, 0);
+
+        // set the length
+        data[0..2].copy_from_slice(&(size as u16).to_le_bytes());
 
         // set the address
-        data[2..].copy_from_slice(&self.address);
+        data[2..8].copy_from_slice(&self.address);
 
-        for raw_ad in optional.into_iter().map(|i| i.into_raw()) {
-            len += raw_ad.len();
+        let mut sequence = crate::gap::assigned::Sequence::new(&mut data[MIN_LEN..]);
 
-            debug_assert!(len < <u16>::MAX.into());
-
-            data.extend(raw_ad);
+        // add the EIR (extended inquiry response) structures (same format as an AD structure)
+        for item in optional.into_iter() {
+            sequence = sequence.try_add(*item).unwrap();
         }
-
-        // set the total length in the data block. This will panic if the length gets too large.
-        data[0..2].copy_from_slice(&<u16>::to_le_bytes(len as u16));
 
         data
     }
 }
+
+/// An Extended Inquiry Response Structure
+pub type ExtendedInquiryResponseStruct<'a> = EirOrAdStruct<'a>;
 
 /// OOB data block
 ///
@@ -86,42 +108,23 @@ impl OobDataBlockIter {
         self.address
     }
 
-    /// Iterator over the EIR Data (or AD)
+    /// Iterator over the EIR Data
     ///
-    /// This iterators over the EIR data structures within the OOB data block. The return is a pair
-    /// containing the assigned number and the data.
-    ///
-    /// # Note
-    /// 1) EIR data structures are in the same format as advertising data
-    /// 2) This provides no validation of the raw data.
-    pub fn iter(&self) -> impl Iterator<Item = (u8, &[u8])> {
+    /// This iterates over the EIR data structures within the OOB data block.
+    pub fn iter(&self) -> impl Iterator<Item = ExtendedInquiryResponseStruct<'_>> {
         struct EirIterator<'a>(&'a [u8]);
 
         impl<'a> Iterator for EirIterator<'a> {
-            type Item = (u8, &'a [u8]);
+            type Item = ExtendedInquiryResponseStruct<'a>;
 
             fn next(&mut self) -> Option<Self::Item> {
-                if self.0.len() == 0 {
-                    None
-                } else {
-                    let data_len: usize = self.0[0].into();
-
-                    let ad_len = 1 + data_len;
-
-                    // Prevent panics by short circuiting the iterator if the length is invalid or 0
-                    if ad_len <= self.0.len() && ad_len > 0 {
-                        let ret_type = self.0[1];
-                        let ret_vec = &self.0[2..ad_len];
-
-                        self.0 = &self.0[ad_len..];
-
-                        Some((ret_type, ret_vec))
-                    } else {
-                        self.0 = &[];
-
-                        None
-                    }
-                }
+                ExtendedInquiryResponseStruct::try_new(self.0)
+                    .ok()
+                    .flatten()
+                    .map(|(eir, rest)| {
+                        self.0 = rest;
+                        eir
+                    })
             }
         }
 

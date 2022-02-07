@@ -1,47 +1,17 @@
-/// Bluetooth scan
+//! Bluetooth LE scanning
 
-/// An iterator over a received scan payload
+/// An iterator over a scanned advertiser's data
 ///
-/// This is used for iterating over the data within an advertising payload and extracting out
-/// everything that can be converted into `T`.
-pub struct ScanPayloadIter<'a, T> {
-    bytes: &'a [u8],
-    pd: core::marker::PhantomData<T>,
-}
+/// This iterator can be used to iterate over the Advertising Data structures within a received
+/// advertiser's data.
+///
+/// # Note
+/// This is an alias of [`EirOrAdIterator`](crate::gap::assigned::EirOrAdIterator).
+pub type ScanIterator<'a> = crate::gap::assigned::EirOrAdIterator<'a>;
 
-impl<'a, T> ScanPayloadIter<'a, T> {
-    /// Create an iterator over
-    pub fn iter(bytes: &'a [u8]) -> Self {
-        Self {
-            bytes,
-            pd: core::marker::PhantomData,
-        }
-    }
-}
-
-impl<T> Iterator for ScanPayloadIter<'_, T>
-where
-    T: super::assigned::TryFromRaw,
-{
-    type Item = Result<T, super::assigned::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.bytes.split_first().map(|(first, rest)| {
-            let len = *first as usize;
-
-            if rest.len() >= len {
-                let (raw_data, rest_of) = rest.split_at(len);
-
-                self.bytes = rest_of;
-
-                T::try_from_raw(raw_data)
-            } else {
-                // This should happen only if a length (any of them) value is bad
-
-                self.bytes = &[];
-
-                Err(super::assigned::Error::IncorrectLength)
-            }
-        })
-    }
-}
+/// Scanned AD Structure
+///
+/// # Note
+/// This is an alias of [`EirOrAdStruct`](crate::gap::assigned::EirOrAdStruct). It can be used in
+/// place of the item type for [`ScanIterator`].
+pub type ScannedAdStruct<'a> = crate::gap::assigned::EirOrAdStruct<'a>;

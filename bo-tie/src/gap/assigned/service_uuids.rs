@@ -155,7 +155,7 @@ where
     type Item = T;
     type IntoIter = <BTreeSet<T> as IntoIterator>::IntoIter;
 
-    /// Usefull for iterating over the contained UUIDs, but after this is done you obviously
+    /// Useful for iterating over the contained UUIDs, but after this is done you obviously
     /// cannot tell if the list is complete or not.
     fn into_iter(self) -> Self::IntoIter {
         self.set.into_iter()
@@ -200,7 +200,7 @@ macro_rules! impl_from_services {
     }
 
 impl_from_services! {u128,u32,u16}
-impl_from_services! {u32,u16} // todo double check that this is correct
+impl_from_services! {u32,u16}
 
 macro_rules! impl_from_for_slice_with_complete {
     ( $type: ty ) => {
@@ -222,67 +222,69 @@ impl_from_for_slice_with_complete! {u16}
 impl_from_for_slice_with_complete! {u32}
 impl_from_for_slice_with_complete! {u128}
 
-/// Implementation for pimitive type numbers
+/// Implementation for primitive type numbers
 ///
-/// Requires `$type` to implement method to_le
+/// Requires `$type` to implement a method by the name `to_le_bytes`
 macro_rules! impl_raw {
     ( $type:tt ) => {
-        impl IntoRaw for Services<$type> {
-            fn into_raw(&self) -> alloc::vec::Vec<u8> {
-                let data_type = if self.set.is_empty() || self.complete {
+        impl IntoStruct for Services<$type> {
+            fn data_len(&self) -> Result<usize, usize> {
+                Ok(core::mem::size_of::<$type>() * self.set.len())
+            }
+
+            fn convert_into<'a>(&self, b: &'a mut [u8]) -> Option<EirOrAdStruct<'a>> {
+                let assigned_type = if self.set.is_empty() || self.complete {
                     Self::COMPLETE
                 } else {
                     Self::INCOMPLETE
                 };
 
-                let mut raw = self.set.iter().map(|v| $type::to_le_bytes(*v)).fold(
-                    new_raw_type(data_type.val()),
-                    |mut raw, slice| {
-                        raw.extend_from_slice(&slice);
-                        raw
-                    },
-                );
+                let mut interm = StructIntermediate::new(b, assigned_type.val())?;
 
-                set_len(&mut raw);
+                self.set
+                    .iter()
+                    .map(|v| $type::to_le_bytes(*v))
+                    .flatten()
+                    .try_for_each(|b| interm.next().map(|r| *r = b))?;
 
-                raw
+                interm.finish()
             }
         }
 
-        impl TryFromRaw for Services<$type> {
-            fn try_from_raw(raw: &[u8]) -> Result<Services<$type>, Error> {
-                from_raw! {raw, Self::COMPLETE, Self::INCOMPLETE, {
-                    use core::mem::size_of;
+        impl TryFromStruct<'_> for Services<$type> {
+            fn try_from_struct(st: EirOrAdStruct<'_>) -> Result<Self, Error>
+            where
+                Self: Sized,
+            {
+                let task = |at: AssignedTypes| -> Result<Self, Error> {
+                    let chunks = st.get_data().chunks_exact(core::mem::size_of::<$type>());
 
-                    let chunks_exact = raw[1..].chunks_exact(size_of::<$type>());
+                    if chunks.remainder().len() == 0 {
+                        let set = chunks
+                            .map(|raw_uuid| {
+                                let mut buffer = [0; core::mem::size_of::<$type>()];
 
+                                buffer.copy_from_slice(raw_uuid);
 
-                    Services::<$type> {
-                        set: if chunks_exact.remainder().len() == 0 {
-
-                            chunks_exact
-                            .map( |raw_uuid| {
-
-                                let sized_raw_uuid = (0..size_of::<$type>())
-                                    .fold(
-                                        [0u8;size_of::<$type>()],
-                                        |mut a, i| { a[i] = raw_uuid[i]; a }
-                                    );
-
-                                $type::from_le_bytes(sized_raw_uuid)
+                                <$type>::from_le_bytes(buffer)
                             })
-                            .collect::<BTreeSet<$type>>()
+                            .collect::<BTreeSet<$type>>();
 
-                        } else {
-                            return Err(super::Error::IncorrectLength)
-                        },
+                        let complete = at == Self::COMPLETE;
 
-                        // from_raw does the check to see if the data is Self::COMPLETE or
-                        // Self::INCOMPLETE. All that needs to be done here is to check
-                        // if this is the complete one or not.
-                        complete: Self::COMPLETE.val() == raw[0],
+                        Ok(Services::<$type> { set, complete })
+                    } else {
+                        Err(Error::IncorrectLength)
                     }
-                }}
+                };
+
+                if st.get_type() == Self::INCOMPLETE.val() {
+                    task(Self::INCOMPLETE)
+                } else if st.get_type() == Self::COMPLETE.val() {
+                    task(Self::COMPLETE)
+                } else {
+                    Err(Error::IncorrectAssignedType)
+                }
             }
         }
     };

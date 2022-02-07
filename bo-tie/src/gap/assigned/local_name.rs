@@ -1,41 +1,60 @@
 //! Local name data type
 use super::*;
+use alloc::string::String;
 
-pub struct LocalName {
-    name: alloc::string::String,
-    is_short: bool,
+/// An advertised Local Name
+///
+/// Local names are either complete or incomplete within the advertising packet. As part of the
+/// format of the local name, there is a flag to indicate if the name has been shortened from its
+/// full length. A `LocalName` can be crated with this flag deliberately set or have it
+/// automatically set if the size of the name is larger than the remaining bytes in an advertising
+/// payload.
+///
+/// # Automatic Sizing
+/// When the local name is to be automatically sized, it is sized down to the remaining bytes
+/// available within an advertising payload. There is no limit to this size, so it can be sized down
+/// to zero characters.
+///
+/// # Deliberate Sizing
+/// When the size is deliberately set, the full length of the name that is assigned as part of the
+/// creation of a `LocalName` must fit in the remaining bytes of an advertising payload.
+pub struct LocalName<'a> {
+    name: &'a str,
+    is_full_name: Option<bool>,
 }
 
-impl LocalName {
+impl<'a> LocalName<'a> {
     const SHORTENED_TYPE: AssignedTypes = AssignedTypes::ShortenedLocalName;
     const COMPLETE_TYPE: AssignedTypes = AssignedTypes::CompleteLocalName;
 
     /// Create a new local name data type
-    ///
-    /// If the name is 'short' then set the `short` parameter to true.
-    /// See the Bluetooth Core Supplement Spec. section 1.2.1 for more details.
-    pub fn new<T>(name: T, short: bool) -> Self
+    pub fn new<S>(name: &'a str, is_full_name: S) -> Self
     where
-        T: Into<alloc::string::String>,
+        S: Into<Option<bool>>,
     {
         Self {
-            name: name.into(),
-            is_short: short,
+            name,
+            is_full_name: is_full_name.into(),
         }
     }
 
-    pub fn is_short(&self) -> bool {
-        self.is_short
+    /// Check if the name is complete
+    ///
+    /// # Note
+    /// True is returned if this `LocalName` was created without specifying if the name is complete
+    /// or shortened.
+    pub fn is_complete(&self) -> bool {
+        self.is_full_name.unwrap_or(true)
     }
 }
 
-impl AsRef<str> for LocalName {
+impl AsRef<str> for LocalName<'_> {
     fn as_ref(&self) -> &str {
         &self.name
     }
 }
 
-impl core::ops::Deref for LocalName {
+impl core::ops::Deref for LocalName<'_> {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -43,48 +62,60 @@ impl core::ops::Deref for LocalName {
     }
 }
 
-impl From<LocalName> for alloc::string::String {
-    fn from(ln: LocalName) -> alloc::string::String {
-        ln.name
+impl alloc::string::ToString for LocalName<'_> {
+    fn to_string(&self) -> String {
+        self.name.to_string()
     }
 }
 
-impl IntoRaw for LocalName {
-    fn into_raw(&self) -> alloc::vec::Vec<u8> {
-        let data_type = if self.is_short {
-            Self::SHORTENED_TYPE
+impl IntoStruct for LocalName<'_> {
+    fn data_len(&self) -> Result<usize, usize> {
+        self.is_full_name.map(|_| self.name.len()).ok_or(self.name.len())
+    }
+
+    fn convert_into<'a>(&self, b: &'a mut [u8]) -> Option<EirOrAdStruct<'a>> {
+        let ad_type = match self.is_full_name {
+            Some(true) => Self::COMPLETE_TYPE,
+            Some(false) => Self::SHORTENED_TYPE,
+            None if self.name.len() > b.len().checked_sub(2)? => Self::SHORTENED_TYPE,
+            None => Self::COMPLETE_TYPE,
+        }
+        .val();
+
+        let mut interm = StructIntermediate::new(b, ad_type)?;
+
+        if self.is_full_name.is_some() {
+            self.name.bytes().try_for_each(|b| interm.next().map(|r| *r = b))?;
         } else {
-            Self::COMPLETE_TYPE
-        };
+            // This does not return if the end of slice in `interm` is reached.
+            self.name.bytes().try_for_each(|b| interm.next().map(|r| *r = b));
+        }
 
-        let mut val = new_raw_type(data_type.val());
-
-        val.extend(self.name.clone().bytes());
-
-        set_len(&mut val);
-
-        val
+        interm.finish()
     }
 }
 
-impl TryFromRaw for LocalName {
-    fn try_from_raw(raw: &[u8]) -> Result<Self, Error> {
-        log::trace!("Trying to convert '{:X?}' to Local Name", raw);
+impl<'a> TryFromStruct<'a> for LocalName<'a> {
+    fn try_from_struct(r#struct: EirOrAdStruct<'a>) -> Result<Self, Error> {
+        use core::str::from_utf8;
 
-        from_raw!(raw, Self::SHORTENED_TYPE, Self::COMPLETE_TYPE, {
-            use core::str::from_utf8;
+        let assigned_type = r#struct.get_type();
 
-            let ref_name = if raw.len() > 1 {
-                from_utf8(&raw[1..]).map_err(|e| super::Error::UTF8Error(e))?
-            } else {
-                ""
-            };
+        let name = from_utf8(r#struct.into_inner()).map_err(|e| Error::UTF8Error(e))?;
 
-            Self {
-                name: alloc::string::ToString::to_string(&ref_name),
-                is_short: raw[0] == Self::SHORTENED_TYPE.val(),
-            }
-        })
+        if assigned_type == Self::SHORTENED_TYPE.val() {
+            Ok(Self {
+                name,
+                is_full_name: Some(false),
+            })
+        } else if assigned_type == Self::COMPLETE_TYPE.val() {
+            Ok(Self {
+                name,
+                is_full_name: Some(true),
+            })
+        } else {
+            Err(Error::IncorrectAssignedType)
+        }
     }
 }
 
