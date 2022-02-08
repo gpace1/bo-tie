@@ -10,7 +10,7 @@
 //! features that require the use of proc-macros are mirrored within this library.
 //!
 //! # host_interface
-//! A [`HostInterface`](bo_tie::hci::HostInterface) has different generic inputs depending on the
+//! A `bo_tie::hci::HostInterface` has different generic inputs depending on the
 //! features enabled for the `hci` bo-tie library. Instead of manually creating all the alternative
 //! versions of items that use `HostInterface` for each feature, this macro will create the
 //! different versions. It can be used wherever the added feature specific generics do not affect

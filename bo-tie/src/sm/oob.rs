@@ -53,25 +53,8 @@ impl core::fmt::Display for OobBuildError {
 ///
 /// Security Managers that implement this trait can be used as the out-of-band (OOB) process for
 /// pairing. Any communication process that is outside of the direct Bluetooth communication between
-/// the two pairing devices can be considered a valid OOB. However the OOB link must have
-/// man in the middle protection in order for the OOB method to be secure form of pairing.
-///
-/// # Bidirectional confirm validation
-/// The methods [`set_send_method`](OutOfBandMethodBuilder::set_send_method) and
-/// [`set_receive_method`]((OutOfBandMethodBuilder::set_receive_method) determine how data is sent
-/// and received through the OOB interface. Both of them must be called before an
-/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
-/// used to set a factory function for generating a future to process sending data over the OOB
-/// interface. Correspondingly `set_receive_method` is for setting the factory function for
-/// generating a future for receiving data over the OOB interface.
-///
-/// # Single Direction confirm validation
-/// If it is desired to only support one direction of OOB data transfer, the methods
-/// [`only_send_oob`](OutOfBandMethodBuilder::only_send_oob) and
-/// [`only_receive_oob`](OutOfBandMethodBuilder::only_receive_oob) can be used for facilitate this,
-/// however it is recommended to only use these methods when the OOB interface only supports a
-/// single direction of data transfer. Using these methods will mean that the initiator must support
-/// the counterpart direction of data transfer or OOB authentication will fail.
+/// the two pairing devices can be considered a valid OOB transport if it has acceptable protection
+/// against a man in the middle attack.
 pub trait BuildOutOfBand: core::ops::DerefMut<Target = Self::Builder> {
     type Builder;
     type SecurityManager;
@@ -85,23 +68,6 @@ pub trait BuildOutOfBand: core::ops::DerefMut<Target = Self::Builder> {
 /// pairing. Any communication process that is outside of the direct Bluetooth communication between
 /// the two pairing devices can be considered a valid OOB. However the OOB link must have
 /// man in the middle protection in order for the OOB method to be secure form of pairing.
-///
-/// # Bidirectional confirm validation
-/// The methods [`set_send_method`](OutOfBandMethodBuilder::set_send_method) and
-/// [`set_receive_method`](OutOfBandMethodBuilder::set_receive_method) determine how data is sent
-/// and received through the OOB interface. Both of them must be called before an
-/// [`OutOfBandSlaveSecurityManager`] can be built with [`build`]. The method `set_send_method` is
-/// used to set a factory function for generating a future to process sending data over the OOB
-/// interface. Correspondingly `set_receive_method` is for setting the factory function for
-/// generating a future for receiving data over the OOB interface.
-///
-/// # Single Direction confirm validation
-/// If it is desired to only support one direction of OOB data transfer, the methods
-/// [`only_send_oob`](OutOfBandMethodBuilder::only_send_oob) and
-/// [`only_receive_oob`](OutOfBandMethodBuilder::only_receive_oob) can be used for facilitate this,
-/// however it is recommended to only use these methods when the OOB interface only supports a
-/// single direction of data transfer. Using these methods will mean that the initiator must support
-/// the counterpart direction of data transfer or OOB authentication will fail.
 pub struct OutOfBandMethodBuilder<B, S, R> {
     pub(super) builder: B,
     pub(super) send_method: S,
@@ -279,10 +245,10 @@ impl<F> OobReceiverType for F where F: OutOfBandReceive {}
 
 /// Marker type for 'externally' resolving reception of OOB data
 ///
-/// This should be used only when [`InternalOobReceiver`] cannot be used. The reason being that
-/// this will require a method call to set the received out of band data at the correct time within
-/// pairing. Both types of security manager have a method to set the received OOB data that is only
-/// available when this type is used.
+/// This should be used only when another implementor of [`OobReceiverType`] cannot be used because
+/// the data must be explicitly set. The reason  being that this will require a method call to set
+/// the received out of band data at the correct time within pairing. Both types of security manager
+/// have a method to set the received OOB data that is only available when this type is used.
 pub struct ExternalOobReceiver;
 
 impl sealed_receiver_type::SealedTrait for ExternalOobReceiver {

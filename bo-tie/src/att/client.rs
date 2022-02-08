@@ -140,12 +140,11 @@ where
     /// Create a new `LeConnectClient` and initiate the connection process
     ///
     /// This takes a connection channel between this device and a slave device with an optional
-    /// maximum transfer unit (MTU). If `max_mtu` is `None`, then the minimum MTU
-    /// [`MIN_ATT_MTU_LE`](crate::att::MIN_ATT_MTU_LE) is used as the maximum MTU. If `max_mtu` is
-    /// specified, this is the MTU *requested* of the server.
-    ///
-    /// Using a max_mtu larger than what the Bluetooth controller can handle is likely for the
-    /// controller to return an error event
+    /// maximum transfer unit (MTU). When the MTU is deliberately set, this client will request the
+    /// server to use this MTU, but oth devices need to go through a MTU handshake before an MTU
+    /// (less than or equal to `mtu`) is assigned to the connection. If `max_mtu` is `None`, then
+    /// the smallest MTU for the channel is used as the maximum MTU. This MTU size will depend on if
+    /// the channel is for LE or BR/EDR.
     pub async fn initiate<M>(mtu: M, connection_channel: &'c C) -> Result<LeConnectClient<'c, C>, super::Error>
     where
         M: Into<Option<u16>>,

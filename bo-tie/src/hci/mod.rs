@@ -189,12 +189,12 @@ impl Display for HciAclPacketConvertError {
 /// header configuration flags. A LE-U Logical link does not support automatic flushing of packets
 /// in a controller, nor does it support connectionless L2CAP channels. The packet boundary flag can
 /// be either
-/// ['FirstNonFlushable`](bo_tie::hci::AclPacketBoundary::FirstNonFlushable) or
-/// [`ContinuingFragment`](bo_tie::hci::AclPacketBoundary::ContinuingFragment), but it cannot be
-/// [`FirstAutoFlushable`](bo_tie::hci::AclPacketBoundary::FirstAutoFlushable) or
-/// [`CompleteL2capPdu`](bo_tie::hci::AclPacketBoundary::CompleteL2capPdu). The broadcast flag must
+/// ['FirstNonFlushable`](crate::hci::AclPacketBoundary::FirstNonFlushable) or
+/// [`ContinuingFragment`](crate::hci::AclPacketBoundary::ContinuingFragment), but it cannot be
+/// [`FirstAutoFlushable`](crate::hci::AclPacketBoundary::FirstAutoFlushable) or
+/// [`CompleteL2capPdu`](crate::hci::AclPacketBoundary::CompleteL2capPdu). The broadcast flag must
 /// always be
-/// [`NoBroadcast`](bo_tie::hci::AclBroadcastFlag::NoBroadcast). Lastly the connection handle can
+/// [`NoBroadcast`](crate::hci::AclBroadcastFlag::NoBroadcast). Lastly the connection handle can
 /// only be a primary controller handle (which is generated with a *LE Connection Complete* or
 /// *LE Enhanced Connection Complete* event for LE-U).
 #[derive(Debug)]
@@ -325,8 +325,8 @@ impl HciAclData {
 /// ## `send_command`
 /// This is used for sending the command to the Bluetooth controller by the HostInterface object.
 /// It is provided with a input that implements the
-/// [`CommandParameter`](bo_tie::hci::CommandParameter) which contains all the information required
-/// for sending the command packet to the Bluetooth controller.
+/// [`CommandParameter`] which contains all the information required for sending the command packet
+/// to the Bluetooth controller.
 ///
 /// ## `receive_event`
 /// `receive_event` is used for implementing a future around the controller's event process. When

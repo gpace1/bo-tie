@@ -1172,7 +1172,7 @@ where
     ///
     /// This method is tricky as it may only be called at the correct time during the pairing
     /// process with OOB, although the method
-    /// [`expecting_oob_data`](SlaveSecurityManager::expecting_oob_data) does make this easier. If
+    /// [`expecting_oob_data`](MasterSecurityManager::expecting_oob_data) does make this easier. If
     /// any other pairing process is being used, or this is called at the incorrect time, pairing is
     /// canceled and must be restarted by the responder. The responder is also sent the error
     /// `OOBNotAvailable`.
@@ -1180,7 +1180,7 @@ where
     /// This method must be called after the responder's pairing public key message is *processed*
     /// but before the pairing random message is *processed*. Note *processed*, it is ok for this
     /// device to receive the pairing random message, but do not call the method
-    /// [`process_command`](SlaveSecurityManager::process_command) until after this method is
+    /// [`process_command`](MasterSecurityManager::continue_pairing) until after this method is
     /// called. The easiest way to know when this occurs is to call the method `expecting_oob_data`
     /// after processing every security manager message, although this  procedure can be stopped
     /// after this method is called.

@@ -2,7 +2,7 @@
 //!
 //! The attribute server for this library is dynamic. It utilizes trait objects for the attribute
 //! data with the only requirements that the data implement
-//! [`TransferFormatInto`](crate::att:TransferFormatInto), and
+//! [`TransferFormatInto`](crate::att::TransferFormatInto), and
 //! [`TransferFormatTryFrom`](crate::att::TransferFormatTryFrom). The server organizes the data as
 //! a vectored list, all attributes are forced into a consecutive order. The client can query the
 //! server using the requests specified within the specification (V 5.0, vol 3 part F section 3.4)
@@ -390,50 +390,58 @@ where
     /// This function is used to check the permissions of a specified attribute against the
     /// permissions given to the client to perform an operation. If a client has been given access
     /// to perform the operation with the attribute, then the return will be `Ok`. When the client
-    /// does not have permission to perform the operation, an error containing the permission
-    /// failure reason is returned. There are to inputs for permission lists. `required` is the list
-    /// of permissions that the operation requires that both the attribute and the client have
-    /// permission for, and `restricted` are the permissions the client must have if the attribute
-    /// requires them.
+    /// does not have permission to perform the operation, an error is returned.
     ///
-    /// The `required` input is the permissions that are needed to perform an operation, and the
-    /// operation cannot be done without both the attribute and client having these permissions. If
-    /// the operation is a read operation, it could have
-    /// [`Read`](crate::att::AttributePermissions::Read) as part of its list of 'required'
-    /// permissions. If either the attribute or client does not the `Read` permission then the
-    /// operation should fail with the error `ReadNotPermitted`.
+    /// Input `permissions` is the list of permissions acceptable for an operation. The permissions
+    /// list is tested against both the permissions list of the attribute and the list of
+    /// permissions granted to the client. If any of the permissions within `permissions` is also
+    /// in both of the other permissions lists, then this method will return `Ok(_)`.
     ///
-    /// The `restricted` input is the permissions that are required by the client if the attribute
-    /// has them. These can be thought of as extra permissions required by the attribute to perform
-    /// the operation.
+    /// # Error
+    /// The returned error is a bit of a best guess by the method. It gives the most general reason
+    /// for why a permission was not satisfied.
     ///
-    /// # Errors
-    /// If a permission is not satisfied, this function will return a corresponding error to the
-    /// permission
-    /// - [`Read`](super::AttributePermissions::Read) ->
-    /// [`ReadNotPermitted`](super::pdu::Error::ReadNotPermitted)
-    /// - [`Write`](super::AttributePermissions::Write) ->
-    /// [`WriteNotPermitted`](super::pdu::Error::WriteNotPermitted)
-    /// - [`Encryption`](super::AttributePermissions::Encryption)(`restriction`, _) where
-    /// `restriction` isn't matched -> [`InsufficientEncryption`](pdu::Error::InsufficientEncryption)
-    /// - [`Encryption`](super::AttributePermissions::Encryption)(`restriction`, `key`) where
-    /// `restriction` is matched but `key` is not matched ->
-    /// [`InsufficientEncryptionKeySize`](pdu::Error::InsufficientEncryptionKeySize)
-    /// - [`Authentication`](super::AttributePermissions::Authentication) ->
-    /// [`InsufficientAuthentication`](pdu::Error::InsufficientAuthentication)
-    /// - [`Authorization`](super::AttributePermissions::Authorization) ->
-    /// [`InsufficientAuthorization`](pdu::Error::InsufficientAuthorization)
-    ///
+    /// ### Bad Handle
     /// If there is no attribute with the handle `handle`, then the error
     /// [`InvalidHandle`](super::pdu::Error::InvalidHandle) is returned.
+    ///
+    /// ### Read and Write
+    /// Read and write are the two gatekeeper permissions. Permissions for read do not extend to
+    /// write and vise versa. Every permission must be granted individually. However when an
+    /// attribute doesn't have any permissions associated with a Read or a Write, this method will
+    /// return one of these errors.
+    /// - [`Read`](super::AttributePermissions::Read) ->
+    ///   [`ReadNotPermitted`](super::pdu::Error::ReadNotPermitted)
+    /// - [`Write`](super::AttributePermissions::Write) ->
+    ///   [`WriteNotPermitted`](super::pdu::Error::WriteNotPermitted)
+    ///
+    /// ### Read and Write Restrictions
+    /// Attribute restrictions are used to further refine when a Read or a Write is available to
+    /// a client. As an example, writing to the attribute may require the encryption permissions
+    /// specific to writing to be granted. These are the errors that are returned whenever a client
+    /// doesn't have the appropriate access restriction granted to them for the specific read or
+    /// write operation.
+    /// - [`Encryption`](super::AttributeRestriction::Encryption) ->
+    ///   [`InsufficientEncryption`](pdu::Error::InsufficientEncryption)
+    /// - [`Authentication`](super::AttributeRestriction::Authentication) ->
+    ///   [`InsufficientAuthentication`](pdu::Error::InsufficientAuthentication)
+    /// - [`Authorization`](super::AttributeRestriction::Authorization) ->
+    ///   [`InsufficientAuthorization`](pdu::Error::InsufficientAuthorization)
+    ///
+    /// ##### Encryption Key Size
+    /// Encryption is further divided into level of encryption. The error `InsufficientEncryption`
+    /// is used whenever the client does not have any encryption and tries to perform an operation,
+    /// but the error
+    /// [`InsufficientEncryptionKeySize`](pdu::Error::InsufficientEncryptionKeySize) is returned
+    /// when the client does not have the encryption permission with (one of) the accepted key size.
     pub fn check_permissions(
         &self,
         handle: u16,
-        permissions: &[super::AttributePermissions],
+        operation_permissions: &[super::AttributePermissions],
     ) -> Result<(), pdu::Error> {
         let att = self.attributes.get(handle).ok_or(super::pdu::Error::InvalidHandle)?;
 
-        match self.validate_permissions(att.get_permissions(), permissions) {
+        match self.validate_permissions(att.get_permissions(), operation_permissions) {
             None => Ok(()),
             Some(e) => Err(e),
         }

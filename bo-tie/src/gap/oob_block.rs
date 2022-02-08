@@ -22,7 +22,8 @@ impl OobDataBlockBuilder {
 
     /// Create the OOB data block
     ///
-    /// This takes an iterator of types that implement [`IntoRaw`](crate::gap::assigned::IntoRaw).
+    /// This takes an iterator of types that implement
+    /// [`IntoStruct`](crate::gap::assigned::IntoStruct).
     /// These are considered 'optional' as part of the OOB data block specification, but higher
     /// layer protocols usually have specific types that need to be sent.
     ///
