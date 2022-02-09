@@ -1,6 +1,7 @@
-//! LE specific common items
+//! Common items used by LE commands (this module contains no commands)
 //!
-//! These are things that are common across multiple modules in `hci/le`.
+//! These are things that are used across multiple LE command modules. Any items that are also used
+//! by other command groups will be in [`hci::common`](crate::hci::common).
 
 /// The valid address types for this HCI command
 ///
