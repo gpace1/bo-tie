@@ -81,8 +81,8 @@ impl Frequency {
     /// The value (N) passed to the adapter follows the following equation:
     ///
     /// # Error
-    /// The value is less then MIN or greater than MAX. MIN or MAX is returned
-    /// depending on which bound is violated.
+    /// The value is less then [`MIN`](Frequency::MIN) or greater than [`MAX`](Frequency::MAX).
+    /// `MIN` or `MAX` is returned depending on which bound is violated.
     pub fn new(mega_hz: usize) -> Result<Frequency, usize> {
         if mega_hz < Frequency::MIN {
             Err(Frequency::MIN)
@@ -161,8 +161,8 @@ macro_rules! interval {
 macro_rules! make_interval {
     ( $(#[ $expl:meta ])*
         $name:ident,
-        $raw_low:expr,
-        $raw_hi:expr,
+        $raw_low:literal,
+        $raw_hi:literal,
         $(#[ $raw_default_note:meta ])*,
         $raw_default:expr,
         $micro_sec_conv:expr) =>
@@ -181,10 +181,16 @@ macro_rules! make_interval {
                 micro_sec_conv: $micro_sec_conv,
             };
 
-            /// Create an interval from a raw value
+            /// Try to create a `
+            #[doc = stringify!($name)]
+            /// ` from a raw u16 value
             ///
             /// # Error
-            /// The value is out of bounds.
+            /// Input `raw` is either greater than
+            #[doc = stringify!($raw_hi)]
+            /// or the value is less than
+            #[doc = stringify!($raw_low)]
+            /// .
             pub fn try_from_raw( raw: u16 ) -> Result<Self, &'static str> {
                 if $name::RAW_RANGE.contains(&raw) {
                     Ok($name{
@@ -277,13 +283,17 @@ pub enum LEAddressType {
 }
 
 impl LEAddressType {
-    pub(crate) fn from(raw: u8) -> Self {
+    /// Try to create a `SupervisionTimeout` from a raw u8 value
+    ///
+    /// # Error
+    /// Input `raw` is not a valid identifier for an address type
+    pub(crate) fn try_from_raw(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => LEAddressType::PublicDeviceAddress,
-            0x01 => LEAddressType::RandomDeviceAddress,
-            0x02 => LEAddressType::PublicIdentityAddress,
-            0x03 => LEAddressType::RandomIdentityAddress,
-            _ => panic!("Unknown {}", raw),
+            0x00 => Ok(LEAddressType::PublicDeviceAddress),
+            0x01 => Ok(LEAddressType::RandomDeviceAddress),
+            0x02 => Ok(LEAddressType::PublicIdentityAddress),
+            0x03 => Ok(LEAddressType::RandomIdentityAddress),
+            _ => Err(alloc::format!("Unknown {}", raw)),
         }
     }
 
@@ -428,26 +438,24 @@ impl SupervisionTimeout {
     pub const MIN: u16 = 0x000A;
     pub const MAX: u16 = 0x0C80;
 
-    pub(crate) fn from(raw: u16) -> Self {
-        debug_assert!(raw >= Self::MIN && raw <= Self::MAX);
-
-        SupervisionTimeout { timeout: raw }
-    }
-
-    pub fn try_from_raw(val: u16) -> Result<Self, &'static str> {
-        if val < Self::MIN {
+    /// Try to create a `SupervisionTimeout` from a raw u16 value
+    ///
+    /// # Error
+    /// Input `raw` is either greater than 0x0C80 or the value is less than 0x000A.
+    pub fn try_from_raw(raw: u16) -> Result<Self, &'static str> {
+        if raw < Self::MIN {
             Err("Supervision timeout below minimum")
-        } else if val > Self::MAX {
+        } else if raw > Self::MAX {
             Err("Supervision timeout above maximum")
         } else {
-            Ok(SupervisionTimeout { timeout: val })
+            Ok(SupervisionTimeout { timeout: raw })
         }
     }
 
     /// Create an advertising interval from a Duration
     ///
     /// # Error
-    /// the value is out of bounds.
+    /// the value is either greater than 0x0C80 or the value is less than 0x000A.
     pub fn try_from_duration(duration: core::time::Duration) -> Result<Self, &'static str> {
         let min = core::time::Duration::from_millis(Self::MIN as u64 * Self::CNV);
         let max = core::time::Duration::from_millis(Self::MAX as u64 * Self::CNV);
@@ -485,19 +493,13 @@ pub struct ConnectionLatency {
 impl ConnectionLatency {
     const MAX: u16 = 0x01F3;
 
-    pub(crate) fn from(raw: u16) -> Self {
-        debug_assert!(raw <= Self::MAX);
-
-        ConnectionLatency { latency: raw }
-    }
-
-    /// Try to create an ConnectionLatency
+    /// Try to create a `ConnectionLatency` from a raw u16 value
     ///
     /// Must be a value less than or equal to 0x01F3
     ///
     /// # Error
-    /// The parameter is greater then 0x01F3
-    pub fn try_from(raw: u16) -> Result<Self, &'static str> {
+    /// The input `raw` is greater then 0x01F3
+    pub fn try_from_raw(raw: u16) -> Result<Self, &'static str> {
         if raw <= Self::MAX {
             Ok(Self { latency: raw })
         } else {

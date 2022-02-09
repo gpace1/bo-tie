@@ -2425,8 +2425,8 @@ impl LEConnectionCompleteData {
             peer_address_type: LEConnectionAddressType::try_from(chew!(packet))?,
             peer_address: chew_baddr!(packet),
             connection_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))?,
-            connection_latency: ConnectionLatency::from(chew_u16!(packet)),
-            supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
+            connection_latency: ConnectionLatency::try_from_raw(chew_u16!(packet))?,
+            supervision_timeout: SupervisionTimeout::try_from_raw(chew_u16!(packet))?,
             master_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,
         })
     }
@@ -2520,19 +2520,24 @@ impl LEAdvertisingReportData {
 
         for _ in 0..reports.capacity() {
             // packet[index + 8] is the data length value as given by the controller
-            reports.push(match LEAdvEventType::try_from(chew!(packet)) {
-                Ok(e_type) => Ok(LEAdvertisingReportData {
-                    event_type: e_type,
-                    address_type: LEAddressType::from(chew!(packet)),
-                    address: chew_baddr!(packet),
-                    data: {
-                        let size = chew!(packet);
-                        chew!(packet, size).to_vec()
-                    },
-                    rssi: get_rssi(chew!(packet)),
-                }),
-                Err(err) => Err(err),
-            });
+            reports.push(
+                match (
+                    LEAdvEventType::try_from(chew!(packet)),
+                    LEAddressType::try_from_raw(chew!(packet)),
+                ) {
+                    (Ok(event_type), Ok(address_type)) => Ok(LEAdvertisingReportData {
+                        event_type,
+                        address_type,
+                        address: chew_baddr!(packet),
+                        data: {
+                            let size = chew!(packet);
+                            chew!(packet, size).to_vec()
+                        },
+                        rssi: get_rssi(chew!(packet)),
+                    }),
+                    (Err(err), _) | (_, Err(err)) => Err(err),
+                },
+            );
         }
 
         reports
@@ -2557,8 +2562,8 @@ impl LEConnectionUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
             connection_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))?,
-            connection_latency: ConnectionLatency::from(chew_u16!(packet)),
-            supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
+            connection_latency: ConnectionLatency::try_from_raw(chew_u16!(packet))?,
+            supervision_timeout: SupervisionTimeout::try_from_raw(chew_u16!(packet))?,
         })
     }
 }
@@ -2627,7 +2632,7 @@ impl LERemoteConnectionParameterRequestData {
                 .map_err(|e| alloc::string::String::from(e))?,
             maximum_interval: le::common::ConnectionInterval::try_from_raw(chew_u16!(packet))
                 .map_err(|e| alloc::string::String::from(e))?,
-            latency: ConnectionLatency::try_from(chew_u16!(packet)).map_err(|e| alloc::string::String::from(e))?,
+            latency: ConnectionLatency::try_from_raw(chew_u16!(packet)).map_err(|e| alloc::string::String::from(e))?,
             timeout: SupervisionTimeout::try_from_raw(chew_u16!(packet)).map_err(|e| alloc::string::String::from(e))?,
         })
     }
@@ -2771,15 +2776,15 @@ impl LEEnhancedConnectionCompleteData {
             connection_handle: chew_handle!(packet),
             role: LERole::try_from(chew!(packet))?,
             peer_address_type: {
-                peer_address_type = LEAddressType::from(chew!(packet));
+                peer_address_type = LEAddressType::try_from_raw(chew!(packet))?;
                 peer_address_type.clone()
             },
             peer_address: chew_baddr!(packet),
             local_resolvable_private_address: if_rpa_is_used!(),
             peer_resolvable_private_address: if_rpa_is_used!(),
             connection_interval: le::common::ConnectionInterval::try_from_raw(chew_u16!(packet)).unwrap(),
-            connection_latency: ConnectionLatency::from(chew_u16!(packet)),
-            supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
+            connection_latency: ConnectionLatency::try_from_raw(chew_u16!(packet))?,
+            supervision_timeout: SupervisionTimeout::try_from_raw(chew_u16!(packet))?,
             master_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,
         })
     }
@@ -2843,7 +2848,7 @@ impl LEDirectedAdvertisingReportData {
             .map(|mut chunk| {
                 Ok(LEDirectedAdvertisingReportData {
                     event_type: LEAdvertisingEventType::try_from(chew!(chunk))?,
-                    address_type: LEAddressType::from(chew!(chunk)),
+                    address_type: LEAddressType::try_from_raw(chew!(chunk))?,
                     address: chew_baddr!(chunk),
                     direct_address_type: LEDirectAddressType::try_from(chew!(chunk))?,
                     direct_address: chew_baddr!(chunk),
@@ -3051,7 +3056,7 @@ impl LEExtendedAdvertisingReportData {
                     let val = chew!(packet);
 
                     if val != 0xFF {
-                        Some(LEAddressType::from(val))
+                        Some(LEAddressType::try_from_raw(val)?)
                     } else {
                         // A value of 0xFF indicates that no address was provided
                         None
@@ -3149,7 +3154,7 @@ impl LEPeriodicAdvertisingSyncEstablishedData {
             status: Error::from(chew!(packet)),
             sync_handle: chew_handle!(packet),
             advertising_sid: chew!(packet),
-            advertiser_address_type: LEAddressType::from(chew!(packet)),
+            advertiser_address_type: LEAddressType::try_from_raw(chew!(packet))?,
             advertiser_address: chew_baddr!(packet),
             advertiser_phy: LEPhy::try_from(chew!(packet))?,
             periodic_advertising_interval: LEAdvertiseInterval::from(chew_u16!(packet)),
@@ -3249,7 +3254,7 @@ impl LEScanRequestReceivedData {
 
         Ok(LEScanRequestReceivedData {
             advertising_handle: chew!(packet),
-            scanner_address_type: LEAddressType::from(chew!(packet)),
+            scanner_address_type: LEAddressType::try_from_raw(chew!(packet))?,
             scanner_address: chew_baddr!(packet),
         })
     }
