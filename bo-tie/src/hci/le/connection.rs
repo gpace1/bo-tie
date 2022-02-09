@@ -1,4 +1,4 @@
-use crate::hci::common::le::ConnectionInterval;
+use crate::hci::le::common::ConnectionInterval;
 pub use crate::hci::link_control::disconnect;
 
 /// ConnectionUpdateInterval contains the minimum and maximum connection intervals for
@@ -25,8 +25,8 @@ impl ConnectionIntervalBounds {
 /// LE Connection Update Command
 pub mod connection_update {
     use super::ConnectionIntervalBounds;
-    use crate::hci::common::le::ConnectionEventLength;
-    use crate::hci::common::{le::SupervisionTimeout, ConnectionHandle};
+    use crate::hci::common::ConnectionHandle;
+    use crate::hci::le::common::{ConnectionEventLength, SupervisionTimeout};
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ConnectionUpdate);
@@ -115,7 +115,7 @@ pub mod create_connection_cancel {
 pub mod create_connection {
 
     use super::ConnectionIntervalBounds;
-    use crate::hci::common::le::{
+    use crate::hci::le::common::{
         ConnectionEventLength, ConnectionLatency, LEAddressType, OwnAddressType, SupervisionTimeout,
     };
     use crate::hci::*;

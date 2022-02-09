@@ -36,7 +36,7 @@ async fn remove_from_white_list<M: Send + 'static>(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     address: bo_tie::BluetoothDeviceAddress,
 ) {
-    use bo_tie::hci::common::le::AddressType::RandomDeviceAddress;
+    use bo_tie::hci::le::common::AddressType::RandomDeviceAddress;
     use bo_tie::hci::le::mandatory::remove_device_from_white_list::send;
 
     send(&hi, RandomDeviceAddress, address).await.unwrap();
@@ -100,8 +100,8 @@ async fn connect<M: Send + 'static>(
     address: bo_tie::BluetoothDeviceAddress,
 ) -> Result<EventsData, impl std::fmt::Debug> {
     use bo_tie::hci::common;
-    use bo_tie::hci::common::le::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::events::{Events, LEMeta};
+    use bo_tie::hci::le::common::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::le::connection;
     use bo_tie::hci::le::connection::create_connection;
     use bo_tie::hci::le::mandatory::set_event_mask;
@@ -116,7 +116,7 @@ async fn connect<M: Send + 'static>(
     let parameters = create_connection::ConnectionParameters::new_without_whitelist(
         create_connection::ScanningInterval::default(),
         create_connection::ScanningWindow::default(),
-        common::LEAddressType::RandomDeviceAddress,
+        le::commonAddressType::RandomDeviceAddress,
         address,
         OwnAddressType::default(),
         connection::ConnectionIntervalBounds::try_from(

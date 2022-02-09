@@ -14,8 +14,8 @@ pub use super::super::info_params::read_local_version_information;
 
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
-        use crate::hci::common::le::AddressType;
         use crate::hci::events::Events;
+        use crate::hci::le::common::AddressType;
         use crate::hci::*;
 
         /// Command parameter data for both add and remove whitelist commands.
@@ -185,7 +185,7 @@ pub mod read_buffer_size {
 
 pub mod read_local_supported_features {
 
-    use crate::hci::common::le::EnabledLeFeaturesItr;
+    use crate::hci::le::common::EnabledLeFeaturesItr;
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand =

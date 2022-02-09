@@ -101,7 +101,7 @@ async fn advertise_setup<M: Send + 'static>(hi: &hci::HostInterface<bo_tie_linux
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
-    adv_prams.own_address_type = bo_tie::hci::common::le::OwnAddressType::RandomDeviceAddress;
+    adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress;
 
     set_advertising_parameters::send(&hi, adv_prams).await.unwrap();
 

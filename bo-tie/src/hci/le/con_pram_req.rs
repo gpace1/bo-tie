@@ -5,8 +5,8 @@
 
 pub mod remote_connection_parameter_request_reply {
 
-    use crate::hci::common::le::ConnectionEventLength;
-    use crate::hci::common::{le::ConnectionInterval, le::ConnectionLatency, le::SupervisionTimeout, ConnectionHandle};
+    use crate::hci::common::ConnectionHandle;
+    use crate::hci::le::common::{ConnectionEventLength, ConnectionInterval, ConnectionLatency, SupervisionTimeout};
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand =

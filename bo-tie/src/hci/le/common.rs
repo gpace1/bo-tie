@@ -1,7 +1,8 @@
-//! `hci` common items
+//! LE specific common items
 //!
-//! These are things that are common to multiple modules in `hci`.
+//! These are things that are common across multiple modules in `hci/le`.
 
+use crate::hci::common::BoundsErr;
 use core::convert::From;
 
 /// The valid address types for this HCI command
@@ -177,7 +178,7 @@ macro_rules! make_interval {
 
         impl $name {
 
-            const RAW_RANGE: crate::hci::common::le::IntervalRange<u16> = crate::hci::common::le::IntervalRange{
+            const RAW_RANGE: crate::hci::le::common::IntervalRange<u16> = crate::hci::le::common::IntervalRange{
                 low: $raw_low,
                 hi: $raw_hi,
                 micro_sec_conv: $micro_sec_conv,
@@ -204,7 +205,7 @@ macro_rules! make_interval {
             /// the value is out of bounds.
             pub fn try_from_duration( duration: core::time::Duration ) -> Result<Self, &'static str>
             {
-                let duration_range = crate::hci::common::le::IntervalRange::<core::time::Duration>::from($name::RAW_RANGE);
+                let duration_range = crate::hci::le::common::IntervalRange::<core::time::Duration>::from($name::RAW_RANGE);
 
                 if duration_range.contains(&duration) {
                     Ok( $name {
@@ -368,7 +369,7 @@ impl EnabledLeFeaturesItr {
 impl Iterator for EnabledLeFeaturesItr {
     type Item = LEFeatures;
 
-    fn next(&mut self) -> ::core::option::Option<Self::Item> {
+    fn next(&mut self) -> core::option::Option<Self::Item> {
         // Yea the match here is stupid as of v5 bluetooth. In the future page 1 or page 2 may
         // contain enough features to have a byte count different from the page number.
         for index in self.bit_index.0..(::core::mem::size_of_val(&self.raw) as u8) {
@@ -452,9 +453,9 @@ impl SupervisionTimeout {
         SupervisionTimeout { timeout: raw }
     }
 
-    pub fn try_from_raw(val: u16) -> Result<Self, super::BoundsErr<u16>> {
+    pub fn try_from_raw(val: u16) -> Result<Self, BoundsErr<u16>> {
         Ok(SupervisionTimeout {
-            timeout: super::BoundsErr::check(val, Self::MIN, Self::MAX)?,
+            timeout: BoundsErr::check(val, Self::MIN, Self::MAX)?,
         })
     }
 

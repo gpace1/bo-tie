@@ -1,3 +1,7 @@
+//! `hci` common items
+//!
+//! These are things that are common across multiple modules in `hci`.
+
 use core::fmt;
 use core::iter::Iterator;
 
@@ -10,9 +14,6 @@ macro_rules! is_bit_set {
         }
     };
 }
-
-#[macro_use]
-pub mod le;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct ConnectionHandle {

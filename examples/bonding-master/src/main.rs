@@ -107,13 +107,13 @@ fn match_report(report: &&hci::events::LEAdvertisingReportData, name: &str) -> b
 async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
     hi: Arc<hci::HostInterface<Base, M>>,
     peer_address: &bo_tie::BluetoothDeviceAddress,
-    peer_address_type: bo_tie::hci::common::LEAddressType,
+    peer_address_type: bo_tie::hci::le::commonAddressType,
     raw_handle: Arc<AtomicU16>,
 ) -> impl bo_tie::l2cap::ConnectionChannel {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
-    use bo_tie::hci::common::le::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::common::{ConnectionLatency, SupervisionTimeout};
     use bo_tie::hci::events::{Events, EventsData, LEMeta, LEMetaData};
+    use bo_tie::hci::le::common::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::le::connection::{
         create_connection::{self, ConnectionParameters, ScanningInterval, ScanningWindow},
         ConnectionInterval, ConnectionIntervalBounds,
@@ -298,7 +298,7 @@ async fn bonding<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
         &cc,
         &peer_addr,
         &this_addr,
-        peer_addr_type == hci::common::LEAddressType::RandomDeviceAddress,
+        peer_addr_type == hci::le::commonAddressType::RandomDeviceAddress,
         false,
     )
     .build();

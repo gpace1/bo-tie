@@ -9,7 +9,7 @@
 
 use bo_tie::att::server::BasicQueuedWriter;
 use bo_tie::hci;
-use bo_tie::hci::common::le::OwnAddressType;
+use bo_tie::hci::le::common::OwnAddressType;
 use futures::lock::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -229,9 +229,9 @@ impl Bonder {
         let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
         adv_prams.own_address_type = if self.is_address_public() {
-            bo_tie::hci::common::le::OwnAddressType::PublicDeviceAddress
+            bo_tie::hci::le::common::OwnAddressType::PublicDeviceAddress
         } else {
-            bo_tie::hci::common::le::OwnAddressType::RandomDeviceAddress
+            bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress
         };
 
         set_advertising_parameters::send(&self.hi, adv_prams).await.unwrap();
@@ -240,7 +240,7 @@ impl Bonder {
     }
 
     async fn connection_update_request(self) {
-        use bo_tie::hci::common::le::ConnectionEventLength;
+        use bo_tie::hci::le::common::ConnectionEventLength;
         use hci::common::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
         use hci::events::EventsData::LEMeta;
         use hci::events::LEMeta::RemoteConnectionParameterRequest as RCPReq;
@@ -452,8 +452,8 @@ impl Bonder {
         mut peer_address_is_random: bool,
     ) {
         use futures::future::FutureExt;
-        use hci::common::LEAddressType;
         use hci::events::Events::DisconnectionComplete;
+        use hci::le::commonAddressType;
 
         let connection_channel = self.hi.clone().flow_ctrl_channel(handle, 512);
 
