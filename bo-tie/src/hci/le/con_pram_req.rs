@@ -5,8 +5,8 @@
 
 pub mod remote_connection_parameter_request_reply {
 
-    use crate::hci::common::{ConnectionHandle, ConnectionInterval, ConnectionLatency, SupervisionTimeout};
-    use crate::hci::le::common::ConnectionEventLength;
+    use crate::hci::common::le::ConnectionEventLength;
+    use crate::hci::common::{le::ConnectionInterval, le::ConnectionLatency, le::SupervisionTimeout, ConnectionHandle};
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand =
@@ -51,8 +51,8 @@ pub mod remote_connection_parameter_request_reply {
         fn get_parameter(&self) -> Self::Parameter {
             Parameter {
                 _connection_handle: self.handle.get_raw_handle().to_le(),
-                _interval_min: self.interval_min.get_interval().to_le(),
-                _interval_max: self.interval_max.get_interval().to_le(),
+                _interval_min: self.interval_min.get_raw_val().to_le(),
+                _interval_max: self.interval_max.get_raw_val().to_le(),
                 _latency: self.latency.get_latency().to_le(),
                 _timeout: self.timeout.get_timeout().to_le(),
                 _minimum_ce_len: self.ce_len.minimum.to_le(),

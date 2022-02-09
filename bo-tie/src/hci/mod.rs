@@ -2,6 +2,7 @@
 //!
 //! The HCI is the primary way of interacting with the controller for this library.
 
+#[macro_use]
 pub mod common;
 pub mod error;
 pub mod opcodes;

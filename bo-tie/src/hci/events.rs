@@ -1,12 +1,15 @@
 //! Host Controller Interface Events
 
+use crate::hci::common::le::ConnectionInterval;
 use crate::hci::common::{
-    ConnectionHandle, ConnectionInterval, ConnectionLatency, EnabledExtendedFeaturesItr, EnabledFeaturesIter,
-    EnabledLeFeaturesItr, EncryptionLevel, ExtendedAdvertisingAndScanResponseDataItr, ExtendedInquiryResponseDataItr,
-    LEAddressType, SupervisionTimeout,
+    self,
+    le::{
+        ConnectionLatency, EnabledLeFeaturesItr, ExtendedAdvertisingAndScanResponseDataItr, LEAddressType,
+        SupervisionTimeout,
+    },
+    ConnectionHandle, EnabledExtendedFeaturesItr, EnabledFeaturesIter, EncryptionLevel, ExtendedInquiryResponseDataItr,
 };
 use crate::hci::error::Error;
-use crate::hci::le;
 use crate::BluetoothDeviceAddress;
 use core::convert::From;
 
@@ -2422,7 +2425,7 @@ impl LEConnectionCompleteData {
             role: LERole::try_from(chew!(packet))?,
             peer_address_type: LEConnectionAddressType::try_from(chew!(packet))?,
             peer_address: chew_baddr!(packet),
-            connection_interval: ConnectionInterval::try_from_received(chew_u16!(packet))?,
+            connection_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))?,
             connection_latency: ConnectionLatency::from(chew_u16!(packet)),
             supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
             master_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,
@@ -2554,7 +2557,7 @@ impl LEConnectionUpdateCompleteData {
         Ok(LEConnectionUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
-            connection_interval: ConnectionInterval::try_from_received(chew_u16!(packet))?,
+            connection_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))?,
             connection_latency: ConnectionLatency::from(chew_u16!(packet)),
             supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
         })
@@ -2629,8 +2632,8 @@ impl LEConnectionTimeout {
 #[derive(Debug, Clone)]
 pub struct LERemoteConnectionParameterRequestData {
     pub connection_handle: ConnectionHandle,
-    pub minimum_interval: le::connection::ConnectionInterval,
-    pub maximum_interval: le::connection::ConnectionInterval,
+    pub minimum_interval: common::le::ConnectionInterval,
+    pub maximum_interval: common::le::ConnectionInterval,
     pub latency: ConnectionLatency,
     pub timeout: LEConnectionTimeout,
 }
@@ -2642,9 +2645,9 @@ impl LERemoteConnectionParameterRequestData {
 
         Ok(LERemoteConnectionParameterRequestData {
             connection_handle: chew_handle!(packet),
-            minimum_interval: le::connection::ConnectionInterval::try_from_raw(chew_u16!(packet))
+            minimum_interval: common::le::ConnectionInterval::try_from_raw(chew_u16!(packet))
                 .map_err(|e| alloc::string::String::from(e))?,
-            maximum_interval: le::connection::ConnectionInterval::try_from_raw(chew_u16!(packet))
+            maximum_interval: common::le::ConnectionInterval::try_from_raw(chew_u16!(packet))
                 .map_err(|e| alloc::string::String::from(e))?,
             latency: ConnectionLatency::from(chew_u16!(packet)),
             timeout: LEConnectionTimeout::from(chew_u16!(packet)),
@@ -2758,7 +2761,7 @@ pub struct LEEnhancedConnectionCompleteData {
     pub peer_address: BluetoothDeviceAddress,
     pub local_resolvable_private_address: Option<BluetoothDeviceAddress>,
     pub peer_resolvable_private_address: Option<BluetoothDeviceAddress>,
-    pub connection_interval: le::connection::ConnectionInterval,
+    pub connection_interval: common::le::ConnectionInterval,
     pub connection_latency: ConnectionLatency,
     pub supervision_timeout: SupervisionTimeout,
     pub master_clock_accuracy: ClockAccuracy,
@@ -2796,7 +2799,7 @@ impl LEEnhancedConnectionCompleteData {
             peer_address: chew_baddr!(packet),
             local_resolvable_private_address: if_rpa_is_used!(),
             peer_resolvable_private_address: if_rpa_is_used!(),
-            connection_interval: le::connection::ConnectionInterval::try_from_raw(chew_u16!(packet)).unwrap(),
+            connection_interval: common::le::ConnectionInterval::try_from_raw(chew_u16!(packet)).unwrap(),
             connection_latency: ConnectionLatency::from(chew_u16!(packet)),
             supervision_timeout: SupervisionTimeout::from(chew_u16!(packet)),
             master_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,

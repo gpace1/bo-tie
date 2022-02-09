@@ -111,9 +111,9 @@ async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
     raw_handle: Arc<AtomicU16>,
 ) -> impl bo_tie::l2cap::ConnectionChannel {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
+    use bo_tie::hci::common::le::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::common::{ConnectionLatency, SupervisionTimeout};
     use bo_tie::hci::events::{Events, EventsData, LEMeta, LEMetaData};
-    use bo_tie::hci::le::common::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::le::connection::{
         create_connection::{self, ConnectionParameters, ScanningInterval, ScanningWindow},
         ConnectionInterval, ConnectionIntervalBounds,

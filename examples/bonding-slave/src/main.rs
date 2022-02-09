@@ -9,6 +9,7 @@
 
 use bo_tie::att::server::BasicQueuedWriter;
 use bo_tie::hci;
+use bo_tie::hci::common::le::OwnAddressType;
 use futures::lock::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -228,9 +229,9 @@ impl Bonder {
         let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
         adv_prams.own_address_type = if self.is_address_public() {
-            bo_tie::hci::le::common::OwnAddressType::PublicDeviceAddress
+            bo_tie::hci::common::le::OwnAddressType::PublicDeviceAddress
         } else {
-            bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress
+            bo_tie::hci::common::le::OwnAddressType::RandomDeviceAddress
         };
 
         set_advertising_parameters::send(&self.hi, adv_prams).await.unwrap();
@@ -239,11 +240,11 @@ impl Bonder {
     }
 
     async fn connection_update_request(self) {
+        use bo_tie::hci::common::le::ConnectionEventLength;
         use hci::common::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
         use hci::events::EventsData::LEMeta;
         use hci::events::LEMeta::RemoteConnectionParameterRequest as RCPReq;
         use hci::events::LEMetaData::RemoteConnectionParameterRequest as RCPReqData;
-        use hci::le::common::ConnectionEventLength;
         use hci::le::con_pram_req::remote_connection_parameter_request_reply::{send, CommandParameters};
 
         loop {
@@ -607,7 +608,6 @@ impl Bonder {
         use hci::events::LEMeta::EnhancedConnectionComplete;
         use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
         use hci::le::{
-            common::OwnAddressType,
             privacy::{
                 add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
                 set_resolvable_private_address_timeout, PeerIdentityAddressType,

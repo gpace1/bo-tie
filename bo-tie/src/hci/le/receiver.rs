@@ -1,6 +1,6 @@
 pub mod receiver_test {
 
-    use crate::hci::le::common::Frequency;
+    use crate::hci::common::le::Frequency;
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReceiverTest);
@@ -79,7 +79,7 @@ pub mod set_scan_enable {
 
 pub mod set_scan_parameters {
 
-    use crate::hci::le::common::OwnAddressType;
+    use crate::hci::common::le::OwnAddressType;
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetScanParameters);

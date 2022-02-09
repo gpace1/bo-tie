@@ -74,7 +74,7 @@ pub mod read_advertising_channel_tx_power {
 
 pub mod transmitter_test {
 
-    use crate::hci::le::common::Frequency;
+    use crate::hci::common::le::Frequency;
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TransmitterTest);
@@ -290,7 +290,7 @@ pub mod set_advertising_enable {
 
 pub mod set_advertising_parameters {
 
-    use crate::hci::le::common::OwnAddressType;
+    use crate::hci::common::le::OwnAddressType;
     use crate::hci::*;
     use core::default::Default;
 
