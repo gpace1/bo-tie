@@ -6,8 +6,8 @@ use crate::hci::common::{
 use crate::hci::error::Error;
 use crate::hci::le;
 use crate::hci::le::common::{
-    ConnectionInterval, ConnectionLatency, EnabledLeFeaturesItr, ExtendedAdvertisingAndScanResponseDataItr,
-    LEAddressType, SupervisionTimeout,
+    ConnectionInterval, ConnectionLatency, EnabledLeFeaturesItr, ExtendedAdvertisingAndScanResponseData, LEAddressType,
+    SupervisionTimeout,
 };
 use crate::BluetoothDeviceAddress;
 use core::convert::From;
@@ -3056,7 +3056,7 @@ pub struct LEExtendedAdvertisingReportData {
     pub periodic_advertising_interval: Option<LEAdvertiseInterval>,
     pub direct_address_type: LEDirectAddressType,
     pub direct_address: BluetoothDeviceAddress,
-    pub data: ExtendedAdvertisingAndScanResponseDataItr,
+    pub data: ExtendedAdvertisingAndScanResponseData,
 }
 
 impl LEExtendedAdvertisingReportData {
@@ -3136,7 +3136,7 @@ impl LEExtendedAdvertisingReportData {
                 data: {
                     let data_len = chew!(packet);
 
-                    ExtendedAdvertisingAndScanResponseDataItr::from(chew!(packet, data_len))
+                    ExtendedAdvertisingAndScanResponseData::from(chew!(packet, data_len))
                 },
             })
         };

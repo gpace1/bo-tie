@@ -403,37 +403,21 @@ impl core::fmt::Debug for EnabledLeFeaturesItr {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExtendedAdvertisingAndScanResponseDataItr {
-    data: alloc::boxed::Box<[u8]>,
-    indexer: usize,
+pub struct ExtendedAdvertisingAndScanResponseData {
+    data: alloc::vec::Vec<u8>,
 }
 
-impl ExtendedAdvertisingAndScanResponseDataItr {
-    pub(crate) fn from(raw_slice: &[u8]) -> Self {
-        ExtendedAdvertisingAndScanResponseDataItr {
-            data: raw_slice.to_vec().into_boxed_slice(),
-            indexer: 0,
-        }
+impl ExtendedAdvertisingAndScanResponseData {
+    pub(crate) fn from<T>(data: T) -> Self
+    where
+        T: Into<alloc::vec::Vec<u8>>,
+    {
+        Self { data: data.into() }
     }
-}
 
-impl Iterator for ExtendedAdvertisingAndScanResponseDataItr {
-    type Item = ::alloc::boxed::Box<[u8]>; // TODO convert to data types (from CSSv7)
-
-    /// This will panic if somehow the EIR Data lengths are incorrect within the entire Extended
-    /// Inquiry Response Data Message processed by this iterator
-    fn next(&mut self) -> Option<Self::Item> {
-        if (self.indexer < self.data.len()) && (self.data[self.indexer] != 0) {
-            let eir_len = self.data[self.indexer] as usize;
-
-            let data_index = self.indexer + 1;
-
-            self.indexer += eir_len + 1;
-
-            Some(self.data[data_index..eir_len].to_vec().into_boxed_slice())
-        } else {
-            None
-        }
+    /// Iterate over the advertising data structures
+    pub fn iter(&self) -> crate::gap::assigned::EirOrAdIterator {
+        crate::gap::assigned::EirOrAdIterator::from(self.data.as_ref())
     }
 }
 
