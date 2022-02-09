@@ -2,9 +2,6 @@
 //!
 //! These are things that are common across multiple modules in `hci/le`.
 
-use crate::hci::common::BoundsErr;
-use core::convert::From;
-
 /// The valid address types for this HCI command
 ///
 /// - PublicDeviceAddress
@@ -437,10 +434,14 @@ impl SupervisionTimeout {
         SupervisionTimeout { timeout: raw }
     }
 
-    pub fn try_from_raw(val: u16) -> Result<Self, BoundsErr<u16>> {
-        Ok(SupervisionTimeout {
-            timeout: BoundsErr::check(val, Self::MIN, Self::MAX)?,
-        })
+    pub fn try_from_raw(val: u16) -> Result<Self, &'static str> {
+        if val < Self::MIN {
+            Err("Supervision timeout below minimum")
+        } else if val > Self::MAX {
+            Err("Supervision timeout above maximum")
+        } else {
+            Ok(SupervisionTimeout { timeout: val })
+        }
     }
 
     /// Create an advertising interval from a Duration

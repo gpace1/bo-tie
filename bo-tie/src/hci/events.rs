@@ -2608,33 +2608,12 @@ impl LELongTermKeyRequestData {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEConnectionTimeout {
-    timeout: u16,
-}
-
-impl LEConnectionTimeout {
-    const CNV: u64 = 10; // unit: milliseconds
-
-    /// Raw is a pair for (minimum, maximum)
-    fn from(raw: u16) -> Self {
-        debug_assert!(raw >= 0x000A && raw <= 0x0C80);
-
-        LEConnectionTimeout { timeout: raw }
-    }
-
-    /// Get the maximum interval value as a duration
-    pub fn as_duration(&self) -> core::time::Duration {
-        core::time::Duration::from_millis((self.timeout as u64) * Self::CNV)
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct LERemoteConnectionParameterRequestData {
     pub connection_handle: ConnectionHandle,
     pub minimum_interval: le::common::ConnectionInterval,
     pub maximum_interval: le::common::ConnectionInterval,
     pub latency: ConnectionLatency,
-    pub timeout: LEConnectionTimeout,
+    pub timeout: SupervisionTimeout,
 }
 
 impl LERemoteConnectionParameterRequestData {
@@ -2648,8 +2627,8 @@ impl LERemoteConnectionParameterRequestData {
                 .map_err(|e| alloc::string::String::from(e))?,
             maximum_interval: le::common::ConnectionInterval::try_from_raw(chew_u16!(packet))
                 .map_err(|e| alloc::string::String::from(e))?,
-            latency: ConnectionLatency::from(chew_u16!(packet)),
-            timeout: LEConnectionTimeout::from(chew_u16!(packet)),
+            latency: ConnectionLatency::try_from(chew_u16!(packet)).map_err(|e| alloc::string::String::from(e))?,
+            timeout: SupervisionTimeout::try_from_raw(chew_u16!(packet)).map_err(|e| alloc::string::String::from(e))?,
         })
     }
 }

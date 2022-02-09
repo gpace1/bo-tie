@@ -78,33 +78,6 @@ impl ConnectionHandle {
     }
 }
 
-/// Bound related Error
-///
-/// The value contained in each enum should be the bound value that was violated.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BoundsErr<T>
-where
-    T: fmt::Debug + Clone + Copy + PartialEq + PartialOrd,
-{
-    AboveMax(T),
-    BelowMin(T),
-}
-
-impl<T> BoundsErr<T>
-where
-    T: fmt::Debug + Clone + Copy + PartialEq + PartialOrd,
-{
-    pub(crate) fn check(val: T, min: T, max: T) -> Result<T, Self> {
-        if val < min {
-            Err(BoundsErr::BelowMin(min))
-        } else if val > max {
-            Err(BoundsErr::AboveMax(max))
-        } else {
-            Ok(val)
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum EncryptionLevel {
     Off,
