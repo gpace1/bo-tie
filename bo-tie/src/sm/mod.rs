@@ -559,7 +559,7 @@ impl Keys {
     pub fn get_peer_addr(&self) -> Option<(bool, crate::BluetoothDeviceAddress)> {
         self.peer_addr.clone().map(|addr| match addr {
             BluAddr::Public(addr) => (true, addr),
-            BluAddr::StaticRandom(addr) => (true, addr),
+            BluAddr::StaticRandom(addr) => (false, addr),
         })
     }
 
