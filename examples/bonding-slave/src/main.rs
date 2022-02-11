@@ -241,7 +241,7 @@ impl Bonder {
 
     async fn connection_update_request(self) {
         use bo_tie::hci::le::common::ConnectionEventLength;
-        use hci::common::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
+        use hci::common::le::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
         use hci::events::EventsData::LEMeta;
         use hci::events::LEMeta::RemoteConnectionParameterRequest as RCPReq;
         use hci::events::LEMetaData::RemoteConnectionParameterRequest as RCPReqData;
