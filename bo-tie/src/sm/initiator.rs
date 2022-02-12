@@ -315,49 +315,72 @@ where
         self.send(pairing::PairingFailed::new(fail_reason)).await
     }
 
-    /// Send the Identity Resolving Key to the Master Device
+    /// Send the Identity Resolving Key
     ///
-    /// This function will send the IRK to the master device if the internal encryption flag is set
-    /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
-    /// and an IRK has been generated. An IRK is generated once the return of
-    /// [`start_pairing`](MasterSecurityManager::start_pairing)
-    /// returns a reference to a [`Keys`](super::Keys). However, since the return is a
-    /// mutable, you can replace the IRK with `None` which would also cause this function to
-    /// return false. If the function returns false then the IRK isn't sent to the Master Device.
-    pub async fn send_irk(&self) -> Result<bool, Error> {
+    /// This will add the IRK to the cypher keys and send it to the other device if the internal
+    /// encryption flag is set to true (by the method
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)) and pairing
+    /// has completed.
+    ///
+    /// If the input `irk` evaluates to `None` then an IRK is generated before being added and sent.
+    ///
+    /// The IRK is returned if it was successfully sent to the other device
+    pub async fn send_irk<Irk>(&mut self, irk: Irk) -> Result<u128, Error>
+    where
+        Irk: Into<Option<u128>>,
+    {
         if self.link_encrypted {
-            if let Some(irk) = self.keys.as_ref().and_then(|key| key.irk.clone()) {
-                self.send(encrypt_info::IdentityInformation::new(irk)).await?;
+            let irk = irk.into().unwrap_or(toolbox::rand_u128());
 
-                Ok(true)
-            } else {
-                Ok(false)
+            if let Some(super::Keys {
+                irk: ref mut irk_opt, ..
+            }) = self.keys
+            {
+                *irk_opt = Some(irk)
             }
+
+            self.send(encrypt_info::IdentityInformation::new(irk)).await?;
+
+            Ok(irk)
         } else {
-            Ok(false)
+            Err(Error::UnknownIfLinkIsEncrypted)
         }
     }
 
-    /// Send the Connection Signature Resolving Key to the Master Device
+    /// Send the Connection Signature Resolving Key
     ///
-    /// This function will send the CSRK to the master device if the internal encryption flag is set
-    /// to true by [`set_encrypted`](MasterSecurityManager::set_encrypted)
-    /// and an CSRK has been generated. An IRK is generated once the return of
-    /// [`start_pairing`](MasterSecurityManager::start_pairing)
-    /// returns a reference to a [`Keys`](super::Keys). However, since the return is a
-    /// mutable, you can replace the IRK with `None` which would also cause this function to
-    /// return false. If the function returns false then the IRK isn't sent to the Master Device.
-    pub async fn send_csrk(&self) -> Result<bool, Error> {
+    /// This will add the CSRK to the cypher keys and send it to the other device if the internal
+    /// encryption flag is set to true (by the method
+    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted)) and pairing
+    /// has completed.
+    ///
+    /// If the input `csrk` evaluates to `None` then a CSRK is generated before being added and
+    /// sent.
+    ///
+    /// The CSRK is returned if it was successfully sent to the other device
+    ///
+    /// # Note
+    /// There is no input for the sign counter as the CSRK is considered a new value, and thus the
+    /// sign counter within the CSRK will always be 0.
+    pub async fn send_csrk<Csrk>(&mut self, csrk: Csrk) -> Result<u128, Error>
+    where
+        Csrk: Into<Option<u128>>,
+    {
         if self.link_encrypted {
-            if let Some(csrk) = self.keys.as_ref().and_then(|key| key.csrk.clone()) {
-                self.send(encrypt_info::SigningInformation::new(csrk.0)).await?;
+            let csrk = csrk.into().unwrap_or(toolbox::rand_u128());
 
-                Ok(true)
-            } else {
-                Ok(false)
+            if let Some(super::Keys {
+                csrk: ref mut csrk_opt, ..
+            }) = self.keys
+            {
+                *csrk_opt = Some((csrk, 0));
             }
+
+            self.send(encrypt_info::SigningInformation::new(csrk)).await?;
+
+            Ok(csrk)
         } else {
-            Ok(false)
+            Err(Error::UnknownIfLinkIsEncrypted)
         }
     }
 
