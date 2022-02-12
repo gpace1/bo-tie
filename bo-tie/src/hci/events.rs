@@ -6,7 +6,7 @@ use crate::hci::common::{
 use crate::hci::error::Error;
 use crate::hci::le;
 use crate::hci::le::common::{
-    ConnectionInterval, ConnectionLatency, EnabledLeFeaturesItr, ExtendedAdvertisingAndScanResponseData, LEAddressType,
+    AddressType, ConnectionInterval, ConnectionLatency, EnabledLeFeaturesItr, ExtendedAdvertisingAndScanResponseData,
     SupervisionTimeout,
 };
 use crate::BluetoothDeviceAddress;
@@ -2492,7 +2492,7 @@ impl<'a> core::iter::Iterator for ReportDataIter<'a> {
 #[derive(Debug, Clone)]
 pub struct LEAdvertisingReportData {
     pub event_type: LEAdvEventType,
-    pub address_type: LEAddressType,
+    pub address_type: AddressType,
     pub address: BluetoothDeviceAddress,
     pub data: alloc::vec::Vec<u8>,
     /// If rssi is None, the the value isn't available
@@ -2523,7 +2523,7 @@ impl LEAdvertisingReportData {
             reports.push(
                 match (
                     LEAdvEventType::try_from(chew!(packet)),
-                    LEAddressType::try_from_raw(chew!(packet)),
+                    AddressType::try_from_raw(chew!(packet)),
                 ) {
                     (Ok(event_type), Ok(address_type)) => Ok(LEAdvertisingReportData {
                         event_type,
@@ -2740,7 +2740,7 @@ pub struct LEEnhancedConnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
     pub role: LERole,
-    pub peer_address_type: LEAddressType,
+    pub peer_address_type: AddressType,
     pub peer_address: BluetoothDeviceAddress,
     pub local_resolvable_private_address: Option<BluetoothDeviceAddress>,
     pub peer_resolvable_private_address: Option<BluetoothDeviceAddress>,
@@ -2755,13 +2755,13 @@ impl LEEnhancedConnectionCompleteData {
     fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
         let mut packet = data;
 
-        let peer_address_type: LEAddressType;
+        let peer_address_type: AddressType;
 
         macro_rules! if_rpa_is_used {
             () => {{
                 let bdaddr = chew_baddr!(packet);
                 if match peer_address_type {
-                    LEAddressType::PublicIdentityAddress | LEAddressType::RandomIdentityAddress => true,
+                    AddressType::PublicIdentityAddress | AddressType::RandomIdentityAddress => true,
                     _ => false,
                 } {
                     Some(bdaddr)
@@ -2776,7 +2776,7 @@ impl LEEnhancedConnectionCompleteData {
             connection_handle: chew_handle!(packet),
             role: LERole::try_from(chew!(packet))?,
             peer_address_type: {
-                peer_address_type = LEAddressType::try_from_raw(chew!(packet))?;
+                peer_address_type = AddressType::try_from_raw(chew!(packet))?;
                 peer_address_type.clone()
             },
             peer_address: chew_baddr!(packet),
@@ -2829,7 +2829,7 @@ impl LEDirectAddressType {
 #[derive(Debug, Clone)]
 pub struct LEDirectedAdvertisingReportData {
     pub event_type: LEAdvertisingEventType,
-    pub address_type: LEAddressType,
+    pub address_type: AddressType,
     pub address: BluetoothDeviceAddress,
     pub direct_address_type: LEDirectAddressType,
     pub direct_address: BluetoothDeviceAddress,
@@ -2848,7 +2848,7 @@ impl LEDirectedAdvertisingReportData {
             .map(|mut chunk| {
                 Ok(LEDirectedAdvertisingReportData {
                     event_type: LEAdvertisingEventType::try_from(chew!(chunk))?,
-                    address_type: LEAddressType::try_from_raw(chew!(chunk))?,
+                    address_type: AddressType::try_from_raw(chew!(chunk))?,
                     address: chew_baddr!(chunk),
                     direct_address_type: LEDirectAddressType::try_from(chew!(chunk))?,
                     direct_address: chew_baddr!(chunk),
@@ -3030,7 +3030,7 @@ impl LEAdvertiseInterval {
 #[derive(Debug, Clone)]
 pub struct LEExtendedAdvertisingReportData {
     pub event_type: LEExtAdvEventType,
-    pub address_type: Option<LEAddressType>,
+    pub address_type: Option<AddressType>,
     pub address: BluetoothDeviceAddress,
     pub primary_phy: LEPhy,
     pub secondary_phy: Option<LEPhy>,
@@ -3056,7 +3056,7 @@ impl LEExtendedAdvertisingReportData {
                     let val = chew!(packet);
 
                     if val != 0xFF {
-                        Some(LEAddressType::try_from_raw(val)?)
+                        Some(AddressType::try_from_raw(val)?)
                     } else {
                         // A value of 0xFF indicates that no address was provided
                         None
@@ -3138,7 +3138,7 @@ pub struct LEPeriodicAdvertisingSyncEstablishedData {
     pub status: Error,
     pub sync_handle: ConnectionHandle,
     pub advertising_sid: u8,
-    pub advertiser_address_type: LEAddressType,
+    pub advertiser_address_type: AddressType,
     pub advertiser_address: BluetoothDeviceAddress,
     pub advertiser_phy: LEPhy,
     pub periodic_advertising_interval: LEAdvertiseInterval,
@@ -3154,7 +3154,7 @@ impl LEPeriodicAdvertisingSyncEstablishedData {
             status: Error::from(chew!(packet)),
             sync_handle: chew_handle!(packet),
             advertising_sid: chew!(packet),
-            advertiser_address_type: LEAddressType::try_from_raw(chew!(packet))?,
+            advertiser_address_type: AddressType::try_from_raw(chew!(packet))?,
             advertiser_address: chew_baddr!(packet),
             advertiser_phy: LEPhy::try_from(chew!(packet))?,
             periodic_advertising_interval: LEAdvertiseInterval::from(chew_u16!(packet)),
@@ -3243,7 +3243,7 @@ impl LEAdvertisingSetTerminatedData {
 #[derive(Debug, Clone)]
 pub struct LEScanRequestReceivedData {
     pub advertising_handle: u8,
-    pub scanner_address_type: LEAddressType,
+    pub scanner_address_type: AddressType,
     pub scanner_address: BluetoothDeviceAddress,
 }
 
@@ -3254,7 +3254,7 @@ impl LEScanRequestReceivedData {
 
         Ok(LEScanRequestReceivedData {
             advertising_handle: chew!(packet),
-            scanner_address_type: LEAddressType::try_from_raw(chew!(packet))?,
+            scanner_address_type: AddressType::try_from_raw(chew!(packet))?,
             scanner_address: chew_baddr!(packet),
         })
     }

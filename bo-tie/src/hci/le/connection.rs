@@ -116,7 +116,7 @@ pub mod create_connection {
 
     use super::ConnectionIntervalBounds;
     use crate::hci::le::common::{
-        ConnectionEventLength, ConnectionLatency, LEAddressType, OwnAddressType, SupervisionTimeout,
+        AddressType, ConnectionEventLength, ConnectionLatency, OwnAddressType, SupervisionTimeout,
     };
     use crate::hci::*;
 
@@ -143,7 +143,7 @@ pub mod create_connection {
         scan_interval: ScanningInterval,
         scan_window: ScanningWindow,
         initiator_filter_policy: InitiatorFilterPolicy,
-        peer_address_type: LEAddressType,
+        peer_address_type: AddressType,
         peer_address: crate::BluetoothDeviceAddress,
         own_address_type: OwnAddressType,
         connection_interval: ConnectionIntervalBounds,
@@ -195,7 +195,7 @@ pub mod create_connection {
         pub fn new_without_whitelist(
             scan_interval: ScanningInterval,
             scan_window: ScanningWindow,
-            peer_address_type: LEAddressType,
+            peer_address_type: AddressType,
             peer_address: crate::BluetoothDeviceAddress,
             own_address_type: OwnAddressType,
             connection_interval: ConnectionIntervalBounds,
@@ -231,8 +231,8 @@ pub mod create_connection {
                 scan_interval,
                 scan_window,
                 initiator_filter_policy: InitiatorFilterPolicy::UseWhiteList,
-                peer_address_type: LEAddressType::PublicDeviceAddress, // This is not used (see spec)
-                peer_address: [0u8; 6],                                // This is not used (see spec)
+                peer_address_type: AddressType::PublicDeviceAddress, // This is not used (see spec)
+                peer_address: [0u8; 6],                              // This is not used (see spec)
                 own_address_type,
                 connection_interval,
                 connection_latency,

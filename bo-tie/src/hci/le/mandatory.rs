@@ -15,7 +15,6 @@ pub use super::super::info_params::read_local_version_information;
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
         use crate::hci::events::Events;
-        use crate::hci::le::common::AddressType;
         use crate::hci::*;
 
         /// Command parameter data for both add and remove whitelist commands.
@@ -31,7 +30,7 @@ macro_rules! add_remove_white_list_setup {
         #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
         pub fn send<'a, T: 'static>(
             hci: &'a HostInterface<T>,
-            at: AddressType,
+            at: crate::hci::le::common::WhiteListedAddressType,
             addr: crate::BluetoothDeviceAddress,
         ) -> impl core::future::Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
         where

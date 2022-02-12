@@ -36,7 +36,7 @@ async fn remove_from_white_list<M: Send + 'static>(
     hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
     address: bo_tie::BluetoothDeviceAddress,
 ) {
-    use bo_tie::hci::le::common::AddressType::RandomDeviceAddress;
+    use bo_tie::hci::le::common::WhiteListedAddressType::RandomDeviceAddress;
     use bo_tie::hci::le::mandatory::remove_device_from_white_list::send;
 
     send(&hi, RandomDeviceAddress, address).await.unwrap();

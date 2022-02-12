@@ -3,7 +3,7 @@
 //! These are things that are used across multiple LE command modules. Any items that are also used
 //! by other command groups will be in [`hci::common`](crate::hci::common).
 
-/// The valid address types for this HCI command
+/// The valid address types for whitelists
 ///
 /// - PublicDeviceAddress
 ///     A bluetooth public address
@@ -11,18 +11,18 @@
 ///     A bluetooth random address
 /// - DevicesSendingAnonymousAdvertisements
 ///     A device sending advertisement packets without an address
-pub enum AddressType {
+pub enum WhiteListedAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
     DevicesSendingAnonymousAdvertisements,
 }
 
-impl AddressType {
+impl WhiteListedAddressType {
     pub fn to_value(&self) -> u8 {
         match *self {
-            AddressType::PublicDeviceAddress => 0x00u8,
-            AddressType::RandomDeviceAddress => 0x01u8,
-            AddressType::DevicesSendingAnonymousAdvertisements => 0xFFu8,
+            WhiteListedAddressType::PublicDeviceAddress => 0x00u8,
+            WhiteListedAddressType::RandomDeviceAddress => 0x01u8,
+            WhiteListedAddressType::DevicesSendingAnonymousAdvertisements => 0xFFu8,
         }
     }
 }
@@ -276,34 +276,34 @@ impl ::core::default::Default for ConnectionEventLength {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LEAddressType {
+pub enum AddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
     PublicIdentityAddress,
     RandomIdentityAddress,
 }
 
-impl LEAddressType {
+impl AddressType {
     /// Try to create a `SupervisionTimeout` from a raw u8 value
     ///
     /// # Error
     /// Input `raw` is not a valid identifier for an address type
     pub(crate) fn try_from_raw(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(LEAddressType::PublicDeviceAddress),
-            0x01 => Ok(LEAddressType::RandomDeviceAddress),
-            0x02 => Ok(LEAddressType::PublicIdentityAddress),
-            0x03 => Ok(LEAddressType::RandomIdentityAddress),
+            0x00 => Ok(AddressType::PublicDeviceAddress),
+            0x01 => Ok(AddressType::RandomDeviceAddress),
+            0x02 => Ok(AddressType::PublicIdentityAddress),
+            0x03 => Ok(AddressType::RandomIdentityAddress),
             _ => Err(alloc::format!("Unknown {}", raw)),
         }
     }
 
     pub(crate) fn into_raw(&self) -> u8 {
         match *self {
-            LEAddressType::PublicDeviceAddress => 0x0,
-            LEAddressType::RandomDeviceAddress => 0x1,
-            LEAddressType::PublicIdentityAddress => 0x2,
-            LEAddressType::RandomIdentityAddress => 0x3,
+            AddressType::PublicDeviceAddress => 0x0,
+            AddressType::RandomDeviceAddress => 0x1,
+            AddressType::PublicIdentityAddress => 0x2,
+            AddressType::RandomIdentityAddress => 0x3,
         }
     }
 }

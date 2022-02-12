@@ -241,10 +241,10 @@ impl Bonder {
 
     async fn connection_update_request(self) {
         use bo_tie::hci::le::common::ConnectionEventLength;
-        use hci::common::le::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
         use hci::events::EventsData::LEMeta;
         use hci::events::LEMeta::RemoteConnectionParameterRequest as RCPReq;
         use hci::events::LEMetaData::RemoteConnectionParameterRequest as RCPReqData;
+        use hci::le::common::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
         use hci::le::con_pram_req::remote_connection_parameter_request_reply::{send, CommandParameters};
 
         loop {
@@ -254,9 +254,9 @@ impl Bonder {
                 Ok(LEMeta(RCPReqData(e))) => {
                     let cp = CommandParameters {
                         handle: e.connection_handle,
-                        interval_min: ConnectionInterval::try_from(400).unwrap(),
-                        interval_max: ConnectionInterval::try_from(400).unwrap(),
-                        latency: ConnectionLatency::try_from(0).unwrap(),
+                        interval_min: ConnectionInterval::try_from_raw(400).unwrap(),
+                        interval_max: ConnectionInterval::try_from_raw(400).unwrap(),
+                        latency: ConnectionLatency::try_from_raw(0).unwrap(),
                         timeout: SupervisionTimeout::try_from_duration(Duration::from_secs(5)).unwrap(),
                         ce_len: ConnectionEventLength {
                             minimum: 0,
@@ -453,7 +453,7 @@ impl Bonder {
     ) {
         use futures::future::FutureExt;
         use hci::events::Events::DisconnectionComplete;
-        use hci::le::commonAddressType;
+        use hci::le::common::AddressType;
 
         let connection_channel = self.hi.clone().flow_ctrl_channel(handle, 512);
 
@@ -534,8 +534,8 @@ impl Bonder {
                 Some(event_data) => {
                     handle = event_data.connection_handle;
                     peer_address = event_data.peer_address;
-                    peer_address_is_random = event_data.peer_address_type == LEAddressType::RandomIdentityAddress
-                        || event_data.peer_address_type == LEAddressType::RandomDeviceAddress;
+                    peer_address_is_random = event_data.peer_address_type == AddressType::RandomIdentityAddress
+                        || event_data.peer_address_type == AddressType::RandomDeviceAddress;
                 }
             }
         }
