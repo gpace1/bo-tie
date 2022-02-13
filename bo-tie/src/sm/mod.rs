@@ -149,6 +149,8 @@ pub enum Error {
     /// method of either the initiator or responder security manager before continuing the process
     /// of pairing.
     ExternalOobNotProvided,
+    /// The operation requires this device to be paired with the connected device.
+    OperationRequiresPairing,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
