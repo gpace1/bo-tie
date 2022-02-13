@@ -265,7 +265,7 @@ pub struct MasterSecurityManager<'a, C, S, R> {
 macro_rules! check_channel_id_and {
     ($data:expr, async $job:block ) => {
         if $data.get_channel_id() == super::L2CAP_CHANNEL_ID {
-            async { $job }.await
+            $job
         } else {
             Err(Error::IncorrectL2capChannelId)
         }
@@ -1103,47 +1103,83 @@ where
         Err(e)
     }
 
-    /// Process non-response packets (bonding keys packets and pairing request)
+    /// Process "bonding" packets
     ///
-    /// The responder can send packets containing bonding keys or the request pairing packet
-    /// unprompted to this security manager. These packets are not used as part of the pairing
-    /// process, but they can be sent at any time once the link is encrypted, with the pairing
-    /// request packet being sent at any time.
+    /// Bonding keys are sent from the peer device (hopefully) as soon as encryption is first
+    /// established between it and this device. After pairing is completed, any received security
+    /// manager packets need to be processed by this method.
+    ///
+    /// This method is used for processing bonding packets, and assuming the peer device is working
+    /// correctly it will only send bonding information when the link is encrypted. **But this
+    /// method will return errors when processing those methods if this Security Manager's internal
+    /// encryption flag is not set via the method
+    /// [`set_encrypted`](MasterSecurityManager::set_encrypted)**. Once this flag is set all
+    /// security manager packets with bonding information can be process by this method.
+    ///
+    /// # Return
+    /// When a packet contains either a key or the identity address, this information is stored
+    /// within the security manager, and a reference to these set of keys is returned.
+    ///
+    /// If the peer device sends a [`SecurityRequest`](super::CommandType::PairingRequest) message,
+    /// this method will process it and return `None` (the internal encryption flag is not checked
+    /// for this specific message).
     ///
     /// # Errors
-    /// This cannot process any of the pairing response packets as well as any of the packets
-    /// containing security keys
-    pub async fn process_non_response(&mut self, acl_data: &crate::l2cap::AclData) -> Result<PromptType, Error> {
+    ///
+    /// ### Always Errors
+    /// An error is always returned if any of the pairing specific or legacy key Security Manager
+    /// messages are processed by this method (only secure connections is supported by this
+    /// library). Trying to process any of following will always cause an error to be returned.
+    /// * [`PairingRequest`](super::CommandType::PairingRequest)
+    /// * [`PairingResponse`](super::CommandType::PairingResponse)
+    /// * [`PairingConfirm`](super::CommandType::PairingConfirm)
+    /// * [`PairingRandom`](super::CommandType::PairingRandom)
+    /// * [`PairingFailed`](super::CommandType::PairingFailed)
+    /// * [`EncryptionInformation`](super::CommandType::EncryptionInformation)
+    /// * [`MasterIdentification`](super::CommandType::MasterIdentification)
+    /// * [`PairingPublicKey`](super::CommandType::PairingPublicKey)
+    /// * [`PairingDHKeyCheck`](super::CommandType::PairingDHKeyCheck)
+    /// * [`PairingKeyPressNotification`](super::CommandType::PairingKeyPressNotification)
+    ///
+    /// ### Require Encryption
+    /// The following Security Manager messages will have this method return an error unless the
+    /// internal encryption flag is set.
+    /// * [`IdentityInformation`](super::CommandType::IdentityInformation)
+    /// * [`IdentityAddressInformation`](super::CommandType::IdentityAddressInformation)
+    /// * [`SigningInformation`](super::CommandType::SigningInformation)
+    pub async fn process_bonding(&mut self, acl_data: &crate::l2cap::AclData) -> Result<Option<&super::Keys>, Error> {
         macro_rules! bonding_key {
-            ($this:expr, $payload:expr, $key:ident, $key_type:ident, $get_key_method:ident, $prompt_type:ident) => {
-                if self.link_encrypted {
-                    if let Some(ref mut keys) = $this.keys {
-                        match encrypt_info::$key_type::try_from_icd($payload) {
-                            Ok(packet) => {
-                                keys.$key = Some(packet.$get_key_method());
+            ($this:expr, $payload:expr, $key:ident, $key_type:ident, $get_key_method:ident) => {
+                match (
+                    self.link_encrypted,
+                    $this.keys.is_some(),
+                    encrypt_info::$key_type::try_from_icd($payload),
+                ) {
+                    (true, true, Ok(packet)) => {
+                        let keys = $this.keys.as_mut().unwrap();
 
-                                Ok(PromptType::$prompt_type)
-                            }
-                            Err(e) => {
-                                self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
-                                    .await?;
+                        keys.$key = Some(packet.$get_key_method());
 
-                                Err(e)
-                            }
-                        }
-                    } else {
+                        Ok(Some(keys))
+                    }
+                    (false, _, _) => {
                         self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
                             .await?;
 
-                        Err(Error::PairingFailed(
-                            pairing::PairingFailedReason::UnspecifiedReason,
-                        ))
+                        Err(Error::UnknownIfLinkIsEncrypted)
                     }
-                } else {
-                    self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
-                        .await?;
+                    (_, false, _) => {
+                        self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
+                            .await?;
 
-                    Err(Error::UnknownIfLinkIsEncrypted)
+                        Err(Error::OperationRequiresPairing)
+                    }
+                    (_, _, Err(e)) => {
+                        self.send_err(pairing::PairingFailedReason::UnspecifiedReason)
+                            .await?;
+
+                        Err(e)
+                    }
                 }
             };
         }
@@ -1151,32 +1187,18 @@ where
         check_channel_id_and!(acl_data, async {
             let (d_type, payload) = acl_data.get_payload().split_at(1);
 
-            match CommandType::try_from_val(d_type[0]) {
-                Ok(CommandType::IdentityInformation) => {
-                    bonding_key!(self, payload, ltk, IdentityInformation, get_irk, IdentityResolvingKey)
+            match CommandType::try_from_val(d_type[0])? {
+                CommandType::IdentityInformation => {
+                    bonding_key!(self, payload, ltk, IdentityInformation, get_irk)
                 }
-                Ok(CommandType::SigningInformation) => {
-                    bonding_key!(
-                        self,
-                        payload,
-                        csrk,
-                        SigningInformation,
-                        to_new_csrk_key,
-                        ConnectionSignatureResolvingKey
-                    )
+                CommandType::SigningInformation => {
+                    bonding_key!(self, payload, csrk, SigningInformation, to_new_csrk_key)
                 }
-                Ok(CommandType::IdentityAddressInformation) => {
-                    bonding_key!(
-                        self,
-                        payload,
-                        peer_addr,
-                        IdentityAddressInformation,
-                        as_blu_addr,
-                        IdentityAddress
-                    )
+                CommandType::IdentityAddressInformation => {
+                    bonding_key!(self, payload, peer_addr, IdentityAddressInformation, as_blu_addr)
                 }
-                Ok(CommandType::SecurityRequest) => Ok(PromptType::PairingRequest),
-                _ => todo!(),
+                CommandType::SecurityRequest => Ok(None),
+                c => Err(Error::IncorrectCommand(c)),
             }
         })
     }
@@ -1264,12 +1286,4 @@ where
             _ => false,
         }
     }
-}
-
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub enum PromptType {
-    IdentityResolvingKey,
-    IdentityAddress,
-    ConnectionSignatureResolvingKey,
-    PairingRequest,
 }
