@@ -46,7 +46,7 @@ pub trait CommandParameter {
     /// This is not the entire packet sent to the interface as there may be additional information
     /// that needs to be sent for the HCI transport layer (such as the
     /// [HciPacketIndicator](crate::hci_transport::uart::HciPacketIndicator) used for UART).
-    fn as_command_packet<'a>(&self) -> Vec<u8> {
+    fn as_command_packet(&self) -> Vec<u8> {
         use core::mem::size_of;
 
         let parameter_size = size_of::<Self::Parameter>();
