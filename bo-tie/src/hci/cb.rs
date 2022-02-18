@@ -29,7 +29,7 @@ pub mod reset {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -206,7 +206,7 @@ pub mod set_event_mask {
         events: &[EventMask],
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = Parameter {
             mask: EventMask::to_val(events).to_le_bytes(),
@@ -302,7 +302,7 @@ pub mod read_transmit_power_level {
         parameter: Parameter,
     ) -> impl Future<Output = Result<TransmitPowerLevel, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }

@@ -75,7 +75,7 @@ pub mod read_bd_addr {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         use events::Events::CommandComplete;
 
@@ -163,7 +163,7 @@ pub mod read_local_supported_features {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<EnabledFeatures, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -248,7 +248,7 @@ pub mod read_local_version_information {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<VersionInformation, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -919,7 +919,7 @@ pub mod read_local_supported_commands {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -1000,7 +1000,7 @@ pub mod read_buffer_size {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }

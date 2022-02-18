@@ -21,7 +21,7 @@ pub mod receiver_test {
         frequency: Frequency,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(frequency, events::Events::CommandComplete))
     }
@@ -66,7 +66,7 @@ pub mod set_scan_enable {
         filter_duplicates: bool,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let cmd_param = Parameter {
             enable,
@@ -195,7 +195,7 @@ pub mod set_scan_parameters {
         sp: ScanningParameters,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(sp, events::Events::CommandComplete))
     }

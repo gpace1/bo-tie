@@ -418,7 +418,7 @@ impl Drop for HCIAdapter {
     }
 }
 
-impl bo_tie::hci::HostControllerInterface for HCIAdapter {
+impl bo_tie::hci::PlatformInterface for HCIAdapter {
     type SendCommandError = Error;
     type ReceiveEventError = Error;
 

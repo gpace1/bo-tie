@@ -338,10 +338,10 @@ impl HciAclData {
 /// Events need to be correctly propagated to the right context that is currently waiting for the
 /// requested event. Some events can be differentiated from themselves through the data passed with
 /// the event, but most do not have any discernible way to tell which context should receive which
-/// event. Its the responsibility of the implementor of `HostControllerInterface` to determine
+/// event. Its the responsibility of the implementor of `PlatformInterface` to determine
 /// what event goes with what `waker`, along with matching events to a `waker` based on the provided
 /// matcher.
-pub trait HostControllerInterface {
+pub trait PlatformInterface {
     type SendCommandError: Debug + Display;
     type ReceiveEventError: Debug + Display;
 
@@ -433,15 +433,15 @@ pub trait HciAclDataInterface {
 
 enum SendCommandError<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
-    Send(<I as HostControllerInterface>::SendCommandError),
-    Recv(<I as HostControllerInterface>::ReceiveEventError),
+    Send(<I as PlatformInterface>::SendCommandError),
+    Recv(<I as PlatformInterface>::ReceiveEventError),
 }
 
 impl<I> Debug for SendCommandError<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -453,7 +453,7 @@ where
 
 impl<I> Display for SendCommandError<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -465,7 +465,7 @@ where
 
 struct CommandFutureReturn<'a, I, CD, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     CD: CommandParameter,
     P: EventMatcher + Send + Sync + 'static,
 {
@@ -481,7 +481,7 @@ where
 
 impl<'a, I, CD, P> CommandFutureReturn<'a, I, CD, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     CD: CommandParameter + Unpin,
     P: EventMatcher + Send + Sync + 'static,
 {
@@ -511,7 +511,7 @@ where
 
 struct EventReturnFuture<'a, I, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     P: EventMatcher + Sync + Send + 'static,
 {
     interface: &'a I,
@@ -521,7 +521,7 @@ where
 
 impl<'a, I, P> Future for EventReturnFuture<'a, I, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     P: EventMatcher + Send + Sync + 'static,
 {
     type Output = Result<events::EventsData, I::ReceiveEventError>;
@@ -670,7 +670,7 @@ impl<I, M: Default> From<I> for HostInterface<I, M> {
 #[bo_tie_macros::host_interface]
 impl<I> HostInterface<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
     /// Send a command to the controller
     ///
@@ -755,7 +755,7 @@ where
     pub fn wait_for_event<'a, E>(
         &'a self,
         event: E,
-    ) -> impl Future<Output = Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError>> + 'a
+    ) -> impl Future<Output = Result<events::EventsData, <I as PlatformInterface>::ReceiveEventError>> + 'a
     where
         E: Into<Option<events::Events>>,
     {
@@ -806,7 +806,7 @@ where
         &'a self,
         event: events::Events,
         matcher: P,
-    ) -> impl Future<Output = Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError>> + 'a
+    ) -> impl Future<Output = Result<events::EventsData, <I as PlatformInterface>::ReceiveEventError>> + 'a
     where
         P: EventMatcher + Send + Sync + 'static,
     {
@@ -891,7 +891,7 @@ where
 #[cfg_attr(docsrs, doc(cfg(feature = "flow-ctrl")))]
 impl<I, M> HostInterface<I, M>
 where
-    I: HciAclDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
+    I: HciAclDataInterface + PlatformInterface + Send + Sync + Unpin + 'static,
     M: for<'a> AsyncLock<'a> + 'static,
 {
     /// Create a new HostInterface
@@ -1059,13 +1059,13 @@ macro_rules! impl_returned_future {
     ($return_type: ty, $event:path, $data:pat, $error:ty, $to_do: block) => {
         struct ReturnedFuture<'a, I, CD, P>(CommandFutureReturn<'a, I, CD, P>)
         where
-            I: HostControllerInterface,
+            I: PlatformInterface,
             CD: CommandParameter + Unpin,
             P: EventMatcher + Send + Sync + 'static;
 
         impl<'a, I, CD, P> core::future::Future for ReturnedFuture<'a, I, CD, P>
         where
-            I: HostControllerInterface,
+            I: PlatformInterface,
             CD: CommandParameter + Unpin,
             P: EventMatcher + Send + Sync + 'static,
         {

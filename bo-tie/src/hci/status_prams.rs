@@ -64,7 +64,7 @@ pub mod read_rssi {
         handle: ConnectionHandle,
     ) -> impl Future<Output = Result<RSSIInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = Parameter {
             handle: handle.get_raw_handle(),

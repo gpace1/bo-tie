@@ -56,7 +56,7 @@ pub mod set_resolvable_private_address_timeout {
         time_out: Duration,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        I: HostControllerInterface,
+        I: PlatformInterface,
     {
         let time_out = if time_out == Duration::default() {
             0x384
@@ -104,7 +104,7 @@ pub mod set_address_resolution_enable {
         enable: bool,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        I: HostControllerInterface,
+        I: PlatformInterface,
     {
         let parameter = Parameter { enable };
 
@@ -156,7 +156,7 @@ pub mod add_device_to_resolving_list {
         parameter: Parameter,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        I: HostControllerInterface,
+        I: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
@@ -199,7 +199,7 @@ pub mod remove_device_from_resolving_list {
         parameter: Parameter,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        I: HostControllerInterface,
+        I: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
@@ -228,7 +228,7 @@ pub mod clear_resolving_list {
         hci: &'a HostInterface<I>,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        I: HostControllerInterface,
+        I: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -288,7 +288,7 @@ pub mod set_privacy_mode {
         parameter: Parameter,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        I: HostControllerInterface,
+        I: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }

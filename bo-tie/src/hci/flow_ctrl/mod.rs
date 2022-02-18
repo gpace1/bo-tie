@@ -4,7 +4,7 @@ pub(super) mod flow_manager;
 #[cfg(feature = "flow-ctrl")]
 use super::AsyncLock;
 #[cfg(feature = "flow-ctrl")]
-use super::HostControllerInterface;
+use super::PlatformInterface;
 use super::{common, HciAclDataInterface, HostInterface};
 use crate::l2cap::{AclData, AclDataFragment, ConnectionChannel};
 use alloc::vec::Vec;
@@ -185,7 +185,7 @@ where
 impl<I, HI, M> HciLeUChannel<I, HI, M>
 where
     HI: Deref<Target = HostInterface<I, M>>,
-    I: HostControllerInterface + HciAclDataInterface + 'static,
+    I: PlatformInterface + HciAclDataInterface + 'static,
     M: for<'a> AsyncLock<'a>,
 {
     /// Create a new `HciLeUChannel` from the `HciDataPacketFlowManager` of a `HostInterface` for
@@ -213,7 +213,7 @@ where
 impl<I, HI, M> crate::l2cap::ConnectionChannel for HciLeUChannel<I, HI, M>
 where
     HI: Deref<Target = HostInterface<I, M>> + Unpin + Clone + 'static,
-    I: HciAclDataInterface + HostControllerInterface + Unpin + 'static,
+    I: HciAclDataInterface + PlatformInterface + Unpin + 'static,
     M: for<'a> AsyncLock<'a>,
 {
     type SendFut = flow_manager::SendFuture<HI, I>;

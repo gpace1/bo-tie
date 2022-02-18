@@ -98,7 +98,7 @@ pub mod remote_connection_parameter_request_reply {
         parameter: CommandParameters,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
     }
@@ -179,7 +179,7 @@ pub mod remote_connection_parameter_request_negative_reply {
         reason: error::Error,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = Parameter {
             _handle: handle.get_raw_handle().to_le(),

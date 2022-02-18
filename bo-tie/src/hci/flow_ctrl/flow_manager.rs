@@ -46,8 +46,7 @@
 use crate::hci::{AclBroadcastFlag, AsyncLock, EventMatcher};
 use crate::{
     hci::{
-        common::ConnectionHandle, AclPacketBoundary, HciAclData, HciAclDataInterface, HostControllerInterface,
-        HostInterface,
+        common::ConnectionHandle, AclPacketBoundary, HciAclData, HciAclDataInterface, HostInterface, PlatformInterface,
     },
     l2cap::AclData,
 };
@@ -294,7 +293,7 @@ impl<M> HciDataPacketFlowManager<M> {
     /// must be made to the inner `HostInterface`.
     pub async fn initialize<I>(hi: &mut HostInterface<I, M>)
     where
-        I: HostControllerInterface + HciAclDataInterface + 'static,
+        I: PlatformInterface + HciAclDataInterface + 'static,
         M: 'static,
     {
         use crate::hci::{info_params::read_buffer_size, le::mandatory::read_buffer_size as le_read_buffer_size};
@@ -344,7 +343,7 @@ impl<M> HciDataPacketFlowManager<M> {
     /// is sent periodically by the controller, but the host must assume that it may be sent
     /// randomly.
     ///
-    /// Normally when waiting on a event, the `receive_event` function of `HostControllerInterface`
+    /// Normally when waiting on a event, the `receive_event` function of `PlatformInterface`
     /// is called at least twice, first to setup the waker and matcher for the driver then lastly to
     /// clear the waker and matcher from the driver and get the event data. This takes advantage of
     /// this and never recalls `receive_event` after the first time. The provides waker to
@@ -361,7 +360,7 @@ impl<M> HciDataPacketFlowManager<M> {
     /// the 'freed' count needs to be divided between ACL-U and LE-U.
     fn setup_completed_packets_callback<I>(interface: &I, matcher: Pin<Arc<impl EventMatcher + 'static>>)
     where
-        I: HostControllerInterface,
+        I: PlatformInterface,
     {
         use core::task::{RawWaker, RawWakerVTable};
         fn c_wake(_: *const ()) -> RawWaker {
@@ -533,7 +532,7 @@ mod tests {
     use super::*;
     use crate::hci::events::{Events, EventsData, Multiple, NumberOfCompletedPacketsData};
     use crate::hci::{
-        events, opcodes, CommandParameter, EventMatcher, HciAclDataInterface, HostControllerInterface, HostInterface,
+        events, opcodes, CommandParameter, EventMatcher, HciAclDataInterface, HostInterface, PlatformInterface,
     };
     use std::sync::Mutex;
 
@@ -605,7 +604,7 @@ mod tests {
         }
     }
 
-    impl HostControllerInterface for TestInterface {
+    impl PlatformInterface for TestInterface {
         type SendCommandError = usize;
         type ReceiveEventError = usize;
 
