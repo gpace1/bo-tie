@@ -389,7 +389,7 @@ impl<M> HciDataPacketFlowManager<M> {
     ///
     /// This function will send data to the controller as long as the controller has space for the
     /// data within its buffers. This doesn't query the controller for its buffer space (which
-    /// cannot be done through the HCI as specified in the specification). When it is determined
+    /// can be done through the HCI, and is done as part of initialization). When it is determined
     /// that the controller has enough room for one or more packets, the future will be awoken to
     /// send more packets to the controller.
     pub async fn send_hci_data<I>(
