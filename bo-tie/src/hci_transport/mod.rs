@@ -9,7 +9,7 @@ pub mod uart {
     /// the interface.
     pub enum HciPacketIndicator {
         Command,
-        AclData,
+        ACLData,
         ScoData,
         Event,
     }
@@ -18,7 +18,7 @@ pub mod uart {
         pub fn val(&self) -> u8 {
             match self {
                 HciPacketIndicator::Command => 0x01,
-                HciPacketIndicator::AclData => 0x02,
+                HciPacketIndicator::ACLData => 0x02,
                 HciPacketIndicator::ScoData => 0x03,
                 HciPacketIndicator::Event => 0x04,
             }

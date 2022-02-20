@@ -1,4 +1,4 @@
-use bo_tie::hci::{common::ConnectionHandle, events, HciAclData};
+use bo_tie::hci::{common::ConnectionHandle, events, HciACLData};
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
@@ -163,7 +163,7 @@ struct AdapterThread {
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
     event_processor: event::EventProcessor,
-    hci_data_recv: RcvHciAclData,
+    hci_data_recv: RcvHciACLData,
 }
 
 impl AdapterThread {
@@ -297,7 +297,7 @@ pub struct HCIAdapter {
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
     event_expecter: Arc<Mutex<event::EventExpecter>>,
-    hci_data_recv: RcvHciAclData,
+    hci_data_recv: RcvHciACLData,
 }
 
 impl From<usize> for HCIAdapter {
@@ -376,7 +376,7 @@ impl From<usize> for HCIAdapter {
 
         let (event_expecter, event_processor) = event::EventSetup::setup();
 
-        let data_receiver = RcvHciAclData::new();
+        let data_receiver = RcvHciACLData::new();
 
         AdapterThread {
             adapter_fd: arc_adapter_fd.clone(),
@@ -466,11 +466,11 @@ impl bo_tie::hci::PlatformInterface for HCIAdapter {
     }
 }
 
-impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
-    type SendAclDataError = nix::Error;
-    type ReceiveAclDataError = String;
+impl bo_tie::hci::HciACLDataInterface for HCIAdapter {
+    type SendACLDataError = nix::Error;
+    type ReceiveACLDataError = String;
 
-    fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError> {
+    fn send(&self, data: HciACLData) -> Result<usize, Self::SendACLDataError> {
         use nix::sys::socket;
         use nix::sys::uio;
 
@@ -500,7 +500,7 @@ impl bo_tie::hci::HciAclDataInterface for HCIAdapter {
         &self,
         handle: &ConnectionHandle,
         waker: &task::Waker,
-    ) -> Option<Result<Vec<HciAclData>, Self::ReceiveAclDataError>> {
+    ) -> Option<Result<Vec<HciACLData>, Self::ReceiveACLDataError>> {
         self.hci_data_recv.get_received(handle, waker)
     }
 }
@@ -527,9 +527,9 @@ enum PacketBuffer {
     /// A circle buffer for limited storage of packets
     ///
     /// The associated `usize` is the index of the start of the ring.
-    Limited(Vec<HciAclData>, usize),
+    Limited(Vec<HciACLData>, usize),
     /// Unlimited storage
-    Unlimited(Vec<HciAclData>),
+    Unlimited(Vec<HciACLData>),
 }
 
 impl PacketBuffer {
@@ -555,7 +555,7 @@ impl PacketBuffer {
         self
     }
 
-    fn add(&mut self, data: HciAclData) {
+    fn add(&mut self, data: HciACLData) {
         match self {
             Self::Unlimited(ref mut v) => v.push(data),
             Self::Limited(ref mut v, ref mut size) => {
@@ -583,7 +583,7 @@ impl ConnectionRecvInfo {
     ///
     /// The `stay` input is used to indicate if this should continue to exist after data is taken
     /// from it. The `stay` flag is used by
-    /// [`RcvHciAclData`](RcvHciAclData).
+    /// [`RcvHciACLData`](RcvHciACLData).
     fn new(stay_around: StayAround) -> Self {
         ConnectionRecvInfo {
             received_packets: match stay_around {
@@ -607,7 +607,7 @@ impl ConnectionRecvInfo {
     /// This either returns all received packets or sets the waker and returns None.
     ///
     /// Regardless of the operation, the packet buffer is upgraded to `Unlimited`
-    fn get_data_or_set_waker(&mut self, waker: &task::Waker) -> Option<Vec<HciAclData>> {
+    fn get_data_or_set_waker(&mut self, waker: &task::Waker) -> Option<Vec<HciACLData>> {
         let recv_packs = match core::mem::replace(&mut self.received_packets, PacketBuffer::Unlimited(Vec::new()))
             .into_unlimited()
         {
@@ -625,7 +625,7 @@ impl ConnectionRecvInfo {
     }
 
     /// Add data
-    fn add(&mut self, data: HciAclData) {
+    fn add(&mut self, data: HciACLData) {
         self.received_packets.add(data);
 
         if let Some(w) = self.waker.take() {
@@ -641,18 +641,18 @@ impl ConnectionRecvInfo {
     }
 }
 
-type AclDataChannels = HashMap<ConnectionHandle, ConnectionRecvInfo>;
+type ACLDataChannels = HashMap<ConnectionHandle, ConnectionRecvInfo>;
 
 /// A structure for managing the reception of hci acl data packets for use with futures
 #[derive(Debug, Clone)]
-struct RcvHciAclData {
-    receive_channels: Arc<Mutex<AclDataChannels>>,
+struct RcvHciACLData {
+    receive_channels: Arc<Mutex<ACLDataChannels>>,
 }
 
-impl RcvHciAclData {
+impl RcvHciACLData {
     fn new() -> Self {
-        RcvHciAclData {
-            receive_channels: Arc::new(Mutex::new(AclDataChannels::new())),
+        RcvHciACLData {
+            receive_channels: Arc::new(Mutex::new(ACLDataChannels::new())),
         }
     }
 
@@ -703,12 +703,12 @@ impl RcvHciAclData {
 
     /// Try to get a received packet
     ///
-    /// If there is a packet to be received for the provided connection handle, then an HciAclData
+    /// If there is a packet to be received for the provided connection handle, then an HciACLData
     /// packet will be returned. If there are no packets to be received, then no packet is returned
     /// but the provided waker will be used when a packet is ready to be received. Whoever is woken
     /// will need to call this function again to get the received data. If data is returned, the
     /// provided waker is ignored.
-    fn get_received(&self, handle: &ConnectionHandle, waker: &task::Waker) -> Option<Result<Vec<HciAclData>, String>> {
+    fn get_received(&self, handle: &ConnectionHandle, waker: &task::Waker) -> Option<Result<Vec<HciACLData>, String>> {
         let mut rc_gaurd = match self.receive_channels.lock() {
             Ok(gaurd) => gaurd,
             Err(e) => log_error_and_panic!("Failed to acquire 'receive_channels' lock: {}", e),
@@ -749,7 +749,7 @@ impl RcvHciAclData {
     /// This is used by the
     /// [`AdapterThread`](AdapterThread)
     /// to add ACL Data packets that were received from the controller.
-    fn add_received(&self, packet: HciAclData) {
+    fn add_received(&self, packet: HciACLData) {
         match self.receive_channels.lock().as_mut() {
             Ok(rc) => {
                 let handle = *packet.get_handle();

@@ -49,19 +49,19 @@
 //! # impl bo_tie::l2cap::ConnectionChannel for StubConnectionChannel {
 //! #     type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
 //! #     type SendFutErr = usize;
-//! #     fn send(&self,data: AclData) -> Self::SendFut { unimplemented!() }
+//! #     fn send(&self,data: BasicInfoFrame) -> Self::SendFut { unimplemented!() }
 //! #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
 //! #     fn get_mtu(&self) -> usize { unimplemented!() }
 //! #     fn max_mtu(&self) -> usize { unimplemented!() }
 //! #     fn min_mtu(&self) -> usize { unimplemented!() }
-//! #     fn receive(&self,waker: &Waker) -> Option<Vec<AclDataFragment>> { unimplemented!() }
+//! #     fn receive(&self,waker: &Waker) -> Option<Vec<BasicFrameFragment>> { unimplemented!() }
 //! # }
 //! # let connection_channel = StubConnectionChannel;
 //! // An example of setting up a receiver that support oob
 //!
 //! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
 //! use bo_tie::sm::BuildOutOfBand;
-//! use bo_tie::l2cap::{AclData, ConnectionChannel, AclDataFragment};
+//! use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, BasicFrameFragment};
 //! use std::task::Waker;
 //! use std::future::Future;
 //!
@@ -104,7 +104,7 @@
 //! * ['aes'](https://lib.rs/crates/aes)
 //! * ['p256'](https://lib.rs/crates/p256)
 
-use crate::l2cap::AclData;
+use crate::l2cap::BasicInfoFrame;
 use crate::sm::oob::OobDirection;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -120,7 +120,7 @@ pub mod toolbox;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
 pub const L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
-    crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
+    crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LEUserChannelIdentifier::SecurityManagerProtocol);
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -144,7 +144,7 @@ pub enum Error {
     /// Send related error
     DataSend(alloc::string::String),
     /// ACL Data related
-    AclData(crate::l2cap::AclDataError),
+    ACLData(crate::l2cap::BasicFrameError),
     /// Out of band data was not provided to the Security Manager via the `received_oob_data`
     /// method of either the initiator or responder security manager before continuing the process
     /// of pairing.
@@ -212,15 +212,15 @@ impl CommandType {
     }
 }
 
-impl core::convert::TryFrom<&'_ AclData> for CommandType {
+impl core::convert::TryFrom<&'_ BasicInfoFrame> for CommandType {
     type Error = Error;
 
-    /// Try to get the CommandType from AclData
+    /// Try to get the CommandType from ACLData
     ///
-    /// This rigidly checks the AclData to get the CommandType. If the channel identifier is
+    /// This rigidly checks the ACLData to get the CommandType. If the channel identifier is
     /// incorrect, the payload does not have a valid value for the command field, or the payload
     /// length is incorrect, an error is returned.
-    fn try_from(acl_data: &'_ AclData) -> Result<Self, Self::Error> {
+    fn try_from(acl_data: &'_ BasicInfoFrame) -> Result<Self, Self::Error> {
         if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
             return Err(Error::IncorrectL2capChannelId);
         }

@@ -6,7 +6,7 @@ mod permissions;
 
 use crate::att::server::PinnedFuture;
 use crate::att::{pdu, TransferFormatInto};
-use crate::l2cap::{AclData, AclDataFragment, ConnectionChannel, MinimumMtu};
+use crate::l2cap::{BasicFrameFragment, BasicInfoFrame, ConnectionChannel, MinimumMtu};
 
 use std::{
     future::Future,
@@ -34,7 +34,7 @@ impl ConnectionChannel for DummyConnection {
     type SendFut = DummySendFut;
     type SendFutErr = ();
 
-    fn send(&self, _: crate::l2cap::AclData) -> Self::SendFut {
+    fn send(&self, _: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
         DummySendFut
     }
 
@@ -54,7 +54,7 @@ impl ConnectionChannel for DummyConnection {
         crate::l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<AclDataFragment>> {
+    fn receive(&self, _: &core::task::Waker) -> Option<Vec<BasicFrameFragment>> {
         Some(Vec::new())
     }
 }
@@ -100,7 +100,7 @@ impl ConnectionChannel for PayloadConnection {
     type SendFut = DummySendFut;
     type SendFutErr = ();
 
-    fn send(&self, data: AclData) -> Self::SendFut {
+    fn send(&self, data: BasicInfoFrame) -> Self::SendFut {
         self.sent.set(data.get_payload().to_vec());
 
         DummySendFut
@@ -122,11 +122,11 @@ impl ConnectionChannel for PayloadConnection {
         crate::l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<AclDataFragment>> {
+    fn receive(&self, _: &core::task::Waker) -> Option<Vec<BasicFrameFragment>> {
         unimplemented!("Pdu Connection does not permit receiving")
     }
 }
 
-fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D>) -> AclData {
-    AclData::new(TransferFormatInto::into(&pdu), crate::att::L2CAP_CHANNEL_ID)
+fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D>) -> BasicInfoFrame {
+    BasicInfoFrame::new(TransferFormatInto::into(&pdu), crate::att::L2CAP_CHANNEL_ID)
 }

@@ -181,64 +181,64 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum AclPacketBoundary {
+pub enum ACLPacketBoundary {
     FirstNonFlushable,
     ContinuingFragment,
     FirstAutoFlushable,
     CompleteL2capPdu,
 }
 
-impl AclPacketBoundary {
+impl ACLPacketBoundary {
     /// Get the value shifted into the correct place of the Packet Boundary Flag in the HCI ACL
     /// data packet. The returned value is in host byte order.
     fn get_shifted_val(&self) -> u16 {
         (match self {
-            AclPacketBoundary::FirstNonFlushable => 0x0,
-            AclPacketBoundary::ContinuingFragment => 0x1,
-            AclPacketBoundary::FirstAutoFlushable => 0x2,
-            AclPacketBoundary::CompleteL2capPdu => 0x3,
+            ACLPacketBoundary::FirstNonFlushable => 0x0,
+            ACLPacketBoundary::ContinuingFragment => 0x1,
+            ACLPacketBoundary::FirstAutoFlushable => 0x2,
+            ACLPacketBoundary::CompleteL2capPdu => 0x3,
         }) << 12
     }
 
-    /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
+    /// Get the `ACLPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn from_shifted_val(val: u16) -> Self {
         match (val >> 12) & 3 {
-            0x0 => AclPacketBoundary::FirstNonFlushable,
-            0x1 => AclPacketBoundary::ContinuingFragment,
-            0x2 => AclPacketBoundary::FirstAutoFlushable,
-            0x3 => AclPacketBoundary::CompleteL2capPdu,
+            0x0 => ACLPacketBoundary::FirstNonFlushable,
+            0x1 => ACLPacketBoundary::ContinuingFragment,
+            0x2 => ACLPacketBoundary::FirstAutoFlushable,
+            0x3 => ACLPacketBoundary::CompleteL2capPdu,
             _ => panic!("This cannot happen"),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum AclBroadcastFlag {
+pub enum ACLBroadcastFlag {
     // Point-to-point message
     NoBroadcast,
     // Broadcast to all active slaves
     ActiveSlaveBroadcast,
 }
 
-impl AclBroadcastFlag {
+impl ACLBroadcastFlag {
     /// Get the value shifted into the correct place of the Packet Boundary Flag in the HCI ACL
     /// data packet. The returned value is in host byte order.
     fn get_shifted_val(&self) -> u16 {
         (match self {
-            AclBroadcastFlag::NoBroadcast => 0x0,
-            AclBroadcastFlag::ActiveSlaveBroadcast => 0x1,
+            ACLBroadcastFlag::NoBroadcast => 0x0,
+            ACLBroadcastFlag::ActiveSlaveBroadcast => 0x1,
         }) << 14
     }
 
-    /// Get the `AclPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
+    /// Get the `ACLPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn try_from_shifted_val(val: u16) -> Result<Self, ()> {
         match (val >> 14) & 1 {
-            0x0 => Ok(AclBroadcastFlag::NoBroadcast),
-            0x1 => Ok(AclBroadcastFlag::ActiveSlaveBroadcast),
+            0x0 => Ok(ACLBroadcastFlag::NoBroadcast),
+            0x1 => Ok(ACLBroadcastFlag::ActiveSlaveBroadcast),
             0x2 | 0x3 => Err(()),
             _ => panic!("This cannot happen"),
         }
@@ -246,18 +246,18 @@ impl AclBroadcastFlag {
 }
 
 #[derive(Debug)]
-pub enum HciAclPacketError {
+pub enum HciACLPacketError {
     PacketTooSmall,
     InvalidBroadcastFlag,
     InvalidConnectionHandle(&'static str),
 }
 
-impl Display for HciAclPacketError {
+impl Display for HciACLPacketError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            HciAclPacketError::PacketTooSmall => write!(f, "Packet is too small to be a valid HCI ACL Data"),
-            HciAclPacketError::InvalidBroadcastFlag => write!(f, "Packet has invalid broadcast Flag"),
-            HciAclPacketError::InvalidConnectionHandle(reason) => {
+            HciACLPacketError::PacketTooSmall => write!(f, "Packet is too small to be a valid HCI ACL Data"),
+            HciACLPacketError::InvalidBroadcastFlag => write!(f, "Packet has invalid broadcast Flag"),
+            HciACLPacketError::InvalidConnectionHandle(reason) => {
                 write!(f, "Invalid connection handle, {}", reason)
             }
         }
@@ -278,24 +278,24 @@ impl Display for HciAclPacketError {
 /// header configuration flags. A LE-U Logical link does not support automatic flushing of packets
 /// in a controller, nor does it support connectionless L2CAP channels. The packet boundary flag can
 /// be either
-/// ['FirstNonFlushable`](crate::hci::AclPacketBoundary::FirstNonFlushable) or
-/// [`ContinuingFragment`](crate::hci::AclPacketBoundary::ContinuingFragment), but it cannot be
-/// [`FirstAutoFlushable`](crate::hci::AclPacketBoundary::FirstAutoFlushable) or
-/// [`CompleteL2capPdu`](crate::hci::AclPacketBoundary::CompleteL2capPdu). The broadcast flag must
+/// ['FirstNonFlushable`](crate::hci::ACLPacketBoundary::FirstNonFlushable) or
+/// [`ContinuingFragment`](crate::hci::ACLPacketBoundary::ContinuingFragment), but it cannot be
+/// [`FirstAutoFlushable`](crate::hci::ACLPacketBoundary::FirstAutoFlushable) or
+/// [`CompleteL2capPdu`](crate::hci::ACLPacketBoundary::CompleteL2capPdu). The broadcast flag must
 /// always be
-/// [`NoBroadcast`](crate::hci::AclBroadcastFlag::NoBroadcast). Lastly the connection handle can
+/// [`NoBroadcast`](crate::hci::ACLBroadcastFlag::NoBroadcast). Lastly the connection handle can
 /// only be a primary controller handle (which is generated with a *LE Connection Complete* or
 /// *LE Enhanced Connection Complete* event for LE-U).
 #[derive(Debug)]
-pub struct HciAclData {
+pub struct HciACLData {
     connection_handle: common::ConnectionHandle,
-    packet_boundary_flag: AclPacketBoundary,
-    broadcast_flag: AclBroadcastFlag,
+    packet_boundary_flag: ACLPacketBoundary,
+    broadcast_flag: ACLBroadcastFlag,
     /// This is always a L2CAP ACL packet
     payload: Vec<u8>,
 }
 
-impl HciAclData {
+impl HciACLData {
     /// The size of the header of a HCI ACL data packet
     pub const HEADER_SIZE: usize = 4;
 
@@ -304,19 +304,19 @@ impl HciAclData {
     /// Larger maximum payload sizes may be defined by either the host or controller.
     pub const MIN_MAX_PAYLOAD_SIZE: usize = 27;
 
-    /// Create a new HciAclData
+    /// Create a new HciACLData
     ///
     /// # Panic
     /// The payload length must not be larger than the maximum u16 number
     pub fn new(
         connection_handle: common::ConnectionHandle,
-        packet_boundary_flag: AclPacketBoundary,
-        broadcast_flag: AclBroadcastFlag,
+        packet_boundary_flag: ACLPacketBoundary,
+        broadcast_flag: ACLBroadcastFlag,
         payload: Vec<u8>,
     ) -> Self {
         assert!(payload.len() <= <u16>::MAX.into());
 
-        HciAclData {
+        HciACLData {
             connection_handle,
             packet_boundary_flag,
             broadcast_flag,
@@ -332,17 +332,17 @@ impl HciAclData {
         &self.payload
     }
 
-    pub fn get_packet_boundary_flag(&self) -> AclPacketBoundary {
+    pub fn get_packet_boundary_flag(&self) -> ACLPacketBoundary {
         self.packet_boundary_flag
     }
 
-    pub fn get_broadcast_flag(&self) -> AclBroadcastFlag {
+    pub fn get_broadcast_flag(&self) -> ACLBroadcastFlag {
         self.broadcast_flag
     }
 
-    /// Convert the `HciAclData` into a raw packet
+    /// Convert the `HciACLData` into a raw packet
     ///
-    /// This will convert HciAclData into a packet that can be sent between the host and controller.
+    /// This will convert HciACLData into a packet that can be sent between the host and controller.
     pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
         let mut v = alloc::vec::Vec::with_capacity(self.payload.len() + 4);
 
@@ -359,7 +359,7 @@ impl HciAclData {
         v
     }
 
-    /// Convert the `HciAclData` into a packet iterator
+    /// Convert the `HciACLData` into a packet iterator
     ///
     /// The return is an iterator over the bytes send over the interface between the host and
     /// controller.
@@ -431,9 +431,9 @@ impl HciAclData {
 
     /// Attempt to create a `HciAclData`
     ///
-    /// A `HciAclData` is created if the packet is in the correct HCI ACL data packet format. If
+    /// A `HciACLData` is created if the packet is in the correct HCI ACL data packet format. If
     /// not, then an error is returned.
-    pub fn try_from_packet(packet: &[u8]) -> Result<Self, HciAclPacketError> {
+    pub fn from_packet(packet: &[u8]) -> Result<Self, HciACLPacketError> {
         const HEADER_SIZE: usize = 4;
 
         if packet.len() >= HEADER_SIZE {
@@ -441,37 +441,37 @@ impl HciAclData {
 
             let connection_handle = match common::ConnectionHandle::try_from(first_2_bytes & 0xFFF) {
                 Ok(handle) => handle,
-                Err(e) => return Err(HciAclPacketError::InvalidConnectionHandle(e)),
+                Err(e) => return Err(HciACLPacketError::InvalidConnectionHandle(e)),
             };
 
-            let packet_boundary_flag = AclPacketBoundary::from_shifted_val(first_2_bytes);
+            let packet_boundary_flag = ACLPacketBoundary::from_shifted_val(first_2_bytes);
 
-            let broadcast_flag = match AclBroadcastFlag::try_from_shifted_val(first_2_bytes) {
+            let broadcast_flag = match ACLBroadcastFlag::try_from_shifted_val(first_2_bytes) {
                 Ok(flag) => flag,
-                Err(_) => return Err(HciAclPacketError::InvalidBroadcastFlag),
+                Err(_) => return Err(HciACLPacketError::InvalidBroadcastFlag),
             };
 
             let data_length = <u16>::from_le_bytes([packet[2], packet[3]]) as usize;
 
-            Ok(HciAclData {
+            Ok(HciACLData {
                 connection_handle,
                 packet_boundary_flag,
                 broadcast_flag,
                 payload: packet[HEADER_SIZE..(HEADER_SIZE + data_length)].to_vec(),
             })
         } else {
-            Err(HciAclPacketError::PacketTooSmall)
+            Err(HciACLPacketError::PacketTooSmall)
         }
     }
 
     /// Convert into a
-    /// [`AclDataFragment`](crate::l2cap::AclDataFragment)
-    pub fn into_acl_fragment(self) -> crate::l2cap::AclDataFragment {
-        use crate::l2cap::AclDataFragment;
+    /// [`ACLDataFragment`](crate::l2cap::ACLDataFragment)
+    pub fn into_acl_fragment(self) -> crate::l2cap::BasicFrameFragment {
+        use crate::l2cap::BasicFrameFragment;
 
         match self.packet_boundary_flag {
-            AclPacketBoundary::ContinuingFragment => AclDataFragment::new(false, self.payload),
-            _ => AclDataFragment::new(true, self.payload),
+            ACLPacketBoundary::ContinuingFragment => BasicFrameFragment::new(false, self.payload),
+            _ => BasicFrameFragment::new(true, self.payload),
         }
     }
 }
@@ -694,9 +694,9 @@ pub trait PlatformInterface {
 /// HCI ACL Data interface
 ///
 /// This is the trait that must be implemented by the platform specific HCI structure.
-pub trait HciAclDataInterface {
-    type SendAclDataError: Debug + Display;
-    type ReceiveAclDataError: Debug + Display;
+pub trait HciACLDataInterface {
+    type SendACLDataError: Debug + Display;
+    type ReceiveACLDataError: Debug + Display;
 
     /// Send ACL data
     ///
@@ -704,7 +704,7 @@ pub trait HciAclDataInterface {
     ///
     /// The return value is the number of bytes of acl data payload + 1 ( due to added packet
     /// indicator ) sent.
-    fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError>;
+    fn send(&self, data: HciACLData) -> Result<usize, Self::SendACLDataError>;
 
     /// Register a handle for receiving ACL packets
     ///
@@ -733,7 +733,7 @@ pub trait HciAclDataInterface {
         &self,
         handle: &common::ConnectionHandle,
         waker: &Waker,
-    ) -> Option<Result<alloc::vec::Vec<HciAclData>, Self::ReceiveAclDataError>>;
+    ) -> Option<Result<alloc::vec::Vec<HciACLData>, Self::ReceiveACLDataError>>;
 }
 
 enum SendCommandError<I>
@@ -1127,7 +1127,7 @@ where
 #[cfg_attr(docsrs, doc(cfg(not(feature = "flow-ctrl"))))]
 impl<I> HostInterface<I>
 where
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
 {
     /// Create a new raw logical link connection channel
     ///
@@ -1153,7 +1153,7 @@ where
     ///
     /// # Panic
     /// The minimum number of bytes required to be in the payload of a HCI ACL data packet is
-    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciAclData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
+    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciACLData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
     /// occurs if `max_mtu` plus the header size of a L2CAP data packet (4 bytes) is not greater
     /// than or equal to `MIN_MAX_PAYLOAD_SIZE`. Thus the minimum `max_mtu` is the same as the
     /// minimum mtu for LE-U since they are the same number of bytes.
@@ -1196,7 +1196,7 @@ where
 #[cfg_attr(docsrs, doc(cfg(feature = "flow-ctrl")))]
 impl<I, M> HostInterface<I, M>
 where
-    I: HciAclDataInterface + PlatformInterface + Send + Sync + Unpin + 'static,
+    I: HciACLDataInterface + PlatformInterface + Send + Sync + Unpin + 'static,
     M: for<'a> AsyncLock<'a> + 'static,
 {
     /// Create a new HostInterface
@@ -1244,7 +1244,7 @@ where
     ///
     /// # Panic
     /// The minimum number of bytes in the payload of a HCI ACL data packet is
-    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciAclData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
+    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciACLData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
     /// occurs if `max_mtu` plus the header size of a L2CAP data packet (4 bytes) is not greater
     /// than or equal to `MIN_MAX_PAYLOAD_SIZE`. Thus the minimum `max_mtu` is defined as the
     /// minimum mtu for LE-U since they are the same number of bytes.

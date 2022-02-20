@@ -5,8 +5,8 @@ pub(super) mod flow_manager;
 use super::AsyncLock;
 #[cfg(feature = "flow-ctrl")]
 use super::PlatformInterface;
-use super::{common, HciAclDataInterface, HostInterface};
-use crate::l2cap::{AclData, AclDataFragment, ConnectionChannel};
+use super::{common, HciACLDataInterface, HostInterface};
+use crate::l2cap::{BasicFrameFragment, BasicInfoFrame, ConnectionChannel};
 use alloc::vec::Vec;
 #[cfg(feature = "flow-ctrl")]
 use core::task::Waker;
@@ -29,7 +29,7 @@ use core::{
 pub(super) struct HciLeUChannel<I, HI>
 where
     HI: Deref<Target = HostInterface<I>>,
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
 {
     mtu: core::cell::Cell<usize>,
     maximum_mtu: usize,
@@ -42,7 +42,7 @@ where
 impl<I, HI> HciLeUChannel<I, HI>
 where
     HI: Deref<Target = HostInterface<I>>,
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
 {
     /// Create a new raw `HciLeUChannel`
     ///
@@ -78,19 +78,19 @@ where
 impl<I, HI> HciLeUChannel<I, HI>
 where
     HI: Deref<Target = HostInterface<I>>,
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
     Self: crate::l2cap::ConnectionChannel,
 {
     /// Get the MTU for a specified data packet
     ///
     /// Data packets can have a different MTU based on the request to use a specified MTU by `data`.
-    fn get_send_mtu(&self, data: &AclData) -> usize {
+    fn get_send_mtu(&self, data: &BasicInfoFrame) -> usize {
         match data.get_mtu() {
-            crate::l2cap::AclDataSuggestedMtu::Minimum => self.min_mtu(),
+            crate::l2cap::LogicalLinkMinimumMtu::LinkType => self.min_mtu(),
 
-            crate::l2cap::AclDataSuggestedMtu::Channel => self.get_mtu(),
+            crate::l2cap::LogicalLinkMinimumMtu::Channel => self.get_mtu(),
 
-            crate::l2cap::AclDataSuggestedMtu::Mtu(mtu) => self.get_mtu().min(mtu).max(self.min_mtu()),
+            crate::l2cap::LogicalLinkMinimumMtu::Mtu(mtu) => self.get_mtu().min(mtu).max(self.min_mtu()),
         }
     }
 }
@@ -105,35 +105,35 @@ where
 impl<I, HI> crate::l2cap::ConnectionChannel for HciLeUChannel<I, HI>
 where
     HI: Deref<Target = HostInterface<I>>,
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
 {
     type SendFut = RawSender;
 
     type SendFutErr = ();
 
-    fn send(&self, data: AclData) -> Self::SendFut {
-        use crate::hci::{AclBroadcastFlag, AclPacketBoundary, HciAclData};
+    fn send(&self, data: BasicInfoFrame) -> Self::SendFut {
+        use crate::hci::{ACLBroadcastFlag, ACLPacketBoundary, HciACLData};
 
         let mtu = self.get_send_mtu(&data);
 
         let packet = data.into_raw_data();
 
         packet
-            .chunks(mtu + HciAclData::HEADER_SIZE)
+            .chunks(mtu + HciACLData::HEADER_SIZE)
             .enumerate()
             .for_each(|(i, chunk)| {
                 let hci_acl_data = if i == 0 {
-                    HciAclData::new(
+                    HciACLData::new(
                         self.handle,
-                        AclPacketBoundary::FirstNonFlushable,
-                        AclBroadcastFlag::NoBroadcast,
+                        ACLPacketBoundary::FirstNonFlushable,
+                        ACLBroadcastFlag::NoBroadcast,
                         chunk.to_vec(),
                     )
                 } else {
-                    HciAclData::new(
+                    HciACLData::new(
                         self.handle,
-                        AclPacketBoundary::ContinuingFragment,
-                        AclBroadcastFlag::NoBroadcast,
+                        ACLPacketBoundary::ContinuingFragment,
+                        ACLBroadcastFlag::NoBroadcast,
                         chunk.to_vec(),
                     )
                 };
@@ -163,7 +163,7 @@ where
         self.minimum_mtu
     }
 
-    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::AclDataFragment>> {
+    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::BasicFrameFragment>> {
         self.hi
             .interface
             .receive(&self.handle, waker)
@@ -171,7 +171,7 @@ where
                 Ok(packets) => packets
                     .into_iter()
                     .map(|packet| packet.into_acl_fragment())
-                    .collect::<Vec<AclDataFragment>>()
+                    .collect::<Vec<BasicFrameFragment>>()
                     .into(),
                 Err(e) => {
                     log::error!("Failed to receive data: {}", e);
@@ -185,7 +185,7 @@ where
 impl<I, HI, M> HciLeUChannel<I, HI, M>
 where
     HI: Deref<Target = HostInterface<I, M>>,
-    I: PlatformInterface + HciAclDataInterface + 'static,
+    I: PlatformInterface + HciACLDataInterface + 'static,
     M: for<'a> AsyncLock<'a>,
 {
     /// Create a new `HciLeUChannel` from the `HciDataPacketFlowManager` of a `HostInterface` for
@@ -213,15 +213,15 @@ where
 impl<I, HI, M> crate::l2cap::ConnectionChannel for HciLeUChannel<I, HI, M>
 where
     HI: Deref<Target = HostInterface<I, M>> + Unpin + Clone + 'static,
-    I: HciAclDataInterface + PlatformInterface + Unpin + 'static,
+    I: HciACLDataInterface + PlatformInterface + Unpin + 'static,
     M: for<'a> AsyncLock<'a>,
 {
     type SendFut = flow_manager::SendFuture<HI, I>;
 
     type SendFutErr = flow_manager::FlowControllerError<I>;
 
-    fn send(&self, data: AclData) -> Self::SendFut {
-        let max_fc_mtu = self.hi.flow_controller.get_max_payload_size() - AclData::HEADER_SIZE;
+    fn send(&self, data: BasicInfoFrame) -> Self::SendFut {
+        let max_fc_mtu = self.hi.flow_controller.get_max_payload_size() - BasicInfoFrame::HEADER_SIZE;
 
         flow_manager::SendFuture::new(
             self.hi.clone(),
@@ -247,7 +247,7 @@ where
         self.minimum_mtu
     }
 
-    fn receive(&self, waker: &Waker) -> Option<Vec<AclDataFragment>> {
+    fn receive(&self, waker: &Waker) -> Option<Vec<BasicFrameFragment>> {
         self.hi
             .interface
             .receive(&self.handle, waker)
@@ -255,7 +255,7 @@ where
                 Ok(packets) => packets
                     .into_iter()
                     .map(|packet| packet.into_acl_fragment())
-                    .collect::<Vec<AclDataFragment>>()
+                    .collect::<Vec<BasicFrameFragment>>()
                     .into(),
                 Err(e) => {
                     log::error!("Failed to receive data: {}", e);
@@ -269,7 +269,7 @@ where
 impl<I, HI> core::ops::Drop for HciLeUChannel<I, HI>
 where
     HI: Deref<Target = HostInterface<I>>,
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
 {
     fn drop(&mut self) {
         self.hi.interface.stop_receiver(&self.handle)

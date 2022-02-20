@@ -43,12 +43,12 @@
 //! This is implemented only to support LE-U. See the note for `setup_completed_packets_callback`
 //! for what needs to changed when implementing ACL-U buffer support.
 
-use crate::hci::{AclBroadcastFlag, AsyncLock, EventMatcher};
+use crate::hci::{ACLBroadcastFlag, AsyncLock, EventMatcher};
 use crate::{
     hci::{
-        common::ConnectionHandle, AclPacketBoundary, HciAclData, HciAclDataInterface, HostInterface, PlatformInterface,
+        common::ConnectionHandle, ACLPacketBoundary, HciACLData, HciACLDataInterface, HostInterface, PlatformInterface,
     },
-    l2cap::AclData,
+    l2cap::BasicInfoFrame,
 };
 use alloc::{boxed::Box, sync::Arc};
 use core::{
@@ -143,7 +143,7 @@ impl<M> HciDataPacketFlowManager<M> {
     /// This is the same as the maximum HCI ACL data payload size minus the header size of a L2CAP
     /// packet.
     pub fn get_max_payload_size(&self) -> usize {
-        self.max_packet_payload_size - crate::l2cap::AclData::HEADER_SIZE
+        self.max_packet_payload_size - crate::l2cap::BasicInfoFrame::HEADER_SIZE
     }
 
     /// Non-flush-able data fragmentation
@@ -158,9 +158,9 @@ impl<M> HciDataPacketFlowManager<M> {
     fn fragment(
         &self,
         mtu: usize,
-        data: &AclData,
+        data: &BasicInfoFrame,
         connection_handle: ConnectionHandle,
-    ) -> Result<alloc::vec::Vec<HciAclData>, HciAclData> {
+    ) -> Result<alloc::vec::Vec<HciACLData>, HciACLData> {
         if data.get_payload().len() > mtu {
             let mut first_packet = true;
 
@@ -168,16 +168,16 @@ impl<M> HciDataPacketFlowManager<M> {
                 .into_raw_data()
                 .chunks(mtu)
                 .map(|chunk| {
-                    HciAclData::new(
+                    HciACLData::new(
                         connection_handle,
                         if first_packet {
                             first_packet = false;
 
-                            AclPacketBoundary::FirstNonFlushable
+                            ACLPacketBoundary::FirstNonFlushable
                         } else {
-                            AclPacketBoundary::ContinuingFragment
+                            ACLPacketBoundary::ContinuingFragment
                         },
-                        AclBroadcastFlag::NoBroadcast,
+                        ACLBroadcastFlag::NoBroadcast,
                         chunk.to_vec(),
                     )
                 })
@@ -185,10 +185,10 @@ impl<M> HciDataPacketFlowManager<M> {
 
             Ok(fragments)
         } else {
-            Err(HciAclData::new(
+            Err(HciACLData::new(
                 connection_handle,
-                AclPacketBoundary::FirstNonFlushable,
-                AclBroadcastFlag::NoBroadcast,
+                ACLPacketBoundary::FirstNonFlushable,
+                ACLBroadcastFlag::NoBroadcast,
                 data.into_raw_data(),
             ))
         }
@@ -233,8 +233,8 @@ impl<M> HciDataPacketFlowManager<M> {
     /// function relies on the waker set by `set_waker` to continue polling.
     async fn wait_for_controller<I, D>(&self, interface: &I, data: D) -> Result<(), FlowControllerError<I>>
     where
-        I: HciAclDataInterface,
-        D: core::iter::IntoIterator<Item = HciAclData>,
+        I: HciACLDataInterface,
+        D: core::iter::IntoIterator<Item = HciACLData>,
     {
         /// A future that returns Ready when one HCI data packet can be sent to the controller.
         ///
@@ -395,12 +395,12 @@ impl<M> HciDataPacketFlowManager<M> {
     pub async fn send_hci_data<I>(
         &self,
         interface: &I,
-        data: AclData,
+        data: BasicInfoFrame,
         connection_handle: ConnectionHandle,
         mtu: usize,
     ) -> Result<(), FlowControllerError<I>>
     where
-        I: HciAclDataInterface,
+        I: HciACLDataInterface,
         M: for<'a> AsyncLock<'a>,
     {
         match self.fragment(mtu, &data, connection_handle) {
@@ -464,25 +464,25 @@ impl<M> Drop for HciDataPacketFlowManager<M> {
     }
 }
 
-pub(super) type FlowControllerError<I> = <I as HciAclDataInterface>::SendAclDataError;
+pub(super) type FlowControllerError<I> = <I as HciACLDataInterface>::SendACLDataError;
 
 /// A future for sending HCI data packets to the controller
 pub struct SendFuture<Hci, I>
 where
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
 {
     hi: Hci,
     mtu: usize,
-    data: Option<AclData>,
+    data: Option<BasicInfoFrame>,
     handle: ConnectionHandle,
     fut: Option<Pin<Box<dyn Future<Output = Result<(), FlowControllerError<I>>>>>>,
 }
 
 impl<Hci, I> SendFuture<Hci, I>
 where
-    I: HciAclDataInterface,
+    I: HciACLDataInterface,
 {
-    pub fn new(hi: Hci, mtu: usize, data: AclData, handle: ConnectionHandle) -> Self {
+    pub fn new(hi: Hci, mtu: usize, data: BasicInfoFrame, handle: ConnectionHandle) -> Self {
         SendFuture {
             hi,
             mtu,
@@ -496,7 +496,7 @@ where
 impl<M, Hci, I> Future for SendFuture<Hci, I>
 where
     Hci: core::ops::Deref<Target = HostInterface<I, M>> + Clone + Unpin + 'static,
-    I: HciAclDataInterface + Unpin,
+    I: HciACLDataInterface + Unpin,
     M: for<'a> AsyncLock<'a>,
 {
     type Output = Result<(), FlowControllerError<I>>;
@@ -532,7 +532,7 @@ mod tests {
     use super::*;
     use crate::hci::events::{Events, EventsData, Multiple, NumberOfCompletedPacketsData};
     use crate::hci::{
-        events, opcodes, CommandParameter, EventMatcher, HciAclDataInterface, HostInterface, PlatformInterface,
+        events, opcodes, CommandParameter, EventMatcher, HciACLDataInterface, HostInterface, PlatformInterface,
     };
     use std::sync::Mutex;
 
@@ -656,11 +656,11 @@ mod tests {
         }
     }
 
-    impl HciAclDataInterface for TestInterface {
-        type SendAclDataError = usize;
-        type ReceiveAclDataError = usize;
+    impl HciACLDataInterface for TestInterface {
+        type SendACLDataError = usize;
+        type ReceiveACLDataError = usize;
 
-        fn send(&self, data: HciAclData) -> Result<usize, Self::SendAclDataError> {
+        fn send(&self, data: HciACLData) -> Result<usize, Self::SendACLDataError> {
             assert!(
                 data.get_payload().len() <= Self::MAX_PAYLOAD_SIZE as usize,
                 "{} !<= {}",
@@ -689,7 +689,7 @@ mod tests {
             &self,
             _: &ConnectionHandle,
             _: &Waker,
-        ) -> Option<Result<Vec<HciAclData>, Self::ReceiveAclDataError>> {
+        ) -> Option<Result<Vec<HciACLData>, Self::ReceiveACLDataError>> {
             None
         }
     }
@@ -725,7 +725,7 @@ mod tests {
 
         rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut test_data);
 
-        let data = AclData::new(test_data, ChannelIdentifier::NullIdentifier);
+        let data = BasicInfoFrame::new(test_data, ChannelIdentifier::NullIdentifier);
 
         block_on(cc.send(data)).unwrap();
     }

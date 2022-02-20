@@ -109,7 +109,7 @@ macro_rules! impl_transfer_format_for_vec_of {
 pub mod pdu;
 
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
-    l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
+    l2cap::ChannelIdentifier::LE(l2cap::LEUserChannelIdentifier::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -947,7 +947,7 @@ mod test {
         type SendFut = DummySendFut;
         type SendFutErr = ();
 
-        fn send(&self, data: crate::l2cap::AclData) -> Self::SendFut {
+        fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             gaurd.b1 = Some(data.into_raw_data());
@@ -973,13 +973,13 @@ mod test {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
-            use crate::l2cap::AclDataFragment;
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::BasicFrameFragment>> {
+            use crate::l2cap::BasicFrameFragment;
 
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b2.take() {
-                Some(vec![AclDataFragment::new(true, data)])
+                Some(vec![BasicFrameFragment::new(true, data)])
             } else {
                 gaurd.w2 = Some(waker.clone());
                 None
@@ -991,7 +991,7 @@ mod test {
         type SendFut = DummySendFut;
         type SendFutErr = ();
 
-        fn send(&self, data: crate::l2cap::AclData) -> Self::SendFut {
+        fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             gaurd.b2 = Some(data.into_raw_data());
@@ -1017,13 +1017,13 @@ mod test {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::AclDataFragment>> {
-            use crate::l2cap::AclDataFragment;
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::BasicFrameFragment>> {
+            use crate::l2cap::BasicFrameFragment;
 
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b1.take() {
-                Some(vec![AclDataFragment::new(true, data)])
+                Some(vec![BasicFrameFragment::new(true, data)])
             } else {
                 gaurd.w1 = Some(waker.clone());
                 None
