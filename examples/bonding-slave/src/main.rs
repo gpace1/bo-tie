@@ -330,7 +330,7 @@ impl Bonder {
     where
         C: bo_tie::l2cap::ConnectionChannel,
     {
-        use bo_tie::l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
+        use bo_tie::l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
 
         let acl_data_vec = connection_channel.future_receiver().await.unwrap();
 
@@ -338,13 +338,13 @@ impl Bonder {
 
         for acl_data in acl_data_vec {
             match acl_data.get_channel_id() {
-                ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) => {
+                ChannelIdentifier::LE(LEUserChannelIdentifier::AttributeProtocol) => {
                     match att_server.process_acl_data(&acl_data).await {
                         Ok(_) => (),
                         Err(e) => eprintln!("Cannot process acl data for ATT, '{}'", e),
                     }
                 }
-                ChannelIdentifier::LE(LeUserChannelIdentifier::SecurityManagerProtocol) => {
+                ChannelIdentifier::LE(LEUserChannelIdentifier::SecurityManagerProtocol) => {
                     match slave_security_manager.process_command(&acl_data).await {
                         Ok(None) => (),
                         Err(e) => eprintln!("Cannot process acl data for SM, '{:?}'", e),

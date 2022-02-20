@@ -44,7 +44,7 @@ pub enum ChannelIdentifier {
     /// ACL-U identifiers
     ACL(ACLUserChannelIdentifier),
     /// LE-U identifiers
-    LE(LeUserChannelIdentifier),
+    LE(LEUserChannelIdentifier),
 }
 
 impl ChannelIdentifier {
@@ -61,7 +61,7 @@ impl ChannelIdentifier {
 
     /// Try to convert a raw value into a LE-U channel identifier
     pub fn le_try_from_raw(val: u16) -> Result<Self, ()> {
-        LeUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
+        LEUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
     }
 
     /// Try to convert a raw value into a ACL-U channel identifier
@@ -70,8 +70,8 @@ impl ChannelIdentifier {
     }
 }
 
-impl From<LeUserChannelIdentifier> for ChannelIdentifier {
-    fn from(le: LeUserChannelIdentifier) -> Self {
+impl From<LEUserChannelIdentifier> for ChannelIdentifier {
+    fn from(le: LEUserChannelIdentifier) -> Self {
         ChannelIdentifier::LE(le)
     }
 }
@@ -114,9 +114,9 @@ impl DynChannelId<LeU> {
     /// [`LE_LOWER`](#const.LE_LOWER) and
     /// [`LE_UPPER`](#const.LE_UPPER). If the input is not between those bounds, then an error is
     /// returned containing the infringing input value.
-    pub fn new_le(channel_id: u16) -> Result<LeUserChannelIdentifier, u16> {
+    pub fn new_le(channel_id: u16) -> Result<LEUserChannelIdentifier, u16> {
         if Self::LE_BOUNDS.contains(&channel_id) {
-            Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
+            Ok(LEUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
                 channel_id,
             )))
         } else {
@@ -180,7 +180,7 @@ impl ACLUserChannelIdentifier {
 ///
 /// These are the channel identifiers for a LE
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LeUserChannelIdentifier {
+pub enum LEUserChannelIdentifier {
     /// Channel for the Attribute Protocol
     ///
     /// This channel is used for the attribute protocol, which also means that all GATT data will
@@ -203,23 +203,23 @@ pub enum LeUserChannelIdentifier {
     DynamicallyAllocated(DynChannelId<LeU>),
 }
 
-impl LeUserChannelIdentifier {
+impl LEUserChannelIdentifier {
     fn to_val(&self) -> u16 {
         match self {
-            LeUserChannelIdentifier::AttributeProtocol => 0x4,
-            LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
-            LeUserChannelIdentifier::SecurityManagerProtocol => 0x6,
-            LeUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
+            LEUserChannelIdentifier::AttributeProtocol => 0x4,
+            LEUserChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
+            LEUserChannelIdentifier::SecurityManagerProtocol => 0x6,
+            LEUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
         }
     }
 
     fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
-            0x4 => Ok(LeUserChannelIdentifier::AttributeProtocol),
-            0x5 => Ok(LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel),
-            0x6 => Ok(LeUserChannelIdentifier::SecurityManagerProtocol),
+            0x4 => Ok(LEUserChannelIdentifier::AttributeProtocol),
+            0x5 => Ok(LEUserChannelIdentifier::LowEnergyL2CAPSignalingChannel),
+            0x6 => Ok(LEUserChannelIdentifier::SecurityManagerProtocol),
             _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
-                Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
+                Ok(LEUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
             }
             _ => Err(()),
         }
@@ -396,7 +396,7 @@ impl ACLData {
                 Ok(Self {
                     mtu: ACLDataSuggestedMtu::Channel,
                     channel_id: ChannelIdentifier::LE(
-                        LeUserChannelIdentifier::try_from_raw(raw_channel_id)
+                        LEUserChannelIdentifier::try_from_raw(raw_channel_id)
                             .or(Err(ACLDataError::InvalidChannelId))?,
                     ),
                     data: payload[..len].to_vec(),

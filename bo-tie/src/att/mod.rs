@@ -109,7 +109,7 @@ macro_rules! impl_transfer_format_for_vec_of {
 pub mod pdu;
 
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
-    l2cap::ChannelIdentifier::LE(l2cap::LeUserChannelIdentifier::AttributeProtocol);
+    l2cap::ChannelIdentifier::LE(l2cap::LEUserChannelIdentifier::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

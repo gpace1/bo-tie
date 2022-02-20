@@ -564,11 +564,11 @@ where
         &self,
         acl_packet: &'a crate::l2cap::ACLData,
     ) -> Result<(super::client::ClientPduName, &'a [u8]), super::Error> {
-        use crate::l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
+        use crate::l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
         use core::convert::TryFrom;
 
         match acl_packet.get_channel_id() {
-            ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) => {
+            ChannelIdentifier::LE(LEUserChannelIdentifier::AttributeProtocol) => {
                 let (att_type, payload) = acl_packet.get_payload().split_at(1);
 
                 if att_type.len() > 0 {

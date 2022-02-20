@@ -120,7 +120,7 @@ pub mod toolbox;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
 pub const L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
-    crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
+    crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LEUserChannelIdentifier::SecurityManagerProtocol);
 
 #[derive(Debug, Clone)]
 pub enum Error {
