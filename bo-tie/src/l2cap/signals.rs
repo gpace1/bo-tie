@@ -4,9 +4,8 @@
 //! various signaling packets that specified in the Bluetooth Specification V 5.0 | Vol 3, Part A
 //! sections 4 and 5.
 
-const ACL_U_SIG_CHANNEL_ID: super::ChannelIdentifier = super::ChannelIdentifier::ACL(
-    super::AclUserChannelIdentifier::SignalingChannel
-);
+const ACL_U_SIG_CHANNEL_ID: super::ChannelIdentifier =
+    super::ChannelIdentifier::ACL(super::ACLUserChannelIdentifier::SignalingChannel);
 
 /// Codes for each Signal Type
 ///
@@ -20,7 +19,7 @@ impl SignalCode {
     fn try_from_raw(val: u8) -> Result<Self, ()> {
         match val {
             0x1 => Ok(SignalCode::CommandReject),
-            _   => Err(()),
+            _ => Err(()),
         }
     }
 }
@@ -47,11 +46,10 @@ impl CommandRejectReason {
     ///
     /// The returned value is in little-endian format
     fn to_val(&self) -> u16 {
-
         match self {
             CommandRejectReason::CommandNotUnderstood => 0x0u16,
             CommandRejectReason::SignalingMTUExceeded => 0x1u16,
-            CommandRejectReason::InvalidCIDInRequest  => 0x2u16,
+            CommandRejectReason::InvalidCIDInRequest => 0x2u16,
         }
         .to_le()
     }
@@ -60,7 +58,7 @@ impl CommandRejectReason {
 enum CommandRejectData {
     None,
     Mtu(u16),
-    RequestedCid(u16,u16),
+    RequestedCid(u16, u16),
 }
 
 impl CommandRejectData {
@@ -68,7 +66,7 @@ impl CommandRejectData {
         match self {
             CommandRejectData::None => 0,
             CommandRejectData::Mtu(_) => 2,
-            CommandRejectData::RequestedCid(_,_) => 4,
+            CommandRejectData::RequestedCid(_, _) => 4,
         }
     }
 
@@ -76,7 +74,7 @@ impl CommandRejectData {
         match self {
             CommandRejectData::None => (),
             CommandRejectData::Mtu(mtu) => to.copy_from_slice(&mtu.to_le_bytes()),
-            CommandRejectData::RequestedCid(local,remote) => {
+            CommandRejectData::RequestedCid(local, remote) => {
                 to[0..2].copy_from_slice(&local.to_le_bytes());
                 to[2..4].copy_from_slice(&remote.to_le_bytes());
             }
@@ -98,7 +96,7 @@ impl CommandReject {
         CommandReject {
             rejected_sig_id,
             reason: CommandRejectReason::CommandNotUnderstood,
-            data: CommandRejectData::None
+            data: CommandRejectData::None,
         }
     }
 
@@ -110,13 +108,11 @@ impl CommandReject {
         }
     }
 
-    pub fn new_invalid_cid_in_request(rejected_sig_id: SignalCode, local_cid: u16, remote_cid: u16)
-    -> Self
-    {
+    pub fn new_invalid_cid_in_request(rejected_sig_id: SignalCode, local_cid: u16, remote_cid: u16) -> Self {
         CommandReject {
             rejected_sig_id,
             reason: CommandRejectReason::InvalidCIDInRequest,
-            data: CommandRejectData::RequestedCid(local_cid, remote_cid)
+            data: CommandRejectData::RequestedCid(local_cid, remote_cid),
         }
     }
 
@@ -125,23 +121,23 @@ impl CommandReject {
     }
 }
 
-impl From<CommandReject> for super::AclData {
+impl From<CommandReject> for super::ACLData {
     fn from(cr: CommandReject) -> Self {
         use core::convert::TryFrom;
 
         // size of the L2CAP data header + size of the command reject signal
-        let mut data = alloc::vec::Vec::with_capacity( cr.len() );
+        let mut data = alloc::vec::Vec::with_capacity(cr.len());
 
         data[0] = SignalCode::CommandReject.into();
 
         data[1] = cr.rejected_sig_id.into();
 
-        data[2..4].copy_from_slice( &<u16>::try_from(cr.data.len()).unwrap().to_le_bytes() );
+        data[2..4].copy_from_slice(&<u16>::try_from(cr.data.len()).unwrap().to_le_bytes());
 
-        data[4..6].copy_from_slice( &cr.reason.to_val().to_le_bytes() );
+        data[4..6].copy_from_slice(&cr.reason.to_val().to_le_bytes());
 
         cr.data.copy_to_bytes(&mut data[6..]);
 
-        super::AclData::new(data, ACL_U_SIG_CHANNEL_ID)
+        super::ACLData::new(data, ACL_U_SIG_CHANNEL_ID)
     }
 }

@@ -531,7 +531,7 @@ where
         self.validate_permissions(att.get_permissions(), super::FULL_WRITE_PERMISSIONS)
     }
 
-    /// Process a received Acl Data packet form the Bluetooth Controller
+    /// Process a received ACL Data packet form the Bluetooth Controller
     ///
     /// The packet is assumed to be in the form of an Attribute protocol request packet. This
     /// function will then process the request and send to the client the appropriate response
@@ -542,7 +542,7 @@ where
     /// [`process_parsed_acl_data`](crate::att::server::Server::process_parsed_acl_data). It is
     /// recommended to use this function over those two functions when this `Server` is at the top
     /// of your server stack (you're not using GATT or some other custom higher layer protocol).
-    pub async fn process_acl_data(&mut self, acl_packet: &crate::l2cap::AclData) -> Result<(), super::Error> {
+    pub async fn process_acl_data(&mut self, acl_packet: &crate::l2cap::ACLData) -> Result<(), super::Error> {
         let (pdu_type, payload) = self.parse_acl_packet(acl_packet)?;
 
         self.process_parsed_acl_data(pdu_type, payload).await
@@ -562,7 +562,7 @@ where
     /// server for communication with a client device.
     pub fn parse_acl_packet<'a>(
         &self,
-        acl_packet: &'a crate::l2cap::AclData,
+        acl_packet: &'a crate::l2cap::ACLData,
     ) -> Result<(super::client::ClientPduName, &'a [u8]), super::Error> {
         use crate::l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
         use core::convert::TryFrom;
@@ -675,7 +675,7 @@ where
     /// This takes a complete Attribute PDU in its transfer byte form. This will package it into
     /// a L2CAP PDU and send it using the `ConnectionChannel`.
     async fn send_raw_tf(&self, intf_data: Vec<u8>) -> Result<(), super::Error> {
-        let acl_data = l2cap::AclData::new(intf_data, super::L2CAP_CHANNEL_ID);
+        let acl_data = l2cap::ACLData::new(intf_data, super::L2CAP_CHANNEL_ID);
 
         self.connection_channel
             .send(acl_data)

@@ -403,9 +403,9 @@ where
         Cmd: Into<Command<P>>,
         P: CommandData,
     {
-        use crate::l2cap::AclData;
+        use crate::l2cap::ACLData;
 
-        let acl_data = AclData::new(command.into().into_icd(), super::L2CAP_CHANNEL_ID);
+        let acl_data = ACLData::new(command.into().into_icd(), super::L2CAP_CHANNEL_ID);
 
         self.connection_channel
             .send(acl_data)
@@ -443,7 +443,7 @@ where
     /// It is recommended to always keep processing Bluetooth Security Manager packets as the
     /// responder. The host can at any point decide to restart encryption using different keys or
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
-    pub async fn process_command(&mut self, acl_data: &crate::l2cap::AclData) -> Result<Option<&super::Keys>, Error> {
+    pub async fn process_command(&mut self, acl_data: &crate::l2cap::ACLData) -> Result<Option<&super::Keys>, Error> {
         use core::convert::TryFrom;
 
         let command = match CommandType::try_from(acl_data) {

@@ -24,9 +24,9 @@ impl MinimumMtu for LeU {
 /// This is a marker type for a ACL-U L2CAP logical link. This is not the MTU for ACL-U with support
 /// for the Extended Flow Rate feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AclU;
+pub struct ACLU;
 
-impl MinimumMtu for AclU {
+impl MinimumMtu for ACLU {
     const MIN_MTU: usize = 48;
 }
 
@@ -42,7 +42,7 @@ impl MinimumMtu for AclU {
 pub enum ChannelIdentifier {
     NullIdentifier,
     /// ACL-U identifiers
-    ACL(AclUserChannelIdentifier),
+    ACL(ACLUserChannelIdentifier),
     /// LE-U identifiers
     LE(LeUserChannelIdentifier),
 }
@@ -66,7 +66,7 @@ impl ChannelIdentifier {
 
     /// Try to convert a raw value into a ACL-U channel identifier
     pub fn acl_try_from_raw(val: u16) -> Result<Self, ()> {
-        AclUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
+        ACLUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
     }
 }
 
@@ -76,8 +76,8 @@ impl From<LeUserChannelIdentifier> for ChannelIdentifier {
     }
 }
 
-impl From<AclUserChannelIdentifier> for ChannelIdentifier {
-    fn from(acl: AclUserChannelIdentifier) -> Self {
+impl From<ACLUserChannelIdentifier> for ChannelIdentifier {
+    fn from(acl: ACLUserChannelIdentifier) -> Self {
         ChannelIdentifier::ACL(acl)
     }
 }
@@ -125,12 +125,12 @@ impl DynChannelId<LeU> {
     }
 }
 
-impl DynChannelId<AclU> {
+impl DynChannelId<ACLU> {
     pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
 
-    pub fn new_acl(channel_id: u16) -> Result<AclUserChannelIdentifier, u16> {
+    pub fn new_acl(channel_id: u16) -> Result<ACLUserChannelIdentifier, u16> {
         if Self::ACL_BOUNDS.contains(&channel_id) {
-            Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
+            Ok(ACLUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
                 channel_id,
             )))
         } else {
@@ -140,36 +140,36 @@ impl DynChannelId<AclU> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AclUserChannelIdentifier {
+pub enum ACLUserChannelIdentifier {
     SignalingChannel,
     ConnectionlessChannel,
     AmpManagerProtocol,
     BrEdrSecurityManager,
     AmpTestManager,
-    DynamicallyAllocated(DynChannelId<AclU>),
+    DynamicallyAllocated(DynChannelId<ACLU>),
 }
 
-impl AclUserChannelIdentifier {
+impl ACLUserChannelIdentifier {
     fn to_val(&self) -> u16 {
         match self {
-            AclUserChannelIdentifier::SignalingChannel => 0x1,
-            AclUserChannelIdentifier::ConnectionlessChannel => 0x2,
-            AclUserChannelIdentifier::AmpManagerProtocol => 0x3,
-            AclUserChannelIdentifier::BrEdrSecurityManager => 0x7,
-            AclUserChannelIdentifier::AmpTestManager => 0x3F,
-            AclUserChannelIdentifier::DynamicallyAllocated(ci) => ci.get_val(),
+            ACLUserChannelIdentifier::SignalingChannel => 0x1,
+            ACLUserChannelIdentifier::ConnectionlessChannel => 0x2,
+            ACLUserChannelIdentifier::AmpManagerProtocol => 0x3,
+            ACLUserChannelIdentifier::BrEdrSecurityManager => 0x7,
+            ACLUserChannelIdentifier::AmpTestManager => 0x3F,
+            ACLUserChannelIdentifier::DynamicallyAllocated(ci) => ci.get_val(),
         }
     }
 
     fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
-            0x1 => Ok(AclUserChannelIdentifier::SignalingChannel),
-            0x2 => Ok(AclUserChannelIdentifier::ConnectionlessChannel),
-            0x3 => Ok(AclUserChannelIdentifier::AmpManagerProtocol),
-            0x7 => Ok(AclUserChannelIdentifier::BrEdrSecurityManager),
-            0x3F => Ok(AclUserChannelIdentifier::AmpTestManager),
-            val if DynChannelId::<AclU>::ACL_BOUNDS.contains(&val) => {
-                Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
+            0x1 => Ok(ACLUserChannelIdentifier::SignalingChannel),
+            0x2 => Ok(ACLUserChannelIdentifier::ConnectionlessChannel),
+            0x3 => Ok(ACLUserChannelIdentifier::AmpManagerProtocol),
+            0x7 => Ok(ACLUserChannelIdentifier::BrEdrSecurityManager),
+            0x3F => Ok(ACLUserChannelIdentifier::AmpTestManager),
+            val if DynChannelId::<ACLU>::ACL_BOUNDS.contains(&val) => {
+                Ok(ACLUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
             }
             _ => Err(()),
         }
@@ -226,9 +226,9 @@ impl LeUserChannelIdentifier {
     }
 }
 
-/// Acl Data Errors
+/// ACL Data Errors
 #[derive(Debug, Clone, Copy)]
-pub enum AclDataError {
+pub enum ACLDataError {
     /// Raw data is too small for an ACL frame
     RawDataTooSmall,
     /// Specified payload length didn't match the actual payload length
@@ -239,17 +239,17 @@ pub enum AclDataError {
     ExpectedStartFragment,
 }
 
-impl core::fmt::Display for AclDataError {
+impl core::fmt::Display for ACLDataError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            AclDataError::RawDataTooSmall => write!(f, "Raw data is too small for an ACL frame"),
-            AclDataError::PayloadLengthIncorrect => write!(
+            ACLDataError::RawDataTooSmall => write!(f, "Raw data is too small for an ACL frame"),
+            ACLDataError::PayloadLengthIncorrect => write!(
                 f,
                 "Specified payload length didn't \
                 match the actual payload length"
             ),
-            AclDataError::InvalidChannelId => write!(f, "Invalid Channel Id"),
-            AclDataError::ExpectedStartFragment => write!(
+            ACLDataError::InvalidChannelId => write!(f, "Invalid Channel Id"),
+            ACLDataError::ExpectedStartFragment => write!(
                 f,
                 "Expected start fragment, received a \
                 continuation fragment"
@@ -258,14 +258,14 @@ impl core::fmt::Display for AclDataError {
     }
 }
 
-/// The suggested MTU as part of an `AclData`
+/// The suggested MTU as part of an `ACLData`
 ///
-/// `AclData` can contain a suggested MTU for a connection channel. Its used for a higher level
+/// `ACLData` can contain a suggested MTU for a connection channel. Its used for a higher level
 /// protocol (than L2CAP) to have the data sent with a smaller MTU than the MTU set for the
 /// `ConnectionChannel`. Instead of fragmentation being being determined by the MTU for the
-/// `ConnectionChannel`, this `AclData`'s MTU would be used to determined if fragmentation is
+/// `ConnectionChannel`, this `ACLData`'s MTU would be used to determined if fragmentation is
 /// needed. *Be aware that it is not a requirement of implementors of a `ConnectionChannel` to use a
-/// `AclData`'s MTU over the connection channels MTU*, but this library's implementations of
+/// `ACLData`'s MTU over the connection channels MTU*, but this library's implementations of
 /// `ConnectionChannel` do take into account this MTU when deciding if fragmentation is necessary.
 ///
 /// # Channel
@@ -279,54 +279,54 @@ impl core::fmt::Display for AclDataError {
 /// Usage this MTU. However if the MTU value is less than the the minimum MTU for the logical link
 /// or larger than the channel's MTU, it will not be used.
 #[derive(Clone, Copy, Debug)]
-pub enum AclDataSuggestedMtu {
+pub enum ACLDataSuggestedMtu {
     Channel,
     Minimum,
     Mtu(usize),
 }
 
-impl Default for AclDataSuggestedMtu {
+impl Default for ACLDataSuggestedMtu {
     fn default() -> Self {
-        AclDataSuggestedMtu::Channel
+        ACLDataSuggestedMtu::Channel
     }
 }
 
 /// Connection-oriented channel data
 ///
-/// `AclData` is a *Basic* L2CAP data packet for asynchronous connection-oriented data sent to and
-/// from a connected device. `AclData` is always a complete packet, it contains the entire payload.
-/// As a consequence `AclData` may be larger than the MTU for the connection channel. The
+/// `ACLData` is a *Basic* L2CAP data packet for asynchronous connection-oriented data sent to and
+/// from a connected device. `ACLData` is always a complete packet, it contains the entire payload.
+/// As a consequence `ACLData` may be larger than the MTU for the connection channel. The
 /// implementor of a
 /// [`ConnectionChannel`](crate::l2cap::ConnectionChannel) will fragment the data within it's
 /// implementation of `send`, and a
 /// [`ConChanFutureRx](crate::l2cap::ConChanFutureRx) will assemble received fragments into
-/// `AclData`.
+/// `ACLData`.
 ///
-/// There is an optional MTU just for this `AclData`. Its used for a higher level protocol (than
+/// There is an optional MTU just for this `ACLData`. Its used for a higher level protocol (than
 /// L2CAP) to have the data sent with a smaller MTU than the MTU set for the `ConnectionChannel`.
 /// Instead of fragmentation being being determined by the MTU for the `ConnectionChannel`, this
-/// `AclData`'s MTU would be used to determined if fragmentation is needed. *Be aware that
-/// it is not a requirement of implementors of a `ConnectionChannel` to use a `AclData`'s MTU over
+/// `ACLData`'s MTU would be used to determined if fragmentation is needed. *Be aware that
+/// it is not a requirement of implementors of a `ConnectionChannel` to use a `ACLData`'s MTU over
 /// the connection channels MTU*, but this library's implementations of `ConnectionChannel` do take
 /// into account this MTU when deciding if fragmentation is necessary.
 #[derive(Debug, Clone)]
-pub struct AclData {
+pub struct ACLData {
     channel_id: ChannelIdentifier,
     data: Vec<u8>,
-    mtu: AclDataSuggestedMtu,
+    mtu: ACLDataSuggestedMtu,
 }
 
-impl AclData {
+impl ACLData {
     pub const HEADER_SIZE: usize = 4;
 
-    /// Create a new `AclData`
+    /// Create a new `ACLData`
     ///
     /// The channel identifier field
     pub fn new(payload: Vec<u8>, channel_id: ChannelIdentifier) -> Self {
-        AclData {
+        ACLData {
             channel_id,
             data: payload,
-            mtu: AclDataSuggestedMtu::default(),
+            mtu: ACLDataSuggestedMtu::default(),
         }
     }
 
@@ -343,8 +343,8 @@ impl AclData {
     /// bytes for ACL-U and 23 bytes for LE-U.
     pub fn use_mtu<Mtu: Into<Option<u16>>>(&mut self, mtu: Mtu) {
         self.mtu = match mtu.into() {
-            None => AclDataSuggestedMtu::Minimum,
-            Some(v) => AclDataSuggestedMtu::Mtu(v.into()),
+            None => ACLDataSuggestedMtu::Minimum,
+            Some(v) => ACLDataSuggestedMtu::Mtu(v.into()),
         }
     }
 
@@ -375,7 +375,7 @@ impl AclData {
         v
     }
 
-    /// Create an AclData struct from a raw L2CAP ACL data packet
+    /// Create an ACLData struct from a raw L2CAP ACL data packet
     ///
     /// The input must be a slice of bytes containing a complete L2CAP data packet.
     ///
@@ -384,7 +384,7 @@ impl AclData {
     /// * The length value in the raw data must be less than or equal to the length of the payload
     ///   portion of the raw data. Any bytes beyond the length are ignored.
     /// * The channel id must be valid
-    pub fn from_raw_data(data: &[u8]) -> Result<Self, AclDataError> {
+    pub fn from_raw_data(data: &[u8]) -> Result<Self, ACLDataError> {
         if data.len() >= 4 {
             let len: usize = <u16>::from_le_bytes([data[0], data[1]]).into();
 
@@ -394,39 +394,39 @@ impl AclData {
 
             if len <= payload.len() {
                 Ok(Self {
-                    mtu: AclDataSuggestedMtu::Channel,
+                    mtu: ACLDataSuggestedMtu::Channel,
                     channel_id: ChannelIdentifier::LE(
                         LeUserChannelIdentifier::try_from_raw(raw_channel_id)
-                            .or(Err(AclDataError::InvalidChannelId))?,
+                            .or(Err(ACLDataError::InvalidChannelId))?,
                     ),
                     data: payload[..len].to_vec(),
                 })
             } else {
-                Err(AclDataError::PayloadLengthIncorrect)
+                Err(ACLDataError::PayloadLengthIncorrect)
             }
         } else {
-            Err(AclDataError::RawDataTooSmall)
+            Err(ACLDataError::RawDataTooSmall)
         }
     }
 
     /// Get the MTU (if any) packaged with this ACL data
-    pub fn get_mtu(&self) -> AclDataSuggestedMtu {
+    pub fn get_mtu(&self) -> ACLDataSuggestedMtu {
         self.mtu
     }
 }
 
-/// A Complete or Fragmented Acl Data
+/// A Complete or Fragmented ACL Data
 ///
 /// Packets sent between the Master and Slave may be fragmented and need to be combined into a
-/// complete [`AclData`]. Multiple AclDataFragments, when in order and complete, can be combined
-/// into a single 'AclData' through the use of 'FromIterator' for AclData.
-pub struct AclDataFragment {
+/// complete [`ACLData`]. Multiple ACLDataFragments, when in order and complete, can be combined
+/// into a single 'ACLData' through the use of 'FromIterator' for ACLData.
+pub struct ACLDataFragment {
     start_fragment: bool,
     data: Vec<u8>,
 }
 
-impl AclDataFragment {
-    /// Crate a 'AclDataFragment'
+impl ACLDataFragment {
+    /// Crate a 'ACLDataFragment'
     pub(crate) fn new(start_fragment: bool, data: Vec<u8>) -> Self {
         Self { start_fragment, data }
     }
@@ -479,10 +479,10 @@ pub trait ConnectionChannel {
     /// fragmentation of `data` before sending raw packets to the controller.
     ///
     /// The implementor of a `ConnectionChannel` is strongly suggested to use the
-    /// [`AclDataSuggestedMtu`](crate::l2cap::AclDataSuggestedMtu) included with an `AclData` for
+    /// [`ACLDataSuggestedMtu`](crate::l2cap::ACLDataSuggestedMtu) included with an `ACLData` for
     /// fragmentation of the data. Implementors of `ConnectionChannel` within this library already
-    /// use the `AclDataSuggestedMtu` in the implementation of `send`.
-    fn send(&self, data: AclData) -> Self::SendFut;
+    /// use the `ACLDataSuggestedMtu` in the implementation of `send`.
+    fn send(&self, data: ACLData) -> Self::SendFut;
 
     /// Set the MTU for `send`
     ///
@@ -516,28 +516,28 @@ pub trait ConnectionChannel {
     /// nothing to be received then the provided waker will be used for waking any awaiting contexts
     /// when data is ready to be received.
     ///
-    /// Receive doesn't return `AclData` but instead returns `AclDataFragments`. What is returned
+    /// Receive doesn't return `ACLData` but instead returns `ACLDataFragments`. What is returned
     /// is what was received from an over-the-air link layer packet, which can be a fragment
-    /// of a complete `AclData`. `receive` does not perform stitching of these fragments into
+    /// of a complete `ACLData`. `receive` does not perform stitching of these fragments into
     /// the a L2CAP pdu, however it does guarantee that *the order in which fragments are returned
     /// was the order in which they were received*.
     ///
     /// Use the function `future_receiver` to return a future that can be awaited for *complete*
     /// ACL data.
-    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<AclDataFragment>>;
+    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<ACLDataFragment>>;
 
-    /// A futures receiver for complete `AclData`
+    /// A futures receiver for complete `ACLData`
     ///
     /// This is used to return a structure that can asynchronously receive from a Bluetooth
-    /// controller and process the received fragments into complete `AclData`. A `ConChanFutureRx`
-    /// is expected to be awoken multiple times as more fragmented `AclData` is received. As
+    /// controller and process the received fragments into complete `ACLData`. A `ConChanFutureRx`
+    /// is expected to be awoken multiple times as more fragmented `ACLData` is received. As
     /// fragments are received, they will be stitched together until they are made into a completed
     /// packet. When all fragments can be made into a completed the future will finally return
     /// `Poll::Ready`.
     ///
     /// The future utilizes the `receive` method to get ACL data fragments from the controller.
     /// These fragments are expected to be contiguous as per the requirements for `receive`, however
-    /// this does not guarantee that these fragments can be made into complete `AclData`. If data
+    /// this does not guarantee that these fragments can be made into complete `ACLData`. If data
     /// cannot be converted into a fragment, then the future will return an error. These fragments
     /// and any other fragments received are lost when an error occurs.
     ///
@@ -568,7 +568,7 @@ pub trait ConnectionChannel {
 /// in the trait [`ConnectionChannel`].
 ///
 /// This implements [`Future`](https://doc.rust-lang.org/core/future/trait.Future.html) for polling
-/// the Bluetooth Controller to obtain complete [`AclData`] (L2CAP data packets). `ConChanFutureRx`
+/// the Bluetooth Controller to obtain complete [`ACLData`] (L2CAP data packets). `ConChanFutureRx`
 /// is effectively a packet defragmenter for packets received by the controller.
 ///
 /// # How It Works
@@ -589,7 +589,7 @@ where
     C: ?Sized,
 {
     cc: &'a C,
-    full_acl_data: Vec<AclData>,
+    full_acl_data: Vec<ACLData>,
     carryover_fragments: Vec<u8>,
     length: Option<usize>,
 }
@@ -606,7 +606,7 @@ where
     /// This is useful when resulting `poll` may contain many complete packets, but still returns
     /// `Poll::Pending` because there were also incomplete fragments received. This should be used
     /// when
-    pub fn get_received_packets(&mut self) -> Vec<AclData> {
+    pub fn get_received_packets(&mut self) -> Vec<ACLData> {
         core::mem::replace(&mut self.full_acl_data, Vec::new())
     }
 
@@ -617,7 +617,7 @@ where
     /// can be retrieved with the method
     /// [`get_received_packets`](ConChanFutureRx::get_received_packets). Once this is called, it is
     /// likely that polling will return multiple
-    /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment)
+    /// [`ExpectedStartFragment`](ACLDataError::ExpectedStartFragment)
     /// errors before complete L2CAP packets are returned again.
     ///
     /// The malformed L2CAP packet that caused the error is not retrievable and is effectively lost.
@@ -629,7 +629,7 @@ where
     ///
     /// # Note
     /// This function doesn't need to be called if polling returns the error
-    /// [`ExpectedStartFragment`](AclDataError::ExpectedStartFragment), but only because there are
+    /// [`ExpectedStartFragment`](ACLDataError::ExpectedStartFragment), but only because there are
     /// no fragments to be dropped.
     pub fn drop_fragments(&mut self) {
         let _dropped = core::mem::replace(&mut self.carryover_fragments, Vec::new());
@@ -639,7 +639,7 @@ where
     ///
     /// This validate the fragment before adding it the the data to eventually be returned by the
     /// future.
-    fn process(&mut self, fragment: &mut AclDataFragment) -> Result<(), AclDataError> {
+    fn process(&mut self, fragment: &mut ACLDataFragment) -> Result<(), ACLDataError> {
         // Return if `fragment` is an empty fragment, as empty fragments can be ignored.
         if fragment.data.len() == 0 {
             return Ok(());
@@ -650,13 +650,13 @@ where
             // new L2CAP packet.
 
             if !fragment.is_start_fragment() {
-                return Err(AclDataError::ExpectedStartFragment);
+                return Err(ACLDataError::ExpectedStartFragment);
             }
 
             match fragment.get_acl_len() {
                 // Check if `fragment` is a complete L2CAP payload
                 Some(l) if (l + Self::HEADER_SIZE) <= fragment.data.len() => {
-                    match AclData::from_raw_data(&fragment.data) {
+                    match ACLData::from_raw_data(&fragment.data) {
                         Ok(data) => self.full_acl_data.push(data),
                         Err(e) => return Err(e),
                     }
@@ -706,7 +706,7 @@ where
             // Assemble the carryover fragments into a complete L2CAP packet if the length of the
             // fragments matches (or is greater than) the total length of the payload.
             if (acl_len + Self::HEADER_SIZE) <= self.carryover_fragments.len() {
-                match AclData::from_raw_data(&self.carryover_fragments) {
+                match ACLData::from_raw_data(&self.carryover_fragments) {
                     Ok(data) => {
                         self.full_acl_data.push(data);
                         self.carryover_fragments.clear();
@@ -724,7 +724,7 @@ impl<'a, C> Future for ConChanFutureRx<'a, C>
 where
     C: ConnectionChannel,
 {
-    type Output = Result<Vec<AclData>, AclDataError>;
+    type Output = Result<Vec<ACLData>, ACLDataError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
         use core::task::Poll;

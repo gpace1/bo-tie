@@ -95,7 +95,7 @@ impl core::fmt::Display for ClientPduName {
 pub trait ResponseProcessor {
     type Response;
 
-    fn process_response(self, acl_data: &l2cap::AclData) -> Result<Self::Response, super::Error>;
+    fn process_response(self, acl_data: &l2cap::ACLData) -> Result<Self::Response, super::Error>;
 }
 
 /// Process a server response of a client request
@@ -113,7 +113,7 @@ where
     ///
     /// The input `acl_data` should be the response from the server to the request that generated
     /// this `ResponseProcessor`.
-    fn process_response(self, acl_data: &l2cap::AclData) -> Result<Self::Response, super::Error> {
+    fn process_response(self, acl_data: &l2cap::ACLData) -> Result<Self::Response, super::Error> {
         if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
             self.0(acl_data.get_payload())
         } else {
@@ -162,7 +162,7 @@ where
         } else {
             let mtu_req = pdu::exchange_mtu_request(requested_mtu as u16);
 
-            let acl_data = l2cap::AclData::new(TransferFormatInto::into(&mtu_req), super::L2CAP_CHANNEL_ID);
+            let acl_data = l2cap::ACLData::new(TransferFormatInto::into(&mtu_req), super::L2CAP_CHANNEL_ID);
 
             connection_channel
                 .send(acl_data)
@@ -183,7 +183,7 @@ where
     /// occur if the response doesn't contain the correct channel identifier or an unexpected ATT
     /// PDU was received. The server is expected to respond with either a mtu response PDU or an
     /// error PDU with request not supported.
-    pub async fn create_client(self, response: &l2cap::AclData) -> Result<Client<'c, C>, super::Error> {
+    pub async fn create_client(self, response: &l2cap::ACLData) -> Result<Client<'c, C>, super::Error> {
         if self.skipped_mtu_request {
             Ok(Client::new(self.requested_mtu, self.connection_channel))
         } else if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
@@ -342,7 +342,7 @@ where
         if payload.len() > self.mtu {
             Err(super::Error::MtuExceeded)
         } else {
-            let data = l2cap::AclData::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
+            let data = l2cap::ACLData::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
 
             self.channel
                 .send(data)

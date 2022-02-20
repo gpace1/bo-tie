@@ -1328,12 +1328,12 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 pub enum PacketType {
-    Acl(AclPacketType),
+    ACL(ACLPacketType),
     Sco(ScoPacketType),
 }
 
 #[derive(Debug, Clone)]
-pub enum AclPacketType {
+pub enum ACLPacketType {
     TwoDH1ShallNotBeUsed,
     ThreeDH1ShallNotBeUsed,
     DM1MayBeUsed,
@@ -1348,21 +1348,21 @@ pub enum AclPacketType {
     DH5MayBeUsed,
 }
 
-impl AclPacketType {
+impl ACLPacketType {
     fn try_from(raw: u16) -> Result<Self, &'static str> {
         match raw {
-            0x0002 => Ok(AclPacketType::TwoDH1ShallNotBeUsed),
-            0x0004 => Ok(AclPacketType::ThreeDH1ShallNotBeUsed),
-            0x0008 => Ok(AclPacketType::DM1MayBeUsed),
-            0x0010 => Ok(AclPacketType::DH1MayBeUsed),
-            0x0100 => Ok(AclPacketType::TwoDH3ShallNotBeUsed),
-            0x0200 => Ok(AclPacketType::ThreeDH3ShallNotBeUsed),
-            0x0400 => Ok(AclPacketType::DM3MayBeUsed),
-            0x0800 => Ok(AclPacketType::DH3MayBeUsed),
-            0x1000 => Ok(AclPacketType::TwoDH5ShallNotBeUsed),
-            0x2000 => Ok(AclPacketType::ThreeDH5ShallNotBeUsed),
-            0x4000 => Ok(AclPacketType::DM5MayBeUsed),
-            0x8000 => Ok(AclPacketType::DH5MayBeUsed),
+            0x0002 => Ok(ACLPacketType::TwoDH1ShallNotBeUsed),
+            0x0004 => Ok(ACLPacketType::ThreeDH1ShallNotBeUsed),
+            0x0008 => Ok(ACLPacketType::DM1MayBeUsed),
+            0x0010 => Ok(ACLPacketType::DH1MayBeUsed),
+            0x0100 => Ok(ACLPacketType::TwoDH3ShallNotBeUsed),
+            0x0200 => Ok(ACLPacketType::ThreeDH3ShallNotBeUsed),
+            0x0400 => Ok(ACLPacketType::DM3MayBeUsed),
+            0x0800 => Ok(ACLPacketType::DH3MayBeUsed),
+            0x1000 => Ok(ACLPacketType::TwoDH5ShallNotBeUsed),
+            0x2000 => Ok(ACLPacketType::ThreeDH5ShallNotBeUsed),
+            0x4000 => Ok(ACLPacketType::DM5MayBeUsed),
+            0x8000 => Ok(ACLPacketType::DH5MayBeUsed),
             _ => Err("Packet type not matched for ACLConnection"),
         }
     }
@@ -1400,7 +1400,7 @@ impl ConnectionPacketTypeChangedData {
     /// be converted to a packet type from the proveded link type
     pub fn get_packet_type(&self, link_type: LinkType) -> Result<PacketType, &'static str> {
         match link_type {
-            LinkType::ACLConnection => Ok(PacketType::Acl(AclPacketType::try_from(self.packet_type)?)),
+            LinkType::ACLConnection => Ok(PacketType::ACL(ACLPacketType::try_from(self.packet_type)?)),
             LinkType::SCOConnection => Ok(PacketType::Sco(ScoPacketType::try_from(self.packet_type)?)),
             _ => Err("Link Type is not SCOConnection or ACLConnection"),
         }
