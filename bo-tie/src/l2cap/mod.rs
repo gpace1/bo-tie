@@ -226,9 +226,12 @@ impl LEUserChannelIdentifier {
     }
 }
 
-/// ACL Data Errors
+/// Basic Frame Errors
+///
+/// These are errors that can occur when trying to translate raw data into a L2CAP basic information
+/// frame.
 #[derive(Debug, Clone, Copy)]
-pub enum ACLDataError {
+pub enum BasicFrameError {
     /// Raw data is too small for an ACL frame
     RawDataTooSmall,
     /// Specified payload length didn't match the actual payload length
@@ -239,17 +242,17 @@ pub enum ACLDataError {
     ExpectedStartFragment,
 }
 
-impl core::fmt::Display for ACLDataError {
+impl core::fmt::Display for BasicFrameError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            ACLDataError::RawDataTooSmall => write!(f, "Raw data is too small for an ACL frame"),
-            ACLDataError::PayloadLengthIncorrect => write!(
+            BasicFrameError::RawDataTooSmall => write!(f, "Raw data is too small for an ACL frame"),
+            BasicFrameError::PayloadLengthIncorrect => write!(
                 f,
                 "Specified payload length didn't \
                 match the actual payload length"
             ),
-            ACLDataError::InvalidChannelId => write!(f, "Invalid Channel Id"),
-            ACLDataError::ExpectedStartFragment => write!(
+            BasicFrameError::InvalidChannelId => write!(f, "Invalid Channel Id"),
+            BasicFrameError::ExpectedStartFragment => write!(
                 f,
                 "Expected start fragment, received a \
                 continuation fragment"
