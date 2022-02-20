@@ -261,75 +261,47 @@ impl core::fmt::Display for BasicFrameError {
     }
 }
 
-/// The suggested MTU as part of an `ACLData`
-///
-/// `ACLData` can contain a suggested MTU for a connection channel. Its used for a higher level
-/// protocol (than L2CAP) to have the data sent with a smaller MTU than the MTU set for the
-/// `ConnectionChannel`. Instead of fragmentation being being determined by the MTU for the
-/// `ConnectionChannel`, this `ACLData`'s MTU would be used to determined if fragmentation is
-/// needed. *Be aware that it is not a requirement of implementors of a `ConnectionChannel` to use a
-/// `ACLData`'s MTU over the connection channels MTU*, but this library's implementations of
-/// `ConnectionChannel` do take into account this MTU when deciding if fragmentation is necessary.
-///
-/// # Channel
-/// Use the MTU defined for the channel
-///
-/// # Minimum
-/// Use the minimum MTU specified for the logical link Type. This is 48 bytes for ACL-U and 23
-/// bytes for LE-U.
-///
-/// # Mtu
-/// Usage this MTU. However if the MTU value is less than the the minimum MTU for the logical link
-/// or larger than the channel's MTU, it will not be used.
 #[derive(Clone, Copy, Debug)]
-pub enum ACLDataSuggestedMtu {
+pub(crate) enum LogicalLinkMinimumMtu {
+    /// The connection channel defines the minimum supported payload length
     Channel,
-    Minimum,
+    /// The Link type defines the minimum supported payload length
+    LinkType,
+    /// A user specified minimum supported payload length
     Mtu(usize),
 }
 
-impl Default for ACLDataSuggestedMtu {
+impl Default for LogicalLinkMinimumMtu {
     fn default() -> Self {
-        ACLDataSuggestedMtu::Channel
+        LogicalLinkMinimumMtu::Channel
     }
 }
 
-/// Connection-oriented channel data
+/// Basic information frame
 ///
-/// `ACLData` is a *Basic* L2CAP data packet for asynchronous connection-oriented data sent to and
-/// from a connected device. `ACLData` is always a complete packet, it contains the entire payload.
-/// As a consequence `ACLData` may be larger than the MTU for the connection channel. The
-/// implementor of a
-/// [`ConnectionChannel`](crate::l2cap::ConnectionChannel) will fragment the data within it's
-/// implementation of `send`, and a
-/// [`ConChanFutureRx](crate::l2cap::ConChanFutureRx) will assemble received fragments into
-/// `ACLData`.
-///
-/// There is an optional MTU just for this `ACLData`. Its used for a higher level protocol (than
-/// L2CAP) to have the data sent with a smaller MTU than the MTU set for the `ConnectionChannel`.
-/// Instead of fragmentation being being determined by the MTU for the `ConnectionChannel`, this
-/// `ACLData`'s MTU would be used to determined if fragmentation is needed. *Be aware that
-/// it is not a requirement of implementors of a `ConnectionChannel` to use a `ACLData`'s MTU over
-/// the connection channels MTU*, but this library's implementations of `ConnectionChannel` do take
-/// into account this MTU when deciding if fragmentation is necessary.
+/// The simplest PDU of L2CAP is the basic information frame (B-frame). A B-frame consists of just
+/// the length of the payload, the channel identifier, and the payload. The maximum size of a
+/// payload is 65535 bytes and the minimum is 0 but channel identifiers will usually define a
+/// minimum size and two connected devices will generally agree on a different maximum transfer
+/// size.
 #[derive(Debug, Clone)]
-pub struct ACLData {
+pub struct BasicInfoFrame {
     channel_id: ChannelIdentifier,
     data: Vec<u8>,
-    mtu: ACLDataSuggestedMtu,
+    mtu: LogicalLinkMinimumMtu,
 }
 
-impl ACLData {
+impl BasicInfoFrame {
     pub const HEADER_SIZE: usize = 4;
 
     /// Create a new `ACLData`
     ///
     /// The channel identifier field
     pub fn new(payload: Vec<u8>, channel_id: ChannelIdentifier) -> Self {
-        ACLData {
+        BasicInfoFrame {
             channel_id,
             data: payload,
-            mtu: ACLDataSuggestedMtu::default(),
+            mtu: Default::default(),
         }
     }
 
@@ -337,18 +309,26 @@ impl ACLData {
     ///
     /// Request to the
     /// [`ConnectionChannel`](crate::l2cap::ConnectionChannel) to use this MTU for sending this
-    /// specific packet, however it is up to the implementation of the `ConnectionChannel`
-    /// whether to use this MTU. However `ConnectionChannel` implementations should prefer to use
-    /// this MTU so long as the mtu is not larger than the MTU agreed upon of the connected device
-    /// nor smaller than the minimum MTU for the Link type (ACL-U or LE-U).
+    /// `BasicInfoFrame`, fragmenting it if needed. A connection channel will never use this MTU if
+    /// it is larger then the maximum or smaller than the minimum supported MTU defined by the
+    /// channel. However, a `ConnectionChannel` implementations should use this MTU so long as it
+    /// fulfills those conditions.
     ///
-    /// If `mtu` is `None` then the MTU will be set to the minimum for the logical link. This is 48
-    /// bytes for ACL-U and 23 bytes for LE-U.
+    /// If `mtu` is `None` then the MTU will be set to the minimum for the type of logical link. It
+    /// depends on the protocol used, but the absolute minimum is 48 bytes for ACL-U and 23 bytes
+    /// for LE-U.
     pub fn use_mtu<Mtu: Into<Option<u16>>>(&mut self, mtu: Mtu) {
         self.mtu = match mtu.into() {
-            None => ACLDataSuggestedMtu::Minimum,
-            Some(v) => ACLDataSuggestedMtu::Mtu(v.into()),
+            None => LogicalLinkMinimumMtu::LinkType,
+            Some(v) => LogicalLinkMinimumMtu::Mtu(v.into()),
         }
+    }
+
+    /// Use the MTU defined by the connection channel
+    ///
+    /// This sets the MTU back to using the connection channel's MTU value.
+    pub fn use_channel_mtu(&mut self) {
+        self.mtu = LogicalLinkMinimumMtu::Channel
     }
 
     pub fn get_channel_id(&self) -> ChannelIdentifier {
@@ -397,7 +377,7 @@ impl ACLData {
 
             if len <= payload.len() {
                 Ok(Self {
-                    mtu: ACLDataSuggestedMtu::Channel,
+                    mtu: LogicalLinkMinimumMtu::default(),
                     channel_id: ChannelIdentifier::LE(
                         LEUserChannelIdentifier::try_from_raw(raw_channel_id)
                             .or(Err(BasicFrameError::InvalidChannelId))?,
@@ -413,22 +393,22 @@ impl ACLData {
     }
 
     /// Get the MTU (if any) packaged with this ACL data
-    pub fn get_mtu(&self) -> ACLDataSuggestedMtu {
+    pub(crate) fn get_mtu(&self) -> LogicalLinkMinimumMtu {
         self.mtu
     }
 }
 
-/// A Complete or Fragmented ACL Data
+/// A Complete or Fragmented Basic Frame
 ///
 /// Packets sent between the Master and Slave may be fragmented and need to be combined into a
 /// complete [`ACLData`]. Multiple ACLDataFragments, when in order and complete, can be combined
 /// into a single 'ACLData' through the use of 'FromIterator' for ACLData.
-pub struct ACLDataFragment {
+pub struct BasicFrameFragment {
     start_fragment: bool,
     data: Vec<u8>,
 }
 
-impl ACLDataFragment {
+impl BasicFrameFragment {
     /// Crate a 'ACLDataFragment'
     pub(crate) fn new(start_fragment: bool, data: Vec<u8>) -> Self {
         Self { start_fragment, data }
@@ -485,7 +465,7 @@ pub trait ConnectionChannel {
     /// [`ACLDataSuggestedMtu`](crate::l2cap::ACLDataSuggestedMtu) included with an `ACLData` for
     /// fragmentation of the data. Implementors of `ConnectionChannel` within this library already
     /// use the `ACLDataSuggestedMtu` in the implementation of `send`.
-    fn send(&self, data: ACLData) -> Self::SendFut;
+    fn send(&self, data: BasicInfoFrame) -> Self::SendFut;
 
     /// Set the MTU for `send`
     ///
@@ -527,7 +507,7 @@ pub trait ConnectionChannel {
     ///
     /// Use the function `future_receiver` to return a future that can be awaited for *complete*
     /// ACL data.
-    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<ACLDataFragment>>;
+    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<BasicFrameFragment>>;
 
     /// A futures receiver for complete `ACLData`
     ///
@@ -592,7 +572,7 @@ where
     C: ?Sized,
 {
     cc: &'a C,
-    full_acl_data: Vec<ACLData>,
+    full_acl_data: Vec<BasicInfoFrame>,
     carryover_fragments: Vec<u8>,
     length: Option<usize>,
 }
@@ -609,7 +589,7 @@ where
     /// This is useful when resulting `poll` may contain many complete packets, but still returns
     /// `Poll::Pending` because there were also incomplete fragments received. This should be used
     /// when
-    pub fn get_received_packets(&mut self) -> Vec<ACLData> {
+    pub fn get_received_packets(&mut self) -> Vec<BasicInfoFrame> {
         core::mem::replace(&mut self.full_acl_data, Vec::new())
     }
 
@@ -642,7 +622,7 @@ where
     ///
     /// This validate the fragment before adding it the the data to eventually be returned by the
     /// future.
-    fn process(&mut self, fragment: &mut ACLDataFragment) -> Result<(), BasicFrameError> {
+    fn process(&mut self, fragment: &mut BasicFrameFragment) -> Result<(), BasicFrameError> {
         // Return if `fragment` is an empty fragment, as empty fragments can be ignored.
         if fragment.data.len() == 0 {
             return Ok(());
@@ -659,7 +639,7 @@ where
             match fragment.get_acl_len() {
                 // Check if `fragment` is a complete L2CAP payload
                 Some(l) if (l + Self::HEADER_SIZE) <= fragment.data.len() => {
-                    match ACLData::from_raw_data(&fragment.data) {
+                    match BasicInfoFrame::from_raw_data(&fragment.data) {
                         Ok(data) => self.full_acl_data.push(data),
                         Err(e) => return Err(e),
                     }
@@ -709,7 +689,7 @@ where
             // Assemble the carryover fragments into a complete L2CAP packet if the length of the
             // fragments matches (or is greater than) the total length of the payload.
             if (acl_len + Self::HEADER_SIZE) <= self.carryover_fragments.len() {
-                match ACLData::from_raw_data(&self.carryover_fragments) {
+                match BasicInfoFrame::from_raw_data(&self.carryover_fragments) {
                     Ok(data) => {
                         self.full_acl_data.push(data);
                         self.carryover_fragments.clear();
@@ -727,7 +707,7 @@ impl<'a, C> Future for ConChanFutureRx<'a, C>
 where
     C: ConnectionChannel,
 {
-    type Output = Result<Vec<ACLData>, BasicFrameError>;
+    type Output = Result<Vec<BasicInfoFrame>, BasicFrameError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
         use core::task::Poll;

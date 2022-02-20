@@ -524,7 +524,7 @@ impl Default for GapServiceBuilder<'_> {
 /// ```
 /// use bo_tie::gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
 /// use bo_tie::att::{FULL_PERMISSIONS, server::NoQueuedWrites};
-/// use bo_tie::l2cap::{ACLData, ConnectionChannel, ACLDataFragment};
+/// use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, BasicFrameFragment};
 /// use std::task::Waker;
 /// use std::future::Future;
 ///
@@ -534,12 +534,12 @@ impl Default for GapServiceBuilder<'_> {
 /// # impl bo_tie::l2cap::ConnectionChannel for CC {
 /// #     type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
 /// #     type SendFutErr = usize;
-/// #     fn send(&self,data: ACLData) -> Self::SendFut { unimplemented!() }
+/// #     fn send(&self,data: BasicInfoFrame) -> Self::SendFut { unimplemented!() }
 /// #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
 /// #     fn get_mtu(&self) -> usize { unimplemented!() }
 /// #     fn max_mtu(&self) -> usize { unimplemented!() }
 /// #     fn min_mtu(&self) -> usize { unimplemented!() }
-/// #     fn receive(&self,waker: &Waker) -> Option<Vec<ACLDataFragment>> { unimplemented!()}
+/// #     fn receive(&self,waker: &Waker) -> Option<Vec<BasicFrameFragment>> { unimplemented!()}
 /// # }
 /// # let connection_channel = CC;
 ///
@@ -627,7 +627,7 @@ where
     }
 
     /// Process some ACL data as a ATT client message
-    pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::ACLData) -> Result<(), crate::att::Error> {
+    pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::BasicInfoFrame) -> Result<(), crate::att::Error> {
         let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
 
         match pdu_type {
@@ -796,7 +796,7 @@ mod tests {
 
     use super::*;
     use crate::att::server::NoQueuedWrites;
-    use crate::l2cap::{ACLDataFragment, ConnectionChannel, MinimumMtu};
+    use crate::l2cap::{BasicFrameFragment, ConnectionChannel, MinimumMtu};
     use crate::UUID;
     use alloc::boxed::Box;
     use att::TransferFormatInto;
@@ -822,7 +822,7 @@ mod tests {
         type SendFut = DummySendFut;
         type SendFutErr = ();
 
-        fn send(&self, _: crate::l2cap::ACLData) -> Self::SendFut {
+        fn send(&self, _: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
             DummySendFut
         }
 
@@ -840,7 +840,7 @@ mod tests {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::ACLDataFragment>> {
+        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::BasicFrameFragment>> {
             None
         }
     }
@@ -903,7 +903,7 @@ mod tests {
         type SendFut = DummySendFut;
         type SendFutErr = ();
 
-        fn send(&self, data: crate::l2cap::ACLData) -> Self::SendFut {
+        fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
             self.last_sent_pdu.set(Some(data.into_raw_data()));
 
             DummySendFut
@@ -923,7 +923,7 @@ mod tests {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, _: &Waker) -> Option<Vec<ACLDataFragment>> {
+        fn receive(&self, _: &Waker) -> Option<Vec<BasicFrameFragment>> {
             unimplemented!()
         }
     }
@@ -971,7 +971,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(1.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::ACLData::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)),);
 
@@ -984,14 +984,14 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::ACLData::from_raw_data(&data).unwrap();
+                let acl_data = l2cap::BasicInfoFrame::from_raw_data(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );
 
         let client_pdu = att::pdu::read_by_group_type_request(9.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::ACLData::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)),);
 
@@ -1001,14 +1001,14 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::ACLData::from_raw_data(&data).unwrap();
+                let acl_data = l2cap::BasicInfoFrame::from_raw_data(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );
 
         let client_pdu = att::pdu::read_by_group_type_request(12.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::ACLData::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         // Request was made for for a attribute that was out of range
         assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)));

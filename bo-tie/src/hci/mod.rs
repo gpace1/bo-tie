@@ -308,12 +308,12 @@ impl HciACLData {
 
     /// Convert into a
     /// [`ACLDataFragment`](crate::l2cap::ACLDataFragment)
-    pub fn into_acl_fragment(self) -> crate::l2cap::ACLDataFragment {
-        use crate::l2cap::ACLDataFragment;
+    pub fn into_acl_fragment(self) -> crate::l2cap::BasicFrameFragment {
+        use crate::l2cap::BasicFrameFragment;
 
         match self.packet_boundary_flag {
-            ACLPacketBoundary::ContinuingFragment => ACLDataFragment::new(false, self.payload),
-            _ => ACLDataFragment::new(true, self.payload),
+            ACLPacketBoundary::ContinuingFragment => BasicFrameFragment::new(false, self.payload),
+            _ => BasicFrameFragment::new(true, self.payload),
         }
     }
 }

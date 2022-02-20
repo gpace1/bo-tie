@@ -8,7 +8,7 @@ use crate::{
         Attribute, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
         TransferFormatTryFrom,
     },
-    l2cap::{ACLDataFragment, ConnectionChannel, MinimumMtu},
+    l2cap::{BasicFrameFragment, ConnectionChannel, MinimumMtu},
     UUID,
 };
 use futures::executor::block_on;
@@ -51,7 +51,7 @@ impl crate::l2cap::ConnectionChannel for SendWatchConnection {
     type SendFut = DummySendFut;
     type SendFutErr = ();
 
-    fn send(&self, data: crate::l2cap::ACLData) -> Self::SendFut {
+    fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
         use std::convert::TryFrom;
 
         let pdu_name = ServerPduName::try_from(data.get_payload()[0]);
@@ -103,7 +103,7 @@ impl crate::l2cap::ConnectionChannel for SendWatchConnection {
         crate::l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<ACLDataFragment>> {
+    fn receive(&self, _: &core::task::Waker) -> Option<Vec<BasicFrameFragment>> {
         Some(Vec::new())
     }
 }

@@ -49,19 +49,19 @@
 //! # impl bo_tie::l2cap::ConnectionChannel for StubConnectionChannel {
 //! #     type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
 //! #     type SendFutErr = usize;
-//! #     fn send(&self,data: ACLData) -> Self::SendFut { unimplemented!() }
+//! #     fn send(&self,data: BasicInfoFrame) -> Self::SendFut { unimplemented!() }
 //! #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
 //! #     fn get_mtu(&self) -> usize { unimplemented!() }
 //! #     fn max_mtu(&self) -> usize { unimplemented!() }
 //! #     fn min_mtu(&self) -> usize { unimplemented!() }
-//! #     fn receive(&self,waker: &Waker) -> Option<Vec<ACLDataFragment>> { unimplemented!() }
+//! #     fn receive(&self,waker: &Waker) -> Option<Vec<BasicFrameFragment>> { unimplemented!() }
 //! # }
 //! # let connection_channel = StubConnectionChannel;
 //! // An example of setting up a receiver that support oob
 //!
 //! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
 //! use bo_tie::sm::BuildOutOfBand;
-//! use bo_tie::l2cap::{ACLData, ConnectionChannel, ACLDataFragment};
+//! use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, BasicFrameFragment};
 //! use std::task::Waker;
 //! use std::future::Future;
 //!
@@ -104,7 +104,7 @@
 //! * ['aes'](https://lib.rs/crates/aes)
 //! * ['p256'](https://lib.rs/crates/p256)
 
-use crate::l2cap::ACLData;
+use crate::l2cap::BasicInfoFrame;
 use crate::sm::oob::OobDirection;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -212,7 +212,7 @@ impl CommandType {
     }
 }
 
-impl core::convert::TryFrom<&'_ ACLData> for CommandType {
+impl core::convert::TryFrom<&'_ BasicInfoFrame> for CommandType {
     type Error = Error;
 
     /// Try to get the CommandType from ACLData
@@ -220,7 +220,7 @@ impl core::convert::TryFrom<&'_ ACLData> for CommandType {
     /// This rigidly checks the ACLData to get the CommandType. If the channel identifier is
     /// incorrect, the payload does not have a valid value for the command field, or the payload
     /// length is incorrect, an error is returned.
-    fn try_from(acl_data: &'_ ACLData) -> Result<Self, Self::Error> {
+    fn try_from(acl_data: &'_ BasicInfoFrame) -> Result<Self, Self::Error> {
         if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
             return Err(Error::IncorrectL2capChannelId);
         }

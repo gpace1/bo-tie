@@ -6,7 +6,7 @@ use super::AsyncLock;
 #[cfg(feature = "flow-ctrl")]
 use super::HostControllerInterface;
 use super::{common, HciACLDataInterface, HostInterface};
-use crate::l2cap::{ACLData, ACLDataFragment, ConnectionChannel};
+use crate::l2cap::{BasicFrameFragment, BasicInfoFrame, ConnectionChannel};
 use alloc::vec::Vec;
 #[cfg(feature = "flow-ctrl")]
 use core::task::Waker;
@@ -84,13 +84,13 @@ where
     /// Get the MTU for a specified data packet
     ///
     /// Data packets can have a different MTU based on the request to use a specified MTU by `data`.
-    fn get_send_mtu(&self, data: &ACLData) -> usize {
+    fn get_send_mtu(&self, data: &BasicInfoFrame) -> usize {
         match data.get_mtu() {
-            crate::l2cap::ACLDataSuggestedMtu::Minimum => self.min_mtu(),
+            crate::l2cap::LogicalLinkMinimumMtu::LinkType => self.min_mtu(),
 
-            crate::l2cap::ACLDataSuggestedMtu::Channel => self.get_mtu(),
+            crate::l2cap::LogicalLinkMinimumMtu::Channel => self.get_mtu(),
 
-            crate::l2cap::ACLDataSuggestedMtu::Mtu(mtu) => self.get_mtu().min(mtu).max(self.min_mtu()),
+            crate::l2cap::LogicalLinkMinimumMtu::Mtu(mtu) => self.get_mtu().min(mtu).max(self.min_mtu()),
         }
     }
 }
@@ -111,7 +111,7 @@ where
 
     type SendFutErr = ();
 
-    fn send(&self, data: ACLData) -> Self::SendFut {
+    fn send(&self, data: BasicInfoFrame) -> Self::SendFut {
         use crate::hci::{ACLBroadcastFlag, ACLPacketBoundary, HciACLData};
 
         let mtu = self.get_send_mtu(&data);
@@ -163,7 +163,7 @@ where
         self.minimum_mtu
     }
 
-    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::ACLDataFragment>> {
+    fn receive(&self, waker: &core::task::Waker) -> Option<alloc::vec::Vec<crate::l2cap::BasicFrameFragment>> {
         self.hi
             .interface
             .receive(&self.handle, waker)
@@ -171,7 +171,7 @@ where
                 Ok(packets) => packets
                     .into_iter()
                     .map(|packet| packet.into_acl_fragment())
-                    .collect::<Vec<ACLDataFragment>>()
+                    .collect::<Vec<BasicFrameFragment>>()
                     .into(),
                 Err(e) => {
                     log::error!("Failed to receive data: {}", e);
@@ -220,8 +220,8 @@ where
 
     type SendFutErr = flow_manager::FlowControllerError<I>;
 
-    fn send(&self, data: ACLData) -> Self::SendFut {
-        let max_fc_mtu = self.hi.flow_controller.get_max_payload_size() - ACLData::HEADER_SIZE;
+    fn send(&self, data: BasicInfoFrame) -> Self::SendFut {
+        let max_fc_mtu = self.hi.flow_controller.get_max_payload_size() - BasicInfoFrame::HEADER_SIZE;
 
         flow_manager::SendFuture::new(
             self.hi.clone(),
@@ -247,7 +247,7 @@ where
         self.minimum_mtu
     }
 
-    fn receive(&self, waker: &Waker) -> Option<Vec<ACLDataFragment>> {
+    fn receive(&self, waker: &Waker) -> Option<Vec<BasicFrameFragment>> {
         self.hi
             .interface
             .receive(&self.handle, waker)
@@ -255,7 +255,7 @@ where
                 Ok(packets) => packets
                     .into_iter()
                     .map(|packet| packet.into_acl_fragment())
-                    .collect::<Vec<ACLDataFragment>>()
+                    .collect::<Vec<BasicFrameFragment>>()
                     .into(),
                 Err(e) => {
                     log::error!("Failed to receive data: {}", e);

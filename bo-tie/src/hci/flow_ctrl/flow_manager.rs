@@ -49,7 +49,7 @@ use crate::{
         common::ConnectionHandle, ACLPacketBoundary, HciACLData, HciACLDataInterface, HostControllerInterface,
         HostInterface,
     },
-    l2cap::ACLData,
+    l2cap::BasicInfoFrame,
 };
 use alloc::{boxed::Box, sync::Arc};
 use core::{
@@ -144,7 +144,7 @@ impl<M> HciDataPacketFlowManager<M> {
     /// This is the same as the maximum HCI ACL data payload size minus the header size of a L2CAP
     /// packet.
     pub fn get_max_payload_size(&self) -> usize {
-        self.max_packet_payload_size - crate::l2cap::ACLData::HEADER_SIZE
+        self.max_packet_payload_size - crate::l2cap::BasicInfoFrame::HEADER_SIZE
     }
 
     /// Non-flush-able data fragmentation
@@ -159,7 +159,7 @@ impl<M> HciDataPacketFlowManager<M> {
     fn fragment(
         &self,
         mtu: usize,
-        data: &ACLData,
+        data: &BasicInfoFrame,
         connection_handle: ConnectionHandle,
     ) -> Result<alloc::vec::Vec<HciACLData>, HciACLData> {
         if data.get_payload().len() > mtu {
@@ -396,7 +396,7 @@ impl<M> HciDataPacketFlowManager<M> {
     pub async fn send_hci_data<I>(
         &self,
         interface: &I,
-        data: ACLData,
+        data: BasicInfoFrame,
         connection_handle: ConnectionHandle,
         mtu: usize,
     ) -> Result<(), FlowControllerError<I>>
@@ -474,7 +474,7 @@ where
 {
     hi: Hci,
     mtu: usize,
-    data: Option<ACLData>,
+    data: Option<BasicInfoFrame>,
     handle: ConnectionHandle,
     fut: Option<Pin<Box<dyn Future<Output = Result<(), FlowControllerError<I>>>>>>,
 }
@@ -483,7 +483,7 @@ impl<Hci, I> SendFuture<Hci, I>
 where
     I: HciACLDataInterface,
 {
-    pub fn new(hi: Hci, mtu: usize, data: ACLData, handle: ConnectionHandle) -> Self {
+    pub fn new(hi: Hci, mtu: usize, data: BasicInfoFrame, handle: ConnectionHandle) -> Self {
         SendFuture {
             hi,
             mtu,
@@ -726,7 +726,7 @@ mod tests {
 
         rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut test_data);
 
-        let data = ACLData::new(test_data, ChannelIdentifier::NullIdentifier);
+        let data = BasicInfoFrame::new(test_data, ChannelIdentifier::NullIdentifier);
 
         block_on(cc.send(data)).unwrap();
     }

@@ -6,7 +6,7 @@ use crate::att::{
     server::{BasicQueuedWriter, Server, ServerAttributes},
     TransferFormatTryFrom,
 };
-use crate::l2cap::{ACLData, ConnectionChannel};
+use crate::l2cap::{BasicInfoFrame, ConnectionChannel};
 
 #[test]
 fn prepare_write_with_exec_test() {
@@ -201,7 +201,7 @@ fn prepare_write_bad_offset() {
     // A request with a bad offset (last 2 bytes should indicate an offset of 0)
     let raw_request = [0x16, att_handle as u8, 0, 33, 33].to_vec();
 
-    let acl_data = ACLData::new(raw_request, crate::att::L2CAP_CHANNEL_ID);
+    let acl_data = BasicInfoFrame::new(raw_request, crate::att::L2CAP_CHANNEL_ID);
 
     block_on(server.process_acl_data(&acl_data)).unwrap();
 

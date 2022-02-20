@@ -542,7 +542,7 @@ where
     /// [`process_parsed_acl_data`](crate::att::server::Server::process_parsed_acl_data). It is
     /// recommended to use this function over those two functions when this `Server` is at the top
     /// of your server stack (you're not using GATT or some other custom higher layer protocol).
-    pub async fn process_acl_data(&mut self, acl_packet: &crate::l2cap::ACLData) -> Result<(), super::Error> {
+    pub async fn process_acl_data(&mut self, acl_packet: &crate::l2cap::BasicInfoFrame) -> Result<(), super::Error> {
         let (pdu_type, payload) = self.parse_acl_packet(acl_packet)?;
 
         self.process_parsed_acl_data(pdu_type, payload).await
@@ -562,7 +562,7 @@ where
     /// server for communication with a client device.
     pub fn parse_acl_packet<'a>(
         &self,
-        acl_packet: &'a crate::l2cap::ACLData,
+        acl_packet: &'a crate::l2cap::BasicInfoFrame,
     ) -> Result<(super::client::ClientPduName, &'a [u8]), super::Error> {
         use crate::l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
         use core::convert::TryFrom;
@@ -675,7 +675,7 @@ where
     /// This takes a complete Attribute PDU in its transfer byte form. This will package it into
     /// a L2CAP PDU and send it using the `ConnectionChannel`.
     async fn send_raw_tf(&self, intf_data: Vec<u8>) -> Result<(), super::Error> {
-        let acl_data = l2cap::ACLData::new(intf_data, super::L2CAP_CHANNEL_ID);
+        let acl_data = l2cap::BasicInfoFrame::new(intf_data, super::L2CAP_CHANNEL_ID);
 
         self.connection_channel
             .send(acl_data)
