@@ -384,7 +384,7 @@ impl ACLData {
     /// * The length value in the raw data must be less than or equal to the length of the payload
     ///   portion of the raw data. Any bytes beyond the length are ignored.
     /// * The channel id must be valid
-    pub fn from_raw_data(data: &[u8]) -> Result<Self, ACLDataError> {
+    pub fn from_raw_data(data: &[u8]) -> Result<Self, BasicFrameError> {
         if data.len() >= 4 {
             let len: usize = <u16>::from_le_bytes([data[0], data[1]]).into();
 
@@ -397,15 +397,15 @@ impl ACLData {
                     mtu: ACLDataSuggestedMtu::Channel,
                     channel_id: ChannelIdentifier::LE(
                         LEUserChannelIdentifier::try_from_raw(raw_channel_id)
-                            .or(Err(ACLDataError::InvalidChannelId))?,
+                            .or(Err(BasicFrameError::InvalidChannelId))?,
                     ),
                     data: payload[..len].to_vec(),
                 })
             } else {
-                Err(ACLDataError::PayloadLengthIncorrect)
+                Err(BasicFrameError::PayloadLengthIncorrect)
             }
         } else {
-            Err(ACLDataError::RawDataTooSmall)
+            Err(BasicFrameError::RawDataTooSmall)
         }
     }
 
@@ -639,7 +639,7 @@ where
     ///
     /// This validate the fragment before adding it the the data to eventually be returned by the
     /// future.
-    fn process(&mut self, fragment: &mut ACLDataFragment) -> Result<(), ACLDataError> {
+    fn process(&mut self, fragment: &mut ACLDataFragment) -> Result<(), BasicFrameError> {
         // Return if `fragment` is an empty fragment, as empty fragments can be ignored.
         if fragment.data.len() == 0 {
             return Ok(());
@@ -650,7 +650,7 @@ where
             // new L2CAP packet.
 
             if !fragment.is_start_fragment() {
-                return Err(ACLDataError::ExpectedStartFragment);
+                return Err(BasicFrameError::ExpectedStartFragment);
             }
 
             match fragment.get_acl_len() {
@@ -724,7 +724,7 @@ impl<'a, C> Future for ConChanFutureRx<'a, C>
 where
     C: ConnectionChannel,
 {
-    type Output = Result<Vec<ACLData>, ACLDataError>;
+    type Output = Result<Vec<ACLData>, BasicFrameError>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
         use core::task::Poll;

@@ -144,7 +144,7 @@ pub enum Error {
     /// Send related error
     DataSend(alloc::string::String),
     /// ACL Data related
-    ACLData(crate::l2cap::ACLDataError),
+    ACLData(crate::l2cap::BasicFrameError),
     /// Out of band data was not provided to the Security Manager via the `received_oob_data`
     /// method of either the initiator or responder security manager before continuing the process
     /// of pairing.
