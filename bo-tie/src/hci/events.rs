@@ -3314,7 +3314,7 @@ macro_rules! enumerate_split {
 
 enumerate_split! {
     #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
-    pub enum LEMeta ( #[derive(Debug,Clone)] enum LEMetaData ) {
+    pub enum LEMeta ( #[derive(Debug,Clone)] enum LeMetaData ) {
         ConnectionComplete{LEConnectionCompleteData},
         AdvertisingReport{BufferType<Result<LEAdvertisingReportData, alloc::string::String>>},
         ConnectionUpdateComplete{LEConnectionUpdateCompleteData},
@@ -3366,38 +3366,38 @@ impl LEMeta {
     }
 }
 
-impl LEMetaData {
+impl LeMetaData {
     fn into_simple(&self) -> LEMeta {
         match *self {
-            LEMetaData::ConnectionComplete(_) => LEMeta::ConnectionComplete,
-            LEMetaData::AdvertisingReport(_) => LEMeta::AdvertisingReport,
-            LEMetaData::ConnectionUpdateComplete(_) => LEMeta::ConnectionUpdateComplete,
-            LEMetaData::ReadRemoteFeaturesComplete(_) => LEMeta::ReadRemoteFeaturesComplete,
-            LEMetaData::LongTermKeyRequest(_) => LEMeta::LongTermKeyRequest,
-            LEMetaData::RemoteConnectionParameterRequest(_) => LEMeta::RemoteConnectionParameterRequest,
-            LEMetaData::DataLengthChange(_) => LEMeta::DataLengthChange,
-            LEMetaData::ReadLocalP256PublicKeyComplete(_) => LEMeta::ReadLocalP256PublicKeyComplete,
-            LEMetaData::GenerateDHKeyComplete(_) => LEMeta::GenerateDHKeyComplete,
-            LEMetaData::EnhancedConnectionComplete(_) => LEMeta::EnhancedConnectionComplete,
-            LEMetaData::DirectedAdvertisingReport(_) => LEMeta::DirectedAdvertisingReport,
-            LEMetaData::PHYUpdateComplete(_) => LEMeta::PHYUpdateComplete,
-            LEMetaData::ExtendedAdvertisingReport(_) => LEMeta::ExtendedAdvertisingReport,
-            LEMetaData::PeriodicAdvertisingSyncEstablished(_) => LEMeta::PeriodicAdvertisingSyncEstablished,
-            LEMetaData::PeriodicAdvertisingReport(_) => LEMeta::PeriodicAdvertisingReport,
-            LEMetaData::PeriodicAdvertisingSyncLost(_) => LEMeta::PeriodicAdvertisingSyncLost,
-            LEMetaData::ScanTimeout => LEMeta::ScanTimeout,
-            LEMetaData::AdvertisingSetTerminated(_) => LEMeta::AdvertisingSetTerminated,
-            LEMetaData::ScanRequestReceived(_) => LEMeta::ScanRequestReceived,
-            LEMetaData::ChannelSelectionAlgorithm(_) => LEMeta::ChannelSelectionAlgorithm,
+            LeMetaData::ConnectionComplete(_) => LEMeta::ConnectionComplete,
+            LeMetaData::AdvertisingReport(_) => LEMeta::AdvertisingReport,
+            LeMetaData::ConnectionUpdateComplete(_) => LEMeta::ConnectionUpdateComplete,
+            LeMetaData::ReadRemoteFeaturesComplete(_) => LEMeta::ReadRemoteFeaturesComplete,
+            LeMetaData::LongTermKeyRequest(_) => LEMeta::LongTermKeyRequest,
+            LeMetaData::RemoteConnectionParameterRequest(_) => LEMeta::RemoteConnectionParameterRequest,
+            LeMetaData::DataLengthChange(_) => LEMeta::DataLengthChange,
+            LeMetaData::ReadLocalP256PublicKeyComplete(_) => LEMeta::ReadLocalP256PublicKeyComplete,
+            LeMetaData::GenerateDHKeyComplete(_) => LEMeta::GenerateDHKeyComplete,
+            LeMetaData::EnhancedConnectionComplete(_) => LEMeta::EnhancedConnectionComplete,
+            LeMetaData::DirectedAdvertisingReport(_) => LEMeta::DirectedAdvertisingReport,
+            LeMetaData::PHYUpdateComplete(_) => LEMeta::PHYUpdateComplete,
+            LeMetaData::ExtendedAdvertisingReport(_) => LEMeta::ExtendedAdvertisingReport,
+            LeMetaData::PeriodicAdvertisingSyncEstablished(_) => LEMeta::PeriodicAdvertisingSyncEstablished,
+            LeMetaData::PeriodicAdvertisingReport(_) => LEMeta::PeriodicAdvertisingReport,
+            LeMetaData::PeriodicAdvertisingSyncLost(_) => LEMeta::PeriodicAdvertisingSyncLost,
+            LeMetaData::ScanTimeout => LEMeta::ScanTimeout,
+            LeMetaData::AdvertisingSetTerminated(_) => LEMeta::AdvertisingSetTerminated,
+            LeMetaData::ScanRequestReceived(_) => LEMeta::ScanRequestReceived,
+            LeMetaData::ChannelSelectionAlgorithm(_) => LEMeta::ChannelSelectionAlgorithm,
         }
     }
 }
 
 impl_try_from_for_raw_packet! {
-    LEMetaData,
+    LeMetaData,
     packet,
     {
-        use self::LEMetaData::*;
+        use self::LeMetaData::*;
         match chew!(packet) {
             0x01 => Ok(ConnectionComplete(LEConnectionCompleteData::try_from(packet)?)),
             0x02 => Ok(AdvertisingReport(LEAdvertisingReportData::buf_from(packet))),
@@ -3580,19 +3580,26 @@ macro_rules! events_markup {
         }
 
         impl crate::hci::events::$EnumName {
-            pub fn get_val( &self ) -> u8 {
+            /// Return the event code
+            ///
+            /// # Note
+            /// This does not return the sub event code for a [`LEMeta`](Events::LEMeta) event
+            pub fn get_event_code( &self ) -> u8 {
                 match *self {
                     $(crate::hci::events::$EnumName::$name $(( $(put_!($enum_val))* ))* => $val,)*
                 }
             }
 
-            /// The from raw normaly only needs to have the first val (`vals.0`) for determining the
-            /// enum conversion. But in the case where the first val matches LEMeta, the second
-            /// value (`vals.1`) is used to determine the LEMeta sub event.
-            pub fn from_raw( vals: (u8, u8) ) -> core::result::Result<crate::hci::events::$EnumName, alloc::string::String> {
-                match vals.0 {
-                    $( $val => Ok( crate::hci::events::$EnumName::$name $(( $($enum_val::try_from(vals.1)?)* ))* ), )*
-                    _ => Err(alloc::format!("Unknown Event ID: {}", vals.0)),
+            /// Try to create an event from an event code.
+            ///
+            /// The first input of this method is for the event code and the second is the LE Meta
+            /// sub event code. When the first input matches [`LEMeta`](Events::LEMeta) the second
+            /// input is used to determine the LEMeta sub event otherwise input `sub_event` is
+            /// ignored.
+            pub fn try_from_event_codes(event: u8, sub_event: u8) -> core::result::Result<crate::hci::events::$EnumName, alloc::string::String> {
+                match event {
+                    $( $val => Ok( crate::hci::events::$EnumName::$name $(( $($enum_val::try_from(sub_event)?)* ))* ), )*
+                    _ => Err(alloc::format!("Unknown Event ID: {}", event)),
                 }
             }
         }
@@ -3619,7 +3626,7 @@ macro_rules! events_markup {
             /// Packet as specified in the Bluetooth core specification (V 5.0, vol 2, Part E).
             /// Do not include the *HCI packet indicator* as that will (most likely) cause this
             /// method to panic.
-            pub fn from_packet( data: &[u8] ) -> Result<Self, alloc::string::String> {
+            pub fn try_from_packet( data: &[u8] ) -> Result<Self, alloc::string::String> {
 
                 use core::convert::TryFrom;
 
@@ -3628,11 +3635,11 @@ macro_rules! events_markup {
 
                 let mut packet = data;
 
-                // packet[0] is the LEMeta specific event code if the event is LEMeta
-                let event_code = crate::hci::events::$EnumName::from_raw((chew!(packet), packet[1]));
+                // packet[1] is the LEMeta specific sub event code if the event is LEMeta
+                let event_code = crate::hci::events::$EnumName::try_from_event_codes(chew!(packet), packet[1]);
 
                 // The length of the packet and convert it into a usize
-                let event_len  = chew!(packet).into();
+                let event_len = chew!(packet).into();
 
                 match event_code {
                     $( Ok(crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )*) =>
@@ -3712,7 +3719,7 @@ events_markup! {
         AMPStartTest{AMPStartTestData} -> 0x49,
         AMPTestEnd{AMPTestEndData} -> 0x4A,
         AMPReceiverReport{AMPReceiverReportData} -> 0x4B,
-        LEMeta(LEMeta){LEMetaData} -> 0x3E,
+        LEMeta(LEMeta){LeMetaData} -> 0x3E,
         TriggeredClockCapture{TriggeredClockCaptureData} -> 0x4E,
         SynchronizationTrainComplete{SynchronizationTrainCompleteData} -> 0x4F,
         SynchronizationTrainReceived{SynchronizationTrainReceivedData} -> 0x50,
@@ -3733,12 +3740,12 @@ impl Events {
     /// This function checks that an event is maskable by the
     /// [set event mask](crate::hci::cb::set_event_mask),
     /// [set event mask page 2](crate::hci::cb::set_event_mask_page_2), or
-    /// [LE set event mask](crate::hci::le::mandatory::set_event_mask) HCI commands.
-    ///
-    /// The events
+    /// [LE set event mask](crate::hci::le::mandatory::set_event_mask) HCI commands. This method
+    /// will return true for every event
+    /// except for
     /// [`CommandComplete`](Events::CommandComplete),
     /// [`CommandStatus`](Events::CommandStatus), and
-    /// [`NumberOfCompletedPackets`](Events::NumberOfCompletedPackets) are not maskable.
+    /// [`NumberOfCompletedPackets`](Events::NumberOfCompletedPackets).
     pub fn is_maskable(&self) -> bool {
         match self {
             Events::CommandComplete => false,
