@@ -2,11 +2,13 @@
 default-members = [
     "bo-tie",
     "bo-tie-macros",
+    "bo-tie-serde",
 ]
 
 members = [
     "bo-tie",
     "bo-tie-macros",
+    "bo-tie-serde",
 
     "base-crates/bo-tie-linux",
 
