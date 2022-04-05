@@ -75,7 +75,7 @@ pub mod connection_update {
         cu: ConnectionUpdate,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(cu, events::Events::CommandStatus))
     }
@@ -106,7 +106,7 @@ pub mod create_connection_cancel {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -250,7 +250,7 @@ pub mod create_connection {
         cp: ConnectionParameters,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(cp, events::Events::CommandStatus))
     }
@@ -343,7 +343,7 @@ pub mod read_channel_map {
         handle: ConnectionHandle,
     ) -> impl Future<Output = Result<ChannelMapInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = CmdParameter {
             _connection_handle: handle.get_raw_handle(),
@@ -382,7 +382,7 @@ pub mod read_remote_features {
         handle: ConnectionHandle,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = CmdParameter {
             _connection_handle: handle.get_raw_handle(),
@@ -461,7 +461,7 @@ pub mod set_host_channel_classification {
         map: ChannelMap,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(map, events::Events::CommandComplete))
     }

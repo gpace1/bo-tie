@@ -256,7 +256,7 @@ impl AdapterThread {
                                 }
                                 CtrlMsgType::ACLData => {
                                     log::trace!("Processing received HCI data, type:'ACL DATA'");
-                                    match HciACLData::from_packet(&buffer[1..len]) {
+                                    match HciAclData::try_from_packet(&buffer[1..len]) {
                                         Ok(hci_acl_data) => self.hci_data_recv.add_received(hci_acl_data),
                                         Err(e) => log::error!("Failed to process hci acl packet: {}", e),
                                     }
@@ -418,7 +418,7 @@ impl Drop for HCIAdapter {
     }
 }
 
-impl bo_tie::hci::HostControllerInterface for HCIAdapter {
+impl bo_tie::hci::PlatformInterface for HCIAdapter {
     type SendCommandError = Error;
     type ReceiveEventError = Error;
 

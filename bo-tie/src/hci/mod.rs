@@ -10,9 +10,9 @@ pub mod opcodes;
 pub mod events;
 mod flow_ctrl;
 
+use crate::l2cap::AclData;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use bo_tie_serde::SerializerHint;
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::future::Future;
@@ -45,8 +45,8 @@ pub trait CommandParameter {
     ///
     /// # Note
     /// This is not the entire packet sent to the interface as there may be additional information
-    /// that needs to be sent for the HCI transport layer (such as the
-    /// [HciPacketIndicator](crate::hci_transport::uart::HciPacketIndicator) used for UART).
+    /// that needs to be sent for the HCI transport layer. `UART`, `USB`, `SD` and Three-wire `UART`
+    /// all have different packets that contain this command packet.
     fn as_command_packet(&self) -> Vec<u8> {
         use core::mem::size_of;
 
@@ -73,7 +73,97 @@ pub trait CommandParameter {
 
         buffer
     }
+
+    /// Create a Iterator over the bytes sent to the controller
+    ///
+    /// This converts this into an iterator over the bytes that are sent as part of the command
+    /// packet to the controller.
+    ///
+    /// ```
+    /// # use bo_tie::hci::link_control::disconnect;
+    /// # use bo_tie::hci::CommandParameter;
+    /// # let parameter = disconnect::DisconnectParameters {
+    ///     connection_handle: bo_tie::hci::common::ConnectionHandle::try_from(0).unwrap(),
+    ///     disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
+    /// };
+    /// # let mut buffer = Vec::new();
+    ///
+    /// buffer.extend(parameter.as_iter())
+    /// ```
+    fn as_iter(&self) -> CommandParameterIter<Self> {
+        CommandParameterIter::new(self)
+    }
 }
+
+pub struct CommandParameterIter<C: CommandParameter> {
+    stage: Some(usize),
+    parameter: C::Parameter,
+}
+
+impl<C: CommandParameter> CommandParameterIter<C> {
+    fn new(c: &C) -> Self {
+        Self {
+            stage: Some(0),
+            parameter: c.get_parameter(),
+        }
+    }
+}
+
+impl<C> Iterator for CommandParameterIter<C>
+where
+    C: CommandParameter,
+{
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stage.and_then(|stage| {
+            // Stages 0 through 2 are for iterating over the bytes containing the opcode (two bytes)
+            // and parameter length field (one byte). Then the `stage` field acts as an indexer of
+            // the bytes that make up the parameter
+            match stage {
+                0 => {
+                    self.stage = 1;
+                    Some(Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes()[0])
+                }
+                1 => {
+                    self.stage = 2;
+                    Some(Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes()[1])
+                }
+                2 => {
+                    self.stage = Some(3);
+                    Some(self.size_hint().0 as u8)
+                }
+                _ => {
+                    let index = stage - 3;
+
+                    let len = self.size_hint().0;
+
+                    if index < len {
+                        self.stage = Some(stage + 1);
+
+                        let data = &self.parameter as *const Self::Parameter as *const u8;
+
+                        let bytes = unsafe { core::slice::from_raw_parts(data, len) };
+
+                        Some(bytes[index])
+                    } else {
+                        self.stage = None;
+
+                        None
+                    }
+                }
+            }
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        const SIZE: usize = 3 + core::mem::size_of::<C::Parameter>();
+
+        (SIZE, Some(SIZE))
+    }
+}
+
+impl<C> ExactSizeIterator for CommandParameterIter<C> where C: CommandParameter {}
 
 /// A trait for matching received events
 ///
@@ -159,18 +249,18 @@ impl ACLBroadcastFlag {
 }
 
 #[derive(Debug)]
-pub enum HciACLPacketConvertError {
+pub enum HciACLPacketError {
     PacketTooSmall,
     InvalidBroadcastFlag,
     InvalidConnectionHandle(&'static str),
 }
 
-impl Display for HciACLPacketConvertError {
+impl Display for HciACLPacketError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            HciACLPacketConvertError::PacketTooSmall => write!(f, "Packet is too small to be a valid HCI ACL Data"),
-            HciACLPacketConvertError::InvalidBroadcastFlag => write!(f, "Packet has invalid broadcast Flag"),
-            HciACLPacketConvertError::InvalidConnectionHandle(reason) => {
+            HciACLPacketError::PacketTooSmall => write!(f, "Packet is too small to be a valid HCI ACL Data"),
+            HciACLPacketError::InvalidBroadcastFlag => write!(f, "Packet has invalid broadcast Flag"),
+            HciACLPacketError::InvalidConnectionHandle(reason) => {
                 write!(f, "Invalid connection handle, {}", reason)
             }
         }
@@ -253,7 +343,7 @@ impl<'a> HciACLData<'a> {
         self.broadcast_flag
     }
 
-    /// Convert the HciACLData into a raw packet
+    /// Convert the `HciACLData` into a raw packet
     ///
     /// This will convert HciACLDataOwned into a packet of bytes that can be sent between the host
     /// and controller.
@@ -273,11 +363,80 @@ impl<'a> HciACLData<'a> {
         v
     }
 
-    /// Attempt to create a `HciACLData`
+    /// Convert the `HciACLData` into a packet iterator
+    ///
+    /// The return is an iterator over the bytes send over the interface between the host and
+    /// controller.
+    ///
+    /// # Note
+    /// Collecting the returned iterator into a `Vec` produces the same thing as the return of
+    /// [`get_packet`](HciAclData)
+    pub fn get_packet_iter(&self) -> impl Iterator<Item = u8> + ExactSizeIterator {
+        struct HciAclPacketIter<'a> {
+            state: Option<usize>,
+            raw_handle_and_flags: u16,
+            total_data_length: u16,
+            payload: &'a [u8],
+        }
+
+        impl<'a> HciAclPacketIter<'a> {
+            fn new(data: &'a HciAclData) -> Self {
+                Self {
+                    state: Some(0),
+                    raw_handle_and_flags: data.connection_handle.get_raw_handle()
+                        | data.packet_boundary_flag.get_shifted_val()
+                        | data.broadcast_flag.get_shifted_val(),
+                    total_data_length: data.get_payload().len() as u16,
+                    payload: &data.payload,
+                }
+            }
+        }
+
+        impl Iterator for HciAclPacketIter<'_> {
+            type Item = u8;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.state.and_then(|state| match state {
+                    0 | 1 => {
+                        self.state = Some(state + 1);
+
+                        Some(self.raw_handle_and_flags.to_le_bytes()[state])
+                    }
+                    2 | 3 => {
+                        self.state = Some(2);
+
+                        Some(self.total_data_length.to_le_bytes()[state])
+                    }
+                    _ => {
+                        let index = state - 4;
+
+                        if index < self.payload.len() {
+                            self.state = Some(state + 1);
+
+                            Some(self.payload[index])
+                        } else {
+                            self.state = None;
+                            None
+                        }
+                    }
+                })
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                let size = 4 + self.payload.len();
+
+                (size, Some(size))
+            }
+        }
+
+        impl ExactSizeIterator for HciAclPacketIter<'_> {}
+    }
+
+    /// Attempt to create a `HciAclData`
     ///
     /// A `HciACLData` is created if the packet is in the correct HCI ACL data packet format. If
     /// not, then an error is returned.
-    pub fn from_packet(packet: &'a [u8]) -> Result<Self, HciACLPacketConvertError> {
+    pub fn try_from_packet(packet: &[u8]) -> Result<Self, HciACLPacketError> {
         const HEADER_SIZE: usize = 4;
 
         if packet.len() >= HEADER_SIZE {
@@ -285,14 +444,14 @@ impl<'a> HciACLData<'a> {
 
             let connection_handle = match common::ConnectionHandle::try_from(first_2_bytes & 0xFFF) {
                 Ok(handle) => handle,
-                Err(e) => return Err(HciACLPacketConvertError::InvalidConnectionHandle(e)),
+                Err(e) => return Err(HciACLPacketError::InvalidConnectionHandle(e)),
             };
 
             let packet_boundary_flag = ACLPacketBoundary::from_shifted_val(first_2_bytes);
 
             let broadcast_flag = match ACLBroadcastFlag::try_from_shifted_val(first_2_bytes) {
                 Ok(flag) => flag,
-                Err(_) => return Err(HciACLPacketConvertError::InvalidBroadcastFlag),
+                Err(_) => return Err(HciACLPacketError::InvalidBroadcastFlag),
             };
 
             let data_length = <u16>::from_le_bytes([packet[2], packet[3]]) as usize;
@@ -304,7 +463,7 @@ impl<'a> HciACLData<'a> {
                 payload: &packet[HEADER_SIZE..(HEADER_SIZE + data_length)],
             })
         } else {
-            Err(HciACLPacketConvertError::PacketTooSmall)
+            Err(HciACLPacketError::PacketTooSmall)
         }
     }
 
@@ -495,70 +654,232 @@ impl<'de> bo_tie_serde::HintedDeserialize<'de> for HciACLData<'de> {
     }
 }
 
+/// UART interface type
+///
+/// This implements the `InterfaceType` for UART communication between the Host and Controller.
+struct UartInterface;
+
+impl UartInterface {
+    const COMMAND_ID: u8 = 1;
+    const ACL_ID: u8 = 2;
+    const SCO_ID: u8 = 3;
+    const EVENT_ID: u8 = 4;
+    const ISO_ID: u8 = 5;
+}
+
+impl<D: CommandParameter> InterfaceData<D> for UartInterface {
+    type Iterator = core::iter::Chain<core::iter::Once<u8>, HciPacket<'a, HciCommandPacket>::IntoIter>;
+
+    fn make_packet(&self, hci_packet: HciPacket<'a, HciCommandPacket>) -> Self::IntoIter
+    where
+        HciPacket<'a, HciCommandPacket>: IntoIterator<Item = u8>,
+    {
+        core::iter::once(Self::COMMAND_ID).chain(hci_packet.into_iter())
+    }
+}
+
+/// Host Controller Interface Packets
+///
+/// There are five different types of HCI packets. These packets are send differently to the
+/// controller depending on the interface used for communicating between the Host and Controller.
+/// There are four types of interfaces officially supported Specification `UART`, `USB`, Secure
+/// Digital `SD`, and Three-wire `UART`.
+///
+/// A `HciPacket` can be converted into the type of packet used for the interface.
+///
+/// # TODO Note
+/// `USB`, `SD`, and Three-wire `UART` `HciPacket` conversions are not implemented yet.
+pub struct HciPacket<T, D> {
+    _type: core::marker::PhantomData<T>,
+    data: D,
+}
+
+impl<D: CommandParameter> IntoIterator for HciPacket<HciCommandPacket, D> {
+    type Item = u8;
+    type IntoIter = CommandParameterIter<D>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.packet_data.as_iter()
+    }
+}
+
+impl<'a> HciPacket<&'a [u8]> {
+    /// Try to convert from raw UART data
+    ///
+    /// Try to convert data from assumed to be a UART transferred HciPacket. The return is a
+    /// `HciPacket` with the internal payload still in its transfer format.
+    ///
+    /// # Errors
+    /// * Received a packet with an invalid UART packet identifier
+    /// * The data is not a valid HCI packet
+    ///
+    /// # TODO Errors
+    /// * An error will be generated if a command, SCO, or ISO packet is received as those are not
+    ///   implemented yet.
+    pub fn try_from_uart(raw: &'a [u8]) -> Result<Self, HciPacketError> {
+        match raw.get(0) {
+            Some(&Self::UART_COMMAND_ID) => Ok(HciPacket::Command(&raw[1..])),
+            Some(&Self::UART_ACL_ID) => HciACLData::try_from_packet(&raw[1..])
+                .map(|data| HciPacket::Acl(data))
+                .map_err(|e| HciPacketError {
+                    invalidity: HciPacketInvalidity::AclError(e),
+                    for_packet_type: Some(HciPacketType::UartAcl),
+                }),
+            Some(&Self::UART_SCO_ID) => Err(HciPacketError {
+                invalidity: HciPacketInvalidity::InvalidFormat("SCO packets are not supported yet"),
+                for_packet_type: Some(HciPacketType::UartSco),
+            }),
+            Some(&Self::UART_EVENT_ID) => events::EventsData::try_from_packet(&raw[1..])
+                .map(|event_data| HciPacket::Event(event_data))
+                .map_err(|e| HciPacketError {
+                    invalidity: HciPacketInvalidity::EventError(e),
+                    for_packet_type: Some(HciPacketType::UartEvent),
+                }),
+            Some(&Self::UART_ISO_ID) => {}
+            Some(_) => Err(HciPacketError {
+                invalidity: HciPacketInvalidity::InvalidFormat("Invalid UART packet identifier"),
+                for_packet_type: None,
+            }),
+            None => Err(HciPacketError {
+                invalidity: HciPacketInvalidity::InvalidDataSize {
+                    data_size: 0,
+                    required_size: None,
+                },
+                for_packet_type: None,
+            }),
+        }
+    }
+}
+
+/// HCI packet error
+///
+/// This error occurs whenever an `HciPacket` cannot be converted from a raw byte slice.
+#[derive(Debug)]
+struct HciPacketError {
+    invalidity: HciPacketInvalidity,
+    for_packet_type: Option<HciPacketType>,
+}
+
+impl fmt::Debug for HciPacketError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut debug_struct = f.debug_struct("HciPacketError");
+
+        if let Some(ref for_packet_type) = self.for_packet_type {
+            debug_struct.field("hci transport packet type", &self.for_packet_type)
+        }
+
+        debug_struct.field("reason_for_invalidity", &self.invalidity).finish()
+    }
+}
+
+enum HciPacketInvalidity {
+    InvalidDataSize {
+        data_size: usize,
+        required_size: Option<usize>,
+    },
+    InvalidFormat(&'static str),
+    AclError(HciACLPacketError),
+    EventError(alloc::string::String),
+}
+
+impl fmt::Debug for HciPacketInvalidity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HciPacketInvalidity::InvalidDataSize {
+                data_size,
+                required_size,
+            } => match required_size {
+                Some(required_size) => f
+                    .debug_struct("InvalidPacketSize")
+                    .field("data_size", data_size)
+                    .field("required_size", required_size)
+                    .finish(),
+                None => f.write_str("Raw slice is empty"),
+            },
+            HciPacketInvalidity::InvalidFormat(reason) => f.write_str(reason),
+            HciPacketInvalidity::AclError(e) => f.debug_tuple("AclError").field(e).finish(),
+            HciPacketInvalidity::EventError(e) => f.debug_tuple("EventError").field(e).finish(),
+        }
+    }
+}
+
+impl fmt::Display for HciPacketInvalidity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HciPacketInvalidity::InvalidDataSize {
+                data_size,
+                required_size,
+            } => {
+                if data_size == 0 {
+                    f.write_str("Cannot convert an empty slice into a HCI packet")
+                } else {
+                    write!(
+                        f,
+                        "The length of the raw slice ({} bytes) is smaller than the required length of {}",
+                        data_size,
+                        required_size.unwrap_or_default()
+                    )
+                }
+            }
+            HciPacketInvalidity::InvalidFormat(reason) => {
+                write!("Raw slice is either badly formatted or not a HCI Packet, {}", reason)
+            }
+            HciPacketInvalidity::AclError(e) => {
+                write!("Failed to raw slice to an HCI ACL data packet, {}", e)
+            }
+            HciPacketInvalidity::EventError(e) => {
+                write!("Failed to raw slice to an HCI event, {}", e)
+            }
+        }
+    }
+}
+
+impl From<HciAclPacketError> for HciPacketInvalidity {
+    fn from(e: HciAclPacketError) -> Self {
+        HciPacketInvalidity::HciAclPacketError(e)
+    }
+}
+
 /// Trait for interfacing with the controller
 ///
+/// While this library provides the vast majority of the functionality for a host to
+/// interact with a Bluetooth controller, it cannot provide the platform specific functionality
+/// required for interacting with peripherals on a system. Whether or not the controller is
+/// connected or directly part of the system it is ultimately a peripheral as far as the CPU is
+/// concerned, so this library still needs to go through whatever process is used to establish the
+/// peripheral with whatever execution is using this library.
 ///
-/// # Implementation
+/// ## Async
+/// Within this library, reading and writing is always done asynchronously to the controller. It
+/// needs to await for received data and also make sure not to send to much data. So since reading
+/// and writing to the controller are already asynchronous actions, the implementor of this trait
+/// should do the same.
 ///
-/// ## `send_command`
-/// This is used for sending the command to the Bluetooth controller by the HostInterface object.
-/// It is provided with a input that implements the
-/// [`CommandParameter`] which contains all the information required for sending the command packet
-/// to the Bluetooth controller.
-///
-/// ## `receive_event`
-/// `receive_event` is used for implementing a future around the controller's event process. When
-/// called it needs to check if the event is available to the Host or not. If the event is not not
-/// immediately available, the implementation of `receive_event` needs to call wake on the provided
-/// `waker` input when the event is accepted by the Host.
-///
-/// Events need to be correctly propagated to the right context that is currently waiting for the
-/// requested event. Some events can be differentiated from themselves through the data passed with
-/// the event, but most do not have any discernible way to tell which context should receive which
-/// event. Its the responsibility of the implementor of `HostControllerInterface` to determine
-/// what event goes with what `waker`, along with matching events to a `waker` based on the provided
-/// matcher.
-pub trait HostControllerInterface {
-    type SendCommandError: Debug + Display;
-    type ReceiveEventError: Debug + Display;
+/// There are two methods within this trait, `try_receive` and `try_send`. Both methods take a
+/// reference to a `Waker` as an input. The implementation of this trait needs to save these
+/// `Waker`s if the operation cannot be completed. `Waker`s should not be assumed to wake the
+/// same context, and calls to these methods may be made to update a Waker. When
+/// [`wake`](core::task::Waker::wake) is called, these methods are called again by whoever is
+/// executing the containing future. These methods are continuously recalled until each method
+/// returns an indication that they have either completed or failed.
+pub trait PlatformInterface {
+    type Sender: Future;
+    type Receiver: Future;
+    type SendError: fmt::Debug + fmt::Display;
+    type ReceiveError: fmt::Debug + fmt::Display;
 
-    /// Send a command from the Host to the Bluetooth Controller
+    /// Try to Send a HCI packet to the controller
     ///
-    /// This will return true if the command was sent to the bluetooth controller, and false if
-    /// the command couldn't be transferred to the controller yet. This doesn't mean that an error
-    /// occurred (it generally means that the bluetooth controller buffer is full), but it does mean
-    /// that the command must be resent. If an error does occur then an Error will be returned.
     ///
-    /// The `cmd_data` input contains all the HCI command information, where as the `waker` input
-    /// is used to wake the context for the command to be resent.
-    fn send_command<D, W>(&self, cmd_data: &D, waker: W) -> Result<bool, Self::SendCommandError>
-    where
-        D: CommandParameter,
-        W: Into<Option<Waker>>;
-
-    /// Receive an event from the Bluetooth controller
-    ///
-    /// This is implemented as a non-blocking operation, the host has either received the event or
-    /// the event hasn't been send sent (or will never be sent) to the host. The function will
-    /// return the data associated with the event (or an error if it occurs) if the event has been
-    /// received or it will return None.
-    ///
-    /// If event is 'None' then the next event received by the host should be returned.
-    ///
-    /// If None is returned, the waker will be used to indicate that the event was received. But to
-    /// get the events data, the exact same event and matcher reference (the matcher may be cloned)
-    /// must be used to guarantee that the event data is returned.
-    ///
-    /// The function requires a
-    /// [`Waker`](https://doc.rust-lang.org/core/task/struct.Waker.html) object because
-    /// it will call wake when the event has been received after the event is received. At which
-    /// point the function must be called again to receive the EventData.
-    fn receive_event<P>(
+    fn try_send<C, A, S, E, I>(
         &self,
-        event: Option<events::Events>,
         waker: &Waker,
-        matcher: Pin<Arc<P>>,
-    ) -> Option<Result<events::EventsData, Self::ReceiveEventError>>
+        data: &HciData<C, A, S, E, I>,
+    ) -> Result<bool, Self::SendCommandError>
+    where
+        C: CommandParameter;
+
+    /// Receive from the Bluetooth controller
+    fn try_receive<P>(&self, waker: &Waker) -> Option<Result<HciData, Self::ReceiveEventError>>
     where
         P: EventMatcher + Send + Sync + 'static;
 }
@@ -610,15 +931,15 @@ pub trait HciACLDataInterface {
 
 enum SendCommandError<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
-    Send(<I as HostControllerInterface>::SendCommandError),
-    Recv(<I as HostControllerInterface>::ReceiveEventError),
+    Send(<I as PlatformInterface>::SendCommandError),
+    Recv(<I as PlatformInterface>::ReceiveEventError),
 }
 
 impl<I> Debug for SendCommandError<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -630,7 +951,7 @@ where
 
 impl<I> Display for SendCommandError<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -642,7 +963,7 @@ where
 
 struct CommandFutureReturn<'a, I, CD, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     CD: CommandParameter,
     P: EventMatcher + Send + Sync + 'static,
 {
@@ -658,7 +979,7 @@ where
 
 impl<'a, I, CD, P> CommandFutureReturn<'a, I, CD, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     CD: CommandParameter + Unpin,
     P: EventMatcher + Send + Sync + 'static,
 {
@@ -688,7 +1009,7 @@ where
 
 struct EventReturnFuture<'a, I, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     P: EventMatcher + Sync + Send + 'static,
 {
     interface: &'a I,
@@ -698,7 +1019,7 @@ where
 
 impl<'a, I, P> Future for EventReturnFuture<'a, I, P>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
     P: EventMatcher + Send + Sync + 'static,
 {
     type Output = Result<events::EventsData, I::ReceiveEventError>;
@@ -847,7 +1168,7 @@ impl<I, M: Default> From<I> for HostInterface<I, M> {
 #[bo_tie_macros::host_interface]
 impl<I> HostInterface<I>
 where
-    I: HostControllerInterface,
+    I: PlatformInterface,
 {
     /// Send a command to the controller
     ///
@@ -932,7 +1253,7 @@ where
     pub fn wait_for_event<'a, E>(
         &'a self,
         event: E,
-    ) -> impl Future<Output = Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError>> + 'a
+    ) -> impl Future<Output = Result<events::EventsData, <I as PlatformInterface>::ReceiveEventError>> + 'a
     where
         E: Into<Option<events::Events>>,
     {
@@ -983,7 +1304,7 @@ where
         &'a self,
         event: events::Events,
         matcher: P,
-    ) -> impl Future<Output = Result<events::EventsData, <I as HostControllerInterface>::ReceiveEventError>> + 'a
+    ) -> impl Future<Output = Result<events::EventsData, <I as PlatformInterface>::ReceiveEventError>> + 'a
     where
         P: EventMatcher + Send + Sync + 'static,
     {
@@ -1068,7 +1389,7 @@ where
 #[cfg_attr(docsrs, doc(cfg(feature = "flow-ctrl")))]
 impl<I, M> HostInterface<I, M>
 where
-    I: HciACLDataInterface + HostControllerInterface + Send + Sync + Unpin + 'static,
+    I: HciACLDataInterface + PlatformInterface + Send + Sync + Unpin + 'static,
     M: for<'a> AsyncLock<'a> + 'static,
 {
     /// Create a new HostInterface
@@ -1236,13 +1557,13 @@ macro_rules! impl_returned_future {
     ($return_type: ty, $event:path, $data:pat, $error:ty, $to_do: block) => {
         struct ReturnedFuture<'a, I, CD, P>(CommandFutureReturn<'a, I, CD, P>)
         where
-            I: HostControllerInterface,
+            I: PlatformInterface,
             CD: CommandParameter + Unpin,
             P: EventMatcher + Send + Sync + 'static;
 
         impl<'a, I, CD, P> core::future::Future for ReturnedFuture<'a, I, CD, P>
         where
-            I: HostControllerInterface,
+            I: PlatformInterface,
             CD: CommandParameter + Unpin,
             P: EventMatcher + Send + Sync + 'static,
         {

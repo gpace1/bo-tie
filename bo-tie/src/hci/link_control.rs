@@ -30,7 +30,7 @@ pub mod read_remote_version_information {
         handle: ConnectionHandle,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = CmdParameter {
             _connection_handle: handle.get_raw_handle(),
@@ -129,7 +129,7 @@ pub mod disconnect {
         dp: DisconnectParameters,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(dp, events::Events::CommandStatus))
     }

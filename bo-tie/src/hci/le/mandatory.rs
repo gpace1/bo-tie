@@ -34,7 +34,7 @@ macro_rules! add_remove_white_list_setup {
             addr: crate::BluetoothDeviceAddress,
         ) -> impl core::future::Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
         where
-            T: HostControllerInterface,
+            T: PlatformInterface,
         {
             let parameter = CommandPrameter {
                 _address_type: at.to_value(),
@@ -85,7 +85,7 @@ pub mod clear_white_list {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -176,7 +176,7 @@ pub mod read_buffer_size {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<BufferSize, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -253,7 +253,7 @@ pub mod read_local_supported_features {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<ReturnedEnabledLeFeaturesItr, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -440,7 +440,7 @@ pub mod read_supported_states {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<CurrentStatesAndRoles, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -513,7 +513,7 @@ pub mod read_white_list_size {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<WhiteListSize, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -593,7 +593,7 @@ pub mod set_event_mask {
     /// Set the enabled events on a device
     ///
     /// ```rust
-    /// # use bo_tie::hci::{HostControllerInterface, CommandParameter, events, EventMatcher};
+    /// # use bo_tie::hci::{PlatformInterface, CommandParameter, events, EventMatcher};
     /// # use std::task::Waker;
     /// # use std::time::Duration;
     /// # use std::pin::Pin;
@@ -612,7 +612,7 @@ pub mod set_event_mask {
     /// #     }
     /// # }
     /// #
-    /// # impl HostControllerInterface for StubHi {
+    /// # impl PlatformInterface for StubHi {
     /// #     type SendCommandError = &'static str;
     /// #     type ReceiveEventError = ReceiveError;
     /// #
@@ -650,7 +650,7 @@ pub mod set_event_mask {
         enabled_events: &[LEMeta],
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let command_pram = CmdParameter {
             _mask: LEMeta::build_mask(enabled_events),
@@ -721,7 +721,7 @@ pub mod test_end {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }

@@ -66,7 +66,7 @@ pub mod read_advertising_channel_tx_power {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<TxPower, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -133,7 +133,7 @@ pub mod transmitter_test {
         payload_length: u8,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameters = CmdParameter {
             _tx_channel: channel.get_val(),
@@ -237,7 +237,7 @@ pub mod set_advertising_data {
         adv_data: A,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
         A: Into<Option<AdvertisingData>>,
     {
         if let Some(data) = adv_data.into() {
@@ -282,7 +282,7 @@ pub mod set_advertising_enable {
         enable: bool,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter { enable }, events::Events::CommandComplete))
     }
@@ -488,7 +488,7 @@ pub mod set_advertising_parameters {
         params: AdvertisingParameters,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = CmdParameter {
             _advertising_interval_min: params.minimum_advertising_interval.get_raw_val(),
@@ -540,7 +540,7 @@ pub mod set_random_address {
         rand_addr: crate::BluetoothDeviceAddress,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = Parameter {
             _rand_address: rand_addr,

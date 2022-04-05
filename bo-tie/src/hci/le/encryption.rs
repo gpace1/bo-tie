@@ -71,7 +71,7 @@ pub mod encrypt {
         plain_text: [u8; 16],
     ) -> impl Future<Output = Result<Cypher, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = Parameter {
             _key: key.to_be_bytes(),
@@ -161,7 +161,7 @@ pub mod long_term_key_request_reply {
         long_term_key: u128,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = Parameter {
             handle: connection_handle,
@@ -242,7 +242,7 @@ pub mod long_term_key_request_negative_reply {
         connection_handle: ConnectionHandle,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         let parameter = Parameter {
             handle: connection_handle,
@@ -315,7 +315,7 @@ pub mod rand {
         hci: &'a HostInterface<T>,
     ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
     }
@@ -377,7 +377,7 @@ pub mod enable_encryption {
         parameter: Parameter,
     ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
     where
-        T: HostControllerInterface,
+        T: PlatformInterface,
     {
         ReturnedFuture(hci.send_command(parameter, events::Events::CommandStatus))
     }
