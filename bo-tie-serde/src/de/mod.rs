@@ -3,13 +3,373 @@ use serde::de::{DeserializeSeed, IntoDeserializer, Visitor};
 
 /// Hints for deserializing
 ///
-/// Many structures defined within the Bluetooth Speceification use information within the protocol
+/// Many structures defined within the Bluetooth Specification use information within the protocol
 /// headers to forgo needed serialization meta information.
 pub trait DeserializerHint {
+    /// Clear all hints
+    ///
+    /// This method should be called in every `deserialize_*` method once all relevant hints have
+    /// been acquired by the deserialize method.
+    ///
+    /// This is deliberately unimplemented to force the implementation. Hints left uncleared can be
+    /// difficult to debug where they were set, so clearing all unused hints is key to easier
+    /// deserialization.
+    fn clear_hints(&mut self);
+
     /// Set the length of the next unsized type
     ///
-    /// Set the length to be used for the next string, byte array, or sequence.
-    fn set_next_len(&mut self, len: usize);
+    /// Set the length to be used for the next string, byte array, sequence, or map. This hint is
+    /// used whenever the length for these types is serialized outside the normal length meta data
+    /// serialization placement.
+    fn hint_next_len(&mut self, len: usize) {
+        let _ = len;
+    }
+}
+
+pub trait HintedDeserialize<'de>: Sized {
+    fn hinted_deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: HintedDeserializer<'de> + DeserializerHint;
+}
+
+pub trait HintedDeserializeSeed<'de>: Sized {
+    type Value;
+
+    fn hinted_deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: HintedDeserializer<'de> + DeserializerHint;
+}
+
+pub trait HintedDeserializer<'de>: serde::de::Deserializer<'de> + DeserializerHint {
+    fn hinted_deserialize_any<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_any(self, visitor)
+    }
+
+    fn hinted_deserialize_bool<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_bool(self, visitor)
+    }
+
+    fn hinted_deserialize_i8<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_i8(self, visitor)
+    }
+
+    fn hinted_deserialize_i16<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_i16(self, visitor)
+    }
+
+    fn hinted_deserialize_i32<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_i32(self, visitor)
+    }
+
+    fn hinted_deserialize_i128<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_i128(self, visitor)
+    }
+
+    fn hinted_deserialize_u8<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_u8(self, visitor)
+    }
+
+    fn hinted_deserialize_u16<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_u16(self, visitor)
+    }
+
+    fn hinted_deserialize_u32<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_u32(self, visitor)
+    }
+
+    fn hinted_deserialize_u64<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_u64(self, visitor)
+    }
+
+    fn hinted_deserialize_u128<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_u128(self, visitor)
+    }
+
+    fn hinted_deserialize_f32<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_f32(self, visitor)
+    }
+
+    fn hinted_deserialize_f64<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_f64(self, visitor)
+    }
+
+    fn hinted_deserialize_char<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_char(self, visitor)
+    }
+
+    fn hinted_deserialize_str<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_str(self, visitor)
+    }
+
+    fn hinted_deserialize_string<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_string(self, visitor)
+    }
+
+    fn hinted_deserialize_bytes<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_bytes(self, visitor)
+    }
+
+    fn hinted_deserialize_byte_buf<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_byte_buf(self, visitor)
+    }
+
+    fn hinted_deserialize_option<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_option(self, visitor)
+    }
+
+    fn hinted_deserialize_unit<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_unit(self, visitor)
+    }
+
+    fn hinted_deserialize_unit_struct<V>(mut self, name: &'static str, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_unit_struct(self, name, visitor)
+    }
+
+    fn hinted_deserialize_newtype_struct<V>(mut self, name: &'static str, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_newtype_struct(self, name, visitor)
+    }
+
+    fn hinted_deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_seq(self, visitor)
+    }
+
+    fn hinted_deserialize_tuple<V>(mut self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_tuple(self, len, visitor)
+    }
+
+    fn hinted_deserialize_tuple_struct<V>(
+        mut self,
+        name: &'static str,
+        len: usize,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_tuple_struct(self, name, len, visitor)
+    }
+
+    fn hinted_deserialize_map<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_map(self, visitor)
+    }
+
+    fn hinted_deserialize_struct<V>(
+        mut self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_struct(self, name, fields, visitor)
+    }
+
+    fn hinted_deserialize_enum<V>(
+        mut self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_enum(self, name, variants, visitor)
+    }
+
+    fn hinted_deserialize_identifier<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_identifier(self, visitor)
+    }
+
+    fn hinted_deserialize_ignored_any<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: Visitor<'de>,
+    {
+        self.clear_hints();
+
+        serde::de::Deserializer::deserialize_ignored_any(self, visitor)
+    }
+}
+
+pub trait HintedVisitor<'de>: Visitor<'de> {
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: HintedDeserializer<'de>,
+    {
+        let _ = deserializer;
+        Err(serde::de::Error::invalid_type(serde::de::Unexpected::Option, &self))
+    }
+
+    fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: HintedDeserializer<'de>,
+    {
+        let _ = deserializer;
+        Err(serde::de::Error::invalid_type(
+            serde::de::Unexpected::NewtypeStruct,
+            &self,
+        ))
+    }
+
+    fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: DeserializerHint + serde::de::SeqAccess<'de>,
+    {
+        let _ = seq;
+        Err(serde::de::Error::invalid_type(serde::de::Unexpected::Seq, &self))
+    }
+
+    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+    where
+        A: DeserializerHint + serde::de::MapAccess<'de>,
+    {
+        let _ = map;
+        Err(serde::de::Error::invalid_type(serde::de::Unexpected::Map, &self))
+    }
+
+    fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+    where
+        A: DeserializerHint + serde::de::EnumAccess<'de>,
+    {
+        let _ = data;
+        Err(serde::de::Error::invalid_type(serde::de::Unexpected::Enum, &self))
+    }
 }
 
 struct Deserializer<'de> {
@@ -20,6 +380,16 @@ struct Deserializer<'de> {
 impl<'de> From<&'de [u8]> for Deserializer<'de> {
     fn from(ser: &'de [u8]) -> Self {
         Deserializer { ser, next_len: None }
+    }
+}
+
+impl DeserializerHint for &mut Deserializer<'_> {
+    fn clear_hints(&mut self) {
+        self.next_len = None;
+    }
+
+    fn hint_next_len(&mut self, len: usize) {
+        self.next_len = Some(len);
     }
 }
 
@@ -227,10 +597,9 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        let len = self.take_next_len().unwrap_or(
-            self.try_take_varnum_usize::<varnum::StringLen>()
-                .ok_or(Self::Error::ExpectedStrUTF8)?,
-        );
+        let len = self
+            .try_take_varnum_usize::<varnum::StringLen>()
+            .ok_or(Self::Error::ExpectedStrUTF8)?;
 
         let bytes = self.try_take(len).ok_or(Self::Error::ExpectedStrUTF8)?;
 
@@ -243,17 +612,16 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_str(visitor)
+        serde::de::Deserializer::deserialize_str(self, visitor)
     }
 
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        let len = self.take_next_len().unwrap_or(
-            self.try_take_varnum_usize::<varnum::BytesLen>()
-                .ok_or(Self::Error::ExpectedArray("u8"))?,
-        );
+        let len = self
+            .try_take_varnum_usize::<varnum::BytesLen>()
+            .ok_or(Self::Error::ExpectedArray("u8"))?;
 
         let bytes = self.try_take(len).ok_or(Self::Error::ExpectedArray("u8"))?;
 
@@ -264,7 +632,7 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_bytes(visitor)
+        serde::de::Deserializer::deserialize_bytes(self, visitor)
     }
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -289,7 +657,7 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_unit(visitor)
+        serde::de::Deserializer::deserialize_unit(self, visitor)
     }
 
     fn deserialize_newtype_struct<V>(self, _name: &'static str, visitor: V) -> Result<V::Value, Self::Error>
@@ -303,10 +671,9 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        let len = self.take_next_len().unwrap_or(
-            self.try_take_varnum_usize::<varnum::SequenceLen>()
-                .ok_or(Self::Error::ExpectedSeq)?,
-        );
+        let len = self
+            .try_take_varnum_usize::<varnum::SequenceLen>()
+            .ok_or(Self::Error::ExpectedSeq)?;
 
         let seq_access = DeserializeSeq {
             len,
@@ -332,7 +699,7 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_tuple(len, visitor)
+        serde::de::Deserializer::deserialize_tuple(self, len, visitor)
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -359,7 +726,7 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_tuple(fields.len(), visitor)
+        serde::de::Deserializer::deserialize_tuple(self, fields.len(), visitor)
     }
 
     fn deserialize_enum<V>(
@@ -393,6 +760,95 @@ impl<'a, 'de: 'a> serde::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 }
 
+impl<'a, 'de: 'a> HintedDeserializer<'de> for &'a mut Deserializer<'de> {
+    fn hinted_deserialize_str<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        let len = self.take_next_len().unwrap_or(
+            self.try_take_varnum_usize::<varnum::StringLen>()
+                .ok_or(Self::Error::ExpectedStrUTF8)?,
+        );
+
+        self.clear_hints();
+
+        let bytes = self.try_take(len).ok_or(Self::Error::ExpectedStrUTF8)?;
+
+        let str = core::str::from_utf8(bytes).map_err(|_| Self::Error::ExpectedStrUTF8)?;
+
+        visitor.visit_borrowed_str(str)
+    }
+
+    fn hinted_deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        HintedDeserializer::hinted_deserialize_str(self, visitor)
+    }
+
+    fn hinted_deserialize_bytes<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        let len = self.take_next_len().unwrap_or(
+            self.try_take_varnum_usize::<varnum::BytesLen>()
+                .ok_or(Self::Error::ExpectedArray("u8"))?,
+        );
+
+        self.clear_hints();
+
+        let bytes = self.try_take(len).ok_or(Self::Error::ExpectedArray("u8"))?;
+
+        visitor.visit_borrowed_bytes(bytes)
+    }
+
+    fn hinted_deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        HintedDeserializer::hinted_deserialize_bytes(self, visitor)
+    }
+
+    fn hinted_deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        let len = self.take_next_len().unwrap_or(
+            self.try_take_varnum_usize::<varnum::SequenceLen>()
+                .ok_or(Self::Error::ExpectedSeq)?,
+        );
+
+        self.clear_hints();
+
+        let seq_access = DeserializeSeq {
+            len,
+            deserializer: self,
+        };
+
+        HintedVisitor::visit_seq(visitor, seq_access)
+    }
+
+    fn hinted_deserialize_map<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: HintedVisitor<'de>,
+    {
+        let len = self.take_next_len().unwrap_or(
+            self.try_take_varnum_usize::<varnum::MapLen>()
+                .ok_or(Self::Error::ExpectedMap)?,
+        );
+
+        self.clear_hints();
+
+        HintedVisitor::visit_map(
+            visitor,
+            DeserializeMap {
+                len,
+                deserializer: self,
+            },
+        )
+    }
+}
+
 struct DeserializeSeq<'a, 'de> {
     len: usize,
     deserializer: &'a mut Deserializer<'de>,
@@ -417,6 +873,16 @@ impl<'a, 'de: 'a> serde::de::SeqAccess<'de> for DeserializeSeq<'a, 'de> {
 
     fn size_hint(&self) -> Option<usize> {
         Some(self.len)
+    }
+}
+
+impl DeserializerHint for DeserializeSeq<'_, '_> {
+    fn clear_hints(&mut self) {
+        self.deserializer.clear_hints()
+    }
+
+    fn hint_next_len(&mut self, len: usize) {
+        self.deserializer.hint_next_len(len)
     }
 }
 
@@ -450,6 +916,16 @@ impl<'a, 'de: 'a> serde::de::MapAccess<'de> for DeserializeMap<'a, 'de> {
 
     fn size_hint(&self) -> Option<usize> {
         Some(self.len)
+    }
+}
+
+impl DeserializerHint for DeserializeMap<'_, '_> {
+    fn clear_hints(&mut self) {
+        self.deserializer.clear_hints()
+    }
+
+    fn hint_next_len(&mut self, len: usize) {
+        self.deserializer.hint_next_len(len)
     }
 }
 
@@ -503,11 +979,11 @@ impl<'a, 'de: 'a> serde::de::VariantAccess<'de> for &'a mut Deserializer<'de> {
 /// Deserialize the input `s` to type `T`.
 pub fn deserialize<'de, T>(s: &'de [u8]) -> Result<T, crate::error::Error>
 where
-    T: serde::Deserialize<'de>,
+    T: HintedDeserialize<'de>,
 {
     let mut deserializer = Deserializer::from(s);
 
-    T::deserialize(&mut deserializer)
+    T::hinted_deserialize(&mut deserializer)
 }
 
 /// Deserialize with a seed to type `T::Value`
@@ -515,9 +991,9 @@ where
 /// Deserialize the input `s` using input `seed` to type `T::Value`.
 pub fn deserialize_seeded<'de, T>(s: &'de [u8], seed: T) -> Result<T::Value, crate::error::Error>
 where
-    T: serde::de::DeserializeSeed<'de>,
+    T: HintedDeserializeSeed<'de>,
 {
     let mut deserializer = Deserializer::from(s);
 
-    seed.deserialize(&mut deserializer)
+    seed.hinted_deserialize(&mut deserializer)
 }

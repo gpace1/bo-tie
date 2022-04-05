@@ -12,6 +12,7 @@ mod flow_ctrl;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use bo_tie_serde::SerializerHint;
 use core::fmt::Debug;
 use core::fmt::Display;
 use core::future::Future;
@@ -199,15 +200,15 @@ impl Display for HciACLPacketConvertError {
 /// only be a primary controller handle (which is generated with a *LE Connection Complete* or
 /// *LE Enhanced Connection Complete* event for LE-U).
 #[derive(Debug)]
-pub struct HciACLData {
+pub struct HciACLData<'a> {
     connection_handle: common::ConnectionHandle,
     packet_boundary_flag: ACLPacketBoundary,
     broadcast_flag: ACLBroadcastFlag,
     /// This is always a L2CAP ACL packet
-    payload: Vec<u8>,
+    payload: &'a [u8],
 }
 
-impl HciACLData {
+impl<'a> HciACLData<'a> {
     /// The size of the header of a HCI ACL data packet
     pub const HEADER_SIZE: usize = 4;
 
@@ -224,7 +225,7 @@ impl HciACLData {
         connection_handle: common::ConnectionHandle,
         packet_boundary_flag: ACLPacketBoundary,
         broadcast_flag: ACLBroadcastFlag,
-        payload: Vec<u8>,
+        payload: &'a [u8],
     ) -> Self {
         assert!(payload.len() <= <u16>::MAX.into());
 
@@ -254,7 +255,8 @@ impl HciACLData {
 
     /// Convert the HciACLData into a raw packet
     ///
-    /// This will convert HciACLData into a packet that can be sent between the host and controller.
+    /// This will convert HciACLDataOwned into a packet of bytes that can be sent between the host
+    /// and controller.
     pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
         let mut v = alloc::vec::Vec::with_capacity(self.payload.len() + 4);
 
@@ -275,7 +277,7 @@ impl HciACLData {
     ///
     /// A `HciACLData` is created if the packet is in the correct HCI ACL data packet format. If
     /// not, then an error is returned.
-    pub fn from_packet(packet: &[u8]) -> Result<Self, HciACLPacketConvertError> {
+    pub fn from_packet(packet: &'a [u8]) -> Result<Self, HciACLPacketConvertError> {
         const HEADER_SIZE: usize = 4;
 
         if packet.len() >= HEADER_SIZE {
@@ -299,7 +301,7 @@ impl HciACLData {
                 connection_handle,
                 packet_boundary_flag,
                 broadcast_flag,
-                payload: packet[HEADER_SIZE..(HEADER_SIZE + data_length)].to_vec(),
+                payload: &packet[HEADER_SIZE..(HEADER_SIZE + data_length)],
             })
         } else {
             Err(HciACLPacketConvertError::PacketTooSmall)
@@ -308,13 +310,188 @@ impl HciACLData {
 
     /// Convert into a
     /// [`ACLDataFragment`](crate::l2cap::ACLDataFragment)
-    pub fn into_acl_fragment(self) -> crate::l2cap::BasicFrameFragment {
+    pub fn into_acl_fragment(self) -> crate::l2cap::BasicFrameFragment<'a> {
         use crate::l2cap::BasicFrameFragment;
 
         match self.packet_boundary_flag {
             ACLPacketBoundary::ContinuingFragment => BasicFrameFragment::new(false, self.payload),
             _ => BasicFrameFragment::new(true, self.payload),
         }
+    }
+}
+
+impl bo_tie_serde::HintedSerialize for HciACLData<'_> {
+    fn hinted_serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: bo_tie_serde::HintedSerializer,
+        S::SerializeSeq: SerializerHint,
+        S::SerializeTuple: SerializerHint,
+        S::SerializeTupleStruct: SerializerHint,
+        S::SerializeTupleVariant: SerializerHint,
+        S::SerializeMap: SerializerHint,
+        S::SerializeStruct: SerializerHint,
+        S::SerializeStructVariant: SerializerHint,
+    {
+        use core::convert::TryFrom;
+        use serde::ser::{Error, SerializeStruct};
+
+        let mut ser_struct = serializer.hinted_serialize_struct("HCI ACL Data Packet", 3)?;
+
+        let first_2_bytes = self.connection_handle.get_raw_handle()
+            | self.packet_boundary_flag.get_shifted_val()
+            | self.broadcast_flag.get_shifted_val();
+
+        ser_struct.serialize_field("handle and flags", &first_2_bytes)?;
+
+        let len: u16 = TryFrom::try_from(self.payload.len()).or(Err(S::Error::custom(format_args!(
+            "Length of HCI ACL data packet payload is larger than {}",
+            u16::MAX
+        ))))?;
+
+        ser_struct.serialize_field("data length", &len)?;
+
+        ser_struct.set_skip_len_hint();
+
+        ser_struct.serialize_field("data", &self.payload)?;
+
+        ser_struct.end()
+    }
+}
+
+impl<'de> bo_tie_serde::HintedDeserialize<'de> for HciACLData<'de> {
+    fn hinted_deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: bo_tie_serde::HintedDeserializer<'de> + bo_tie_serde::DeserializerHint,
+    {
+        enum Field {
+            HandleAndFlags,
+            DataLength,
+            Data,
+        }
+
+        impl<'de> serde::de::Deserialize<'de> for Field {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct FieldVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for FieldVisitor {
+                    type Value = Field;
+
+                    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                        write!(formatter, "A string identifier")
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Field, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "handle and flags" => Ok(Field::HandleAndFlags),
+                            "data length" => Ok(Field::DataLength),
+                            "data" => Ok(Field::Data),
+                            _ => Err(E::unknown_field(value, &["handle and flags", "data length", "data"])),
+                        }
+                    }
+                }
+
+                deserializer.deserialize_identifier(FieldVisitor)
+            }
+        }
+
+        struct Visitor;
+
+        impl Visitor {
+            fn try_split_handle_and_flags<E>(
+                &self,
+                handle_and_flags: u16,
+            ) -> Result<(common::ConnectionHandle, ACLPacketBoundary, ACLBroadcastFlag), E>
+            where
+                E: serde::de::Error,
+            {
+                let connection_handle = common::ConnectionHandle::try_from(handle_and_flags & 0xFFF)
+                    .map_err(|e| serde::de::Error::custom(format_args!("invalid connection handle {}", e)))?;
+
+                let packet_boundary_flag = ACLPacketBoundary::from_shifted_val(handle_and_flags);
+
+                let broadcast_flag = ACLBroadcastFlag::try_from_shifted_val(handle_and_flags)
+                    .map_err(|_| serde::de::Error::custom("invalid broadcast flag"))?;
+
+                Ok((connection_handle, packet_boundary_flag, broadcast_flag))
+            }
+        }
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = HciACLData<'de>;
+
+            fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+                formatter.write_str("struct HciACLData")
+            }
+        }
+
+        impl<'de> bo_tie_serde::HintedVisitor<'de> for Visitor {
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: bo_tie_serde::DeserializerHint + serde::de::SeqAccess<'de>,
+            {
+                let handle_and_flags: u16 = seq.next_element()?.ok_or(serde::de::Error::invalid_length(0, &self))?;
+
+                let data_len: u16 = seq.next_element()?.ok_or(serde::de::Error::invalid_length(1, &self))?;
+
+                seq.hint_next_len(data_len.into());
+
+                let payload: &[u8] = seq.next_element()?.ok_or(serde::de::Error::invalid_length(2, &self))?;
+
+                let (connection_handle, packet_boundary_flag, broadcast_flag) =
+                    self.try_split_handle_and_flags(handle_and_flags)?;
+
+                Ok(HciACLData {
+                    connection_handle,
+                    packet_boundary_flag,
+                    broadcast_flag,
+                    payload,
+                })
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: bo_tie_serde::DeserializerHint + serde::de::MapAccess<'de>,
+            {
+                let mut handle_and_flags: Option<u16> = None;
+                let mut data_len: Option<u16> = None;
+                let mut data: Option<&[u8]> = None;
+
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::HandleAndFlags => handle_and_flags = Some(map.next_value()?),
+                        Field::DataLength => data_len = Some(map.next_value()?),
+                        Field::Data => {
+                            let len = data_len.ok_or(serde::de::Error::missing_field("data length"))?;
+
+                            map.hint_next_len(len.into());
+
+                            data = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let (connection_handle, packet_boundary_flag, broadcast_flag) = self.try_split_handle_and_flags(
+                    handle_and_flags.ok_or(serde::de::Error::missing_field("handle and flags"))?,
+                )?;
+
+                let payload = data.ok_or(serde::de::Error::missing_field("data"))?;
+
+                Ok(HciACLData {
+                    connection_handle,
+                    packet_boundary_flag,
+                    broadcast_flag,
+                    payload,
+                })
+            }
+        }
+
+        deserializer.deserialize_struct("HciACLData", &["handle and flags", "data length", "data"], Visitor)
     }
 }
 

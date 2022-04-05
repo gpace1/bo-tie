@@ -147,54 +147,6 @@ impl<M> HciDataPacketFlowManager<M> {
         self.max_packet_payload_size - crate::l2cap::BasicInfoFrame::HEADER_SIZE
     }
 
-    /// Non-flush-able data fragmentation
-    ///
-    /// This converts HCI ACL data whose payload is larger then the maximum payload size that the
-    /// controller can handle into fragments that the controller can handle. If 'data' doesn't need
-    /// to be fragmented, then it just returned as an Error.
-    ///
-    /// # Panic
-    /// If data has a packet boundary flag indicating a complete L2CAP PDU and the payload is larger
-    /// then the controller's accepted payload size, this function produces a panic.
-    fn fragment(
-        &self,
-        mtu: usize,
-        data: &BasicInfoFrame,
-        connection_handle: ConnectionHandle,
-    ) -> Result<alloc::vec::Vec<HciACLData>, HciACLData> {
-        if data.get_payload().len() > mtu {
-            let mut first_packet = true;
-
-            let fragments = data
-                .into_raw_data()
-                .chunks(mtu)
-                .map(|chunk| {
-                    HciACLData::new(
-                        connection_handle,
-                        if first_packet {
-                            first_packet = false;
-
-                            ACLPacketBoundary::FirstNonFlushable
-                        } else {
-                            ACLPacketBoundary::ContinuingFragment
-                        },
-                        ACLBroadcastFlag::NoBroadcast,
-                        chunk.to_vec(),
-                    )
-                })
-                .collect();
-
-            Ok(fragments)
-        } else {
-            Err(HciACLData::new(
-                connection_handle,
-                ACLPacketBoundary::FirstNonFlushable,
-                ACLBroadcastFlag::NoBroadcast,
-                data.into_raw_data(),
-            ))
-        }
-    }
-
     /// Set the waker from the current context
     ///
     /// This function is about as questionably safe as it could possibly be. It uses a future
@@ -232,10 +184,10 @@ impl<M> HciDataPacketFlowManager<M> {
     /// # WARNING
     /// This function **must** be called within the same context as the method `set_waker`. This
     /// function relies on the waker set by `set_waker` to continue polling.
-    async fn wait_for_controller<I, D>(&self, interface: &I, data: D) -> Result<(), FlowControllerError<I>>
+    async fn wait_for_controller<'a, I, D>(&self, interface: &I, data: D) -> Result<(), FlowControllerError<I>>
     where
         I: HciACLDataInterface,
-        D: core::iter::IntoIterator<Item = HciACLData>,
+        D: core::iter::IntoIterator<Item = HciACLData<'a>>,
     {
         /// A future that returns Ready when one HCI data packet can be sent to the controller.
         ///
@@ -276,9 +228,7 @@ impl<M> HciDataPacketFlowManager<M> {
 
         Ok(())
     }
-}
 
-impl<M> HciDataPacketFlowManager<M> {
     /// Initialize the HCI data packet flow manager for LE data.
     ///
     /// This performs a series of steps to get the information from the controller and process the
@@ -404,57 +354,52 @@ impl<M> HciDataPacketFlowManager<M> {
         I: HciACLDataInterface,
         M: for<'a> AsyncLock<'a>,
     {
-        match self.fragment(mtu, &data, connection_handle) {
-            Ok(vec_data) => {
-                // Fragmented sending requires exclusive access to the HCI interface
-                let _lock = AsyncLock::lock(&self.sender_lock).await;
+        let mut first_packet = true;
 
-                self.set_waker().await;
+        let l2cap_data = data.into_raw_data();
 
-                let buffer_used_space = self.controller_buffer_info.used_space.load(Ordering::SeqCst);
+        let mut fragments = l2cap_data
+            .chunks(mtu)
+            .map(|chunk| {
+                HciACLData::new(
+                    connection_handle,
+                    if first_packet {
+                        first_packet = false;
 
-                if self.controller_buffer_size > (vec_data.len() + buffer_used_space) {
-                    self.controller_buffer_info
-                        .used_space
-                        .fetch_add(vec_data.len(), Ordering::Acquire);
+                        ACLPacketBoundary::FirstNonFlushable
+                    } else {
+                        ACLPacketBoundary::ContinuingFragment
+                    },
+                    ACLBroadcastFlag::NoBroadcast,
+                    chunk,
+                )
+            })
+            .peekable();
 
-                    vec_data
-                        .into_iter()
-                        .try_for_each(|data| interface.send(data).map(|_| ()))
-                } else {
-                    let send_amount = self
-                        .controller_buffer_size
-                        .checked_sub(buffer_used_space)
-                        .unwrap_or_default();
+        let _lock = self.sender_lock.lock().await;
 
-                    self.controller_buffer_info
-                        .used_space
-                        .fetch_add(send_amount, Ordering::Acquire);
+        self.set_waker().await;
 
-                    let mut data_itr = vec_data.into_iter();
+        let buffer_used_space = self.controller_buffer_info.used_space.load(Ordering::SeqCst);
 
-                    data_itr
-                        .by_ref()
-                        .enumerate()
-                        .take_while(|(i, _)| i < &send_amount)
-                        .try_for_each(|(_, data)| interface.send(data).map(|_| ()))?;
+        let send_amount = self
+            .controller_buffer_size
+            .checked_sub(buffer_used_space)
+            .unwrap_or_default();
 
-                    self.wait_for_controller(interface, data_itr).await
-                }
-            }
-            Err(single_data) => {
-                let _lock = self.sender_lock.lock().await;
+        self.controller_buffer_info
+            .used_space
+            .fetch_add(send_amount, Ordering::Acquire);
 
-                self.set_waker().await;
+        (&mut fragments)
+            .enumerate()
+            .take_while(|(i, _)| i < &send_amount)
+            .try_for_each(|(_, data)| interface.send(data).map(|_| ()))?;
 
-                let buffer_used_space = self.controller_buffer_info.used_space.load(Ordering::SeqCst);
-
-                if self.controller_buffer_size < buffer_used_space {
-                    interface.send(single_data).map(|_| ())
-                } else {
-                    self.wait_for_controller(interface, Some(single_data)).await
-                }
-            }
+        if let Some(_) = fragments.peek() {
+            self.wait_for_controller(interface, fragments).await
+        } else {
+            Ok(())
         }
     }
 }

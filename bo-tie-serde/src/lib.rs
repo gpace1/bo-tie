@@ -14,9 +14,12 @@ mod error;
 mod ser;
 mod varnum;
 
-pub use de::{deserialize, deserialize_seeded};
+pub use de::{
+    deserialize, deserialize_seeded, DeserializerHint, HintedDeserialize, HintedDeserializeSeed, HintedDeserializer,
+    HintedVisitor,
+};
 use error::Error;
-pub use ser::{serialize, serialize_sized};
+pub use ser::{serialize, serialize_sized, HintedSerialize, HintedSerializer, SerializerHint};
 
 /// A static buffer
 ///

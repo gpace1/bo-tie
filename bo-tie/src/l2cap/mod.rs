@@ -403,14 +403,14 @@ impl BasicInfoFrame {
 /// Packets sent between the Master and Slave may be fragmented and need to be combined into a
 /// complete [`ACLData`]. Multiple ACLDataFragments, when in order and complete, can be combined
 /// into a single 'ACLData' through the use of 'FromIterator' for ACLData.
-pub struct BasicFrameFragment {
+pub struct BasicFrameFragment<'a> {
     start_fragment: bool,
-    data: Vec<u8>,
+    data: &'a [u8],
 }
 
-impl BasicFrameFragment {
+impl<'a> BasicFrameFragment<'a> {
     /// Crate a 'ACLDataFragment'
-    pub(crate) fn new(start_fragment: bool, data: Vec<u8>) -> Self {
+    pub(crate) fn new(start_fragment: bool, data: &'a [u8]) -> Self {
         Self { start_fragment, data }
     }
 
@@ -648,18 +648,18 @@ where
                 // The Length field in `fragment` is available, but `fragment` is just the starting
                 // fragment of a L2CAP packet split into multiple fragments.
                 len @ Some(_) => {
-                    self.carryover_fragments.append(&mut fragment.data);
+                    self.carryover_fragments.extend_from_slice(fragment.data);
                     self.length = len;
                 }
 
                 // Length field is unavailable or incomplete, its debatable if this case ever
                 // happens, but `fragment` is definitely not a L2CAP complete packet.
-                None => self.carryover_fragments.append(&mut fragment.data),
+                None => self.carryover_fragments.extend_from_slice(fragment.data),
             }
         } else {
             // `fragment` is a continuing (not starting) fragment of a fragmented L2CAP payload
 
-            self.carryover_fragments.append(&mut fragment.data);
+            self.carryover_fragments.extend_from_slice(fragment.data);
 
             let acl_len = match self.length {
                 None => {

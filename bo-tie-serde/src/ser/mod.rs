@@ -9,28 +9,438 @@ use serde::ser::{
 /// Hints for serializing
 ///
 /// Many structures defined within the Bluetooth Specification use information within the protocol
-/// headers to forgo need serialization meta information.
-///
+/// headers to forgo need serialization meta information. This is used to hint to the deserializer
+/// whether meta data used for deserializing should be skipped.
 pub trait SerializerHint {
-    /// Skip the length of the next unsized type
+    /// Clear all hints
     ///
-    /// Skipping the length works for strings, byte arrays, and sequences. When this hint is set
-    /// the *next* call to `serialize_str`, `serialize_bytes`, `serialize_seq`, or `serialize_map`
-    /// will not serialize a length with the data. This method should only be called just before
-    /// calling one of these methods.
-    fn skip_next_len(&mut self);
+    /// This method should be called in every `serialize_*` method once all relevant hints have
+    /// been acquired by the deserialize method.
+    ///
+    /// This is deliberately unimplemented to force the implementation. Hints left uncleared can be
+    /// difficult to debug where they were set, so clearing all unused hints is key to easier
+    /// serialization.
+    fn clear_hints(&mut self);
+
+    /// Skip serializing the length Meta Data
+    ///
+    /// This hint is used to indicate to the deserializer that the length meta data of a string,
+    /// byte array, sequence, or map does not need to be serialized. This hint only affects the next
+    /// instance of one of those four data types.
+    #[inline]
+    fn set_skip_len_hint(&mut self) {}
+}
+
+pub trait HintedSerialize {
+    fn hinted_serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: HintedSerializer,
+        S::SerializeSeq: SerializerHint,
+        S::SerializeTuple: SerializerHint,
+        S::SerializeTupleStruct: SerializerHint,
+        S::SerializeTupleVariant: SerializerHint,
+        S::SerializeMap: SerializerHint,
+        S::SerializeStruct: SerializerHint,
+        S::SerializeStructVariant: SerializerHint;
+}
+
+/// A serializer
+pub trait HintedSerializer: serde::ser::Serializer + SerializerHint {
+    /// Serialize a bool
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_bool`](serde::ser::Serializer::serialize_bool)
+    fn hinted_serialize_bool(mut self, v: bool) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_bool(self, v)
+    }
+
+    /// Serialize an i8
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_i8`](serde::ser::Serializer::serialize_i8)
+    fn hinted_serialize_i8(mut self, v: i8) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_i8(self, v)
+    }
+
+    /// Serialize an i16
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_i16`](serde::ser::Serializer::serialize_i16)
+    fn hinted_serialize_i16(mut self, v: i16) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_i16(self, v)
+    }
+
+    /// Serialize an i32
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_i32`](serde::ser::Serializer::serialize_i32)
+    fn hinted_serialize_i32(mut self, v: i32) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_i32(self, v)
+    }
+
+    /// Serialize an i64
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_i64`](serde::ser::Serializer::serialize_i64)
+    fn hinted_serialize_i64(mut self, v: i64) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_i64(self, v)
+    }
+
+    /// Serialize an i128
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_i128`](serde::ser::Serializer::serialize_i128)
+    fn hinted_serialize_i128(mut self, v: i128) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_i128(self, v)
+    }
+
+    /// Serialize an u8
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_u8`](serde::ser::Serializer::serialize_u8)
+    fn hinted_serialize_u8(mut self, v: u8) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_u8(self, v)
+    }
+
+    /// Serialize an u16
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_u16`](serde::ser::Serializer::serialize_u16)
+    fn hinted_serialize_u16(mut self, v: u16) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_u16(self, v)
+    }
+
+    /// Serialize an u32
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_u32`](serde::ser::Serializer::serialize_u32)
+    fn hinted_serialize_u32(mut self, v: u32) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_u32(self, v)
+    }
+
+    /// Serialize an u64
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_u64`](serde::ser::Serializer::serialize_u64)
+    fn hinted_serialize_u64(mut self, v: u64) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_u64(self, v)
+    }
+
+    /// Serialize an u128
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_u128`](serde::ser::Serializer::serialize_u128)
+    fn hinted_serialize_u128(mut self, v: u128) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_u128(self, v)
+    }
+
+    /// Serialize an f32
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_f32`](serde::ser::Serializer::serialize_f32)
+    fn hinted_serialize_f32(mut self, v: f32) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_f32(self, v)
+    }
+
+    /// Serialize an f64
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_f64`](serde::ser::Serializer::serialize_f64)
+    fn hinted_serialize_f64(mut self, v: f64) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_f64(self, v)
+    }
+
+    /// Serialize an char
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_char`](serde::ser::Serializer::serialize_char)
+    fn hinted_serialize_char(mut self, v: char) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_char(self, v)
+    }
+
+    /// Serialize an str
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_str`](serde::ser::Serializer::serialize_str)
+    fn hinted_serialize_str(mut self, v: &str) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_str(self, v)
+    }
+
+    /// Serialize an bytes
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_bytes`](serde::ser::Serializer::serialize_bytes)
+    fn hinted_serialize_bytes(mut self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_bytes(self, v)
+    }
+
+    /// Serialize `None`
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_none`](serde::ser::Serializer::serialize_none)
+    fn hinted_serialize_none(mut self) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_none(self)
+    }
+
+    /// Serialize `Some(T)`
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_some`](serde::ser::Serializer::serialize_some)
+    fn hinted_serialize_some<V: ?Sized>(mut self, value: &V) -> Result<Self::Ok, Self::Error>
+    where
+        V: Serialize,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_some(self, value)
+    }
+
+    /// Serialize `()`
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_unit`](serde::ser::Serializer::serialize_unit)
+    fn hinted_serialize_unit(mut self) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_unit(self)
+    }
+
+    /// Serialize a Unit Struct
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_unit_struct`](serde::ser::Serializer::serialize_unit_struct)
+    fn hinted_serialize_unit_struct(mut self, name: &'static str) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_unit_struct(self, name)
+    }
+
+    /// Serialize a Unit Variant
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_unit_variant`](serde::ser::Serializer::serialize_unit_variant)
+    fn hinted_serialize_unit_variant(
+        mut self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+    ) -> Result<Self::Ok, Self::Error> {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_unit_variant(self, name, variant_index, variant)
+    }
+
+    /// Serialize a New Type Struct
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_newtype_struct`](serde::ser::Serializer::serialize_newtype_struct)
+    fn hinted_serialize_newtype_struct<V: ?Sized>(
+        mut self,
+        name: &'static str,
+        value: &V,
+    ) -> Result<Self::Ok, Self::Error>
+    where
+        V: Serialize,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_newtype_struct(self, name, value)
+    }
+
+    /// Serialize a New Type Variant
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_newtype_variant`](serde::ser::Serializer::serialize_newtype_variant)
+    fn hinted_serialize_newtype_variant<V: ?Sized>(
+        mut self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+        value: &V,
+    ) -> Result<Self::Ok, Self::Error>
+    where
+        V: Serialize,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_newtype_variant(self, name, variant_index, variant, value)
+    }
+
+    /// Serialize a Sequence
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_seq`](serde::ser::Serializer::serialize_seq)
+    fn hinted_serialize_seq(mut self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error>
+    where
+        Self::SerializeSeq: SerializerHint,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_seq(self, len)
+    }
+
+    /// Serialize a Tuple
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_tuple`](serde::ser::Serializer::serialize_tuple)
+    fn hinted_serialize_tuple(mut self, len: usize) -> Result<Self::SerializeTuple, Self::Error>
+    where
+        Self::SerializeTuple: SerializerHint,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_tuple(self, len)
+    }
+
+    /// Serialize a Tuple Struct
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_tuple_struct`](serde::ser::Serializer::serialize_tuple_struct)
+    fn hinted_serialize_tuple_struct(
+        mut self,
+        name: &'static str,
+        len: usize,
+    ) -> Result<Self::SerializeTupleStruct, Self::Error>
+    where
+        Self::SerializeTupleStruct: SerializerHint,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_tuple_struct(self, name, len)
+    }
+
+    /// Serialize a Tuple Variant
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_tuple_variant`](serde::ser::Serializer::serialize_tuple_variant)
+    fn hinted_serialize_tuple_variant(
+        mut self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+        len: usize,
+    ) -> Result<Self::SerializeTupleVariant, Self::Error>
+    where
+        Self::SerializeTupleVariant: SerializerHint,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_tuple_variant(self, name, variant_index, variant, len)
+    }
+
+    /// Serialize a Map
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_map`](serde::ser::Serializer::serialize_map)
+    fn hinted_serialize_map(mut self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error>
+    where
+        Self::SerializeMap: SerializerHint,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_map(self, len)
+    }
+
+    /// Serialize a Struct
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_struct`](serde::ser::Serializer::serialize_struct)
+    fn hinted_serialize_struct(mut self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error>
+    where
+        Self::SerializeStruct: SerializerHint,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_struct(self, name, len)
+    }
+
+    /// Serialize a Struct Variant
+    ///
+    ///
+    /// The default implementation clears all hints before calling
+    /// [`Serializer::serialize_struct_variant`](serde::ser::Serializer::serialize_struct_variant)
+    fn hinted_serialize_struct_variant(
+        mut self,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
+        len: usize,
+    ) -> Result<Self::SerializeStructVariant, Self::Error>
+    where
+        Self::SerializeStructVariant: SerializerHint,
+    {
+        self.clear_hints();
+
+        serde::ser::Serializer::serialize_struct_variant(self, name, variant_index, variant, len)
+    }
 }
 
 #[derive(Default)]
 struct Serializer<T> {
     skip_next_len: bool,
     buffer: T,
-}
-
-impl<T> Serializer<T> {
-    fn take_length_skip(&mut self) -> bool {
-        core::mem::take(&mut self.skip_next_len)
-    }
 }
 
 impl<T> TryExtend<u8> for Serializer<T>
@@ -63,12 +473,6 @@ impl<T: TryExtend<u8>> core::fmt::Write for &mut Serializer<T> {
     }
 }
 
-impl<T> SerializerHint for Serializer<T> {
-    fn skip_next_len(&mut self) {
-        self.skip_next_len = true;
-    }
-}
-
 impl<T: TryExtend<u8>> serde::ser::Serializer for &mut Serializer<T> {
     type Ok = ();
     type Error = crate::Error;
@@ -81,7 +485,7 @@ impl<T: TryExtend<u8>> serde::ser::Serializer for &mut Serializer<T> {
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
-        self.serialize_u8(if v { 1u8 } else { 0u8 })
+        serde::ser::Serializer::serialize_u8(self, if v { 1u8 } else { 0u8 })
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
@@ -139,30 +543,26 @@ impl<T: TryExtend<u8>> serde::ser::Serializer for &mut Serializer<T> {
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        if !self.take_length_skip() {
-            self.try_extend(varnum::StringLen::new(v.len()))?;
-        }
+        self.try_extend(varnum::StringLen::new(v.len()))?;
 
         self.try_extend(v.as_bytes())
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        if !self.take_length_skip() {
-            self.try_extend(varnum::BytesLen::new(v.len()))?;
-        }
+        self.try_extend(varnum::BytesLen::new(v.len()))?;
 
         self.try_extend(v)
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        self.serialize_u8(0)
+        serde::ser::Serializer::serialize_u8(self, 0)
     }
 
     fn serialize_some<V: ?Sized>(self, value: &V) -> Result<Self::Ok, Self::Error>
     where
         V: Serialize,
     {
-        self.serialize_u8(1)?;
+        serde::ser::Serializer::serialize_u8(&mut *self, 1)?;
 
         value.serialize(self)
     }
@@ -207,12 +607,10 @@ impl<T: TryExtend<u8>> serde::ser::Serializer for &mut Serializer<T> {
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        if !self.take_length_skip() {
-            if let Some(len) = len {
-                self.try_extend(varnum::SequenceLen::new(len))?;
-            } else {
-                return Err(Self::Error::StaticMessage("unknown length of sequence"));
-            }
+        if let Some(len) = len {
+            self.try_extend(varnum::SequenceLen::new(len))?;
+        } else {
+            return Err(Self::Error::StaticMessage("unknown length of sequence"));
         }
 
         Ok(self)
@@ -243,10 +641,10 @@ impl<T: TryExtend<u8>> serde::ser::Serializer for &mut Serializer<T> {
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        if !self.take_length_skip() {
-            if let Some(len) = len {
-                self.try_extend(varnum::MapLen::new(len))?;
-            }
+        if let Some(len) = len {
+            self.try_extend(varnum::MapLen::new(len))?;
+        } else {
+            return Err(Self::Error::StaticMessage("unknown length of map collection"));
         }
 
         Ok(self)
@@ -400,28 +798,86 @@ impl<T: TryExtend<u8>> SerializeStructVariant for &mut Serializer<T> {
     }
 }
 
+impl<T> SerializerHint for &mut Serializer<T> {
+    fn clear_hints(&mut self) {
+        self.skip_next_len = false;
+    }
+
+    fn set_skip_len_hint(&mut self) {
+        self.skip_next_len = true
+    }
+}
+
+impl<T: TryExtend<u8>> HintedSerializer for &mut Serializer<T> {
+    fn hinted_serialize_str(mut self, v: &str) -> Result<Self::Ok, Self::Error> {
+        if !self.skip_next_len {
+            self.try_extend(varnum::StringLen::new(v.len()))?;
+        }
+
+        self.clear_hints();
+
+        self.try_extend(v.as_bytes())
+    }
+
+    fn hinted_serialize_bytes(mut self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
+        if !self.skip_next_len {
+            self.try_extend(varnum::BytesLen::new(v.len()))?;
+        }
+
+        self.clear_hints();
+
+        self.try_extend(v)
+    }
+
+    fn hinted_serialize_seq(mut self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        if !self.skip_next_len {
+            if let Some(len) = len {
+                self.try_extend(varnum::SequenceLen::new(len))?;
+            } else {
+                return Err(Self::Error::StaticMessage("unknown length of sequence"));
+            }
+        }
+
+        self.clear_hints();
+
+        Ok(self)
+    }
+
+    fn hinted_serialize_map(mut self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        if !self.skip_next_len {
+            if let Some(len) = len {
+                self.try_extend(varnum::MapLen::new(len))?;
+            }
+        }
+
+        self.clear_hints();
+
+        Ok(self)
+    }
+}
+
 /// Serialize some data to a sized buffer
 ///
 /// The input `t` will be serialized into a statically allocated buffer of size `SIZE`. The only
 /// condition being that the generated serialization cannot be more bytes than SIZE.
-pub fn serialize_sized<D, const SIZE: usize>(t: D) -> Result<impl core::ops::Deref<Target = [u8]>, Error>
+pub fn serialize_sized<S, const SIZE: usize>(t: S) -> Result<impl core::ops::Deref<Target = [u8]>, Error>
 where
-    D: Serialize,
+    S: HintedSerialize,
 {
     let mut serializer: Serializer<crate::StaticBuffer<SIZE>> = Default::default();
 
-    t.serialize(&mut serializer).map(|_| serializer.buffer)
+    t.hinted_serialize(&mut serializer).map(|_| serializer.buffer)
 }
 
 /// Serialize the input
 ///
 /// Generates a serialization of input `t`.
 #[cfg(any(feature = "alloc", feature = "std"))]
-pub fn serialize<D>(t: D) -> Result<alloc::vec::Vec<u8>, Error>
+pub fn serialize<S>(t: S) -> Result<alloc::vec::Vec<u8>, Error>
 where
-    D: Serialize,
+    S: HintedSerialize,
 {
     let mut serializer: Serializer<alloc::vec::Vec<u8>> = Default::default();
 
-    t.serialize(&mut serializer).map(|_| serializer.buffer)
+    t.hinted_serialize(&mut serializer).map(|_| serializer.buffer)
 }
