@@ -27,7 +27,7 @@ pub mod reset {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -204,7 +204,7 @@ pub mod set_event_mask {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         events: &[EventMask],
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -300,7 +300,7 @@ pub mod read_transmit_power_level {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         parameter: Parameter,
-    ) -> impl Future<Output = Result<TransmitPowerLevel, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<TransmitPowerLevel, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

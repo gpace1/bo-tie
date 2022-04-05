@@ -73,7 +73,7 @@ pub mod connection_update {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         cu: ConnectionUpdate,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -104,7 +104,7 @@ pub mod create_connection_cancel {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -248,7 +248,7 @@ pub mod create_connection {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         cp: ConnectionParameters,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -341,7 +341,7 @@ pub mod read_channel_map {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         handle: ConnectionHandle,
-    ) -> impl Future<Output = Result<ChannelMapInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<ChannelMapInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -380,7 +380,7 @@ pub mod read_remote_features {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         handle: ConnectionHandle,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -459,7 +459,7 @@ pub mod set_host_channel_classification {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         map: ChannelMap,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

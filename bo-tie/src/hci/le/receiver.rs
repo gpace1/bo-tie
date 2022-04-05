@@ -19,7 +19,7 @@ pub mod receiver_test {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         frequency: Frequency,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -64,7 +64,7 @@ pub mod set_scan_enable {
         hci: &'a HostInterface<T>,
         enable: bool,
         filter_duplicates: bool,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -193,7 +193,7 @@ pub mod set_scan_parameters {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         sp: ScanningParameters,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

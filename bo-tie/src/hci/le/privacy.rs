@@ -54,7 +54,7 @@ pub mod set_resolvable_private_address_timeout {
     pub fn send<'a, I: 'static>(
         hci: &'a HostInterface<I>,
         time_out: Duration,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         I: PlatformInterface,
     {
@@ -102,7 +102,7 @@ pub mod set_address_resolution_enable {
     pub fn send<'a, I: 'static>(
         hci: &'a HostInterface<I>,
         enable: bool,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         I: PlatformInterface,
     {
@@ -154,7 +154,7 @@ pub mod add_device_to_resolving_list {
     pub fn send<'a, I: 'static>(
         hci: &'a HostInterface<I>,
         parameter: Parameter,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         I: PlatformInterface,
     {
@@ -197,7 +197,7 @@ pub mod remove_device_from_resolving_list {
     pub fn send<'a, I: 'static>(
         hci: &'a HostInterface<I>,
         parameter: Parameter,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         I: PlatformInterface,
     {
@@ -226,7 +226,7 @@ pub mod clear_resolving_list {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, I: 'static>(
         hci: &'a HostInterface<I>,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         I: PlatformInterface,
     {
@@ -286,7 +286,7 @@ pub mod set_privacy_mode {
     pub fn send<'a, I: 'static>(
         hci: &'a HostInterface<I>,
         parameter: Parameter,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         I: PlatformInterface,
     {

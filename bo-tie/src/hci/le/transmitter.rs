@@ -64,7 +64,7 @@ pub mod read_advertising_channel_tx_power {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<TxPower, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<TxPower, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -131,7 +131,7 @@ pub mod transmitter_test {
         channel: Frequency,
         payload: TestPayload,
         payload_length: u8,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -235,7 +235,7 @@ pub mod set_advertising_data {
     pub fn send<'a, T: 'static, A>(
         hci: &'a HostInterface<T>,
         adv_data: A,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
         A: Into<Option<AdvertisingData>>,
@@ -280,7 +280,7 @@ pub mod set_advertising_enable {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         enable: bool,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -486,7 +486,7 @@ pub mod set_advertising_parameters {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         params: AdvertisingParameters,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -538,7 +538,7 @@ pub mod set_random_address {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         rand_addr: crate::BluetoothDeviceAddress,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

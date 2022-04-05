@@ -32,7 +32,9 @@ macro_rules! add_remove_white_list_setup {
             hci: &'a HostInterface<T>,
             at: crate::hci::le::common::WhiteListedAddressType,
             addr: crate::BluetoothDeviceAddress,
-        ) -> impl core::future::Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+        ) -> impl core::future::Future<
+            Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>,
+        > + 'a
         where
             T: PlatformInterface,
         {
@@ -83,7 +85,7 @@ pub mod clear_white_list {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -174,7 +176,7 @@ pub mod read_buffer_size {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<BufferSize, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<BufferSize, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -251,7 +253,7 @@ pub mod read_local_supported_features {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<ReturnedEnabledLeFeaturesItr, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<ReturnedEnabledLeFeaturesItr, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -438,7 +440,7 @@ pub mod read_supported_states {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<CurrentStatesAndRoles, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<CurrentStatesAndRoles, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -511,7 +513,7 @@ pub mod read_white_list_size {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<WhiteListSize, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<WhiteListSize, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -648,7 +650,7 @@ pub mod set_event_mask {
     pub fn send<'a, T: 'static>(
         hi: &'a HostInterface<T>,
         enabled_events: &[LEMeta],
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -719,7 +721,7 @@ pub mod test_end {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

@@ -28,7 +28,7 @@ pub mod read_remote_version_information {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         handle: ConnectionHandle,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -127,7 +127,7 @@ pub mod disconnect {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         dp: DisconnectParameters,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

@@ -161,7 +161,7 @@ pub mod read_local_supported_features {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<EnabledFeatures, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<EnabledFeatures, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -246,7 +246,7 @@ pub mod read_local_version_information {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<VersionInformation, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<VersionInformation, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -917,7 +917,7 @@ pub mod read_local_supported_commands {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -998,7 +998,7 @@ pub mod read_buffer_size {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

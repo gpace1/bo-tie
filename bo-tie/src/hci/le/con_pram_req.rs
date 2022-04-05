@@ -96,7 +96,7 @@ pub mod remote_connection_parameter_request_reply {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         parameter: CommandParameters,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -177,7 +177,7 @@ pub mod remote_connection_parameter_request_negative_reply {
         hci: &'a HostInterface<T>,
         handle: ConnectionHandle,
         reason: error::Error,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

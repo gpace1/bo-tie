@@ -69,7 +69,7 @@ pub mod encrypt {
         hci: &'a HostInterface<T>,
         key: u128,
         plain_text: [u8; 16],
-    ) -> impl Future<Output = Result<Cypher, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Cypher, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -159,7 +159,7 @@ pub mod long_term_key_request_reply {
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,
         long_term_key: u128,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -240,7 +240,7 @@ pub mod long_term_key_request_negative_reply {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         connection_handle: ConnectionHandle,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -313,7 +313,7 @@ pub mod rand {
     #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {
@@ -375,7 +375,7 @@ pub mod enable_encryption {
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         parameter: Parameter,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl Display + Debug>> + 'a
+    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
     where
         T: PlatformInterface,
     {

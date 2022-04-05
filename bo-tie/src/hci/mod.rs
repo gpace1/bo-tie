@@ -10,11 +10,9 @@ pub mod opcodes;
 pub mod events;
 mod flow_ctrl;
 
-use crate::l2cap::AclData;
+use crate::l2cap::BasicInfoFrame;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::fmt::Debug;
-use core::fmt::Display;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Poll, Waker};
@@ -40,8 +38,7 @@ pub trait CommandParameter {
     /// Get the command packet to be sent to the controller
     ///
     /// The format of the command packet is to send the command opcode, followed by the length of
-    /// the parameter, and then finally the parameter. The packet is a fully packed structure tyus
-    /// the parameter is of the type `Self::Parameter`.
+    /// the parameter, and then finally the parameter.
     ///
     /// # Note
     /// This is not the entire packet sent to the interface as there may be additional information
@@ -96,11 +93,13 @@ pub trait CommandParameter {
 }
 
 pub struct CommandParameterIter<C: CommandParameter> {
-    stage: Some(usize),
+    stage: Option<usize>,
     parameter: C::Parameter,
 }
 
 impl<C: CommandParameter> CommandParameterIter<C> {
+    const SIZE: usize = 3 + core::mem::size_of::<C::Parameter>();
+
     fn new(c: &C) -> Self {
         Self {
             stage: Some(0),
@@ -122,11 +121,11 @@ where
             // the bytes that make up the parameter
             match stage {
                 0 => {
-                    self.stage = 1;
+                    self.stage = Some(1);
                     Some(Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes()[0])
                 }
                 1 => {
-                    self.stage = 2;
+                    self.stage = Some(2);
                     Some(Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes()[1])
                 }
                 2 => {
@@ -157,9 +156,7 @@ where
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        const SIZE: usize = 3 + core::mem::size_of::<C::Parameter>();
-
-        (SIZE, Some(SIZE))
+        (Self::SIZE, Some(Self::SIZE))
     }
 }
 
@@ -168,7 +165,7 @@ impl<C> ExactSizeIterator for CommandParameterIter<C> where C: CommandParameter 
 /// A trait for matching received events
 ///
 /// When receiving an event in a concurrent system, it can be unknown which context a received
-/// event should be propigated to. The event must be matched to determine this.
+/// event should be propagated to. The event must be matched to determine this.
 pub trait EventMatcher: Sync + Send {
     /// Match the event data
     fn match_event(&self, event_data: &events::EventsData) -> bool;
@@ -203,7 +200,7 @@ impl ACLPacketBoundary {
         }) << 12
     }
 
-    /// Get the `ACLPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
+    /// Get the `ACLPacketBoundary` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn from_shifted_val(val: u16) -> Self {
@@ -235,7 +232,7 @@ impl ACLBroadcastFlag {
         }) << 14
     }
 
-    /// Get the `ACLPacketBoundry` from the first 16 bits of a HCI ACL data packet. The input
+    /// Get the `ACLBroadcastFlag` from the first 16 bits of a HCI ACL data packet. The input
     /// `val` does not need to be masked to only include the Packet Boundary Flag, however it does
     /// need to be in host byte order.
     fn try_from_shifted_val(val: u16) -> Result<Self, ()> {
@@ -255,7 +252,7 @@ pub enum HciACLPacketError {
     InvalidConnectionHandle(&'static str),
 }
 
-impl Display for HciACLPacketError {
+impl core::fmt::Display for HciACLPacketError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             HciACLPacketError::PacketTooSmall => write!(f, "Packet is too small to be a valid HCI ACL Data"),
@@ -483,13 +480,13 @@ impl bo_tie_serde::HintedSerialize for HciACLData<'_> {
     fn hinted_serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: bo_tie_serde::HintedSerializer,
-        S::SerializeSeq: SerializerHint,
-        S::SerializeTuple: SerializerHint,
-        S::SerializeTupleStruct: SerializerHint,
-        S::SerializeTupleVariant: SerializerHint,
-        S::SerializeMap: SerializerHint,
-        S::SerializeStruct: SerializerHint,
-        S::SerializeStructVariant: SerializerHint,
+        S::SerializeSeq: bo_tie_serde::SerializerHint,
+        S::SerializeTuple: bo_tie_serde::SerializerHint,
+        S::SerializeTupleStruct: bo_tie_serde::SerializerHint,
+        S::SerializeTupleVariant: bo_tie_serde::SerializerHint,
+        S::SerializeMap: bo_tie_serde::SerializerHint,
+        S::SerializeStruct: bo_tie_serde::SerializerHint,
+        S::SerializeStructVariant: bo_tie_serde::SerializerHint,
     {
         use core::convert::TryFrom;
         use serde::ser::{Error, SerializeStruct};
@@ -759,8 +756,8 @@ struct HciPacketError {
     for_packet_type: Option<HciPacketType>,
 }
 
-impl fmt::Debug for HciPacketError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl core::fmt::Debug for HciPacketError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         let mut debug_struct = f.debug_struct("HciPacketError");
 
         if let Some(ref for_packet_type) = self.for_packet_type {
@@ -781,8 +778,8 @@ enum HciPacketInvalidity {
     EventError(alloc::string::String),
 }
 
-impl fmt::Debug for HciPacketInvalidity {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl core::fmt::Debug for HciPacketInvalidity {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             HciPacketInvalidity::InvalidDataSize {
                 data_size,
@@ -802,8 +799,8 @@ impl fmt::Debug for HciPacketInvalidity {
     }
 }
 
-impl fmt::Display for HciPacketInvalidity {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl core::fmt::Display for HciPacketInvalidity {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             HciPacketInvalidity::InvalidDataSize {
                 data_size,
@@ -821,13 +818,13 @@ impl fmt::Display for HciPacketInvalidity {
                 }
             }
             HciPacketInvalidity::InvalidFormat(reason) => {
-                write!("Raw slice is either badly formatted or not a HCI Packet, {}", reason)
+                write!(f, "Raw slice is either badly formatted or not a HCI Packet, {}", reason)
             }
             HciPacketInvalidity::AclError(e) => {
-                write!("Failed to raw slice to an HCI ACL data packet, {}", e)
+                write!(f, "Failed to raw slice to an HCI ACL data packet, {}", e)
             }
             HciPacketInvalidity::EventError(e) => {
-                write!("Failed to raw slice to an HCI event, {}", e)
+                write!(f, "Failed to raw slice to an HCI event, {}", e)
             }
         }
     }
@@ -864,8 +861,8 @@ impl From<HciAclPacketError> for HciPacketInvalidity {
 pub trait PlatformInterface {
     type Sender: Future;
     type Receiver: Future;
-    type SendError: fmt::Debug + fmt::Display;
-    type ReceiveError: fmt::Debug + fmt::Display;
+    type SendError: core::fmt::Debug + core::fmt::Display;
+    type ReceiveError: core::fmt::Debug + core::fmt::Display;
 
     /// Try to Send a HCI packet to the controller
     ///
@@ -888,8 +885,8 @@ pub trait PlatformInterface {
 ///
 /// This is the trait that must be implemented by the platform specific HCI structure.
 pub trait HciACLDataInterface {
-    type SendACLDataError: Debug + Display;
-    type ReceiveACLDataError: Debug + Display;
+    type SendACLDataError: core::fmt::Debug + core::fmt::Display;
+    type ReceiveACLDataError: core::fmt::Debug + core::fmt::Display;
 
     /// Send ACL data
     ///
@@ -937,26 +934,26 @@ where
     Recv(<I as PlatformInterface>::ReceiveEventError),
 }
 
-impl<I> Debug for SendCommandError<I>
+impl<I> core::fmt::Debug for SendCommandError<I>
 where
     I: PlatformInterface,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            SendCommandError::Send(err) => Debug::fmt(err, f),
-            SendCommandError::Recv(err) => Debug::fmt(err, f),
+            SendCommandError::Send(err) => core::fmt::Debug::fmt(err, f),
+            SendCommandError::Recv(err) => core::fmt::Debug::fmt(err, f),
         }
     }
 }
 
-impl<I> Display for SendCommandError<I>
+impl<I> core::fmt::Display for SendCommandError<I>
 where
     I: PlatformInterface,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            SendCommandError::Send(err) => Display::fmt(err, f),
-            SendCommandError::Recv(err) => Display::fmt(err, f),
+            SendCommandError::Send(err) => core::fmt::Display::fmt(err, f),
+            SendCommandError::Recv(err) => core::fmt::Display::fmt(err, f),
         }
     }
 }
@@ -983,7 +980,7 @@ where
     CD: CommandParameter + Unpin,
     P: EventMatcher + Send + Sync + 'static,
 {
-    /// This is just called within an implemenation of future created by the macro
+    /// This is just called within an implementation of future created by the macro
     /// `[impl_returned_future]`(../index.html#impl_returned_future)
     fn fut_poll(&mut self, cx: &mut core::task::Context) -> Poll<Result<events::EventsData, SendCommandError<I>>> {
         if let Some(ref data) = self.command_data {
@@ -1029,7 +1026,7 @@ where
             .interface
             .receive_event(self.event, cx.waker(), self.matcher.clone())
         {
-            Some(evnt_rspn) => Poll::Ready(evnt_rspn),
+            Some(event_response) => Poll::Ready(event_response),
             None => Poll::Pending,
         }
     }
@@ -1467,14 +1464,14 @@ where
 }
 
 #[derive(Debug)]
-enum OutputErr<TargErr, CmdErr>
+enum OutputErr<TargetErr, CmdErr>
 where
-    TargErr: Display + Debug,
-    CmdErr: Display + Debug,
+    TargetErr: core::fmt::Display + core::fmt::Debug,
+    CmdErr: core::fmt::Display + core::fmt::Debug,
 {
     /// An error occurred at the target specific HCI implementation
-    TargetSpecificErr(TargErr),
-    /// Cannot convert the data from the HCI packed form into its useable form.
+    TargetSpecificErr(TargetErr),
+    /// Cannot convert the data from the HCI packed form into its usable form.
     CommandDataConversionError(CmdErr),
     /// The first item is the received event and the second item is the event expected
     ReceivedIncorrectEvent(crate::hci::events::Events),
@@ -1486,10 +1483,10 @@ where
     CommandStatusErr(error::Error),
 }
 
-impl<TargErr, CmdErr> Display for OutputErr<TargErr, CmdErr>
+impl<TargetErr, CmdErr> core::fmt::Display for OutputErr<TargetErr, CmdErr>
 where
-    TargErr: Display + Debug,
-    CmdErr: Display + Debug,
+    TargetErr: core::fmt::Display + core::fmt::Debug,
+    CmdErr: core::fmt::Display + core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
