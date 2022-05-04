@@ -9,6 +9,7 @@ pub mod opcodes;
 #[macro_use]
 pub mod events;
 mod flow_ctrl;
+mod interface;
 
 use crate::l2cap::BasicInfoFrame;
 use alloc::sync::Arc;

@@ -8,6 +8,7 @@
 //! The primary way of interfacing to the controller is through the [`hci`] (Host Controller
 //! Interface). All commands, events, *and* data (ACL, SCO/eSCO) go through this interface.
 
+#![feature(generic_associated_types)]
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
