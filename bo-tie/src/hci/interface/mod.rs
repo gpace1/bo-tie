@@ -1,31 +1,52 @@
 //! Implementation for the interface between the host and controller
 //!
+//! The host is split up between a host functional component and an interface component. The host
+//! functional part contains the controller commanding and data processing portions which are
+//! referred to the host-controller async task and connection async task respectively. The interface
+//! portion of the host is referred to as the interface async task. Its job is to constantly service
+//! the driver and controller for messages to and from it.
+//!
+//! An interface async task is platform specific. It is needs to include the driver to the interface
+//! as well as an `Interface`. It needs to be implemented to constantly listen to both data coming
+//! from the other async tasks and data coming from the interface.
+//!
+//! ## Messaging
+//! The interface async task is the gateway to the interface. HCI packets to and from the controller
+//! must go through the interface async task and consequently HCI packets from other async tasks
+//! must also go through the interface. The interface async task's job is to constantly await the
+//! physical interface, so its the only safe way to handle messaging to the controller. The main
+//! reason is so that it can quickly serve the interface driver (usually to flush peripheral
+//! buffers), but also to capture HCI events not awaited upon by another async task.
+//!
+//! Messaging between the interface async task and the other async tasks is done through
+//! asynchronous multiple producer single consumer (mpsc) channels. There is always two of these
+//! channels for the host async task and every connection async task. This is what allows for the
+//! async tasks to be separated from monitoring the controller. This library classifies channels
+//! into two kinds, 'send safe' and 'local'. If the channels are send safe, then all async tasks
+//! will be send safe (assuming the user doesn't have `!Send` implementation), because channels
+//! happen to be the defining component for the HCI async tasks to implement `Send`. A Local channel
+//! does not `Send` (which means the async tasks are also !Send) but they're designed to run
+//! efficiently within the same thread. They also do not require allocation when using a local
+//! static channel.
+//!
+//! ## Specification Defined Interfaces
 //! There are four types of interfaces mentioned within the Bluetooth Specification (v5.2) but
 //! interfacing between the host and controller can be done via any interface so long as the host
 //! to controller functional specification can be applied to it. As a general rule any interface
 //! can work so long as there is a way to send and receive data between the host and controller
 //! asynchronously in respect to either side's CPU.
 //!
-//! The Host Controller Interface is broken up within this library between the interface and the
-//! functional specification. The functional specification is defined within this library but the
-//! interfaces are always going to have some part of them that is platform specific. Even the four
-//! kinds of interfaces defined within the Specification are not completely implemented within this
-//! library. There is always some part, whether it is something related to memory mapping or some
-//! API details that must be implemented by a platform for using the interface between the Host and
-//! Controller with this library
-//!
-//! ## Specification Defined Interfaces
 //! UART, USB, Secure Digital (SD), and Three-Wire UART interfaces have defined specification for
 //! how to use them with the functional specification. Everything that is defined within the
 //! specification is implemented within this library, but this only covers the data encapsulation
 //! and some of configuration details.
 
+use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
-use std::fmt::{Debug, Display, Formatter};
-use std::ops::Deref;
+use core::ops::Deref;
 
-mod buffer;
 mod local_channel;
+pub mod uart;
 
 /// Identifiers of channels
 ///
@@ -85,7 +106,8 @@ pub trait ChannelsManagement {
 
 /// The interface
 ///
-/// The interface is the component of the host that runs with the interface driver.
+/// An `Interface` is the component of the host that must run with the interface driver. Its the
+/// part of the host that must perpetually await upon the
 pub struct Interface<T> {
     channel_manager: T,
 }
@@ -123,27 +145,143 @@ where
         Ok((sender, receiver))
     }
 
-    /// Buffer and send a HCI packet from the interface
+    /// Buffer received HCI packet from the interface until it can be sent upwards
     ///
-    /// Packets are processed and sent from the interface to their appropriate receiving async task
-    /// by this method. Unfortunately however, in order to facilitate as many different types of
-    /// interfaces as possible this send method needs to be a bit weird. Because some interface are
-    /// not able to transfer a complete HCI packet, `maybe_send` can be called multiple times. The
-    /// input bytes are buffered until `maybe_send` can form a complete packet before sending that
-    /// to its destination.
+    /// An interface may be unable to receive complete HCI packets from the interface. Instead of
+    /// having the driver process the fragmented HCI packet into complete fragment, a buffered send
+    /// can be used to do this. This buffers interface data until a complete packet is held within
+    /// the buffer. The buffered send is consumed and then the HCI packet is sent upward (either to
+    /// the host or connection async task).
     ///
-    /// `maybe_send` works by greedily consuming bytes until a complete HCI packet formed.
-    pub fn buffer_send<'a>(
+    /// ```
+    /// # #![feature(generic_associated_types)]
+    /// # use std::future::Future;
+    /// # use std::pin::Pin;
+    /// # use std::task::{Context, Poll};
+    /// # use std::fmt::Debug;
+    /// # use crate::bo_tie::hci::interface::{BufferSend, Channel, ChannelId, ChannelsManagement, HciPacket, HciPacketType, Interface, Receiver, Sender};
+    /// #
+    /// # struct Sf;
+    /// # impl Future for Sf {
+    /// #     type Output = Result<(), ()>;
+    /// #
+    /// #     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # struct Rf;
+    /// # impl Future for Rf {
+    /// #     type Output = Option<HciPacket<()>>;
+    /// #
+    /// #     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # struct S;
+    /// # impl Sender for S {
+    /// #     type Error = ();
+    /// #     type Payload = ();
+    /// #     type SendFuture<'a> = Sf;
+    /// #
+    /// #     fn send<'a>(&'a mut self, t: HciPacket<Self::Payload>) -> Self::SendFuture<'a> {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # struct R;
+    /// # impl Receiver for R {
+    /// # type Payload = ();
+    /// # type ReceiveFuture<'a> = Rf;
+    /// #
+    /// #     fn recv<'a>(&'a mut self) -> Self::ReceiveFuture<'a> {
+    /// #         unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # struct C;
+    /// # impl Channel for C {
+    /// #    type Sender<'a> = S;
+    /// #    type Receiver<'a> = R;
+    /// #    
+    /// #    fn get_sender<'a>(&'a self) -> Self::Sender<'a> {
+    /// #        unimplemented!()
+    /// #    }
+    /// #    
+    /// #    fn get_receiver<'a>(&'a self) -> Self::Receiver<'a> {
+    /// #        unimplemented!()
+    /// #    }
+    /// # }
+    /// #
+    /// # struct CM;
+    /// # impl ChannelsManagement for CM {
+    /// #    type Error = usize;
+    /// #    type Channel = C;
+    /// #
+    /// #    fn get_rx_channel(&self) -> &Self::Channel {
+    /// #        unimplemented!()
+    /// #    }
+    /// #
+    /// #    fn try_add(&mut self, id: ChannelId) -> Result<usize, Self::Error> {
+    /// #        unimplemented!()
+    /// #    }
+    /// #
+    /// #    fn try_remove(&mut self, id: ChannelId) -> Result<Self::Channel, Self::Error> {
+    /// #        unimplemented!()
+    /// #    }
+    /// #
+    /// #    fn get(&self, id: ChannelId) -> Option<&Self::Channel> {
+    /// #        unimplemented!()
+    /// #    }
+    /// #
+    /// #    fn get_by_index(&self, index: usize) -> Option<&Self::Channel> {
+    /// #        unimplemented!()
+    /// #    }
+    /// # }
+    /// #
+    /// # struct Driver;
+    /// # impl Driver {
+    /// #    fn read_packet_type(&self) -> HciPacketType { unimplemented!() }
+    /// #
+    /// #    async fn read_byte(&self) -> u8 { unimplemented!() }
+    /// # }
+    /// #
+    /// # async {
+    /// # let mut interface = Interface::<Vec<u8>>::new_local(0);
+    /// # let driver = Driver;
+    /// # let packet_type = HciPacketType::Command;
+    /// # let _ = {
+    /// // The Bluetooth Specification leaves how to determine the type
+    /// // of a HCI packet to the interface implementation. Here this
+    /// // is magically done in the dummy method `read_packet_type`. How
+    /// // it is done for a driver is a bit more complicated.
+    /// let packet_type: HciPacketType = driver.read_packet_type();
+    ///
+    /// let mut buffer_send = interface.buffer_send(packet_type);
+    ///
+    /// // Bytes are
+    /// while !buffer_send.add(driver.read_byte().await) {}
+    ///
+    /// buffer_send.send().await
+    /// # }.ok();
+    /// # };
+    /// ```
+    pub fn buffered_send<'a>(
         &'a mut self,
         packet_type: HciPacketType,
-    ) -> BufferSend<T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
+    ) -> BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
     where
         <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Deref<Target = [u8]> + Extend<u8> + Default,
     {
-        BufferSend::new(self, packet_type)
+        BufferedSend::new(self, packet_type)
     }
 
     /// Send a complete HCI packet
+    ///
+    /// This sends a complete `HciPacket` to the correct destination (either the host or a
+    /// connection async task). It is up to the implementation to guarantee that the data within
+    /// the packet is complete.
     pub async fn send<'a>(
         &'a mut self,
         packet: HciPacket<<<T::Channel as Channel>::Sender<'a> as Sender>::Payload>,
@@ -172,19 +310,17 @@ where
     }
 }
 
-impl<T> Interface<local_channel::LocalChannelManager<HciPacket<T>>> {
+impl<T> Interface<T> {
     /// Create a new local `Interface`
     ///
     /// A local interface is used whenever the interface driver is not `Send` safe. Using this
     /// means the host, interface driver, and connection async tasks all run within the same thread.
-    pub fn new_local(channel_size: usize) -> Self {
-        Self::new_inner(local_channel::LocalChannelManager::new(channel_size))
+    pub fn new_local(channel_size: usize) -> Interface<local_channel::LocalChannelManager<HciPacket<T>>> {
+        Interface::<local_channel::LocalChannelManager<HciPacket<T>>>::new_inner(
+            local_channel::LocalChannelManager::new(channel_size),
+        )
     }
-}
 
-impl<T, const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize>
-    Interface<local_channel::LocalStaticChannelManager<HciPacket<T>, CHANNEL_COUNT, CHANNEL_SIZE>>
-{
     /// Create a statically sized local interface
     ///
     /// This interface uses statically allocated buffers to create a message channel system between
@@ -196,8 +332,11 @@ impl<T, const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize>
     /// connection async tasks plus two for the channels to the host async task.
     ///
     ///
-    pub fn new_local_static() -> Self {
-        Self::new_inner(local_channel::LocalStaticChannelManager::new())
+    pub fn new_local_static<const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize>(
+    ) -> Interface<local_channel::LocalStaticChannelManager<HciPacket<T>, CHANNEL_COUNT, CHANNEL_SIZE>> {
+        Interface::<local_channel::LocalStaticChannelManager<HciPacket<T>, CHANNEL_COUNT, CHANNEL_SIZE>>::new_inner(
+            local_channel::LocalStaticChannelManager::new(),
+        )
     }
 }
 
@@ -229,14 +368,14 @@ where
 /// than necessary will result in the `BufferedSend` ignoring them.
 ///
 /// For information on how to use this see the method [`buffer_send`](Interface::buffered_send)
-pub struct BufferSend<'a, T, B> {
+pub struct BufferedSend<'a, T, B> {
     interface: &'a mut Interface<T>,
     packet_type: HciPacketType,
     buffer: B,
     packet_len: Option<usize>,
 }
 
-impl<'a, T> BufferSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
+impl<'a, T> BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
 where
     T: ChannelsManagement,
     <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Deref<Target = [u8]> + Extend<u8>,
@@ -248,7 +387,7 @@ where
     where
         <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Default,
     {
-        BufferSend {
+        BufferedSend {
             interface,
             packet_type,
             buffer: Default::default(),
@@ -347,36 +486,43 @@ where
     ///
     /// # Note
     /// `byte` is ignored if this already has a complete HCI Packet.
-    pub fn add(&mut self, byte: u8) -> bool {
+    pub fn add(
+        &mut self,
+        byte: u8,
+    ) -> Result<bool, BufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
         match self.packet_len {
             None => {
                 self.add_initial_byte(byte);
 
-                false
+                Ok(false)
             }
             Some(len) if len != self.buffer.len() => {
                 self.buffer.extend(core::iter::once(byte));
 
-                len == self.buffer.len()
+                Ok(len == self.buffer.len())
             }
-            _ => true,
+            _ => Err(BufferedSendError::BufferReadyToSend),
         }
     }
 
     /// Add bytes to the buffer
     ///
-    /// This add multiple bytes to the buffer, stopping early if a complete HCI Packet is formed.
+    /// This add multiple bytes to the buffer, stopping iteration of `iter` early if a complete HCI
+    /// Packet is formed.
     ///
     /// # Return
     /// `true` is returned if the this `BufferSend` contains a complete HCI Packet.
-    pub fn add_bytes<I: IntoIterator<Item = u8>>(&mut self, iter: I) -> bool {
+    pub fn add_bytes<I: IntoIterator<Item = u8>>(
+        &mut self,
+        iter: I,
+    ) -> Result<bool, BufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
         for i in iter {
-            if self.add(i) {
-                return true;
+            if self.add(i)? {
+                return Ok(true);
             }
         }
 
-        false
+        Ok(false)
     }
 
     /// Check if a complete HCI packet is stored and ready to be sent
@@ -391,8 +537,8 @@ where
     ///
     /// When a complete packet is sored within this `BufferSend`, this method is called to transfer
     /// the packet to its
-    pub async fn send(self) -> Result<(), BufferSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
-        self.packet_len.ok_or(BufferSendError::IncompleteHciPacket)?;
+    pub async fn send(self) -> Result<(), BufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
+        self.packet_len.ok_or(BufferedSendError::IncompleteHciPacket)?;
 
         let hci_packet = HciPacket {
             packet_type: self.packet_type,
@@ -402,11 +548,11 @@ where
         self.interface
             .send(hci_packet)
             .await
-            .map_err(|e| BufferSendError::SendError(e))
+            .map_err(|e| BufferedSendError::SendError(e))
     }
 }
 
-impl<'a, T> Extend<u8> for BufferSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
+impl<'a, T> Extend<u8> for BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
 where
     T: ChannelsManagement,
     <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Deref<Target = [u8]> + Extend<u8>,
@@ -417,19 +563,21 @@ where
 }
 
 #[derive(Debug)]
-pub enum BufferSendError<E> {
+pub enum BufferedSendError<E> {
+    BufferReadyToSend,
     IncompleteHciPacket,
     SendError(SendError<E>),
 }
 
-impl<E> Display for BufferSendError<E>
+impl<E> Display for BufferedSendError<E>
 where
     E: Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            BufferSendError::IncompleteHciPacket => f.write_str("cannot send incomplete HCI packet"),
-            BufferSendError::SendError(e) => e.fmt(f),
+            BufferedSendError::BufferReadyToSend => f.write_str("buffer contains a complete HCI packet"),
+            BufferedSendError::IncompleteHciPacket => f.write_str("cannot send incomplete HCI packet"),
+            BufferedSendError::SendError(e) => e.fmt(f),
         }
     }
 }
