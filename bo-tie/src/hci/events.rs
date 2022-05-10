@@ -4,6 +4,7 @@ use crate::hci::common::{
     ConnectionHandle, EnabledExtendedFeaturesItr, EnabledFeaturesIter, EncryptionLevel, ExtendedInquiryResponseDataItr,
 };
 use crate::hci::error::Error;
+use crate::hci::events::EventErrorReason::UnknownEventCode;
 use crate::hci::le;
 use crate::hci::le::common::{
     AddressType, ConnectionInterval, ConnectionLatency, EnabledLeFeaturesItr, ExtendedAdvertisingAndScanResponseData,
@@ -3596,10 +3597,14 @@ macro_rules! events_markup {
             /// sub event code. When the first input matches [`LEMeta`](Events::LEMeta) the second
             /// input is used to determine the LEMeta sub event otherwise input `sub_event` is
             /// ignored.
-            pub fn try_from_event_codes(event: u8, sub_event: u8) -> core::result::Result<crate::hci::events::$EnumName, alloc::string::String> {
+            pub fn try_from_event_codes<S>(event: u8, sub_event: S)
+            -> core::result::Result<crate::hci::events::$EnumName, EventError>
+            where
+                S: Into<Option<u8>>
+            {
                 match event {
-                    $( $val => Ok( crate::hci::events::$EnumName::$name $(( $($enum_val::try_from(sub_event)?)* ))* ), )*
-                    _ => Err(alloc::format!("Unknown Event ID: {}", event)),
+                    $( $val => Ok( crate::hci::events::$EnumName::$name $(( $($enum_val::try_from(sub_event.into())?)* ))* ), )*
+                    _ => Err(EventCodeError::new(event, sub_event.into()).into()),
                 }
             }
         }
@@ -3752,6 +3757,82 @@ impl Events {
             Events::CommandStatus => false,
             Events::NumberOfCompletedPackets => false,
             _ => true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EventError {
+    for_event: Option<Events>,
+    reason: EventErrorReason,
+}
+
+impl core::fmt::Display for EventError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.reason, f)?;
+
+        if let Some(ref event) = self.for_event {
+            f.write_str(r#" for event ""#)?;
+            core::fmt::Display::fmt(event, f)?;
+            f.write_str(r#"""#)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl From<EventCodeError> for EventError {
+    fn from(ec: EventCodeError) -> EventError {
+        EventError {
+            for_event: None,
+            reason: EventErrorReason::EventCode(ec),
+        }
+    }
+}
+
+impl From<alloc::string::String> for EventError {
+    fn from(s: alloc::string::String) -> EventError {
+        EventError {
+            for_event: None,
+            reason: EventErrorReason::Error(s),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum EventErrorReason {
+    // Temporary error message until strings are no longer used for event errors
+    Error(alloc::string::String),
+    EventCode(EventCodeError),
+}
+
+#[derive(Debug)]
+struct EventCodeError {
+    code: u8,
+    sub_code: Option<u8>,
+}
+
+impl EventCodeError {
+    fn new(code: u8, sub_code: u8) -> Self {
+        const IRRELEVANT: LEMeta = LEMeta::ConnectionComplete;
+
+        if code == Events::LEMeta(IRRELEVANT).get_event_code() {
+            EventCodeError {
+                code,
+                sub_code: Some(sub_code),
+            }
+        } else {
+            EventCodeError { code, sub_code: None }
+        }
+    }
+}
+
+impl core::fmt::Display for EventCodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        if let Some(ref sub_code) = self.sub_code {
+            write!(f, "unknown LE sub event code: {}", sub_code)
+        } else {
+            write!(f, "Unknown event code: {}", self.code)
         }
     }
 }
