@@ -78,7 +78,7 @@ pub mod encrypt {
             _plain_text: plain_text,
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -168,7 +168,7 @@ pub mod long_term_key_request_reply {
             ltk: long_term_key,
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -248,7 +248,7 @@ pub mod long_term_key_request_negative_reply {
             handle: connection_handle,
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -317,7 +317,7 @@ pub mod rand {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -379,6 +379,6 @@ pub mod enable_encryption {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandStatus))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandStatus))
     }
 }

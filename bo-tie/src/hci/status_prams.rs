@@ -48,7 +48,7 @@ pub mod read_rssi {
         }
     }
 
-    impl crate::hci::FlowControlInfo for RSSIInfo {
+    impl FlowControlInfo for RSSIInfo {
         fn packet_space(&self) -> usize {
             self.completed_packets_cnt
         }
@@ -58,7 +58,6 @@ pub mod read_rssi {
 
     impl_command_complete_future!(RSSIInfo, error::Error);
 
-    #[cfg(not(feature = "flow-ctrl"))]
     pub fn send<'a, T: 'static>(
         hci: &'a HostInterface<T>,
         handle: ConnectionHandle,
@@ -70,6 +69,6 @@ pub mod read_rssi {
             handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }

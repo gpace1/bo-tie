@@ -68,7 +68,7 @@ pub mod read_advertising_channel_tx_power {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -141,7 +141,7 @@ pub mod transmitter_test {
             _packet_payload: payload.into_val(),
         };
 
-        ReturnedFuture(hci.send_command(parameters, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameters, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -241,11 +241,11 @@ pub mod set_advertising_data {
         A: Into<Option<AdvertisingData>>,
     {
         if let Some(data) = adv_data.into() {
-            ReturnedFuture(hci.send_command(data, events::Events::CommandComplete))
+            ReturnedFuture(hci.send_command(data, CommandEventMatcher::CommandComplete))
         } else {
             let data = AdvertisingData::new();
 
-            ReturnedFuture(hci.send_command(data, events::Events::CommandComplete))
+            ReturnedFuture(hci.send_command(data, CommandEventMatcher::CommandComplete))
         }
     }
 }
@@ -284,7 +284,7 @@ pub mod set_advertising_enable {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter { enable }, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter { enable }, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -508,7 +508,7 @@ pub mod set_advertising_parameters {
             _advertising_filter_policy: params.advertising_filter_policy.into_val(),
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -546,6 +546,6 @@ pub mod set_random_address {
             _rand_address: rand_addr,
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }

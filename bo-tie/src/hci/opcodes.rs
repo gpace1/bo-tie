@@ -80,7 +80,7 @@ impl OpCodePair {
         ((self.ocf & 0x3FFu16) | (self.ogf << 10)).to_le()
     }
 
-    /// Convert the HCI command packet Op Code into an OpCodePair
+    /// Convert a HCI command packet formatted Op Code into an OpCodePair
     pub fn from_opcode(val: u16) -> Self {
         let value = <u16>::from_le(val);
         OpCodePair {

@@ -8,12 +8,12 @@
 mod local_dynamic_channel;
 mod local_static_channel;
 
+use core::fmt::{Display, Formatter};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll, Waker};
 pub use local_dynamic_channel::LocalChannelManager;
 pub use local_static_channel::LocalStaticChannelManager;
-use std::fmt::{Display, Formatter};
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
 
 /// Trait for a buffer of the sender of a local channel
 ///
@@ -71,10 +71,7 @@ impl<'a, S, T> LocalSendFuture<'a, S, T> {
     fn new(local_sender: &'a mut S, packet: T) -> Self {
         let packet = Some(packet);
 
-        LocalSendFuture {
-            packet,
-            local_sender,
-        }
+        LocalSendFuture { packet, local_sender }
     }
 }
 

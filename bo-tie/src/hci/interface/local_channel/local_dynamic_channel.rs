@@ -7,12 +7,12 @@
 //!
 //! This is a local channel so it can only be used between async tasks running on the same thread.
 
-use crate::{Channel, ChannelId, ChannelsManagement, HciPacket, Receiver, Sender};
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::fmt::{Display, Formatter};
-use std::task::{Waker};
-use crate::local_channel::{LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture, LocalSendFutureError};
+use crate::hci::interface::{Channel, ChannelId, ChannelsManagement, HciPacket, Receiver, Sender};
+use core::cell::RefCell;
+use alloc::collections::VecDeque;
+use core::fmt::{Display, Formatter};
+use core::task::Waker;
+use super::{LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture, LocalSendFutureError};
 
 struct LocalChannelInner<T> {
     sender_count: usize,
@@ -74,12 +74,12 @@ impl<T> LocalQueueBufferSend for LocalChannelSender<'_, T> {
     }
 }
 
-impl<'z, T> Sender for LocalChannelSender<'z, HciPacket<T>> {
+impl<'z, T> Sender for LocalChannelSender<'z, T> {
     type Error = LocalSendFutureError;
-    type Payload = T;
-    type SendFuture<'a> = LocalSendFuture<'a, Self, HciPacket<T>> where T: 'a, 'z: 'a;
+    type Message = T;
+    type SendFuture<'a> = LocalSendFuture<'a, Self, T> where T: 'a, 'z: 'a;
 
-    fn send(&mut self, t: HciPacket<Self::Payload>) -> Self::SendFuture<'_> {
+    fn send(&mut self, t: Self::Payload) -> Self::SendFuture<'_> {
         LocalSendFuture::new(self, t)
     }
 }
@@ -124,8 +124,8 @@ impl<T> LocalQueueBufferReceive for LocalChannelReceiver<'_, T> {
     }
 }
 
-impl<'z, T> Receiver for LocalChannelReceiver<'z, HciPacket<T>> {
-    type Payload = T;
+impl<'z, T> Receiver for LocalChannelReceiver<'z, T> {
+    type Message = T;
     type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where T: 'a, 'z: 'a;
 
     fn recv(&mut self) -> Self::ReceiveFuture<'_> {

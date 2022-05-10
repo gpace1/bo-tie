@@ -100,7 +100,7 @@ pub mod remote_connection_parameter_request_reply {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -186,6 +186,6 @@ pub mod remote_connection_parameter_request_negative_reply {
             _reason: reason.into(),
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }

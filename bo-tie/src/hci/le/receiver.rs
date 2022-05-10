@@ -23,7 +23,7 @@ pub mod receiver_test {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(frequency, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(frequency, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -73,7 +73,7 @@ pub mod set_scan_enable {
             filter_duplicates,
         };
 
-        ReturnedFuture(hci.send_command(cmd_param, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(cmd_param, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -197,6 +197,6 @@ pub mod set_scan_parameters {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(sp, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(sp, CommandEventMatcher::CommandComplete))
     }
 }

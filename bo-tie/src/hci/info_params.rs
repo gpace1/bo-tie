@@ -77,9 +77,7 @@ pub mod read_bd_addr {
     where
         T: PlatformInterface,
     {
-        use events::Events::CommandComplete;
-
-        let cmd_rslt = hci.send_command(Parameter, CommandComplete);
+        let cmd_rslt = hci.send_command(Parameter, CommandEventMatcher::CommandComplete);
 
         ReturnedFuture(cmd_rslt)
     }
@@ -165,7 +163,7 @@ pub mod read_local_supported_features {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -250,7 +248,7 @@ pub mod read_local_version_information {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -921,7 +919,7 @@ pub mod read_local_supported_commands {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -1002,6 +1000,6 @@ pub mod read_buffer_size {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }

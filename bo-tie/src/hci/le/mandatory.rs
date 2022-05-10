@@ -89,7 +89,7 @@ pub mod clear_white_list {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -180,7 +180,7 @@ pub mod read_buffer_size {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -257,7 +257,7 @@ pub mod read_local_supported_features {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -444,7 +444,7 @@ pub mod read_supported_states {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -517,7 +517,7 @@ pub mod read_white_list_size {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -658,7 +658,7 @@ pub mod set_event_mask {
             _mask: LEMeta::build_mask(enabled_events),
         };
 
-        ReturnedFuture(hi.send_command(command_pram, events::Events::CommandComplete))
+        ReturnedFuture(hi.send_command(command_pram, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -725,6 +725,6 @@ pub mod test_end {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }

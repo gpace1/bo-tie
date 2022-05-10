@@ -36,7 +36,7 @@ pub mod read_remote_version_information {
             _connection_handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandStatus))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandStatus))
     }
 }
 
@@ -131,6 +131,6 @@ pub mod disconnect {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(dp, events::Events::CommandStatus))
+        ReturnedFuture(hci.send_command(dp, CommandEventMatcher::CommandStatus))
     }
 }

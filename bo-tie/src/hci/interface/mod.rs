@@ -44,6 +44,8 @@
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
 use core::ops::Deref;
+use crate::hci::{CommandEventMatcher, events};
+use crate::hci::events::EventsData;
 
 mod local_channel;
 pub mod uart;
@@ -185,14 +187,14 @@ where
     /// #     type Payload = ();
     /// #     type SendFuture<'a> = Sf;
     /// #
-    /// #     fn send<'a>(&'a mut self, t: HciPacket<Self::Payload>) -> Self::SendFuture<'a> {
+    /// #     fn send<'a>(&'a mut self, t: HciPacket<Self::Message>) -> Self::SendFuture<'a> {
     /// #         unimplemented!()
     /// #     }
     /// # }
     /// #
     /// # struct R;
     /// # impl Receiver for R {
-    /// # type Payload = ();
+    /// # type Message = ();
     /// # type ReceiveFuture<'a> = Rf;
     /// #
     /// #     fn recv<'a>(&'a mut self) -> Self::ReceiveFuture<'a> {
@@ -270,9 +272,9 @@ where
     pub fn buffered_send<'a>(
         &'a mut self,
         packet_type: HciPacketType,
-    ) -> BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
+    ) -> BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Message>
     where
-        <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Deref<Target = [u8]> + Extend<u8> + Default,
+        <<T::Channel as Channel>::Sender<'a> as Sender>::Message: Deref<Target = [u8]> + Extend<u8> + Default,
     {
         BufferedSend::new(self, packet_type)
     }
@@ -284,7 +286,7 @@ where
     /// the packet is complete.
     pub async fn send<'a>(
         &'a mut self,
-        packet: HciPacket<<<T::Channel as Channel>::Sender<'a> as Sender>::Payload>,
+        packet: HciPacket<<<T::Channel as Channel>::Sender<'a> as Sender>::Message>,
     ) -> Result<(), SendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
         match packet.packet_type {
             HciPacketType::Command | HciPacketType::Event => self
@@ -305,7 +307,7 @@ where
     ///
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
-    pub async fn recv(&mut self) -> Option<HciPacket<<<T::Channel as Channel>::Receiver<'_> as Receiver>::Payload>> {
+    pub async fn recv(&mut self) -> Option<HciPacket<<<T::Channel as Channel>::Receiver<'_> as Receiver>::Message>> {
         self.channel_manager.get_rx_channel().get_receiver().recv().await
     }
 }
@@ -375,17 +377,17 @@ pub struct BufferedSend<'a, T, B> {
     packet_len: Option<usize>,
 }
 
-impl<'a, T> BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
+impl<'a, T> BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Message>
 where
     T: ChannelsManagement,
-    <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Deref<Target = [u8]> + Extend<u8>,
+    <<T::Channel as Channel>::Sender<'a> as Sender>::Message: Deref<Target = [u8]> + Extend<u8>,
 {
     /// Create a new `BufferSend`
     ///
     /// todo use pre-allocated buffers instead of creating them from default
     fn new(interface: &'a mut Interface<T>, packet_type: HciPacketType) -> Self
     where
-        <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Default,
+        <<T::Channel as Channel>::Sender<'a> as Sender>::Message: Default,
     {
         BufferedSend {
             interface,
@@ -552,10 +554,10 @@ where
     }
 }
 
-impl<'a, T> Extend<u8> for BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
+impl<'a, T> Extend<u8> for BufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Message>
 where
     T: ChannelsManagement,
-    <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Deref<Target = [u8]> + Extend<u8>,
+    <<T::Channel as Channel>::Sender<'a> as Sender>::Message: Deref<Target = [u8]> + Extend<u8>,
 {
     fn extend<I: IntoIterator<Item = u8>>(&mut self, iter: I) {
         self.add_bytes(iter);
@@ -606,16 +608,16 @@ where
 /// #![feature(generic_associated_types)]
 /// use futures::channel::mpsc;
 /// use futures::sink;
-/// use temp_::{Sender, HciPacket};
+/// use bo_tie::hci::interface::Sender;
 ///
-/// struct FuturesSender<T>(mpsc::Sender<HciPacket<T>>);
+/// struct FuturesSender<T>(mpsc::Sender<T>);
 ///
 /// impl<T> Sender for FuturesSender<T> {
 ///     type Error = mpsc::SendError;
-///     type Payload = T;
-///     type SendFuture<'a> = sink::Feed<'a, mpsc::Sender<HciPacket<T>>, HciPacket<T>> where T: 'a;
+///     type Message = T;
+///     type SendFuture<'a> = sink::Feed<'a, mpsc::Sender<T>, T> where T: 'a;
 ///
-///     fn send<'a>(&'a mut self, t: HciPacket<Self::Payload>) -> Self::SendFuture<'a> {
+///     fn send<'a>(&'a mut self, t: Self::Message) -> Self::SendFuture<'a> {
 ///         // Sending an item does not await until the item is received
 ///         sink::SinkExt::feed(&mut self.0, t)
 ///     }
@@ -629,16 +631,16 @@ where
 /// #![feature(type_alias_impl_trait)]
 /// # use std::future::Future;
 /// use tokio::sync::mpsc;
-/// use temp_::{Sender, HciPacket};
+/// use bo_tie::hci::interface::{Sender, HciPacket};
 ///
 /// struct TokioSender<T>(mpsc::Sender<HciPacket<T>>);
 ///
 /// impl<T> Sender for TokioSender<T> {
 ///     type Error = mpsc::error::SendError<HciPacket<T>>;
-///     type Payload = T;
+///     type Message = T;
 ///     type SendFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where T: 'a;
 ///
-///     fn send<'a>(&'a mut self, t: HciPacket<Self::Payload>) -> Self::SendFuture<'a> {
+///     fn send<'a>(&'a mut self, t: Self::Message) -> Self::SendFuture<'a> {
 ///         // Since `send` is an async method, its return type is hidden.
 ///         self.0.send(t)
 ///    }
@@ -646,12 +648,12 @@ where
 /// ```
 pub trait Sender {
     type Error;
-    type Payload;
+    type Message;
     type SendFuture<'a>: Future<Output = Result<(), Self::Error>>
     where
         Self: 'a;
 
-    fn send<'a>(&'a mut self, t: HciPacket<Self::Payload>) -> Self::SendFuture<'a>;
+    fn send<'a>(&'a mut self, t: Self::Message) -> Self::SendFuture<'a>;
 }
 
 /// The Receiver trait
@@ -681,13 +683,13 @@ pub trait Sender {
 /// use futures::channel::mpsc;
 /// use futures::stream;
 /// use futures::FutureExt;
-/// use temp_::{Receiver, HciPacket};
+/// use bo_tie::hci::interface::Receiver;
 ///
-/// struct FuturesReceiver<T>(mpsc::Receiver<HciPacket<T>>);
+/// struct FuturesReceiver<T>(mpsc::Receiver<T>);
 ///
 /// impl<T> Receiver for FuturesReceiver<T> {
-///     type Payload = T;
-///     type ReceiveFuture<'a> = stream::Next<'a, mpsc::Receiver<HciPacket<T>>> where T: 'a;
+///     type Message = T;
+///     type ReceiveFuture<'a> = stream::Next<'a, mpsc::Receiver<T>> where T: 'a;
 ///
 ///     fn recv<'a>(&'a mut self) -> Self::ReceiveFuture<'a> {
 ///         stream::StreamExt::next(&mut self.0)
@@ -702,13 +704,13 @@ pub trait Sender {
 /// #![feature(type_alias_impl_trait)]
 /// # use std::future::Future;
 /// use tokio::sync::mpsc;
-/// use temp_::{Receiver, HciPacket};
+/// use bo_tie::hci::interface::Receiver;
 ///
-/// struct TokioSender<T>(mpsc::Receiver<HciPacket<T>>);
+/// struct TokioSender<T>(mpsc::Receiver<T>);
 ///
 /// impl<T> Receiver for TokioSender<T> {
-///     type Payload = T;
-///     type ReceiveFuture<'a> = impl Future<Output = Option<HciPacket<T>>> + 'a where T: 'a;
+///     type Message = T;
+///     type ReceiveFuture<'a> = impl Future<Output = Option<T>> + 'a where T: 'a;
 ///
 ///     fn recv<'a>(&'a mut self) -> Self::ReceiveFuture<'a> {
 ///         // Since `send` is an async method, its return type is hidden.
@@ -717,8 +719,8 @@ pub trait Sender {
 /// }
 /// ```
 pub trait Receiver {
-    type Payload;
-    type ReceiveFuture<'a>: Future<Output = Option<HciPacket<Self::Payload>>>
+    type Message;
+    type ReceiveFuture<'a>: Future<Output = Option<Self::Message>>
     where
         Self: 'a;
 
@@ -726,33 +728,78 @@ pub trait Receiver {
 }
 
 /// The types of HCI packets
-pub enum HciPacketType {
+pub enum HciPacketType<T> {
     /// Command packet
-    Command,
+    Command(T),
     /// Asynchronous Connection-Oriented Data Packet
-    Acl,
+    Acl(T),
     /// Synchronous Connection-Oriented Data Packet
-    Sco,
+    Sco(T),
     /// Event Packet
-    Event,
+    Event(T),
     /// Isochronous Data Packet
-    Iso,
+    Iso(T),
 }
 
-/// An HCI packet
-pub struct HciPacket<T> {
-    packet_type: HciPacketType,
-    data: T,
+/// Inner interface messaging
+///
+/// This is the type for messages sent between the interface async task and either the host or a
+/// connection async tasks. HCI packets are the most common message, but there is also other types
+/// of messages sent for task related things.
+#[repr(transparent)]
+pub struct IntraMessage<T> {
+    pub(crate) ty: T,
 }
 
-impl<T> HciPacket<T>
-where
-    T: Deref<Target = [u8]>,
-{
-    /// Get the size of the HCI packet
-    pub fn len(&self) -> usize {
-        self.data.len()
+impl<T> IntraMessage<T> {
+    pub(crate) fn into_buffer(self) -> Option<T> {
+        match self.0 {
+            IntraMessageType::Command(_, t) => Some(t),
+            IntraMessageType::Acl(t) => Some(t),
+            IntraMessageType::Sco(t) => Some(t),
+            IntraMessageType::Event(t) => Some(t),
+            IntraMessageType::Iso(t) => Some(t),
+            _ => None,
+        }
     }
+}
+
+impl<T> From<IntraMessageType<T>> for IntraMessage<T> {
+    fn from(ty: IntraMessageType<T>) -> Self {
+        Self { ty }
+    }
+}
+
+impl<T> From<HciPacket<T>> for IntraMessage<T> {
+    fn from(packet: HciPacket<T>) -> Self {
+        let ty = IntraMessageType::Hci(packet);
+
+        Self { ty }
+    }
+}
+
+/// An enum of the type of message sent between two async tasks
+pub(crate) enum IntraMessageType<T> {
+    /*----------------------------
+       HCI Packet messages
+      ----------------------------*/
+
+    /// HCI Command Packet
+    Command(CommandEventMatcher, T),
+    /// HCI asynchronous Connection-Oriented Data Packet
+    Acl(T),
+    /// HCI synchronous Connection-Oriented Data Packet
+    Sco(T),
+    /// HCI Event Packet
+    Event(T),
+    /// HCI isochronous Data Packet
+    Iso(T),
+
+    /*----------------------------
+       Meta information messages
+      ----------------------------*/
+
+    /// Finished command
 }
 
 #[cfg(test)]

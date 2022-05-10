@@ -70,7 +70,7 @@ pub mod set_resolvable_private_address_timeout {
 
         let parameter = Parameter { time_out };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -108,7 +108,7 @@ pub mod set_address_resolution_enable {
     {
         let parameter = Parameter { enable };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -158,7 +158,7 @@ pub mod add_device_to_resolving_list {
     where
         I: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -201,7 +201,7 @@ pub mod remove_device_from_resolving_list {
     where
         I: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -230,7 +230,7 @@ pub mod clear_resolving_list {
     where
         I: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -290,6 +290,6 @@ pub mod set_privacy_mode {
     where
         I: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }

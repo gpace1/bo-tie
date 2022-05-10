@@ -77,7 +77,7 @@ pub mod connection_update {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(cu, events::Events::CommandStatus))
+        ReturnedFuture(hci.send_command(cu, CommandEventMatcher::CommandStatus))
     }
 }
 
@@ -108,7 +108,7 @@ pub mod create_connection_cancel {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(Parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -252,7 +252,7 @@ pub mod create_connection {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(cp, events::Events::CommandStatus))
+        ReturnedFuture(hci.send_command(cp, CommandEventMatcher::CommandStatus))
     }
 }
 pub mod read_channel_map {
@@ -349,7 +349,7 @@ pub mod read_channel_map {
             _connection_handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }
 }
 
@@ -388,7 +388,7 @@ pub mod read_remote_features {
             _connection_handle: handle.get_raw_handle(),
         };
 
-        ReturnedFuture(hci.send_command(parameter, events::Events::CommandStatus))
+        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandStatus))
     }
 }
 
@@ -463,7 +463,7 @@ pub mod set_host_channel_classification {
     where
         T: PlatformInterface,
     {
-        ReturnedFuture(hci.send_command(map, events::Events::CommandComplete))
+        ReturnedFuture(hci.send_command(map, CommandEventMatcher::CommandComplete))
     }
 }
 
