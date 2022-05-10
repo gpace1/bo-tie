@@ -3631,7 +3631,7 @@ macro_rules! events_markup {
             /// Packet as specified in the Bluetooth core specification (V 5.0, vol 2, Part E).
             /// Do not include the *HCI packet indicator* as that will (most likely) cause this
             /// method to panic.
-            pub fn try_from_packet( data: &[u8] ) -> Result<Self, alloc::string::String> {
+            pub fn try_from_packet( data: &[u8] ) -> Result<Self, EventError> {
 
                 use core::convert::TryFrom;
 
@@ -3651,7 +3651,7 @@ macro_rules! events_markup {
                         Ok(crate::hci::events::$EnumDataName::$name(
                             crate::hci::events::$data::<$( $type ),*>::try_from( RawData::from(&packet[..event_len]) )?)),
                     )*
-                    Err(err) => Err(err),
+                    Err(err) => Err(err.into()),
                 }
             }
         }
@@ -3761,8 +3761,9 @@ impl Events {
     }
 }
 
+/// Generic error for trying to convert raw data into an event
 #[derive(Debug)]
-struct EventError {
+pub struct EventError {
     for_event: Option<Events>,
     reason: EventErrorReason,
 }
@@ -3806,8 +3807,9 @@ enum EventErrorReason {
     EventCode(EventCodeError),
 }
 
+/// Error returned when trying to convert event codes into an `Events`
 #[derive(Debug)]
-struct EventCodeError {
+pub struct EventCodeError {
     code: u8,
     sub_code: Option<u8>,
 }
