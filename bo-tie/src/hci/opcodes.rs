@@ -263,7 +263,8 @@ impl StatusParameters {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LEController {
     SetEventMask,
-    ReadBufferSize,
+    ReadBufferSizeV1,
+    ReadBufferSizeV2,
     ReadLocalSupportedFeatures,
     SetRandomAddress,
     SetAdvertisingParameters,
@@ -313,7 +314,8 @@ impl LEController {
             ogf: LEController::OGF,
             ocf: match *self {
                 SetEventMask => 0x1,
-                ReadBufferSize => 0x2,
+                ReadBufferSizeV1 => 0x2,
+                ReadBufferSizeV2 => 0x60,
                 ReadLocalSupportedFeatures => 0x3,
                 SetRandomAddress => 0x5,
                 SetAdvertisingParameters => 0x6,
@@ -357,7 +359,8 @@ impl LEController {
     fn try_from(ocf: u16) -> Result<Self, alloc::string::String> {
         match ocf {
             0x1 => Ok(LEController::SetEventMask),
-            0x2 => Ok(LEController::ReadBufferSize),
+            0x2 => Ok(LEController::ReadBufferSizeV1),
+            0x60 => Ok(LEController::ReadBufferSizeV2),
             0x3 => Ok(LEController::ReadLocalSupportedFeatures),
             0x5 => Ok(LEController::SetRandomAddress),
             0x6 => Ok(LEController::SetAdvertisingParameters),

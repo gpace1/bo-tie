@@ -255,7 +255,7 @@ impl<M> HciDataPacketFlowManager<M> {
         //       plus the payload)
         // pc -> The size of the data buffer in the controller.
         let (pl, pc) = match le_read_buffer_size::send(&hi).await.unwrap() {
-            le_read_buffer_size::BufferSize {
+            le_read_buffer_size::BufferSizeV1 {
                 packet_len: Some(pl),
                 packet_cnt: Some(pc),
                 ..
@@ -559,14 +559,14 @@ mod tests {
             W: Into<Option<Waker>>,
         {
             match D::COMMAND {
-                opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize) => {
+                opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSizeV1) => {
                     let packet_len = Self::MAX_PAYLOAD_SIZE.to_le_bytes();
 
                     *self.e_data.lock().unwrap() =
                         Some(events::EventsData::CommandComplete(events::CommandCompleteData {
                             number_of_hci_command_packets: 10,
                             command_opcode: Some(
-                                opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize)
+                                opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSizeV1)
                                     .as_opcode_pair()
                                     .as_opcode(),
                             ),

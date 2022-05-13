@@ -2,26 +2,17 @@
 
 pub mod read_rssi {
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::events::CommandCompleteData;
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::StatusParameters(opcodes::StatusParameters::ReadRSSI);
 
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        handle: u16,
-        rssi: i8,
-    }
+    struct Parameter(ConnectionHandle);
 
-    struct Parameter {
-        handle: u16,
-    }
-
-    impl CommandParameter for Parameter {
-        type Parameter = u16;
+    impl CommandParameter<2> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            self.handle
+        fn get_parameter(&self) -> [u8; 2] {
+            self.0.get_raw_handle().to_le_bytes()
         }
     }
 
@@ -32,43 +23,40 @@ pub mod read_rssi {
         completed_packets_cnt: usize,
     }
 
-    impl RSSIInfo {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
+    impl TryFromCommandComplete for RSSIInfo {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
 
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    handle: ConnectionHandle::try_from(packed.handle)?,
-                    rssi: packed.rssi,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
+            let raw_handle = <u16>::from_le_bytes([
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let handle = ConnectionHandle::try_from(raw_handle).map_err(CCParameterError::InvalidEventParameter)?;
+
+            let rssi = *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)? as i8;
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            OK(Self {
+                handle,
+                rssi,
+                completed_packets_cnt,
+            })
         }
     }
 
     impl FlowControlInfo for RSSIInfo {
-        fn packet_space(&self) -> usize {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
 
-    impl_get_data_for_command!(COMMAND, CmdReturn, RSSIInfo, error::Error);
-
-    impl_command_complete_future!(RSSIInfo, error::Error);
-
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
+    /// Get the RSSI value for a specific connection
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
         handle: ConnectionHandle,
-    ) -> impl Future<Output = Result<RSSIInfo, impl Display + Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        let parameter = Parameter {
-            handle: handle.get_raw_handle(),
-        };
-
-        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
+    ) -> Result<RSSIInfo, CommandError<H>> {
+        host.send_command_expect_complete(Parameter(handle)).await
     }
 }

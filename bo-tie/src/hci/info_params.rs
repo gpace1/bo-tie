@@ -1,172 +1,5 @@
 //! Informational Parameter Commands
 
-/// Read BD_ADDR Command
-///
-/// For LE this will read the public address of the controller. If the controller doesn't have a
-/// public device address then this will return 0 as the address.
-pub mod read_bd_addr {
-
-    use crate::hci::*;
-    use crate::BluetoothDeviceAddress;
-    use core::fmt::{Debug, Display};
-
-    const COMMAND: opcodes::HCICommand =
-        opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBD_ADDR);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        address: BluetoothDeviceAddress,
-    }
-
-    pub struct Return {
-        address: BluetoothDeviceAddress,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
-    }
-
-    impl Return {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Return, error::Error> {
-            let status = error::Error::from(packed.status);
-
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    address: packed.address,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
-        }
-    }
-
-    impl core::ops::Deref for Return {
-        type Target = BluetoothDeviceAddress;
-
-        fn deref(&self) -> &Self::Target {
-            &self.address
-        }
-    }
-
-    impl crate::hci::FlowControlInfo for Return {
-        fn packet_space(&self) -> usize {
-            self.completed_packets_cnt
-        }
-    }
-
-    impl_get_data_for_command!(COMMAND, CmdReturn, Return, error::Error);
-
-    impl_command_complete_future!(Return, error::Error);
-
-    #[derive(Clone, Copy)]
-    struct Parameter;
-
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    /// Returns the bluetooth device address for the device
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl Display + Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        let cmd_rslt = hci.send_command(Parameter, CommandEventMatcher::CommandComplete);
-
-        ReturnedFuture(cmd_rslt)
-    }
-}
-
-/// Read Local Supported Features Command
-///
-/// This will return the supported features of the BR/EDR controller
-pub mod read_local_supported_features {
-
-    use crate::hci::common::EnabledFeaturesIter;
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand =
-        opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedFeatures);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        features: [u8; 8],
-    }
-
-    pub struct EnabledFeatures {
-        itr: EnabledFeaturesIter,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
-    }
-
-    impl EnabledFeatures {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
-
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    itr: EnabledFeaturesIter::from(packed.features),
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
-        }
-    }
-
-    impl core::ops::Deref for EnabledFeatures {
-        type Target = EnabledFeaturesIter;
-
-        fn deref(&self) -> &Self::Target {
-            &self.itr
-        }
-    }
-
-    impl core::ops::DerefMut for EnabledFeatures {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.itr
-        }
-    }
-
-    impl crate::hci::FlowControlInfo for EnabledFeatures {
-        fn packet_space(&self) -> usize {
-            self.completed_packets_cnt
-        }
-    }
-
-    impl_get_data_for_command!(COMMAND, CmdReturn, EnabledFeatures, error::Error);
-
-    impl_command_complete_future!(EnabledFeatures, error::Error);
-
-    #[derive(Clone, Copy)]
-    struct Parameter;
-
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<EnabledFeatures, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
-    }
-}
-
 /// Read Local Version Information Command
 ///
 /// This command will give the version information for the Host Controller Interface (HCI) and Link
@@ -175,20 +8,11 @@ pub mod read_local_supported_features {
 /// usually .
 pub mod read_local_version_information {
     use crate::hci::*;
+    use crate::hci::events::CommandCompleteData;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(
         opcodes::InformationParameters::ReadLocalSupportedVersionInformation,
     );
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        hci_version: u8,
-        hci_revision: u16,
-        lmp_pal_version: u8,
-        manufacturer_name: u16,
-        lmp_pal_subversion: u16,
-    }
 
     #[derive(Debug)]
     pub struct VersionInformation {
@@ -201,54 +25,60 @@ pub mod read_local_version_information {
         completed_packets_cnt: usize,
     }
 
-    impl VersionInformation {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
+    impl TryFromCommandComplete for VersionInformation {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
 
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    hci_version: packed.hci_version,
-                    hci_revision: packed.hci_revision,
-                    lmp_pal_version: packed.lmp_pal_version,
-                    manufacturer_name: packed.manufacturer_name,
-                    lmp_pal_subversion: packed.lmp_pal_subversion,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
+            let hci_version = *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?;
+
+            let hci_revision = <u16>::from_le_bytes([
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let lmp_pal_version = *cc.raw_data.get(4).ok_or(CCParameterError::InvalidEventParameter)?;
+
+            let manufacturer_name = <u16>::from_le_bytes([
+                *cc.raw_data.get(5).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(6).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let lmp_pal_subversion = <u16>::from_le_bytes([
+                *cc.raw_data.get(7).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(8).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                hci_version,
+                hci_revision,
+                lmp_pal_version,
+                manufacturer_name,
+                lmp_pal_subversion,
+                completed_packets_cnt
+            })
         }
     }
 
-    impl crate::hci::FlowControlInfo for VersionInformation {
-        fn packet_space(&self) -> usize {
+    impl FlowControlInfo for VersionInformation {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
-
-    impl_get_data_for_command!(COMMAND, CmdReturn, VersionInformation, error::Error);
-
-    impl_command_complete_future!(VersionInformation, error::Error);
-
-    #[derive(Clone, Copy)]
+    
     struct Parameter;
 
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
+    impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
+        fn get_parameter(&self) -> [u8; 0] {
+            []
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<VersionInformation, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
+    /// Get the version information from the Controller
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<VersionInformation, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
     }
 }
 
@@ -257,20 +87,14 @@ pub mod read_local_version_information {
 /// This returns the list of Host Controller Interface commands that are implemented by the
 /// controller.
 pub mod read_local_supported_commands {
-
     use crate::hci::*;
+    use crate::hci::events::CommandCompleteData;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedCommands);
 
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        supported_commands: [u8; 64],
-    }
 
-    #[cfg_attr(test, derive(Debug))]
-    #[derive(PartialEq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Ord, PartialOrd, Eq)]
     pub enum SupportedCommands {
         Inquiry,
         InquiryCancel,
@@ -559,6 +383,13 @@ pub mod read_local_supported_commands {
     }
 
     impl SupportedCommands {
+        /// The last byte containing command masks
+        ///
+        /// Instead of iterating into the bytes that have no masks, the `LAST_BYTE` is used to mark
+        /// wherever the last byte is used. This value will need to be updated when more commands
+        /// are added to the HCI in new editions of the Bluetooth Specification.
+        const LAST_BYTE: usize = 39;
+
         fn from_bit_pos(pos: (usize, usize)) -> Option<SupportedCommands> {
             use self::SupportedCommands::*;
 
@@ -836,14 +667,299 @@ pub mod read_local_supported_commands {
                 (38, 5) => Some(LEClearPeriodicAdvertiserListCommand),
                 (38, 6) => Some(LEReadPeriodicAdvertiserListSizeCommand),
                 (38, 7) => Some(LEReadTransmitPowerCommand),
-                (39, 0) => Some(LEReadRFPathCompensationCommand),
-                (39, 1) => Some(LEWriteRFPathCompensationCommand),
-                (39, 2) => Some(LESetPrivacyMode),
+                (Self::LAST_BYTE, 0) => Some(LEReadRFPathCompensationCommand),
+                (Self::LAST_BYTE, 1) => Some(LEWriteRFPathCompensationCommand),
+                (Self::LAST_BYTE, 2) => Some(LESetPrivacyMode),
                 _ => None,
             }
         }
+        /// Get the position of the command within the bit mask
+        ///
+        /// The return is the byte followed by the bit within the byte.
+        fn get_pos(&self) -> (usize, usize) {
+            use self::SupportedCommands::*;
 
-        pub(crate) fn try_from(packed: CmdReturn) -> Result<alloc::vec::Vec<Self>, error::Error> {
+            match self {
+                Inquiry => (0, 0),
+                InquiryCancel => (0, 1),
+                PeriodicInquiryMode => (0, 2),
+                ExitPeriodicInquiryMode => (0, 3),
+                CreateConnection => (0, 4),
+                Disconnect => (0, 5),
+                AddSCOConnection => (0, 6),
+                CreateConnectionCancel => (0, 7),
+                AcceptConnectionRequest => (1, 0),
+                RejectConnectionRequest => (1, 1),
+                LinkKeyRequestReply => (1, 2),
+                LinkKeyRequestNegativeReply => (1, 3),
+                PINCodeRequestReply => (1, 4),
+                PINCodeRequestNegativeReply => (1, 5),
+                ChangeConnectionPacketType => (1, 6),
+                AuthenticationRequested => (1, 7),
+                SetConnectionEncryption => (2, 0),
+                ChangeConnectionLinkKey => (2, 1),
+                MasterLinkKey => (2, 2),
+                RemoteNameRequest => (2, 3),
+                RemoteNameRequestCancel => (2, 4),
+                ReadRemoteSupportedFeatures => (2, 5),
+                ReadRemoteExtendedFeatures => (2, 6),
+                ReadRemoteVersionInformation => (2, 7),
+                ReadClockOffset => (3, 0),
+                ReadLMPHandle => (3, 1),
+                HoldMode => (4, 1),
+                SniffMode => (4, 2),
+                ExitSniffMode => (4, 3),
+                QosSetup => (4, 6),
+                RoleDiscovery => (4, 7),
+                SwitchRole => (5, 0),
+                ReadLinkPolicySettings => (5, 1),
+                WriteLinkPolicySettings => (5, 2),
+                ReadDefaultLinkPolicySettings => (5, 3),
+                WriteDefaultLinkPolicySettings => (5, 4),
+                FlowSpecification => (5, 5),
+                SetEventMask => (5, 6),
+                Reset => (5, 7),
+                SetEVentFilter => (6, 0),
+                Flush => (6, 1),
+                ReadPINType => (6, 2),
+                WritePINType => (6, 3),
+                CreateNewUnitKey => (6, 4),
+                ReadStoredLinkKey => (6, 5),
+                WriteStoredLinkKey => (6, 6),
+                DeleteStoredLinkKey => (6, 7),
+                WriteLocalName => (7, 0),
+                ReadLocalName => (7, 1),
+                ReadConnectionAcceptedTimeout => (7, 2),
+                WriteConnectionAcceptedTimeout => (7, 3),
+                ReadPageTimeout => (7, 4),
+                WritePageTimeout => (7, 5),
+                ReadScanEnable => (7, 6),
+                WriteScanEnable => (7, 7),
+                ReadPageScanActivity => (8, 0),
+                WritePageScanActivity => (8, 1),
+                ReadInquiryScanActivity => (8, 2),
+                WriteInquiryScanActivity => (8, 3),
+                ReadAuthenticationEnable => (8, 4),
+                WriteAuthenticationEnable => (8, 5),
+                ReadEncryptionMode => (8, 6),
+                WriteEncryptionMode => (8, 7),
+                ReadClassOfDevice => (9, 0),
+                WriteClassOfDevice => (9, 1),
+                REadVoiceSetting => (9, 2),
+                WriteVoiceSetting => (9, 3),
+                ReadAutomaticFlushTimeout => (9, 4),
+                WriteAutomaticFlushTimeout => (9, 5),
+                ReadNumBroadcastRetransmission => (9, 6),
+                WriteNumBroadcastRetransmissions => (9, 7),
+                ReadHoldModeActivity => (10, 0),
+                WriteHoldModeActiviy => (10, 1),
+                ReadTransmitPowerLevel => (10, 2),
+                ReadSynchronousFlowControlEnable => (10, 3),
+                WriteSynchronousFlowControlEnable => (10, 4),
+                SetConrollerToHostFlowControl => (10, 5),
+                HostBufferSize => (10, 6),
+                HostNumberOfCompletedPackets => (10, 7),
+                ReadLinkSupervisionTimeout => (11, 0),
+                WriteLinkSupervisionTimeout => (11, 1),
+                ReadNumberOfSupportedIAC => (11, 2),
+                ReadCurrentIACLAP => (11, 3),
+                WriteCurrentIACLAP => (11, 4),
+                ReadPageScanModePeriod => (11, 5),
+                WritePageScanModePeriod => (11, 6),
+                ReadPageScanMode => (11, 7),
+                WritePageSanMode => (12, 0),
+                SetAFHHostChannel => (12, 1),
+                ReadInquiryScanType => (12, 4),
+                WriteInquirySCanType => (12, 5),
+                ReadInquiryMode => (12, 6),
+                WriteInquiryMode => (12, 7),
+                ReadPageScanType => (13, 0),
+                WritePageScanType => (13, 1),
+                ReadAFHChannelAssessmentMode => (13, 2),
+                WriteAFHChannelAssessmentMode => (13, 3),
+                ReadLocalVersionInformation => (14, 3),
+                ReadLocalSupportedFeatures => (14, 5),
+                ReadLocalExtendedFeatures => (14, 6),
+                ReadBufferSize => (14, 7),
+                ReadCountryCode => (15, 0),
+                ReadBDADDR => (15, 1),
+                ReadFAiledContactCounter => (15, 2),
+                ResetFailedContactCounter => (15, 3),
+                ReadLinkQuality => (15, 4),
+                ReadRSSI => (15, 5),
+                ReadAFHChannelMap => (15, 6),
+                ReadClock => (15, 7),
+                ReadLoopbackMode => (16, 0),
+                WriteLoopbackMode => (16, 1),
+                EnableDeviceUnderTestMode => (16, 2),
+                SetupSynchronousConnectionRequest => (16, 3),
+                AcceptSynchronousConnectionRequest => (16, 4),
+                RejectSynchronousConnectionRequest => (16, 5),
+                ReadExtendedInquiryResponse => (17, 0),
+                WriteExtendedInquiryResponse => (17, 1),
+                RefreshEncryptionKey => (17, 2),
+                SniffSubrating => (17, 4),
+                ReadSimplePairingMode => (17, 5),
+                WriteSimplePairingMode => (17, 6),
+                ReadLocalOOBData => (17, 7),
+                ReadInquiryResponseTransmitPowerLevel => (18, 0),
+                WriteInquiryTransmitPowerLevel => (18, 1),
+                ReadDefaultErroneousDataReporting => (18, 2),
+                WriteDefaultErroneousDataReporting => (18, 3),
+                IOCapabilityRequestReply => (18, 7),
+                UserConfirmationRequestReply => (19, 0),
+                UserConfirmationRequestNegativeReply => (19, 1),
+                UserPasskeyRequestReply => (19, 2),
+                UserPasskeyRequestNegativeReply => (19, 3),
+                RemoteOOBDataRequestReply => (19, 4),
+                WriteSimplePairingDebugMode => (19, 5),
+                EnhancedFlush => (19, 6),
+                RemoteOOBDataRequestNagativeReply => (19, 7),
+                SendKeypressNotification => (20, 2),
+                IOCapabilityRequestNegativeReply => (20, 3),
+                ReadEncryptionKeySize => (20, 4),
+                CreatePhysicalLink => (21, 0),
+                AcceptPhysicalLink => (21, 1),
+                DisconnectPhysicalLink => (21, 2),
+                CreateLogicalLink => (21, 3),
+                AcceptLogicalLink => (21, 4),
+                DisconnectLogicalLink => (21, 5),
+                LogicalLinkCancel => (21, 6),
+                FlowSpecModify => (21, 7),
+                ReadLogicalLinkAcceptTimeout => (22, 0),
+                WriteLogicalLinkAcceptTimeout => (22, 1),
+                SetEventMaskPage2 => (22, 2),
+                ReadLocationData => (22, 3),
+                WRiteLocationData => (22, 4),
+                ReadLocalAMPInfo => (22, 5),
+                ReadLocalAMPASSOC => (22, 6),
+                WriteRemoteAMPASSOC => (22, 7),
+                READFlowControlMode => (23, 0),
+                WriteFlowControlMode => (23, 1),
+                ReadDataBlockSize => (23, 2),
+                EnableAMPReceiverReports => (23, 5),
+                AMPTestEnd => (23, 6),
+                AmPTest => (23, 7),
+                ReadEnhancedTransmitPowerLevel => (24, 0),
+                ReadBestEffortFlushTimeout => (24, 2),
+                WriteBestEffortFlushTimeout => (24, 3),
+                ShortRangeMode => (24, 4),
+                ReadLEHostSupport => (24, 5),
+                WriteLEHostSupport => (24, 6),
+                LESetEventMask => (25, 0),
+                LEReadBufferSize => (25, 1),
+                LEReadLocalSupportedFeatures => (25, 2),
+                LESetRandomAddress => (25, 4),
+                LESetAdvertisingParameters => (25, 5),
+                LEReadAdvertisingChannelTXPower => (25, 6),
+                LESetAdvertisingData => (25, 7),
+                LESetScanResponseData => (26, 0),
+                LESetAdvertisingEnable => (26, 1),
+                LESetScanParameters => (26, 2),
+                LESetScanEnable => (26, 3),
+                LECreateConnection => (26, 4),
+                LECreateConnectionCancel => (26, 5),
+                LEReadWhiteListSize => (26, 6),
+                LEClearWhiteList => (26, 7),
+                LEAddDeviceToWhiteList => (27, 0),
+                LERemoveDeviceFromWhiteList => (27, 1),
+                LEConnectionUpdate => (27, 2),
+                LESetHostChannelClassification => (27, 3),
+                LEReadChannelMap => (27, 4),
+                LEReadRemoteFeatures => (27, 5),
+                LEEncrypt => (27, 6),
+                LERand => (27, 7),
+                LEStartEncryption => (28, 0),
+                LELongTermKeyRequestReply => (28, 1),
+                LELongTermKeyRequestNegativeReply => (28, 2),
+                LEReadSupportedStates => (28, 3),
+                LEReceiverTest => (28, 4),
+                LETransmitterTest => (28, 5),
+                LETestEnd => (28, 6),
+                EnhancedSetupSynchronousConnection => (29, 3),
+                EnhancedAcceptSynchronousConnection => (29, 4),
+                ReadLocalSupportedCondecs => (29, 5),
+                SetMWSChannelParameters => (29, 6),
+                SetExternalFrameConfiguration => (29, 7),
+                SetMWSSignaling => (30, 0),
+                SetMWSTransportLayer => (30, 1),
+                SetMWSScanFrequencyTable => (30, 2),
+                GetMWSTransportLayerConfiguration => (30, 3),
+                SetMWSPATTERNConfiguration => (30, 4),
+                SetTriggeredClockCapture => (30, 5),
+                TruncatedPage => (30, 6),
+                TruncatedPageCancel => (30, 7),
+                SetConnectionlessSlaveBroadcast => (31, 0),
+                SetConnectionlessSlaveBroadcastReceive => (31, 1),
+                StartSynchronizationTrain => (31, 2),
+                ReceiveSynchronizationTrain => (31, 3),
+                SetReservedLTADDR => (31, 4),
+                DeleteReservedLTADDR => (31, 5),
+                SetConnectionlessSlaveBroadcastData => (31, 6),
+                ReadSynchronizationTrainParameters => (31, 7),
+                WriteSynchronizationTrainParameters => (32, 0),
+                RemoteOOBExtendedDataRequestReply => (32, 1),
+                ReadSecureConnectionsHostSupport => (32, 2),
+                WriteSecureConnectionsHostSupport => (32, 3),
+                ReadAuthenticatedPayloadTimeout => (32, 4),
+                WriteAuthenticatedPayloadTimeout => (32, 5),
+                ReadLocalOOBExtendedData => (32, 6),
+                WriteSecureConnectionsTestMode => (32, 7),
+                ReadExtendedPageTimeout => (33, 0),
+                WriteExtendedPageTimeout => (33, 1),
+                ReadExtendedInquiryLength => (33, 2),
+                WriteExtendedInquiryLengh => (33, 3),
+                LERemoteConnectionParameterRequestReply => (33, 4),
+                LERemoteConnectionParameterREquestNegativeReply => (33, 5),
+                LESetDataLength => (33, 6),
+                LEReadSuggestedDefaultDataLength => (33, 7),
+                LEWriteSuggestedDefaultDataLength => (34, 0),
+                LEReadLocalP256PublicKey => (34, 1),
+                LEGenerateDHKey => (34, 2),
+                LEAddDeviceToResolvingList => (34, 3),
+                LERemoveDeviceFromResolvingList => (34, 4),
+                LEClearResolvingList => (34, 5),
+                LEReadResolvingListSize => (34, 6),
+                LEReadPeerResolvableAddress => (34, 7),
+                LEReadLocalResolvableAddress => (35, 0),
+                LESetAddressResolutionEnable => (35, 1),
+                LESetResolvablePrivateAddressTimeout => (35, 2),
+                LEReadMaximumDataLength => (35, 3),
+                LEReadPHYCommand => (35, 4),
+                LESetDefaultPHYCommand => (35, 5),
+                LESetPHYCommand => (35, 6),
+                LEEnhancedReceiverTestCommand => (35, 7),
+                LEEnhancedTransmitterTestCommand => (36, 0),
+                LESetAdvertisingSetRandomAddressCommand => (36, 1),
+                LESetExtendedAdvertisingParametersCommand => (36, 2),
+                LESetExtendedAdvertisingDataCommand => (36, 3),
+                LESetExtendedScanResponseDataCommand => (36, 4),
+                LESetExtendedAdvertisingEnableCommand => (36, 5),
+                LEReadMaximumAdvertisingDataLengthCommand => (36, 6),
+                LEReadNumberOfSupportedAdvertisingSetCommand => (36, 7),
+                LERemoveAdvertisingSetCommand => (37, 0),
+                LEClearAdvertisingSetsCommand => (37, 1),
+                LESetPeriodicAdvertisingParametersCommand => (37, 2),
+                LESetPeriodicAdvertisingDataCommand => (37, 3),
+                LESetPeriodicAdvertisingEnableCommand => (37, 4),
+                LESetExtendedScanParametersCommand => (37, 5),
+                LESetExtendedScanEnableCommand => (37, 6),
+                LEExtendedCreateConnectionCommand => (37, 7),
+                LEPeriodicAdvertisingCreateSyncCommand => (38, 0),
+                LEPeriodicAdvertisingCreateSyncCancelCommand => (38, 1),
+                LEPeriodicAdvertisingTerminateSyncCommand => (38, 2),
+                LEAddDeviceToPeriodicAdvertiserListCommand => (38, 3),
+                LERemoveDeviceFromPeriodicAdvertiserListCommand => (38, 4),
+                LEClearPeriodicAdvertiserListCommand => (38, 5),
+                LEReadPeriodicAdvertiserListSizeCommand => (38, 6),
+                LEReadTransmitPowerCommand => (38, 7),
+                LEReadRFPathCompensationCommand => (Self::LAST_BYTE, 0),
+                LEWriteRFPathCompensationCommand => (Self::LAST_BYTE, 1),
+                LESetPrivacyMode => (Self::LAST_BYTE, 2),
+            }
+        }
+
+        fn iter_bit_mask(mask: &[u8; 64]) -> Result<alloc::vec::Vec<Self>, error::Error> {
             let status = error::Error::from(packed.status);
 
             if let error::Error::NoError = status {
@@ -868,58 +984,282 @@ pub mod read_local_supported_commands {
         }
     }
 
+    /// An iterator over the supported commands
+    ///
+    /// The controller returns a bit mask of the commands within
+    pub struct SuppCmdIter<'a> {
+        supported_commands: &'a [u8; 64],
+        byte: usize,
+        bit: usize,
+    }
+
+    impl<'a> SuppCmdIter<'a> {
+        fn new(supported_commands: &'a [u8; 64]) -> Self {
+            Self {
+                supported_commands,
+                byte: 0,
+                bit: 0,
+            }
+        }
+
+        fn next_pos(&mut self) {
+            if (self.bit + 1) / 8 == 1 {
+                self.bit += 1
+            } else {
+                self.bit = 0;
+                self.byte += 1;
+            }
+        }
+    }
+
+    impl Iterator for SuppCmdIter<'_> {
+        type Item = SupportedCommands;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                if Some(command) = SupportedCommands::from_bit_pos((self.byte, self.bit)) {
+                    if self.supported_commands[self.byte] & (1 << self.bit) {
+                        self.next_pos();
+
+                        break Some(command);
+                    }
+                } else {
+                    if self.byte > SupportedCommands::LAST_BYTE { break None }
+                }
+
+                self.next_pos()
+            }
+        }
+    }
+
+    /// The supported commands of the controller
     pub struct Return {
-        supported_commands: alloc::vec::Vec<SupportedCommands>,
+        supported_commands: [u8; 64],
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
 
     impl Return {
-        pub(crate) fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            Ok(Self {
-                supported_commands: SupportedCommands::try_from(packed)?,
-                completed_packets_cnt: cnt.into(),
-            })
+        /// Check if the command is enabled
+        pub fn is_enabled(&self, command: SupportedCommands) -> bool {
+            let (byte, bit) = command.get_pos();
+
+            self.supported_commands[byte] & (1 << bit) != 0
         }
-    }
 
-    impl crate::hci::FlowControlInfo for Return {
-        fn packet_space(&self) -> usize {
-            self.completed_packets_cnt
+        /// Iterate over the enabled commands
+        ///
+        /// # Note
+        /// Only the commands listed within [`SupportedCommands`](SupportedCommands) are iterated
+        /// over, any masked custom commands are not returned.
+        pub fn iter(&self) -> SuppCmdIter<'_> {
+            SuppCmdIter::new(&self.supported_commands)
         }
-    }
 
-    impl core::ops::Deref for Return {
-        type Target = [SupportedCommands];
-
-        fn deref(&self) -> &Self::Target {
+        /// Get the raw bit mask
+        pub fn get_raw_mask(&self) -> &[u8; 64] {
             &self.supported_commands
         }
     }
 
-    impl_get_data_for_command!(COMMAND, CmdReturn, Return, error::Error);
+    impl<'a> IntoIterator for &'a Return {
+        type Item = SupportedCommands;
+        type IntoIter = SuppCmdIter<'a>;
 
-    impl_command_complete_future!(Return, error::Error);
+        fn into_iter(self) -> Self::IntoIter {
+            Return::iter(self)
+        }
+    }
+
+    impl TryFromCommandComplete for Return {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            if cc.raw_data[1..].len() == 64 {
+                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+                let mut supported_commands = [0u8; 64];
+
+                supported_commands.copy_from_slice(&cc.raw_data[1..]);
+
+                Ok(Self {
+                    supported_commands,
+                    completed_packets_cnt,
+                })
+            } else {
+                Err(CCParameterError::InvalidEventParameter)
+            }
+        }
+    }
+
+    impl FlowControlInfo for Return {
+        fn command_count(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    struct Parameter;
+
+    impl CommandParameter<0> for Parameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> [u8;0] {
+            []
+        }
+    }
+
+    /// Get the bit mask of enabled commands from the Controller
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
+    }
+}
+
+/// Read Local Supported Features Command
+///
+/// This will return the supported features of the BR/EDR controller
+pub mod read_local_supported_features {
+
+    use crate::hci::common::{Features, EnabledFeaturesIter};
+    use crate::hci::*;
+    use crate::hci::events::CommandCompleteData;
+
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedFeatures);
+
+    pub struct EnabledFeatures {
+        raw_features: [u8; 8],
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl TryFromCommandComplete for EnabledFeatures {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            if cc.raw_data[1..].len() == 8 {
+                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+                let mut raw_features = [0u8; 8];
+
+                raw_features.copy_from_slice(&cc.raw_data[1..]);
+
+                Ok(Self {
+                    raw_features,
+                    completed_packets_cnt,
+                })
+            } else {
+                Err(CCParameterError::InvalidEventParameter)
+            }
+        }
+    }
+
+    impl IntoIterator for EnabledFeatures {
+        type Item = Features;
+        type IntoIter = EnabledFeaturesIter;
+
+        fn into_iter(self) -> Self::IntoIter {
+            EnabledFeaturesIter::from(self.raw_features)
+        }
+    }
+
+    impl IntoIterator for &EnabledFeatures {
+        type Item = Features;
+        type IntoIter = EnabledFeaturesIter;
+
+        fn into_iter(self) -> Self::IntoIter {
+            EnabledFeaturesIter::from(*self.raw_features)
+        }
+    }
+
+    impl FlowControlInfo for EnabledFeatures {
+        fn command_count(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
 
     #[derive(Clone, Copy)]
     struct Parameter;
 
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
+    impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
+        fn get_parameter(&self) -> [u8;0] {
+            []
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
+    /// Request the features of the Link Manager Protocol on the controller
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<EnabledFeatures, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
+    }
+}
+
+/// Read BD_ADDR Command
+///
+/// For LE this will read the public address of the controller. If the controller doesn't have a
+/// public device address then this will return 0 as the address.
+pub mod read_bd_addr {
+
+    use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
+    use crate::BluetoothDeviceAddress;
+    use core::fmt::{Debug, Display};
+
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBD_ADDR);
+
+    pub struct Return {
+        address: BluetoothDeviceAddress,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl TryFromCommandComplete for Return {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            if cc.raw_data[1..].len() == 6 {
+                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+                let mut address = BluetoothDeviceAddress::default();
+
+                address.copy_from_slice(&cc.raw_data[1..])
+
+                Ok(Return {
+                    address,
+                    completed_packets_cnt
+                })
+            } else {
+                Err(CCParameterError::InvalidEventParameter)
+            }
+        }
+    }
+
+    impl core::ops::Deref for Return {
+        type Target = BluetoothDeviceAddress;
+
+        fn deref(&self) -> &Self::Target {
+            &self.address
+        }
+    }
+
+    impl FlowControlInfo for Return {
+        fn command_count(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct Parameter;
+
+    impl CommandParameter<0> for Parameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> [u8; 0] {
+            []
+        }
+    }
+
+    /// Get the public Bluetooth device address
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
     }
 }
 
@@ -927,18 +1267,10 @@ pub mod read_local_supported_commands {
 pub mod read_buffer_size {
 
     use crate::hci::*;
+    use crate::hci::events::CommandCompleteData;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBufferSize);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        hc_acl_data_packet_len: u16,
-        hc_synchronous_data_packet_len: u8,
-        hc_total_num_acl_data_packets: u16,
-        hc_total_num_synchronous_data_packets: u16,
-    }
 
     pub struct Return {
         pub hc_acl_data_packet_len: usize,
@@ -948,58 +1280,63 @@ pub mod read_buffer_size {
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
+    
+    impl TryFromCommandComplete for Return {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
 
-    impl Return {
-        pub(crate) fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
+            let hc_acl_data_packet_len = <u16>::from_le_bytes([
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ])
+                .into();
 
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    hc_acl_data_packet_len: <u16>::from_le(packed.hc_acl_data_packet_len).into(),
+            let hc_synchronous_data_packet_len = <u16>::from_le_bytes([
+                *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(4).ok_or(CCParameterError::InvalidEventParameter)?,
+            ])
+                .into();
 
-                    hc_synchronous_data_packet_len: packed.hc_synchronous_data_packet_len.into(),
+            let hc_total_num_acl_data_packets = <u16>::from_le_bytes([
+                *cc.raw_data.get(5).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(6).ok_or(CCParameterError::InvalidEventParameter)?,
+            ])
+                .into();
 
-                    hc_total_num_acl_data_packets: <u16>::from_le(packed.hc_total_num_acl_data_packets).into(),
+            let hc_total_num_synchronous_data_packets = <u16>::from_le_bytes([
+                *cc.raw_data.get(7).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(8).ok_or(CCParameterError::InvalidEventParameter)?,
+            ])
+                .into();
 
-                    hc_total_num_synchronous_data_packets: <u16>::from_le(packed.hc_total_num_synchronous_data_packets)
-                        .into(),
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
+            Ok(Self {
+                hc_acl_data_packet_len,
+                hc_synchronous_data_packet_len,
+                hc_total_num_acl_data_packets,
+                hc_total_num_synchronous_data_packets,
+                completed_packets_cnt,
+            })
         }
     }
 
-    impl crate::hci::FlowControlInfo for Return {
-        fn packet_space(&self) -> usize {
+    impl FlowControlInfo for Return {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
 
-    impl_get_data_for_command!(COMMAND, CmdReturn, Return, error::Error);
-
-    impl_command_complete_future!(Return, error::Error);
-
-    #[derive(Clone, Copy)]
     struct Parameter;
 
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
+    impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
+        fn get_parameter(&self) -> [u8; 0] {
+            []
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
     }
 }

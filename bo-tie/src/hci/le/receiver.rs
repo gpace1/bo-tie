@@ -1,82 +1,4 @@
-pub mod receiver_test {
-
-    use crate::hci::le::common::Frequency;
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReceiverTest);
-
-    impl_status_return!(COMMAND);
-
-    impl CommandParameter for Frequency {
-        type Parameter = u8;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            self.get_val()
-        }
-    }
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        frequency: Frequency,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(frequency, CommandEventMatcher::CommandComplete))
-    }
-}
-
-pub mod set_scan_enable {
-
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetScanEnable);
-
-    impl_status_return!(COMMAND);
-
-    #[repr(packed)]
-    struct CmdParameter {
-        _enable: u8,
-        _filter_duplicates: u8,
-    }
-
-    struct Parameter {
-        enable: bool,
-        filter_duplicates: bool,
-    }
-
-    impl CommandParameter for Parameter {
-        type Parameter = CmdParameter;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            CmdParameter {
-                _enable: if self.enable { 1 } else { 0 },
-                _filter_duplicates: if self.filter_duplicates { 1 } else { 0 },
-            }
-        }
-    }
-
-    /// The command has the ability to enable/disable scanning and filter duplicate
-    /// advertisement.
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        enable: bool,
-        filter_duplicates: bool,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        let cmd_param = Parameter {
-            enable,
-            filter_duplicates,
-        };
-
-        ReturnedFuture(hci.send_command(cmd_param, CommandEventMatcher::CommandComplete))
-    }
-}
-
+/// LE Set Scan Parameters command
 pub mod set_scan_parameters {
 
     use crate::hci::le::common::OwnAddressType;
@@ -163,40 +85,103 @@ pub mod set_scan_parameters {
         }
     }
 
-    impl_status_return!(COMMAND);
-
-    #[repr(packed)]
-    #[doc(hidden)]
-    pub struct CmdParameter {
-        _scan_type: u8,
-        _scan_interval: u16,
-        _scan_window: u16,
-        _own_address_type: u8,
-        _filter_policy: u8,
-    }
-
-    impl CommandParameter for ScanningParameters {
-        type Parameter = CmdParameter;
+    impl CommandParameter<7> for ScanningParameters {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            CmdParameter {
-                _scan_type: self.scan_type.into_val(),
-                _scan_interval: self.scan_interval.get_raw_val(),
-                _scan_window: self.scan_window.get_raw_val(),
-                _own_address_type: self.own_address_type.into_val(),
-                _filter_policy: self.scanning_filter_policy.into_val(),
-            }
+        fn get_parameter(&self) -> [u8; 7] {
+            let mut parameter = [0u8; 7];
+
+            parameter[0] = self.scan_type.into_val();
+
+            parameter[1..3].copy_from_slice(&self.scan_interval.get_raw_val().to_le_bytes());
+
+            parameter[3..5].copy_from_slice(&self.scan_window.get_raw_val().to_le_bytes());
+
+            parameter[5] = self.own_address_type.into_val();
+
+            parameter[6] = self.scanning_filter_policy.into_val();
+
+            parameter
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        sp: ScanningParameters,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(sp, CommandEventMatcher::CommandComplete))
+    /// Send the LE Set Scan Parameters command
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        parameters: ScanningParameters,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameters).await;
+
+        r
+    }
+}
+
+/// LE Set Scan Enable command
+pub mod set_scan_enable {
+
+    use crate::hci::*;
+
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetScanEnable);
+
+    struct Parameter {
+        enable: bool,
+        filter_duplicates: bool,
+    }
+
+    impl CommandParameter<2> for Parameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> Self::Parameter {
+            [
+                if self.enable { 1 } else { 0 },
+                if self.filter_duplicates { 1 } else { 0 },
+            ]
+        }
+    }
+
+    /// Send the LE Set Scan Enable command
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        enable: bool,
+        filter_duplicates: bool,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let parameter = Parameter {
+            enable,
+            filter_duplicates,
+        };
+
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
+
+        r
+    }
+}
+
+/// LE Receiver Test command
+pub mod receiver_test {
+
+    use crate::hci::le::common::Frequency;
+    use crate::hci::*;
+
+    const COMMAND_V1: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReceiverTest);
+
+    struct ParameterV1 {
+        frequency: Frequency,
+    }
+
+    impl CommandParameter<1> for ParameterV1 {
+        const COMMAND: opcodes::HCICommand = COMMAND_V1;
+        fn get_parameter(&self) -> [u8; 1] {
+            [self.frequency.get_val()]
+        }
+    }
+
+    /// Send LE Receiver Test (v1) command
+    pub async fn send_v1<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        frequency: Frequency,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let parameter = ParameterV1 { frequency };
+
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
+
+        r
     }
 }

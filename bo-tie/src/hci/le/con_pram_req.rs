@@ -6,29 +6,12 @@
 pub mod remote_connection_parameter_request_reply {
 
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::events::CommandCompleteData;
     use crate::hci::le::common::{ConnectionEventLength, ConnectionInterval, ConnectionLatency, SupervisionTimeout};
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::LEController(opcodes::LEController::ReadConnectionParameterRequestReply);
-
-    #[repr(packed)]
-    struct CommandReturn {
-        status: u8,
-        connection_handle: u16,
-    }
-
-    #[repr(packed)]
-    #[doc(hidden)]
-    pub struct Parameter {
-        _connection_handle: u16,
-        _interval_min: u16,
-        _interval_max: u16,
-        _latency: u16,
-        _timeout: u16,
-        _minimum_ce_len: u16,
-        _maximum_ce_len: u16,
-    }
 
     pub struct CommandParameters {
         /// The handle for the connection
@@ -45,19 +28,26 @@ pub mod remote_connection_parameter_request_reply {
         pub ce_len: ConnectionEventLength,
     }
 
-    impl CommandParameter for CommandParameters {
-        type Parameter = Parameter;
+    impl CommandParameter<14> for CommandParameters {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            Parameter {
-                _connection_handle: self.handle.get_raw_handle().to_le(),
-                _interval_min: self.interval_min.get_raw_val().to_le(),
-                _interval_max: self.interval_max.get_raw_val().to_le(),
-                _latency: self.latency.get_latency().to_le(),
-                _timeout: self.timeout.get_timeout().to_le(),
-                _minimum_ce_len: self.ce_len.minimum.to_le(),
-                _maximum_ce_len: self.ce_len.maximum.to_le(),
-            }
+        fn get_parameter(&self) -> [u8; 14] {
+            let mut parameter = [0u8; 14];
+
+            parameter[0..2].copy_from_slice(&self.handle.get_raw_handle().to_le_bytes());
+
+            parameter[2..4].copy_from_slice(&self.interval_min.get_raw_val().to_le_bytes());
+
+            parameter[4..6].copy_from_slice(&self.interval_max.get_raw_val().to_le_bytes());
+
+            parameter[6..8].copy_from_slice(&self.latency.get_latency().to_le_bytes());
+
+            parameter[8..10].copy_from_slice(&self.timeout.get_timeout().to_le_bytes());
+
+            parameter[10..12].copy_from_slice(&self.ce_len.minimum.to_le_bytes());
+
+            parameter[12..14].copy_from_slice(&self.ce_len.maximum.to_le_bytes());
+
+            parameter
         }
     }
 
@@ -67,61 +57,44 @@ pub mod remote_connection_parameter_request_reply {
         completed_packets_cnt: usize,
     }
 
-    impl Return {
-        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
+    impl TryFromCommandComplete for Return {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
 
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    connection_handle: ConnectionHandle::try_from(packed.connection_handle)?,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
+            let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]))
+            .map_err(|e| CCParameterError::InvalidEventParameter)?;
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                connection_handle,
+                completed_packets_cnt,
+            })
         }
     }
 
-    impl crate::hci::FlowControlInfo for Return {
-        fn packet_space(&self) -> usize {
+    impl FlowControlInfo for Return {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
 
-    impl_get_data_for_command!(COMMAND, CommandReturn, Return, error::Error);
-
-    impl_command_complete_future!(Return, error::Error);
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        parameter: CommandParameters,
-    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        parameters: CommandParameters,
+    ) -> Result<Return, CommandError<H>> {
+        host.send_command_expect_complete(parameters).await
     }
 }
 
-/// Send the negative reply to a connection parameter request
-///
-/// This sends a reason as to why the the request is rejected
-///
-/// # Note
-/// That reason cannot be
-/// [`NoError`](crate::hci::error::Error::NoError) nor
-/// [`Message`](crate::hci::error::Error::Message)
-/// as they are translated into the value of 0 on the interface.
 pub mod remote_connection_parameter_request_negative_reply {
 
     use crate::hci::common::ConnectionHandle;
+    use crate::hci::events::CommandCompleteData;
     use crate::hci::*;
-
-    struct CommandReturn {
-        status: u8,
-        connection_handle: u16,
-    }
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::LEController(opcodes::LEController::ReadConnectionParameterRequestNegativeReply);
@@ -132,59 +105,78 @@ pub mod remote_connection_parameter_request_negative_reply {
         completed_packets_cnt: usize,
     }
 
-    impl Return {
-        fn try_from((packed, cnt): (CommandReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
+    impl TryFromCommandComplete for Return {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
 
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    connection_handle: ConnectionHandle::try_from(packed.connection_handle)?,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
+            let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]))
+            .map_err(|e| CCParameterError::InvalidEventParameter)?;
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                connection_handle,
+                completed_packets_cnt,
+            })
         }
     }
 
-    impl crate::hci::FlowControlInfo for Return {
-        fn packet_space(&self) -> usize {
+    impl FlowControlInfo for Return {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
 
-    impl_get_data_for_command!(COMMAND, CommandReturn, Return, error::Error);
-
-    impl_command_complete_future!(Return, error::Error);
-
-    #[repr(packed)]
-    #[derive(Clone, Copy)]
     struct Parameter {
-        _handle: u16,
-        _reason: u8,
+        handle: ConnectionHandle,
+        reason: error::Error,
     }
 
-    impl CommandParameter for Parameter {
-        type Parameter = Parameter;
+    impl CommandParameter<3> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
+        fn get_parameter(&self) -> [u8; 3] {
+            let mut parameter = [0u8; 3];
+
+            parameter[..2].copy_from_slice(&self.handle.get_raw_handle().to_le_bytes());
+
+            parameter[2] = self.reason.into();
+
+            parameter
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
+    /// Send the negative reply to a connection parameter request
+    ///
+    /// This sends a reason as to why the the request is rejected
+    ///
+    /// # Panic
+    /// The reason cannot be
+    /// [`NoError`](crate::hci::error::Error::NoError) nor
+    /// [`Message`](crate::hci::error::Error::Message)
+    /// as they are translated into the value of 0 on the interface.
+    pub async fn send<H: HostGenerics>(
+        hci: &mut HostInterface<H>,
         handle: ConnectionHandle,
         reason: error::Error,
-    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        let parameter = Parameter {
-            _handle: handle.get_raw_handle().to_le(),
-            _reason: reason.into(),
-        };
+    ) -> Result<Return, CommandError<H>> {
+        use core::mem::discriminant;
+
+        assert_ne!(
+            error::Error::NoError,
+            reason,
+            "input 'reason' cannot be error 'NoError'"
+        );
+
+        assert_ne!(
+            discriminant(&error::Error::Message("")),
+            discriminant(&reason),
+            "input 'reason' cannot be error 'Message'"
+        );
+
+        let parameter = Parameter { handle, reason };
 
         ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
     }

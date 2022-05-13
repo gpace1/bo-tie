@@ -12,46 +12,462 @@ pub use super::super::info_params::read_local_supported_commands;
 pub use super::super::info_params::read_local_supported_features as info_params_read_local_supported_features;
 pub use super::super::info_params::read_local_version_information;
 
+/// Set the [`LeMeta`](crate::hci::events::LEMeta) event mask
+pub mod set_event_mask {
+
+    use crate::hci::events::LEMeta;
+    use crate::hci::*;
+    use crate::hci::cb::set_event_mask::EventMask::LEMeta;
+
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetEventMask);
+
+    impl LEMeta {
+        fn bit_offset(&self) -> usize {
+            match *self {
+                LEMeta::ConnectionComplete => 0,
+                LEMeta::AdvertisingReport => 1,
+                LEMeta::ConnectionUpdateComplete => 2,
+                LEMeta::ReadRemoteFeaturesComplete => 3,
+                LEMeta::LongTermKeyRequest => 4,
+                LEMeta::RemoteConnectionParameterRequest => 5,
+                LEMeta::DataLengthChange => 6,
+                LEMeta::ReadLocalP256PublicKeyComplete => 7,
+                LEMeta::GenerateDHKeyComplete => 8,
+                LEMeta::EnhancedConnectionComplete => 9,
+                LEMeta::DirectedAdvertisingReport => 10,
+                LEMeta::PHYUpdateComplete => 11,
+                LEMeta::ExtendedAdvertisingReport => 12,
+                LEMeta::PeriodicAdvertisingSyncEstablished => 13,
+                LEMeta::PeriodicAdvertisingReport => 14,
+                LEMeta::PeriodicAdvertisingSyncLost => 15,
+                LEMeta::ScanTimeout => 16,
+                LEMeta::AdvertisingSetTerminated => 17,
+                LEMeta::ScanRequestReceived => 18,
+                LEMeta::ChannelSelectionAlgorithm => 19,
+            }
+        }
+
+        fn build_mask(events: &[Self]) -> [u8; 8] {
+            let mut mask = <[u8; 8]>::default();
+
+            for event in events.iter() {
+                let bit = event.bit_offset();
+                let byte = bit / 8;
+
+                mask[byte] |= 1 << (bit % 8);
+            }
+
+            mask
+        }
+    }
+
+    struct CmdParameter {
+        mask: [u8; 8],
+    }
+
+    impl CommandParameter<8> for CmdParameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> [u8;8] {
+            self.mask
+        }
+    }
+
+    /// Set the enabled events on a device
+    ///
+    /// ```rust
+    /// # use bo_tie::hci::{PlatformInterface, CommandParameter, events, EventMatcher};
+    /// # use std::task::Waker;
+    /// # use std::time::Duration;
+    /// # use std::pin::Pin;
+    /// # use std::sync::Arc;
+    /// #
+    /// # #[derive(Default)]
+    /// # pub struct StubHi;
+    /// #
+    /// # #[derive(Debug)]
+    /// # pub struct ReceiveError;
+    /// #
+    /// # impl core::fmt::Display for ReceiveError {
+    /// #     fn fmt(&self,f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+    /// #     {
+    /// #          unimplemented!()
+    /// #     }
+    /// # }
+    /// #
+    /// # impl PlatformInterface for StubHi {
+    /// #     type SendCommandError = &'static str;
+    /// #     type ReceiveEventError = ReceiveError;
+    /// #
+    /// #     fn send_command<D, W>(&self, _: &D, _: W)
+    /// #     -> Result<bool, Self::SendCommandError>
+    /// #     where D: CommandParameter,
+    /// #           W: Into<Option<Waker>>,
+    /// #     {
+    /// #         Ok(true)
+    /// #     }
+    /// #
+    /// #     fn receive_event<P>(&self, _: Option<events::Events>, _: &Waker, _: Pin<Arc<P>> )
+    /// #     -> Option<Result<events::EventsData, Self::ReceiveEventError>>
+    /// #     where P: EventMatcher + Send + Sync + 'static,
+    /// #     {
+    /// #         None
+    /// #     }
+    /// # }
+    /// #
+    /// # let host_interface = bo_tie::hci::HostInterface::<StubHi>::default();
+    ///
+    /// use bo_tie::hci::le::mandatory::set_event_mask::{self, send};
+    /// use bo_tie::hci::events::LEMeta;
+    /// use serde::export::Formatter;
+    ///
+    ///
+    /// let events = vec!(LEMeta::ConnectionComplete,LEMeta::AdvertisingReport);
+    ///
+    /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
+    /// send(&host_interface, &events);
+    /// ```
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>, enabled_events: &[LEMeta]) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let mask = LEMeta::build_mask(enabled_events);
+
+        let parameter = CmdParameter { mask };
+
+        let r : Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
+
+        r
+    }
+}
+
+/// Read the size of the LE HCI data buffer
+pub mod read_buffer_size {
+
+    use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
+    use crate::hci::opcodes::HCICommand;
+
+    const COMMAND_V1: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSizeV1);
+    const COMMAND_V2: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::)
+
+    struct ParameterV1;
+
+    impl CommandParameter<0> for ParameterV1 {
+        const COMMAND: opcodes::HCICommand = COMMAND_V1;
+        fn get_parameter(&self) -> [u8; 0] {
+            []
+        }
+    }
+
+    struct ParameterV2;
+
+    impl CommandParameter<0> for ParameterV2 {
+        const COMMAND: HCICommand = COMMAND_V2;
+        fn get_parameter(&self) -> [u8; 0] {
+            []
+        }
+    }
+
+    /// Buffer Size (version 1)
+    ///
+    /// This type consists of the ACL packet data length and total number of ACL data
+    /// packets the Bluetooth device (controller portion) can store.
+    ///
+    /// If either member of BufferSize is None (they are either both None or both Some),
+    /// then the Read Buffer Size (v5 | vol2, part E, sec 7.4.5) command should be used
+    /// instead.
+    #[derive(Debug)]
+    pub struct BufferSizeV1 {
+        /// The maximum size of each ACL packet
+        pub packet_len: Option<u16>,
+        /// The maximum number of ACL packets that the controller can hold
+        pub packet_cnt: Option<u8>,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl TryFromCommandComplete for BufferSizeV1 {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            let raw_packet_len = <u16>::from_le_bytes([
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let raw_packet_cnt = *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)?;
+
+            let packet_len = (raw_packet_len != 0).then(|| raw_packet_len);
+
+            let packet_cnt = (raw_packet_cnt != 0).then(|| raw_packet_cnt);
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                packet_len,
+                packet_cnt,
+                completed_packets_cnt,
+            })
+        }
+    }
+
+    impl FlowControlInfo for BufferSizeV1 {
+        fn command_count(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct BufferSizeV2 {
+        /// The maximum size of each ACL packet
+        pub acl_packet_len: Option<u16>,
+        /// The maximum number of ACL packets that the controller can hold
+        pub acl_packet_cnt: Option<u8>,
+        /// The maximum size of each ISO packet
+        pub iso_packet_len: Option<u16>,
+        /// The maximum number of ISO packets that the controller can hold
+        pub iso_packet_cnt: Option<u8>,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl TryFromCommandComplete for BufferSizeV2 {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            let raw_acl_packet_len = <u16>::from_le_bytes([
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let raw_acl_packet_cnt = *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)?;
+
+            let raw_iso_packet_len = <u16>::from_le_bytes([
+                *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(4).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let raw_iso_packet_cnt = *cc.raw_data.get(5).ok_or(CCParameterError::InvalidEventParameter)?;
+
+            let acl_packet_len = (raw_acl_packet_len != 0).then(|| raw_acl_packet_len);
+
+            let acl_packet_cnt = (raw_acl_packet_cnt != 0).then(|| raw_acl_packet_cnt);
+
+            let iso_packet_len = (raw_iso_packet_len != 0).then(|| raw_iso_packet_len);
+
+            let iso_packet_cnt = (raw_iso_packet_cnt != 0).then(|| raw_iso_packet_cnt);
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                acl_packet_len,
+                acl_packet_cnt,
+                iso_packet_len,
+                iso_packet_cnt,
+                completed_packets_cnt
+            })
+        }
+    }
+
+    /// Request information on the LE data buffers (version 1)
+    ///
+    /// This only returns the buffer information for LE ACL data packets.
+    pub async fn send_v1<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<BufferSizeV1, CommandError<H>> {
+        host.send_command_expect_complete(ParameterV1).await
+    }
+
+    /// Request information on the LE data buffers (version 2)
+    ///
+    /// This returns the buffer information for the LE ACL and LE ISO data packets.
+    pub async fn send_v2<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<BufferSizeV2, CommandError<H>> {
+        host.send_command_expect_complete(ParameterV2).await
+    }
+}
+
+pub mod read_local_supported_features {
+
+    use crate::hci::le::common::EnabledLeFeaturesItr;
+    use crate::hci::*;
+    use crate::hci::events::CommandCompleteData;
+
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
+
+    pub struct EnabledLeFeatures {
+        features_mask: [u8;8],
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl EnabledLeFeatures {
+        pub fn iter(&self) -> EnabledLEFeaturesItr {
+            EnabledLeFeaturesItr::from(self.features_mask)
+        }
+    }
+
+    impl IntoIterator for EnabledLeFeatures {
+        type Item = EnabledLeFeaturesItr::Item;
+        type IntoIter = EnabledLeFeaturesItr;
+
+        fn into_iter(self) -> Self::IntoIter {
+            EnabledLeFeaturesItr::from(self.features_mask)
+        }
+    }
+
+    impl TryFromCommandComplete for EnabledLeFeatures {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            if cc.raw_data[1..].len() == 8 {
+                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+                let mut features_mask = [0u8; 8];
+
+                features_mask.copy_from_slice(&cc.raw_data[1..]);
+
+                Ok(Self {
+                    features_mask,
+                    completed_packets_cnt
+                })
+            } else {
+                Err(CCParameterError::InvalidEventParameter)
+            }
+        }
+    }
+
+    impl FlowControlInfo for EnabledLeFeatures {
+        fn command_count(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    struct Parameter;
+
+    impl CommandParameter<0> for Parameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> [u8;0] {
+            []
+        }
+    }
+
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<EnabledLeFeatures, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
+    }
+}
+
+pub mod read_white_list_size {
+
+    use crate::hci::*;
+    use crate::hci::events::CommandCompleteData;
+
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadWhiteListSize);
+
+    pub struct WhiteListSize {
+        pub list_size: usize,
+        /// The number of HCI command packets completed by the controller
+        completed_packets_cnt: usize,
+    }
+
+    impl TryFromCommandComplete for WhiteListSize {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            let list_size = cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?.into();
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                list_size,
+                completed_packets_cnt
+            })
+        }
+    }
+
+    impl core::ops::Deref for WhiteListSize {
+        type Target = usize;
+
+        fn deref(&self) -> &Self::Target {
+            &self.list_size
+        }
+    }
+
+    impl FlowControlInfo for WhiteListSize {
+        fn command_count(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
+    struct Parameter;
+
+    impl CommandParameter<0> for Parameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> [u8;0] {
+            []
+        }
+    }
+
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<WhiteListSize, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
+    }
+}
+
+pub mod clear_white_list {
+
+    use crate::hci::*;
+
+    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ClearWhiteList);
+
+    struct Parameter;
+
+    impl CommandParameter<0> for Parameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> [u8; 0] {
+            []
+        }
+    }
+
+    /// Send the command to clear the white list
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
+
+        r
+    }
+}
+
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
-        use crate::hci::events::Events;
+        use crate::hci::events::CommandCompleteData;
+        use crate::BluetoothDeviceAddress,
         use crate::hci::*;
 
-        /// Command parameter data for both add and remove whitelist commands.
-        #[repr(packed)]
-        #[derive(Clone, Copy)]
         struct CommandPrameter {
-            _address_type: u8,
-            _address: [u8; 6],
+            address_type: u8,
+            address: BluetoothDeviceAddress,
         }
 
-        impl_status_return!($command);
-
-        #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-        pub fn send<'a, T: 'static>(
-            hci: &'a HostInterface<T>,
-            at: crate::hci::le::common::WhiteListedAddressType,
-            addr: crate::BluetoothDeviceAddress,
-        ) -> impl core::future::Future<
-            Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>,
-        > + 'a
-        where
-            T: PlatformInterface,
-        {
-            let parameter = CommandPrameter {
-                _address_type: at.to_value(),
-                _address: addr,
-            };
-
-            ReturnedFuture(hci.send_command(parameter, Events::CommandComplete))
-        }
-
-        impl CommandParameter for CommandPrameter {
-            type Parameter = Self;
+        impl CommandParameter<7> for CommandPrameter {
             const COMMAND: opcodes::HCICommand = $command;
-            fn get_parameter(&self) -> Self::Parameter {
-                *self
+            fn get_parameter(&self) -> [u8; 7] {
+                let mut parameter = [0u8; 7];
+
+                parameter[0] = self.address_type;
+
+                parameter[1..].copy_from_slice(&self.address);
+
+                parameter
             }
+        }
+
+        pub async fn send<H: HostGenerics>(
+            host: &mut HostInterface<H>,
+            address_type: crate::hci::le::common::WhiteListedAddressType,
+            address: crate::BluetoothDeviceAddress,
+        ) -> Result<impl FlowControlInfo, CommandError<H>> {
+            let parameter = CommandParameter {
+                address_type,
+                address
+            }
+
+            let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
+
+            r
         }
     };
 }
@@ -63,216 +479,22 @@ pub mod add_device_to_white_list {
     add_remove_white_list_setup!(COMMAND);
 }
 
-pub mod clear_white_list {
+pub mod remove_device_from_white_list {
 
-    use crate::hci::*;
+    const COMMAND: crate::hci::opcodes::HCICommand =
+        crate::hci::opcodes::HCICommand::LEController(crate::hci::opcodes::LEController::RemoveDeviceFromWhiteList);
 
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ClearWhiteList);
-
-    #[derive(Clone, Copy)]
-    struct Parameter;
-
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    impl_status_return!(COMMAND);
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
-    }
+    add_remove_white_list_setup!(COMMAND);
 }
 
-/// Read the size of the LE HCI data buffer
-pub mod read_buffer_size {
-
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSize);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        packet_length: u16,
-        maximum_packet_cnt: u8,
-    }
-
-    #[derive(Clone, Copy)]
-    struct Parameter;
-
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    /// This type consists of the ACL packet data length and total number of ACL data
-    /// packets the Bluetooth device (controller portion) can store.
-    ///
-    /// If either member of BufferSize is None (they are either both None or both Some),
-    /// then the Read Buffer Size (v5 | vol2, part E, sec 7.4.5) command should be used
-    /// instead.
-    #[derive(Debug)]
-    pub struct BufferSize {
-        /// The maximum size of each packet
-        pub packet_len: Option<u16>,
-        /// The maximum number of packets that the controller can hold
-        pub packet_cnt: Option<u8>,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
-    }
-
-    impl BufferSize {
-        fn try_from((packed, buf_cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let err_val = error::Error::from(packed.status);
-
-            match err_val {
-                error::Error::NoError => {
-                    let len = if packed.packet_length != 0 {
-                        Some(<u16>::from_le(packed.packet_length))
-                    } else {
-                        None
-                    };
-
-                    let cnt = if packed.maximum_packet_cnt != 0 {
-                        Some(packed.maximum_packet_cnt)
-                    } else {
-                        None
-                    };
-
-                    Ok(BufferSize {
-                        packet_len: len,
-                        packet_cnt: cnt,
-                        completed_packets_cnt: buf_cnt.into(),
-                    })
-                }
-                _ => Err(err_val),
-            }
-        }
-    }
-
-    impl crate::hci::FlowControlInfo for BufferSize {
-        fn packet_space(&self) -> usize {
-            self.completed_packets_cnt
-        }
-    }
-
-    impl_get_data_for_command!(COMMAND, CmdReturn, BufferSize, error::Error);
-
-    impl_command_complete_future!(BufferSize, error::Error);
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<BufferSize, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
-    }
-}
-
-pub mod read_local_supported_features {
-
-    use crate::hci::le::common::EnabledLeFeaturesItr;
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand =
-        opcodes::HCICommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        features: [u8; 8],
-    }
-
-    pub struct ReturnedEnabledLeFeaturesItr {
-        itr: EnabledLeFeaturesItr,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
-    }
-
-    impl core::ops::Deref for ReturnedEnabledLeFeaturesItr {
-        type Target = EnabledLeFeaturesItr;
-
-        fn deref(&self) -> &Self::Target {
-            &self.itr
-        }
-    }
-
-    impl ReturnedEnabledLeFeaturesItr {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
-
-            if let error::Error::NoError = status {
-                let itr = EnabledLeFeaturesItr::from(packed.features);
-
-                Ok(Self {
-                    itr,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
-        }
-    }
-
-    impl crate::hci::FlowControlInfo for ReturnedEnabledLeFeaturesItr {
-        fn packet_space(&self) -> usize {
-            self.completed_packets_cnt
-        }
-    }
-
-    impl_get_data_for_command!(COMMAND, CmdReturn, ReturnedEnabledLeFeaturesItr, error::Error);
-
-    impl_command_complete_future!(ReturnedEnabledLeFeaturesItr, error::Error);
-
-    #[derive(Clone, Copy)]
-    struct Parameter;
-
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<ReturnedEnabledLeFeaturesItr, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
-    }
-}
 
 pub mod read_supported_states {
 
     use crate::hci::*;
     use core::mem::size_of_val;
+    use crate::hci::events::CommandCompleteData;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadSupportedStates);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        states: [u8; 8],
-    }
 
     /// All possible states/roles a controller can be in
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -352,327 +574,145 @@ pub mod read_supported_states {
                 _ => &[],
             }
         }
-
-        /// This function will return all the supported states
-        ///
-        /// The returned supported states will be ordered per the derived implementation of `ord`.
-        fn get_supported_states(rss: &CmdReturn) -> alloc::vec::Vec<Self> {
-            let mut set = Vec::with_capacity(Self::NUMBER_OF_STATES_AND_ROLES);
-
-            let count = StatesAndRoles::get_bit_count();
-
-            for byte in 0..size_of_val(&rss.states) {
-                for bit in 0..8 {
-                    if (byte * 8 + bit) < count {
-                        if 0 != rss.states[byte] & (1 << bit) {
-                            for state_or_role in StatesAndRoles::get_states_for_bit_val(bit) {
-                                if let Err(indx) = set.binary_search(state_or_role) {
-                                    set.insert(indx, *state_or_role);
-                                }
-                            }
-                        }
-                    } else {
-                        return set;
-                    }
-                }
-            }
-
-            set
-        }
-
-        fn try_from(packed: CmdReturn) -> Result<alloc::vec::Vec<Self>, error::Error> {
-            let status = error::Error::from(packed.status);
-
-            if let error::Error::NoError = status {
-                Ok(StatesAndRoles::get_supported_states(&packed))
-            } else {
-                Err(status)
-            }
-        }
     }
 
     pub struct CurrentStatesAndRoles {
-        states_and_roles: Vec<StatesAndRoles>,
+        states_and_roles_mask: [u8; 8],
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
 
     impl CurrentStatesAndRoles {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let states_and_roles = StatesAndRoles::try_from(packed)?;
 
-            Ok(Self {
-                states_and_roles,
-                completed_packets_cnt: cnt.into(),
-            })
+        /// Iterate over the supported LE states and roles
+        ///
+        /// # Note
+        /// Because bit flags can correspond to multiple states and roles, this iterator can often
+        /// return the same [`StatesAndRoles`] multiple times.
+        pub fn iter(&self) -> StatesAndRolesIter<'_> {
+            StatesAndRolesIter::new(&self.states_and_roles_mask)
         }
     }
 
-    impl crate::hci::FlowControlInfo for CurrentStatesAndRoles {
-        fn packet_space(&self) -> usize {
-            self.completed_packets_cnt
-        }
-    }
+    impl TryFromCommandComplete for CurrentStatesAndRoles {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
 
-    impl core::ops::Deref for CurrentStatesAndRoles {
-        type Target = [StatesAndRoles];
+            if cc.raw_data[1..].len() == 8 {
+                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
-        fn deref(&self) -> &Self::Target {
-            &self.states_and_roles
-        }
-    }
+                let mut states_and_roles_mask = [0u8; 8];
 
-    impl_get_data_for_command!(COMMAND, CmdReturn, CurrentStatesAndRoles, error::Error);
+                states_and_roles_mask.copy_from_slice(&cc.raw_data[1..]);
 
-    impl_command_complete_future!(CurrentStatesAndRoles, error::Error);
-
-    #[derive(Clone, Copy)]
-    struct Parameter;
-
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<CurrentStatesAndRoles, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
-    }
-}
-
-pub mod read_white_list_size {
-
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadWhiteListSize);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        size: u8,
-    }
-
-    pub struct WhiteListSize {
-        pub list_size: usize,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
-    }
-
-    impl WhiteListSize {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
-
-            if let error::Error::NoError = status {
                 Ok(Self {
-                    list_size: packed.size.into(),
-                    completed_packets_cnt: cnt.into(),
+                    states_and_roles_mask,
+                    completed_packets_cnt
                 })
             } else {
-                Err(status)
+                Err(CCParameterError::InvalidEventParameter)
             }
         }
     }
 
-    impl core::ops::Deref for WhiteListSize {
-        type Target = usize;
-
-        fn deref(&self) -> &Self::Target {
-            &self.list_size
-        }
-    }
-
-    impl crate::hci::FlowControlInfo for WhiteListSize {
-        fn packet_space(&self) -> usize {
+    impl FlowControlInfo for CurrentStatesAndRoles {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
 
-    impl_get_data_for_command!(COMMAND, CmdReturn, WhiteListSize, error::Error);
+    pub struct StatesAndRolesIter<'a> {
+        mask: &'a [u8; 8],
+        current: &'static [StatesAndRoles],
+        byte: usize,
+        bit: usize,
+    }
 
-    impl_command_complete_future!(WhiteListSize, error::Error);
+    impl<'a> StatesAndRolesIter<'a> {
+        fn new(mask: &'a [u8; 8]) -> Self {
+            Self {
+                mask,
+                current: &[],
+                byte: 0,
+                bit: 0,
+            }
+        }
 
-    #[derive(Clone, Copy)]
+        fn next_current(&mut self) -> Option<StatesAndRoles> {
+            let (next, current) = self.current.split_first()?;
+
+            self.current = current;
+
+            Some(*next)
+        }
+
+        fn next_bit(&mut self) {
+            if (self.bit + 1) / 8 == 1 {
+                self.byte += 1;
+                self.bit = 0;
+            } else {
+                self.bit += 1;
+            }
+        }
+
+        fn get_bit_val(&self) -> usize {
+            self.byte * 8 + self.bit
+        }
+    }
+
+    impl Iterator for StatesAndRolesIter<'_> {
+        type Item = StatesAndRoles;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self.next_current() {
+                None => {
+                    self.next_bit();
+
+                    let states = StatesAndRoles::get_states_for_bit_val(self.get_bit_val());
+
+                    if states.is_empty() {
+                        None
+                    } else {
+                        self.current = states;
+
+                        self.next_current()
+                    }
+                }
+                next => next,
+            }
+        }
+    }
+    
+    impl<'a> IntoIterator for &'a CurrentStatesAndRoles {
+        type Item = StatesAndRoles;
+        type IntoIter = StatesAndRolesIter<'a>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.iter()
+        }
+    }
+    
     struct Parameter;
 
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
+    impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
+        fn get_parameter(&self) -> [u8; 0] {
+            []
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<WhiteListSize, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
-    }
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
+    }    
 }
 
-pub mod remove_device_from_white_list {
-
-    const COMMAND: crate::hci::opcodes::HCICommand =
-        crate::hci::opcodes::HCICommand::LEController(crate::hci::opcodes::LEController::RemoveDeviceFromWhiteList);
-
-    add_remove_white_list_setup!(COMMAND);
-}
-
-pub mod set_event_mask {
-
-    use crate::hci::events::LEMeta;
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetEventMask);
-
-    impl LEMeta {
-        fn bit_offset(&self) -> usize {
-            match *self {
-                LEMeta::ConnectionComplete => 0,
-                LEMeta::AdvertisingReport => 1,
-                LEMeta::ConnectionUpdateComplete => 2,
-                LEMeta::ReadRemoteFeaturesComplete => 3,
-                LEMeta::LongTermKeyRequest => 4,
-                LEMeta::RemoteConnectionParameterRequest => 5,
-                LEMeta::DataLengthChange => 6,
-                LEMeta::ReadLocalP256PublicKeyComplete => 7,
-                LEMeta::GenerateDHKeyComplete => 8,
-                LEMeta::EnhancedConnectionComplete => 9,
-                LEMeta::DirectedAdvertisingReport => 10,
-                LEMeta::PHYUpdateComplete => 11,
-                LEMeta::ExtendedAdvertisingReport => 12,
-                LEMeta::PeriodicAdvertisingSyncEstablished => 13,
-                LEMeta::PeriodicAdvertisingReport => 14,
-                LEMeta::PeriodicAdvertisingSyncLost => 15,
-                LEMeta::ScanTimeout => 16,
-                LEMeta::AdvertisingSetTerminated => 17,
-                LEMeta::ScanRequestReceived => 18,
-                LEMeta::ChannelSelectionAlgorithm => 19,
-            }
-        }
-
-        fn build_mask(events: &[Self]) -> [u8; 8] {
-            let mut mask = <[u8; 8]>::default();
-
-            for event in events.iter() {
-                let bit = event.bit_offset();
-                let byte = bit / 8;
-
-                mask[byte] |= 1 << (bit % 8);
-            }
-
-            mask
-        }
-    }
-
-    impl_status_return!(COMMAND);
-
-    #[repr(packed)]
-    #[derive(Clone, Copy)]
-    struct CmdParameter {
-        _mask: [u8; 8],
-    }
-
-    impl CommandParameter for CmdParameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    /// Set the enabled events on a device
-    ///
-    /// ```rust
-    /// # use bo_tie::hci::{PlatformInterface, CommandParameter, events, EventMatcher};
-    /// # use std::task::Waker;
-    /// # use std::time::Duration;
-    /// # use std::pin::Pin;
-    /// # use std::sync::Arc;
-    /// #
-    /// # #[derive(Default)]
-    /// # pub struct StubHi;
-    /// #
-    /// # #[derive(Debug)]
-    /// # pub struct ReceiveError;
-    /// #
-    /// # impl core::fmt::Display for ReceiveError {
-    /// #     fn fmt(&self,f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-    /// #     {
-    /// #          unimplemented!()
-    /// #     }
-    /// # }
-    /// #
-    /// # impl PlatformInterface for StubHi {
-    /// #     type SendCommandError = &'static str;
-    /// #     type ReceiveEventError = ReceiveError;
-    /// #
-    /// #     fn send_command<D, W>(&self, _: &D, _: W)
-    /// #     -> Result<bool, Self::SendCommandError>
-    /// #     where D: CommandParameter,
-    /// #           W: Into<Option<Waker>>,
-    /// #     {
-    /// #         Ok(true)
-    /// #     }
-    /// #
-    /// #     fn receive_event<P>(&self, _: Option<events::Events>, _: &Waker, _: Pin<Arc<P>> )
-    /// #     -> Option<Result<events::EventsData, Self::ReceiveEventError>>
-    /// #     where P: EventMatcher + Send + Sync + 'static,
-    /// #     {
-    /// #         None
-    /// #     }
-    /// # }
-    /// #
-    /// # let host_interface = bo_tie::hci::HostInterface::<StubHi>::default();
-    ///
-    /// use bo_tie::hci::le::mandatory::set_event_mask::{self, send};
-    /// use bo_tie::hci::events::LEMeta;
-    /// use serde::export::Formatter;
-    ///
-    ///
-    /// let events = vec!(LEMeta::ConnectionComplete,LEMeta::AdvertisingReport);
-    ///
-    /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
-    /// send(&host_interface, &events);
-    /// ```
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hi: &'a HostInterface<T>,
-        enabled_events: &[LEMeta],
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        let command_pram = CmdParameter {
-            _mask: LEMeta::build_mask(enabled_events),
-        };
-
-        ReturnedFuture(hi.send_command(command_pram, CommandEventMatcher::CommandComplete))
-    }
-}
-
+/// LE test end command
 pub mod test_end {
 
     use crate::hci::*;
+    use crate::hci::events::CommandCompleteData;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TestEnd);
-
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        number_of_packets: u16,
-    }
 
     pub struct Return {
         pub number_of_packets: u16,
@@ -680,51 +720,40 @@ pub mod test_end {
         completed_packets_cnt: usize,
     }
 
-    impl crate::hci::FlowControlInfo for Return {
-        fn packet_space(&self) -> usize {
+    impl TryFromCommandComplete for Return {
+        fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
+
+            let number_of_packets = <u16>::from_le_bytes([
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                number_of_packets,
+                completed_packets_cnt,
+            })
+        }
+    }
+    impl FlowControlInfo for Return {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
 
-    impl Return {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Return, error::Error> {
-            let status = error::Error::from(packed.status);
-
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    number_of_packets: packed.number_of_packets,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
-        }
-    }
-
-    impl_get_data_for_command!(COMMAND, CmdReturn, Return, error::Error);
-
-    impl_command_complete_future!(Return, error::Error);
-
-    #[derive(Clone, Copy)]
     struct Parameter;
 
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
+    impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
+        fn get_parameter(&self) -> [u8;0] {
+            []
         }
     }
 
-    /// This will return a future with its type 'Output' being the number of packets
-    /// received during what ever tests was done
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<Return, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
+    /// Send the command
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+        host.send_command_expect_complete(Parameter).await
     }
 }

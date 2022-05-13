@@ -1,40 +1,5 @@
 //! Controller and Baseband Commands
 
-/// Reset the controller
-///
-/// This will reset the Controller and the appropriate link Layer. For BR/EDR the Link
-/// Manager is reset, for LE the Link Layer is reset, and for AMP the PAL is reset.
-pub mod reset {
-
-    use crate::hci::*;
-
-    const COMMAND: opcodes::HCICommand =
-        opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
-
-    impl_status_return!(COMMAND);
-
-    #[derive(Clone, Copy)]
-    struct Parameter;
-
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
-        const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
-        }
-    }
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(Parameter, CommandEventMatcher::CommandComplete))
-    }
-}
-
 /// Enable events
 pub mod set_event_mask {
     use crate::hci::*;
@@ -186,36 +151,65 @@ pub mod set_event_mask {
         }
     }
 
-    impl_status_return!(COMMAND);
-
-    struct Parameter {
+    pub struct Parameter {
         mask: [u8; 8],
     }
 
-    impl CommandParameter for Parameter {
-        type Parameter = [u8; 8];
+    impl CommandParameter<8> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
+        fn get_parameter(&self) -> [u8; 8] {
             self.mask
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
+    /// Send the event mask to the controller
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
         events: &[EventMask],
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let parameter = Parameter {
             mask: EventMask::to_val(events).to_le_bytes(),
         };
 
-        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
+
+        r
     }
 }
 
+/// Reset the controller
+///
+/// This will reset the Controller and the appropriate link Layer. For BR/EDR the Link
+/// Manager is reset, for LE the Link Layer is reset, and for AMP the PAL is reset.
+pub mod reset {
+
+    use crate::hci::*;
+
+    const COMMAND: opcodes::HCICommand =
+        opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
+
+    #[derive(Clone, Copy)]
+    struct Parameter;
+
+    impl CommandParameter<0> for Parameter {
+        const COMMAND: opcodes::HCICommand = COMMAND;
+        fn get_parameter(&self) -> [u8; 0] {
+            []
+        }
+    }
+
+    /// Send the reset command to the controller
+    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
+
+        r
+    }
+}
+
+/// Read the transmit power level
+///
+/// This reads the transmit power level for a connection specified by its
+/// [`ConnectionHandle`](crate::hci::common::ConnectionHandle).
 pub mod read_transmit_power_level {
     use crate::hci::common::ConnectionHandle;
     use crate::hci::*;
@@ -223,54 +217,43 @@ pub mod read_transmit_power_level {
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::ReadTransmitPowerLevel);
 
-    #[repr(packed)]
-    #[doc(hidden)]
-    pub struct CmdParameter {
-        _connection_handle: u16,
-        _level_type: u8,
-    }
-
-    #[repr(packed)]
-    struct CmdReturn {
-        status: u8,
-        connection_handle: u16,
-        power_level: i8,
-    }
-
     /// Transmit power range (from minimum to maximum levels)
     pub struct TransmitPowerLevel {
         pub connection_handle: ConnectionHandle,
         pub power_level: i8,
-        /// The number of HCI command packets completed by the controller
+        /// The number of HCI commands that can be sent to the controller
         completed_packets_cnt: usize,
     }
 
-    impl TransmitPowerLevel {
-        fn try_from((packed, cnt): (CmdReturn, u8)) -> Result<Self, error::Error> {
-            let status = error::Error::from(packed.status);
+    impl TryFromCommandComplete for TransmitPowerLevel {
+        fn try_from(data: &events::CommandCompleteData) -> Result<Self, CCParameterError> {
+            check_status!(cc.raw_data);
 
-            if let error::Error::NoError = status {
-                Ok(Self {
-                    // If this panics here the controller returned a bad connection handle
-                    connection_handle: ConnectionHandle::try_from(packed.connection_handle).unwrap(),
-                    power_level: packed.power_level,
-                    completed_packets_cnt: cnt.into(),
-                })
-            } else {
-                Err(status)
-            }
+            let raw_connection_handle = <u16>::from_le_bytes([
+                *data.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *data.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+            ]);
+
+            let connection_handle =
+                ConnectionHandle::try_from(raw_connection_handle).or(Err(CCParameterError::InvalidEventParameter))?;
+
+            let power_level = *data.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)? as i8;
+
+            let completed_packets_cnt = data.number_of_hci_command_packets.into();
+
+            Ok(Self {
+                connection_handle,
+                power_level,
+                completed_packets_cnt,
+            })
         }
     }
 
-    impl crate::hci::FlowControlInfo for TransmitPowerLevel {
-        fn packet_space(&self) -> usize {
+    impl FlowControlInfo for TransmitPowerLevel {
+        fn command_count(&self) -> usize {
             self.completed_packets_cnt
         }
     }
-
-    impl_get_data_for_command!(COMMAND, CmdReturn, TransmitPowerLevel, error::Error);
-
-    impl_command_complete_future!(TransmitPowerLevel, error::Error);
 
     pub enum TransmitPowerLevelType {
         CurrentPowerLevel,
@@ -282,28 +265,27 @@ pub mod read_transmit_power_level {
         pub level_type: TransmitPowerLevelType,
     }
 
-    impl CommandParameter for Parameter {
-        type Parameter = CmdParameter;
+    impl CommandParameter<3> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            CmdParameter {
-                _connection_handle: self.connection_handle.get_raw_handle(),
-                _level_type: match self.level_type {
-                    TransmitPowerLevelType::CurrentPowerLevel => 0,
-                    TransmitPowerLevelType::MaximumPowerLevel => 1,
-                },
-            }
+        fn get_parameter(&self) -> [u8; 3] {
+            let [b0, b1] = self.connection_handle.get_raw_handle().to_le_bytes();
+
+            let b2 = match self.level_type {
+                TransmitPowerLevelType::CurrentPowerLevel => 0,
+                TransmitPowerLevelType::MaximumPowerLevel => 1,
+            };
+
+            [b0, b1, b2]
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
+    /// Send a read transmit power level command to the controller
+    ///
+    /// This will send the command to the controller and wait for the transmit power level to be returned by it.
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
         parameter: Parameter,
-    ) -> impl Future<Output = Result<TransmitPowerLevel, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
+    ) -> Result<TransmitPowerLevel, CommandError<H>> {
+        host.send_command_expect_complete(parameter).await
     }
 }

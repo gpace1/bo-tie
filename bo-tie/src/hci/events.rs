@@ -690,61 +690,6 @@ where
     }
 }
 
-pub(crate) trait DataResult
-where
-    <Self as crate::hci::events::DataResult>::UnpackErrorType: core::fmt::Debug + core::fmt::Display,
-{
-    type ReturnData;
-    type UnpackErrorType;
-}
-
-/// Try to get the return parameter data
-///
-/// This trait is for converting the raw byte information from a Command Complete Event into
-/// a useable prameterized value. This method does a few checks to verify that command type
-/// and data saze are correct for the expected return parameter.
-///
-/// There is a case where there is no associated data. This happens when the controller is only
-/// telling the host the number of hci commands it can now process.
-pub(crate) trait GetDataForCommand<T>
-where
-    T: DataResult,
-{
-    /// Get the return parameter
-    ///
-    /// This function converts the raw bytes as given from the controller into an object of the
-    /// generic type T.
-    ///
-    /// This functions will perform the checks as mentioned on the trait declaration. However if
-    /// those two checks pass, this method isn't required to be implemented to do any further
-    /// checking for full validity of the data. This is why it's marked unsafe
-    ///
-    /// Will return a None result if there is no data associated with the event
-    ///
-    /// # Errors
-    /// - The command data doesn't match the return type
-    /// - The buffered data is smaller then the size of the parameter data (packed, as in the spec)
-    unsafe fn get_return(&self) -> Result<Option<T::ReturnData>, CommandDataErr<T::UnpackErrorType>>;
-
-    /// Get the return parameter without checking the OpCode
-    ///
-    /// This is the same as get_return except that it doesn't validate that the command complete
-    /// event was sent from the controller with the correct opcode. Use this only if you're absolutely
-    /// positive that the controller is returning incorrect OpCode values only because the
-    /// controller is implemented incorrectly.
-    unsafe fn get_return_unchecked(&self) -> Result<Option<T::ReturnData>, CommandDataErr<T::UnpackErrorType>>;
-
-    fn no_opcode(&self) -> bool {
-        // This logic is safe because if there is no op_code then there is no unsafe data
-        unsafe {
-            match self.get_return() {
-                Ok(None) => true,
-                _ => false,
-            }
-        }
-    }
-}
-
 macro_rules! impl_get_data_for_event_data {
     ( $event_data:path, $command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty ) => {
         impl crate::hci::events::DataResult for $data {
@@ -818,73 +763,6 @@ pub struct CommandCompleteData {
     pub command_opcode: Option<u16>,
     /// only public for hci
     pub(super) raw_data: BufferType<u8>,
-}
-
-/// Implement GetDataForCommand
-///
-/// When using this macro keep in mind that the compiler will not understand how to correctly
-/// convert the raw data into the usable data. The CommandCompleteData instance needs to be casted
-/// to GetDataForCommand with the template type as the desired "usable data" to convert to.
-/// Something like the following example needs to be done:
-/// ```rust
-/// # use ::hci::events::{GetDataForCommand, CommandCompleteData};
-/// #
-/// # /// Made up variables
-/// # let command_data = events::EventsData::CommandComplete {
-/// #   number_of_hci_command_packets: 0,
-/// #   command_opcode: None,
-/// #   raw_data: alloc::vec![1,2,3,4,5,6,7,8,9,10].into_boxed_slice(),
-/// # };
-/// # let ocf = 0;
-/// # let ogf = 0;
-/// # struct UseableDataType;
-/// # type PackedDataType = u8;
-/// # type TryFromReturnType = ();
-/// # type TryFromErrorType = ();
-/// # impl UseableDataType { fn try_from(packed: PackedDataType) -> Result(TryFromReturn, TryFromError)}
-///
-/// // If the type TryFromReturnType is the same as UseableDataType, then TryFromReturnType can be
-/// // omitted
-/// impl_get_data_for_command!( ocf, ogf, PackedDataType, UseableDataType, TryFromReturnType, TryFromErrorType );
-///
-/// let return_data = (command_data as GetDataForCommand<UseableDataType>).get_return().unwrap();
-///
-/// ```
-///
-/// This macro also implements DataResult for the parameter "data"
-///
-/// # Parameters
-/// - ocf: Opcode Command Field
-/// - ogf: Opcode Group Field
-/// - packed_data: The packed structure of the return parameter as sent by the controller.
-/// - data: The type to convert the packed_data from.
-///   - This type must implement the function 'try_from' in some fation (but this macro does not
-///     perform for disambiguation if you implement the function multiple times). The return of
-///     try_from can either be a result of "data" or the optional parameter "return_ty" with the
-///     error type being try_from_err_ty
-///   - This type should not be a packed data type.
-/// - (optional) return_ty: If the type "data" doesn't need to be returned and it would make sense
-/// - try_from_err_ty: The error type of the return of the try_from function implemented for "data"
-macro_rules! impl_get_data_for_command {
-    ($command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty) => {
-        impl_get_data_for_event_data! {
-            crate::hci::events::CommandCompleteData,
-            $command,
-            $packed_data,
-            $data,
-            $return_ty,
-            $try_from_err_ty
-        }
-    };
-    ($command:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty) => {
-        impl_get_data_for_event_data! {
-            crate::hci::events::CommandCompleteData,
-            $command,
-            $packed_data,
-            $data,
-            $try_from_err_ty
-        }
-    };
 }
 
 impl_try_from_for_raw_packet! {

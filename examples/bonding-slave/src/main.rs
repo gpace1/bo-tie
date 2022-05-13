@@ -619,7 +619,7 @@ impl Bonder {
         };
 
         let resolve_list_param = add_device_to_resolving_list::Parameter {
-            identity_address_type: if peer_address_info.is_pub {
+            peer_identity_address_type: if peer_address_info.is_pub {
                 PeerIdentityAddressType::PublicIdentityAddress
             } else {
                 PeerIdentityAddressType::RandomStaticIdentityAddress

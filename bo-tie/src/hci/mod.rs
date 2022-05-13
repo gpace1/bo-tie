@@ -14,6 +14,7 @@ pub mod interface;
 use crate::l2cap::BasicInfoFrame;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::fmt::Write;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
@@ -48,10 +49,7 @@ impl<T> TryToRejuvenate for Vec<T> {
 /// Used to get the information required for sending a command from the host to the controller
 ///
 /// The type Parameter should be a packed structure of the command's parameters
-pub trait CommandParameter {
-    /// Data for the parameter as specified by the Bluetooth Specification.
-    type Parameter;
-
+pub trait CommandParameter<const PARAMETER_SIZE: usize> {
     /// The command to send to the Bluetooth Controller.
     ///
     /// This is the OGF & OCF pair.
@@ -61,7 +59,7 @@ pub trait CommandParameter {
     ///
     /// The returned parameter is the structure defined as the parameter part of the command packet
     /// for the specific HCI command.
-    fn get_parameter(&self) -> Self::Parameter;
+    fn get_parameter(&self) -> [u8; PARAMETER_SIZE];
 
     /// Get the command packet to be sent to the controller
     ///
@@ -626,7 +624,7 @@ where
 /// reserve.
 #[doc(hidden)]
 pub trait BufferReserve {
-    type Buffer: core::ops::Deref<Target = [u8]>;
+    type Buffer: core::ops::DerefMut<Target = [u8]>;
     type TakeBuffer: Future<Output = Self::Buffer>;
 
     /// Take a buffer from the reserve
@@ -691,44 +689,68 @@ impl Future for TakeVecReserveFuture {
 /// This is used for matching a HCI packet from the controller to the events Command Complete and
 /// Command Status. Either one will match so long as the opcode within the event matches the opcode
 /// within the `CommandEventMatcher`.
-enum CommandEventMatcher {
-    CommandComplete,
-    CommandStatus,
+#[derive(Clone, Copy)]
+pub struct CommandEventMatcher {
+    op_code: opcodes::HCICommand,
+    event: events::Events,
+    get_op_code: for<'a> fn(&'a [u8]) -> Option<u16>,
 }
 
 impl CommandEventMatcher {
-    fn new(expected_opcode: opcodes::HCICommand) -> Self {
-        Self { expected_opcode }
+    /// Create a new `CommandEventMatcher` for the event `CommandComplete`
+    fn new_command_complete(op_code: opcodes::HCICommand) -> Self {
+        fn get_op_code(raw: &[u8]) -> Option<u16> {
+            // bytes 3 and 4 are the opcode within an HCI event
+            // packet containing a Command Complete event.
+
+            let b1 = raw.get(3)?;
+            let b2 = raw.get(4)?;
+
+            Some(<u16>::from_le_bytes([*b1, *b2]))
+        }
+
+        Self {
+            op_code,
+            event: events::Events::CommandComplete,
+            get_op_code,
+        }
     }
 
-    /// Match the packet returning true if the packet is the correct event
+    /// Create a new `CommandEventMatcher` for the event `CommandStatus`
+    fn new_command_status(op_code: opcodes::HCICommand) -> Self {
+        fn get_op_code(raw: &[u8]) -> Option<u16> {
+            // bytes 4 and 5 are the opcode within an HCI event
+            // packet containing a Command Status event.
+
+            let b1 = raw.get(4)?;
+            let b2 = raw.get(5)?;
+
+            Some(<u16>::from_le_bytes([*b1, *b2]))
+        }
+
+        Self {
+            op_code,
+            event: events::Events::CommandStatus,
+            get_op_code,
+        }
+    }
+
+    /// Match an event packet
     ///
-    /// This is used for matching an event packet containing either of the events Command Complete
-    /// or Command Status containing the correct op code.
-    fn match_packet(&self, raw: &[u8]) -> bool {
+    /// This is used to match event packets received from the controller to the event expected in
+    /// response to a previously sent command.
+    fn match_packet(&self, event_packet: &[u8]) -> bool {
         use core::convert::TryFrom;
         use events::{Events, EventsData};
 
-        let raw_opcode = if let Some(event_code) = raw.get(0) {
-            match (self, Events::try_from_event_codes(*event_code, 0 /* irrelevant */)) {
-                (CommandEventMatcher::CommandComplete, Ok(Events::CommandComplete)) => {
-                    if let (Some(b1), Some(b2)) = (raw.get(3), raw.get(4)) {
-                        <u16>::from_le_bytes([*b1, *b2])
-                    } else {
-                        return false;
-                    }
-                }
-                (CommandEventMatcher::CommandStatus, Ok(Events::CommandStatus)) => {
-                    if let (Some(b1), Some(b2)) = (raw.get(4), raw.get(5)) {
-                        <u16>::from_le_bytes([*b1, *b2])
-                    } else {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-        } else {
-            return false;
+        let raw_opcode = match event_packet
+            .get(0)
+            .and_then(|event_code| Events::try_from_event_codes(*event_code, 0 /* irrelevant */).ok())
+            .and_then(|event| (self.event == event).then(|| ()))
+            .and_then(|_| (self.get_op_code)(event_packet))
+        {
+            Some(raw_opcode) => raw_opcode,
+            None => return false,
         };
 
         let opc_pair = opcodes::OpCodePair::from_opcode(raw_opcode);
@@ -743,44 +765,15 @@ impl CommandEventMatcher {
     }
 }
 
-/// The host interface
+/// Generics used as part of a `HostInterface`
 ///
-/// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
-/// host controller interface.
-///
-/// # Feature *flow-ctrl*
-/// The default implementation of `HostInterface` provides no flow control for HCI data sent from
-/// the host to the controller. HCI data packets that are too large or too many packets within too
-/// short of time frame can be sent. It is up to the user of a HostInterface to be sure that the
-/// HCI data packets sent to the controller are not too big or overflow the buffers.
-///
-/// Building this library with the "flow-ctrl" feature adds a flow controller to a `HostInterface`.
-/// This flow controller monitors the *Number of Completed Packets Event* sent from the controller
-/// and allows packets to be sent to the controller so long as there is space in the controllers
-/// buffers. Every [`ConnectionChannel`](crate::l2cap::ConnectionChannel) made from a
-/// `HostInterface` will be regulated by the flow controller when sending data to the controller.
-///
-/// A flow controller is not built with a HostInterface by default since there are a few issues with
-/// having it. First is that a flow controller must be initialized. Without a flow controller a
-/// `HostInterface` can be created with either `default()` or `from(your_interface)`, but with it
-/// the only way to create a `HostInterface` is with the `initialize()` async method. The flow
-/// controller's initialization process is to query the controller for the HCI send buffer
-/// information, to get both the maximum HCI data packet size and number of HCI data packets the
-/// size of the buffer. The next issue is that the *Number of Completed Packets Event* cannot be
-/// awaited upon. The flow-controller must be the only user of this event. Lastly the 'raw'
-/// `ConnectionChannel` implementations are not available, you are forced to use the flow
-/// controller when creating a `ConnectionChannel`.
-///
-/// The main reason why feature *flow-ctrl* is not a part of the default features list is that for
-/// most use cases a flow controller is unnecessary. It should really only be needed for when
-/// numerous connections are made or for some reason the buffer information is unknown. Most of the
-/// time the raw connections will suffice with the MTU value set to the maximum packet size of the
-/// HCI receive data buffer on the controller.
-#[derive(Clone, Default)]
-#[cfg(not(feature = "flow-ctrl"))]
-pub struct HostInterface<S, R> {
-    interface_sender: S,
-    interface_receiver: R,
+/// The generics within a `HostInterface` are not implementable by the user, so to simplify usage of
+/// the `HostInterface`, the generics are wrapped up within this trait.
+pub trait HostGenerics {
+    type Buffer: core::ops::DerefMut<Target = [u8]>;
+    type Sender: interface::Sender<Message = interface::IntraMessage<Self::Buffer>>;
+    type Receiver: interface::Receiver<Message = interface::IntraMessage<Self::Buffer>>;
+    type Reserve: BufferReserve<Buffer = Self::Buffer>;
 }
 
 /// The host interface
@@ -816,58 +809,128 @@ pub struct HostInterface<S, R> {
 /// numerous connections are made or for some reason the buffer information is unknown. Most of the
 /// time the raw connections will suffice with the MTU value set to the maximum packet size of the
 /// HCI receive data buffer on the controller.
-#[cfg(feature = "flow-ctrl")]
-pub struct HostInterface<S, R, B, M> {
-    interface_sender: S,
-    interface_receiver: R,
-    buffer_reserve: B,
-    flow_controller: flow_ctrl::flow_manager::HciDataPacketFlowManager<M>,
+pub struct HostInterface<H: HostGenerics> {
+    interface_sender: H::Sender,
+    interface_receiver: H::Receiver,
+    buffer_reserve: H::Reserve,
 }
 
-#[bo_tie_macros::host_interface]
-impl<S, R, B, T> HostInterface<S, R, B, R>
+impl<H> HostInterface<H>
 where
-    S: interface::Sender<Message = interface::IntraMessage<T>>,
-    R: interface::Receiver<Message = interface::IntraMessage<T>>,
-    B: BufferReserve,
-    T: core::ops::DerefMut<Target = [u8]>,
+    H: HostGenerics,
 {
-    /// Send a command to the controller
+    /// Send a command with the provided matcher to the interface async task
     ///
-    /// The command data will be used in the command packet to determine what HCI command is sent
-    /// to the controller. The events specified must be the events directly returned by the
-    /// controller in response to the command.
+    /// Returns the intra message received from the interface async task (hopefully) containing the
+    /// expected controller response to the sent command.
     ///
-    /// A future is returned for waiting on the event generated from the controller in response to
-    /// the sent command.
-    async fn send_command<CD>(
+    /// # Note
+    /// This method is intended to only be used internally
+    #[doc(hidden)]
+    async fn send_command<CP, const CP_SIZE: usize>(
         &mut self,
-        cmd_data: CD,
+        parameter: CP,
         event_matcher: CommandEventMatcher,
-    ) -> Result<events::EventsData, SendCommandError<S::Error>>
+    ) -> Result<interface::IntraMessage<T>, CommandError<H>>
     where
-        CD: CommandParameter + 'static,
+        CP: CommandParameter<CP_SIZE> + 'static,
     {
-        use events::EventsData;
         use interface::IntraMessageType;
 
         let mut packet = self.buffer_reserve.take().await;
 
-        cmd_data.as_command_packet(self.buffer_reserve.take().await, &mut packet);
+        parameter.as_command_packet(self.buffer_reserve.take().await, &mut packet);
 
         self.interface_sender
             .send(IntraMessageType::Command(event_matcher, packet).into())
             .await?;
 
-        let intra_message: interface::IntraMessage<T> = self
-            .interface_receiver
-            .recv()
-            .await
-            .ok_or(SendCommandError::ReceiverClosed)?;
+        self.interface_receiver.recv().await.ok_or(CommandError::ReceiverClosed)
+    }
+
+    /// Send a command to the controller expecting a returned parameter
+    ///
+    /// This sends the command within `cmd_data` to the controller and awaits for the Command
+    /// Complete event. The return parameter within the Command Complete event is then returned by
+    /// the controller.
+    ///
+    /// Input `cmd_data` is the type used as the command parameter sent to the controller.
+    ///
+    /// The returned type `T` must be able to be converted from the pair of raw parameter bytes
+    /// accompanied with the number of commands that can be sent to the controller.
+    ///
+    /// # Controller Error
+    /// If a status code is provided as part of the return parameter within the Command Complete
+    /// event, this method will return an `Err` containing the status instead of returning possibly
+    /// invalid data.
+    async fn send_command_expect_complete<CP, T, const CP_SIZE: usize>(
+        &mut self,
+        parameter: CP,
+    ) -> Result<T, CommandError<H>>
+    where
+        CP: CommandParameter<CP_SIZE> + 'static,
+        T: TryFromCommandComplete,
+    {
+        use core::convert::TryFrom;
+        use events::EventsData;
+        use interface::IntraMessageType;
+
+        let event_matcher = CommandEventMatcher::new_command_complete(CP::COMMAND);
+
+        let intra_message = self.send_command(parameter, event_matcher)?;
 
         match intra_message.ty {
-            IntraMessageType::Event(data) => EventsData::try_from_packet(&data).map_err(|e| e.into()),
-            _ => unreachable!("host task expected event"),
+            IntraMessageType::Event(data) => match EventsData::try_from_packet(&data)? {
+                EventsData::CommandComplete(data) => Ok(T::try_from(&data)),
+                e => unreachable!("invalid event matched for command: {:?}", e),
+            },
+            _ => unreachable!("host task expected event intra message"),
+        }
+    }
+
+    /// Send a command to the controller expecting a status
+    ///
+    /// This sends the command within `cmd_data` to the controller and awaits for the Command
+    /// Complete event. The return parameter within the Command Complete event is then returned by
+    /// the controller.
+    ///
+    /// Input `cmd_data` is the type used as the command parameter sent to the controller. The
+    /// return is the number of HCI commands that the controller can currently accept.
+    ///
+    /// # Note
+    /// The returned number is invalidated when another Command Complete or Command Status event is
+    /// sent from the controller.
+    ///
+    /// # Controller Error
+    /// If there is a status code within the event returned from the controller, this method will
+    /// return an `Err` containing the status.
+    async fn send_command_expect_status<CP, const CP_SIZE: usize>(
+        &mut self,
+        parameter: CP,
+    ) -> Result<usize, CommandError<H>>
+    where
+        CP: CommandParameter<CP_SIZE> + 'static,
+    {
+        use core::convert::TryFrom;
+        use events::EventsData;
+        use interface::IntraMessageType;
+
+        let event_matcher = CommandEventMatcher::new_command_status(CP::COMMAND);
+
+        let intra_message = self.send_command(parameter, event_matcher)?;
+
+        match intra_message.ty {
+            IntraMessageType::Event(data) => match EventsData::try_from_packet(&data)? {
+                EventsData::CommandStatus(data) => {
+                    if error::Error::NoError == data.status {
+                        Ok(data.number_of_hci_command_packets.into())
+                    } else {
+                        Err(data.status.into())
+                    }
+                }
+                e => unreachable!("invalid event matched for command: {:?}", e),
+            },
+            _ => unreachable!("host task expected event intra message"),
         }
     }
 
@@ -960,98 +1023,108 @@ where
     }
 }
 
-#[derive(Debug)]
-enum SendCommandError<S> {
-    SendError(S),
+/// An error when trying to send a command
+pub enum CommandError<H>
+where
+    H: HostGenerics,
+{
+    CommandError(error::Error),
+    SendError(<H::Sender as interface::Sender>::Error),
     EventError(events::EventError),
+    InvalidEventParameter,
     ReceiverClosed,
 }
 
-impl<S> core::fmt::Display for SendCommandError<S>
+impl<H> core::fmt::Debug for CommandError<H>
 where
-    S: core::fmt::Display,
+    H: HostGenerics,
+    <H::Sender as interface::Sender>::Error: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            SendCommandError::SendError(e) => e.fmt(f),
-            SendCommandError::EventError(e) => e.fmt(f),
-            SendCommandError::ReceiverClosed => f.write_str("interface is not running"),
+            CommandError::CommandError(e) => f.debug_tuple("CommandError").field(e).finish(),
+            CommandError::SendError(e) => f.debug_tuple("SendError").field(e).finish(),
+            CommandError::EventError(e) => f.debug_tuple("EventError").field(e).finish(),
+            CommandError::InvalidEventParameter => f.debug_tuple("InvalidEventParameter").finish(),
+            CommandError::ReceiverClosed => f.debug_tuple("ReceiverClosed").finish(),
         }
     }
 }
 
-impl<S> From<events::EventError> for SendCommandError<S> {
-    fn from(e: events::EventError) -> Self {
-        SendCommandError::EventError(e)
+impl<H> core::fmt::Display for CommandError<H>
+where
+    H: HostGenerics,
+    <H::Sender as interface::Sender>::Error: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            CommandError::CommandError(e) => core::fmt::Display::fmt(e, f),
+            CommandError::SendError(e) => core::fmt::Display::fmt(e, f),
+            CommandError::EventError(e) => core::fmt::Display::fmt(e, f),
+            CommandError::InvalidEventParameter => f.write_str("command complete event contained an invalid parameter"),
+            CommandError::ReceiverClosed => f.write_str("interface is not running"),
+        }
     }
 }
 
-#[cfg(all(not(feature = "flow-ctrl"), not(docsrs)))]
-#[cfg_attr(docsrs, doc(cfg(not(feature = "flow-ctrl"))))]
-impl<I> HostInterface<I>
-where
-    I: HciACLDataInterface,
-{
-    /// Create a new raw logical link connection channel
-    ///
-    /// Make a raw HCI connection channel with the provided connection handle for a logical
-    /// link. This raw connection channel provides no protection for the controller. It only
-    /// provides fragmentation of data that is currently larger than the `mtu`. It is up to the user
-    /// to make sure that the controllers data buffers do not overflow because too many HCI data
-    /// packets are sent.
-    ///
-    /// # MTU
-    /// The `max_mtu` input is the maximum value the logical link's MTU can be changed to over the
-    /// lifetime of the connection channel. When this is initialized, the used MTU value is
-    /// defaulted to the minimum possible MTU for LE-U. It can later be changed by higher layer
-    /// protocols with set MTU requests or directly by the method `set_mtu` within a
-    /// `ConnectionChannel`. If `max_mtu` is `None` it defaults to the minimum MTU.
-    ///
-    /// The `max_mtu` will not be the initial value for the MTU of the connection. It is the maximum
-    /// value that the MTU can be changed to. The default MTU is the minimum MTU a HCI ACL data
-    /// payload can have, which translates to a 23 byte MTU for a L2CAP logical link. This is not
-    /// necessarily the same as the minimum MTU for the L2CAP layer type, although it happens to be
-    /// the same as the minimum MTU of a LE-U logical link packet. The `mtu` can be changed directly
-    /// or through a higher layer protocol using the `set_mtu` method of a `ConnectionChannel`.
-    ///
-    /// # Panic
-    /// The minimum number of bytes required to be in the payload of a HCI ACL data packet is
-    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciACLData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
-    /// occurs if `max_mtu` plus the header size of a L2CAP data packet (4 bytes) is not greater
-    /// than or equal to `MIN_MAX_PAYLOAD_SIZE`. Thus the minimum `max_mtu` is the same as the
-    /// minimum mtu for LE-U since they are the same number of bytes.
-    ///
-    /// # Warning
-    /// Supplying a handle that does not represent a connection with the controller will result in
-    /// undefined behaviour.
-    pub fn raw_channel<'a, M>(
-        &'a self,
-        handle: common::ConnectionHandle,
-        max_mtu: M,
-    ) -> impl crate::l2cap::ConnectionChannel + 'a
-    where
-        M: Into<Option<u16>>,
-    {
-        flow_ctrl::HciLeUChannel::new_raw(self, handle, max_mtu)
+impl<S> From<events::EventError> for CommandError<S> {
+    fn from(e: events::EventError) -> Self {
+        CommandError::EventError(e)
     }
+}
 
-    /// Create a new connection-oriented data channel with a `HostInterface` wrapped within an `Arc`
-    ///
-    /// This is an alternative to `new_le_raw_channel` for situations where the lifetime of
-    /// `self` may not outlive the generated `ConnectionChannel`. This can be useful for thread
-    /// pools or other synchronization related executors where it may be required to have a
-    /// atomically reference counted `HostInterface`.
-    ///
-    /// All `handle` and `max_mtu` rules and panics still apply.
-    pub fn sync_raw_channel<M>(
-        self: Arc<Self>,
-        handle: common::ConnectionHandle,
-        max_mtu: M,
-    ) -> impl crate::l2cap::ConnectionChannel
-    where
-        M: Into<Option<u16>>,
-    {
-        flow_ctrl::HciLeUChannel::new_raw(self, handle, max_mtu)
+impl<S> From<error::Error> for CommandError<S> {
+    fn from(e: error::Error) -> Self {
+        CommandError::CommandError(e)
+    }
+}
+
+impl<S> From<CCParameterError> for CommandError<S> {
+    fn from(e: CCParameterError) -> Self {
+        match e {
+            CCParameterError::CommandError(e) => CommandError::CommandError(e),
+            CCParameterError::InvalidEventParameter => CommandError::InvalidEventParameter,
+        }
+    }
+}
+
+/// A trait for converting from a Command Complete Event
+trait TryFromCommandComplete {
+    fn try_from(cc: &events::CommandCompleteData) -> Result<Self, CCParameterError>;
+}
+
+/// An error when converting the parameter of a Command Complete to a concrete type fails.
+enum CCParameterError {
+    CommandError(error::Error),
+    InvalidEventParameter,
+}
+
+macro_rules! check_status {
+    ($raw_data:expr) => {
+        error::Error::from(*cc.raw_data.get(0).ok_or(CCParameterError::InvalidEventParameter)?)
+            .ok_or_else(CCParameterError::InvalidEventParameter)?;
+    };
+}
+
+/// A type used when a Command Complete event return parameter is expected to only contains a status
+///
+/// This is used for commands where the controller returns a command complete event but the only
+/// thing in the parameter is a status.
+///
+/// `OnlyStatus` just contains the number of commands the controller can currently accept.
+struct OnlyStatus(usize);
+
+impl TryFromCommandComplete for OnlyStatus {
+    fn try_from(cc: &events::CommandCompleteData) -> Result<Self, CCParameterError> {
+        check_status!(cc.raw_data);
+
+        Ok(Self(cc.number_of_hci_command_packets.into()))
+    }
+}
+
+impl FlowControlInfo for OnlyStatus {
+    fn command_count(&self) -> usize {
+        self.0
     }
 }
 
@@ -1205,15 +1278,12 @@ pub trait FlowControlInfo {
     /// have the number of HCI command packets parameter as zero. Be aware that the Controller can
     /// issue a Command Complete Event with no opcode to indicate that the host can send packets
     /// to the controller.
-    fn packet_space(&self) -> usize;
+    fn command_count(&self) -> usize;
 }
 
-/// Flow control data extracted from the command status event
-struct StatusFlowControlInfo(usize);
-
-impl FlowControlInfo for StatusFlowControlInfo {
-    fn packet_space(&self) -> usize {
-        self.0
+impl FlowControlInfo for usize {
+    fn command_count(&self) -> usize {
+        *self
     }
 }
 

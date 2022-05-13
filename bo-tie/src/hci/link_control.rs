@@ -1,5 +1,6 @@
 //! Link Control Commands
 
+/// Query a connected device for its Controller's version information
 pub mod read_remote_version_information {
 
     use crate::hci::common::ConnectionHandle;
@@ -8,42 +9,34 @@ pub mod read_remote_version_information {
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::LinkControl(opcodes::LinkControl::ReadRemoteVersionInformation);
 
-    #[repr(packed)]
-    #[derive(Clone, Copy)]
-    struct CmdParameter {
-        _connection_handle: u16,
-    }
+    struct CmdParameter(ConnectionHandle);
 
-    impl CommandParameter for CmdParameter {
-        type Parameter = Self;
+    impl CommandParameter<2> for CmdParameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            *self
+        fn get_parameter(&self) -> [u8; 2] {
+            self.0.get_raw_handle().to_le_bytes()
         }
     }
 
-    impl_command_status_future!();
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        handle: ConnectionHandle,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        let parameter = CmdParameter {
-            _connection_handle: handle.get_raw_handle(),
-        };
-
-        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandStatus))
+    /// Read the version information of the connected device by its connection handle.
+    ///
+    /// The returned future awaits until the controller responds with a
+    /// [`CommandStatus`](events::Events::CommandStatus) event. The event
+    /// [`ReadRemoteVersionInformationComplete`](events::Events::ReadRemoteVersionInformationComplete)
+    /// must be awaited upon by the `host` to get the version information of the remote controller.
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        connection_handle: ConnectionHandle,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        host.send_command_expect_status(CmdParameter(connection_handle)).await
     }
 }
 
-// TODO when BR/EDR is enabled move this to a module for common features and import here
+/// Disconnect a remote device
 pub mod disconnect {
     use crate::hci::common::ConnectionHandle;
     use crate::hci::*;
+    use core::convert::TryFrom;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LinkControl(opcodes::LinkControl::Disconnect);
 
@@ -62,9 +55,7 @@ pub mod disconnect {
     }
 
     impl DisconnectReason {
-        // TODO implement when HCI error codes are added, and add parameter for the
-        // error enumeration name
-        pub fn try_from_hci_error(error: error::Error) -> Result<DisconnectReason, &'static str> {
+        fn try_from_hci_error(error: error::Error) -> Result<DisconnectReason, DisconnectReasonCnvError> {
             match error {
                 error::Error::AuthenticationFailure => Ok(DisconnectReason::AuthenticationFailure),
                 error::Error::RemoteUserTerminatedConnection => Ok(DisconnectReason::RemoteUserTerminatedConnection),
@@ -81,7 +72,7 @@ pub mod disconnect {
                 error::Error::UnacceptableConnectionParameters => {
                     Ok(DisconnectReason::UnacceptableConnectionParameters)
                 }
-                _ => Err("No Disconnect reason for error"),
+                _ => Err(DisconnectReasonCnvError),
             }
         }
 
@@ -98,11 +89,27 @@ pub mod disconnect {
         }
     }
 
-    #[repr(packed)]
-    #[doc(hidden)]
-    pub struct CmdParameter {
-        _handle: u16,
-        _reason: u8,
+    impl TryFrom<error::Error> for DisconnectReason {
+        type Error = ConversionError;
+
+        fn try_from(value: error::Error) -> Result<Self, Self::Error> {
+            DisconnectReason::try_from_hci_error(value)
+        }
+    }
+
+    /// Error for when an [`Error`](error::Error) cannot be converted into a [`DisconnectReason`]
+    pub struct ConversionError;
+
+    impl core::fmt::Debug for DisconnectReason {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            f.write_str("No Disconnect reason for error")
+        }
+    }
+
+    impl core::fmt::Display for DisconnectReason {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            core::fmt::Debug::fmt(self, f)
+        }
     }
 
     pub struct DisconnectParameters {
@@ -110,27 +117,28 @@ pub mod disconnect {
         pub disconnect_reason: DisconnectReason,
     }
 
-    impl CommandParameter for DisconnectParameters {
-        type Parameter = CmdParameter;
+    impl CommandParameter<3> for DisconnectParameters {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            CmdParameter {
-                _handle: self.connection_handle.get_raw_handle(),
-                _reason: self.disconnect_reason.get_val(),
-            }
+        fn get_parameter(&self) -> [u8; 3] {
+            let [b0, b1] = self.connection_handle.get_raw_handle().to_le_bytes();
+
+            let b2 = self.disconnect_reason.get_val();
+
+            [b0, b1, b2]
         }
     }
 
-    impl_command_status_future!();
-
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        dp: DisconnectParameters,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        ReturnedFuture(hci.send_command(dp, CommandEventMatcher::CommandStatus))
+    /// Disconnect the device
+    ///
+    /// The returned future awaits until the controller responds with a
+    /// [`CommandStatus`](events::Events::CommandStatus) event. This does not mean the remote device
+    /// is disconnected. The event
+    /// [`DisconnectionComplete`](events::Events::DisconnectionComplete)
+    /// must be awaited upon by the `host` to know the device has disconnected.
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        parameter: DisconnectParameters,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        host.send_command_expect_status(parameter).await
     }
 }
