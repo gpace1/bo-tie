@@ -11,7 +11,7 @@ pub mod events;
 mod flow_ctrl;
 pub mod interface;
 
-use crate::l2cap::BasicInfoFrame;
+use crate::l2cap::{BasicFrameError, BasicFrameFragment, BasicInfoFrame};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt::Write;
@@ -95,24 +95,6 @@ pub trait CommandParameter<const PARAMETER_SIZE: usize> {
 
         // Add the parameter
         buffer.extend(parm_bytes);
-    }
-}
-
-/// A trait for matching received events
-///
-/// When receiving an event in a concurrent system, it can be unknown which context a received
-/// event should be propagated to. The event must be matched to determine this.
-pub trait EventMatcher: Sync + Send {
-    /// Match the event data
-    fn match_event(&self, event_data: &events::EventsData) -> bool;
-}
-
-impl<F> EventMatcher for F
-where
-    F: Fn(&events::EventsData) -> bool + Sized + Sync + Send,
-{
-    fn match_event(&self, event_data: &events::EventsData) -> bool {
-        self(event_data)
     }
 }
 
@@ -624,7 +606,7 @@ where
 /// reserve.
 #[doc(hidden)]
 pub trait BufferReserve {
-    type Buffer: core::ops::DerefMut<Target = [u8]>;
+    type Buffer: core::ops::DerefMut<Target = [u8]> + crate::TryExtend<u8>;
     type TakeBuffer: Future<Output = Self::Buffer>;
 
     /// Take a buffer from the reserve
@@ -639,6 +621,30 @@ pub trait BufferReserve {
     /// Buffers can be reclaimed for reuse later. However, if the reserve is full then the buffer to
     /// be reclaimed is dropped.
     fn reclaim(&mut self, buffer: Self::Buffer);
+}
+
+/// Extension trait for `BufferReserve`
+trait BufferReserveExt: BufferReserve {
+    /// Use a `BufferReserve` as in iterator
+    ///
+    /// This is an iterator over taking a `BufferReserve`. Every iteration calls the method `take`
+    /// and returns the future. The iterator will never return `None`.
+    fn as_take_iter(&mut self) -> BufferReserveTakeIterator<'_, Self> {
+        BufferReserveIterator(self)
+    }
+}
+
+impl<T: BufferReserve> BufferReserveExt for T {}
+
+/// An iterator for continuously taking a `BufferReserve`
+struct BufferReserveTakeIterator<'a, T>(&'a mut T);
+
+impl<T: BufferReserve> Iterator for BufferReserveTakeIterator<'_, T> {
+    type Item = T::TakeBuffer;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.take()
+    }
 }
 
 /// A reserve of `Vec` buffers
@@ -960,65 +966,28 @@ where
     /// can be used to further refine the matching event to get around the limitation of this
     /// function. However it can also run into the same problem if the matcher is not differential
     /// enough between two events.
-    pub async fn wait_for_event<E>(&self, event: E) -> Result<(), R::Error>
+    pub async fn wait_for_event<E>(&mut self, event: E) -> Result<events::EventsData, WaitForEventError>
     where
         E: Into<Option<events::Events>>,
     {
-        fn default_matcher(_: &events::EventsData) -> bool {
-            true
-        }
+        use events::EventsData;
+        use interface::IntraMessageType;
 
-        fn most_matcher(e: &events::EventsData) -> bool {
-            e.get_event_name().is_maskable()
-        }
+        let event_opt = event.into();
 
-        let opt_event: Option<events::Events> = event.into();
+        loop {
+            let data = self.interface_receiver.recv().await.ok_or(WaitForEventError)?;
 
-        let matcher = if opt_event.is_none() {
-            most_matcher
-        } else {
-            default_matcher
-        };
+            let ed = EventsData::try_from_packet(&data)?;
 
-        EventReturnFuture {
-            interface: &self.interface,
-            event: opt_event,
-            matcher: Arc::pin(matcher),
-        }
-    }
-
-    /// Get a future for a *more* specific Bluetooth Event
-    ///
-    /// This is the same as the function
-    /// [`wait_for_event`](crate::hci::HostInterface::wait_for_event)
-    /// except an additional matcher is used to filter same events based on the data sent with the
-    /// event. See
-    /// [`EventMatcher`](crate::hci::EventMatcher)
-    /// for information on implementing a matcher, but you can use a closure that borrows
-    /// [`EventsData`](crate::hci::events::EventsData)
-    /// as an input and returns a `bool` as a matcher.
-    ///
-    /// # Limitations
-    /// While this can be used to further specify what event data gets returned by a future, its
-    /// really just further filters the event data. The same exact undefined behaviour mentioned in
-    /// the `Limitations` section of
-    /// [`wait_for_event`](crate::hci::HostInterface::wait_for_event)
-    /// will occur when the return of `wait_for_event_with_matcher` is awaited concurrently
-    /// with matchers that return `true` given the same
-    /// [`EventData`](crate::hci::events::EventsData) (the conditions for undefined behaviour
-    /// for `wait_for_event` still apply).
-    pub fn wait_for_event_with_matcher<'a, P>(
-        &'a self,
-        event: events::Events,
-        matcher: P,
-    ) -> impl Future<Output = Result<events::EventsData, <I as PlatformInterface>::ReceiveEventError>> + 'a
-    where
-        P: EventMatcher + Send + Sync + 'static,
-    {
-        EventReturnFuture {
-            interface: &self.interface,
-            event: event.into(),
-            matcher: Arc::pin(matcher),
+            match event_opt {
+                Some(ref event) => {
+                    if ed.get_event_name() == *event {
+                        break Ok(ed);
+                    }
+                }
+                None => break Ok(ed),
+            }
         }
     }
 }
@@ -1106,6 +1075,28 @@ macro_rules! check_status {
     };
 }
 
+/// Error for method [`wait_for_event`](HostInterface::wait_for_event)
+#[derive(Debug)]
+enum WaitForEventError {
+    ReceiverClosed,
+    EventConversionError(events::EventError),
+}
+
+impl core::fmt::Display for WaitForEventError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            WaitForEventError::ReceiverClosed => f.write_str("interface task is dropped"),
+            WaitForEventError::EventConversionError(e) => core::fmt::Display::fmt(self, f),
+        }
+    }
+}
+
+impl From<events::EventError> for WaitForEventError {
+    fn from(e: events::EventError) -> Self {
+        WaitForEventError::EventConversionError(e)
+    }
+}
+
 /// A type used when a Command Complete event return parameter is expected to only contains a status
 ///
 /// This is used for commands where the controller returns a command complete event but the only
@@ -1128,144 +1119,284 @@ impl FlowControlInfo for OnlyStatus {
     }
 }
 
-#[cfg(feature = "flow-ctrl")]
-#[cfg_attr(docsrs, doc(cfg(feature = "flow-ctrl")))]
-impl<I, M> HostInterface<I, M>
+struct AclConnection<S, R, B> {
+    max_mtu: usize,
+    min_mtu: usize,
+    mtu: core::cell::Cell<usize>,
+    sender: S,
+    receiver: R,
+    buffer_reserve: B,
+}
+
+impl<S, R, B, T> crate::l2cap::ConnectionChannel for AclConnection<S, R, B>
 where
-    I: HciACLDataInterface + PlatformInterface + Send + Sync + Unpin + 'static,
-    M: for<'a> AsyncLock<'a> + 'static,
+    S: interface::Sender<Message = interface::IntraMessage<T>>,
+    R: interface::Receiver<Message = interface::IntraMessage<T>>,
+    B: BufferReserve<Buffer = interface::IntraMessage<T>>,
+    T: core::ops::Deref<Target = [u8]>,
 {
-    /// Create a new HostInterface
-    pub async fn new() -> Arc<Self>
-    where
-        I: Default,
-        M: Default,
-    {
-        let mut hci = HostInterface {
-            interface: Default::default(),
-            flow_controller: Default::default(),
+    type SendFut<'a> = ConnectionChannelSender<'a, S, B>;
+    type SendFutErr = S::Error;
+
+    type RecvFut<'a> = AclReceiverMap<'a, R>;
+
+    fn send(&mut self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut<'_> {
+        let iter = SelfSendBufferMap {
+            sender: &mut self.sender,
+            iterator: self.buffer_reserve.as_take_iter(),
         };
 
-        flow_ctrl::flow_manager::HciDataPacketFlowManager::initialize(&mut hci).await;
-
-        Arc::new(hci)
+        ConnectionChannelSender {
+            sliced_future: data.into_sliced_packet(iter),
+        }
     }
 
-    /// Create a connection channel with a flow controller
-    ///
-    /// This connection channel is flow controlled when sending HCI data to the controller. Unlike a
-    /// raw channel this will make sure that the controller cannot be sent HCI ACL data that is
-    /// either too large or too many within a time frame for the controller. Data that is larger
-    /// than the maximum packet size will be fragmented into multiple packets and when there is no
-    /// room in the controller's buffer the sending future will pend.
-    ///
-    /// # MTU
-    /// The `max_mtu` input is the maximum value the logical link's MTU can be changed to over the
-    /// lifetime of the connection channel. When this is initialized, the used MTU value is
-    /// defaulted to the minimum possible MTU for LE-U, but if it changed it can only be changed to
-    /// a value no greater than `max_mtu`. If `max_mtu` is `None` it defaults to the minimum MTU.
-    ///
-    /// The `max_mtu` will not be the initial value for the MTU of the connection. It is the maximum
-    /// value that the MTU can be changed to. The default MTU is the minimum MTU a HCI ACL data
-    /// payload can have, which translates to a 23 byte MTU for a L2CAP logical link. This is not
-    /// necessarily the same as the minimum MTU for the L2CAP layer type, although it happens to be
-    /// the same as the minimum MTU of a LE-U logical link packet. The `mtu` can be changed directly
-    /// or through a higher layer protocol using the `set_mtu` method of a `ConnectionChannel`.
-    ///
-    /// # Fragmentation
-    /// Data is fragmented to either the MTU or the maximum HCI data payload size minus the L2CAP
-    /// data header size. If the MTU is changed to be larger than the maximum size supported by the
-    /// Bluetooth Controller's buffer, it will be fragmented to the buffer's maximum instead of the
-    /// set MTU.
-    ///
-    /// # Panic
-    /// The minimum number of bytes in the payload of a HCI ACL data packet is
-    /// [`MIN_MAX_PAYLOAD_SIZE`](crate::hci::HciACLData::MIN_MAX_PAYLOAD_SIZE) (27 bytes). A panic
-    /// occurs if `max_mtu` plus the header size of a L2CAP data packet (4 bytes) is not greater
-    /// than or equal to `MIN_MAX_PAYLOAD_SIZE`. Thus the minimum `max_mtu` is defined as the
-    /// minimum mtu for LE-U since they are the same number of bytes.
-    ///
-    /// # Warning
-    /// Supplying a handle that does not represent a connection with the controller will result in
-    /// undefined behaviour.
-    pub fn flow_ctrl_channel<Mtu>(
-        self: Arc<Self>,
-        handle: common::ConnectionHandle,
-        max_mtu: Mtu,
-    ) -> impl crate::l2cap::ConnectionChannel
-    where
-        Mtu: Into<Option<u16>>,
-    {
-        let max = match max_mtu.into() {
-            None => self.flow_controller.get_max_payload_size(),
-            Some(v) => {
-                let val = <usize>::from(v);
+    fn set_mtu(&self, mtu: u16) {
+        self.mtu.set(mtu.into())
+    }
 
-                val
-            }
-        };
+    fn get_mtu(&self) -> usize {
+        self.mtu.get()
+    }
 
-        flow_ctrl::HciLeUChannel::<I, Arc<Self>, M>::new_le_flow_controller(self, handle, max)
+    fn max_mtu(&self) -> usize {
+        self.max_mtu
+    }
+
+    fn min_mtu(&self) -> usize {
+        self.min_mtu
+    }
+
+    fn receive(&mut self) -> Self::RecvFut<'_> {
+        AclReceiverMap {
+            receiver: &mut self.receiver,
+            receive_future: None,
+        }
     }
 }
 
-#[derive(Debug)]
-enum OutputErr<TargetErr, CmdErr>
-where
-    TargetErr: core::fmt::Display + core::fmt::Debug,
-    CmdErr: core::fmt::Display + core::fmt::Debug,
-{
-    /// An error occurred at the target specific HCI implementation
-    TargetSpecificErr(TargetErr),
-    /// Cannot convert the data from the HCI packed form into its usable form.
-    CommandDataConversionError(CmdErr),
-    /// The first item is the received event and the second item is the event expected
-    ReceivedIncorrectEvent(crate::hci::events::Events),
-    /// This is used when either the 'command complete' or 'command status' events contain no data
-    /// and are used to indicate the maximum number of HCI command packets that can be queued by
-    /// the controller.
-    ResponseHasNoAssociatedCommand,
-    /// The command status event returned with this error
-    CommandStatusErr(error::Error),
+/// A self sending buffer
+///
+/// This is a wrapper around a buffer and a sender. When it is created it is in buffer mode and can
+/// be de-referenced as a slice or extended,
+struct SelfSendBuffer<'a, S: interface::Sender> {
+    sender: &'a mut S,
+    state: SelfSendBufferState<'a, S>,
 }
 
-impl<TargetErr, CmdErr> core::fmt::Display for OutputErr<TargetErr, CmdErr>
+enum SelfSendBufferState<'a, S: interface::Sender> {
+    Buffer(S::Message),
+    Sender(S::SendFuture<'a>),
+    InBetween,
+}
+
+impl<S, T> SelfSendBuffer<S>
 where
-    TargetErr: core::fmt::Display + core::fmt::Debug,
-    CmdErr: core::fmt::Display + core::fmt::Debug,
+    S: interface::Sender<Message = interface::IntraMessage<T>>,
 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            OutputErr::TargetSpecificErr(reason) => {
-                core::write!(f, "{}", reason)
+    #[inline]
+    fn inplace_to_sender(&mut self) {
+        match core::mem::replace(&mut self.state, SelfSendBuffer::InBetween) {
+            SelfSendBufferState::Buffer(buffer) => {
+                let future = self.sender.send(buffer);
+
+                self.state = SelfSendBufferState::Sender(future);
             }
-            OutputErr::CommandDataConversionError(reason) => {
-                core::write!(f, "{}", reason)
-            }
-            OutputErr::ReceivedIncorrectEvent(expected_event) => {
-                core::write!(f, "Received unexpected event '{:?}'", expected_event)
-            }
-            OutputErr::ResponseHasNoAssociatedCommand => {
-                core::write!(
-                    f,
-                    "Event Response contains no data and is not associated with \
-                    a HCI command. This should have been handled by the driver and not received \
-                    here"
-                )
-            }
-            OutputErr::CommandStatusErr(reason) => {
-                core::write!(f, "{}", reason)
+            _ => unreachable!("'to_sender' called on an enum other than a 'Buffer'"),
+        }
+    }
+}
+
+impl<S> Future for SelfSendBuffer<S>
+where
+    S: interface::Sender,
+{
+    type Output = Result<(), core::convert::Infallible>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        use core::mem::replace;
+
+        let this = unsafe { self.get_unchecked_mut() };
+
+        if let SelfSendBufferState::Buffer(_) = this.state {
+            this.inplace_to_sender()
+        }
+
+        if let SelfSendBufferState::Sender(ref mut future) = this.state {
+            Pin::new(future).poll(cx)
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+struct SelfSendBufferFutureMap<'a, S, F> {
+    sender: Option<&'a mut S>,
+    future: F,
+}
+
+impl<'a, F, S> Future for SelfSendBufferFutureMap<'a, S, F>
+where
+    S: interface::Sender,
+    F: Future<Output = S::Message>,
+{
+    type Output = SelfSendBuffer<'a, S>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        Pin::new(&mut this.future).poll(cx).map(|message| SelfSendBuffer {
+            sender: this.sender.take().unwrap(),
+            state: SelfSendBufferState::Buffer(message),
+        })
+    }
+}
+
+struct SelfSendBufferMap<'a, S, I> {
+    sender: &'a mut S,
+    iterator: I,
+}
+
+impl<'a, I, S, F> Iterator for SelfSendBufferMap<'a, S, I>
+where
+    S: interface::Sender,
+    I: Iterator<Item = F>,
+    F: Future<Output = S::Message>,
+{
+    type Item = SelfSendBufferFutureMap<'a, S, F>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iterator.next().map(|future| SelfSendBufferFutureMap {
+            sender: Some(self.sender),
+            future,
+        })
+    }
+}
+
+struct ConnectionChannelSender<'a, S, B: BufferReserve> {
+    sliced_future: crate::l2cap::send_future::AsSlicedPacketFuture<
+        'a,
+        SelfSendBufferMap<'a, S, BufferReserveTakeIterator<'a, B>>,
+        SelfSendBufferFutureMap<'a, S, B::TakeBuffer>,
+        SelfSendBuffer<'a, S>,
+    >,
+}
+
+impl<'a, S, B> Future for ConnectionChannelSender<'a, S, B>
+where
+    S: interface::Sender,
+    B: BufferReserve,
+    B::TakeBuffer: Future<Output = S::Message>,
+{
+    type Output = Result<(), S::Error>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().sliced_future.poll(cx)
+    }
+}
+
+pub struct AclReceiverMap<'a, R: interface::Receiver> {
+    receiver: &'a mut R,
+    receive_future: Option<R::ReceiveFuture<'a>>,
+}
+
+impl<'a, R, T> Future for AclReceiverMap<'a, R>
+where
+    R: interface::Receiver<Message = interface::IntraMessage<T>>,
+    T: Unpin,
+{
+    type Output = Option<Result<crate::l2cap::BasicInfoFrame, crate::l2cap::BasicFrameError>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        use crate::l2cap::{BasicFrameError, BasicInfoFrame};
+
+        let this = unsafe { self.get_unchecked_mut() };
+
+        loop {
+            match this.receive_future {
+                None => this.receive_future = Some(this.receiver.recv()),
+                Some(ref mut receiver) => match Pin::new(receiver).poll(cx) {
+                    Poll::Pending => break Poll::Pending,
+                    Poll::Ready(None) => break Poll::Ready(None),
+                    Poll::Ready(Option(intra_message)) => match intra_message.ty {
+                        interface::IntraMessageType::Acl(ref data) => match HciACLData::try_from_packet(data) {
+                            Ok(data) => {
+                                let fragment = data.into_acl_fragment();
+
+                                Poll::Ready(Some(Ok(fragment)));
+                            }
+                            Err(_) => {
+                                break Poll::Ready(Some(Err(BasicFrameError::Other(
+                                    "Received invalid HCI ACL Data packet",
+                                ))))
+                            }
+                        },
+                    },
+                },
             }
         }
     }
 }
 
-/// Controller flow-control information
+// #[derive(Debug)]
+// enum OutputErr<TargetErr, CmdErr>
+// where
+//     TargetErr: core::fmt::Display + core::fmt::Debug,
+//     CmdErr: core::fmt::Display + core::fmt::Debug,
+// {
+//     /// An error occurred at the target specific HCI implementation
+//     TargetSpecificErr(TargetErr),
+//     /// Cannot convert the data from the HCI packed form into its usable form.
+//     CommandDataConversionError(CmdErr),
+//     /// The first item is the received event and the second item is the event expected
+//     ReceivedIncorrectEvent(crate::hci::events::Events),
+//     /// This is used when either the 'command complete' or 'command status' events contain no data
+//     /// and are used to indicate the maximum number of HCI command packets that can be queued by
+//     /// the controller.
+//     ResponseHasNoAssociatedCommand,
+//     /// The command status event returned with this error
+//     CommandStatusErr(error::Error),
+// }
+//
+// impl<TargetErr, CmdErr> core::fmt::Display for OutputErr<TargetErr, CmdErr>
+// where
+//     TargetErr: core::fmt::Display + core::fmt::Debug,
+//     CmdErr: core::fmt::Display + core::fmt::Debug,
+// {
+//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+//         match self {
+//             OutputErr::TargetSpecificErr(reason) => {
+//                 core::write!(f, "{}", reason)
+//             }
+//             OutputErr::CommandDataConversionError(reason) => {
+//                 core::write!(f, "{}", reason)
+//             }
+//             OutputErr::ReceivedIncorrectEvent(expected_event) => {
+//                 core::write!(f, "Received unexpected event '{:?}'", expected_event)
+//             }
+//             OutputErr::ResponseHasNoAssociatedCommand => {
+//                 core::write!(
+//                     f,
+//                     "Event Response contains no data and is not associated with \
+//                     a HCI command. This should have been handled by the driver and not received \
+//                     here"
+//                 )
+//             }
+//             OutputErr::CommandStatusErr(reason) => {
+//                 core::write!(f, "{}", reason)
+//             }
+//         }
+//     }
+// }
+
+/// Controller *Command* flow-control information
 ///
-/// Flow control information is issued as part of the Command Complete and Command Status events,
-/// however the HCI commands of this library catch and do not return this information. This trait
-/// is instead implemented on the return of those methods for the user to get the flow control
-/// information.
+/// Command flow control information is issued as part of the Command Complete and Command Status
+/// events. A controller sends back the number of commands that can be currently sent to the
+/// controller as part of the information in both events. This trait is implemented for every `send`
+/// command method in this library.
+///
+/// This trait is not very useful
 pub trait FlowControlInfo {
     /// Get the number of HCI command packets that can be set to the controller
     ///
@@ -1287,132 +1418,7 @@ impl FlowControlInfo for usize {
     }
 }
 
-macro_rules! event_pattern_creator {
-    ( $event_path:path, $( $data:pat ),+ ) => { $event_path ( $($data),+ ) };
-    ( $event_path:path ) => { $event_path };
-}
-
-macro_rules! impl_returned_future {
-    // these inputs match the inputs from crate::hci::events::impl_get_data_for_command
-    ($return_type: ty, $event:path, $data:pat, $error:ty, $to_do: block) => {
-        struct ReturnedFuture<'a, I, CD, P>(CommandFutureReturn<'a, I, CD, P>)
-        where
-            I: PlatformInterface,
-            CD: CommandParameter + Unpin,
-            P: EventMatcher + Send + Sync + 'static;
-
-        impl<'a, I, CD, P> core::future::Future for ReturnedFuture<'a, I, CD, P>
-        where
-            I: PlatformInterface,
-            CD: CommandParameter + Unpin,
-            P: EventMatcher + Send + Sync + 'static,
-        {
-            type Output = core::result::Result<$return_type, crate::hci::OutputErr<SendCommandError<I>, $error>>;
-
-            fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
-                if let core::task::Poll::Ready(result) = self.get_mut().0.fut_poll(cx) {
-                    match result {
-                        Ok(event_pattern_creator!($event, $data)) => $to_do,
-                        Ok(event @ _) => {
-                            let ret = Err(crate::hci::OutputErr::ReceivedIncorrectEvent(
-                                event.get_event_name(),
-                            ));
-
-                            core::task::Poll::Ready(ret)
-                        }
-                        Err(reason) => core::task::Poll::Ready(Err(crate::hci::OutputErr::TargetSpecificErr(reason))),
-                    }
-                } else {
-                    core::task::Poll::Pending
-                }
-            }
-        }
-    };
-}
-
-/// A Future for the command complete event.
-///
-/// This future is used for awaiting the command complete event in response to a command sent. If
-/// the Command Complete event is received and it's the one that doesn't contain an op code, this
-/// future will return an error.
-macro_rules! impl_command_complete_future {
-    ($data_type: ty, $return_type: ty, $try_from_err_ty:ty) => {
-        impl_returned_future!(
-            $return_type,
-            crate::hci::events::EventsData::CommandComplete,
-            data,
-            crate::hci::events::CommandDataErr<$try_from_err_ty>,
-            {
-                use crate::hci::OutputErr::{CommandDataConversionError, ResponseHasNoAssociatedCommand};
-
-                match unsafe { crate::hci::events::GetDataForCommand::<$data_type>::get_return(&data) } {
-                    Ok(Some(ret_val)) => core::task::Poll::Ready(Ok(ret_val)),
-                    Ok(None) => core::task::Poll::Ready(Err(ResponseHasNoAssociatedCommand)),
-                    Err(reason) => core::task::Poll::Ready(Err(CommandDataConversionError(reason))),
-                }
-            }
-        );
-    };
-    ($data: ty, $try_from_err_ty:ty) => {
-        impl_command_complete_future!($data, $data, $try_from_err_ty);
-    };
-}
-
-macro_rules! impl_command_status_future {
-    () => {
-        impl_returned_future! {
-            StatusFlowControlInfo,
-            crate::hci::events::EventsData::CommandStatus,
-            data,
-            &'static str,
-            {
-                use crate::hci::OutputErr::CommandStatusErr;
-
-                if let crate::hci::error::Error::NoError = data.status {
-
-                    let ret = StatusFlowControlInfo(data.number_of_hci_command_packets as usize);
-
-                    core::task::Poll::Ready(Ok(ret))
-                } else {
-                    core::task::Poll::Ready(Err(CommandStatusErr(data.status)))
-                }
-            }
-        }
-    };
-}
-
-/// For commands that receive a command complete with just a status
-macro_rules! impl_status_return {
-    ($command:expr) => {
-        struct ReturnData;
-
-        struct ReturnType(usize);
-
-        impl crate::hci::FlowControlInfo for ReturnType {
-            fn packet_space(&self) -> usize {
-                self.0
-            }
-        }
-
-        impl ReturnData {
-            fn try_from((raw, packet_cnt): (u8, u8)) -> Result<ReturnType, error::Error> {
-                let status = error::Error::from(raw);
-
-                if let error::Error::NoError = status {
-                    Ok(ReturnType(packet_cnt.into()))
-                } else {
-                    Err(status)
-                }
-            }
-        }
-
-        impl_get_data_for_command!($command, u8, ReturnData, ReturnType, error::Error);
-
-        impl_command_complete_future!(ReturnData, ReturnType, error::Error);
-    };
-}
-
-// All these are down here for the macros
+// All these were down here for the macros, planning to move them to a new module named `commands`
 pub mod cb;
 pub mod info_params;
 pub mod le;

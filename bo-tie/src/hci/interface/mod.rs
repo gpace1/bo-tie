@@ -648,7 +648,7 @@ where
 /// ```
 pub trait Sender {
     type Error;
-    type Message;
+    type Message: Unpin;
     type SendFuture<'a>: Future<Output = Result<(), Self::Error>>
     where
         Self: 'a;
@@ -719,7 +719,7 @@ pub trait Sender {
 /// }
 /// ```
 pub trait Receiver {
-    type Message;
+    type Message: Unpin;
     type ReceiveFuture<'a>: Future<Output = Option<Self::Message>>
     where
         Self: 'a;

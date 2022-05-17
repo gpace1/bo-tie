@@ -1,5 +1,7 @@
 //! L2CAP protocol
 
+pub mod send_future;
+
 use alloc::vec::Vec;
 /// Logical Link Control and Adaption protocol (L2CAP)
 use core::future::Future;
@@ -240,6 +242,9 @@ pub enum BasicFrameError {
     InvalidChannelId,
     /// Expected A start Fragment
     ExpectedStartFragment,
+    /// The connection has closed
+    ConnectionClosed,
+    Other(&'static str),
 }
 
 impl core::fmt::Display for BasicFrameError {
@@ -257,6 +262,12 @@ impl core::fmt::Display for BasicFrameError {
                 "Expected start fragment, received a \
                 continuation fragment"
             ),
+            BrasicFrameError::ConnectionClosed => write!(
+                r,
+                "The connection has closed between the host and the \
+                remote device"
+            ),
+            BasicFrameError::Other(reason) => f.write_str(reason),
         }
     }
 }
@@ -337,6 +348,21 @@ impl BasicInfoFrame {
 
     pub fn get_payload(&self) -> &[u8] {
         &self.data
+    }
+
+    /// Create a complete `L2ACAP` data packet into multiple buffers
+    ///
+    /// This slices a complete `L2CAP` packet into the multiple buffers within `buffers`. `buffers`
+    /// must have enough buffers to contain the entire packet, but it is allowed to await for a
+    /// buffer to be available. After each buffer is filled it is then awaited to complete it
+    /// (generally this is used to send the buffer).
+    pub(crate) fn into_sliced_packet<I, F, D, E>(self, buffers: I) -> send_future::AsSlicedPacketFuture<'_, I, F, D>
+    where
+        I: IntoIterator<Item = F>,
+        F: Future<Output = D>,
+        D: crate::TryExtend<u8> + Future<Output = Result<(), E>>,
+    {
+        send_future::AsSlicedPacketFuture::new(self, buffers)
     }
 
     /// This create a complete L2CAP data packet in its raw form
@@ -451,9 +477,14 @@ pub trait ConnectionChannel {
     ///
     /// The controller will probably have limits on the number of L2CAP PDU's that can be sent. This
     /// future is used for awaiting the sending process until the entire L2CAP PDU is sent.
-    type SendFut: Future<Output = Result<(), Self::SendFutErr>>;
+    type SendFut<'a>: Future<Output = Result<(), Self::SendFutErr>> + 'a;
 
-    type SendFutErr: core::fmt::Debug;
+    type SendFutErr;
+
+    /// Receiving future
+    ///
+    /// Awaits for the controller to send a data packet
+    type RecvFut<'a>: Future<Output = Option<Result<BasicInfoFrame, BasicFrameError>>> + 'a;
 
     /// Send a L2CAP PDU to the Controller
     ///
@@ -465,7 +496,7 @@ pub trait ConnectionChannel {
     /// [`ACLDataSuggestedMtu`](crate::l2cap::ACLDataSuggestedMtu) included with an `ACLData` for
     /// fragmentation of the data. Implementors of `ConnectionChannel` within this library already
     /// use the `ACLDataSuggestedMtu` in the implementation of `send`.
-    fn send(&self, data: BasicInfoFrame) -> Self::SendFut;
+    fn send(&mut self, data: BasicInfoFrame) -> Self::SendFut<'_>;
 
     /// Set the MTU for `send`
     ///
@@ -507,8 +538,13 @@ pub trait ConnectionChannel {
     ///
     /// Use the function `future_receiver` to return a future that can be awaited for *complete*
     /// ACL data.
-    fn receive(&self, waker: &core::task::Waker) -> Option<Vec<BasicFrameFragment>>;
+    fn receive(&self) -> Self::RecvFut<'_>;
+}
 
+/// Extension method for a [`ConnectionChannel`]
+///
+/// Anything that implements `ConnectionChannel` will also `ConnectionChannelExt`.
+trait ConnectionChannelExt: ConnectionChannel {
     /// A futures receiver for complete `ACLData`
     ///
     /// This is used to return a structure that can asynchronously receive from a Bluetooth
@@ -535,15 +571,17 @@ pub trait ConnectionChannel {
     /// to `receive`. The only exception to this is when you know that all packets will be sent as
     /// complete packets, but this can only occur when the maximum payload is set to the minimum for
     /// the given Bluetooth type, BR/EDR or LE, for L2CAP.
-    fn future_receiver(&self) -> ConChanFutureRx<'_, Self> {
+    fn future_receiver(&mut self) -> ConChanFutureRx<'_, Self> {
         ConChanFutureRx {
-            cc: self,
+            connection_channel: self,
             full_acl_data: Vec::new(),
             carryover_fragments: Vec::new(),
             length: None,
         }
     }
 }
+
+impl<T> ConnectionChannelExt for T where T: ConnectionChannel {}
 
 /// A future for asynchronously waiting for received packets from the connected device
 ///
@@ -569,9 +607,10 @@ pub trait ConnectionChannel {
 /// repeats itself.
 pub struct ConChanFutureRx<'a, C>
 where
-    C: ?Sized,
+    C: ?Sized + ConnectionChannel,
 {
-    cc: &'a C,
+    connection_channel: &'a mut C,
+    receive_future: C::RecvFut<'a>,
     full_acl_data: Vec<BasicInfoFrame>,
     carryover_fragments: Vec<u8>,
     length: Option<usize>,
@@ -579,10 +618,22 @@ where
 
 impl<'a, C> ConChanFutureRx<'a, C>
 where
-    C: ?Sized,
+    C: ?Sized + ConnectionChannel,
 {
     // The size of the L2CAP data header
     const HEADER_SIZE: usize = 4;
+
+    /// Create a new ConChanFutureRx<'a, C>
+    ///
+    pub fn new(connection_channel: &'a mut C) -> Self {
+        Self {
+            connection_channel,
+            receive_future: None,
+            full_acl_data: Vec::new(),
+            carryover_fragments: Vec::new(),
+            length: None,
+        }
+    }
 
     /// Get the complete, de-fragmented, received ACL Data
     ///
@@ -705,7 +756,7 @@ where
 
 impl<'a, C> Future for ConChanFutureRx<'a, C>
 where
-    C: ConnectionChannel,
+    C: ?Sized + ConnectionChannel,
 {
     type Output = Result<Vec<BasicInfoFrame>, BasicFrameError>;
 
@@ -715,20 +766,29 @@ where
         let this = self.get_mut();
 
         loop {
-            match this.cc.receive(cx.waker()) {
-                None => break Poll::Pending,
-                Some(fragments) => {
-                    match fragments.into_iter().try_for_each(|ref mut f| this.process(f)) {
-                        Ok(_) => {
-                            if this.carryover_fragments.is_empty() && !this.full_acl_data.is_empty() {
-                                // Break iff there are complete L2CAP packets
+            match this.receive_future {
+                None => this.receive_future = Some(this.connection_channel.receive()),
+                Some(ref mut receive_future) => {
+                    match core::pin::Pin::new(receive_future).poll(cx) {
+                        Poll::Pending => break Poll::Pending,
+                        Poll::Ready(None) => break Poll::Ready(Err(BasicFrameError::ConnectionClosed)),
+                        Poll::Ready(Err(e)) => break Poll::Ready(Err(e)),
+                        Poll::Ready(Some(Ok(fragment))) => {
+                            this.receive_future = None;
 
-                                let data = core::mem::replace(&mut this.full_acl_data, Vec::new());
+                            match this.process(fragment) {
+                                Ok(_) => {
+                                    if this.carryover_fragments.is_empty() && !this.full_acl_data.is_empty() {
+                                        // Break iff there are complete L2CAP packets
 
-                                break Poll::Ready(Ok(data));
+                                        let data = core::mem::replace(&mut this.full_acl_data, Vec::new());
+
+                                        break Poll::Ready(Ok(data));
+                                    }
+                                }
+                                Err(e) => break Poll::Ready(Err(e)),
                             }
                         }
-                        Err(e) => break Poll::Ready(Err(e)),
                     }
                 }
             }

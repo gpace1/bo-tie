@@ -24,7 +24,6 @@ pub mod att;
 pub mod gap;
 pub mod gatt;
 pub mod hci;
-pub mod hci_transport;
 pub mod l2cap;
 pub mod sm;
 
@@ -434,6 +433,21 @@ impl core::fmt::Display for UUIDVersion {
             UUIDVersion::RandomNumber => write!(f, "Random-number-based version"),
             UUIDVersion::NameSHA1 => write!(f, "Name-based (with SHA-1 hash) version"),
         }
+    }
+}
+
+/// Try Extend
+///
+/// This is the try equivalent to [`Extend`](std::iter::Extend)
+trait TryExtend<A> {
+    type Error;
+
+    fn try_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
+    where
+        T: IntoIterator<Item = A>;
+
+    fn try_extend_one(&mut self, item: A) -> Result<(), Self::Error> {
+        self.try_extend(core::iter::once(item))
     }
 }
 
