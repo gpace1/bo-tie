@@ -158,7 +158,7 @@ pub mod remote_connection_parameter_request_negative_reply {
     /// [`Message`](crate::hci::error::Error::Message)
     /// as they are translated into the value of 0 on the interface.
     pub async fn send<H: HostGenerics>(
-        hci: &mut HostInterface<H>,
+        host: &mut HostInterface<H>,
         handle: ConnectionHandle,
         reason: error::Error,
     ) -> Result<Return, CommandError<H>> {
@@ -178,6 +178,6 @@ pub mod remote_connection_parameter_request_negative_reply {
 
         let parameter = Parameter { handle, reason };
 
-        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
+        host.send_command_expect_complete(parameter).await
     }
 }

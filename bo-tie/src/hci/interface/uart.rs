@@ -7,11 +7,11 @@
 //! A `UartInterface` is a wrapper around an `Interface` to integrate processing of this packet
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
+use crate::hci::interface::{
+    BufferedSend, BufferedSendError, Channel, ChannelsManagement, HciPacketType, Interface, Sender,
+};
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
-use futures::SinkExt;
-use crate::hci::events::PacketType;
-use crate::hci::interface::{BufferedSend, BufferedSendError, Channel, ChannelsManagement, HciPacketType, Interface, Sender};
 
 /// UART wrapper around an [`Interface`](Interface)
 ///
@@ -41,11 +41,11 @@ where
     /// is able to determine the packet type by assuming the first byte put into the buffer is the
     /// packet indicator. Otherwise the returned `UartBufferedSend` acts the same as the return of
     /// method `buffered_send` within `Interface`.
-    pub async fn buffered_send(&mut self) -> UartBufferedSend<T, <<T::Channel as Channel>::Sender as Sender>::Payload> {
+    pub async fn buffered_send(
+        &mut self,
+    ) -> UartBufferedSend<'_, T, <<T::Channel as Channel>::Sender as Sender>::Message> {
         UartBufferedSend::new(self)
     }
-
-    /// Proce
 }
 
 impl<T> From<Interface<T>> for UartInterface<T> {
@@ -61,7 +61,7 @@ fn match_uart_packet(byte: u8) -> Result<HciPacketType, UartInterfaceError> {
         3 => Ok(HciPacketType::Sco),
         4 => Ok(HciPacketType::Event),
         5 => Ok(HciPacketType::Iso),
-        _ => Err(UartInterfaceError(byte))
+        _ => Err(UartInterfaceError(byte)),
     }
 }
 
@@ -88,21 +88,18 @@ impl Display for UartInterfaceError {
 /// `UartInterface`.
 struct UartBufferedSend<'a, T, B> {
     // being lazy and just using a result for an enum of two type
-    buffered_send: Result<BufferedSend<'a, T, B>, &'a mut Interface<T>>
+    buffered_send: Result<BufferedSend<'a, T, B>, &'a mut Interface<T>>,
 }
 
-impl<'a, T> UartBufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Payload>
-    where
-        T: ChannelsManagement,
-        <<T::Channel as Channel>::Sender<'a> as Sender>::Payload: Deref<Target = [u8]> + Extend<u8>,
+impl<'a, T> UartBufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Sender>::Message>
+where
+    T: ChannelsManagement,
+    <<T::Channel as Channel>::Sender<'a> as Sender>::Message: Deref<Target = [u8]> + Extend<u8>,
 {
-
     fn new(interface: &'a mut Interface<T>) -> Self {
         let buffered_send = Err(interface);
 
-        Self {
-            buffered_send,
-        }
+        Self { buffered_send }
     }
 
     /// Add a byte to the buffer
@@ -110,7 +107,10 @@ impl<'a, T> UartBufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Send
     /// This adds a byte to the buffer. The first byte added to the buffer is always assumed to be
     /// the indicator byte and any following bytes to be HCI packet. `add` will return true when it
     /// is determined that the buffer contains a complete HCI packet
-    pub fn add(&mut self, byte: u8) -> Result<bool, UartBufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
+    pub fn add(
+        &mut self,
+        byte: u8,
+    ) -> Result<bool, UartBufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
         match self.buffered_send {
             Err(interface) => {
                 let packet_type = match_uart_packet(byte)?;
@@ -121,7 +121,7 @@ impl<'a, T> UartBufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Send
 
                 Ok(false)
             }
-            Ok(ref mut buffered_sender) => buffered_sender.add(byte)
+            Ok(ref mut buffered_sender) => buffered_sender.add(byte),
         }
     }
 
@@ -135,7 +135,10 @@ impl<'a, T> UartBufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Send
     ///
     /// # Return
     /// `true` is returned if the this `BufferSend` contains a complete HCI Packet.
-    pub fn add_bytes<I: IntoIterator<Item = u8>>(&mut self, iter: I) -> Result<bool, UartBufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
+    pub fn add_bytes<I: IntoIterator<Item = u8>>(
+        &mut self,
+        iter: I,
+    ) -> Result<bool, UartBufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
         for i in iter {
             if self.add(i)? {
                 return Ok(true);
@@ -155,7 +158,9 @@ impl<'a, T> UartBufferedSend<'a, T, <<T::Channel as Channel>::Sender<'a> as Send
 
     pub fn send(self) -> Result<(), UartBufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
         match self.buffered_send {
-            Err(_) => Err(UartBufferedSendError::BufferedSendError(BufferedSendError::IncompleteHciPacket)),
+            Err(_) => Err(UartBufferedSendError::BufferedSendError(
+                BufferedSendError::IncompleteHciPacket,
+            )),
             Ok(bs) => bs.send(),
         }
     }
@@ -167,7 +172,10 @@ enum UartBufferedSendError<E> {
     BufferedSendError(BufferedSendError<E>),
 }
 
-impl Display for UartBufferedSendError<E> where E: Display {
+impl<E> Display for UartBufferedSendError<E>
+where
+    E: Display,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             UartBufferedSendError::UartInterface(e) => e.fmt(f),

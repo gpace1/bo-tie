@@ -4,7 +4,6 @@ use crate::hci::common::{
     ConnectionHandle, EnabledExtendedFeaturesItr, EnabledFeaturesIter, EncryptionLevel, ExtendedInquiryResponseDataItr,
 };
 use crate::hci::error::Error;
-use crate::hci::events::EventErrorReason::UnknownEventCode;
 use crate::hci::le;
 use crate::hci::le::common::{
     AddressType, ConnectionInterval, ConnectionLatency, EnabledLeFeaturesItr, ExtendedAdvertisingAndScanResponseData,
@@ -688,73 +687,6 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
         (self as &dyn core::fmt::Display).fmt(f)
     }
-}
-
-macro_rules! impl_get_data_for_event_data {
-    ( $event_data:path, $command:expr, $packed_data:ty, $data:ty, $return_ty:ty, $try_from_err_ty:ty ) => {
-        impl crate::hci::events::DataResult for $data {
-            type ReturnData = $return_ty;
-            type UnpackErrorType = $try_from_err_ty;
-        }
-
-        impl crate::hci::events::GetDataForCommand<$data> for $event_data {
-            unsafe fn get_return(
-                &self,
-            ) -> core::result::Result<
-                core::option::Option<<$data as crate::hci::events::DataResult>::ReturnData>,
-                crate::hci::events::CommandDataErr<<$data as crate::hci::events::DataResult>::UnpackErrorType>,
-            > {
-                let oc_pair = $command.as_opcode_pair();
-
-                let expected_opcode = oc_pair.ocf | (oc_pair.ogf << 10);
-
-                if self.command_opcode == Some(expected_opcode) {
-                    <Self as crate::hci::events::GetDataForCommand<$data>>::get_return_unchecked(&self)
-                } else if self.command_opcode.is_none() {
-                    Ok(None)
-                } else {
-                    Err(crate::hci::events::CommandDataErr::IncorrectOCF(
-                        oc_pair.ocf | (oc_pair.ogf << 10),
-                        self.command_opcode.unwrap(),
-                    ))
-                }
-            }
-
-            unsafe fn get_return_unchecked(
-                &self,
-            ) -> core::result::Result<
-                core::option::Option<<$data as crate::hci::events::DataResult>::ReturnData>,
-                crate::hci::events::CommandDataErr<<$data as crate::hci::events::DataResult>::UnpackErrorType>,
-            > {
-                use core::mem::size_of;
-
-                if self.raw_data.len() >= core::mem::size_of::<$packed_data>() {
-                    let mut buffer = [0u8; size_of::<$packed_data>()];
-
-                    buffer.copy_from_slice(&(*self.raw_data));
-
-                    let p_data: $packed_data = core::mem::transmute(buffer);
-
-                    match <$data>::try_from((p_data, self.number_of_hci_command_packets)) {
-                        Ok(val) => Ok(Some(val)),
-                        Err(e) => Err(crate::hci::events::CommandDataErr::UnpackError(e)),
-                    }
-                } else {
-                    Err(crate::hci::events::CommandDataErr::RawDataLenTooSmall)
-                }
-            }
-        }
-    };
-    ( $event_data:path, $command:expr, $packed_data:ty, $data:ty, $try_from_err_ty:ty ) => {
-        impl_get_data_for_event_data!(
-            $event_data,
-            $command,
-            $packed_data,
-            $data,
-            $data,
-            $try_from_err_ty
-        );
-    };
 }
 
 #[derive(Debug, Clone)]

@@ -8,43 +8,15 @@ pub mod error;
 pub mod opcodes;
 #[macro_use]
 pub mod events;
-mod flow_ctrl;
+// mod flow_ctrl;
 pub mod interface;
 
-use crate::l2cap::{BasicFrameError, BasicFrameFragment, BasicInfoFrame};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
-
-/// Try to rejuvenate a buffer
-///
-/// This is a trait for emptying a buffer and gives the buffer a capacity. This capacity could
-/// be the same capacity as before, but it could also be a new capacity. However, the capacity of
-/// the buffer does not change if the new capacity is less than the prior one.
-///
-/// # Note
-/// All data previously in the buffer is dropped
-#[doc(hidden)]
-pub trait TryToRejuvenate {
-    type Error;
-
-    fn try_to_rejuvenate(&mut self, capacity: usize) -> Result<(), Self::Error>;
-}
-
-impl<T> TryToRejuvenate for Vec<T> {
-    type Error = core::convert::Infallible;
-
-    fn try_to_rejuvenate(&mut self, to: usize) -> Result<(), Self::Error> {
-        self.clear();
-
-        (self.capacity() < to)
-            .then(self.reserve(to - self.capacity()))
-            .ok_or(core::convert::Infallible)
-    }
-}
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -71,7 +43,7 @@ pub trait CommandParameter<const PARAMETER_SIZE: usize> {
     /// packet must be wrapped within a type to give the interface driver the knowledge
     fn as_command_packet<T>(&self, buffer: &mut T)
     where
-        T: TryReserveTo + Extend<u8>,
+        T: Extend<u8>,
     {
         use core::mem::size_of;
 
@@ -285,7 +257,7 @@ impl<'a> HciACLData<'a> {
     ///
     /// # Note
     /// Collecting the returned iterator into a `Vec` produces the same thing as the return of
-    /// [`get_packet`](HciAclData)
+    /// [`get_packet`](HciACLData::get_packet)
     pub fn get_packet_iter(&self) -> impl Iterator<Item = u8> + ExactSizeIterator {
         struct HciAclPacketIter<'a> {
             state: Option<usize>,
@@ -295,7 +267,7 @@ impl<'a> HciACLData<'a> {
         }
 
         impl<'a> HciAclPacketIter<'a> {
-            fn new(data: &'a HciAclData) -> Self {
+            fn new(data: &'a HciACLData<'a>) -> Self {
                 Self {
                     state: Some(0),
                     raw_handle_and_flags: data.connection_handle.get_raw_handle()
@@ -569,34 +541,6 @@ impl<'de> bo_tie_serde::HintedDeserialize<'de> for HciACLData<'de> {
     }
 }
 
-struct EventReturnFuture<'a, I, P>
-where
-    I: PlatformInterface,
-    P: EventMatcher + Sync + Send + 'static,
-{
-    interface: &'a I,
-    event: Option<events::Events>,
-    matcher: Pin<Arc<P>>,
-}
-
-impl<'a, I, P> Future for EventReturnFuture<'a, I, P>
-where
-    I: PlatformInterface,
-    P: EventMatcher + Send + Sync + 'static,
-{
-    type Output = Result<events::EventsData, I::ReceiveEventError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut core::task::Context) -> Poll<Self::Output> {
-        match self
-            .interface
-            .receive_event(self.event, cx.waker(), self.matcher.clone())
-        {
-            Some(event_response) => Poll::Ready(event_response),
-            None => Poll::Pending,
-        }
-    }
-}
-
 /// A reserve of buffers
 ///
 /// A reserve is for storing previously used buffers for usage later. The main purpose is for both
@@ -629,8 +573,11 @@ trait BufferReserveExt: BufferReserve {
     ///
     /// This is an iterator over taking a `BufferReserve`. Every iteration calls the method `take`
     /// and returns the future. The iterator will never return `None`.
-    fn as_take_iter(&mut self) -> BufferReserveTakeIterator<'_, Self> {
-        BufferReserveIterator(self)
+    fn as_take_iter(&mut self) -> BufferReserveTakeIterator<'_, Self>
+    where
+        Self: Sized,
+    {
+        BufferReserveTakeIterator(self)
     }
 }
 
@@ -837,7 +784,7 @@ where
         &mut self,
         parameter: CP,
         event_matcher: CommandEventMatcher,
-    ) -> Result<interface::IntraMessage<T>, CommandError<H>>
+    ) -> Result<interface::IntraMessage<H::Buffer>, CommandError<H>>
     where
         CP: CommandParameter<CP_SIZE> + 'static,
     {
@@ -976,7 +923,11 @@ where
         let event_opt = event.into();
 
         loop {
-            let data = self.interface_receiver.recv().await.ok_or(WaitForEventError)?;
+            let data = self
+                .interface_receiver
+                .recv()
+                .await
+                .ok_or(WaitForEventError::ReceiverClosed)?;
 
             let ed = EventsData::try_from_packet(&data)?;
 
@@ -1036,19 +987,19 @@ where
     }
 }
 
-impl<S> From<events::EventError> for CommandError<S> {
+impl<H: HostGenerics> From<events::EventError> for CommandError<H> {
     fn from(e: events::EventError) -> Self {
         CommandError::EventError(e)
     }
 }
 
-impl<S> From<error::Error> for CommandError<S> {
+impl<H: HostGenerics> From<error::Error> for CommandError<H> {
     fn from(e: error::Error) -> Self {
         CommandError::CommandError(e)
     }
 }
 
-impl<S> From<CCParameterError> for CommandError<S> {
+impl<H: HostGenerics> From<CCParameterError> for CommandError<H> {
     fn from(e: CCParameterError) -> Self {
         match e {
             CCParameterError::CommandError(e) => CommandError::CommandError(e),
@@ -1059,7 +1010,9 @@ impl<S> From<CCParameterError> for CommandError<S> {
 
 /// A trait for converting from a Command Complete Event
 trait TryFromCommandComplete {
-    fn try_from(cc: &events::CommandCompleteData) -> Result<Self, CCParameterError>;
+    fn try_from(cc: &events::CommandCompleteData) -> Result<Self, CCParameterError>
+    where
+        Self: Sized;
 }
 
 /// An error when converting the parameter of a Command Complete to a concrete type fails.
@@ -1070,7 +1023,7 @@ enum CCParameterError {
 
 macro_rules! check_status {
     ($raw_data:expr) => {
-        error::Error::from(*cc.raw_data.get(0).ok_or(CCParameterError::InvalidEventParameter)?)
+        error::Error::from(*$raw_data.get(0).ok_or(CCParameterError::InvalidEventParameter)?)
             .ok_or_else(CCParameterError::InvalidEventParameter)?;
     };
 }
@@ -1135,10 +1088,10 @@ where
     B: BufferReserve<Buffer = interface::IntraMessage<T>>,
     T: core::ops::Deref<Target = [u8]>,
 {
-    type SendFut<'a> = ConnectionChannelSender<'a, S, B>;
+    type SendFut<'a> = ConnectionChannelSender<'a, S, B> where S: 'a, B: 'a;
     type SendFutErr = S::Error;
 
-    type RecvFut<'a> = AclReceiverMap<'a, R>;
+    type RecvFut<'a> = AclReceiverMap<'a, R> where R: 'a;
 
     fn send(&mut self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut<'_> {
         let iter = SelfSendBufferMap {
@@ -1184,13 +1137,13 @@ struct SelfSendBuffer<'a, S: interface::Sender> {
     state: SelfSendBufferState<'a, S>,
 }
 
-enum SelfSendBufferState<'a, S: interface::Sender> {
+enum SelfSendBufferState<'a, S: interface::Sender + 'a> {
     Buffer(S::Message),
     Sender(S::SendFuture<'a>),
     InBetween,
 }
 
-impl<S, T> SelfSendBuffer<S>
+impl<S, T> SelfSendBuffer<'_, S>
 where
     S: interface::Sender<Message = interface::IntraMessage<T>>,
 {
@@ -1207,7 +1160,7 @@ where
     }
 }
 
-impl<S> Future for SelfSendBuffer<S>
+impl<S> Future for SelfSendBuffer<'_, S>
 where
     S: interface::Sender,
 {
@@ -1273,9 +1226,8 @@ where
     }
 }
 
-struct ConnectionChannelSender<'a, S, B: BufferReserve> {
+struct ConnectionChannelSender<'a, S: 'a, B: BufferReserve> {
     sliced_future: crate::l2cap::send_future::AsSlicedPacketFuture<
-        'a,
         SelfSendBufferMap<'a, S, BufferReserveTakeIterator<'a, B>>,
         SelfSendBufferFutureMap<'a, S, B::TakeBuffer>,
         SelfSendBuffer<'a, S>,
@@ -1318,12 +1270,12 @@ where
                 Some(ref mut receiver) => match Pin::new(receiver).poll(cx) {
                     Poll::Pending => break Poll::Pending,
                     Poll::Ready(None) => break Poll::Ready(None),
-                    Poll::Ready(Option(intra_message)) => match intra_message.ty {
+                    Poll::Ready(Some(intra_message)) => match intra_message.ty {
                         interface::IntraMessageType::Acl(ref data) => match HciACLData::try_from_packet(data) {
                             Ok(data) => {
                                 let fragment = data.into_acl_fragment();
 
-                                Poll::Ready(Some(Ok(fragment)));
+                                break Poll::Ready(Some(Ok(fragment)));
                             }
                             Err(_) => {
                                 break Poll::Ready(Some(Err(BasicFrameError::Other(

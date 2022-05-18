@@ -79,7 +79,7 @@ impl<'a, S, T> LocalSendFuture<'a, S, T> {
 pub struct LocalSendFutureError;
 
 impl Display for LocalSendFutureError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_str("local send future error")
     }
 }
@@ -140,7 +140,7 @@ where
 pub struct LocalReceiverFutureError;
 
 impl Display for LocalReceiverFutureError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_str("local receiver future error")
     }
 }

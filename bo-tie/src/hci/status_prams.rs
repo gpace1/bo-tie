@@ -38,7 +38,7 @@ pub mod read_rssi {
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
-            OK(Self {
+            Ok(Self {
                 handle,
                 rssi,
                 completed_packets_cnt,

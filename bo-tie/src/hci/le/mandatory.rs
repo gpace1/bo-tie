@@ -17,7 +17,6 @@ pub mod set_event_mask {
 
     use crate::hci::events::LEMeta;
     use crate::hci::*;
-    use crate::hci::cb::set_event_mask::EventMask::LEMeta;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetEventMask);
 
@@ -67,7 +66,7 @@ pub mod set_event_mask {
 
     impl CommandParameter<8> for CmdParameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> [u8;8] {
+        fn get_parameter(&self) -> [u8; 8] {
             self.mask
         }
     }
@@ -126,12 +125,15 @@ pub mod set_event_mask {
     /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
     /// send(&host_interface, &events);
     /// ```
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>, enabled_events: &[LEMeta]) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        enabled_events: &[LEMeta],
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let mask = LEMeta::build_mask(enabled_events);
 
         let parameter = CmdParameter { mask };
 
-        let r : Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
 
         r
     }
@@ -142,10 +144,9 @@ pub mod read_buffer_size {
 
     use crate::hci::events::CommandCompleteData;
     use crate::hci::*;
-    use crate::hci::opcodes::HCICommand;
 
     const COMMAND_V1: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSizeV1);
-    const COMMAND_V2: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::)
+    const COMMAND_V2: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadBufferSizeV2);
 
     struct ParameterV1;
 
@@ -159,7 +160,7 @@ pub mod read_buffer_size {
     struct ParameterV2;
 
     impl CommandParameter<0> for ParameterV2 {
-        const COMMAND: HCICommand = COMMAND_V2;
+        const COMMAND: opcodes::HCICommand = COMMAND_V2;
         fn get_parameter(&self) -> [u8; 0] {
             []
         }
@@ -261,7 +262,7 @@ pub mod read_buffer_size {
                 acl_packet_cnt,
                 iso_packet_len,
                 iso_packet_cnt,
-                completed_packets_cnt
+                completed_packets_cnt,
             })
         }
     }
@@ -283,27 +284,27 @@ pub mod read_buffer_size {
 
 pub mod read_local_supported_features {
 
+    use crate::hci::events::CommandCompleteData;
     use crate::hci::le::common::EnabledLeFeaturesItr;
     use crate::hci::*;
-    use crate::hci::events::CommandCompleteData;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
 
     pub struct EnabledLeFeatures {
-        features_mask: [u8;8],
+        features_mask: [u8; 8],
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
 
     impl EnabledLeFeatures {
-        pub fn iter(&self) -> EnabledLEFeaturesItr {
+        pub fn iter(&self) -> EnabledLeFeaturesItr {
             EnabledLeFeaturesItr::from(self.features_mask)
         }
     }
 
     impl IntoIterator for EnabledLeFeatures {
-        type Item = EnabledLeFeaturesItr::Item;
+        type Item = <EnabledLeFeaturesItr as Iterator>::Item;
         type IntoIter = EnabledLeFeaturesItr;
 
         fn into_iter(self) -> Self::IntoIter {
@@ -324,7 +325,7 @@ pub mod read_local_supported_features {
 
                 Ok(Self {
                     features_mask,
-                    completed_packets_cnt
+                    completed_packets_cnt,
                 })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
@@ -342,7 +343,7 @@ pub mod read_local_supported_features {
 
     impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> [u8;0] {
+        fn get_parameter(&self) -> [u8; 0] {
             []
         }
     }
@@ -354,8 +355,8 @@ pub mod read_local_supported_features {
 
 pub mod read_white_list_size {
 
-    use crate::hci::*;
     use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadWhiteListSize);
 
@@ -369,13 +370,17 @@ pub mod read_white_list_size {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
             check_status!(cc.raw_data);
 
-            let list_size = cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?.into();
+            let list_size = cc
+                .raw_data
+                .get(1)
+                .ok_or(CCParameterError::InvalidEventParameter)?
+                .into();
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
             Ok(Self {
                 list_size,
-                completed_packets_cnt
+                completed_packets_cnt,
             })
         }
     }
@@ -398,7 +403,7 @@ pub mod read_white_list_size {
 
     impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> [u8;0] {
+        fn get_parameter(&self) -> [u8; 0] {
             []
         }
     }
@@ -434,8 +439,8 @@ pub mod clear_white_list {
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
         use crate::hci::events::CommandCompleteData;
-        use crate::BluetoothDeviceAddress,
         use crate::hci::*;
+        use crate::BluetoothDeviceAddress;
 
         struct CommandPrameter {
             address_type: u8,
@@ -460,10 +465,10 @@ macro_rules! add_remove_white_list_setup {
             address_type: crate::hci::le::common::WhiteListedAddressType,
             address: crate::BluetoothDeviceAddress,
         ) -> Result<impl FlowControlInfo, CommandError<H>> {
-            let parameter = CommandParameter {
+            let parameter = CommandPrameter {
                 address_type,
-                address
-            }
+                address,
+            };
 
             let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
 
@@ -487,12 +492,11 @@ pub mod remove_device_from_white_list {
     add_remove_white_list_setup!(COMMAND);
 }
 
-
 pub mod read_supported_states {
 
+    use crate::hci::events::CommandCompleteData;
     use crate::hci::*;
     use core::mem::size_of_val;
-    use crate::hci::events::CommandCompleteData;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadSupportedStates);
 
@@ -583,7 +587,6 @@ pub mod read_supported_states {
     }
 
     impl CurrentStatesAndRoles {
-
         /// Iterate over the supported LE states and roles
         ///
         /// # Note
@@ -607,7 +610,7 @@ pub mod read_supported_states {
 
                 Ok(Self {
                     states_and_roles_mask,
-                    completed_packets_cnt
+                    completed_packets_cnt,
                 })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
@@ -682,7 +685,7 @@ pub mod read_supported_states {
             }
         }
     }
-    
+
     impl<'a> IntoIterator for &'a CurrentStatesAndRoles {
         type Item = StatesAndRoles;
         type IntoIter = StatesAndRolesIter<'a>;
@@ -691,7 +694,7 @@ pub mod read_supported_states {
             self.iter()
         }
     }
-    
+
     struct Parameter;
 
     impl CommandParameter<0> for Parameter {
@@ -703,14 +706,14 @@ pub mod read_supported_states {
 
     pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
-    }    
+    }
 }
 
 /// LE test end command
 pub mod test_end {
 
-    use crate::hci::*;
     use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::TestEnd);
 
@@ -747,7 +750,7 @@ pub mod test_end {
 
     impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> [u8;0] {
+        fn get_parameter(&self) -> [u8; 0] {
             []
         }
     }

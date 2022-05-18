@@ -96,7 +96,7 @@ pub mod create_connection_cancel {
 
     /// Send the LE Create Connection Cancel command
     pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
-        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Paremter).await
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
     }
@@ -236,7 +236,10 @@ pub mod create_connection {
     /// [`EnhancedConnectionComplete`](events::LEMeta::EnhancedConnectionComplete) is unmasked, the
     /// controller will send the event (with `EnhancedConnectionComplete` having precedence over
     /// `ConnectionComplete` if they are both unmasked) to the host after a connection is made.
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>, parameters: ConnectionParameters) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        parameters: ConnectionParameters,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
         host.send_command_expect_status(parameters).await
     }
 }
@@ -253,14 +256,17 @@ pub mod set_host_channel_classification {
     }
 
     impl CmdParameter {
-        fn new<I>(channels: I) -> Self where I: IntoIterator<Item = usize> {
-            let mut channel_map = [u8; 5];
+        fn new<I>(channels: I) -> Self
+        where
+            I: IntoIterator<Item = usize>,
+        {
+            let mut channel_map = [0u8; 5];
 
             for channel in channels {
                 let byte = channel / 8;
                 let bit = channel % 8;
 
-                channel_map[byte] |= (1 << bit);
+                channel_map[byte] |= 1 << bit;
             }
 
             CmdParameter { channel_map }
@@ -278,7 +284,7 @@ pub mod set_host_channel_classification {
     pub async fn send<H, I>(host: &mut HostInterface<H>, channels: I) -> Result<impl FlowControlInfo, CommandError<H>>
     where
         H: HostGenerics,
-        I: IntoIterator<Item = usize>
+        I: IntoIterator<Item = usize>,
     {
         let parameter = CmdParameter::new(channels);
 
@@ -292,8 +298,8 @@ pub mod set_host_channel_classification {
 pub mod read_channel_map {
 
     use crate::hci::common::ConnectionHandle;
-    use crate::hci::*;
     use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadChannelMap);
 
@@ -307,7 +313,7 @@ pub mod read_channel_map {
     pub struct ChannelMapInfo {
         pub handle: ConnectionHandle,
         /// This is the list of channels (from 0 through 36)
-        pub channel_map_bit_mask: [u8;5],
+        pub channel_map_bit_mask: [u8; 5],
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
@@ -320,7 +326,7 @@ pub mod read_channel_map {
                 *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter),
                 *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter),
             ]))
-                .map_err(|_| CCParameterError::InvalidEventParameter)?;
+            .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
             if cc.raw_data[3..].len() == 5 {
                 let completed_packets_cnt = cc.number_of_hci_command_packets.into();
@@ -349,7 +355,7 @@ pub mod read_channel_map {
     /// An iterator over the enabled channels
     pub struct ChannelMapIter {
         bit_mask: [u8; 5],
-        channel: usize
+        channel: usize,
     }
 
     impl Iterator for ChannelMapIter {
@@ -366,7 +372,7 @@ pub mod read_channel_map {
 
                     self.channel += 1;
 
-                    return Some(channel)
+                    return Some(channel);
                 } else {
                     self.channel += 1;
                 }
@@ -388,10 +394,11 @@ pub mod read_channel_map {
     }
 
     /// Send the LE Read Channel Map command
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>, connection_handle: ConnectionHandle) -> Result<ChannelMapInfo, CommandError<H>> {
-        let parameter = CmdParameter {
-            connection_handle
-        };
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        connection_handle: ConnectionHandle,
+    ) -> Result<ChannelMapInfo, CommandError<H>> {
+        let parameter = CmdParameter { connection_handle };
 
         host.send_command_expect_complete(parameter).await
     }
@@ -422,11 +429,11 @@ pub mod read_remote_features {
     /// LE event [`ReadRemoteFeaturesComplete`](events::LEMeta::ReadRemoteFeaturesComplete) is
     /// unmasked, the controller will send the event to the host containing the LE features of the
     /// connected device.
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>, connection_handle: ConnectionHandle) -> Result<impl FlowControlInfo, CommandError<H>> {
-
-        let parameter = CmdParameter {
-            connection_handle
-        };
+    pub async fn send<H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        connection_handle: ConnectionHandle,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let parameter = CmdParameter { connection_handle };
 
         host.send_command_expect_status(parameter).await
     }

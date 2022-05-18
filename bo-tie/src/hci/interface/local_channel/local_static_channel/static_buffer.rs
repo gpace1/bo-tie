@@ -3,9 +3,9 @@
 //! Buffers in this module are statically allocated. The size of the buffer must be known at
 //! compile time.
 
-use std::fmt::{Display, Formatter};
-use std::mem::{replace, transmute, MaybeUninit};
-use std::ops::{Deref, DerefMut};
+use core::fmt::{Display, Formatter};
+use core::mem::{replace, transmute, MaybeUninit};
+use core::ops::{Deref, DerefMut};
 
 /// A linear buffer
 ///
@@ -44,8 +44,7 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
     /// Removes an item from the buffer shifting everything past the index left by one.
     pub fn try_remove(&mut self, index: usize) -> Result<T, LinearBufferError> {
         if index < self.count {
-            let v =
-                unsafe { replace(&mut self.buffer[index], MaybeUninit::uninit()).assume_init() };
+            let v = unsafe { replace(&mut self.buffer[index], MaybeUninit::uninit()).assume_init() };
 
             if self.count != 1 {
                 // shifting everything *past* the removed to the left by one
@@ -122,7 +121,7 @@ pub enum LinearBufferError {
 }
 
 impl Display for LinearBufferError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             LinearBufferError::BufferFull => f.write_str("linear buffer full"),
             LinearBufferError::BufferEmpty => f.write_str("linear buffer empty"),
@@ -153,11 +152,7 @@ impl<T, const SIZE: usize> QueueBuffer<T, SIZE> {
 
         let count = 0;
 
-        Self {
-            buffer,
-            start,
-            count,
-        }
+        Self { buffer, start, count }
     }
 
     pub fn is_full(&self) -> bool {
@@ -184,9 +179,7 @@ impl<T, const SIZE: usize> QueueBuffer<T, SIZE> {
 
     pub fn try_remove(&mut self) -> Result<T, QueueBufferError> {
         if self.count != 0 {
-            let ret = unsafe {
-                replace(&mut self.buffer[self.start], MaybeUninit::uninit()).assume_init()
-            };
+            let ret = unsafe { replace(&mut self.buffer[self.start], MaybeUninit::uninit()).assume_init() };
 
             self.start = (self.start + 1) % SIZE;
 
@@ -206,7 +199,7 @@ pub enum QueueBufferError {
 }
 
 impl Display for QueueBufferError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             QueueBufferError::BufferFull => f.write_str("buffer is full"),
             QueueBufferError::BufferEmpty => f.write_str("buffer is empty"),
@@ -282,20 +275,14 @@ mod test {
 
         match l.try_insert(0, 2) {
             Err(LinearBufferError::IndexOutOfRange) => (),
-            v => panic!(
-                "Expected LinearBufferError::IndexOutOfRange, received {:?}",
-                v
-            ),
+            v => panic!("Expected LinearBufferError::IndexOutOfRange, received {:?}", v),
         }
 
         l.try_insert(0, 0).unwrap();
 
         match l.try_remove(2) {
             Err(LinearBufferError::IndexOutOfRange) => (),
-            v => panic!(
-                "Expected LinearBufferError::IndexOutOfRange, received {:?}",
-                v
-            ),
+            v => panic!("Expected LinearBufferError::IndexOutOfRange, received {:?}", v),
         }
     }
 

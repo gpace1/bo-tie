@@ -10,12 +10,15 @@
 //! allocated on the stack. Tasks must use the channel through a reference to it in order to
 //! guarantee the lifetime of the buffer.
 
-use crate::{Channel, ChannelId, ChannelsManagement, HciPacket, Receiver, Sender};
-use std::cell::RefCell;
-use std::fmt::{Display, Formatter};
-use std::task::{Waker};
-use crate::local_channel::{LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture, LocalSendFutureError};
-use crate::local_channel::local_static_channel::static_buffer::{LinearBuffer, QueueBuffer};
+use super::{
+    LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture,
+    LocalSendFutureError,
+};
+use crate::hci::interface::{Channel, ChannelId, ChannelsManagement, Receiver, Sender};
+use core::cell::RefCell;
+use core::fmt::{Display, Formatter};
+use core::task::Waker;
+use static_buffer::{LinearBuffer, QueueBuffer};
 
 mod static_buffer;
 
@@ -50,9 +53,15 @@ impl<const SIZE: usize, T> LocalStaticChannel<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize, T> Channel for LocalStaticChannel<SIZE, HciPacket<T>> {
-    type Sender<'a> = LocalStaticChannelSender<'a, SIZE, HciPacket<T>> where T: 'a;
-    type Receiver<'a> = LocalStaticChannelReceiver<'a, SIZE, HciPacket<T>> where T: 'a;
+impl<const SIZE: usize, T> Channel for LocalStaticChannel<SIZE, T> {
+    type Sender<'a>
+
+    = LocalStaticChannelSender<'a, SIZE, T>     where
+    T: 'a,;
+    type Receiver<'a>
+
+    = LocalStaticChannelReceiver<'a, SIZE, T>     where
+    T: 'a,;
 
     fn get_sender(&self) -> Self::Sender<'_> {
         LocalStaticChannelSender::new(&self.0)
@@ -63,9 +72,7 @@ impl<const SIZE: usize, T> Channel for LocalStaticChannel<SIZE, HciPacket<T>> {
     }
 }
 
-pub struct LocalStaticChannelSender<'a, const SIZE: usize, T>(
-    &'a RefCell<LocalStaticChannelInner<SIZE, T>>,
-);
+pub struct LocalStaticChannelSender<'a, const SIZE: usize, T>(&'a RefCell<LocalStaticChannelInner<SIZE, T>>);
 
 impl<'a, const SIZE: usize, T> LocalStaticChannelSender<'a, SIZE, T> {
     fn new(ref_cell_inner: &'a RefCell<LocalStaticChannelInner<SIZE, T>>) -> Self {
@@ -88,8 +95,8 @@ impl<'a, const SIZE: usize, T> LocalQueueBuffer for LocalStaticChannelSender<'a,
 }
 
 impl<'a, const SIZE: usize, T> LocalQueueBufferSend for LocalStaticChannelSender<'a, SIZE, T>
-    where
-        T: Sized,
+where
+    T: Sized,
 {
     fn is_full(&self) -> bool {
         self.0.borrow().circle_buffer.is_full()
@@ -100,12 +107,16 @@ impl<'a, const SIZE: usize, T> LocalQueueBufferSend for LocalStaticChannelSender
     }
 }
 
-impl<'z, const SIZE: usize, T> Sender for LocalStaticChannelSender<'z, SIZE, HciPacket<T>> {
+impl<'z, const SIZE: usize, T> Sender for LocalStaticChannelSender<'z, SIZE, T> {
     type Error = LocalSendFutureError;
-    type Payload = T;
-    type SendFuture<'a> = LocalSendFuture<'a, Self, HciPacket<T>> where T: 'a, 'z: 'a;
+    type Message = T;
+    type SendFuture<'a>
 
-    fn send(&mut self, t: HciPacket<Self::Payload>) -> Self::SendFuture<'_> {
+    = LocalSendFuture<'a, Self, T>    where
+    T: 'a,
+    'z: 'a,;
+
+    fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture {
             packet: Some(t),
             local_sender: self,
@@ -125,9 +136,7 @@ impl<const SIZE: usize, T> Drop for LocalStaticChannelSender<'_, SIZE, T> {
     }
 }
 
-pub struct LocalStaticChannelReceiver<'a, const SIZE: usize, T>(
-    &'a RefCell<LocalStaticChannelInner<SIZE, T>>,
-);
+pub struct LocalStaticChannelReceiver<'a, const SIZE: usize, T>(&'a RefCell<LocalStaticChannelInner<SIZE, T>>);
 
 impl<'a, const SIZE: usize, T> LocalQueueBuffer for LocalStaticChannelReceiver<'a, SIZE, T> {
     type Payload = T;
@@ -142,8 +151,8 @@ impl<'a, const SIZE: usize, T> LocalQueueBuffer for LocalStaticChannelReceiver<'
 }
 
 impl<'a, const SIZE: usize, T> LocalQueueBufferReceive for LocalStaticChannelReceiver<'a, SIZE, T>
-    where
-        T: Sized,
+where
+    T: Sized,
 {
     fn has_senders(&self) -> bool {
         self.0.borrow().sender_count != 0
@@ -158,11 +167,13 @@ impl<'a, const SIZE: usize, T> LocalQueueBufferReceive for LocalStaticChannelRec
     }
 }
 
-impl<'z, const SIZE: usize, T> Receiver
-for LocalStaticChannelReceiver<'z, SIZE, HciPacket<T>>
-{
-    type Payload = T;
-    type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where T: 'a, 'z: 'a;
+impl<'z, const SIZE: usize, T> Receiver for LocalStaticChannelReceiver<'z, SIZE, T> {
+    type Message = T;
+    type ReceiveFuture<'a>
+
+    = LocalReceiverFuture<'a, Self>    where
+    T: 'a,
+    'z: 'a,;
 
     fn recv<'a>(&'a mut self) -> Self::ReceiveFuture<'a> {
         LocalReceiverFuture(self)
@@ -177,13 +188,12 @@ for LocalStaticChannelReceiver<'z, SIZE, HciPacket<T>>
 /// "grow" to their maximum size). `LocalStaticChannels` is intended to be used only where dynamic
 /// allocation is not possible.
 pub struct LocalStaticChannelManager<T, const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize> {
-    rx_channel: LocalStaticChannel<CHANNEL_SIZE, HciPacket<T>>,
-    tx_channels:
-    LinearBuffer<CHANNEL_COUNT, (ChannelId, LocalStaticChannel<CHANNEL_SIZE, HciPacket<T>>)>,
+    rx_channel: LocalStaticChannel<CHANNEL_SIZE, T>,
+    tx_channels: LinearBuffer<CHANNEL_COUNT, (ChannelId, LocalStaticChannel<CHANNEL_SIZE, T>)>,
 }
 
 impl<T, const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize>
-LocalStaticChannelManager<T, CHANNEL_COUNT, CHANNEL_SIZE>
+    LocalStaticChannelManager<T, CHANNEL_COUNT, CHANNEL_SIZE>
 {
     pub fn new() -> Self {
         let rx_channel = LocalStaticChannel::new();
@@ -197,9 +207,9 @@ LocalStaticChannelManager<T, CHANNEL_COUNT, CHANNEL_SIZE>
 }
 
 impl<T, const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize> ChannelsManagement
-for LocalStaticChannelManager<T, CHANNEL_COUNT, CHANNEL_SIZE>
+    for LocalStaticChannelManager<T, CHANNEL_COUNT, CHANNEL_SIZE>
 {
-    type Channel = LocalStaticChannel<CHANNEL_SIZE, HciPacket<T>>;
+    type Channel = LocalStaticChannel<CHANNEL_SIZE, T>;
     type Error = LocalStaticChannelsError;
 
     fn get_rx_channel(&self) -> &Self::Channel {
@@ -257,11 +267,9 @@ pub enum LocalStaticChannelsError {
 }
 
 impl Display for LocalStaticChannelsError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
-            LocalStaticChannelsError::ChannelCountReached => {
-                f.write_str("reached maximum channel count")
-            }
+            LocalStaticChannelsError::ChannelCountReached => f.write_str("reached maximum channel count"),
             LocalStaticChannelsError::ChannelIdAlreadyUsed => f.write_str("id already used"),
             LocalStaticChannelsError::ChannelForIdDoesNotExist => {
                 f.write_str("no channel is associated with the provided id")
@@ -315,7 +323,7 @@ mod test {
             "more spam".as_bytes(),
             "even more spam".as_bytes(),
             "this is a test of the boring alert system".as_bytes(),
-            "who asked for your opinion on my test data?".as_bytes()
+            "who asked for your opinion on my test data?".as_bytes(),
         ];
 
         generic_send_and_receive(&l, test_vals).await
@@ -325,19 +333,11 @@ mod test {
     async fn local_add_remove_array() {
         const SIZE: usize = 20;
 
-        let l: LocalStaticChannel<4, HciPacket<[usize;SIZE]>> = LocalStaticChannel::new();
+        let l: LocalStaticChannel<4, HciPacket<[usize; SIZE]>> = LocalStaticChannel::new();
 
-        let test_vals: &[[usize;SIZE]] = &[
-            [0;SIZE],
-            [1;SIZE],
-            [2;SIZE],
-            [3;SIZE],
-            [4;SIZE],
-            [5;SIZE],
-            [6;SIZE],
-            [7;SIZE],
-            [8;SIZE],
-            [9;SIZE],
+        let test_vals: &[[usize; SIZE]] = &[
+            [0; SIZE], [1; SIZE], [2; SIZE], [3; SIZE], [4; SIZE], [5; SIZE], [6; SIZE], [7; SIZE], [8; SIZE],
+            [9; SIZE],
         ];
 
         generic_send_and_receive(&l, test_vals).await

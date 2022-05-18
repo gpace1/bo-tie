@@ -67,7 +67,7 @@ pub mod set_resolvable_private_address_timeout {
     impl CommandParameter<2> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> [u8; 2] {
-            [u8; 2]
+            [0u8; 2]
         }
     }
 
@@ -81,7 +81,7 @@ pub mod set_resolvable_private_address_timeout {
         CommandError(CommandError<H>),
     }
 
-    impl core::fmt::Display for RpaTimeoutCommandError<H>
+    impl<H> core::fmt::Display for RpaTimeoutCommandError<H>
     where
         H: HostGenerics,
     {
@@ -195,7 +195,7 @@ pub mod remove_device_from_resolving_list {
     impl CommandParameter<7> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> [u8; 7] {
-            let mut parameter = [u8; 7];
+            let mut parameter = [0u8; 7];
 
             parameter[0] = self.peer_identity_address_type.val();
 

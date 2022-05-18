@@ -55,7 +55,7 @@ pub mod disconnect {
     }
 
     impl DisconnectReason {
-        fn try_from_hci_error(error: error::Error) -> Result<DisconnectReason, DisconnectReasonCnvError> {
+        fn try_from_hci_error(error: error::Error) -> Result<DisconnectReason, ConversionError> {
             match error {
                 error::Error::AuthenticationFailure => Ok(DisconnectReason::AuthenticationFailure),
                 error::Error::RemoteUserTerminatedConnection => Ok(DisconnectReason::RemoteUserTerminatedConnection),
@@ -72,7 +72,7 @@ pub mod disconnect {
                 error::Error::UnacceptableConnectionParameters => {
                     Ok(DisconnectReason::UnacceptableConnectionParameters)
                 }
-                _ => Err(DisconnectReasonCnvError),
+                e => Err(ConversionError),
             }
         }
 

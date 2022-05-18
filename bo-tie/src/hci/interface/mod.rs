@@ -41,11 +41,10 @@
 //! specification is implemented within this library, but this only covers the data encapsulation
 //! and some of configuration details.
 
+use crate::hci::CommandEventMatcher;
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
 use core::ops::Deref;
-use crate::hci::{CommandEventMatcher, events};
-use crate::hci::events::EventsData;
 
 mod local_channel;
 pub mod uart;
@@ -286,19 +285,22 @@ where
     /// the packet is complete.
     pub async fn send<'a>(
         &'a mut self,
-        packet: HciPacket<<<T::Channel as Channel>::Sender<'a> as Sender>::Message>,
+        packet_type: HciPacketType,
+        packet: <<T::Channel as Channel>::Sender<'a> as Sender>::Message,
     ) -> Result<(), SendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
-        match packet.packet_type {
-            HciPacketType::Command | HciPacketType::Event => self
-                .channel_manager
-                .get(ChannelId::Host)
-                .unwrap()
-                .get_sender()
-                .send(packet)
-                .await
-                .map_err(|e| SendError::ChannelError(e)),
-            _ => Ok(()),
-        }
+        todo!()
+
+        // match packet {
+        //     HciPacketType::Event(message) => self
+        //         .channel_manager
+        //         .get(ChannelId::Host)
+        //         .unwrap()
+        //         .get_sender()
+        //         .send(packet)
+        //         .await
+        //         .map_err(|e| SendError::ChannelError(e)),
+        //     _ => Ok(()),
+        // }
     }
 
     /// Receive a HCI packet
@@ -307,7 +309,7 @@ where
     ///
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
-    pub async fn recv(&mut self) -> Option<HciPacket<<<T::Channel as Channel>::Receiver<'_> as Receiver>::Message>> {
+    pub async fn recv(&mut self) -> Option<<<T::Channel as Channel>::Receiver<'_> as Receiver>::Message> {
         self.channel_manager.get_rx_channel().get_receiver().recv().await
     }
 }
@@ -317,10 +319,10 @@ impl<T> Interface<T> {
     ///
     /// A local interface is used whenever the interface driver is not `Send` safe. Using this
     /// means the host, interface driver, and connection async tasks all run within the same thread.
-    pub fn new_local(channel_size: usize) -> Interface<local_channel::LocalChannelManager<HciPacket<T>>> {
-        Interface::<local_channel::LocalChannelManager<HciPacket<T>>>::new_inner(
-            local_channel::LocalChannelManager::new(channel_size),
-        )
+    pub fn new_local(channel_size: usize) -> Interface<local_channel::LocalChannelManager<T>> {
+        Interface::<local_channel::LocalChannelManager<T>>::new_inner(local_channel::LocalChannelManager::new(
+            channel_size,
+        ))
     }
 
     /// Create a statically sized local interface
@@ -335,8 +337,8 @@ impl<T> Interface<T> {
     ///
     ///
     pub fn new_local_static<const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize>(
-    ) -> Interface<local_channel::LocalStaticChannelManager<HciPacket<T>, CHANNEL_COUNT, CHANNEL_SIZE>> {
-        Interface::<local_channel::LocalStaticChannelManager<HciPacket<T>, CHANNEL_COUNT, CHANNEL_SIZE>>::new_inner(
+    ) -> Interface<local_channel::LocalStaticChannelManager<T, CHANNEL_COUNT, CHANNEL_SIZE>> {
+        Interface::<local_channel::LocalStaticChannelManager<T, CHANNEL_COUNT, CHANNEL_SIZE>>::new_inner(
             local_channel::LocalStaticChannelManager::new(),
         )
     }
@@ -352,7 +354,7 @@ impl<T> Display for SendError<T>
 where
     T: Display,
 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             SendError::ChannelError(e) => e.fmt(f),
             SendError::UnknownConnectionHandle(handle) => {
@@ -542,13 +544,8 @@ where
     pub async fn send(self) -> Result<(), BufferedSendError<<<T::Channel as Channel>::Sender<'a> as Sender>::Error>> {
         self.packet_len.ok_or(BufferedSendError::IncompleteHciPacket)?;
 
-        let hci_packet = HciPacket {
-            packet_type: self.packet_type,
-            data: self.buffer,
-        };
-
         self.interface
-            .send(hci_packet)
+            .send(self.packet_type, self.buffer)
             .await
             .map_err(|e| BufferedSendError::SendError(e))
     }
@@ -575,7 +572,7 @@ impl<E> Display for BufferedSendError<E>
 where
     E: Display,
 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             BufferedSendError::BufferReadyToSend => f.write_str("buffer contains a complete HCI packet"),
             BufferedSendError::IncompleteHciPacket => f.write_str("cannot send incomplete HCI packet"),
@@ -728,17 +725,17 @@ pub trait Receiver {
 }
 
 /// The types of HCI packets
-pub enum HciPacketType<T> {
+pub enum HciPacketType {
     /// Command packet
-    Command(T),
+    Command,
     /// Asynchronous Connection-Oriented Data Packet
-    Acl(T),
+    Acl,
     /// Synchronous Connection-Oriented Data Packet
-    Sco(T),
+    Sco,
     /// Event Packet
-    Event(T),
+    Event,
     /// Isochronous Data Packet
-    Iso(T),
+    Iso,
 }
 
 /// Inner interface messaging
@@ -770,20 +767,11 @@ impl<T> From<IntraMessageType<T>> for IntraMessage<T> {
     }
 }
 
-impl<T> From<HciPacket<T>> for IntraMessage<T> {
-    fn from(packet: HciPacket<T>) -> Self {
-        let ty = IntraMessageType::Hci(packet);
-
-        Self { ty }
-    }
-}
-
 /// An enum of the type of message sent between two async tasks
 pub(crate) enum IntraMessageType<T> {
     /*----------------------------
-       HCI Packet messages
-      ----------------------------*/
-
+     HCI Packet messages
+    ----------------------------*/
     /// HCI Command Packet
     Command(CommandEventMatcher, T),
     /// HCI asynchronous Connection-Oriented Data Packet
@@ -794,12 +782,9 @@ pub(crate) enum IntraMessageType<T> {
     Event(T),
     /// HCI isochronous Data Packet
     Iso(T),
-
     /*----------------------------
-       Meta information messages
-      ----------------------------*/
-
-    /// Finished command
+     Meta information messages
+    ----------------------------*/
 }
 
 #[cfg(test)]

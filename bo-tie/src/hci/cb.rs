@@ -226,20 +226,20 @@ pub mod read_transmit_power_level {
     }
 
     impl TryFromCommandComplete for TransmitPowerLevel {
-        fn try_from(data: &events::CommandCompleteData) -> Result<Self, CCParameterError> {
+        fn try_from(cc: &events::CommandCompleteData) -> Result<Self, CCParameterError> {
             check_status!(cc.raw_data);
 
             let raw_connection_handle = <u16>::from_le_bytes([
-                *data.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
-                *data.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
             ]);
 
             let connection_handle =
                 ConnectionHandle::try_from(raw_connection_handle).or(Err(CCParameterError::InvalidEventParameter))?;
 
-            let power_level = *data.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)? as i8;
+            let power_level = *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)? as i8;
 
-            let completed_packets_cnt = data.number_of_hci_command_packets.into();
+            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
             Ok(Self {
                 connection_handle,

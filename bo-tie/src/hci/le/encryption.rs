@@ -254,7 +254,7 @@ pub mod enable_encryption {
     /// encrypted, sending this command will instead cause the controller to issue the
     /// [EncryptionKeyRefreshComplete](crate::hci::events::Events::EncryptionKeyRefreshComplete)
     /// event once the encryption is updated.
-    pub async fn send<H>(
+    pub async fn send<H: HostGenerics>(
         host: &mut HostInterface<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {

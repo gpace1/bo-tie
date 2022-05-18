@@ -242,10 +242,10 @@ pub mod set_advertising_parameters {
         advertising_filter_policy: u8,
     }
 
-    impl CommandParameter<15> for AdvertisingParameters {
+    impl CommandParameter<15> for AdvertisingParameters<'_> {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> [u8; 15] {
-            let mut parameter = [u8; 15];
+            let mut parameter = [0u8; 15];
 
             parameter[..2].copy_from_slice(&self.minimum_advertising_interval.get_raw_val().to_le_bytes());
 
@@ -270,7 +270,7 @@ pub mod set_advertising_parameters {
     /// Send the LE Set Advertising Enable command
     pub async fn send<H: HostGenerics>(
         host: &mut HostInterface<H>,
-        parameters: AdvertisingParameters,
+        parameters: AdvertisingParameters<'_>,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameters).await;
 
@@ -408,35 +408,27 @@ pub mod set_random_address {
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetRandomAddress);
 
-    impl_status_return!(COMMAND);
-
-    #[repr(packed)]
     #[derive(Clone)]
     struct Parameter {
-        _rand_address: crate::BluetoothDeviceAddress,
+        rand_address: crate::BluetoothDeviceAddress,
     }
 
-    impl CommandParameter for Parameter {
-        type Parameter = Self;
+    impl CommandParameter<6> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
-            self.clone()
+        fn get_parameter(&self) -> [u8; 6] {
+            self.rand_address
         }
     }
 
-    #[bo_tie_macros::host_interface(flow_ctrl_bounds = "'static")]
-    pub fn send<'a, T: 'static>(
-        hci: &'a HostInterface<T>,
-        rand_addr: crate::BluetoothDeviceAddress,
-    ) -> impl Future<Output = Result<impl crate::hci::FlowControlInfo, impl core::fmt::Display + core::fmt::Debug>> + 'a
-    where
-        T: PlatformInterface,
-    {
-        let parameter = Parameter {
-            _rand_address: rand_addr,
-        };
+    pub async fn send<'a, H: HostGenerics>(
+        host: &mut HostInterface<H>,
+        address: crate::BluetoothDeviceAddress,
+    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        let parameter = Parameter { rand_address: address };
 
-        ReturnedFuture(hci.send_command(parameter, CommandEventMatcher::CommandComplete))
+        let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
+
+        r
     }
 }
 

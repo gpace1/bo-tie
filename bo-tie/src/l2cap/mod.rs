@@ -262,8 +262,8 @@ impl core::fmt::Display for BasicFrameError {
                 "Expected start fragment, received a \
                 continuation fragment"
             ),
-            BrasicFrameError::ConnectionClosed => write!(
-                r,
+            BasicFrameError::ConnectionClosed => write!(
+                f,
                 "The connection has closed between the host and the \
                 remote device"
             ),
@@ -356,7 +356,7 @@ impl BasicInfoFrame {
     /// must have enough buffers to contain the entire packet, but it is allowed to await for a
     /// buffer to be available. After each buffer is filled it is then awaited to complete it
     /// (generally this is used to send the buffer).
-    pub(crate) fn into_sliced_packet<I, F, D, E>(self, buffers: I) -> send_future::AsSlicedPacketFuture<'_, I, F, D>
+    pub(crate) fn into_sliced_packet<I, F, D, E>(self, buffers: I) -> send_future::AsSlicedPacketFuture<I, F, D>
     where
         I: IntoIterator<Item = F>,
         F: Future<Output = D>,
@@ -477,14 +477,18 @@ pub trait ConnectionChannel {
     ///
     /// The controller will probably have limits on the number of L2CAP PDU's that can be sent. This
     /// future is used for awaiting the sending process until the entire L2CAP PDU is sent.
-    type SendFut<'a>: Future<Output = Result<(), Self::SendFutErr>> + 'a;
+    type SendFut<'a>: Future<Output = Result<(), Self::SendFutErr>> + 'a
+    where
+        Self: 'a;
 
     type SendFutErr;
 
     /// Receiving future
     ///
     /// Awaits for the controller to send a data packet
-    type RecvFut<'a>: Future<Output = Option<Result<BasicInfoFrame, BasicFrameError>>> + 'a;
+    type RecvFut<'a>: Future<Output = Option<Result<BasicInfoFrame, BasicFrameError>>> + 'a
+    where
+        Self: 'a;
 
     /// Send a L2CAP PDU to the Controller
     ///

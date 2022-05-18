@@ -129,7 +129,7 @@ pub mod set_scan_enable {
 
     impl CommandParameter<2> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> Self::Parameter {
+        fn get_parameter(&self) -> [u8; 2] {
             [
                 if self.enable { 1 } else { 0 },
                 if self.filter_duplicates { 1 } else { 0 },

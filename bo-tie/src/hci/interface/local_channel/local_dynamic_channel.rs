@@ -7,12 +7,15 @@
 //!
 //! This is a local channel so it can only be used between async tasks running on the same thread.
 
-use crate::hci::interface::{Channel, ChannelId, ChannelsManagement, HciPacket, Receiver, Sender};
-use core::cell::RefCell;
+use super::{
+    LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture,
+    LocalSendFutureError,
+};
+use crate::hci::interface::{Channel, ChannelId, ChannelsManagement, Receiver, Sender};
 use alloc::collections::VecDeque;
+use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
 use core::task::Waker;
-use super::{LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture, LocalSendFutureError};
 
 struct LocalChannelInner<T> {
     sender_count: usize,
@@ -77,9 +80,13 @@ impl<T> LocalQueueBufferSend for LocalChannelSender<'_, T> {
 impl<'z, T> Sender for LocalChannelSender<'z, T> {
     type Error = LocalSendFutureError;
     type Message = T;
-    type SendFuture<'a> = LocalSendFuture<'a, Self, T> where T: 'a, 'z: 'a;
+    type SendFuture<'a>
 
-    fn send(&mut self, t: Self::Payload) -> Self::SendFuture<'_> {
+    = LocalSendFuture<'a, Self, T>    where
+    T: 'a,
+    'z: 'a,;
+
+    fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture::new(self, t)
     }
 }
@@ -126,16 +133,26 @@ impl<T> LocalQueueBufferReceive for LocalChannelReceiver<'_, T> {
 
 impl<'z, T> Receiver for LocalChannelReceiver<'z, T> {
     type Message = T;
-    type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where T: 'a, 'z: 'a;
+    type ReceiveFuture<'a>
+
+    = LocalReceiverFuture<'a, Self>    where
+    T: 'a,
+    'z: 'a,;
 
     fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }
 
-impl<T> Channel for LocalChannel<HciPacket<T>> {
-    type Sender<'a> = LocalChannelSender<'a, HciPacket<T>> where T: 'a;
-    type Receiver<'a> = LocalChannelReceiver<'a, HciPacket<T>> where T: 'a;
+impl<T> Channel for LocalChannel<T> {
+    type Sender<'a>
+
+    = LocalChannelSender<'a, T>    where
+    T: 'a,;
+    type Receiver<'a>
+
+    = LocalChannelReceiver<'a, T>    where
+    T: 'a,;
 
     fn get_sender(&self) -> Self::Sender<'_> {
         LocalChannelSender::new(&self.0)
@@ -159,13 +176,13 @@ impl<T> Channel for LocalChannel<HciPacket<T>> {
 pub struct LocalChannelManager<T> {
     channel_size: usize,
     rx_channel: LocalChannel<T>,
-    tx_channels: Vec<(ChannelId, LocalChannel<T>)>,
+    tx_channels: alloc::vec::Vec<(ChannelId, LocalChannel<T>)>,
 }
 
 impl<T> LocalChannelManager<T> {
     pub fn new(channel_size: usize) -> Self {
         let rx_channel = LocalChannel::new(channel_size);
-        let tx_channels = Vec::new();
+        let tx_channels = alloc::vec::Vec::new();
 
         Self {
             channel_size,
@@ -175,8 +192,8 @@ impl<T> LocalChannelManager<T> {
     }
 }
 
-impl<T> ChannelsManagement for LocalChannelManager<HciPacket<T>> {
-    type Channel = LocalChannel<HciPacket<T>>;
+impl<T> ChannelsManagement for LocalChannelManager<T> {
+    type Channel = LocalChannel<T>;
     type Error = LocalChannelManagerError;
 
     fn get_rx_channel<'a>(&'a self) -> &Self::Channel {
@@ -222,14 +239,10 @@ pub enum LocalChannelManagerError {
 }
 
 impl Display for LocalChannelManagerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
-            LocalChannelManagerError::ChannelIdAlreadyUsed => {
-                f.write_str("channel id already used")
-            }
-            LocalChannelManagerError::ChannelIdDoesNotExist => {
-                f.write_str("channel for id does not exist")
-            }
+            LocalChannelManagerError::ChannelIdAlreadyUsed => f.write_str("channel id already used"),
+            LocalChannelManagerError::ChannelIdDoesNotExist => f.write_str("channel for id does not exist"),
         }
     }
 }
@@ -279,7 +292,7 @@ mod test {
             "more spam".as_bytes(),
             "even more spam".as_bytes(),
             "this is a test of the boring alert system".as_bytes(),
-            "who asked for your opinion on my test data?".as_bytes()
+            "who asked for your opinion on my test data?".as_bytes(),
         ];
 
         generic_send_and_receive(&l, test_vals).await
@@ -289,19 +302,11 @@ mod test {
     async fn local_add_remove_array() {
         const SIZE: usize = 20;
 
-        let l: LocalChannel<HciPacket<[usize;SIZE]>> = LocalChannel::new(4);
+        let l: LocalChannel<HciPacket<[usize; SIZE]>> = LocalChannel::new(4);
 
-        let test_vals: &[[usize;SIZE]] = &[
-            [0;SIZE],
-            [1;SIZE],
-            [2;SIZE],
-            [3;SIZE],
-            [4;SIZE],
-            [5;SIZE],
-            [6;SIZE],
-            [7;SIZE],
-            [8;SIZE],
-            [9;SIZE],
+        let test_vals: &[[usize; SIZE]] = &[
+            [0; SIZE], [1; SIZE], [2; SIZE], [3; SIZE], [4; SIZE], [5; SIZE], [6; SIZE], [7; SIZE], [8; SIZE],
+            [9; SIZE],
         ];
 
         generic_send_and_receive(&l, test_vals).await

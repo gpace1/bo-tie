@@ -7,8 +7,8 @@
 /// AMP, the PAL version information is returned instead of the LMP version (but the information is
 /// usually .
 pub mod read_local_version_information {
-    use crate::hci::*;
     use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::InformationParameters(
         opcodes::InformationParameters::ReadLocalSupportedVersionInformation,
@@ -56,7 +56,7 @@ pub mod read_local_version_information {
                 lmp_pal_version,
                 manufacturer_name,
                 lmp_pal_subversion,
-                completed_packets_cnt
+                completed_packets_cnt,
             })
         }
     }
@@ -66,7 +66,7 @@ pub mod read_local_version_information {
             self.completed_packets_cnt
         }
     }
-    
+
     struct Parameter;
 
     impl CommandParameter<0> for Parameter {
@@ -87,12 +87,11 @@ pub mod read_local_version_information {
 /// This returns the list of Host Controller Interface commands that are implemented by the
 /// controller.
 pub mod read_local_supported_commands {
-    use crate::hci::*;
     use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedCommands);
-
 
     #[derive(Debug, Clone, Copy, PartialEq, Ord, PartialOrd, Eq)]
     pub enum SupportedCommands {
@@ -958,30 +957,6 @@ pub mod read_local_supported_commands {
                 LESetPrivacyMode => (Self::LAST_BYTE, 2),
             }
         }
-
-        fn iter_bit_mask(mask: &[u8; 64]) -> Result<alloc::vec::Vec<Self>, error::Error> {
-            let status = error::Error::from(packed.status);
-
-            if let error::Error::NoError = status {
-                let mut sup_commands = alloc::vec::Vec::new();
-
-                let raw = &packed.supported_commands;
-
-                for indx in 0..raw.len() {
-                    for bit in 0..8 {
-                        if 0 != raw[indx] & (1 << bit) {
-                            if let Some(command) = Self::from_bit_pos((indx, bit)) {
-                                sup_commands.push(command);
-                            }
-                        }
-                    }
-                }
-
-                Ok(sup_commands)
-            } else {
-                Err(status)
-            }
-        }
     }
 
     /// An iterator over the supported commands
@@ -1017,14 +992,16 @@ pub mod read_local_supported_commands {
 
         fn next(&mut self) -> Option<Self::Item> {
             loop {
-                if Some(command) = SupportedCommands::from_bit_pos((self.byte, self.bit)) {
+                if let Some(command) = SupportedCommands::from_bit_pos((self.byte, self.bit)) {
                     if self.supported_commands[self.byte] & (1 << self.bit) {
                         self.next_pos();
 
                         break Some(command);
                     }
                 } else {
-                    if self.byte > SupportedCommands::LAST_BYTE { break None }
+                    if self.byte > SupportedCommands::LAST_BYTE {
+                        break None;
+                    }
                 }
 
                 self.next_pos()
@@ -1102,7 +1079,7 @@ pub mod read_local_supported_commands {
 
     impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> [u8;0] {
+        fn get_parameter(&self) -> [u8; 0] {
             []
         }
     }
@@ -1118,9 +1095,9 @@ pub mod read_local_supported_commands {
 /// This will return the supported features of the BR/EDR controller
 pub mod read_local_supported_features {
 
-    use crate::hci::common::{Features, EnabledFeaturesIter};
-    use crate::hci::*;
+    use crate::hci::common::{EnabledFeaturesIter, Features};
     use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedFeatures);
@@ -1181,7 +1158,7 @@ pub mod read_local_supported_features {
 
     impl CommandParameter<0> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
-        fn get_parameter(&self) -> [u8;0] {
+        fn get_parameter(&self) -> [u8; 0] {
             []
         }
     }
@@ -1201,7 +1178,6 @@ pub mod read_bd_addr {
     use crate::hci::events::CommandCompleteData;
     use crate::hci::*;
     use crate::BluetoothDeviceAddress;
-    use core::fmt::{Debug, Display};
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBD_ADDR);
@@ -1221,11 +1197,11 @@ pub mod read_bd_addr {
 
                 let mut address = BluetoothDeviceAddress::default();
 
-                address.copy_from_slice(&cc.raw_data[1..])
+                address.copy_from_slice(&cc.raw_data[1..]);
 
                 Ok(Return {
                     address,
-                    completed_packets_cnt
+                    completed_packets_cnt,
                 })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
@@ -1266,8 +1242,8 @@ pub mod read_bd_addr {
 /// Read the size of the BR/EDR HCI data buffer
 pub mod read_buffer_size {
 
-    use crate::hci::*;
     use crate::hci::events::CommandCompleteData;
+    use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::InformationParameters(opcodes::InformationParameters::ReadBufferSize);
@@ -1280,7 +1256,7 @@ pub mod read_buffer_size {
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
-    
+
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
             check_status!(cc.raw_data);
@@ -1289,25 +1265,25 @@ pub mod read_buffer_size {
                 *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
             ])
-                .into();
+            .into();
 
             let hc_synchronous_data_packet_len = <u16>::from_le_bytes([
                 *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.raw_data.get(4).ok_or(CCParameterError::InvalidEventParameter)?,
             ])
-                .into();
+            .into();
 
             let hc_total_num_acl_data_packets = <u16>::from_le_bytes([
                 *cc.raw_data.get(5).ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.raw_data.get(6).ok_or(CCParameterError::InvalidEventParameter)?,
             ])
-                .into();
+            .into();
 
             let hc_total_num_synchronous_data_packets = <u16>::from_le_bytes([
                 *cc.raw_data.get(7).ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.raw_data.get(8).ok_or(CCParameterError::InvalidEventParameter)?,
             ])
-                .into();
+            .into();
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 

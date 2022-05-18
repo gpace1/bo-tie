@@ -16,7 +16,7 @@ pub struct AsSlicedPacketFuture<I, F, D> {
 }
 
 impl<I, F, D> AsSlicedPacketFuture<I, F, D> {
-    pub fn new<T>(frame: BasicInfoFrame, into_iterator: T) -> Self
+    pub async fn new<T>(frame: BasicInfoFrame, into_iterator: T) -> Self
     where
         T: IntoIterator<IntoIter = I>,
         I: Iterator<Item = F>,
@@ -35,7 +35,9 @@ impl<I, F, D> AsSlicedPacketFuture<I, F, D> {
 
         let mut iter = into_iterator.into_iter();
 
-        // The first state is to acquire the first buffer. This must be the first state.
+        let first = iter.next().await;
+
+        // The first state is to acquire the first buffer from the buffer iter.
         let state = State::AcquireBuffer(first, 0, State::length);
 
         Self {
@@ -133,8 +135,6 @@ impl<C, F> State<C, F> {
     /// # Panic
     /// If `next_index` is called an enum other than `Length`, `ChannelId`, or `Data`.
     fn next_index(&mut self) {
-        use core::ops::AddAssign;
-
         match self {
             State::Length(_, index) => index.add_assign(1),
             State::ChannelId(_, index) => index.add_assign(1),
