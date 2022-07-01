@@ -950,7 +950,7 @@ mod test {
         fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b1 = Some(data.into_raw_data());
+            gaurd.b1 = Some(data.into_packet());
 
             if let Some(waker) = gaurd.w1.take() {
                 waker.wake();
@@ -973,13 +973,13 @@ mod test {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::BasicFrameFragment>> {
-            use crate::l2cap::BasicFrameFragment;
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::L2capFragment>> {
+            use crate::l2cap::L2capFragment;
 
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b2.take() {
-                Some(vec![BasicFrameFragment::new(true, data)])
+                Some(vec![L2capFragment::new(true, data)])
             } else {
                 gaurd.w2 = Some(waker.clone());
                 None
@@ -994,7 +994,7 @@ mod test {
         fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
-            gaurd.b2 = Some(data.into_raw_data());
+            gaurd.b2 = Some(data.into_packet());
 
             if let Some(waker) = gaurd.w2.take() {
                 waker.wake();
@@ -1017,13 +1017,13 @@ mod test {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::BasicFrameFragment>> {
-            use crate::l2cap::BasicFrameFragment;
+        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::L2capFragment>> {
+            use crate::l2cap::L2capFragment;
 
             let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
 
             if let Some(data) = gaurd.b1.take() {
-                Some(vec![BasicFrameFragment::new(true, data)])
+                Some(vec![L2capFragment::new(true, data)])
             } else {
                 gaurd.w1 = Some(waker.clone());
                 None
@@ -1092,7 +1092,7 @@ mod test {
             if let Err(e) = 'server_loop: loop {
                 use std::convert::TryFrom;
 
-                match block_on(c2.future_receiver()) {
+                match block_on(c2.receive_b_frame()) {
                     Ok(l2cap_data_vec) => {
                         for l2cap_pdu in l2cap_data_vec {
                             match block_on(server.process_acl_data(&l2cap_pdu)) {
@@ -1157,7 +1157,7 @@ mod test {
 
         let client = block_on(
             le_client_setup.create_client(
-                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "Connect timed out")
+                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "Connect timed out")
                     .expect("connect receiver")
                     .first()
                     .unwrap(),
@@ -1169,7 +1169,7 @@ mod test {
         block_on(client.write_request(1, test_val_1))
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "write handle 1 timed out")
+                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "write handle 1 timed out")
                     .expect("w1 receiver")
                     .first()
                     .unwrap(),
@@ -1180,7 +1180,7 @@ mod test {
         block_on(client.write_request(2, test_val_2))
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "write handle 2 timed out")
+                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "write handle 2 timed out")
                     .expect("w2 receiver")
                     .first()
                     .unwrap(),
@@ -1191,7 +1191,7 @@ mod test {
         block_on(client.write_request(3, test_val_3))
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "write handle 3 timed out")
+                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "write handle 3 timed out")
                     .expect("w3 receiver")
                     .first()
                     .unwrap(),
@@ -1202,7 +1202,7 @@ mod test {
         let read_val_1 = block_on(client.read_request(1))
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "read handle 1 timed out")
+                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "read handle 1 timed out")
                     .expect("r1 receiver")
                     .first()
                     .unwrap(),
@@ -1212,7 +1212,7 @@ mod test {
         let read_val_2 = block_on(client.read_request(2))
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "read handle 2 timed out")
+                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "read handle 2 timed out")
                     .expect("r2 receiver")
                     .first()
                     .unwrap(),
@@ -1222,7 +1222,7 @@ mod test {
         let read_val_3 = block_on(client.read_request(3))
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.future_receiver(), "read handle 3 timed out")
+                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "read handle 3 timed out")
                     .expect("r3 receiver")
                     .first()
                     .unwrap(),

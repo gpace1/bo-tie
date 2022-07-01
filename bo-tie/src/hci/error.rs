@@ -88,7 +88,7 @@ impl Error {
     where
         F: FnOnce(Self) -> E,
     {
-        if Error::NoError = self {
+        if let Error::NoError = self {
             Ok(())
         } else {
             Err(err(self))

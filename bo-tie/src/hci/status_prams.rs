@@ -25,6 +25,8 @@ pub mod read_rssi {
 
     impl TryFromCommandComplete for RSSIInfo {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            use core::convert::TryFrom;
+
             check_status!(cc.raw_data);
 
             let raw_handle = <u16>::from_le_bytes([
@@ -32,7 +34,7 @@ pub mod read_rssi {
                 *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
             ]);
 
-            let handle = ConnectionHandle::try_from(raw_handle).map_err(CCParameterError::InvalidEventParameter)?;
+            let handle = ConnectionHandle::try_from(raw_handle).or(Err(CCParameterError::InvalidEventParameter))?;
 
             let rssi = *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)? as i8;
 
@@ -53,7 +55,7 @@ pub mod read_rssi {
     }
 
     /// Get the RSSI value for a specific connection
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         handle: ConnectionHandle,
     ) -> Result<RSSIInfo, CommandError<H>> {

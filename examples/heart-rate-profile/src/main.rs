@@ -301,7 +301,7 @@ async fn wait_for_connection<M: Send + 'static>(
 ) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
-    let awaited_event = Some(events::Events::from(events::LEMeta::ConnectionComplete));
+    let awaited_event = Some(events::Events::from(events::LeMeta::ConnectionComplete));
 
     let evt_rsl = hi.wait_for_event(awaited_event).await;
 
@@ -309,11 +309,11 @@ async fn wait_for_connection<M: Send + 'static>(
 
     match evt_rsl {
         Ok(event) => {
-            use bo_tie::hci::events::{EventsData, LEMetaData};
+            use bo_tie::hci::events::{EventsData, LeMetaData};
 
             println!("Connection Made!");
 
-            if let EventsData::LEMeta(LEMetaData::ConnectionComplete(le_conn_comp_event)) = event {
+            if let EventsData::LeMeta(LeMetaData::ConnectionComplete(le_conn_comp_event)) = event {
                 Ok(le_conn_comp_event)
             } else {
                 Err(format!("Received the incorrect event {:?}", event))

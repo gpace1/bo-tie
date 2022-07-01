@@ -951,8 +951,10 @@ where
         &'a mut self,
     ) -> (
         Result<&'a mut super::Keys, super::Error>,
-        alloc::vec::Vec<crate::l2cap::BasicInfoFrame>,
+        Vec<crate::l2cap::BasicInfoFrame<Vec<u8>>>,
     ) {
+        use crate::l2cap::ConnectionChannelExt;
+
         let mut other_data = alloc::vec::Vec::new();
 
         if let Err(e) = self.start_pairing().await {
@@ -960,7 +962,7 @@ where
         }
 
         'outer: loop {
-            let data = self.connection_channel.future_receiver().await;
+            let data = self.connection_channel.receive_b_frame().await;
 
             match data {
                 Err(e) => return (Err(super::Error::ACLData(e)), other_data),
@@ -1002,7 +1004,10 @@ where
     /// This is used to continue pairing until pairing is either complete or fails. It must be
     /// called for every received Security Manager ACL data. True is returned once pairing is
     /// completed.
-    pub async fn continue_pairing(&mut self, acl_data: &crate::l2cap::BasicInfoFrame) -> Result<bool, super::Error> {
+    pub async fn continue_pairing(
+        &mut self,
+        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
+    ) -> Result<bool, super::Error> {
         check_channel_id_and!(acl_data, async {
             let (d_type, payload) = acl_data.get_payload().split_at(1);
 
@@ -1149,7 +1154,7 @@ where
     /// * [`SigningInformation`](super::CommandType::SigningInformation)
     pub async fn process_bonding(
         &mut self,
-        acl_data: &crate::l2cap::BasicInfoFrame,
+        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
     ) -> Result<Option<&super::Keys>, Error> {
         macro_rules! bonding_key {
             ($this:expr, $payload:expr, $key:ident, $key_type:ident, $get_key_method:ident) => {

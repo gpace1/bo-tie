@@ -8,7 +8,7 @@ use crate::{
         Attribute, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
         TransferFormatTryFrom,
     },
-    l2cap::{BasicFrameFragment, ConnectionChannel, MinimumMtu},
+    l2cap::{ConnectionChannel, L2capFragment, MinimumMtu},
     UUID,
 };
 use futures::executor::block_on;
@@ -103,7 +103,7 @@ impl crate::l2cap::ConnectionChannel for SendWatchConnection {
         crate::l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<BasicFrameFragment>> {
+    fn receive(&self, _: &core::task::Waker) -> Option<Vec<L2capFragment>> {
         Some(Vec::new())
     }
 }

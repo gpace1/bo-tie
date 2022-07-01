@@ -56,11 +56,11 @@ impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
 async fn events_setup<M: Send + 'static>(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>) {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
-    use events::LEMeta;
+    use events::LeMeta;
 
-    let enabled_events = &[EventMask::LEMeta, EventMask::DisconnectionComplete];
+    let enabled_events = &[EventMask::LeMeta, EventMask::DisconnectionComplete];
 
-    let enabled_le_events = &[LEMeta::ConnectionComplete];
+    let enabled_le_events = &[LeMeta::ConnectionComplete];
 
     set_event_mask::send(hi, enabled_events).await.unwrap();
 
@@ -115,15 +115,15 @@ async fn wait_for_connection<M: Send + 'static>(
 ) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
-    let waited_event = Some(events::Events::from(events::LEMeta::ConnectionComplete));
+    let waited_event = Some(events::Events::from(events::LeMeta::ConnectionComplete));
 
     let evt_rsl = hi.wait_for_event(waited_event).await;
 
     match evt_rsl {
         Ok(event) => {
-            use bo_tie::hci::events::{EventsData, LEMetaData};
+            use bo_tie::hci::events::{EventsData, LeMetaData};
 
-            if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
+            if let EventsData::LeMeta(LeMetaData::ConnectionComplete(event_data)) = event {
                 Ok(event_data)
             } else {
                 Err(format!("Received the incorrect event {:?}", event))
@@ -181,7 +181,7 @@ where
     let mut server = gatt_server_init(&connection_channel, local_name);
 
     loop {
-        block_on(connection_channel.future_receiver())
+        block_on(connection_channel.receive_b_frame())
             .map(|l2cap_pdus| {
                 l2cap_pdus
                     .iter()

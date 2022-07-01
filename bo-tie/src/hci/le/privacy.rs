@@ -40,7 +40,7 @@ pub mod set_address_resolution_enable {
     }
 
     /// Send the LE Set Address Resolution Enable command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         enable: bool,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -67,28 +67,42 @@ pub mod set_resolvable_private_address_timeout {
     impl CommandParameter<2> for Parameter {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> [u8; 2] {
-            [0u8; 2]
+            self.time_out.to_le_bytes()
         }
     }
 
-    #[derive(Debug)]
-    enum RpaTimeoutCommandError<H>
+    pub enum RpaTimeoutCommandError<H>
     where
-        H: HostGenerics,
+        H: Host,
     {
         TooSmall(Duration),
         TooLarge(Duration),
         CommandError(CommandError<H>),
     }
 
-    impl<H> core::fmt::Display for RpaTimeoutCommandError<H>
+    impl<H> core::fmt::Debug for RpaTimeoutCommandError<H>
     where
-        H: HostGenerics,
+        H: Host,
+        CommandError<H>: core::fmt::Debug,
     {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
             match self {
-                RpaTimeoutCommandError::TooSmall(d) => f.write_str("timeout duration is less than one second"),
-                RpaTimeoutCommandError::TooLarge(d) => f.write_str("timeout duration is larger than one hour"),
+                RpaTimeoutCommandError::TooSmall(d) => f.debug_tuple("TooSmall").field(d).finish(),
+                RpaTimeoutCommandError::TooLarge(d) => f.debug_tuple("TooLarge").field(d).finish(),
+                RpaTimeoutCommandError::CommandError(e) => f.debug_tuple("CommandError").field(e).finish(),
+            }
+        }
+    }
+
+    impl<H> core::fmt::Display for RpaTimeoutCommandError<H>
+    where
+        H: Host,
+        CommandError<H>: core::fmt::Display,
+    {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            match self {
+                RpaTimeoutCommandError::TooSmall(_) => f.write_str("timeout duration is less than one second"),
+                RpaTimeoutCommandError::TooLarge(_) => f.write_str("timeout duration is larger than one hour"),
                 RpaTimeoutCommandError::CommandError(c) => core::fmt::Display::fmt(c, f),
             }
         }
@@ -96,7 +110,7 @@ pub mod set_resolvable_private_address_timeout {
 
     impl<H> From<CommandError<H>> for RpaTimeoutCommandError<H>
     where
-        H: HostGenerics,
+        H: Host,
     {
         fn from(ce: CommandError<H>) -> Self {
             Self::CommandError(ce)
@@ -113,7 +127,7 @@ pub mod set_resolvable_private_address_timeout {
     /// # Note
     /// Using the [`Default`](core::default::Default) value of `Duration` for the input `time_out`
     /// will set the resolvable private address timeout to it's default value of 15 minutes.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         time_out: Duration,
     ) -> Result<impl FlowControlInfo, RpaTimeoutCommandError<H>> {
@@ -169,7 +183,7 @@ pub mod add_device_to_resolving_list {
     }
 
     /// Send the LE Add Device To Resolving List command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -206,7 +220,7 @@ pub mod remove_device_from_resolving_list {
     }
 
     /// Send the LE Remove Device To Resolving List command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -232,7 +246,7 @@ pub mod clear_resolving_list {
     }
 
     /// Send the LE Clear Resolving List command
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
@@ -281,7 +295,7 @@ pub mod set_privacy_mode {
         }
     }
 
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {

@@ -445,7 +445,7 @@ where
     /// send a `PairingFailed` to indicate that the prior pairing process failed.
     pub async fn process_command(
         &mut self,
-        acl_data: &crate::l2cap::BasicInfoFrame,
+        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
     ) -> Result<Option<&super::Keys>, Error> {
         use core::convert::TryFrom;
 
@@ -879,7 +879,7 @@ where
         }
     }
 
-    async fn p_pairing_failed(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
+    async fn p_pairing_failed<'z>(&'z mut self, payload: &[u8]) -> Result<Option<&'z super::Keys>, Error> {
         log::trace!("(SM) Processing pairing failed");
 
         let initiator_fail = match pairing::PairingFailed::try_from_icd(payload) {
@@ -989,7 +989,7 @@ where
         }
     }
 
-    async fn p_identity_info(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
+    async fn p_identity_info<'z>(&'z mut self, payload: &[u8]) -> Result<Option<&'z super::Keys>, Error> {
         log::trace!("(SM) Processing peer IRK");
 
         let identity_info = match encrypt_info::IdentityInformation::try_from_icd(payload) {
@@ -1047,7 +1047,7 @@ where
         }
     }
 
-    async fn p_signing_info(&mut self, payload: &[u8]) -> Result<Option<&super::Keys>, Error> {
+    async fn p_signing_info<'z>(&'z mut self, payload: &[u8]) -> Result<Option<&'z super::Keys>, Error> {
         log::trace!("(SM) Processing peer signing info (CSRK)");
 
         let signing_info = match encrypt_info::SigningInformation::try_from_icd(payload) {

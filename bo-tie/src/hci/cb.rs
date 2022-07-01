@@ -61,13 +61,13 @@ pub mod set_event_mask {
         UserPasskeyNotification,
         KeyPressNotification,
         RemoteHostSupportedFeaturesNotification,
-        LEMeta,
+        LeMeta,
     }
 
     impl EventMask {
         const DEFAULT_MASK: &'static [Self] = &[Self::_Default];
 
-        const DEFAULT_MASK_LE: &'static [Self] = &[Self::_Default, Self::LEMeta];
+        const DEFAULT_MASK_LE: &'static [Self] = &[Self::_Default, Self::LeMeta];
 
         /// Get the default enabled events
         ///
@@ -79,14 +79,14 @@ pub mod set_event_mask {
             Self::DEFAULT_MASK
         }
 
-        /// Get the default enabled events with the `LEMeta` event also enabled.
+        /// Get the default enabled events with the `LeMeta` event also enabled.
         ///
-        /// The LEMeta event is a mask for all LE events, it must be enabled for any LE event to be
+        /// The LeMeta event is a mask for all LE events, it must be enabled for any LE event to be
         /// propagate from the controller to the host.
         ///
         /// # Note
         /// The returned slice only contains a hidden member of `EventMask` and the
-        /// [`LEMeta`](EventMask::LEMeta) event.
+        /// [`LeMeta`](EventMask::LeMeta) event.
         /// The hidden member is used for quickly masking the bits of the command parameter
         /// corresponding to the default events.
         pub fn default_le() -> &'static [EventMask] {
@@ -145,7 +145,7 @@ pub mod set_event_mask {
                     EventMask::UserPasskeyNotification => 1 << 58,
                     EventMask::KeyPressNotification => 1 << 59,
                     EventMask::RemoteHostSupportedFeaturesNotification => 1 << 60,
-                    EventMask::LEMeta => 1 << 61,
+                    EventMask::LeMeta => 1 << 61,
                 }
             })
         }
@@ -163,7 +163,7 @@ pub mod set_event_mask {
     }
 
     /// Send the event mask to the controller
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         events: &[EventMask],
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -199,7 +199,7 @@ pub mod reset {
     }
 
     /// Send the reset command to the controller
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
@@ -227,6 +227,8 @@ pub mod read_transmit_power_level {
 
     impl TryFromCommandComplete for TransmitPowerLevel {
         fn try_from(cc: &events::CommandCompleteData) -> Result<Self, CCParameterError> {
+            use core::convert::TryFrom;
+
             check_status!(cc.raw_data);
 
             let raw_connection_handle = <u16>::from_le_bytes([
@@ -282,7 +284,7 @@ pub mod read_transmit_power_level {
     /// Send a read transmit power level command to the controller
     ///
     /// This will send the command to the controller and wait for the transmit power level to be returned by it.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameter: Parameter,
     ) -> Result<TransmitPowerLevel, CommandError<H>> {

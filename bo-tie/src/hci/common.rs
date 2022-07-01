@@ -59,22 +59,32 @@ impl AsRef<u16> for ConnectionHandle {
 impl ConnectionHandle {
     pub const MAX: u16 = 0x0EFF;
 
-    /// Try to create a ConnectionHandle from a raw value
-    ///
-    /// Performs a check to determine if the raw value if greater than the max value
-    ///
-    /// # Error
-    /// The raw value was greater then the maximum value.
-    pub fn try_from(raw: u16) -> Result<ConnectionHandle, &'static str> {
-        if raw <= ConnectionHandle::MAX {
-            Ok(ConnectionHandle { handle: raw })
-        } else {
-            Err("Raw value larger then max")
-        }
-    }
+    const ERROR: &'static str = "Raw connection handle value larger then the maximum (0x0EFF)";
 
     pub fn get_raw_handle(&self) -> u16 {
         self.handle
+    }
+}
+
+impl core::convert::TryFrom<u16> for ConnectionHandle {
+    type Error = &'static str;
+
+    fn try_from(raw: u16) -> Result<Self, Self::Error> {
+        if raw <= ConnectionHandle::MAX {
+            Ok(ConnectionHandle { handle: raw })
+        } else {
+            Err(Self::ERROR)
+        }
+    }
+}
+
+impl core::convert::TryFrom<[u8; 2]> for ConnectionHandle {
+    type Error = &'static str;
+
+    fn try_from(raw: [u8; 2]) -> Result<Self, Self::Error> {
+        let raw_val = <u16>::from_le_bytes(raw);
+
+        core::convert::TryFrom::<u16>::try_from(raw_val)
     }
 }
 

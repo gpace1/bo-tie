@@ -54,14 +54,14 @@
 //! #     fn get_mtu(&self) -> usize { unimplemented!() }
 //! #     fn max_mtu(&self) -> usize { unimplemented!() }
 //! #     fn min_mtu(&self) -> usize { unimplemented!() }
-//! #     fn receive(&self,waker: &Waker) -> Option<Vec<BasicFrameFragment>> { unimplemented!() }
+//! #     fn receive(&self,waker: &Waker) -> Option<Vec<L2capFragment>> { unimplemented!() }
 //! # }
 //! # let connection_channel = StubConnectionChannel;
 //! // An example of setting up a receiver that support oob
 //!
 //! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
 //! use bo_tie::sm::BuildOutOfBand;
-//! use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, BasicFrameFragment};
+//! use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment};
 //! use std::task::Waker;
 //! use std::future::Future;
 //!
@@ -144,7 +144,7 @@ pub enum Error {
     /// Send related error
     DataSend(alloc::string::String),
     /// ACL Data related
-    ACLData(crate::l2cap::BasicFrameError),
+    ACLData(crate::l2cap::BasicFrameError<core::convert::Infallible>), // temporarily using infallible
     /// Out of band data was not provided to the Security Manager via the `received_oob_data`
     /// method of either the initiator or responder security manager before continuing the process
     /// of pairing.
@@ -212,7 +212,7 @@ impl CommandType {
     }
 }
 
-impl core::convert::TryFrom<&'_ BasicInfoFrame> for CommandType {
+impl core::convert::TryFrom<&'_ BasicInfoFrame<Vec<u8>>> for CommandType {
     type Error = Error;
 
     /// Try to get the CommandType from ACLData
@@ -220,7 +220,7 @@ impl core::convert::TryFrom<&'_ BasicInfoFrame> for CommandType {
     /// This rigidly checks the ACLData to get the CommandType. If the channel identifier is
     /// incorrect, the payload does not have a valid value for the command field, or the payload
     /// length is incorrect, an error is returned.
-    fn try_from(acl_data: &'_ BasicInfoFrame) -> Result<Self, Self::Error> {
+    fn try_from(acl_data: &'_ BasicInfoFrame<Vec<u8>>) -> Result<Self, Self::Error> {
         if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
             return Err(Error::IncorrectL2capChannelId);
         }

@@ -6,22 +6,27 @@ use core::task::{Context, Poll};
 
 const BUFFERS_EXPECT: &'static str = "input 'buffers' returned None";
 
-pub struct AsSlicedPacketFuture<I, F, D> {
+pub struct AsSlicedPacketFuture<I, D, F, C, S> {
+    mtu: usize,
+    byte_count: usize,
     iter: I,
     len: [u8; 2],
     channel_id: [u8; 2],
-    data: alloc::vec::Vec<u8>,
-    current_buffer: Option<D>,
-    state: State<D, F>,
+    data: D,
+    state: State<C, F, S>,
 }
 
-impl<I, F, D> AsSlicedPacketFuture<I, F, D> {
-    pub async fn new<T>(frame: BasicInfoFrame, into_iterator: T) -> Self
+impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
+    pub fn new<T>(mtu: usize, frame: BasicInfoFrame<D>, into_iterator: T) -> Self
     where
         T: IntoIterator<IntoIter = I>,
         I: Iterator<Item = F>,
+        F: Future<Output = C>,
+        D: core::ops::Deref<Target = [u8]>,
     {
         use core::convert::TryInto;
+
+        let byte_count = 0;
 
         let len: u16 = frame.data.len().try_into().expect("Couldn't convert into u16");
 
@@ -31,84 +36,124 @@ impl<I, F, D> AsSlicedPacketFuture<I, F, D> {
 
         let data = frame.data;
 
-        let current_buffer = None;
-
         let mut iter = into_iterator.into_iter();
 
-        let first = iter.next().await;
+        let first = iter.next().unwrap();
 
         // The first state is to acquire the first buffer from the buffer iter.
         let state = State::AcquireBuffer(first, 0, State::length);
 
         Self {
+            mtu,
+            byte_count,
             iter,
             len,
             channel_id,
             data,
-            current_buffer,
             state,
         }
     }
 }
 
-impl<I, F, D, E> Future for AsSlicedPacketFuture<I, F, D>
+macro_rules! try_extend_current {
+    ($this:expr, $current:expr, $val:expr) => {
+        if $this.mtu < $this.byte_count {
+            if let Err(_) = $current.try_extend_one($val) {
+                $this.byte_count = 0;
+                Err(())
+            } else {
+                Ok(())
+            }
+        } else {
+            Err(())
+        }
+    };
+}
+
+impl<I, D, F, C, E> Future for AsSlicedPacketFuture<I, D, F, C, C::IntoFuture>
 where
     I: Iterator<Item = F>,
-    F: Future<Output = D>,
-    D: crate::TryExtend<u8> + Future<Output = Result<(), E>>,
+    D: core::ops::Deref<Target = [u8]>,
+    F: Future<Output = C>,
+    C: crate::TryExtend<u8> + core::future::IntoFuture<Output = Result<(), E>>,
 {
     type Output = Result<(), E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // This is safe as types F and C are only moved before
-        // they're polled and after they're polled to completion
+        // No generics except for F and C are moved. Using `get_unchecked_mut`
+        // is safe because both types F and C are moved only before they have
+        // been polled and are dropped once they have polled to completion.
+
         let this = unsafe { self.get_unchecked_mut() };
 
         loop {
-            match this.state {
-                State::AcquireBuffer(ref mut future, index, to_next) => match Pin::new(future).poll(cx) {
-                    Poll::Ready(current) => {
-                        this.current_buffer = Some(current);
-
-                        this.state = to_next(this.current_buffer.as_mut().unwrap(), index)
-                    }
+            match &mut this.state {
+                State::AcquireBuffer(future, index, to_next) => match unsafe { Pin::new_unchecked(future) }.poll(cx) {
+                    Poll::Ready(current) => this.state = to_next(current, *index),
                     Poll::Pending => break Poll::Pending,
                 },
                 State::FinishCurrent(current, index, to_next) => {
-                    match Pin::new(unsafe { current.as_mut().unwrap() }).poll(cx)? {
+                    match unsafe { Pin::new_unchecked(current) }.poll(cx)? {
                         Poll::Ready(_) => {
-                            let future = self.iter.next().expect(BUFFERS_EXPECT);
+                            let future = this.iter.next().expect(BUFFERS_EXPECT);
 
-                            this.state = State::AcquireBuffer(future, index, to_next);
+                            this.state = State::AcquireBuffer(future, *index, *to_next);
                         }
                         Poll::Pending => break Poll::Pending,
                     }
                 }
                 State::Length(current, index) => {
-                    if index < this.len.len() {
-                        match unsafe { current.as_mut().unwrap() }.try_extend_one(this.len[index]) {
+                    if let Some(val) = this.len.get(*index).copied() {
+                        match try_extend_current!(this, current, val) {
                             Ok(_) => this.state.next_index(),
-                            Err(_) => this.state = State::FinishCurrent(current, index, State::length),
+                            Err(_) => {
+                                let (current, index) = match core::mem::replace(&mut this.state, State::Complete) {
+                                    State::Length(current, index) => (current, index),
+                                    _ => unreachable!(),
+                                };
+
+                                this.state = State::FinishCurrent(current.into_future(), index, State::length)
+                            }
                         }
                     } else {
-                        this.state = State::ChannelId(current, 0)
+                        match core::mem::replace(&mut this.state, State::TEMPORARY) {
+                            State::Length(current, _) => this.state = State::ChannelId(current, 0),
+                            _ => unreachable!(),
+                        }
                     }
                 }
                 State::ChannelId(current, index) => {
-                    if index < this.channel_id.len() {
-                        match unsafe { current.as_mut().unwrap() }.try_extend_one(this.channel_id[index]) {
+                    if let Some(val) = this.channel_id.get(*index).copied() {
+                        match try_extend_current!(this, current, val) {
                             Ok(_) => this.state.next_index(),
-                            Err(_) => this.state = State::FinishCurrent(current, index, State::channel_id),
+                            Err(_) => {
+                                let (current, index) = match core::mem::replace(&mut this.state, State::Complete) {
+                                    State::ChannelId(current, index) => (current, index),
+                                    _ => unreachable!(),
+                                };
+
+                                this.state = State::FinishCurrent(current.into_future(), index, State::channel_id)
+                            }
                         }
                     } else {
-                        this.state = State::Data(current, 0)
+                        match core::mem::replace(&mut this.state, State::TEMPORARY) {
+                            State::ChannelId(current, _) => this.state = State::Data(current, 0),
+                            _ => unreachable!(),
+                        }
                     }
                 }
                 State::Data(current, index) => {
-                    if index < this.data.len() {
-                        match unsafe { current.as_mut().unwrap() }.try_extend_one(this.data[index]) {
+                    if let Some(val) = this.data.get(*index).copied() {
+                        match try_extend_current!(this, current, val) {
                             Ok(_) => this.state.next_index(),
-                            Err(_) => this.state = State::FinishCurrent(current, index, State::data),
+                            Err(_) => {
+                                let (current, index) = match core::mem::replace(&mut this.state, State::Complete) {
+                                    State::Data(current, index) => (current, index),
+                                    _ => unreachable!(),
+                                };
+
+                                this.state = State::FinishCurrent(current.into_future(), index, State::data)
+                            }
                         }
                     } else {
                         this.state = State::Complete
@@ -120,16 +165,18 @@ where
     }
 }
 
-enum State<C, F> {
-    AcquireBuffer(F, usize, fn(*mut C, usize) -> Self),
-    FinishCurrent(*mut C, usize, fn(*mut C, usize) -> Self),
-    Length(*mut C, usize),
-    ChannelId(*mut C, usize),
-    Data(*mut C, usize),
+enum State<C, F, S> {
+    AcquireBuffer(F, usize, fn(C, usize) -> Self),
+    FinishCurrent(S, usize, fn(C, usize) -> Self),
+    Length(C, usize),
+    ChannelId(C, usize),
+    Data(C, usize),
     Complete,
 }
 
-impl<C, F> State<C, F> {
+impl<C, F, S> State<C, F, S> {
+    const TEMPORARY: Self = State::Complete;
+
     /// Go to the next index
     ///
     /// # Panic
@@ -144,17 +191,17 @@ impl<C, F> State<C, F> {
     }
 
     /// Create a Length enum
-    fn length(current: *mut C, index: usize) -> Self {
+    fn length(current: C, index: usize) -> Self {
         Self::Length(current, index)
     }
 
     /// Create a ChannelId enum
-    fn channel_id(current: *mut C, index: usize) -> Self {
+    fn channel_id(current: C, index: usize) -> Self {
         Self::ChannelId(current, index)
     }
 
     /// Create a Data enum
-    fn data(current: *mut C, index: usize) -> Self {
+    fn data(current: C, index: usize) -> Self {
         Self::Data(current, index)
     }
 }

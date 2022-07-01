@@ -59,13 +59,15 @@ pub mod remote_connection_parameter_request_reply {
 
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            use core::convert::TryFrom;
+
             check_status!(cc.raw_data);
 
             let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
                 *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
             ]))
-            .map_err(|e| CCParameterError::InvalidEventParameter)?;
+            .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
@@ -82,7 +84,7 @@ pub mod remote_connection_parameter_request_reply {
         }
     }
 
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameters: CommandParameters,
     ) -> Result<Return, CommandError<H>> {
@@ -107,13 +109,15 @@ pub mod remote_connection_parameter_request_negative_reply {
 
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            use core::convert::TryFrom;
+
             check_status!(cc.raw_data);
 
             let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
                 *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
             ]))
-            .map_err(|e| CCParameterError::InvalidEventParameter)?;
+            .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
@@ -157,7 +161,7 @@ pub mod remote_connection_parameter_request_negative_reply {
     /// [`NoError`](crate::hci::error::Error::NoError) nor
     /// [`Message`](crate::hci::error::Error::Message)
     /// as they are translated into the value of 0 on the interface.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         handle: ConnectionHandle,
         reason: error::Error,

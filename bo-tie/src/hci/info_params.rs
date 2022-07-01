@@ -77,7 +77,7 @@ pub mod read_local_version_information {
     }
 
     /// Get the version information from the Controller
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<VersionInformation, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<VersionInformation, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -993,7 +993,7 @@ pub mod read_local_supported_commands {
         fn next(&mut self) -> Option<Self::Item> {
             loop {
                 if let Some(command) = SupportedCommands::from_bit_pos((self.byte, self.bit)) {
-                    if self.supported_commands[self.byte] & (1 << self.bit) {
+                    if (self.supported_commands[self.byte] & (1 << self.bit)) != 0 {
                         self.next_pos();
 
                         break Some(command);
@@ -1085,7 +1085,7 @@ pub mod read_local_supported_commands {
     }
 
     /// Get the bit mask of enabled commands from the Controller
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -1143,7 +1143,7 @@ pub mod read_local_supported_features {
         type IntoIter = EnabledFeaturesIter;
 
         fn into_iter(self) -> Self::IntoIter {
-            EnabledFeaturesIter::from(*self.raw_features)
+            EnabledFeaturesIter::from(self.raw_features)
         }
     }
 
@@ -1164,7 +1164,7 @@ pub mod read_local_supported_features {
     }
 
     /// Request the features of the Link Manager Protocol on the controller
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<EnabledFeatures, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<EnabledFeatures, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -1234,7 +1234,7 @@ pub mod read_bd_addr {
     }
 
     /// Get the public Bluetooth device address
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -1312,7 +1312,7 @@ pub mod read_buffer_size {
         }
     }
 
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }

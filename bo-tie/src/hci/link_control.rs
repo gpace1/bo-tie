@@ -24,7 +24,7 @@ pub mod read_remote_version_information {
     /// [`CommandStatus`](events::Events::CommandStatus) event. The event
     /// [`ReadRemoteVersionInformationComplete`](events::Events::ReadRemoteVersionInformationComplete)
     /// must be awaited upon by the `host` to get the version information of the remote controller.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -72,7 +72,7 @@ pub mod disconnect {
                 error::Error::UnacceptableConnectionParameters => {
                     Ok(DisconnectReason::UnacceptableConnectionParameters)
                 }
-                e => Err(ConversionError),
+                _ => Err(ConversionError),
             }
         }
 
@@ -135,7 +135,7 @@ pub mod disconnect {
     /// is disconnected. The event
     /// [`DisconnectionComplete`](events::Events::DisconnectionComplete)
     /// must be awaited upon by the `host` to know the device has disconnected.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameter: DisconnectParameters,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {

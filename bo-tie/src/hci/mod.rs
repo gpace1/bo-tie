@@ -11,12 +11,10 @@ pub mod events;
 // mod flow_ctrl;
 pub mod interface;
 
-use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::fmt::Write;
 use core::future::Future;
 use core::pin::Pin;
-use core::task::{Context, Poll, Waker};
+use core::task::{Context, Poll};
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -41,32 +39,20 @@ pub trait CommandParameter<const PARAMETER_SIZE: usize> {
     /// # Note
     /// HCI packets do not contain information on the type of packet that they are. This command
     /// packet must be wrapped within a type to give the interface driver the knowledge
-    fn as_command_packet<T>(&self, buffer: &mut T)
+    fn as_command_packet<T>(&self, buffer: &mut T) -> Result<(), T::Error>
     where
-        T: Extend<u8>,
+        T: crate::TryExtend<u8>,
     {
-        use core::mem::size_of;
-
-        let parameter_size = size_of::<Self::Parameter>();
-
-        // Allocating a vector to the exact size of the packet. The 3 bytes come from the opcode
-        // field (2 bytes) and the length field (1 byte)
-        buffer.try_reserve_to(parameter_size + 3);
-
         let parameter = self.get_parameter();
 
-        let p_bytes_p = &parameter as *const Self::Parameter as *const u8;
-
-        let parm_bytes = unsafe { core::slice::from_raw_parts(p_bytes_p, parameter_size) };
-
         // Add opcode to packet
-        buffer.extend(&Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes());
+        buffer.try_extend(Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes())?;
 
         // Add the length of the parameter
-        buffer.extend(core::iter::once(parm_bytes.len() as u8));
+        buffer.try_extend(core::iter::once(parameter.len() as u8))?;
 
         // Add the parameter
-        buffer.extend(parm_bytes);
+        buffer.try_extend(parameter)
     }
 }
 
@@ -177,15 +163,14 @@ impl core::fmt::Display for HciACLPacketError {
 /// only be a primary controller handle (which is generated with a *LE Connection Complete* or
 /// *LE Enhanced Connection Complete* event for LE-U).
 #[derive(Debug)]
-pub struct HciACLData<'a> {
+pub struct HciACLData<T> {
     connection_handle: common::ConnectionHandle,
     packet_boundary_flag: ACLPacketBoundary,
     broadcast_flag: ACLBroadcastFlag,
-    /// This is always a L2CAP ACL packet
-    payload: &'a [u8],
+    payload: T,
 }
 
-impl<'a> HciACLData<'a> {
+impl<T> HciACLData<T> {
     /// The size of the header of a HCI ACL data packet
     pub const HEADER_SIZE: usize = 4;
 
@@ -197,13 +182,16 @@ impl<'a> HciACLData<'a> {
     /// Create a new HciACLData
     ///
     /// # Panic
-    /// The payload length must not be larger than the maximum u16 number
+    /// The payload length must not be larger than the maximum `u16` number
     pub fn new(
         connection_handle: common::ConnectionHandle,
         packet_boundary_flag: ACLPacketBoundary,
         broadcast_flag: ACLBroadcastFlag,
-        payload: &'a [u8],
-    ) -> Self {
+        payload: T,
+    ) -> Self
+    where
+        T: core::ops::Deref<Target = [u8]>,
+    {
         assert!(payload.len() <= <u16>::MAX.into());
 
         HciACLData {
@@ -218,7 +206,7 @@ impl<'a> HciACLData<'a> {
         &self.connection_handle
     }
 
-    pub fn get_payload(&self) -> &[u8] {
+    pub fn get_payload(&self) -> &T {
         &self.payload
     }
 
@@ -230,44 +218,27 @@ impl<'a> HciACLData<'a> {
         self.broadcast_flag
     }
 
-    /// Convert the `HciACLData` into a raw packet
-    ///
-    /// This will convert HciACLDataOwned into a packet of bytes that can be sent between the host
-    /// and controller.
-    pub fn get_packet(&self) -> alloc::vec::Vec<u8> {
-        let mut v = alloc::vec::Vec::with_capacity(self.payload.len() + 4);
-
-        let first_2_bytes = self.connection_handle.get_raw_handle()
-            | self.packet_boundary_flag.get_shifted_val()
-            | self.broadcast_flag.get_shifted_val();
-
-        v.extend_from_slice(&first_2_bytes.to_le_bytes());
-
-        v.extend_from_slice(&(self.payload.len() as u16).to_le_bytes());
-
-        v.extend_from_slice(&self.payload);
-
-        v
-    }
-
-    /// Convert the `HciACLData` into a packet iterator
-    ///
-    /// The return is an iterator over the bytes send over the interface between the host and
-    /// controller.
+    /// Convert the `HciACLData` into a iterator over bytes of a HCI packet
     ///
     /// # Note
-    /// Collecting the returned iterator into a `Vec` produces the same thing as the return of
-    /// [`get_packet`](HciACLData::get_packet)
-    pub fn get_packet_iter(&self) -> impl Iterator<Item = u8> + ExactSizeIterator {
-        struct HciAclPacketIter<'a> {
+    /// Collecting the returned iterator into a `Vec` produces the same result as the return of
+    /// method [`to_packet`](HciACLData::to_packet)
+    pub fn to_packet_iter(&self) -> impl Iterator<Item = u8> + ExactSizeIterator + '_
+    where
+        T: core::ops::Deref<Target = [u8]>,
+    {
+        struct HciAclPacketIter<'a, T> {
             state: Option<usize>,
             raw_handle_and_flags: u16,
             total_data_length: u16,
-            payload: &'a [u8],
+            payload: &'a T,
         }
 
-        impl<'a> HciAclPacketIter<'a> {
-            fn new(data: &'a HciACLData<'a>) -> Self {
+        impl<'a, T> HciAclPacketIter<'a, T>
+        where
+            T: core::ops::Deref<Target = [u8]>,
+        {
+            fn new(data: &'a HciACLData<T>) -> Self {
                 Self {
                     state: Some(0),
                     raw_handle_and_flags: data.connection_handle.get_raw_handle()
@@ -279,7 +250,10 @@ impl<'a> HciACLData<'a> {
             }
         }
 
-        impl Iterator for HciAclPacketIter<'_> {
+        impl<T> Iterator for HciAclPacketIter<'_, T>
+        where
+            T: core::ops::Deref<Target = [u8]>,
+        {
             type Item = u8;
 
             fn next(&mut self) -> Option<Self::Item> {
@@ -316,230 +290,158 @@ impl<'a> HciACLData<'a> {
             }
         }
 
-        impl ExactSizeIterator for HciAclPacketIter<'_> {}
+        impl<T> ExactSizeIterator for HciAclPacketIter<'_, T> where T: core::ops::Deref<Target = [u8]> {}
+
+        HciAclPacketIter::new(self)
     }
 
-    /// Attempt to create a `HciAclData`
+    /// Attempt to create a `HciAclData` with the provided buffer
     ///
-    /// A `HciACLData` is created if the packet is in the correct HCI ACL data packet format. If
-    /// not, then an error is returned.
-    pub fn try_from_packet(packet: &[u8]) -> Result<Self, HciACLPacketError> {
-        const HEADER_SIZE: usize = 4;
+    /// The buffer must contain a complete HCI ACL packet within it.
+    fn try_from_buffer(mut buffer: T) -> Result<Self, HciACLPacketError>
+    where
+        T: crate::TryFrontRemove<u8> + crate::TryRemove<u8> + core::ops::Deref<Target = [u8]>,
+    {
+        use core::convert::TryFrom;
 
-        if packet.len() >= HEADER_SIZE {
-            let first_2_bytes = <u16>::from_le_bytes([packet[0], packet[1]]);
+        let first_2_bytes = <u16>::from_le_bytes([
+            buffer.try_front_pop().ok_or(HciACLPacketError::PacketTooSmall)?,
+            buffer.try_front_pop().ok_or(HciACLPacketError::PacketTooSmall)?,
+        ]);
 
-            let connection_handle = match common::ConnectionHandle::try_from(first_2_bytes & 0xFFF) {
-                Ok(handle) => handle,
-                Err(e) => return Err(HciACLPacketError::InvalidConnectionHandle(e)),
-            };
+        let connection_handle = match common::ConnectionHandle::try_from(first_2_bytes & 0xFFF) {
+            Ok(handle) => handle,
+            Err(e) => return Err(HciACLPacketError::InvalidConnectionHandle(e)),
+        };
 
-            let packet_boundary_flag = ACLPacketBoundary::from_shifted_val(first_2_bytes);
+        let packet_boundary_flag = ACLPacketBoundary::from_shifted_val(first_2_bytes);
 
-            let broadcast_flag = match ACLBroadcastFlag::try_from_shifted_val(first_2_bytes) {
-                Ok(flag) => flag,
-                Err(_) => return Err(HciACLPacketError::InvalidBroadcastFlag),
-            };
+        let broadcast_flag = match ACLBroadcastFlag::try_from_shifted_val(first_2_bytes) {
+            Ok(flag) => flag,
+            Err(_) => return Err(HciACLPacketError::InvalidBroadcastFlag),
+        };
 
-            let data_length = <u16>::from_le_bytes([packet[2], packet[3]]) as usize;
+        let data_length = <u16>::from_le_bytes([
+            buffer.try_front_pop().ok_or(HciACLPacketError::PacketTooSmall)?,
+            buffer.try_front_pop().ok_or(HciACLPacketError::PacketTooSmall)?,
+        ]) as usize;
 
-            Ok(HciACLData {
-                connection_handle,
-                packet_boundary_flag,
-                broadcast_flag,
-                payload: &packet[HEADER_SIZE..(HEADER_SIZE + data_length)],
-            })
-        } else {
-            Err(HciACLPacketError::PacketTooSmall)
-        }
+        let remove_len = buffer
+            .len()
+            .checked_sub(data_length)
+            .ok_or(HciACLPacketError::PacketTooSmall)?;
+
+        // remove_len should have verified how many bytes are to be truncated from it
+        buffer.try_remove(remove_len).ok().unwrap();
+
+        Ok(HciACLData {
+            connection_handle,
+            packet_boundary_flag,
+            broadcast_flag,
+            payload: buffer,
+        })
     }
 
     /// Convert into a
     /// [`ACLDataFragment`](crate::l2cap::ACLDataFragment)
-    pub fn into_acl_fragment(self) -> crate::l2cap::BasicFrameFragment<'a> {
-        use crate::l2cap::BasicFrameFragment;
+    pub fn into_acl_fragment(self) -> crate::l2cap::L2capFragment<T>
+    where
+        T: core::ops::Deref<Target = [u8]>,
+    {
+        use crate::l2cap::L2capFragment;
 
         match self.packet_boundary_flag {
-            ACLPacketBoundary::ContinuingFragment => BasicFrameFragment::new(false, self.payload),
-            _ => BasicFrameFragment::new(true, self.payload),
+            ACLPacketBoundary::ContinuingFragment => L2capFragment::new(false, self.payload),
+            _ => L2capFragment::new(true, self.payload),
         }
     }
 }
 
-impl bo_tie_serde::HintedSerialize for HciACLData<'_> {
-    fn hinted_serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: bo_tie_serde::HintedSerializer,
-        S::SerializeSeq: bo_tie_serde::SerializerHint,
-        S::SerializeTuple: bo_tie_serde::SerializerHint,
-        S::SerializeTupleStruct: bo_tie_serde::SerializerHint,
-        S::SerializeTupleVariant: bo_tie_serde::SerializerHint,
-        S::SerializeMap: bo_tie_serde::SerializerHint,
-        S::SerializeStruct: bo_tie_serde::SerializerHint,
-        S::SerializeStructVariant: bo_tie_serde::SerializerHint,
-    {
-        use core::convert::TryFrom;
-        use serde::ser::{Error, SerializeStruct};
+impl<'a> HciACLData<&'a [u8]> {
+    /// Attempt to create a `HciAclData`
+    ///
+    /// A `HciACLData` is created if the packet is in the correct HCI ACL data packet format. If
+    /// not, then an error is returned.
+    pub fn try_from_packet(packet: &'a [u8]) -> Result<Self, HciACLPacketError> {
+        Self::try_from_buffer(packet)
+    }
 
-        let mut ser_struct = serializer.hinted_serialize_struct("HCI ACL Data Packet", 3)?;
+    /// Convert the `HciACLData` into a raw packet
+    ///
+    /// This will convert HciACLDataOwned into a HCI ACL packet that can be sent between the host
+    /// and controller.
+    pub fn to_packet(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(self.payload.len() + 4);
 
         let first_2_bytes = self.connection_handle.get_raw_handle()
             | self.packet_boundary_flag.get_shifted_val()
             | self.broadcast_flag.get_shifted_val();
 
-        ser_struct.serialize_field("handle and flags", &first_2_bytes)?;
+        v.extend_from_slice(&first_2_bytes.to_le_bytes());
 
-        let len: u16 = TryFrom::try_from(self.payload.len()).or(Err(S::Error::custom(format_args!(
-            "Length of HCI ACL data packet payload is larger than {}",
-            u16::MAX
-        ))))?;
+        v.extend_from_slice(&(self.payload.len() as u16).to_le_bytes());
 
-        ser_struct.serialize_field("data length", &len)?;
+        v.extend_from_slice(&self.payload);
 
-        ser_struct.set_skip_len_hint();
-
-        ser_struct.serialize_field("data", &self.payload)?;
-
-        ser_struct.end()
+        v
     }
 }
 
-impl<'de> bo_tie_serde::HintedDeserialize<'de> for HciACLData<'de> {
-    fn hinted_deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+/// A buffer
+///
+/// Buffers within the HCI are used for passing HCI packets between the host, connection, and
+/// interface async tasks. The only requirement is that a buffer act like a double ended vector. The
+/// implementation needs to push and pop bytes to both the front and end of a buffer. This is
+/// because a HCI packet ends up being a nesting of multiple different protocols. Bytes of protocol
+/// header information are pushed to the front of a buffer while payload data is pushed to the end
+/// of the buffer.
+pub trait Buffer: core::ops::DerefMut<Target = [u8]> + crate::TryExtend<u8> + Unpin {
+    /// Create a Buffer with the front and back capacities
+    fn with_capacity(front: usize, back: usize) -> Self
     where
-        D: bo_tie_serde::HintedDeserializer<'de> + bo_tie_serde::DeserializerHint,
+        Self: Sized;
+
+    /// Clear the buffer and set new capacity thresholds
+    fn clear_with_capacity(&mut self, front: usize, back: usize);
+}
+
+/// Extension methods for types that implement [`Buffer`]
+trait BufferExt: Buffer {
+    fn new() -> Self
+    where
+        Self: Sized,
     {
-        enum Field {
-            HandleAndFlags,
-            DataLength,
-            Data,
-        }
+        Self::with_capacity(0, 0)
+    }
 
-        impl<'de> serde::de::Deserialize<'de> for Field {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct FieldVisitor;
+    fn with_front_capacity(front: usize) -> Self
+    where
+        Self: Sized,
+    {
+        Self::with_capacity(front, 0)
+    }
 
-                impl<'de> serde::de::Visitor<'de> for FieldVisitor {
-                    type Value = Field;
+    fn with_back_capacity(back: usize) -> Self
+    where
+        Self: Sized,
+    {
+        Self::with_capacity(0, back)
+    }
 
-                    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                        write!(formatter, "A string identifier")
-                    }
+    fn clear_uncapped(&mut self) {
+        self.clear_with_capacity(0, 0)
+    }
 
-                    fn visit_str<E>(self, value: &str) -> Result<Field, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "handle and flags" => Ok(Field::HandleAndFlags),
-                            "data length" => Ok(Field::DataLength),
-                            "data" => Ok(Field::Data),
-                            _ => Err(E::unknown_field(value, &["handle and flags", "data length", "data"])),
-                        }
-                    }
-                }
+    fn clear_with_front_capacity(&mut self, front: usize) {
+        self.clear_with_capacity(front, 0)
+    }
 
-                deserializer.deserialize_identifier(FieldVisitor)
-            }
-        }
-
-        struct Visitor;
-
-        impl Visitor {
-            fn try_split_handle_and_flags<E>(
-                &self,
-                handle_and_flags: u16,
-            ) -> Result<(common::ConnectionHandle, ACLPacketBoundary, ACLBroadcastFlag), E>
-            where
-                E: serde::de::Error,
-            {
-                let connection_handle = common::ConnectionHandle::try_from(handle_and_flags & 0xFFF)
-                    .map_err(|e| serde::de::Error::custom(format_args!("invalid connection handle {}", e)))?;
-
-                let packet_boundary_flag = ACLPacketBoundary::from_shifted_val(handle_and_flags);
-
-                let broadcast_flag = ACLBroadcastFlag::try_from_shifted_val(handle_and_flags)
-                    .map_err(|_| serde::de::Error::custom("invalid broadcast flag"))?;
-
-                Ok((connection_handle, packet_boundary_flag, broadcast_flag))
-            }
-        }
-
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = HciACLData<'de>;
-
-            fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
-                formatter.write_str("struct HciACLData")
-            }
-        }
-
-        impl<'de> bo_tie_serde::HintedVisitor<'de> for Visitor {
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: bo_tie_serde::DeserializerHint + serde::de::SeqAccess<'de>,
-            {
-                let handle_and_flags: u16 = seq.next_element()?.ok_or(serde::de::Error::invalid_length(0, &self))?;
-
-                let data_len: u16 = seq.next_element()?.ok_or(serde::de::Error::invalid_length(1, &self))?;
-
-                seq.hint_next_len(data_len.into());
-
-                let payload: &[u8] = seq.next_element()?.ok_or(serde::de::Error::invalid_length(2, &self))?;
-
-                let (connection_handle, packet_boundary_flag, broadcast_flag) =
-                    self.try_split_handle_and_flags(handle_and_flags)?;
-
-                Ok(HciACLData {
-                    connection_handle,
-                    packet_boundary_flag,
-                    broadcast_flag,
-                    payload,
-                })
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: bo_tie_serde::DeserializerHint + serde::de::MapAccess<'de>,
-            {
-                let mut handle_and_flags: Option<u16> = None;
-                let mut data_len: Option<u16> = None;
-                let mut data: Option<&[u8]> = None;
-
-                while let Some(field) = map.next_key()? {
-                    match field {
-                        Field::HandleAndFlags => handle_and_flags = Some(map.next_value()?),
-                        Field::DataLength => data_len = Some(map.next_value()?),
-                        Field::Data => {
-                            let len = data_len.ok_or(serde::de::Error::missing_field("data length"))?;
-
-                            map.hint_next_len(len.into());
-
-                            data = Some(map.next_value()?);
-                        }
-                    }
-                }
-
-                let (connection_handle, packet_boundary_flag, broadcast_flag) = self.try_split_handle_and_flags(
-                    handle_and_flags.ok_or(serde::de::Error::missing_field("handle and flags"))?,
-                )?;
-
-                let payload = data.ok_or(serde::de::Error::missing_field("data"))?;
-
-                Ok(HciACLData {
-                    connection_handle,
-                    packet_boundary_flag,
-                    broadcast_flag,
-                    payload,
-                })
-            }
-        }
-
-        deserializer.deserialize_struct("HciACLData", &["handle and flags", "data length", "data"], Visitor)
+    fn clear_with_back_capacity(&mut self, back: usize) {
+        self.clear_with_capacity(0, back)
     }
 }
+
+impl<T> BufferExt for T where T: Buffer {}
 
 /// A reserve of buffers
 ///
@@ -550,7 +452,8 @@ impl<'de> bo_tie_serde::HintedDeserialize<'de> for HciACLData<'de> {
 /// reserve.
 #[doc(hidden)]
 pub trait BufferReserve {
-    type Buffer: core::ops::DerefMut<Target = [u8]> + crate::TryExtend<u8>;
+    type Buffer: Buffer + Unpin;
+
     type TakeBuffer: Future<Output = Self::Buffer>;
 
     /// Take a buffer from the reserve
@@ -558,7 +461,9 @@ pub trait BufferReserve {
     /// If there is no more buffers within the reserve the returned future will await. However, it
     /// is intended that there be enough buffers in the reserve so that most of the time this does
     /// not await.
-    fn take(&mut self) -> Self::TakeBuffer;
+    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    where
+        S: Into<Option<usize>>;
 
     /// Reclaim an unused buffer
     ///
@@ -573,67 +478,24 @@ trait BufferReserveExt: BufferReserve {
     ///
     /// This is an iterator over taking a `BufferReserve`. Every iteration calls the method `take`
     /// and returns the future. The iterator will never return `None`.
-    fn as_take_iter(&mut self) -> BufferReserveTakeIterator<'_, Self>
+    fn as_take_iter(&self, front_capacity: usize) -> BufferReserveTakeIterator<'_, Self>
     where
         Self: Sized,
     {
-        BufferReserveTakeIterator(self)
+        BufferReserveTakeIterator(self, front_capacity)
     }
 }
 
 impl<T: BufferReserve> BufferReserveExt for T {}
 
 /// An iterator for continuously taking a `BufferReserve`
-struct BufferReserveTakeIterator<'a, T>(&'a mut T);
+struct BufferReserveTakeIterator<'a, T>(&'a T, usize);
 
-impl<T: BufferReserve> Iterator for BufferReserveTakeIterator<'_, T> {
+impl<'a, T: BufferReserve> Iterator for BufferReserveTakeIterator<'a, T> {
     type Item = T::TakeBuffer;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.take()
-    }
-}
-
-/// A reserve of `Vec` buffers
-///
-/// ## Reclaiming Buffers
-/// Buffers are reclaimed up to the capacity limit of the reserve. After that buffers are dropped
-/// instead of reused.
-struct VecBufferReserve(Vec<Vec<u8>>);
-
-impl VecBufferReserve {
-    fn new(capacity: usize) -> Self {
-        Self(Vec::with_capacity(capacity))
-    }
-}
-
-impl BufferReserve for VecBufferReserve {
-    type Buffer = Vec<u8>;
-    type TakeBuffer = TakeVecReserveFuture;
-
-    fn take(&mut self) -> Self::TakeBuffer {
-        if let Some(buffer) = self.pop() {
-            TakeVecReserveFuture(buffer)
-        } else {
-            TakeVecReserveFuture(Vec::new())
-        }
-    }
-
-    fn reclaim(&mut self, buffer: Self::Buffer) {
-        if self.0.capacity() != self.0.len() {
-            self.buffers.push(buffer);
-        }
-    }
-}
-
-/// A future for taking buffers from a `VecBufferReserve`
-struct TakeVecReserveFuture(Vec<u8>);
-
-impl Future for TakeVecReserveFuture {
-    type Output = Vec<u8>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(core::mem::replace(&mut self.get_mut().0, Vec::new()))
+        Some(self.0.take(self.1))
     }
 }
 
@@ -687,46 +549,32 @@ impl CommandEventMatcher {
             get_op_code,
         }
     }
-
-    /// Match an event packet
-    ///
-    /// This is used to match event packets received from the controller to the event expected in
-    /// response to a previously sent command.
-    fn match_packet(&self, event_packet: &[u8]) -> bool {
-        use core::convert::TryFrom;
-        use events::{Events, EventsData};
-
-        let raw_opcode = match event_packet
-            .get(0)
-            .and_then(|event_code| Events::try_from_event_codes(*event_code, 0 /* irrelevant */).ok())
-            .and_then(|event| (self.event == event).then(|| ()))
-            .and_then(|_| (self.get_op_code)(event_packet))
-        {
-            Some(raw_opcode) => raw_opcode,
-            None => return false,
-        };
-
-        let opc_pair = opcodes::OpCodePair::from_opcode(raw_opcode);
-
-        match opcodes::HCICommand::try_from(opc_pair) {
-            Ok(code) => self.expected_opcode == code,
-            Err(reason) => {
-                log::error!("{}", reason);
-                false
-            }
-        }
-    }
 }
 
-/// Generics used as part of a `HostInterface`
+/// The `Host`
 ///
-/// The generics within a `HostInterface` are not implementable by the user, so to simplify usage of
-/// the `HostInterface`, the generics are wrapped up within this trait.
-pub trait HostGenerics {
-    type Buffer: core::ops::DerefMut<Target = [u8]>;
-    type Sender: interface::Sender<Message = interface::IntraMessage<Self::Buffer>>;
+/// This trait is for the implementation of the host asynchronous task.
+pub trait Host {
+    type TryExtendError: core::fmt::Debug;
+
+    type SenderError: core::fmt::Debug;
+
+    type Buffer: core::ops::DerefMut<Target = [u8]> + crate::TryExtend<u8, Error = Self::TryExtendError>;
+
+    type Sender: interface::Sender<Error = Self::SenderError, Message = interface::IntraMessage<Self::Buffer>>;
+
     type Receiver: interface::Receiver<Message = interface::IntraMessage<Self::Buffer>>;
+
     type Reserve: BufferReserve<Buffer = Self::Buffer>;
+
+    /// Get the sender of messages to the interface async task
+    ///
+    /// This returns the sender part of the MPSC channel
+    fn get_sender(&self) -> &Self::Sender;
+
+    fn get_receiver(&self) -> &Self::Receiver;
+
+    fn get_reserve(&self) -> &Self::Reserve;
 }
 
 /// The host interface
@@ -762,15 +610,13 @@ pub trait HostGenerics {
 /// numerous connections are made or for some reason the buffer information is unknown. Most of the
 /// time the raw connections will suffice with the MTU value set to the maximum packet size of the
 /// HCI receive data buffer on the controller.
-pub struct HostInterface<H: HostGenerics> {
-    interface_sender: H::Sender,
-    interface_receiver: H::Receiver,
-    buffer_reserve: H::Reserve,
+pub struct HostInterface<H> {
+    host: H,
 }
 
 impl<H> HostInterface<H>
 where
-    H: HostGenerics,
+    H: Host,
 {
     /// Send a command with the provided matcher to the interface async task
     ///
@@ -786,19 +632,28 @@ where
         event_matcher: CommandEventMatcher,
     ) -> Result<interface::IntraMessage<H::Buffer>, CommandError<H>>
     where
-        CP: CommandParameter<CP_SIZE> + 'static,
+        CP: CommandParameter<CP_SIZE>,
     {
         use interface::IntraMessageType;
+        use interface::{Receiver, Sender};
 
-        let mut packet = self.buffer_reserve.take().await;
+        let mut buffer = self.host.get_reserve().take(None).await;
 
-        parameter.as_command_packet(self.buffer_reserve.take().await, &mut packet);
+        parameter
+            .as_command_packet(&mut buffer)
+            .map_err(|e| CommandError::TryExtendBufferError(e))?;
 
-        self.interface_sender
-            .send(IntraMessageType::Command(event_matcher, packet).into())
-            .await?;
+        self.host
+            .get_sender()
+            .send(IntraMessageType::Command(event_matcher, buffer).into())
+            .await
+            .map_err(|e| CommandError::SendError(e))?;
 
-        self.interface_receiver.recv().await.ok_or(CommandError::ReceiverClosed)
+        self.host
+            .get_receiver()
+            .recv()
+            .await
+            .ok_or(CommandError::ReceiverClosed)
     }
 
     /// Send a command to the controller expecting a returned parameter
@@ -821,20 +676,19 @@ where
         parameter: CP,
     ) -> Result<T, CommandError<H>>
     where
-        CP: CommandParameter<CP_SIZE> + 'static,
+        CP: CommandParameter<CP_SIZE>,
         T: TryFromCommandComplete,
     {
-        use core::convert::TryFrom;
         use events::EventsData;
         use interface::IntraMessageType;
 
         let event_matcher = CommandEventMatcher::new_command_complete(CP::COMMAND);
 
-        let intra_message = self.send_command(parameter, event_matcher)?;
+        let intra_message = self.send_command(parameter, event_matcher).await?;
 
         match intra_message.ty {
             IntraMessageType::Event(data) => match EventsData::try_from_packet(&data)? {
-                EventsData::CommandComplete(data) => Ok(T::try_from(&data)),
+                EventsData::CommandComplete(data) => Ok(T::try_from(&data)?),
                 e => unreachable!("invalid event matched for command: {:?}", e),
             },
             _ => unreachable!("host task expected event intra message"),
@@ -864,13 +718,12 @@ where
     where
         CP: CommandParameter<CP_SIZE> + 'static,
     {
-        use core::convert::TryFrom;
         use events::EventsData;
         use interface::IntraMessageType;
 
         let event_matcher = CommandEventMatcher::new_command_status(CP::COMMAND);
 
-        let intra_message = self.send_command(parameter, event_matcher)?;
+        let intra_message = self.send_command(parameter, event_matcher).await?;
 
         match intra_message.ty {
             IntraMessageType::Event(data) => match EventsData::try_from_packet(&data)? {
@@ -918,26 +771,31 @@ where
         E: Into<Option<events::Events>>,
     {
         use events::EventsData;
-        use interface::IntraMessageType;
+        use interface::{IntraMessageType, Receiver};
 
         let event_opt = event.into();
 
         loop {
-            let data = self
-                .interface_receiver
+            let intra_message = self
+                .host
+                .get_receiver()
                 .recv()
                 .await
                 .ok_or(WaitForEventError::ReceiverClosed)?;
 
-            let ed = EventsData::try_from_packet(&data)?;
+            if let IntraMessageType::Event(data) = intra_message.ty {
+                let ed = EventsData::try_from_packet(&data)?;
 
-            match event_opt {
-                Some(ref event) => {
-                    if ed.get_event_name() == *event {
-                        break Ok(ed);
+                match event_opt {
+                    Some(ref event) => {
+                        if ed.get_event_name() == *event {
+                            break Ok(ed);
+                        }
                     }
+                    None => break Ok(ed),
                 }
-                None => break Ok(ed),
+            } else {
+                break Err(WaitForEventError::UnexpectedIntraMessage(intra_message.kind()));
             }
         }
     }
@@ -946,10 +804,11 @@ where
 /// An error when trying to send a command
 pub enum CommandError<H>
 where
-    H: HostGenerics,
+    H: Host,
 {
+    TryExtendBufferError(H::TryExtendError),
     CommandError(error::Error),
-    SendError(<H::Sender as interface::Sender>::Error),
+    SendError(H::SenderError),
     EventError(events::EventError),
     InvalidEventParameter,
     ReceiverClosed,
@@ -957,11 +816,13 @@ where
 
 impl<H> core::fmt::Debug for CommandError<H>
 where
-    H: HostGenerics,
-    <H::Sender as interface::Sender>::Error: core::fmt::Debug,
+    H: Host,
+    H::TryExtendError: core::fmt::Debug,
+    H::SenderError: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
+            CommandError::TryExtendBufferError(e) => f.debug_tuple("BufferError").field(e).finish(),
             CommandError::CommandError(e) => f.debug_tuple("CommandError").field(e).finish(),
             CommandError::SendError(e) => f.debug_tuple("SendError").field(e).finish(),
             CommandError::EventError(e) => f.debug_tuple("EventError").field(e).finish(),
@@ -973,11 +834,13 @@ where
 
 impl<H> core::fmt::Display for CommandError<H>
 where
-    H: HostGenerics,
-    <H::Sender as interface::Sender>::Error: core::fmt::Display,
+    H: Host,
+    H::TryExtendError: core::fmt::Display,
+    H::SenderError: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
+            CommandError::TryExtendBufferError(e) => core::fmt::Display::fmt(e, f),
             CommandError::CommandError(e) => core::fmt::Display::fmt(e, f),
             CommandError::SendError(e) => core::fmt::Display::fmt(e, f),
             CommandError::EventError(e) => core::fmt::Display::fmt(e, f),
@@ -987,19 +850,19 @@ where
     }
 }
 
-impl<H: HostGenerics> From<events::EventError> for CommandError<H> {
+impl<H: Host> From<events::EventError> for CommandError<H> {
     fn from(e: events::EventError) -> Self {
         CommandError::EventError(e)
     }
 }
 
-impl<H: HostGenerics> From<error::Error> for CommandError<H> {
+impl<H: Host> From<error::Error> for CommandError<H> {
     fn from(e: error::Error) -> Self {
         CommandError::CommandError(e)
     }
 }
 
-impl<H: HostGenerics> From<CCParameterError> for CommandError<H> {
+impl<H: Host> From<CCParameterError> for CommandError<H> {
     fn from(e: CCParameterError) -> Self {
         match e {
             CCParameterError::CommandError(e) => CommandError::CommandError(e),
@@ -1024,22 +887,29 @@ enum CCParameterError {
 macro_rules! check_status {
     ($raw_data:expr) => {
         error::Error::from(*$raw_data.get(0).ok_or(CCParameterError::InvalidEventParameter)?)
-            .ok_or_else(CCParameterError::InvalidEventParameter)?;
+            .ok_or_else(|e| CCParameterError::CommandError(e))?;
     };
 }
 
 /// Error for method [`wait_for_event`](HostInterface::wait_for_event)
 #[derive(Debug)]
-enum WaitForEventError {
+pub enum WaitForEventError {
     ReceiverClosed,
     EventConversionError(events::EventError),
+    UnexpectedIntraMessage(&'static str),
 }
 
 impl core::fmt::Display for WaitForEventError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             WaitForEventError::ReceiverClosed => f.write_str("interface task is dropped"),
-            WaitForEventError::EventConversionError(e) => core::fmt::Display::fmt(self, f),
+            WaitForEventError::EventConversionError(e) => core::fmt::Display::fmt(e, f),
+            WaitForEventError::UnexpectedIntraMessage(kind) => write!(
+                f,
+                "Unexpected intra \
+                message '{}' (this is a library bug)",
+                kind
+            ),
         }
     }
 }
@@ -1072,35 +942,55 @@ impl FlowControlInfo for OnlyStatus {
     }
 }
 
-struct AclConnection<S, R, B> {
+/// Trait for a connection async task
+///
+/// The purpose of this trait is to allow for connections to be made for send safe, local, and
+/// stack local implementations of the HCI.
+trait Connection {
+    type Buffer: core::ops::DerefMut<Target = [u8]>
+        + crate::TryExtend<u8>
+        + crate::TryFrontRemove<u8>
+        + crate::TryRemove<u8>
+        + Unpin;
+
+    type Reserve: BufferReserve<Buffer = Self::Buffer>;
+
+    type SendFutErr: core::fmt::Debug;
+
+    type Sender: interface::Sender<Error = Self::SendFutErr, Message = interface::IntraMessage<Self::Buffer>>;
+
+    type Receiver: interface::Receiver<Message = interface::IntraMessage<Self::Buffer>>;
+}
+
+struct AclConnection<C: Connection> {
     max_mtu: usize,
     min_mtu: usize,
     mtu: core::cell::Cell<usize>,
-    sender: S,
-    receiver: R,
-    buffer_reserve: B,
+    sender: C::Sender,
+    receiver: C::Receiver,
+    buffer_reserve: C::Reserve,
 }
 
-impl<S, R, B, T> crate::l2cap::ConnectionChannel for AclConnection<S, R, B>
+impl<C> crate::l2cap::ConnectionChannel for AclConnection<C>
 where
-    S: interface::Sender<Message = interface::IntraMessage<T>>,
-    R: interface::Receiver<Message = interface::IntraMessage<T>>,
-    B: BufferReserve<Buffer = interface::IntraMessage<T>>,
-    T: core::ops::Deref<Target = [u8]>,
+    C: Connection,
 {
-    type SendFut<'a> = ConnectionChannelSender<'a, S, B> where S: 'a, B: 'a;
-    type SendFutErr = S::Error;
+    type Buffer = C::Buffer;
+    type SendFut<'a> = ConnectionChannelSender<'a, C::Sender, C::Reserve> where Self: 'a;
+    type SendFutErr = C::SendFutErr;
+    type RecvFut<'a> = AclReceiverMap<'a, C::Receiver> where Self: 'a;
 
-    type RecvFut<'a> = AclReceiverMap<'a, R> where R: 'a;
+    fn send(&self, data: crate::l2cap::BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        // todo: not sure if this will be necessary when the type of input data is `BasicInfoFrame<Self::Buffer<'_>>`
+        let front_capacity = HciACLData::<()>::HEADER_SIZE;
 
-    fn send(&mut self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut<'_> {
         let iter = SelfSendBufferMap {
-            sender: &mut self.sender,
-            iterator: self.buffer_reserve.as_take_iter(),
+            sender: &self.sender,
+            iterator: self.buffer_reserve.as_take_iter(front_capacity),
         };
 
         ConnectionChannelSender {
-            sliced_future: data.into_sliced_packet(iter),
+            sliced_future: data.into_sliced_packet(self.get_mtu(), iter),
         }
     }
 
@@ -1120,9 +1010,9 @@ where
         self.min_mtu
     }
 
-    fn receive(&mut self) -> Self::RecvFut<'_> {
+    fn receive(&self) -> Self::RecvFut<'_> {
         AclReceiverMap {
-            receiver: &mut self.receiver,
+            receiver: &self.receiver,
             receive_future: None,
         }
     }
@@ -1132,146 +1022,176 @@ where
 ///
 /// This is a wrapper around a buffer and a sender. When it is created it is in buffer mode and can
 /// be de-referenced as a slice or extended,
-struct SelfSendBuffer<'a, S: interface::Sender> {
-    sender: &'a mut S,
-    state: SelfSendBufferState<'a, S>,
+struct AclBufferSender<'a, S: interface::Sender> {
+    sender: &'a S,
+    message: S::Message,
 }
 
-enum SelfSendBufferState<'a, S: interface::Sender + 'a> {
-    Buffer(S::Message),
-    Sender(S::SendFuture<'a>),
-    InBetween,
-}
-
-impl<S, T> SelfSendBuffer<'_, S>
+impl<'a, S, T> crate::TryExtend<u8> for AclBufferSender<'a, S>
 where
     S: interface::Sender<Message = interface::IntraMessage<T>>,
+    T: crate::TryExtend<u8>,
 {
-    #[inline]
-    fn inplace_to_sender(&mut self) {
-        match core::mem::replace(&mut self.state, SelfSendBuffer::InBetween) {
-            SelfSendBufferState::Buffer(buffer) => {
-                let future = self.sender.send(buffer);
+    type Error = AclBufferError<T>;
 
-                self.state = SelfSendBufferState::Sender(future);
-            }
-            _ => unreachable!("'to_sender' called on an enum other than a 'Buffer'"),
+    fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        self.message
+            .get_mut_buffer()
+            .ok_or(AclBufferError::IncorrectIntraMessageType)?
+            .try_extend(iter)
+            .map_err(|e| AclBufferError::Buffer(e))
+    }
+}
+
+impl<'a, S> core::future::IntoFuture for AclBufferSender<'a, S>
+where
+    S: interface::Sender,
+{
+    type Output = <S::SendFuture<'a> as Future>::Output;
+    type IntoFuture = S::SendFuture<'a>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        self.sender.send(self.message)
+    }
+}
+
+/// Error for `TryExtend` implementation of `SelfSendBuffer`
+enum AclBufferError<T: crate::TryExtend<u8>> {
+    Buffer(T::Error),
+    IncorrectIntraMessageType,
+}
+
+impl<T: crate::TryExtend<u8>> core::fmt::Debug for AclBufferError<T>
+where
+    T::Error: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            AclBufferError::Buffer(e) => e.fmt(f),
+            AclBufferError::IncorrectIntraMessageType => f.write_str("Incorrect message type for SelfSendBuffer"),
         }
     }
 }
 
-impl<S> Future for SelfSendBuffer<'_, S>
+impl<T: crate::TryExtend<u8>> core::fmt::Display for AclBufferError<T>
 where
-    S: interface::Sender,
+    T::Error: core::fmt::Display,
 {
-    type Output = Result<(), core::convert::Infallible>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        use core::mem::replace;
-
-        let this = unsafe { self.get_unchecked_mut() };
-
-        if let SelfSendBufferState::Buffer(_) = this.state {
-            this.inplace_to_sender()
-        }
-
-        if let SelfSendBufferState::Sender(ref mut future) = this.state {
-            Pin::new(future).poll(cx)
-        } else {
-            unreachable!()
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            AclBufferError::Buffer(e) => e.fmt(f),
+            AclBufferError::IncorrectIntraMessageType => f.write_str("Incorrect message type for SelfSendBuffer"),
         }
     }
 }
 
 struct SelfSendBufferFutureMap<'a, S, F> {
-    sender: Option<&'a mut S>,
+    sender: &'a S,
     future: F,
 }
 
-impl<'a, F, S> Future for SelfSendBufferFutureMap<'a, S, F>
+impl<'a, F, S, T> Future for SelfSendBufferFutureMap<'a, S, F>
 where
-    S: interface::Sender,
-    F: Future<Output = S::Message>,
+    S: interface::Sender<Message = interface::IntraMessage<T>>,
+    F: Future<Output = T>,
+    T: 'a + crate::TryExtend<u8> + Unpin,
 {
-    type Output = SelfSendBuffer<'a, S>;
+    type Output = AclBufferSender<'a, S>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
-        Pin::new(&mut this.future).poll(cx).map(|message| SelfSendBuffer {
-            sender: this.sender.take().unwrap(),
-            state: SelfSendBufferState::Buffer(message),
+        unsafe { Pin::new_unchecked(&mut this.future) }.poll(cx).map(|buffer| {
+            let message = interface::IntraMessage {
+                ty: interface::IntraMessageType::Acl(buffer),
+            };
+
+            let sender = this.sender;
+
+            AclBufferSender { sender, message }
         })
     }
 }
 
 struct SelfSendBufferMap<'a, S, I> {
-    sender: &'a mut S,
+    sender: &'a S,
     iterator: I,
 }
 
-impl<'a, I, S, F> Iterator for SelfSendBufferMap<'a, S, I>
+impl<'a, I, S, F, T> Iterator for SelfSendBufferMap<'a, S, I>
 where
-    S: interface::Sender,
+    S: interface::Sender<Message = interface::IntraMessage<T>>,
     I: Iterator<Item = F>,
-    F: Future<Output = S::Message>,
+    F: Future<Output = T>,
+    T: 'a,
 {
     type Item = SelfSendBufferFutureMap<'a, S, F>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iterator.next().map(|future| SelfSendBufferFutureMap {
-            sender: Some(self.sender),
+            sender: self.sender,
             future,
         })
     }
 }
 
-struct ConnectionChannelSender<'a, S: 'a, B: BufferReserve> {
+struct ConnectionChannelSender<'a, S: 'a + interface::Sender, B: BufferReserve> {
     sliced_future: crate::l2cap::send_future::AsSlicedPacketFuture<
         SelfSendBufferMap<'a, S, BufferReserveTakeIterator<'a, B>>,
+        Vec<u8>,
         SelfSendBufferFutureMap<'a, S, B::TakeBuffer>,
-        SelfSendBuffer<'a, S>,
+        AclBufferSender<'a, S>,
+        S::SendFuture<'a>,
     >,
 }
 
-impl<'a, S, B> Future for ConnectionChannelSender<'a, S, B>
+impl<'a, S, B, T> Future for ConnectionChannelSender<'a, S, B>
 where
-    S: interface::Sender,
-    B: BufferReserve,
-    B::TakeBuffer: Future<Output = S::Message>,
+    S: interface::Sender<Message = interface::IntraMessage<T>>,
+    B: BufferReserve<Buffer = T>,
+    T: 'a + crate::TryExtend<u8> + Unpin,
 {
     type Output = Result<(), S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().sliced_future.poll(cx)
+        unsafe { self.map_unchecked_mut(|this| &mut this.sliced_future) }.poll(cx)
     }
 }
 
 pub struct AclReceiverMap<'a, R: interface::Receiver> {
-    receiver: &'a mut R,
+    receiver: &'a R,
     receive_future: Option<R::ReceiveFuture<'a>>,
 }
 
 impl<'a, R, T> Future for AclReceiverMap<'a, R>
 where
     R: interface::Receiver<Message = interface::IntraMessage<T>>,
-    T: Unpin,
+    T: crate::TryExtend<u8>
+        + crate::TryFrontRemove<u8>
+        + crate::TryRemove<u8>
+        + core::ops::Deref<Target = [u8]>
+        + Unpin,
 {
-    type Output = Option<Result<crate::l2cap::BasicInfoFrame, crate::l2cap::BasicFrameError>>;
+    type Output = Option<
+        Result<crate::l2cap::L2capFragment<T>, crate::l2cap::BasicFrameError<<T as crate::TryExtend<u8>>::Error>>,
+    >;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        use crate::l2cap::{BasicFrameError, BasicInfoFrame};
+        use crate::l2cap::BasicFrameError;
 
         let this = unsafe { self.get_unchecked_mut() };
 
         loop {
             match this.receive_future {
                 None => this.receive_future = Some(this.receiver.recv()),
-                Some(ref mut receiver) => match Pin::new(receiver).poll(cx) {
+                Some(ref mut receiver) => match unsafe { Pin::new_unchecked(receiver) }.poll(cx) {
                     Poll::Pending => break Poll::Pending,
                     Poll::Ready(None) => break Poll::Ready(None),
                     Poll::Ready(Some(intra_message)) => match intra_message.ty {
-                        interface::IntraMessageType::Acl(ref data) => match HciACLData::try_from_packet(data) {
+                        interface::IntraMessageType::Acl(data) => match HciACLData::try_from_buffer(data) {
                             Ok(data) => {
                                 let fragment = data.into_acl_fragment();
 
@@ -1283,63 +1203,23 @@ where
                                 ))))
                             }
                         },
+                        interface::IntraMessageType::Sco(_) => {
+                            break Poll::Ready(Some(Err(BasicFrameError::Other(
+                                "synchronous connection data is not implemented",
+                            ))))
+                        }
+                        interface::IntraMessageType::Iso(_) => {
+                            break Poll::Ready(Some(Err(BasicFrameError::Other(
+                                "isochronous connection data is not implemented",
+                            ))))
+                        }
+                        _ => unreachable!(),
                     },
                 },
             }
         }
     }
 }
-
-// #[derive(Debug)]
-// enum OutputErr<TargetErr, CmdErr>
-// where
-//     TargetErr: core::fmt::Display + core::fmt::Debug,
-//     CmdErr: core::fmt::Display + core::fmt::Debug,
-// {
-//     /// An error occurred at the target specific HCI implementation
-//     TargetSpecificErr(TargetErr),
-//     /// Cannot convert the data from the HCI packed form into its usable form.
-//     CommandDataConversionError(CmdErr),
-//     /// The first item is the received event and the second item is the event expected
-//     ReceivedIncorrectEvent(crate::hci::events::Events),
-//     /// This is used when either the 'command complete' or 'command status' events contain no data
-//     /// and are used to indicate the maximum number of HCI command packets that can be queued by
-//     /// the controller.
-//     ResponseHasNoAssociatedCommand,
-//     /// The command status event returned with this error
-//     CommandStatusErr(error::Error),
-// }
-//
-// impl<TargetErr, CmdErr> core::fmt::Display for OutputErr<TargetErr, CmdErr>
-// where
-//     TargetErr: core::fmt::Display + core::fmt::Debug,
-//     CmdErr: core::fmt::Display + core::fmt::Debug,
-// {
-//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-//         match self {
-//             OutputErr::TargetSpecificErr(reason) => {
-//                 core::write!(f, "{}", reason)
-//             }
-//             OutputErr::CommandDataConversionError(reason) => {
-//                 core::write!(f, "{}", reason)
-//             }
-//             OutputErr::ReceivedIncorrectEvent(expected_event) => {
-//                 core::write!(f, "Received unexpected event '{:?}'", expected_event)
-//             }
-//             OutputErr::ResponseHasNoAssociatedCommand => {
-//                 core::write!(
-//                     f,
-//                     "Event Response contains no data and is not associated with \
-//                     a HCI command. This should have been handled by the driver and not received \
-//                     here"
-//                 )
-//             }
-//             OutputErr::CommandStatusErr(reason) => {
-//                 core::write!(f, "{}", reason)
-//             }
-//         }
-//     }
-// }
 
 /// Controller *Command* flow-control information
 ///

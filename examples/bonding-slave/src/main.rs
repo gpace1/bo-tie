@@ -45,7 +45,7 @@ struct Keys {
 struct Bonder {
     hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter, AsyncLock>>,
     event_mask: Arc<Mutex<HashSet<hci::cb::set_event_mask::EventMask>>>,
-    le_event_mask: Arc<Mutex<HashSet<hci::events::LEMeta>>>,
+    le_event_mask: Arc<Mutex<HashSet<hci::events::LeMeta>>>,
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
     abort_server_handle: Arc<Mutex<Option<futures::future::AbortHandle>>>,
     privacy_info: Arc<Mutex<Keys>>,
@@ -136,11 +136,11 @@ impl Bonder {
     }
 
     /// Enable/Disable the provided le events
-    async fn set_le_events(&self, events: &[hci::events::LEMeta], enable: bool) {
-        use hci::events::LEMeta;
+    async fn set_le_events(&self, events: &[hci::events::LeMeta], enable: bool) {
+        use hci::events::LeMeta;
         use hci::le::mandatory::set_event_mask;
 
-        let le_events: Vec<LEMeta> = {
+        let le_events: Vec<LeMeta> = {
             let mut gaurd = self.le_event_mask.lock().await;
 
             if enable {
@@ -163,14 +163,14 @@ impl Bonder {
 
     async fn init_events(&self) {
         use hci::cb::set_event_mask::EventMask;
-        use hci::events::LEMeta;
+        use hci::events::LeMeta;
 
         self.set_events(
             &[
                 EventMask::DisconnectionComplete,
                 EventMask::EncryptionChange,
                 EventMask::EncryptionKeyRefreshComplete,
-                EventMask::LEMeta,
+                EventMask::LeMeta,
             ],
             true,
         )
@@ -178,9 +178,9 @@ impl Bonder {
 
         self.set_le_events(
             &[
-                LEMeta::ConnectionComplete,
-                LEMeta::LongTermKeyRequest,
-                LEMeta::RemoteConnectionParameterRequest,
+                LeMeta::ConnectionComplete,
+                LeMeta::LongTermKeyRequest,
+                LeMeta::RemoteConnectionParameterRequest,
             ],
             true,
         )
@@ -241,9 +241,9 @@ impl Bonder {
 
     async fn connection_update_request(self) {
         use bo_tie::hci::le::common::ConnectionEventLength;
-        use hci::events::EventsData::LEMeta;
-        use hci::events::LEMeta::RemoteConnectionParameterRequest as RCPReq;
-        use hci::events::LEMetaData::RemoteConnectionParameterRequest as RCPReqData;
+        use hci::events::EventsData::LeMeta;
+        use hci::events::LeMeta::RemoteConnectionParameterRequest as RCPReq;
+        use hci::events::LeMetaData::RemoteConnectionParameterRequest as RCPReqData;
         use hci::le::common::{ConnectionInterval, ConnectionLatency, SupervisionTimeout};
         use hci::le::con_pram_req::remote_connection_parameter_request_reply::{send, CommandParameters};
 
@@ -251,7 +251,7 @@ impl Bonder {
             let event = self.hi.wait_for_event(Some(RCPReq.into())).await;
 
             match event {
-                Ok(LEMeta(RCPReqData(e))) => {
+                Ok(LeMeta(RCPReqData(e))) => {
                     let cp = CommandParameters {
                         handle: e.connection_handle,
                         interval_min: ConnectionInterval::try_from_raw(400).unwrap(),
@@ -277,8 +277,8 @@ impl Bonder {
     // For simplicity, I've left the race condition in here. There could be a case where the connection
     // is made and the ConnectionComplete event isn't propicated & processed
     async fn wait_for_connection(&self) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
-        use hci::events::LEMeta::ConnectionComplete;
-        use hci::events::{EventsData, LEMetaData};
+        use hci::events::LeMeta::ConnectionComplete;
+        use hci::events::{EventsData, LeMetaData};
         use hci::le::transmitter::set_advertising_enable;
 
         println!("Waiting for a connection (timeout is 60 seconds)");
@@ -287,7 +287,7 @@ impl Bonder {
 
         match evt_rsl {
             Ok(event) => {
-                if let EventsData::LEMeta(LEMetaData::ConnectionComplete(event_data)) = event {
+                if let EventsData::LeMeta(LeMetaData::ConnectionComplete(event_data)) = event {
                     *self.handle.lock().await = event_data.connection_handle.clone().into();
 
                     set_advertising_enable::send(&self.hi, false).await.unwrap();
@@ -332,7 +332,7 @@ impl Bonder {
     {
         use bo_tie::l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
 
-        let acl_data_vec = connection_channel.future_receiver().await.unwrap();
+        let acl_data_vec = connection_channel.receive_b_frame().await.unwrap();
 
         let mut ret = None;
 
@@ -374,16 +374,16 @@ impl Bonder {
     }
 
     async fn await_ltk_request(&self, ch: hci::common::ConnectionHandle) -> bool {
-        use hci::events::{EventsData, LEMeta, LEMetaData};
+        use hci::events::{EventsData, LeMeta, LeMetaData};
         use hci::le::encryption::long_term_key_request_negative_reply;
 
-        let event = self.hi.wait_for_event(Some(LEMeta::LongTermKeyRequest.into())).await;
+        let event = self.hi.wait_for_event(Some(LeMeta::LongTermKeyRequest.into())).await;
 
         println!("Received Long Term Key Request");
 
         match event {
-            Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) if ltk_req.connection_handle == ch => true,
-            Ok(EventsData::LEMeta(LEMetaData::LongTermKeyRequest(ltk_req))) => {
+            Ok(EventsData::LeMeta(LeMetaData::LongTermKeyRequest(ltk_req))) if ltk_req.connection_handle == ch => true,
+            Ok(EventsData::LeMeta(LeMetaData::LongTermKeyRequest(ltk_req))) => {
                 long_term_key_request_negative_reply::send(&self.hi, ltk_req.connection_handle)
                     .await
                     .unwrap();
@@ -415,7 +415,7 @@ impl Bonder {
         use hci::common::EncryptionLevel::{Off, AESCCM};
         use hci::events::Events::EncryptionChange;
         use hci::events::EventsData::EncryptionChange as EC;
-        use hci::events::LEMeta;
+        use hci::events::LeMeta;
 
         let evnt = self.hi.wait_for_event(EncryptionChange).await;
 
@@ -423,7 +423,7 @@ impl Bonder {
             Ok(EC(e_data)) => match (e_data.encryption_enabled.get_for_le(), e_data.connection_handle) {
                 (AESCCM, handle) if ch == handle => {
                     // removing connection complete event
-                    self.set_le_events(&[LEMeta::ConnectionComplete], false).await;
+                    self.set_le_events(&[LeMeta::ConnectionComplete], false).await;
 
                     true
                 }
@@ -605,8 +605,8 @@ impl Bonder {
         peer_address_info: AddressInfo,
     ) -> Option<hci::events::LEEnhancedConnectionCompleteData> {
         use hci::events::EventsData;
-        use hci::events::LEMeta::EnhancedConnectionComplete;
-        use hci::events::LEMetaData::EnhancedConnectionComplete as ECCData;
+        use hci::events::LeMeta::EnhancedConnectionComplete;
+        use hci::events::LeMetaData::EnhancedConnectionComplete as ECCData;
         use hci::le::{
             privacy::{
                 add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
@@ -684,7 +684,7 @@ impl Bonder {
                 eprintln!("Failed to receive EnhancedConnectionComplete: {:?}", e);
                 None
             }
-            Ok(EventsData::LEMeta(ECCData(event_data))) => {
+            Ok(EventsData::LeMeta(ECCData(event_data))) => {
                 if event_data.status == hci::error::Error::NoError {
                     *self.handle.lock().await = Some(event_data.connection_handle);
                     Some(event_data)

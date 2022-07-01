@@ -40,7 +40,7 @@ async fn start_scanning_for_addr<M: Send + 'static>(
     local_name: &str,
 ) -> bo_tie::hci::events::LEAdvertisingReportData {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
-    use bo_tie::hci::events::{Events, EventsData, LEMeta, LEMetaData};
+    use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
     use bo_tie::hci::le::receiver::{set_scan_enable, set_scan_parameters};
 
@@ -50,9 +50,9 @@ async fn start_scanning_for_addr<M: Send + 'static>(
     // so the result is just converted into an option.
     set_scan_enable::send(hi, false, false).await.ok();
 
-    set_event_mask::send(hi, &[EventMask::LEMeta]).await.unwrap();
+    set_event_mask::send(hi, &[EventMask::LeMeta]).await.unwrap();
 
-    le_set_event_mask::send(hi, &[LEMeta::AdvertisingReport.into()])
+    le_set_event_mask::send(hi, &[LeMeta::AdvertisingReport.into()])
         .await
         .unwrap();
 
@@ -60,10 +60,10 @@ async fn start_scanning_for_addr<M: Send + 'static>(
 
     set_scan_enable::send(hi, true, true).await.unwrap();
 
-    let waited_event = Some(Events::from(LEMeta::AdvertisingReport));
+    let waited_event = Some(Events::from(LeMeta::AdvertisingReport));
     let ret = 'outer: loop {
         match hi.wait_for_event(waited_event).await.unwrap() {
-            EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) => {
+            EventsData::LeMeta(LeMetaData::AdvertisingReport(reports)) => {
                 if let Some(report) = reports
                     .iter()
                     .filter_map(|r| r.as_ref().ok())
@@ -112,7 +112,7 @@ async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
 ) -> impl bo_tie::l2cap::ConnectionChannel {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
     use bo_tie::hci::common::{ConnectionLatency, SupervisionTimeout};
-    use bo_tie::hci::events::{Events, EventsData, LEMeta, LEMetaData};
+    use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
     use bo_tie::hci::le::common::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::le::connection::{
         create_connection::{self, ConnectionParameters, ScanningInterval, ScanningWindow},
@@ -120,11 +120,11 @@ async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
     };
     use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
 
-    set_event_mask::send(&hi, &[EventMask::DisconnectionComplete, EventMask::LEMeta])
+    set_event_mask::send(&hi, &[EventMask::DisconnectionComplete, EventMask::LeMeta])
         .await
         .unwrap();
 
-    le_set_event_mask::send(&hi, &[LEMeta::ConnectionComplete])
+    le_set_event_mask::send(&hi, &[LeMeta::ConnectionComplete])
         .await
         .unwrap();
 
@@ -149,10 +149,10 @@ async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
 
     create_connection::send(&hi, parameters).await.unwrap();
 
-    let awaited_event = Some(Events::from(LEMeta::ConnectionComplete));
+    let awaited_event = Some(Events::from(LeMeta::ConnectionComplete));
 
     match hi.wait_for_event(awaited_event).await.unwrap() {
-        EventsData::LEMeta(LEMetaData::ConnectionComplete(data)) => {
+        EventsData::LeMeta(LeMetaData::ConnectionComplete(data)) => {
             raw_handle.store(data.connection_handle.get_raw_handle(), Ordering::Relaxed);
 
             hi.flow_ctrl_channel(data.connection_handle, 512)
@@ -171,7 +171,7 @@ where
     msm.start_pairing().await;
 
     'outer: loop {
-        match cc.future_receiver().await {
+        match cc.receive_b_frame().await {
             Ok(vec_data) => {
                 for data in vec_data {
                     // All data that is not Security Manager related is ignored for this example

@@ -476,7 +476,7 @@ impl bo_tie::hci::HciACLDataInterface for HCIAdapter {
 
         let packet_indicator = &[CtrlMsgType::ACLData.into()];
 
-        let packet_data = &data.get_packet();
+        let packet_data = &data.to_packet();
 
         let io_vec = &[
             uio::IoVec::from_slice(packet_indicator),

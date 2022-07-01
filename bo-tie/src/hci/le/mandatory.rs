@@ -12,37 +12,37 @@ pub use super::super::info_params::read_local_supported_commands;
 pub use super::super::info_params::read_local_supported_features as info_params_read_local_supported_features;
 pub use super::super::info_params::read_local_version_information;
 
-/// Set the [`LeMeta`](crate::hci::events::LEMeta) event mask
+/// Set the [`LeMeta`](crate::hci::events::LeMeta) event mask
 pub mod set_event_mask {
 
-    use crate::hci::events::LEMeta;
+    use crate::hci::events::LeMeta;
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::SetEventMask);
 
-    impl LEMeta {
+    impl LeMeta {
         fn bit_offset(&self) -> usize {
             match *self {
-                LEMeta::ConnectionComplete => 0,
-                LEMeta::AdvertisingReport => 1,
-                LEMeta::ConnectionUpdateComplete => 2,
-                LEMeta::ReadRemoteFeaturesComplete => 3,
-                LEMeta::LongTermKeyRequest => 4,
-                LEMeta::RemoteConnectionParameterRequest => 5,
-                LEMeta::DataLengthChange => 6,
-                LEMeta::ReadLocalP256PublicKeyComplete => 7,
-                LEMeta::GenerateDHKeyComplete => 8,
-                LEMeta::EnhancedConnectionComplete => 9,
-                LEMeta::DirectedAdvertisingReport => 10,
-                LEMeta::PHYUpdateComplete => 11,
-                LEMeta::ExtendedAdvertisingReport => 12,
-                LEMeta::PeriodicAdvertisingSyncEstablished => 13,
-                LEMeta::PeriodicAdvertisingReport => 14,
-                LEMeta::PeriodicAdvertisingSyncLost => 15,
-                LEMeta::ScanTimeout => 16,
-                LEMeta::AdvertisingSetTerminated => 17,
-                LEMeta::ScanRequestReceived => 18,
-                LEMeta::ChannelSelectionAlgorithm => 19,
+                LeMeta::ConnectionComplete => 0,
+                LeMeta::AdvertisingReport => 1,
+                LeMeta::ConnectionUpdateComplete => 2,
+                LeMeta::ReadRemoteFeaturesComplete => 3,
+                LeMeta::LongTermKeyRequest => 4,
+                LeMeta::RemoteConnectionParameterRequest => 5,
+                LeMeta::DataLengthChange => 6,
+                LeMeta::ReadLocalP256PublicKeyComplete => 7,
+                LeMeta::GenerateDHKeyComplete => 8,
+                LeMeta::EnhancedConnectionComplete => 9,
+                LeMeta::DirectedAdvertisingReport => 10,
+                LeMeta::PHYUpdateComplete => 11,
+                LeMeta::ExtendedAdvertisingReport => 12,
+                LeMeta::PeriodicAdvertisingSyncEstablished => 13,
+                LeMeta::PeriodicAdvertisingReport => 14,
+                LeMeta::PeriodicAdvertisingSyncLost => 15,
+                LeMeta::ScanTimeout => 16,
+                LeMeta::AdvertisingSetTerminated => 17,
+                LeMeta::ScanRequestReceived => 18,
+                LeMeta::ChannelSelectionAlgorithm => 19,
             }
         }
 
@@ -116,20 +116,20 @@ pub mod set_event_mask {
     /// # let host_interface = bo_tie::hci::HostInterface::<StubHi>::default();
     ///
     /// use bo_tie::hci::le::mandatory::set_event_mask::{self, send};
-    /// use bo_tie::hci::events::LEMeta;
+    /// use bo_tie::hci::events::LeMeta;
     /// use serde::export::Formatter;
     ///
     ///
-    /// let events = vec!(LEMeta::ConnectionComplete,LEMeta::AdvertisingReport);
+    /// let events = vec!(LeMeta::ConnectionComplete,LeMeta::AdvertisingReport);
     ///
     /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
     /// send(&host_interface, &events);
     /// ```
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
-        enabled_events: &[LEMeta],
+        enabled_events: &[LeMeta],
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
-        let mask = LEMeta::build_mask(enabled_events);
+        let mask = LeMeta::build_mask(enabled_events);
 
         let parameter = CmdParameter { mask };
 
@@ -267,17 +267,23 @@ pub mod read_buffer_size {
         }
     }
 
+    impl FlowControlInfo for BufferSizeV2 {
+        fn command_count(&self) -> usize {
+            self.completed_packets_cnt
+        }
+    }
+
     /// Request information on the LE data buffers (version 1)
     ///
     /// This only returns the buffer information for LE ACL data packets.
-    pub async fn send_v1<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<BufferSizeV1, CommandError<H>> {
+    pub async fn send_v1<H: Host>(host: &mut HostInterface<H>) -> Result<BufferSizeV1, CommandError<H>> {
         host.send_command_expect_complete(ParameterV1).await
     }
 
     /// Request information on the LE data buffers (version 2)
     ///
     /// This returns the buffer information for the LE ACL and LE ISO data packets.
-    pub async fn send_v2<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<BufferSizeV2, CommandError<H>> {
+    pub async fn send_v2<H: Host>(host: &mut HostInterface<H>) -> Result<BufferSizeV2, CommandError<H>> {
         host.send_command_expect_complete(ParameterV2).await
     }
 }
@@ -348,7 +354,7 @@ pub mod read_local_supported_features {
         }
     }
 
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<EnabledLeFeatures, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<EnabledLeFeatures, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -373,6 +379,7 @@ pub mod read_white_list_size {
             let list_size = cc
                 .raw_data
                 .get(1)
+                .copied()
                 .ok_or(CCParameterError::InvalidEventParameter)?
                 .into();
 
@@ -408,7 +415,7 @@ pub mod read_white_list_size {
         }
     }
 
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<WhiteListSize, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<WhiteListSize, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -429,7 +436,7 @@ pub mod clear_white_list {
     }
 
     /// Send the command to clear the white list
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
@@ -438,7 +445,6 @@ pub mod clear_white_list {
 
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
-        use crate::hci::events::CommandCompleteData;
         use crate::hci::*;
         use crate::BluetoothDeviceAddress;
 
@@ -460,13 +466,13 @@ macro_rules! add_remove_white_list_setup {
             }
         }
 
-        pub async fn send<H: HostGenerics>(
+        pub async fn send<H: Host>(
             host: &mut HostInterface<H>,
             address_type: crate::hci::le::common::WhiteListedAddressType,
             address: crate::BluetoothDeviceAddress,
         ) -> Result<impl FlowControlInfo, CommandError<H>> {
             let parameter = CommandPrameter {
-                address_type,
+                address_type: address_type.to_value(),
                 address,
             };
 
@@ -496,7 +502,6 @@ pub mod read_supported_states {
 
     use crate::hci::events::CommandCompleteData;
     use crate::hci::*;
-    use core::mem::size_of_val;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadSupportedStates);
 
@@ -516,16 +521,6 @@ pub mod read_supported_states {
     }
 
     impl StatesAndRoles {
-        /// Returns the total number of states and roles
-        const NUMBER_OF_STATES_AND_ROLES: usize = 10;
-
-        /// Returns the total possible bit options
-        ///
-        /// See Bluetooth v5 vol 2 part E 7.8.27
-        fn get_bit_count() -> usize {
-            41
-        }
-
         /// This function doesn't return all available states and roles of a device
         /// (since devices can set multiple of these bits indicating the available
         /// roles) so it doesn't return the special type name.
@@ -624,42 +619,49 @@ pub mod read_supported_states {
         }
     }
 
+    /// An iterator over the states and roles
+    ///
+    /// This is returned by the method [`iter`](CurrentStatesAndRoles::iter) of
+    /// `CurrentStatesAndRoles`
     pub struct StatesAndRolesIter<'a> {
-        mask: &'a [u8; 8],
-        current: &'static [StatesAndRoles],
-        byte: usize,
+        mask_iter: core::slice::Iter<'a, u8>,
+        current_mask: core::slice::Iter<'static, StatesAndRoles>,
+        byte: &'a u8,
         bit: usize,
     }
 
     impl<'a> StatesAndRolesIter<'a> {
         fn new(mask: &'a [u8; 8]) -> Self {
+            let mut mask_iter = mask.iter();
+
+            let current_mask = [].iter();
+
+            let byte = mask_iter.next().unwrap();
+
+            let bit = 0;
+
             Self {
-                mask,
-                current: &[],
-                byte: 0,
-                bit: 0,
+                mask_iter,
+                current_mask,
+                byte,
+                bit,
             }
         }
 
-        fn next_current(&mut self) -> Option<StatesAndRoles> {
-            let (next, current) = self.current.split_first()?;
+        fn next_mask(&mut self) -> Option<usize> {
+            loop {
+                let next_bit = (self.bit + 1) % 8;
 
-            self.current = current;
+                if next_bit == 0 {
+                    self.byte = self.mask_iter.next()?;
+                }
 
-            Some(*next)
-        }
-
-        fn next_bit(&mut self) {
-            if (self.bit + 1) / 8 == 1 {
-                self.byte += 1;
-                self.bit = 0;
-            } else {
                 self.bit += 1;
-            }
-        }
 
-        fn get_bit_val(&self) -> usize {
-            self.byte * 8 + self.bit
+                if self.byte & (1 << next_bit) != 0 {
+                    break Some(self.bit);
+                }
+            }
         }
     }
 
@@ -667,21 +669,15 @@ pub mod read_supported_states {
         type Item = StatesAndRoles;
 
         fn next(&mut self) -> Option<Self::Item> {
-            match self.next_current() {
-                None => {
-                    self.next_bit();
+            loop {
+                match self.current_mask.next().copied() {
+                    s @ Some(_) => break s,
+                    None => {
+                        let bit_val = self.next_mask()?;
 
-                    let states = StatesAndRoles::get_states_for_bit_val(self.get_bit_val());
-
-                    if states.is_empty() {
-                        None
-                    } else {
-                        self.current = states;
-
-                        self.next_current()
+                        self.current_mask = StatesAndRoles::get_states_for_bit_val(bit_val).iter();
                     }
                 }
-                next => next,
             }
         }
     }
@@ -704,7 +700,7 @@ pub mod read_supported_states {
         }
     }
 
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -756,7 +752,7 @@ pub mod test_end {
     }
 
     /// Send the command
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }

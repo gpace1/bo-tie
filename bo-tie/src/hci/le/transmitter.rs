@@ -20,7 +20,7 @@ pub mod read_advertising_channel_tx_power {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
             check_status!(cc.raw_data);
 
-            let power = cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)? as i8;
+            let power = *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)? as i8;
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
@@ -54,7 +54,7 @@ pub mod read_advertising_channel_tx_power {
     }
 
     /// Send the LE Read Advertising Physical Channel Tx Power command
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<TxPower, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<TxPower, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -231,17 +231,6 @@ pub mod set_advertising_parameters {
         }
     }
 
-    struct CmdParameter {
-        advertising_interval_min: u16,
-        advertising_interval_max: u16,
-        advertising_type: u8,
-        own_address_type: u8,
-        peer_address_type: u8,
-        peer_address: crate::BluetoothDeviceAddress,
-        advertising_channel_map: u8,
-        advertising_filter_policy: u8,
-    }
-
     impl CommandParameter<15> for AdvertisingParameters<'_> {
         const COMMAND: opcodes::HCICommand = COMMAND;
         fn get_parameter(&self) -> [u8; 15] {
@@ -268,10 +257,10 @@ pub mod set_advertising_parameters {
     }
 
     /// Send the LE Set Advertising Enable command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<'a, H: Host>(
         host: &mut HostInterface<H>,
-        parameters: AdvertisingParameters<'_>,
-    ) -> Result<impl FlowControlInfo, CommandError<H>> {
+        parameters: AdvertisingParameters<'a>,
+    ) -> Result<impl FlowControlInfo + 'a, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameters).await;
 
         r
@@ -360,7 +349,7 @@ pub mod set_advertising_data {
         advertising_data: A,
     ) -> Result<impl FlowControlInfo, CommandError<H>>
     where
-        H: HostGenerics,
+        H: Host,
         A: Into<Option<AdvertisingData>>,
     {
         let parameter = advertising_data.into().unwrap_or_default();
@@ -390,7 +379,7 @@ pub mod set_advertising_enable {
     }
 
     /// Send the LE Set Advertising Enable command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         enable: bool,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -420,7 +409,7 @@ pub mod set_random_address {
         }
     }
 
-    pub async fn send<'a, H: HostGenerics>(
+    pub async fn send<'a, H: Host>(
         host: &mut HostInterface<H>,
         address: crate::BluetoothDeviceAddress,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -482,7 +471,7 @@ pub mod transmitter_test {
     }
 
     /// Send the LE Transmitter Test (v1) command
-    pub async fn send_v1<H: HostGenerics>(
+    pub async fn send_v1<H: Host>(
         host: &mut HostInterface<H>,
         channel: Frequency,
         payload: TestPayload,

@@ -47,7 +47,7 @@ async fn scan_for_local_name<'a, M: Send + 'static>(
     name: &'a str,
 ) -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>> {
     use bo_tie::gap::assigned::{local_name, TryFromRawAdvData};
-    use bo_tie::hci::events::{Events, LEMeta, LEMetaData};
+    use bo_tie::hci::events::{Events, LeMeta, LeMetaData};
     use bo_tie::hci::le::mandatory::set_event_mask;
     use bo_tie::hci::le::receiver::{set_scan_enable, set_scan_parameters};
 
@@ -56,7 +56,7 @@ async fn scan_for_local_name<'a, M: Send + 'static>(
     scan_prms.scan_type = set_scan_parameters::LEScanType::PassiveScanning;
     scan_prms.scanning_filter_policy = set_scan_parameters::ScanningFilterPolicy::AcceptAll;
 
-    let le_event = LEMeta::AdvertisingReport;
+    let le_event = LeMeta::AdvertisingReport;
 
     set_scan_enable::send(&hi, false, false).await.unwrap();
 
@@ -70,7 +70,7 @@ async fn scan_for_local_name<'a, M: Send + 'static>(
 
     // This will stop 15 seconds after the last advertising packet is received
     while let Ok(event) = hi.wait_for_event(awaited_event).await {
-        if let EventsData::LEMeta(LEMetaData::AdvertisingReport(reports)) = event {
+        if let EventsData::LeMeta(LeMetaData::AdvertisingReport(reports)) = event {
             for report_result in reports.iter() {
                 match report_result {
                     Ok(report) => {
@@ -100,13 +100,13 @@ async fn connect<M: Send + 'static>(
     address: bo_tie::BluetoothDeviceAddress,
 ) -> Result<EventsData, impl std::fmt::Debug> {
     use bo_tie::hci::common;
-    use bo_tie::hci::events::{Events, LEMeta};
+    use bo_tie::hci::events::{Events, LeMeta};
     use bo_tie::hci::le::common::{ConnectionEventLength, OwnAddressType};
     use bo_tie::hci::le::connection;
     use bo_tie::hci::le::connection::create_connection;
     use bo_tie::hci::le::mandatory::set_event_mask;
 
-    let connect_event = LEMeta::ConnectionComplete;
+    let connect_event = LeMeta::ConnectionComplete;
 
     let min_connection_interval = Duration::from_millis(10);
     let max_connection_interval = Duration::from_millis(40);
@@ -162,7 +162,7 @@ async fn disconnect<M: Send + 'static>(
 }
 
 fn main() {
-    use bo_tie::hci::events::LEMetaData;
+    use bo_tie::hci::events::LeMetaData;
     use futures::executor;
     use std::io::stdin;
     use std::io::BufRead;
@@ -192,7 +192,7 @@ fn main() {
         executor::block_on(remove_from_white_list(&host_interface, address));
 
         match executor::block_on(connect(&host_interface, address)) {
-            Ok(EventsData::LEMeta(LEMetaData::ConnectionComplete(data))) => {
+            Ok(EventsData::LeMeta(LeMetaData::ConnectionComplete(data))) => {
                 println!("Connected! ... waiting 5 seconds then disconnecting");
 
                 ::std::thread::sleep(::std::time::Duration::from_secs(5));

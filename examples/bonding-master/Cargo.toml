@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bo-tie = { path = "../../bo-tie", features = ["flow-ctrl"] }
+bo-tie = { path = "../../bo-tie" }
 bo-tie-linux = { path = "../../base-crates/bo-tie-linux"}
 futures = "0.3"
 simplelog = "0.11"

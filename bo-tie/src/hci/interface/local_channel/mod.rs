@@ -13,7 +13,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 pub use local_dynamic_channel::LocalChannelManager;
-pub use local_static_channel::LocalStaticChannelManager;
+pub use local_static_channel::LocalStackChannelReserve;
 
 /// Trait for a buffer of the sender of a local channel
 ///
@@ -25,10 +25,10 @@ pub trait LocalQueueBuffer {
     ///
     /// # Note
     /// This method will do nothing if no current waker is set
-    fn call_waker(&mut self);
+    fn call_waker(&self);
 
     /// Set the waker
-    fn set_waker(&mut self, waker: Waker);
+    fn set_waker(&self, waker: Waker);
 }
 
 /// Trait for a buffer of the sender of a local channel
@@ -42,7 +42,7 @@ trait LocalQueueBufferSend: LocalQueueBuffer {
     ///
     /// # Note
     /// This method is called after `is_full` returns false
-    fn push(&mut self, packet: Self::Payload);
+    fn push(&self, packet: Self::Payload);
 }
 
 /// Trait for a buffer of the receiver of a local channel
@@ -59,16 +59,16 @@ trait LocalQueueBufferReceive: LocalQueueBuffer {
     ///
     /// # Note
     /// This method is called after `is_empty` returns false
-    fn remove(&mut self) -> Self::Payload;
+    fn remove(&self) -> Self::Payload;
 }
 
 pub struct LocalSendFuture<'a, S, T> {
     packet: Option<T>,
-    local_sender: &'a mut S,
+    local_sender: &'a S,
 }
 
 impl<'a, S, T> LocalSendFuture<'a, S, T> {
-    fn new(local_sender: &'a mut S, packet: T) -> Self {
+    fn new(local_sender: &'a S, packet: T) -> Self {
         let packet = Some(packet);
 
         LocalSendFuture { packet, local_sender }
@@ -109,7 +109,7 @@ where
     }
 }
 
-pub struct LocalReceiverFuture<'a, S>(&'a mut S);
+pub struct LocalReceiverFuture<'a, S>(&'a S);
 
 impl<S> Future for LocalReceiverFuture<'_, S>
 where

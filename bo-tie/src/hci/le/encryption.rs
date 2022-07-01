@@ -24,21 +24,6 @@ pub mod encrypt {
                 plain_text,
             }
         }
-
-        /// Create a new `Parameter`
-        ///
-        /// This creates a new from the inputs `key` and `plain_text`. Input `Key` must be in native
-        /// endian order and `plain_text` must be no larger than 16 bytes.
-        ///
-        /// # Panic
-        /// `new` will panic if `plain_text` is more than 16 bytes.
-        fn new_unsized(key: u128, plain_text: &[u8]) -> Self {
-            let mut plain_text_sized = [0u8; 16];
-
-            plain_text_sized[..plain_text.len()].copy_from_slice(plain_text);
-
-            Self::new(key, plain_text_sized)
-        }
     }
 
     impl CommandParameter<32> for Parameter {
@@ -63,7 +48,7 @@ pub mod encrypt {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
             check_status!(cc.raw_data);
 
-            if cc[1..].len() == 16 {
+            if cc.raw_data[1..].len() == 16 {
                 let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
                 let mut cypher_text = [0u8; 16];
@@ -90,7 +75,7 @@ pub mod encrypt {
     ///
     /// # Note
     /// The input 'key' must be in native byte order.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         key: u128,
         plain_text: [u8; 16],
@@ -107,12 +92,6 @@ pub mod rand {
     use crate::hci::*;
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::Rand);
-
-    #[repr(packed)]
-    struct CommandReturn {
-        status: u8,
-        random: u64,
-    }
 
     struct Parameter;
 
@@ -141,7 +120,7 @@ pub mod rand {
 
             check_status!(cc.raw_data);
 
-            if cc.raw_data[1..] == U64_SIZE {
+            if cc.raw_data[1..].len() == U64_SIZE {
                 let mut rand_bytes = [0u8; U64_SIZE];
 
                 rand_bytes.copy_from_slice(&cc.raw_data[1..]);
@@ -167,7 +146,7 @@ pub mod rand {
     }
 
     /// Send the LE Rand command
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<Random, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<Random, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -187,11 +166,11 @@ pub mod enable_encryption {
     }
 
     impl Parameter {
-        /// Create a `Parameter` from Secure Connection
+        /// Create a `Parameter` for a Secure Connection
         ///
         /// This `Parameter` is used when the `long_term_key` was generated using a Bluetooth Secure
         /// Connection pairing method.
-        fn new_sc(connection_handle: ConnectionHandle, long_term_key: u128) -> Self {
+        pub fn new_sc(connection_handle: ConnectionHandle, long_term_key: u128) -> Self {
             let random_number = 0;
 
             let encrypted_diversifier = 0;
@@ -204,11 +183,11 @@ pub mod enable_encryption {
             }
         }
 
-        /// Create a `Parameter` from legacy encryption
+        /// Create a `Parameter` for legacy encryption
         ///
         /// This `Parameter` is used when the `long_term_key` was generated using a Bluetooth Legacy
         /// pairing method.
-        fn new_legacy(
+        pub fn new_legacy(
             connection_handle: ConnectionHandle,
             random_number: u64,
             encrypted_diversifier: u16,
@@ -254,7 +233,7 @@ pub mod enable_encryption {
     /// encrypted, sending this command will instead cause the controller to issue the
     /// [EncryptionKeyRefreshComplete](crate::hci::events::Events::EncryptionKeyRefreshComplete)
     /// event once the encryption is updated.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -267,7 +246,6 @@ pub mod long_term_key_request_reply {
     use crate::hci::common::ConnectionHandle;
     use crate::hci::events::CommandCompleteData;
     use crate::hci::*;
-    use core::convert::TryFrom;
 
     const COMMAND: opcodes::HCICommand =
         opcodes::HCICommand::LEController(opcodes::LEController::LongTermKeyRequestReply);
@@ -298,11 +276,13 @@ pub mod long_term_key_request_reply {
 
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            use core::convert::TryFrom;
+
             check_status!(cc.raw_data);
 
             let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
-                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter),
-                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter),
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
             ]))
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
@@ -325,7 +305,7 @@ pub mod long_term_key_request_reply {
     ///
     /// # Note
     /// The input 'long_term_key' must be in native byte order.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         connection_handle: ConnectionHandle,
         long_term_key: u128,
@@ -367,11 +347,13 @@ pub mod long_term_key_request_negative_reply {
 
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            use core::convert::TryFrom;
+
             check_status!(cc.raw_data);
 
             let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
-                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter),
-                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter),
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(2).ok_or(CCParameterError::InvalidEventParameter)?,
             ]))
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
@@ -391,7 +373,7 @@ pub mod long_term_key_request_negative_reply {
     }
 
     /// Send the LE Long Term Key Request Negative Reply Command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<Return, CommandError<H>> {

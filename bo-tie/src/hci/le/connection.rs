@@ -66,9 +66,9 @@ pub mod connection_update {
     ///
     /// This sends the LE Connection Update command and awaits for the controller to send back the
     /// Command Status event. If the LE
-    /// [`ConnectionUpdateComplete`](events::LEMeta::ConnectionUpdateComplete) event is enabled, the
+    /// [`ConnectionUpdateComplete`](events::LeMeta::ConnectionUpdateComplete) event is enabled, the
     /// controller will send this event to the host when the connection is updated.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameter: ConnectionUpdate,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -95,7 +95,7 @@ pub mod create_connection_cancel {
     }
 
     /// Send the LE Create Connection Cancel command
-    pub async fn send<H: HostGenerics>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
@@ -232,11 +232,11 @@ pub mod create_connection {
     ///
     /// This sends the LE Create Connection command to the controller and awaits for the controller
     /// to send back the [`CommandStatus`](events::Events::CommandStatus) event. If the LE event
-    /// [`ConnectionComplete`](events::LEMeta::ConnectionComplete) or
-    /// [`EnhancedConnectionComplete`](events::LEMeta::EnhancedConnectionComplete) is unmasked, the
+    /// [`ConnectionComplete`](events::LeMeta::ConnectionComplete) or
+    /// [`EnhancedConnectionComplete`](events::LeMeta::EnhancedConnectionComplete) is unmasked, the
     /// controller will send the event (with `EnhancedConnectionComplete` having precedence over
     /// `ConnectionComplete` if they are both unmasked) to the host after a connection is made.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameters: ConnectionParameters,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -283,7 +283,7 @@ pub mod set_host_channel_classification {
     /// Send the LE Set Host Channel Classification command
     pub async fn send<H, I>(host: &mut HostInterface<H>, channels: I) -> Result<impl FlowControlInfo, CommandError<H>>
     where
-        H: HostGenerics,
+        H: Host,
         I: IntoIterator<Item = usize>,
     {
         let parameter = CmdParameter::new(channels);
@@ -303,13 +303,6 @@ pub mod read_channel_map {
 
     const COMMAND: opcodes::HCICommand = opcodes::HCICommand::LEController(opcodes::LEController::ReadChannelMap);
 
-    #[repr(packed)]
-    pub(crate) struct CmdReturn {
-        status: u8,
-        connection_handle: u16,
-        channel_map: [u8; 5],
-    }
-
     pub struct ChannelMapInfo {
         pub handle: ConnectionHandle,
         /// This is the list of channels (from 0 through 36)
@@ -320,11 +313,13 @@ pub mod read_channel_map {
 
     impl TryFromCommandComplete for ChannelMapInfo {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
+            use core::convert::TryFrom;
+
             check_status!(cc.raw_data);
 
             let handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
-                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter),
-                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter),
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
+                *cc.raw_data.get(1).ok_or(CCParameterError::InvalidEventParameter)?,
             ]))
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
@@ -394,7 +389,7 @@ pub mod read_channel_map {
     }
 
     /// Send the LE Read Channel Map command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<ChannelMapInfo, CommandError<H>> {
@@ -426,10 +421,10 @@ pub mod read_remote_features {
     ///
     /// This sends the LE Read Remote Features command to the controller and awaits for the
     /// controller to send back the [`CommandStatus`](events::Events::CommandStatus) event. If the
-    /// LE event [`ReadRemoteFeaturesComplete`](events::LEMeta::ReadRemoteFeaturesComplete) is
+    /// LE event [`ReadRemoteFeaturesComplete`](events::LeMeta::ReadRemoteFeaturesComplete) is
     /// unmasked, the controller will send the event to the host containing the LE features of the
     /// connected device.
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {

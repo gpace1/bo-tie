@@ -524,7 +524,7 @@ impl Default for GapServiceBuilder<'_> {
 /// ```
 /// use bo_tie::gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
 /// use bo_tie::att::{FULL_PERMISSIONS, server::NoQueuedWrites};
-/// use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, BasicFrameFragment};
+/// use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment};
 /// use std::task::Waker;
 /// use std::future::Future;
 ///
@@ -539,7 +539,7 @@ impl Default for GapServiceBuilder<'_> {
 /// #     fn get_mtu(&self) -> usize { unimplemented!() }
 /// #     fn max_mtu(&self) -> usize { unimplemented!() }
 /// #     fn min_mtu(&self) -> usize { unimplemented!() }
-/// #     fn receive(&self,waker: &Waker) -> Option<Vec<BasicFrameFragment>> { unimplemented!()}
+/// #     fn receive(&self,waker: &Waker) -> Option<Vec<L2capFragment>> { unimplemented!()}
 /// # }
 /// # let connection_channel = CC;
 ///
@@ -627,7 +627,7 @@ where
     }
 
     /// Process some ACL data as a ATT client message
-    pub async fn process_acl_data(&mut self, acl_data: &crate::l2cap::BasicInfoFrame) -> Result<(), crate::att::Error> {
+    pub async fn process_acl_data(&mut self, acl_data: &l2cap::BasicInfoFrame<Vec<u8>>) -> Result<(), att::Error> {
         let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
 
         match pdu_type {
@@ -796,7 +796,7 @@ mod tests {
 
     use super::*;
     use crate::att::server::NoQueuedWrites;
-    use crate::l2cap::{BasicFrameFragment, ConnectionChannel, MinimumMtu};
+    use crate::l2cap::{ConnectionChannel, L2capFragment, MinimumMtu};
     use crate::UUID;
     use alloc::boxed::Box;
     use att::TransferFormatInto;
@@ -840,7 +840,7 @@ mod tests {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::BasicFrameFragment>> {
+        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::L2capFragment>> {
             None
         }
     }
@@ -904,7 +904,7 @@ mod tests {
         type SendFutErr = ();
 
         fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
-            self.last_sent_pdu.set(Some(data.into_raw_data()));
+            self.last_sent_pdu.set(Some(data.into_packet()));
 
             DummySendFut
         }
@@ -923,7 +923,7 @@ mod tests {
             crate::l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, _: &Waker) -> Option<Vec<BasicFrameFragment>> {
+        fn receive(&self, _: &Waker) -> Option<Vec<L2capFragment>> {
             unimplemented!()
         }
     }
@@ -984,7 +984,7 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicInfoFrame::from_raw_data(&data).unwrap();
+                let acl_data = l2cap::BasicInfoFrame::try_into_from_slice(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );
@@ -1001,7 +1001,7 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicInfoFrame::from_raw_data(&data).unwrap();
+                let acl_data = l2cap::BasicInfoFrame::try_into_from_slice(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );

@@ -105,7 +105,7 @@ pub mod set_scan_parameters {
     }
 
     /// Send the LE Set Scan Parameters command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         parameters: ScanningParameters,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -138,7 +138,7 @@ pub mod set_scan_enable {
     }
 
     /// Send the LE Set Scan Enable command
-    pub async fn send<H: HostGenerics>(
+    pub async fn send<H: Host>(
         host: &mut HostInterface<H>,
         enable: bool,
         filter_duplicates: bool,
@@ -174,7 +174,7 @@ pub mod receiver_test {
     }
 
     /// Send LE Receiver Test (v1) command
-    pub async fn send_v1<H: HostGenerics>(
+    pub async fn send_v1<H: Host>(
         host: &mut HostInterface<H>,
         frequency: Frequency,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {

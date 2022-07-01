@@ -6,7 +6,7 @@ mod permissions;
 
 use crate::att::server::PinnedFuture;
 use crate::att::{pdu, TransferFormatInto};
-use crate::l2cap::{BasicFrameFragment, BasicInfoFrame, ConnectionChannel, MinimumMtu};
+use crate::l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment, MinimumMtu};
 
 use std::{
     future::Future,
@@ -54,7 +54,7 @@ impl ConnectionChannel for DummyConnection {
         crate::l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<BasicFrameFragment>> {
+    fn receive(&self, _: &core::task::Waker) -> Option<Vec<L2capFragment>> {
         Some(Vec::new())
     }
 }
@@ -122,7 +122,7 @@ impl ConnectionChannel for PayloadConnection {
         crate::l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<BasicFrameFragment>> {
+    fn receive(&self, _: &core::task::Waker) -> Option<Vec<L2capFragment>> {
         unimplemented!("Pdu Connection does not permit receiving")
     }
 }

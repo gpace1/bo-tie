@@ -10,7 +10,7 @@ use crate::hci::le::common::{
     SupervisionTimeout,
 };
 use crate::BluetoothDeviceAddress;
-use core::convert::From;
+use core::convert::TryFrom;
 
 macro_rules! make_u16 {
     ( $packet:ident, $start:expr ) => {
@@ -58,22 +58,6 @@ macro_rules! make_handle {
     };
 }
 
-struct RawData<'a> {
-    raw_data: &'a [u8],
-}
-
-impl<'a> From<&'a [u8]> for RawData<'a> {
-    fn from(raw_data: &'a [u8]) -> Self {
-        Self { raw_data }
-    }
-}
-
-impl core::convert::AsRef<[u8]> for RawData<'_> {
-    fn as_ref(&self) -> &[u8] {
-        self.raw_data
-    }
-}
-
 /// Create from implementation for $name
 ///
 /// The parameter name for the from method is "raw" and its type is &[u8].
@@ -82,10 +66,9 @@ macro_rules! impl_try_from_for_raw_packet {
     ( $name:ty, $param:tt, $inner:block ) => {
         #[allow(unused_assignments)]
         #[allow(unused_mut)]
-        impl core::convert::TryFrom<RawData<'_>> for $name {
+        impl core::convert::TryFrom<&[u8]> for $name {
             type Error = alloc::string::String;
-            fn try_from(param: RawData<'_>) -> Result<Self, Self::Error> {
-                let mut $param = param.as_ref();
+            fn try_from(mut $param: &[u8]) -> Result<Self, Self::Error> {
                 $inner
             }
         }
@@ -172,15 +155,6 @@ type BufferType<T> = alloc::vec::Vec<T>;
 #[derive(Debug, Clone)]
 pub struct Multiple<T> {
     data: BufferType<T>,
-}
-
-impl<T, C> From<C> for Multiple<T>
-where
-    C: Into<BufferType<T>>,
-{
-    fn from(c: C) -> Self {
-        Multiple { data: c.into() }
-    }
 }
 
 impl<T> core::ops::Deref for Multiple<T> {
@@ -815,7 +789,7 @@ impl_try_from_for_raw_packet! {
 #[derive(Debug, Clone)]
 pub struct NumberOfCompletedPacketsData {
     pub connection_handle: ConnectionHandle,
-    pub number_of_completed_packets: u16,
+    pub completed_packets: u16,
 }
 
 impl_try_from_for_raw_packet! {
@@ -830,7 +804,7 @@ impl_try_from_for_raw_packet! {
                 .map(|mut chunk| {
                     NumberOfCompletedPacketsData {
                         connection_handle: chew_handle!(chunk),
-                        number_of_completed_packets: chew_u16!(chunk),
+                        completed_packets: chew_u16!(chunk),
                     }
                 })
                 .collect::<alloc::vec::Vec<NumberOfCompletedPacketsData>>();
@@ -1028,8 +1002,8 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 pub struct LoopbackCommandData {
-    opcode: u16,
-    hci_command_packet: BufferType<u8>,
+    pub opcode: u16,
+    pub hci_command_packet: BufferType<u8>,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1119,10 +1093,10 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 pub struct ReadClockOffsetCompleteData {
-    status: Error,
-    connection_handle: ConnectionHandle,
+    pub status: Error,
+    pub connection_handle: ConnectionHandle,
     /// Bits 16-2 of CLKNslave-CLK
-    clock_offset: u32,
+    pub clock_offset: u32,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1232,7 +1206,7 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 pub struct QoSViolationData {
-    connection_handle: ConnectionHandle,
+    pub connection_handle: ConnectionHandle,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1247,8 +1221,8 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 pub struct PageScanRepetitionModeChangeData {
-    bluetooth_address: BluetoothDeviceAddress,
-    page_scan_repition_mode: PageScanRepetitionMode,
+    pub bluetooth_address: BluetoothDeviceAddress,
+    pub page_scan_repetition_mode: PageScanRepetitionMode,
 }
 
 impl_try_from_for_raw_packet! {
@@ -1257,7 +1231,7 @@ impl_try_from_for_raw_packet! {
     {
         Ok(PageScanRepetitionModeChangeData {
             bluetooth_address: chew_baddr!(packet,0),
-            page_scan_repition_mode: PageScanRepetitionMode::try_from(chew!(packet))?,
+            page_scan_repetition_mode: PageScanRepetitionMode::try_from(chew!(packet))?,
         })
     }
 }
@@ -1983,7 +1957,7 @@ impl ControllerBlocks {
 
 #[derive(Debug, Clone)]
 pub struct CompletedDataPacketsAndBlocks {
-    pub handle: ConnectionHandle,
+    pub connection_handle: ConnectionHandle,
     /// This is the number of completed packets (transmitted or flushed) since the last time
     /// number of completed data blocks command was called.
     pub completed_packets: u16,
@@ -2009,7 +1983,7 @@ impl_try_from_for_raw_packet! {
                 let mut vec = packet.chunks_exact(6)
                 .map(|mut chunk| {
                     CompletedDataPacketsAndBlocks {
-                        handle: chew_handle!(chunk),
+                        connection_handle: chew_handle!(chunk),
                         completed_packets: chew_u16!(chunk),
                         completed_blocks: chew_u16!(chunk),
                     }
@@ -2127,13 +2101,13 @@ impl AMPReceiverReportDataEventType {
 
 #[derive(Debug, Clone)]
 pub struct AMPReceiverReportData {
-    controller_type: u8,
-    reason: Error,
-    event_type: AMPReceiverReportDataEventType,
-    number_of_frames: u16,
-    number_of_error_frames: u16,
-    number_of_bits: u32,
-    number_of_error_bits: u32,
+    pub controller_type: u8,
+    pub reason: Error,
+    pub event_type: AMPReceiverReportDataEventType,
+    pub number_of_frames: u16,
+    pub number_of_error_frames: u16,
+    pub number_of_bits: u32,
+    pub number_of_error_bits: u32,
 }
 
 impl_try_from_for_raw_packet! {
@@ -2526,8 +2500,8 @@ impl LEReadLocalP256PublicKeyCompleteData {
 #[derive(Debug, Clone)]
 /// DHKey stands for diffie Hellman Key
 pub struct LEGenerateDHKeyCompleteData {
-    status: Error,
-    key: [u8; 32],
+    pub status: Error,
+    pub key: [u8; 32],
 }
 
 impl LEGenerateDHKeyCompleteData {
@@ -3016,7 +2990,7 @@ impl LEPeriodicAdvertisingReportData {
 
 #[derive(Debug, Clone)]
 pub struct LEPeriodicAdvertisingSyncLostData {
-    sync_handle: ConnectionHandle,
+    pub sync_handle: ConnectionHandle,
 }
 
 impl LEPeriodicAdvertisingSyncLostData {
@@ -3125,7 +3099,7 @@ macro_rules! enumerate_split {
 
 enumerate_split! {
     #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
-    pub enum LEMeta ( #[derive(Debug,Clone)] enum LeMetaData ) {
+    pub enum LeMeta ( #[derive(Debug,Clone)] enum LeMetaData ) {
         ConnectionComplete{LEConnectionCompleteData},
         AdvertisingReport{BufferType<Result<LEAdvertisingReportData, alloc::string::String>>},
         ConnectionUpdateComplete{LEConnectionUpdateCompleteData},
@@ -3149,57 +3123,108 @@ enumerate_split! {
     }
 }
 
-impl LEMeta {
-    pub fn try_from(raw: u8) -> Result<LEMeta, alloc::string::String> {
+impl LeMeta {
+    pub fn try_from(raw: u8) -> Result<LeMeta, alloc::string::String> {
         match raw {
-            0x01 => Ok(LEMeta::ConnectionComplete),
-            0x02 => Ok(LEMeta::AdvertisingReport),
-            0x03 => Ok(LEMeta::ConnectionUpdateComplete),
-            0x04 => Ok(LEMeta::ReadRemoteFeaturesComplete),
-            0x05 => Ok(LEMeta::LongTermKeyRequest),
-            0x06 => Ok(LEMeta::RemoteConnectionParameterRequest),
-            0x07 => Ok(LEMeta::DataLengthChange),
-            0x08 => Ok(LEMeta::ReadLocalP256PublicKeyComplete),
-            0x09 => Ok(LEMeta::GenerateDHKeyComplete),
-            0x0A => Ok(LEMeta::EnhancedConnectionComplete),
-            0x0B => Ok(LEMeta::DirectedAdvertisingReport),
-            0x0C => Ok(LEMeta::PHYUpdateComplete),
-            0x0D => Ok(LEMeta::ExtendedAdvertisingReport),
-            0x0E => Ok(LEMeta::PeriodicAdvertisingSyncEstablished),
-            0x0F => Ok(LEMeta::PeriodicAdvertisingReport),
-            0x10 => Ok(LEMeta::PeriodicAdvertisingSyncLost),
-            0x11 => Ok(LEMeta::ScanTimeout),
-            0x12 => Ok(LEMeta::AdvertisingSetTerminated),
-            0x13 => Ok(LEMeta::ScanRequestReceived),
-            0x14 => Ok(LEMeta::ChannelSelectionAlgorithm),
+            0x01 => Ok(LeMeta::ConnectionComplete),
+            0x02 => Ok(LeMeta::AdvertisingReport),
+            0x03 => Ok(LeMeta::ConnectionUpdateComplete),
+            0x04 => Ok(LeMeta::ReadRemoteFeaturesComplete),
+            0x05 => Ok(LeMeta::LongTermKeyRequest),
+            0x06 => Ok(LeMeta::RemoteConnectionParameterRequest),
+            0x07 => Ok(LeMeta::DataLengthChange),
+            0x08 => Ok(LeMeta::ReadLocalP256PublicKeyComplete),
+            0x09 => Ok(LeMeta::GenerateDHKeyComplete),
+            0x0A => Ok(LeMeta::EnhancedConnectionComplete),
+            0x0B => Ok(LeMeta::DirectedAdvertisingReport),
+            0x0C => Ok(LeMeta::PHYUpdateComplete),
+            0x0D => Ok(LeMeta::ExtendedAdvertisingReport),
+            0x0E => Ok(LeMeta::PeriodicAdvertisingSyncEstablished),
+            0x0F => Ok(LeMeta::PeriodicAdvertisingReport),
+            0x10 => Ok(LeMeta::PeriodicAdvertisingSyncLost),
+            0x11 => Ok(LeMeta::ScanTimeout),
+            0x12 => Ok(LeMeta::AdvertisingSetTerminated),
+            0x13 => Ok(LeMeta::ScanRequestReceived),
+            0x14 => Ok(LeMeta::ChannelSelectionAlgorithm),
             _ => Err(alloc::format!("Unknown LE Meta: {}", raw)),
         }
     }
 }
 
+impl core::fmt::Display for LeMeta {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            LeMeta::ConnectionComplete => f.write_str(bo_tie_macros::display_hci_event!(ConnectionComplete)),
+            LeMeta::AdvertisingReport => f.write_str(bo_tie_macros::display_hci_event!(AdvertisingReport)),
+            LeMeta::ConnectionUpdateComplete => {
+                f.write_str(bo_tie_macros::display_hci_event!(ConnectionUpdateComplete))
+            }
+            LeMeta::ReadRemoteFeaturesComplete => {
+                f.write_str(bo_tie_macros::display_hci_event!(ReadRemoteFeaturesComplete))
+            }
+            LeMeta::LongTermKeyRequest => f.write_str(bo_tie_macros::display_hci_event!(LongTermKeyRequest)),
+            LeMeta::RemoteConnectionParameterRequest => {
+                f.write_str(bo_tie_macros::display_hci_event!(RemoteConnectionParameterRequest))
+            }
+            LeMeta::DataLengthChange => f.write_str(bo_tie_macros::display_hci_event!(DataLengthChange)),
+            LeMeta::ReadLocalP256PublicKeyComplete => {
+                f.write_str(bo_tie_macros::display_hci_event!(ReadLocalP256PublicKeyComplete))
+            }
+            LeMeta::GenerateDHKeyComplete => f.write_str(bo_tie_macros::display_hci_event!(GenerateDHKeyComplete)),
+            LeMeta::EnhancedConnectionComplete => {
+                f.write_str(bo_tie_macros::display_hci_event!(EnhancedConnectionComplete))
+            }
+            LeMeta::DirectedAdvertisingReport => {
+                f.write_str(bo_tie_macros::display_hci_event!(DirectedAdvertisingReport))
+            }
+            LeMeta::PHYUpdateComplete => f.write_str(bo_tie_macros::display_hci_event!(PHYUpdateComplete)),
+            LeMeta::ExtendedAdvertisingReport => {
+                f.write_str(bo_tie_macros::display_hci_event!(ExtendedAdvertisingReport))
+            }
+            LeMeta::PeriodicAdvertisingSyncEstablished => {
+                f.write_str(bo_tie_macros::display_hci_event!(PeriodicAdvertisingSyncEstablished))
+            }
+            LeMeta::PeriodicAdvertisingReport => {
+                f.write_str(bo_tie_macros::display_hci_event!(PeriodicAdvertisingReport))
+            }
+            LeMeta::PeriodicAdvertisingSyncLost => {
+                f.write_str(bo_tie_macros::display_hci_event!(PeriodicAdvertisingSyncLost))
+            }
+            LeMeta::ScanTimeout => f.write_str(bo_tie_macros::display_hci_event!(ScanTimeout)),
+            LeMeta::AdvertisingSetTerminated => {
+                f.write_str(bo_tie_macros::display_hci_event!(AdvertisingSetTerminated))
+            }
+            LeMeta::ScanRequestReceived => f.write_str(bo_tie_macros::display_hci_event!(ScanRequestReceived)),
+            LeMeta::ChannelSelectionAlgorithm => {
+                f.write_str(bo_tie_macros::display_hci_event!(ChannelSelectionAlgorithm))
+            }
+        }
+    }
+}
+
 impl LeMetaData {
-    fn into_simple(&self) -> LEMeta {
+    fn into_simple(&self) -> LeMeta {
         match *self {
-            LeMetaData::ConnectionComplete(_) => LEMeta::ConnectionComplete,
-            LeMetaData::AdvertisingReport(_) => LEMeta::AdvertisingReport,
-            LeMetaData::ConnectionUpdateComplete(_) => LEMeta::ConnectionUpdateComplete,
-            LeMetaData::ReadRemoteFeaturesComplete(_) => LEMeta::ReadRemoteFeaturesComplete,
-            LeMetaData::LongTermKeyRequest(_) => LEMeta::LongTermKeyRequest,
-            LeMetaData::RemoteConnectionParameterRequest(_) => LEMeta::RemoteConnectionParameterRequest,
-            LeMetaData::DataLengthChange(_) => LEMeta::DataLengthChange,
-            LeMetaData::ReadLocalP256PublicKeyComplete(_) => LEMeta::ReadLocalP256PublicKeyComplete,
-            LeMetaData::GenerateDHKeyComplete(_) => LEMeta::GenerateDHKeyComplete,
-            LeMetaData::EnhancedConnectionComplete(_) => LEMeta::EnhancedConnectionComplete,
-            LeMetaData::DirectedAdvertisingReport(_) => LEMeta::DirectedAdvertisingReport,
-            LeMetaData::PHYUpdateComplete(_) => LEMeta::PHYUpdateComplete,
-            LeMetaData::ExtendedAdvertisingReport(_) => LEMeta::ExtendedAdvertisingReport,
-            LeMetaData::PeriodicAdvertisingSyncEstablished(_) => LEMeta::PeriodicAdvertisingSyncEstablished,
-            LeMetaData::PeriodicAdvertisingReport(_) => LEMeta::PeriodicAdvertisingReport,
-            LeMetaData::PeriodicAdvertisingSyncLost(_) => LEMeta::PeriodicAdvertisingSyncLost,
-            LeMetaData::ScanTimeout => LEMeta::ScanTimeout,
-            LeMetaData::AdvertisingSetTerminated(_) => LEMeta::AdvertisingSetTerminated,
-            LeMetaData::ScanRequestReceived(_) => LEMeta::ScanRequestReceived,
-            LeMetaData::ChannelSelectionAlgorithm(_) => LEMeta::ChannelSelectionAlgorithm,
+            LeMetaData::ConnectionComplete(_) => LeMeta::ConnectionComplete,
+            LeMetaData::AdvertisingReport(_) => LeMeta::AdvertisingReport,
+            LeMetaData::ConnectionUpdateComplete(_) => LeMeta::ConnectionUpdateComplete,
+            LeMetaData::ReadRemoteFeaturesComplete(_) => LeMeta::ReadRemoteFeaturesComplete,
+            LeMetaData::LongTermKeyRequest(_) => LeMeta::LongTermKeyRequest,
+            LeMetaData::RemoteConnectionParameterRequest(_) => LeMeta::RemoteConnectionParameterRequest,
+            LeMetaData::DataLengthChange(_) => LeMeta::DataLengthChange,
+            LeMetaData::ReadLocalP256PublicKeyComplete(_) => LeMeta::ReadLocalP256PublicKeyComplete,
+            LeMetaData::GenerateDHKeyComplete(_) => LeMeta::GenerateDHKeyComplete,
+            LeMetaData::EnhancedConnectionComplete(_) => LeMeta::EnhancedConnectionComplete,
+            LeMetaData::DirectedAdvertisingReport(_) => LeMeta::DirectedAdvertisingReport,
+            LeMetaData::PHYUpdateComplete(_) => LeMeta::PHYUpdateComplete,
+            LeMetaData::ExtendedAdvertisingReport(_) => LeMeta::ExtendedAdvertisingReport,
+            LeMetaData::PeriodicAdvertisingSyncEstablished(_) => LeMeta::PeriodicAdvertisingSyncEstablished,
+            LeMetaData::PeriodicAdvertisingReport(_) => LeMeta::PeriodicAdvertisingReport,
+            LeMetaData::PeriodicAdvertisingSyncLost(_) => LeMeta::PeriodicAdvertisingSyncLost,
+            LeMetaData::ScanTimeout => LeMeta::ScanTimeout,
+            LeMetaData::AdvertisingSetTerminated(_) => LeMeta::AdvertisingSetTerminated,
+            LeMetaData::ScanRequestReceived(_) => LeMeta::ScanRequestReceived,
+            LeMetaData::ChannelSelectionAlgorithm(_) => LeMeta::ChannelSelectionAlgorithm,
         }
     }
 }
@@ -3235,9 +3260,9 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-impl From<LEMeta> for Events {
-    fn from(meta: LEMeta) -> Events {
-        Events::LEMeta(meta)
+impl From<LeMeta> for Events {
+    fn from(meta: LeMeta) -> Events {
+        Events::LeMeta(meta)
     }
 }
 
@@ -3342,7 +3367,7 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedPayloadTimeoutExpiredData {
-    connection_handle: ConnectionHandle,
+    pub connection_handle: ConnectionHandle,
 }
 
 impl_try_from_for_raw_packet! {
@@ -3390,22 +3415,22 @@ macro_rules! events_markup {
             }
         }
 
-        impl crate::hci::events::$EnumName {
+        impl $EnumName {
             /// Return the event code
             ///
             /// # Note
-            /// This does not return the sub event code for a [`LEMeta`](Events::LEMeta) event
+            /// This does not return the sub event code for a [`LeMeta`](Events::LeMeta) event
             pub fn get_event_code( &self ) -> u8 {
                 match *self {
-                    $(crate::hci::events::$EnumName::$name $(( $(put_!($enum_val))* ))* => $val,)*
+                    $($EnumName::$name $(( $(put_!($enum_val))* ))* => $val,)*
                 }
             }
 
             /// Try to create an event from an event code.
             ///
             /// The first input of this method is for the event code and the second is the LE Meta
-            /// sub event code. When the first input matches [`LEMeta`](Events::LEMeta) the second
-            /// input is used to determine the LEMeta sub event otherwise input `sub_event` is
+            /// sub event code. When the first input matches [`LeMeta`](Events::LeMeta) the second
+            /// input is used to determine the LeMeta sub event otherwise input `sub_event` is
             /// ignored.
             pub fn try_from_event_codes<S>(event: u8, sub_event: S)
             -> core::result::Result<crate::hci::events::$EnumName, EventError>
@@ -3413,8 +3438,27 @@ macro_rules! events_markup {
                 S: Into<Option<u8>>
             {
                 match event {
-                    $( $val => Ok( crate::hci::events::$EnumName::$name $(( $($enum_val::try_from(sub_event.into())?)* ))* ), )*
-                    _ => Err(EventCodeError::new(event, sub_event.into()).into()),
+                    $( $val => Ok( $EnumName::$name $(( $($enum_val::try_from(sub_event.into().unwrap())?)* ))* ), )*
+                    _ => Err(EventCodeError::new(event, sub_event.into().unwrap_or_default()).into()),
+                }
+            }
+        }
+
+        impl core::fmt::Display for $EnumName {
+            fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+                #![allow(non_snake_case)]
+
+                match self {
+                    $( $EnumName::$name $(($( $enum_val )*))* => {
+                        f.write_str(bo_tie_macros::display_hci_event!($name))?;
+
+                        $($(
+                            f.write_str(" with sub event ")?;
+                            core::fmt::Display::fmt($enum_val, f)?;
+                        )*)*
+
+                        Ok(())
+                    } ),*
                 }
             }
         }
@@ -3424,14 +3468,14 @@ macro_rules! events_markup {
             pub fn get_event_name(&self) -> $EnumName {
                 #[cfg(not(test))]
                 match *self {
-                    $( crate::hci::events::$EnumDataName::$name(ref _data) =>
-                        crate::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
+                    $( $EnumDataName::$name(ref _data) =>
+                        $EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
                 }
 
                 #[cfg(test)]
                 match *self {
-                    $( crate::hci::events::$EnumDataName::$name(ref _data) =>
-                        crate::hci::events::$EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
+                    $( $EnumDataName::$name(ref _data) =>
+                        $EnumName::$name $(( $(data_into_simple!($enum_val, _data)),* ))*, )*
                 }
             }
 
@@ -3450,18 +3494,17 @@ macro_rules! events_markup {
 
                 let mut packet = data;
 
-                // packet[1] is the LEMeta specific sub event code if the event is LEMeta
+                // packet[1] is the LeMeta specific sub event code if the event is LeMeta
                 let event_code = crate::hci::events::$EnumName::try_from_event_codes(chew!(packet), packet[1])?;
 
                 // The length of the packet and convert it into a usize
                 let event_len = chew!(packet).into();
 
                 match event_code {
-                    $( Ok(crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )*) =>
+                    $( crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
                         Ok(crate::hci::events::$EnumDataName::$name(
-                            crate::hci::events::$data::<$( $type ),*>::try_from( RawData::from(&packet[..event_len]) )?)),
+                            crate::hci::events::$data::<$( $type ),*>::try_from( &packet[..event_len] )?)),
                     )*
-                    Err(err) => Err(err.into()),
                 }
             }
         }
@@ -3534,7 +3577,7 @@ events_markup! {
         AMPStartTest{AMPStartTestData} -> 0x49,
         AMPTestEnd{AMPTestEndData} -> 0x4A,
         AMPReceiverReport{AMPReceiverReportData} -> 0x4B,
-        LEMeta(LEMeta){LeMetaData} -> 0x3E,
+        LeMeta(LeMeta){LeMetaData} -> 0x3E,
         TriggeredClockCapture{TriggeredClockCaptureData} -> 0x4E,
         SynchronizationTrainComplete{SynchronizationTrainCompleteData} -> 0x4F,
         SynchronizationTrainReceived{SynchronizationTrainReceivedData} -> 0x50,
@@ -3617,6 +3660,15 @@ enum EventErrorReason {
     EventCode(EventCodeError),
 }
 
+impl core::fmt::Display for EventErrorReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            EventErrorReason::Error(reason) => core::fmt::Display::fmt(reason, f),
+            EventErrorReason::EventCode(code) => core::fmt::Display::fmt(code, f),
+        }
+    }
+}
+
 /// Error returned when trying to convert event codes into an `Events`
 #[derive(Debug)]
 pub struct EventCodeError {
@@ -3626,9 +3678,9 @@ pub struct EventCodeError {
 
 impl EventCodeError {
     fn new(code: u8, sub_code: u8) -> Self {
-        const IRRELEVANT: LEMeta = LEMeta::ConnectionComplete;
+        const IRRELEVANT: LeMeta = LeMeta::ConnectionComplete;
 
-        if code == Events::LEMeta(IRRELEVANT).get_event_code() {
+        if code == Events::LeMeta(IRRELEVANT).get_event_code() {
             EventCodeError {
                 code,
                 sub_code: Some(sub_code),
@@ -3644,7 +3696,7 @@ impl core::fmt::Display for EventCodeError {
         if let Some(ref sub_code) = self.sub_code {
             write!(f, "unknown LE sub event code: {}", sub_code)
         } else {
-            write!(f, "Unknown event code: {}", self.code)
+            write!(f, "unknown event code: {}", self.code)
         }
     }
 }
