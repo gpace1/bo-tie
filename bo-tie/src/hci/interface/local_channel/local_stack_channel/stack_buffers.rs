@@ -459,60 +459,60 @@ impl Display for QueueBufferError {
     }
 }
 
-/// A static reserve for buffers
+/// Hotel style stack allocated memory
 ///
-/// This is a reserve with a finite number of statically allocated buffers. It does not require
-/// dynamic allocation of memory as it holds the buffers within the `BufferReserve` structure, but
-/// as a consequence any operation with it must be done with it pinned in memory. A `BufferReserve`
-/// cannot be moved as the reserve must contain references back to itself to determine what buffers
-/// are currently used and what buffers are free. It is safe to move the buffer before any buffers
-/// are reserved, but once a buffer is taken from the reserved it must be pinned until the
-/// `BufferReserve` is dropped.
+/// This is a simplistic hotel type memory allocation. A Hotel is a memory allocation scheme where
+/// memory is 'reserved' for use. A holder of a reservation may use the memory how they wish, but
+/// nothing else is allowed to access the memory. The memory allocation lasts as long as the
+/// reservation to the allocation. Once the reservation is gone then the memory is deallocated.
 ///
-/// # Awaiting
-/// The reserve contains a finite amount of buffers, so it can be possible for every buffer to be
-/// reserved when trying to acquire from it. A waker can be set, but only one waker may set, thus
-/// *it is only safe for one task to be awaiting for buffers*. Other tasks may take buffers but they
-/// cannot set a waker. Once a `ReservedBuffer` is dropped the waker will be called.
+/// The problem with stack allocated memory is that it either relies on the programmer or the
+/// compiler (like rust) to ensure the lifetime of a reference does not outlive its source. A
+/// `StackHotel` allocates memory on the stack and uses rust's lifetimes to ensure that a
+/// `StackHotel` is never moved while any reservations exist. When [`take`](StackHotel::take)ing a
+/// reserve from a `StackHotel` the created [`Reservation`] contains a lifetime back to the
+/// `StackHotel`. Rust will ensure that a `StackHotel` cannot be moved so long as any `Reservation`
+/// exists (a `StackHotel` is safe to move if no `Reservation` exists.
 ///
-/// # Panic
-/// The size of a buffer reserve cannot be zero. If a `BufferReserve` is initialized with the
-/// constant `SIZE` equal to zero it will panic when the user tries to take a buffer from the
-/// reserve.
-// A `BufferReserve` is a growable doubly link list split between those that are reserved and those
-// that are free to use. When a `BufferReserve` is created the link list is empty. Once a buffer is
-// taken from the reserve the link list grows to one, and the buffer is referred to as 'reserved'.
-// The buffer is reserved until it is dropped where by it then becomes free to use. The link list
-// is split between a reserved part and a free part. The reserved part is at the front of the list
-// and the free part is at the back. Field `last` points to the last element in the list of the
-// reserved section. The link list grows when the list only contains reserved buffers. To grow, a
-// `BufferReserve` uses a link from the `buffers` array and connects it to the end of the link list.
-//
-// Field `buffers` contains the physical location of the links of the link list. A link list can
-// grow so long as there are unused links within `buffers`. The field `untouched` is the number of
-// links within `buffers` that can be used to grow the link list. Once every link in `buffers` is
-// used, trying to take a buffer from the reserve will cause it to return `None`.
-pub struct StaticBufferReserve<T, const SIZE: usize> {
-    inner: core::cell::UnsafeCell<BufferReserveInner<T, SIZE>>,
+/// # Note
+/// This is purpose built for module `local_stack_channel`, so reservations are taken from a
+/// `StackHotel` wrapped within a `Ref`.
+///
+/// # implementation
+/// This is a growable doubly link list split between those that are taken and those that are free
+/// to use. When a `StackHotel` is created the link list is empty. Once a buffer is
+/// taken from the reserve the link list grows to one, and the buffer is referred to as 'reserved'.
+/// The buffer is reserved until it is dropped where by it then becomes free to use. The link list
+/// is split between a reserved part and a free part. The reserved part is at the front of the list
+/// and the free part is at the back. Field `last` points to the last element in the list of the
+/// reserved section. The link list grows when the list only contains reserved buffers. To grow, a
+/// `StackHotel` uses a link from the `buffers` array and connects it to the end of the link list.
+///
+/// Field `buffers` contains the physical location of the links of the link list. A link list can
+/// grow so long as there are unused links within `buffers`. The field `untouched` is the number of
+/// links within `buffers` that can be used to grow the link list. Once every link in `buffers` is
+/// used, trying to take a buffer from the reserve will cause it to return `None`.
+pub struct StackHotel<T, const SIZE: usize> {
+    inner: core::cell::UnsafeCell<StackLinkedListInner<T, SIZE>>,
 }
 
-impl<T, const SIZE: usize> StaticBufferReserve<T, SIZE> {
-    /// Create a new `BufferReserve`
+impl<T, const SIZE: usize> StackHotel<T, SIZE> {
+    /// Create a new `StackHotel`
     pub fn new() -> Self {
-        let inner = core::cell::UnsafeCell::new(BufferReserveInner::new());
+        let inner = core::cell::UnsafeCell::new(StackLinkedListInner::new());
 
         Self { inner }
     }
 
-    fn get_inner(&self) -> &BufferReserveInner<T, SIZE> {
+    fn get_inner(&self) -> &StackLinkedListInner<T, SIZE> {
         unsafe { &*self.inner.get() }
     }
 
-    fn get_inner_mut(&mut self) -> &mut BufferReserveInner<T, SIZE> {
+    fn get_inner_mut(&mut self) -> &mut StackLinkedListInner<T, SIZE> {
         self.inner.get_mut()
     }
 
-    unsafe fn get_inner_unsafe_mut(&self) -> &mut BufferReserveInner<T, SIZE> {
+    unsafe fn get_inner_unsafe_mut(&self) -> &mut StackLinkedListInner<T, SIZE> {
         self.inner.get().as_mut().unwrap()
     }
 
@@ -534,7 +534,7 @@ impl<T, const SIZE: usize> StaticBufferReserve<T, SIZE> {
     }
 }
 
-impl<T, const SIZE: usize> StaticBufferReserve<T, SIZE>
+impl<T, const SIZE: usize> StackHotel<T, SIZE>
 where
     T: crate::hci::Buffer,
 {
@@ -562,39 +562,28 @@ where
     ///
     /// # Unsafe
     /// This may only be called once to initialize the the list.
-    unsafe fn init_list(orig: Ref<Self>) -> ReservedBuffer<'_, T, SIZE> {
-        let first_buffer: *mut _ = orig.next_buffer().expect("size of buffer reserve is zero");
+    unsafe fn init_list(&self) -> UnsafeReservation<T, SIZE> {
+        let first_buffer: *mut _ = self.next_buffer().expect("size of buffer reserve is zero");
 
-        orig.get_inner_unsafe_mut().start = first_buffer;
-        orig.get_inner_unsafe_mut().last = first_buffer;
-        orig.get_inner_unsafe_mut().end = first_buffer;
+        self.get_inner_unsafe_mut().start = first_buffer;
+        self.get_inner_unsafe_mut().last = first_buffer;
+        self.get_inner_unsafe_mut().end = first_buffer;
 
-        let index = orig.get_index_of_last();
-        let reserve = ptr::NonNull::from(&*orig);
-        let _pd_ref = Ref::map(orig, |_| &core::marker::PhantomData);
+        let index = self.get_index_of_last();
+        let reserve = ptr::NonNull::from(&*self);
 
-        ReservedBuffer {
-            index,
-            reserve,
-            _pd_ref,
-        }
+        UnsafeReservation::new(index, reserve)
     }
 
-    /// Take a buffer from the reserve
-    ///
-    /// If the reserve cannot give any more buffers `None` is returned.
-    pub fn take_buffer(orig: Ref<Self>, front_capacity: usize) -> Option<ReservedBuffer<'_, T, SIZE>>
-    where
-        T: crate::hci::Buffer,
-    {
+    fn take_inner(&self) -> Option<UnsafeReservation<T, SIZE>> {
         unsafe {
-            if orig.get_inner().end.is_null() {
-                Some(Self::init_list(orig))
+            if self.get_inner().end.is_null() {
+                Some(Self::init_list(self))
             } else {
-                let link = if orig.get_inner().end == orig.get_inner().last {
-                    let last = orig.get_inner().last;
+                let link = if self.get_inner().end == self.get_inner().last {
+                    let last = self.get_inner().last;
 
-                    let link = orig.next_buffer().map(|link| {
+                    let link = self.next_buffer().map(|link| {
                         link.prev = last;
 
                         link as *mut _
@@ -602,29 +591,49 @@ where
 
                     last.as_mut().unwrap().next = link;
 
-                    orig.get_inner_unsafe_mut().last = link;
-                    orig.get_inner_unsafe_mut().end = link;
+                    self.get_inner_unsafe_mut().last = link;
+                    self.get_inner_unsafe_mut().end = link;
 
                     link
                 } else {
                     // last is null when there is no reserved buffers
-                    let next = match orig.get_inner().last.as_ref() {
+                    let next = match self.get_inner().last.as_ref() {
                         Some(last) => last.next,
-                        None => orig.get_inner().start,
+                        None => self.get_inner().start,
                     };
 
-                    orig.get_inner_unsafe_mut().last = next;
+                    self.get_inner_unsafe_mut().last = next;
 
                     next
                 };
 
-                Some(ReservedBuffer::new(link, orig, front_capacity))
+                let index = link.offset_from(ref_reserve.get_inner().buffers.as_ptr()) as usize;
+
+                let reserve = ptr::NonNull::from(&*ref_reserve);
+
+                Some(UnsafeReservation::new(index, reserve))
             }
         }
     }
+
+    /// Take a reservation from a `StackHotel` wrapped in a [`Ref`](std::cell::Ref)
+    pub fn take_ref(orig: Ref<Self>) -> Option<RefReservation<'_, T, SIZE>> {
+        orig.take_inner().map(|ur| RefReservation::new(ur, orig))
+    }
+
+    /// Take a reservation of a buffer from a `StackHotel` wrapped in a [`Ref`](std::cell::Ref)
+    ///
+    /// This returns a reservation unless there is no more allocations available
+    pub fn take_buffer(orig: Ref<Self>, front_capacity: usize) -> Option<BufferReservation<'_, T, SIZE>>
+    where
+        T: crate::hci::Buffer,
+    {
+        orig.take_inner()
+            .map(|ur| unsafe { BufferReservation::new(ur, orig, front_capacity) })
+    }
 }
 
-struct BufferReserveInner<T, const SIZE: usize> {
+struct StackLinkedListInner<T, const SIZE: usize> {
     buffers: [MaybeReserveLink<T>; SIZE],
     start: *mut MaybeReserveLink<T>,
     last: *mut MaybeReserveLink<T>,
@@ -634,7 +643,7 @@ struct BufferReserveInner<T, const SIZE: usize> {
     _pp: core::marker::PhantomPinned,
 }
 
-impl<T, const SIZE: usize> BufferReserveInner<T, SIZE> {
+impl<T, const SIZE: usize> StackLinkedListInner<T, SIZE> {
     fn new() -> Self {
         let buffers = [(); SIZE].map(|_| MaybeReserveLink::uninit());
         let start = ptr::null_mut();
@@ -676,88 +685,28 @@ impl<T> MaybeReserveLink<T> {
     }
 }
 
-/// A reserved buffer
+/// An unsafe reservation
 ///
-/// This is a reservation for buffer from a `BufferReserve`. The reservation on the buffer lasts
-/// until this `ReservedBuffer` is dropped.
-///
-/// The buffer 'T' can be accessed by dereferencing a `ReservedBuffer`.
-pub struct ReservedBuffer<'a, T, const CHANNEL_SIZE: usize> {
+/// This contains the information that points back to the hotel without any lifetime. As a result
+/// the compiler cannot guarantee the the lifetime of an UnsafeReservation does not outlive the
+/// `StackHotel` that created it.
+struct UnsafeReservation<T, const SIZE: usize> {
     index: usize,
-    reserve: ptr::NonNull<StaticBufferReserve<T, CHANNEL_SIZE>>,
-    _pd_ref: Ref<'a, core::marker::PhantomData<()>>,
+    reserve: ptr::NonNull<StackHotel<T, SIZE>>,
 }
 
-impl<T, const CHANNEL_SIZE: usize> crate::hci::Buffer for ReservedBuffer<'_, T, CHANNEL_SIZE>
-where
-    T: crate::hci::Buffer,
-{
-    fn with_capacity(_front: usize, _back: usize) -> Self
-    where
-        Self: Sized,
-    {
-        panic!("with_capacity cannot be called on a reserved buffer");
+impl<T, const SIZE: usize> UnsafeReservation<T, SIZE> {
+    fn new(index: usize, reserve: ptr::NonNull<StackHotel<T, SIZE>>) -> Self {
+        Self { index, reserve }
     }
 
-    fn clear_with_capacity(&mut self, front: usize, back: usize) {
-        unsafe {
-            self.get_mut_link()
-                .buffer
-                .assume_init_mut()
-                .clear_with_capacity(front, back)
-        }
-    }
-}
-
-impl<'a, T, const CHANNEL_SIZE: usize> ReservedBuffer<'a, T, CHANNEL_SIZE>
-where
-    T: crate::hci::Buffer,
-{
-    /// Create a new `ReservedBuffer`
-    ///
-    /// This creates a new `ReservedBuffer` from the provided `link` and `reserve`.
-    ///
-    /// `link` must be a reference to an element of `reserve.buffers`. Undefined behaviour will
-    /// occur if this is not the case and this method is called.
-    ///
-    /// # Safety
-    /// This method assumes that input `link` points to a location that is unique to this
-    /// `ReservedBuffer`. It is undefined behaviour if multiple `ReservedBuffer`s exist at the same
-    /// time containing the same `link`.
-    unsafe fn new(
-        link: *const MaybeReserveLink<T>,
-        ref_reserve: Ref<'a, StaticBufferReserve<T, CHANNEL_SIZE>>,
-        front_capacity: usize,
-    ) -> Self {
-        use crate::hci::BufferExt;
-
-        let index = link.offset_from(ref_reserve.get_inner().buffers.as_ptr()) as usize;
-
-        ref_reserve.get_inner_unsafe_mut().buffers[index]
-            .buffer
-            .assume_init_mut()
-            .clear_with_front_capacity(front_capacity);
-
-        let reserve = ptr::NonNull::from(&*ref_reserve);
-
-        let _pd_ref = Ref::map(ref_reserve, |_| &core::marker::PhantomData);
-
-        Self {
-            index,
-            reserve,
-            _pd_ref,
-        }
-    }
-}
-
-impl<T, const SIZE: usize> ReservedBuffer<'_, T, SIZE> {
     #[inline]
-    fn get_reserve(&self) -> &StaticBufferReserve<T, SIZE> {
+    fn get_reserve(&self) -> &StackHotel<T, SIZE> {
         unsafe { self.reserve.as_ref() }
     }
 
     #[inline]
-    fn get_reserve_mut(&mut self) -> &mut StaticBufferReserve<T, SIZE> {
+    fn get_reserve_mut(&mut self) -> &mut StackHotel<T, SIZE> {
         unsafe { self.reserve.as_mut() }
     }
 
@@ -776,7 +725,7 @@ impl<T, const SIZE: usize> ReservedBuffer<'_, T, SIZE> {
     /// Move the current link to after the link pointed to by `last`
     ///
     /// This will move the link to the place after the link pointed to by member
-    /// `BufferReserve::last`.
+    /// `StackHotel::last`.
     ///
     /// # Panic
     /// The last pointer must not be null
@@ -859,7 +808,7 @@ impl<T, const SIZE: usize> ReservedBuffer<'_, T, SIZE> {
     }
 }
 
-impl<T, const SIZE: usize> Drop for ReservedBuffer<'_, T, SIZE> {
+impl<T, const SIZE: usize> Drop for UnsafeReservation<T, SIZE> {
     fn drop(&mut self) {
         unsafe {
             self.get_mut_link().buffer.assume_init_drop();
@@ -882,27 +831,117 @@ impl<T, const SIZE: usize> Drop for ReservedBuffer<'_, T, SIZE> {
     }
 }
 
-impl<T, const SIZE: usize> Deref for ReservedBuffer<'_, T, SIZE>
+/// A reservation of a `StackHotel` wrapped in a `RefCell`
+///
+/// This is returned by the method [`take`](StackHotel::take) of `StackHotel`
+pub struct RefReservation<'a, T, const SIZE: usize> {
+    ur: UnsafeReservation<T, SIZE>,
+    _pd_ref: Ref<'a, core::marker::PhantomData<()>>,
+}
+
+impl<'a, T, const SIZE: usize> RefReservation<'a, T, SIZE> {
+    fn new(ur: UnsafeReservation<T, SIZE>, _: Ref<'a, StackHotel<T, SIZE>>) -> Self {
+        let _pd_ref = Ref::map(orig, |_| &core::marker::PhantomData);
+
+        Self { ur, _pd_ref }
+    }
+}
+
+impl<T, const SIZE: usize> Deref for RefReservation<'_, T, SIZE> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.ur.get()
+    }
+}
+
+impl<T, const SIZE: usize> DerefMut for RefReservation<'_, T, SIZE> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ur.get_mut()
+    }
+}
+
+/// A reserved buffer
+///
+/// This is returned by the method [`take_buffer`](StackHotel::take_buffer) of `StackHotel`
+pub struct BufferReservation<'a, T, const SIZE: usize> {
+    ref_res: RefReservation<'a, T, SIZE>,
+}
+
+impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
+    /// Create a new `ReservedBuffer`
+    ///
+    /// This creates a new `ReservedBuffer` from the provided `link` and `reserve`.
+    ///
+    /// `link` must be a reference to an element of `reserve.buffers`. Undefined behaviour will
+    /// occur if this is not the case and this method is called.
+    ///
+    /// # Safety
+    /// This method assumes that input `link` points to a location that is unique to this
+    /// `ReservedBuffer`. It is undefined behaviour if multiple `ReservedBuffer`s exist at the same
+    /// time containing the same `link`.
+    unsafe fn new(
+        ur: UnsafeReservation<T, SIZE>,
+        ref_reserve: Ref<'a, StackHotel<T, SIZE>>,
+        front_capacity: usize,
+    ) -> Self {
+        use crate::hci::BufferExt;
+
+        ref_reserve.get_inner_unsafe_mut().buffers[ur.index]
+            .buffer
+            .assume_init_mut()
+            .clear_with_front_capacity(front_capacity);
+
+        let ref_res = RefReservation::new(ur, ref_reserve);
+
+        Self { ref_res }
+    }
+}
+
+impl<T, const SIZE: usize> crate::hci::Buffer for BufferReservation<'_, T, SIZE>
+where
+    T: crate::hci::Buffer,
+{
+    fn with_capacity(_front: usize, _back: usize) -> Self
+    where
+        Self: Sized,
+    {
+        panic!("with_capacity cannot be called on a reserved buffer");
+    }
+
+    fn clear_with_capacity(&mut self, front: usize, back: usize) {
+        unsafe {
+            self.ref_res
+                .ur
+                .get_mut_link()
+                .buffer
+                .assume_init_mut()
+                .clear_with_capacity(front, back)
+        }
+    }
+}
+
+impl<T, const SIZE: usize> Deref for BufferReservation<'_, T, SIZE>
 where
     T: Deref<Target = [u8]>,
 {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        self.get().deref()
+        self.ref_res.ur.get().deref()
     }
 }
 
-impl<T, const SIZE: usize> DerefMut for ReservedBuffer<'_, T, SIZE>
+impl<T, const SIZE: usize> DerefMut for BufferReservation<'_, T, SIZE>
 where
     T: DerefMut<Target = [u8]>,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.get_mut().deref_mut()
+        self.ref_res.ur.get_mut().deref_mut()
     }
 }
 
-impl<T, A, const SIZE: usize> crate::TryExtend<A> for ReservedBuffer<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::TryExtend<A> for BufferReservation<'_, T, SIZE>
 where
     T: crate::TryExtend<A>,
 {
@@ -912,11 +951,11 @@ where
     where
         I: IntoIterator<Item = A>,
     {
-        self.get_mut().try_extend(iter)
+        self.ref_res.ur.get_mut().try_extend(iter)
     }
 }
 
-impl<T, A, const SIZE: usize> crate::TryRemove<A> for ReservedBuffer<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::TryRemove<A> for BufferReservation<'_, T, SIZE>
 where
     T: crate::TryRemove<A>,
 {
@@ -924,11 +963,11 @@ where
     type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
 
     fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
-        self.get_mut().try_remove(how_many)
+        self.ref_res.ur.get_mut().try_remove(how_many)
     }
 }
 
-impl<T, A, const SIZE: usize> crate::TryFrontExtend<A> for ReservedBuffer<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::TryFrontExtend<A> for BufferReservation<'_, T, SIZE>
 where
     T: crate::TryFrontExtend<A>,
 {
@@ -938,11 +977,11 @@ where
     where
         I: IntoIterator<Item = A>,
     {
-        self.get_mut().try_front_extend(iter)
+        self.ref_res.ur.get_mut().try_front_extend(iter)
     }
 }
 
-impl<T, A, const SIZE: usize> crate::TryFrontRemove<A> for ReservedBuffer<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::TryFrontRemove<A> for BufferReservation<'_, T, SIZE>
 where
     T: crate::TryFrontRemove<A>,
 {
@@ -950,7 +989,7 @@ where
     type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
 
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
-        self.get_mut().try_front_remove(how_many)
+        self.ref_res.ur.get_mut().try_front_remove(how_many)
     }
 }
 
@@ -1226,25 +1265,25 @@ mod test {
         }
     }
 
-    /// A very unsafe way to create a `BufferReserve` on the heap
+    /// A very unsafe way to create a `StackHotel` on the heap
     ///
-    /// For testing a BufferReserve needs to be created on the heap as the test threads do not
-    /// have enough stack to allocate the type. This unsafely creates `BufferReserve` of `usize`
+    /// For testing a `StackHotel` needs to be created on the heap as the test threads do not
+    /// have enough stack to allocate the type. This unsafely creates `StackHotel` of `usize`
     /// typed buffers on the stack.
     ///
     /// # Safety
-    /// This creates a `HeapAllocatedBufferReserve` from a zeroed dynamic allocation and then
-    /// transforms it into a `BufferReserve`. This is about as unsafely stupid as you can get
+    /// This creates a `HeapAllocatedStackHotel` from a zeroed dynamic allocation and then
+    /// transforms it into a `StackHotel`. This is about as unsafely stupid as you can get
     /// without it being UB. The only check made
-    unsafe fn inboxed_buffer_reserve<const SIZE: usize>() -> Box<StaticBufferReserve<usize, SIZE>> {
+    unsafe fn inboxed_buffer_reserve<const SIZE: usize>() -> Box<StackHotel<usize, SIZE>> {
         use std::ptr::write;
 
-        let layout = std::alloc::Layout::new::<StaticBufferReserve<usize, SIZE>>();
+        let layout = std::alloc::Layout::new::<StackHotel<usize, SIZE>>();
 
-        let allocation = std::alloc::alloc(layout) as *mut StaticBufferReserve<usize, SIZE>;
+        let allocation = std::alloc::alloc(layout) as *mut StackHotel<usize, SIZE>;
 
         // uninit_boxed_buffer should be though of
-        let mut uninit_boxed_buffer: Box<StaticBufferReserve<usize, SIZE>> = Box::from_raw(allocation);
+        let mut uninit_boxed_buffer: Box<StackHotel<usize, SIZE>> = Box::from_raw(allocation);
 
         // The extensive use of the method std::ptr::write is to avoid
         // dropping an uninitialized value even when dropping would

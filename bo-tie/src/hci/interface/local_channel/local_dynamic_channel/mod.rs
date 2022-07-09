@@ -14,15 +14,13 @@ use super::{
     LocalSendFutureError,
 };
 use crate::hci::interface::local_channel::local_dynamic_channel::dyn_buffer::{DynBufferReserve, TakeDynReserveFuture};
-use crate::hci::interface::{
-    Channel, ChannelId, ChannelReserve, ChannelReserveTypes, FlowControl, IntraMessage, Receiver, Sender,
-};
+use crate::hci::interface::{Channel, ChannelReserve, FlowControl, IntraMessage, Receiver, Sender, TaskId};
 use crate::hci::BufferReserve;
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
-use core::cell::RefCell;
+use core::cell::{Ref, RefCell};
 use core::fmt::{Display, Formatter};
-use core::task::Waker;
+use core::task::{Context, Poll, Waker};
 use dyn_buffer::DeVec;
 
 /// The sender for a local channel
@@ -112,7 +110,7 @@ impl<B, T> LocalQueueBufferReceive for LocalChannelReceiver<B, T> {
         self.0.borrow().channel_buffer.is_empty()
     }
 
-    fn remove(&self) -> Self::Payload {
+    fn pop_next(&self) -> Self::Payload {
         self.0.borrow_mut().channel_buffer.pop_front().unwrap()
     }
 }
@@ -120,6 +118,18 @@ impl<B, T> LocalQueueBufferReceive for LocalChannelReceiver<B, T> {
 impl<B: Unpin, T: Unpin> Receiver for LocalChannelReceiver<B, T> {
     type Message = T;
     type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where Self: 'a,;
+
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+        if self.has_senders() {
+            if self.is_empty() {
+                Poll::Pending
+            } else {
+                Poll::Ready(Some(self.pop_next()))
+            }
+        } else {
+            Poll::Ready(None)
+        }
+    }
 
     fn recv(&self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
@@ -146,7 +156,7 @@ struct LocalChannelInner<B, T> {
     flow_control: FlowControl,
 }
 
-impl<B, T> LocalChannel<B, T> {
+impl<B, T> LocalChannelInner<B, T> {
     fn new(capacity: usize) -> Self {
         let reserve = DynBufferReserve::new(capacity);
         let senders_count = 0;
@@ -154,13 +164,19 @@ impl<B, T> LocalChannel<B, T> {
         let waker = None;
         let flow_control = Default::default();
 
-        LocalChannel(Rc::new(RefCell::new(LocalChannelInner {
+        LocalChannelInner {
             reserve,
             sender_count: senders_count,
             channel_buffer: buffer,
             waker,
             flow_control,
-        })))
+        }
+    }
+}
+
+impl<B, T> LocalChannel<B, T> {
+    fn new(capacity: usize) -> Self {
+        Self(Rc::new(RefCell::new(LocalChannelInner::new(capacity))))
     }
 }
 
@@ -171,7 +187,7 @@ impl<B: Unpin, T: Unpin> Channel for LocalChannel<B, T> {
     type Receiver = LocalChannelReceiver<B, T>;
 
     fn get_sender(&self) -> Self::Sender {
-        LocalChannelSender::new(&self.0)
+        LocalChannelSender(self.0.clone())
     }
 
     fn take_receiver(&self) -> Option<Self::Receiver> {
@@ -182,7 +198,7 @@ impl<B: Unpin, T: Unpin> Channel for LocalChannel<B, T> {
     where
         F: FnOnce(&mut FlowControl),
     {
-        f(&mut self.0.borrow_mut().flow_control)
+        f(&mut self.to.borrow_mut().flow_control)
     }
 }
 
@@ -197,16 +213,19 @@ where
     where
         S: Into<Option<usize>>,
     {
-        self.0
+        self.to
             .borrow_mut()
             .reserve
             .take(front_capacity.into().unwrap_or_default())
     }
 
     fn reclaim(&mut self, buffer: Self::Buffer) {
-        self.0.borrow_mut().reserve.reclaim(buffer)
+        self.to.borrow_mut().reserve.reclaim(buffer)
     }
 }
+
+/// Alias type for ChannelEnds used by a [`LocalChannelManager`]
+type ChannelEnds = crate::hci::interface::ChannelEnds<LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>>;
 
 /// A Channel Manager for local channels
 ///
@@ -222,15 +241,15 @@ pub struct LocalChannelManager {
     channel_size: usize,
     rx_sender: LocalChannelSender<DeVec<u8>, IntraMessage<DeVec<u8>>>,
     rx_receiver: LocalChannelReceiver<DeVec<u8>, IntraMessage<DeVec<u8>>>,
-    tx_channels: alloc::vec::Vec<(ChannelId, LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>)>,
+    tx_channels: alloc::vec::Vec<(TaskId, ChannelEnds)>,
 }
 
 impl LocalChannelManager {
     pub fn new(channel_size: usize) -> Self {
         let rx_channel = LocalChannel::new(channel_size);
 
-        let rx_sender = rx_channel.get_sender();
-        let rx_receiver = rx_channel.take_receiver().unwrap();
+        let rx_sender = rx_channel.get_to_sender();
+        let rx_receiver = rx_channel.take_to_receiver().unwrap();
 
         let tx_channels = alloc::vec::Vec::new();
 
@@ -243,12 +262,14 @@ impl LocalChannelManager {
     }
 }
 
-impl ChannelReserveTypes for LocalChannelManager {
+impl ChannelReserve for LocalChannelManager {
     type Error = LocalChannelManagerError;
 
     type SenderError = LocalSendFutureError;
 
     type TryExtendError = core::convert::Infallible;
+
+    type ForNewTaskError = core::convert::Infallible;
 
     type Sender = LocalChannelSender<DeVec<u8>, IntraMessage<DeVec<u8>>>;
 
@@ -257,30 +278,8 @@ impl ChannelReserveTypes for LocalChannelManager {
     type Buffer = DeVec<u8>;
 
     type Channel = LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>;
-}
 
-impl ChannelReserve for LocalChannelManager {
-    fn get_self_sender(&self) -> Self::Sender {
-        self.rx_sender.clone()
-    }
-
-    fn get_self_receiver(&self) -> &Self::Receiver {
-        &self.rx_receiver
-    }
-
-    fn try_add(&mut self, id: ChannelId) -> Result<Self::Channel, Self::Error> {
-        if let Err(index) = self.tx_channels.binary_search_by(|c| c.0.cmp(&id)) {
-            let local_channel = LocalChannel::new(self.channel_size);
-
-            self.tx_channels.insert(index, (id, local_channel));
-
-            Ok(self.tx_channels[index].1.clone())
-        } else {
-            Err(LocalChannelManagerError::ChannelIdAlreadyUsed)
-        }
-    }
-
-    fn try_remove(&mut self, id: ChannelId) -> Result<(), Self::Error> {
+    fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error> {
         if let Ok(index) = self.tx_channels.binary_search_by(|c| c.0.cmp(&id)) {
             self.tx_channels.remove(index);
 
@@ -290,13 +289,39 @@ impl ChannelReserve for LocalChannelManager {
         }
     }
 
-    fn get(&self, id: ChannelId) -> Option<Self::Channel> {
+    fn add_new_task(&mut self, task_id: TaskId) -> Result<ChannelEnds, Self::ForNewTaskError>
+    where
+        Self::Channel: Sized,
+    {
+        let from_new_task_channel = LocalChannel::new(self.channel_size);
+        let to_new_task_channel = LocalChannel::new(self.channel_size);
+
+        let new_task_ends = ChannelEnds::new(
+            from_new_task_channel.get_sender(),
+            to_new_task_channel.take_receiver().unwrap(),
+        );
+
+        let interface_task_ends = ChannelEnds::new(
+            to_new_task_channel.get_sender(),
+            from_new_task_channel.take_receiver().unwrap(),
+        );
+
+        let index = self
+            .tx_channels
+            .binary_search_by(|i| i.0.cmp(&task_id))
+            .expect("task id already associated to another async task");
+
+        self.tx_channels.insert(index, (task_id, interface_task_ends));
+
+        Ok(new_task_ends)
+    }
+
+    fn get(&self, id: TaskId) -> Option<&ChannelEnds> {
         self.tx_channels
             .binary_search_by(|i| i.0.cmp(&id))
             .ok()
             .and_then(|index| self.tx_channels.get(index))
             .map(|(_, channel)| channel)
-            .cloned()
     }
 }
 

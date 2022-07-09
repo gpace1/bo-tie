@@ -7,7 +7,8 @@
 //! A `UartInterface` is a wrapper around an `Interface` to integrate processing of this packet
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
-use crate::hci::interface::{BufferedSend, ChannelReserve, ChannelReserveTypes, HciPacketType, Interface, SendError};
+use crate::hci::interface::flow_control::FlowControlQueues;
+use crate::hci::interface::{BufferedSend, ChannelReserve, HciPacketType, Interface, SendError};
 use core::fmt::{Debug, Display, Formatter};
 
 /// UART wrapper around an [`Interface`](Interface)
@@ -18,16 +19,17 @@ use core::fmt::{Debug, Display, Formatter};
 /// indicator prepends the HCI packet.
 ///
 ///
-pub struct UartInterface<R> {
-    interface: Interface<R>,
+pub struct UartInterface<R, F> {
+    interface: Interface<R, F>,
 }
 
-impl<R> UartInterface<R>
+impl<R, F> UartInterface<R, F>
 where
     R: ChannelReserve,
+    F: FlowControlQueues,
 {
     /// Create a new `UartInterface`
-    pub fn new(interface: Interface<R>) -> Self {
+    pub fn new(interface: Interface<R, F>) -> Self {
         Self { interface }
     }
 
@@ -38,13 +40,13 @@ where
     /// is able to determine the packet type by assuming the first byte put into the buffer is the
     /// packet indicator. Otherwise the returned `UartBufferedSend` acts the same as the return of
     /// method `buffered_send` within `Interface`.
-    pub async fn buffered_send(&mut self) -> UartBufferedSend<'_, R> {
+    pub async fn buffered_send(&mut self) -> UartBufferedSend<'_, R, F> {
         UartBufferedSend::new(&mut self.interface)
     }
 }
 
-impl<T> From<Interface<T>> for UartInterface<T> {
-    fn from(interface: Interface<T>) -> Self {
+impl<R, F> From<Interface<R, F>> for UartInterface<R, F> {
+    fn from(interface: Interface<R, F>) -> Self {
         UartInterface { interface }
     }
 }
@@ -77,18 +79,18 @@ impl Display for UartInterfaceError {
     }
 }
 
-enum UartSendState<'a, R: ChannelReserve> {
+enum UartSendState<'a, R: ChannelReserve, F> {
     Swap,
-    Interface(&'a mut Interface<R>),
-    BufferedSender(BufferedSend<'a, R>),
+    Interface(&'a mut Interface<R, F>),
+    BufferedSender(BufferedSend<'a, R, F>),
 }
 
-impl<'a, R: ChannelReserve> UartSendState<'a, R> {
+impl<'a, R: ChannelReserve, F> UartSendState<'a, R, F> {
     /// unwrap the interface
     ///
     /// # Panic
     /// A panic occurs if this is not enum `Interface`
-    fn unwrap_interface(self) -> &'a mut Interface<R> {
+    fn unwrap_interface(self) -> &'a mut Interface<R, F> {
         if let UartSendState::Interface(interface) = self {
             interface
         } else {
@@ -101,15 +103,16 @@ impl<'a, R: ChannelReserve> UartSendState<'a, R> {
 ///
 /// This is the return of the method [`buffered_send`](UartInterface::buffered_send) within
 /// `UartInterface`.
-pub struct UartBufferedSend<'a, R: ChannelReserve> {
-    state: UartSendState<'a, R>,
+pub struct UartBufferedSend<'a, R: ChannelReserve, F> {
+    state: UartSendState<'a, R, F>,
 }
 
-impl<'a, R> UartBufferedSend<'a, R>
+impl<'a, R, F> UartBufferedSend<'a, R, F>
 where
     R: ChannelReserve,
+    F: FlowControlQueues,
 {
-    fn new(interface: &'a mut Interface<R>) -> Self {
+    fn new(interface: &'a mut Interface<R, F>) -> Self {
         let state = UartSendState::Interface(interface).into();
 
         Self { state }
@@ -154,10 +157,7 @@ where
 }
 
 #[derive(Debug)]
-pub enum UartBufferedSendError<R>
-where
-    R: ChannelReserveTypes,
-{
+pub enum UartBufferedSendError<R> {
     NothingBuffered,
     UartInterface(UartInterfaceError),
     BufferedSendError(SendError<R>),
@@ -165,14 +165,14 @@ where
 
 impl<R> From<UartInterfaceError> for UartBufferedSendError<R>
 where
-    R: ChannelReserveTypes,
+    R: ChannelReserve,
 {
     fn from(e: UartInterfaceError) -> Self {
         Self::UartInterface(e)
     }
 }
 
-impl<R: ChannelReserveTypes> Display for UartBufferedSendError<R>
+impl<R: ChannelReserve> Display for UartBufferedSendError<R>
 where
     R::SenderError: Display,
     R::TryExtendError: Display,

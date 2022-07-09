@@ -6,7 +6,7 @@
 //! are sent from the sender to the receiver.
 
 mod local_dynamic_channel;
-mod local_static_channel;
+mod local_stack_channel;
 
 use core::fmt::{Display, Formatter};
 use core::future::Future;
@@ -59,7 +59,7 @@ trait LocalQueueBufferReceive: LocalQueueBuffer {
     ///
     /// # Note
     /// This method is called after `is_empty` returns false
-    fn remove(&self) -> Self::Payload;
+    fn pop_next(&self) -> Self::Payload;
 }
 
 pub struct LocalSendFuture<'a, S, T> {
@@ -123,7 +123,7 @@ where
         if !this.has_senders() {
             Poll::Ready(None)
         } else if !this.is_empty() {
-            let ret = this.remove();
+            let ret = this.pop_next();
 
             this.call_waker();
 
