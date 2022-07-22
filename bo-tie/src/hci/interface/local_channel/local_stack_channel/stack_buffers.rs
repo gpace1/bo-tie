@@ -3,6 +3,7 @@
 //! Buffers in this module are statically allocated. The size of the buffer must be known at
 //! compile time.
 
+use crate::hci::BufferExt;
 use core::cell::Ref;
 use core::fmt::{Display, Formatter};
 use core::mem::{replace, transmute, MaybeUninit};
@@ -534,22 +535,19 @@ impl<T, const SIZE: usize> StackHotel<T, SIZE> {
     }
 }
 
-impl<T, const SIZE: usize> StackHotel<T, SIZE>
-where
-    T: crate::hci::Buffer,
-{
+impl<T, const SIZE: usize> StackHotel<T, SIZE> {
     /// Get the next free buffer from `buffers`
     ///
     /// This is used to get the next buffer from `buffers`. If there is no more free buffers within
     /// `buffers` then `None` is returned, otherwise the number of untouched links is reduced by one
     /// and a mutable reference to the next `MaybeReserveLink` from `buffers` is returned.
-    unsafe fn next_buffer(&self) -> Option<&mut MaybeReserveLink<T>> {
+    unsafe fn next(&self, init: T) -> Option<&mut MaybeReserveLink<T>> {
         use crate::hci::BufferExt;
 
         self.get_inner().untouched.checked_sub(1).map(|next| {
             self.get_inner_unsafe_mut().untouched = next;
 
-            self.get_inner_unsafe_mut().buffers[next].buffer.write(T::new());
+            self.get_inner_unsafe_mut().buffers[next].buffer.write(init);
 
             &mut self.get_inner_unsafe_mut().buffers[next]
         })
@@ -562,8 +560,8 @@ where
     ///
     /// # Unsafe
     /// This may only be called once to initialize the the list.
-    unsafe fn init_list(&self) -> UnsafeReservation<T, SIZE> {
-        let first_buffer: *mut _ = self.next_buffer().expect("size of buffer reserve is zero");
+    unsafe fn init_list(&self, init: T) -> UnsafeReservation<T, SIZE> {
+        let first_buffer: *mut _ = self.next(init).expect("size of buffer reserve is zero");
 
         self.get_inner_unsafe_mut().start = first_buffer;
         self.get_inner_unsafe_mut().last = first_buffer;
@@ -575,15 +573,15 @@ where
         UnsafeReservation::new(index, reserve)
     }
 
-    fn take_inner(&self) -> Option<UnsafeReservation<T, SIZE>> {
+    fn take_inner(&self, init: T) -> Option<UnsafeReservation<T, SIZE>> {
         unsafe {
             if self.get_inner().end.is_null() {
-                Some(Self::init_list(self))
+                Some(Self::init_list(self, init))
             } else {
                 let link = if self.get_inner().end == self.get_inner().last {
                     let last = self.get_inner().last;
 
-                    let link = self.next_buffer().map(|link| {
+                    let link = self.next(init).map(|link| {
                         link.prev = last;
 
                         link as *mut _
@@ -607,9 +605,9 @@ where
                     next
                 };
 
-                let index = link.offset_from(ref_reserve.get_inner().buffers.as_ptr()) as usize;
+                let index = link.offset_from(self.get_inner().buffers.as_ptr()) as usize;
 
-                let reserve = ptr::NonNull::from(&*ref_reserve);
+                let reserve = ptr::NonNull::from(self);
 
                 Some(UnsafeReservation::new(index, reserve))
             }
@@ -617,19 +615,21 @@ where
     }
 
     /// Take a reservation from a `StackHotel` wrapped in a [`Ref`](std::cell::Ref)
-    pub fn take_ref(orig: Ref<Self>) -> Option<RefReservation<'_, T, SIZE>> {
-        orig.take_inner().map(|ur| RefReservation::new(ur, orig))
+    pub fn take(&self, init: T) -> Option<Reservation<'_, T, SIZE>> {
+        self.take_inner(init).map(|ur| Reservation::new(ur, self))
     }
 
-    /// Take a reservation of a buffer from a `StackHotel` wrapped in a [`Ref`](std::cell::Ref)
+    /// Take an unsafe reservation from a `StackHotel` containing buffers
     ///
     /// This returns a reservation unless there is no more allocations available
-    pub fn take_buffer(orig: Ref<Self>, front_capacity: usize) -> Option<BufferReservation<'_, T, SIZE>>
+    pub fn take_buffer(&self, front_capacity: usize) -> Option<BufferReservation<T, SIZE>>
     where
         T: crate::hci::Buffer,
     {
-        orig.take_inner()
-            .map(|ur| unsafe { BufferReservation::new(ur, orig, front_capacity) })
+        use crate::hci::BufferExt;
+
+        self.take_inner(T::with_front_capacity(front_capacity))
+            .map(|ur| unsafe { BufferReservation::new(ur, self, front_capacity) })
     }
 }
 
@@ -831,23 +831,21 @@ impl<T, const SIZE: usize> Drop for UnsafeReservation<T, SIZE> {
     }
 }
 
-/// A reservation of a `StackHotel` wrapped in a `RefCell`
-///
-/// This is returned by the method [`take`](StackHotel::take) of `StackHotel`
-pub struct RefReservation<'a, T, const SIZE: usize> {
+/// A reservation from a `StackHotel`
+pub struct Reservation<'a, T, const SIZE: usize> {
     ur: UnsafeReservation<T, SIZE>,
-    _pd_ref: Ref<'a, core::marker::PhantomData<()>>,
+    _pd: core::marker::PhantomData<&'a StackHotel<T, SIZE>>,
 }
 
-impl<'a, T, const SIZE: usize> RefReservation<'a, T, SIZE> {
-    fn new(ur: UnsafeReservation<T, SIZE>, _: Ref<'a, StackHotel<T, SIZE>>) -> Self {
-        let _pd_ref = Ref::map(orig, |_| &core::marker::PhantomData);
+impl<'a, T, const SIZE: usize> Reservation<'a, T, SIZE> {
+    fn new(ur: UnsafeReservation<T, SIZE>, _: &'a StackHotel<T, SIZE>) -> Self {
+        let _pd = core::marker::PhantomData;
 
-        Self { ur, _pd_ref }
+        Self { ur, _pd }
     }
 }
 
-impl<T, const SIZE: usize> Deref for RefReservation<'_, T, SIZE> {
+impl<T, const SIZE: usize> Deref for Reservation<'_, T, SIZE> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -855,7 +853,7 @@ impl<T, const SIZE: usize> Deref for RefReservation<'_, T, SIZE> {
     }
 }
 
-impl<T, const SIZE: usize> DerefMut for RefReservation<'_, T, SIZE> {
+impl<T, const SIZE: usize> DerefMut for Reservation<'_, T, SIZE> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.ur.get_mut()
     }
@@ -864,8 +862,14 @@ impl<T, const SIZE: usize> DerefMut for RefReservation<'_, T, SIZE> {
 /// A reserved buffer
 ///
 /// This is returned by the method [`take_buffer`](StackHotel::take_buffer) of `StackHotel`
+///
+/// # Note
+/// A `BufferReservation` can be converted into an `UnsafeBufferReservation` through methods
+/// `from/into`. Although these methods are not unsafe, it does not mead that they make the
+/// resulting `UnsafeBufferReservation` safe to use.
 pub struct BufferReservation<'a, T, const SIZE: usize> {
-    ref_res: RefReservation<'a, T, SIZE>,
+    ubr: UnsafeBufferReservation<T, SIZE>,
+    _pd: core::marker::PhantomData<&'a StackHotel<T, SIZE>>,
 }
 
 impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
@@ -880,21 +884,21 @@ impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
     /// This method assumes that input `link` points to a location that is unique to this
     /// `ReservedBuffer`. It is undefined behaviour if multiple `ReservedBuffer`s exist at the same
     /// time containing the same `link`.
-    unsafe fn new(
-        ur: UnsafeReservation<T, SIZE>,
-        ref_reserve: Ref<'a, StackHotel<T, SIZE>>,
-        front_capacity: usize,
-    ) -> Self {
+    unsafe fn new(ur: UnsafeReservation<T, SIZE>, _hotel: &'a StackHotel<T, SIZE>, front_capacity: usize) -> Self
+    where
+        T: crate::hci::Buffer,
+    {
         use crate::hci::BufferExt;
 
-        ref_reserve.get_inner_unsafe_mut().buffers[ur.index]
-            .buffer
-            .assume_init_mut()
-            .clear_with_front_capacity(front_capacity);
+        let ubr = UnsafeBufferReservation(ur);
 
-        let ref_res = RefReservation::new(ur, ref_reserve);
+        let _pd = core::marker::PhantomData;
 
-        Self { ref_res }
+        let mut ret = Self { ubr, _pd };
+
+        ret.clear_with_front_capacity(front_capacity);
+
+        ret
     }
 }
 
@@ -910,14 +914,7 @@ where
     }
 
     fn clear_with_capacity(&mut self, front: usize, back: usize) {
-        unsafe {
-            self.ref_res
-                .ur
-                .get_mut_link()
-                .buffer
-                .assume_init_mut()
-                .clear_with_capacity(front, back)
-        }
+        unsafe { self.ubr.clear_with_capacity(front, back) }
     }
 }
 
@@ -928,7 +925,7 @@ where
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        self.ref_res.ur.get().deref()
+        self.ubr.deref()
     }
 }
 
@@ -937,7 +934,7 @@ where
     T: DerefMut<Target = [u8]>,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.ref_res.ur.get_mut().deref_mut()
+        self.ubr.deref_mut()
     }
 }
 
@@ -951,7 +948,7 @@ where
     where
         I: IntoIterator<Item = A>,
     {
-        self.ref_res.ur.get_mut().try_extend(iter)
+        self.ubr.try_extend(iter)
     }
 }
 
@@ -963,7 +960,7 @@ where
     type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
 
     fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
-        self.ref_res.ur.get_mut().try_remove(how_many)
+        self.ubr.try_remove(how_many)
     }
 }
 
@@ -977,7 +974,7 @@ where
     where
         I: IntoIterator<Item = A>,
     {
-        self.ref_res.ur.get_mut().try_front_extend(iter)
+        self.ubr.try_front_extend(iter)
     }
 }
 
@@ -989,7 +986,114 @@ where
     type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
 
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
-        self.ref_res.ur.get_mut().try_front_remove(how_many)
+        self.try_front_remove(how_many)
+    }
+}
+
+/// An unsafe buffer reservation
+///
+/// This is a wrapper around an [`UnsafeReservation`] so that it can implement buffer related
+/// traits.
+#[repr(transparent)]
+pub struct UnsafeBufferReservation<T, const SIZE: usize>(UnsafeReservation<T, SIZE>);
+
+impl<T, const SIZE: usize> crate::hci::Buffer for UnsafeBufferReservation<T, SIZE>
+where
+    T: crate::hci::Buffer,
+{
+    fn with_capacity(_front: usize, _back: usize) -> Self
+    where
+        Self: Sized,
+    {
+        panic!("with_capacity cannot be called on a reserved buffer");
+    }
+
+    fn clear_with_capacity(&mut self, front: usize, back: usize) {
+        unsafe {
+            self.0
+                .get_mut_link()
+                .buffer
+                .assume_init_mut()
+                .clear_with_capacity(front, back)
+        }
+    }
+}
+
+impl<T, const SIZE: usize> Deref for UnsafeBufferReservation<T, SIZE>
+where
+    T: Deref<Target = [u8]>,
+{
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.get().deref()
+    }
+}
+
+impl<T, const SIZE: usize> DerefMut for UnsafeBufferReservation<T, SIZE>
+where
+    T: DerefMut<Target = [u8]>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.get_mut().deref_mut()
+    }
+}
+
+impl<T, A, const SIZE: usize> crate::TryExtend<A> for UnsafeBufferReservation<T, SIZE>
+where
+    T: crate::TryExtend<A>,
+{
+    type Error = T::Error;
+
+    fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = A>,
+    {
+        self.0.get_mut().try_extend(iter)
+    }
+}
+
+impl<T, A, const SIZE: usize> crate::TryRemove<A> for UnsafeBufferReservation<T, SIZE>
+where
+    T: crate::TryRemove<A>,
+{
+    type Error = T::Error;
+    type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
+
+    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+        self.0.get_mut().try_remove(how_many)
+    }
+}
+
+impl<T, A, const SIZE: usize> crate::TryFrontExtend<A> for UnsafeBufferReservation<T, SIZE>
+where
+    T: crate::TryFrontExtend<A>,
+{
+    type Error = T::Error;
+
+    fn try_front_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = A>,
+    {
+        self.0.get_mut().try_front_extend(iter)
+    }
+}
+
+impl<T, A, const SIZE: usize> crate::TryFrontRemove<A> for UnsafeBufferReservation<T, SIZE>
+where
+    T: crate::TryFrontRemove<A>,
+{
+    type Error = T::Error;
+    type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
+
+    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+        self.0.get_mut().try_front_remove(how_many)
+    }
+}
+
+impl<T, const SIZE: usize> From<BufferReservation<'_, T, SIZE>> for UnsafeBufferReservation<T, SIZE> {
+    fn from(br: BufferReservation<T, SIZE>) -> Self {
+        br.ubr
     }
 }
 

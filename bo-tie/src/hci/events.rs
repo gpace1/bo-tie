@@ -1936,26 +1936,6 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub enum ControllerBlocks {
-    /// Requesting means that the controller is requesting the host to issue the Read Data Block
-    /// Size Commmand to the controller. This is because the size of the buffer pool may have
-    /// changed on the controller.
-    RequestingReadDataBlockSize,
-    /// Number of data block buffers free to be used for storage of data packets for transmission.
-    FreeBlockBuffers(u16),
-}
-
-impl ControllerBlocks {
-    fn from(raw: u16) -> Self {
-        if raw == 0 {
-            ControllerBlocks::RequestingReadDataBlockSize
-        } else {
-            ControllerBlocks::FreeBlockBuffers(raw)
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct CompletedDataPacketsAndBlocks {
     pub connection_handle: ConnectionHandle,
     /// This is the number of completed packets (transmitted or flushed) since the last time
@@ -1966,9 +1946,32 @@ pub struct CompletedDataPacketsAndBlocks {
     pub completed_blocks: u16,
 }
 
+/// The number of completed data blocks
+///
+/// This event is periodically sent by the controller to update the status of the data block buffers
+/// within it.
+///
+/// # The total number of data blocks
+/// The controller is allowed to change the total number of data blocks provided for buffering HCI
+/// ACL data packets. When `total_data_blocks` contains a number, it represents the new total
+/// of data blocks provided. This value is always greater than the sum of the
+/// [`completed_blocks`](CompletedDataPacketsAndBlocks::completed_blocks) within
+/// `completed_packets_and_blocks`.
+///
+/// When `total_data_blocks` is `None` then the Host must resend the
+/// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command to acquire the
+/// new total number of data blocks. `total_data_blocks` is `None` only when the new total number
+/// of data blocks is less than the sum of `completed_blocks` within `completed_packets_and_blocks`.
+/// No new HCI ACL data packets shall be sent to the controller until after the
+/// `read_data_block_size` command is completed.
+///
+/// # Note
+/// This structure does not contain the field `Num_Handles` of the event parameters (as seen the
+/// specification for the event) because it is equivalent to the length of
+/// `completed_packets_and_blocks`.
 #[derive(Debug, Clone)]
 pub struct NumberOfCompletedDataBlocksData {
-    pub total_data_blocks: ControllerBlocks,
+    pub total_data_blocks: Option<u16>,
     pub completed_packets_and_blocks: BufferType<CompletedDataPacketsAndBlocks>,
 }
 
@@ -1977,7 +1980,10 @@ impl_try_from_for_raw_packet! {
     packet,
     {
         Ok(NumberOfCompletedDataBlocksData {
-            total_data_blocks: ControllerBlocks::from(chew_u16!(packet)),
+            total_data_blocks: match chew_u16!(packet) {
+                0 => None,
+                cnt => Some(cnt)
+            },
             completed_packets_and_blocks: {
                 let handle_cnt = chew!(packet) as usize;
                 let mut vec = packet.chunks_exact(6)

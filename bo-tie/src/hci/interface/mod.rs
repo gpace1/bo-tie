@@ -45,9 +45,13 @@ use crate::hci::common::ConnectionHandle;
 use crate::hci::events::Events;
 use crate::hci::interface::flow_control::FlowControlQueues;
 use crate::hci::{BufferReserve, CommandEventMatcher};
+use core::borrow::Borrow;
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
+use core::mem::take;
 use core::ops::Deref;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 mod flow_control;
 mod local_channel;
@@ -63,11 +67,243 @@ pub enum TaskId {
     Connection(ConnectionHandle),
 }
 
+/// Identification for a flow controller
+///
+/// An [`Interface`] has a different flow controller for each of the possible data buffers in a
+/// controller.
+///
+/// ### Legend
+/// `Cmd` -> Commands buffer
+/// `Acl` -> ACL data buffer
+/// `Sco` -> SCO data buffer
+/// `LeAcl` -> LE ACL data buffer
+/// `LeIso` -> LE ISO data buffer
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlowControlId {
+    Cmd,
+    Acl,
+    Sco,
+    LeAcl,
+    LeIso,
+}
+
+impl FlowControlId {
+    const fn to_mask(&self) -> usize {
+        match self {
+            FlowControlId::Cmd => 1 << 0,
+            FlowControlId::Acl => 1 << 1,
+            FlowControlId::Sco => 1 << 2,
+            FlowControlId::LeAcl => 1 << 3,
+            FlowControlId::LeIso => 1 << 4,
+        }
+    }
+
+    /// Create an iterator to cycles through the enumerations starting at the enumeration after
+    ///
+    /// This creates an iterator that is used iterate through the enumerations within
+    /// `FlowControlId`. The iterator starts at the enumeration listed after the enumeration that
+    /// method `cycle_after` was called on. The last item output by the iterator is always the
+    /// enumeration that called `cycle_after`.
+    fn cycle_after(self) -> impl Iterator<Item = Self> {
+        struct Cycle {
+            current: FlowControlId,
+            cnt: usize,
+        }
+
+        impl Cycle {
+            const ENUM_COUNT: usize = 5;
+
+            fn new(id: FlowControlId) -> Self {
+                let current = id;
+                let cnt = 0;
+
+                Self { current, cnt }
+            }
+
+            fn next_id(&self) -> FlowControlId {
+                match self.current {
+                    FlowControlId::Cmd => FlowControlId::Acl,
+                    FlowControlId::Acl => FlowControlId::Sco,
+                    FlowControlId::Sco => FlowControlId::LeAcl,
+                    FlowControlId::LeAcl => FlowControlId::LeIso,
+                    FlowControlId::LeIso => FlowControlId::Cmd,
+                }
+            }
+        }
+
+        impl Iterator for Cycle {
+            type Item = FlowControlId;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.cnt < Self::ENUM_COUNT {
+                    self.current = self.next_id();
+
+                    self.cnt += 1;
+
+                    Some(self.current)
+                } else {
+                    None
+                }
+            }
+        }
+
+        Cycle::new(self)
+    }
+}
+
+/// Trait for retreiving the size of a payload
+trait PayloadSize {
+    fn payload_size(&self) -> usize;
+}
+
 /// Flow control information
-#[derive(Default, Debug, Copy, Clone)]
-pub struct FlowControl {
-    packet_count: usize,
-    data_blocks: usize,
+///
+/// This is flow control information about a specific buffer within the controller. It's used to
+/// monitor the buffer space within the controller by keeping a count of the space available within
+/// it.
+///
+/// `FlowControl` is used for both command and data HCI packets. For commands it contains the
+/// number of commands that can be currently sent to the controller. For data packets it either
+/// contains the number of packets that can be sent to the controller or the number of data blocks
+/// that is free within the controller.
+///
+/// ## Kinds
+/// As specified in the Bluetooth Specification, *packet-based* and *data-block-based* are the two
+/// kinds of buffering done for HCI within a Controller. In `FlowControl` the enumeration `Packets`
+/// corresponds to *packet-based* flow control, and `DataBlocks` corresponds to *data-block-based*
+/// flow control. Users of this library can specify at runtime what kind of flow control to use for
+/// data packets, but command flow control always uses `Packets`.
+///
+/// ### `Packets`
+/// `Packets` is a flow control mechanism of counting the number of packets that can be sent to the
+/// controller. The enumeration consist of `how_many` packets can currently be sent to the
+/// controller and the boolean `awaiting` to indicate if interface has messages awaiting for
+/// `how_many` to be greater than 0. When `how_many` is increased to be greater than zero an
+/// `awating` is true, the interface async task send the awaiting message to the interface driver.
+///
+/// ### `DataBlocks`
+/// `DataBlocks` is a flow control mechanism of counting the number of bytes the controller can
+/// currently accept from a HCI data packet. Here, `how_many` represents the maximum number of bytes
+/// in a payload of a HCI data packet that can be currently accepted by the controller. The field
+/// `awaiting` is the size of the payload of the next HCI data packet to be sent to the controller.
+/// When `how_many` is greater than `awaiting` the interface async task will send the awaiting
+/// message to the interface driver. When `awaiting` is none, then there is no awaiting message.
+///
+/// The `halted` field is a flag to halt the sending of messages to the controller, regardless of
+/// the value of `how_many`. `halted` is only true when the controller wants to resize the number of
+/// empty data blocks to a value less than what the host *may* think there is. It used during the
+/// process of re-acquiring the buffer information after the `NumberOfCompletedDataBlocks` event
+/// contains `None` (or zero in the event parameters) for the total number of data blocks.
+///
+/// Currently *data-block-based* flow control is only supports ACL data.
+///
+/// ### Default
+/// The default flow control type is *packet-based*.
+#[derive(Debug, Copy, Clone)]
+pub enum FlowControl {
+    Packets {
+        how_many: usize,
+        awaiting: bool,
+    },
+    DataBlocks {
+        how_many: usize,
+        halted: bool,
+        awaiting: Option<usize>,
+    },
+}
+
+impl Default for FlowControl {
+    fn default() -> Self {
+        FlowControl::Packets {
+            how_many: 0,
+            awaiting: false,
+        }
+    }
+}
+
+impl FlowControl {
+    /// Check if it is possible to send another HCI data message
+    fn is_capped(&self) -> bool {
+        0 == match self {
+            FlowControl::Packets { how_many, .. } => *how_many,
+            FlowControl::DataBlocks { how_many, .. } => *how_many,
+        }
+    }
+
+    /// Reduce the flow control by tye provided message
+    ///
+    /// This reduces the flow control information. For `Packets` the 'how_many' count is reduced by
+    /// one (unless it is already zero). For `DataBlocks` the `how_many` is reduced by the input
+    /// `by` (floored to zero). Both the `awaiting` fields of `Packets` and `DataBlocks` are set to
+    /// their default values after this method is called.
+    ///
+    /// # Note
+    /// Input `by` is ignored if this is `Packets`.
+    ///
+    /// # Panic
+    /// Input `payload_info` must not return `None` from method
+    /// [`get_payload_size`](GetPayloadSize::get_payload_size)
+    fn reduce<T: GetPayloadSize>(&mut self, payload_info: &T) {
+        match self {
+            FlowControl::Packets { how_many, awaiting } => {
+                how_many.checked_sub(1).map(|new| *how_many = new);
+
+                *awaiting = Default::default();
+            }
+            FlowControl::DataBlocks { how_many, awaiting, .. } => {
+                match how_many.checked_sub(payload_info.get_payload_size().unwrap()) {
+                    Some(new) => *how_many = new,
+                    None => *how_many = 0,
+                };
+
+                *awaiting = Default::default();
+            }
+        }
+    }
+
+    /// Set the awaiting message flag
+    ///
+    /// # Panic
+    /// Input `payload_info` must not return `None` from method
+    /// [`get_payload_size`](GetPayloadSize::get_payload_size)
+    fn set_awaiting<T: GetPayloadSize>(&mut self, payload_info: &T) {
+        match self {
+            FlowControl::Packets { awaiting, .. } => *awaiting = true,
+            FlowControl::DataBlocks { awaiting, .. } => *awaiting = Some(payload_info.get_payload_size().unwrap()),
+        }
+    }
+
+    /// Halt the sending of messages to the controller
+    ///
+    /// This halts the sending of messages to the controller regardless of the value of `how_many`
+    ///
+    /// # Note
+    /// This does nothing if `self` is `Packets`
+    fn halt(&mut self) {
+        if let FlowControl::DataBlocks { halted, .. } = self {
+            *halted = true
+        }
+    }
+
+    /// Release from the halted state
+    fn release(&mut self) {
+        if let FlowControl::DataBlocks { halted, .. } = self {
+            *halted = false
+        }
+    }
+}
+
+/// A trait for getting the size of the payload
+///
+/// The use of this trait is really for the method [`set_awaiting`](FlowControl::set_awaiting) of
+/// `FlowControl` to extract the payload size of an HCI packet from an [`IntraMessage`]. This trait
+/// is only implemented by `IntraMessage`.
+trait GetPayloadSize {
+    /// Get the size of the payload of an HCI packet
+    ///
+    /// # Note
+    /// This method will return `None` if the intra message is a meta type message.
+    fn get_payload_size(&self) -> Option<usize>;
 }
 
 /// A message channel
@@ -108,73 +344,29 @@ pub trait Channel {
     /// async task. It is taken as part of the construction of the asynchronous task. This method
     /// can be assumed to only be called once.
     fn take_receiver(&self) -> Option<Self::Receiver>;
-
-    /// Do something on the flow control information
-    fn on_flow_control<F>(&self, f: F)
-    where
-        F: FnOnce(&mut FlowControl);
 }
 
-trait ChannelExt: Channel {
-    /// Increment the number of data packets that can be sent
-    fn inc_flow_control_packets<N>(&mut self, number: N)
-    where
-        N: Into<usize>,
-    {
-        self.on_flow_control(|fc| fc.packet_count += number.into());
-    }
+/// Ends of the channels for an async task
+///
+/// Communication between the interface async task and any other task is done through two channels
+/// for bi-directional data transmission. The `ChannelEnds` are the parts of the channels used by
+/// one of the async tasks.
+trait ChannelEnds {
+    /// A channel for sending messages
+    type Channel: Channel + BufferReserve;
 
-    /// Decrement the number of packets that can be sent
-    ///
-    /// The result of calling this method will reduce the number of packets that the controller can
-    /// currently receive by one but not less than zero. The return is true as long as the flow
-    /// control tracker believes that the controller can currently receive another packet.
-    fn dec_flow_control_packets(&mut self) -> bool {
-        let mut can_receive = false;
+    /// Get the sender of messages to the other async task
+    fn get_prep_send(
+        &self,
+        front_capacity: usize,
+    ) -> GetPrepareSend<<Self::Channel as Channel>::Sender, <Self::Channel as BufferReserve>::TakeBuffer>;
 
-        self.on_flow_control(|fc| {
-            can_receive = 0
-                != fc
-                    .packet_count
-                    .checked_sub(1)
-                    .map(|result| {
-                        fc.packet_count = result;
-                        result
-                    })
-                    .unwrap_or_default()
-        });
+    /// Get the receiver of messages from the async task
+    fn get_receiver(&self) -> &<Self::Channel as Channel>::Receiver;
 
-        can_receive
-    }
-
-    /// Set the data blocks and number of data packets
-    fn inc_flow_control_packets_and_data<N, D>(&mut self, number_of_packets: N, number_of_data_blocks: D)
-    where
-        N: Into<usize>,
-        D: Into<usize>,
-    {
-        self.on_flow_control(|fc| {
-            fc.packet_count += number_of_packets.into();
-            fc.data_blocks += number_of_data_blocks.into();
-        })
-    }
-
-    /// Set the flow control information
-    fn set_flow_control(&mut self, flow_control: FlowControl) {
-        self.on_flow_control(|fc| *fc = flow_control)
-    }
-
-    /// Get the flow control information
-    fn get_flow_control(&mut self) -> FlowControl {
-        let mut flow_control = FlowControl::default();
-
-        self.on_flow_control(|fc| flow_control = *fc);
-
-        flow_control
-    }
+    /// Get a mutable reference to the receiver of messages from the async task
+    fn get_mut_receiver(&mut self) -> &mut <Self::Channel as Channel>::Receiver;
 }
-
-impl<T: Channel> ChannelExt for T {}
 
 /// A channel reserve
 ///
@@ -192,47 +384,79 @@ pub trait ChannelReserve {
     /// The error that occurs when trying to extend a buffer fails
     type TryExtendError: Debug;
 
-    /// Error returned by [`for_new_task`]
-    type ForNewTaskError: Debug;
+    /// The data type for the buffer of message sent
+    ///
+    /// This type may be "unsafe" with the exception that it must be safe to use within the buffers
+    type MessageBuffer: Unpin + From<Self::Buffer>;
 
     /// The type for the sender between async tasks
-    type Sender: Sender<Error = Self::SenderError, Message = IntraMessage<Self::Buffer>>;
+    type Sender: Sender<Error = Self::SenderError, Message = IntraMessage<Self::MessageBuffer>>;
 
     /// The type for the receiver between async tasks
-    type Receiver: Receiver<Message = IntraMessage<Self::Buffer>>;
+    type Receiver: Receiver<Message = IntraMessage<Self::MessageBuffer>>;
 
     /// The type for buffering messages between the host and controller
     type Buffer: Unpin + crate::TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>;
 
-    /// The mpsc channel
+    /// The mpsc channel type
     type Channel: BufferReserve<Buffer = Self::Buffer>
         + Channel<
             SenderError = Self::SenderError,
-            Message = IntraMessage<Self::Buffer>,
+            Message = IntraMessage<Self::MessageBuffer>,
             Sender = Self::Sender,
             Receiver = Self::Receiver,
         >;
 
+    /// The ends of the channels used to communicate with the interface async task.
+    type ChannelEnds: ChannelEnds<Channel = Self::Channel>;
+
     /// Try to remove a channel
     fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error>;
 
-    /// Create new channels for an async task
+    /// Add a new async task
     ///
-    /// This creates two new channels for communication with a new async task. The ends of these new
-    /// channels are split up between the interface async task and the async task identified by
-    /// input `task_id`. The ends used by the interface async task are saved within `self`. The ends
-    /// used by the async task identified by `task_id` are returned by this method.  
+    /// This creates a new channel for the task identified by `task_id`. The return is the channel
+    /// ends used by the async task to communicate with the interface async task.
     ///
     /// # Panic
-    /// This method may panic if `for_id` is already used
-    fn add_new_task(&mut self, task_id: TaskId) -> Result<ChannelEnds<Self::Channel>, Self::ForNewTaskError>
+    /// This method may panic if `task_id` is already used.
+    fn add_new_task(
+        &mut self,
+        task_id: TaskId,
+        flow_control_id: FlowControlId,
+    ) -> Result<Self::ChannelEnds, Self::Error>
     where
         Self::Channel: Sized;
 
-    /// Get the channel ends associated by the specified ID
+    /// Get the channel for sending messages *to* the async task associated by the specified task ID
     ///
-    /// `None` is returned if no channel exists for the provided identifier.
-    fn get(&self, id: TaskId) -> Option<&ChannelEnds<Self::Channel>>;
+    /// `None` is returned if no channel is associated with the input identifier.
+    fn get_and<F, R>(&self, id: TaskId, f: F) -> Option<R>
+    where
+        F: FnOnce(&Self::Channel) -> R;
+
+    /// Get the controller flow control identification
+    ///
+    /// This gets the flow control identifier that is associated to the task ID.
+    ///
+    /// `None` is returned if no data flow control id is associated with the input identifier.
+    fn get_flow_control_id(&self, id: TaskId) -> Option<FlowControlId>;
+
+    /// Get the [`FlowCtrlReceiver`]
+    ///
+    /// This returns the `FlowCtrlReceiver` used by this `ChannelReserve`.
+    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<Self::Receiver>;
+}
+
+macro_rules! inc_flow_ctrl {
+    ($fc:expr, $ty:ident, $how_many:expr $(,)?) => {{
+        match &mut $fc.$ty {
+            FlowControl::Packets { how_many, .. } => *how_many += $how_many,
+            FlowControl::DataBlocks { how_many, .. } => *how_many += $how_many,
+        }
+
+        $fc.call_waker()
+    }};
 }
 
 trait ChannelReserveExt: ChannelReserve {
@@ -245,38 +469,108 @@ trait ChannelReserveExt: ChannelReserve {
     fn prepare_send(
         &self,
         id: TaskId,
-    ) -> Option<GetPrepareSend<Self::Channel, <Self::Channel as BufferReserve>::TakeBuffer>> {
-        self.get(id).map(|channel| GetPrepareSend::new(channel))
+        front_capacity: usize,
+    ) -> Option<GetPrepareSend<Self::Sender, <Self::Channel as BufferReserve>::TakeBuffer>> {
+        self.get_and(id, |channel| GetPrepareSend::new(channel, front_capacity))
+    }
+
+    /// Receive the next message
+    fn receive_next(&mut self) -> ReceiveNext<'_, Self::Receiver> {
+        self.get_flow_ctrl_receiver().receive_next()
+    }
+
+    /// Increment the flow control for commands
+    ///
+    /// This increments the number of commands that can be sent to the controller by the number
+    /// provided by input `how_many`.
+    fn inc_cmd_flow_ctrl(&mut self, how_many: usize) {
+        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), cmd_flow_control, how_many);
+    }
+
+    /// Increment the flow control for ACL data
+    ///
+    /// This increments the amount of ACL data that can be sent to the controller by the number
+    /// provided by input `how_many`. The value of `how_many` depends on the type of flow control
+    /// currently implemented.
+    ///
+    /// ## Packet-Based
+    /// In packet based flow control, input `how_many` is the number of ACL data packets completed
+    /// by the controller from the last time this method was called. `how_many` directly corresponds
+    /// to the number of completed packets within the event
+    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    ///
+    /// ## Data-Block-Based
+    /// In data block based flow control, input `how_many` is the number of bytes that the
+    /// controller can currently accept since the last time this method was called. This value must
+    /// be calculated from the number of data blocks that were completed as stated in the event
+    /// [`NumberOfCompletedDataBlocks`](crate::hci::events::EventsData::NumberOfCompletedDataBlocks).
+    ///
+    /// This method shall not be called if the event `NumberOfCompletedDataBlocks` contained `None`
+    /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
+    /// information through the
+    /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
+    fn inc_acl_flow_ctrl(&mut self, how_many: usize) {
+        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), acl_flow_control, how_many);
+    }
+
+    /// Increment the flow control for SCO data
+    ///
+    /// This increments the amount of SCO data that can be sent to the controller by the number
+    /// provided by input `how_many`. The value of `how_many` depends on the type of flow control
+    /// currently implemented.
+    ///
+    /// ## Packet-Based
+    /// In packet based flow control, input `how_many` is the number of SCO data packets completed
+    /// by the controller from the last time this method was called. `how_many` directly corresponds
+    /// to the number of completed packets within the event
+    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    fn inc_sco_flow_control(&mut self, how_many: usize) {
+        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), sco_flow_control, how_many);
+    }
+
+    /// Increment the flow control for LE ACL data
+    ///
+    /// This increments the amount of ACL data that can be sent to the controller by the number
+    /// provided by input `how_many`. The value of `how_many` depends on the type of flow control
+    /// currently implemented.
+    ///
+    /// ## Packet-Based
+    /// In packet based flow control, input `how_many` is the number of ACL data packets completed
+    /// by the controller from the last time this method was called. `how_many` directly corresponds
+    /// to the number of completed packets within the event
+    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    ///
+    /// ## Data-Block-Based
+    /// In data block based flow control, input `how_many` is the number of bytes that the
+    /// controller can currently accept since the last time this method was called. This value must
+    /// be calculated from the number of data blocks that were completed as stated in the event
+    /// [`NumberOfCompletedDataBlocks`](crate::hci::events::EventsData::NumberOfCompletedDataBlocks).
+    ///
+    /// This method shall not be called if the event `NumberOfCompletedDataBlocks` contained `None`
+    /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
+    /// information through the
+    /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
+    fn inc_le_acl_flow_control(&mut self, how_many: usize) {
+        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_acl_flow_control, how_many);
+    }
+
+    /// Increment the flow control for ISO data
+    ///
+    /// This increments the amount of ISO data that can be sent to the controller by the number
+    /// provided by input `how_many`. The value of `how_many` depends on the type of flow control
+    /// currently implemented.
+    ///
+    /// ## Packet-Based
+    /// In packet based flow control, input `how_many` is the number of ISO data packets completed
+    /// by the controller from the last time this method was called. `how_many` directly corresponds
+    /// to the number of completed packets within the event
+    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    fn inc_le_iso_flow_control(&mut self, how_many: usize) {
+        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_iso_flow_control, how_many);
     }
 }
 
 impl<T: ChannelReserve> ChannelReserveExt for T {}
-
-/// Ends of the channels to another async task
-///
-/// This contains the two channel ends held by the interface for the channels connecting the two
-/// async task.
-struct ChannelEnds<C: Channel> {
-    sender: C::Sender,
-    receiver: C::Receiver,
-}
-
-impl<C: Channel> ChannelEnds<C> {
-    /// Create a new `ChannelEnds`
-    pub fn new(sender: C::Sender, receiver: C::Receiver) -> Self {
-        Self { sender, receiver }
-    }
-
-    /// Get the sender of messages to the async task
-    fn get_sender(&self) -> &C::Sender {
-        &self.sender
-    }
-
-    /// Get the receiver of messages from the async task
-    fn get_receiver(&self) -> &C::Receiver {
-        &self.receiver
-    }
-}
 
 /// A future for acquiring a `PrepareSend`
 ///
@@ -284,44 +578,38 @@ impl<C: Channel> ChannelEnds<C> {
 /// future returns right away, but it is needed in the case where the reserve is waiting to free up
 /// a buffer for this send process. When the future does poll to completion it returns a
 /// `PrepareSend`.
-struct GetPrepareSend<'a, C, T> {
-    channel_ends: Option<&'a ChannelEnds<C>>,
+pub struct GetPrepareSend<S, T> {
+    sender: Option<S>,
     take_buffer: T,
 }
 
-impl<'a, C> GetPrepareSend<'a, C, C::TakeBuffer>
-where
-    C: BufferReserve,
-{
-    pub fn new(channel_ends: &'a ChannelEnds<C>) -> Self {
-        let take_buffer = channel_ends.sender.take(None);
-        let channel_ends = Some(channel_ends);
+impl<S, T> GetPrepareSend<S, T> {
+    fn new<C>(channel: &C, front_capacity: usize) -> Self
+    where
+        C: Channel<Sender = S> + BufferReserve<TakeBuffer = T>,
+    {
+        let take_buffer = channel.take(front_capacity);
+        let sender = Some(channel.get_sender());
 
-        GetPrepareSend {
-            channel_ends,
-            take_buffer,
-        }
+        GetPrepareSend { sender, take_buffer }
     }
 }
 
-impl<C> Future for GetPrepareSend<C, C::TakeBuffer>
+impl<S, T> Future for GetPrepareSend<S, T>
 where
-    C: Channel + BufferReserve,
+    T: Future,
 {
-    type Output = PrepareSend<C, C::Buffer>;
+    type Output = PrepareSend<S, T::Output>;
 
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
-        unsafe { core::pin::Pin::new_unchecked(&mut this.take_buffer) }
+        unsafe { Pin::new_unchecked(&mut this.take_buffer) }
             .poll(cx)
             .map(|buffer| {
-                let channel_ends = this
-                    .channel_ends
-                    .take()
-                    .expect("GetPrepareSend already polled to completion");
+                let sender = this.sender.take().expect("GetPrepareSend already polled to completion");
 
-                PrepareSend::new(channel_ends, buffer)
+                PrepareSend::new(sender, buffer)
             })
     }
 }
@@ -336,48 +624,47 @@ where
 /// well as the crate traits `TryExtend`/`TryRemove`/`TryFrontExtend`/`TryFrontRemove`. Once
 /// modification of the message is done, a `PrepareSend` can be converted into a future with the
 /// function [`and_send`](PrepareSend::and_send) to send the message.
-struct PrepareSend<'a, C, B> {
-    channel_ends: &'a ChannelEnds<C>,
+pub struct PrepareSend<S, B> {
+    sender: S,
     buffer: B,
 }
 
-impl<'a, C, B> PrepareSend<'a, C, B>
-where
-    C: Channel,
-{
-    fn new(channel_ends: &'a ChannelEnds<C>, buffer: B) -> Self {
-        Self { channel_ends, buffer }
+impl<S, B> PrepareSend<S, B> {
+    fn new(sender: S, buffer: B) -> Self {
+        Self { sender, buffer }
     }
 
     /// Take a `PrepareSend` and return a future to send a message
     ///
     /// This take a `PrepareSend` and a closure `f` to convert the buffered data into a message (of
     /// type M) and return a future for sending the message.
-    async fn and_send<F>(ps: Self, f: F) -> Result<(), C::SenderError>
+    pub async fn and_send<F, M>(ps: Self, f: F) -> Result<(), S::Error>
     where
-        F: FnOnce(B) -> C::Message,
+        S: Sender<Message = IntraMessage<M>>,
+        F: FnOnce(B) -> IntraMessage<B>,
+        M: From<B>,
     {
-        let message = f(ps.buffer);
+        let message = f(ps.buffer).map();
 
-        ps.channel_ends.get_sender().send(message).await
+        ps.sender.send(message).await
     }
 }
 
-impl<C, M> AsRef<M> for PrepareSend<C, M> {
-    fn as_ref(&self) -> &M {
+impl<S, B> AsRef<B> for PrepareSend<S, B> {
+    fn as_ref(&self) -> &B {
         &self.buffer
     }
 }
 
-impl<C, M> AsMut<M> for PrepareSend<C, M> {
-    fn as_mut(&mut self) -> &mut M {
+impl<S, B> AsMut<B> for PrepareSend<S, B> {
+    fn as_mut(&mut self) -> &mut B {
         &mut self.buffer
     }
 }
 
-impl<C, M> Deref for PrepareSend<C, M>
+impl<S, B> Deref for PrepareSend<S, B>
 where
-    M: Deref<Target = [u8]>,
+    B: Deref<Target = [u8]>,
 {
     type Target = [u8];
 
@@ -386,11 +673,11 @@ where
     }
 }
 
-impl<C, M> crate::TryExtend<u8> for PrepareSend<C, M>
+impl<S, B> crate::TryExtend<u8> for PrepareSend<S, B>
 where
-    M: crate::TryExtend<u8>,
+    B: crate::TryExtend<u8>,
 {
-    type Error = M::Error;
+    type Error = B::Error;
 
     fn try_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
     where
@@ -400,23 +687,23 @@ where
     }
 }
 
-impl<C, M> crate::TryRemove<u8> for PrepareSend<C, M>
+impl<S, B> crate::TryRemove<u8> for PrepareSend<S, B>
 where
-    M: crate::TryRemove<u8>,
+    B: crate::TryRemove<u8>,
 {
-    type Error = M::Error;
-    type RemoveIter<'a> = M::RemoveIter<'a> where M: 'a, Self: 'a;
+    type Error = B::Error;
+    type RemoveIter<'a> = B::RemoveIter<'a> where Self: 'a;
 
     fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
         self.buffer.try_remove(how_many)
     }
 }
 
-impl<C, M> crate::TryFrontExtend<u8> for PrepareSend<C, M>
+impl<S, B> crate::TryFrontExtend<u8> for PrepareSend<S, B>
 where
-    M: crate::TryFrontExtend<u8>,
+    B: crate::TryFrontExtend<u8>,
 {
-    type Error = M::Error;
+    type Error = B::Error;
 
     fn try_front_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
     where
@@ -426,15 +713,161 @@ where
     }
 }
 
-impl<C, M> crate::TryFrontRemove<u8> for PrepareSend<C, M>
+impl<S, B> crate::TryFrontRemove<u8> for PrepareSend<S, B>
 where
-    M: crate::TryFrontRemove<u8>,
+    B: crate::TryFrontRemove<u8>,
 {
-    type Error = M::Error;
-    type FrontRemoveIter<'a> = M::FrontRemoveIter<'a> where M: 'a, Self: 'a;
+    type Error = B::Error;
+    type FrontRemoveIter<'a> = B::FrontRemoveIter<'a> where Self: 'a;
 
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
         self.buffer.try_front_remove(how_many)
+    }
+}
+
+/// Receivers used by an interface async task
+struct InterfaceReceivers<R> {
+    pub cmd_receiver: R,
+    pub acl_receiver: R,
+    pub sco_receiver: R,
+    pub le_acl_receiver: R,
+    pub le_iso_receiver: R,
+}
+
+/// A flow controlled receiver
+///
+/// This is used to manage the flow control from the interface async task to the interface driver.
+/// The interface async task monitors the buffers of the controller to ensure that data is not sent
+/// to it when the controller cannot accept it.
+///
+/// This works by only releasing messages from a channel when the controller can accept it. There is
+/// possibly five different kinds of buffers in a controller. A
+struct FlowCtrlReceiver<R: Receiver> {
+    cmd_receiver: PeekableReceiver<R>,
+    acl_receiver: PeekableReceiver<R>,
+    sco_receiver: PeekableReceiver<R>,
+    le_acl_receiver: PeekableReceiver<R>,
+    le_iso_receiver: PeekableReceiver<R>,
+    last_received: FlowControlId,
+    cmd_flow_control: FlowControl,
+    acl_flow_control: FlowControl,
+    sco_flow_control: FlowControl,
+    le_acl_flow_control: FlowControl,
+    le_iso_flow_control: FlowControl,
+    block_size: usize,
+    waker: Option<core::task::Waker>,
+}
+
+impl<R: Receiver> FlowCtrlReceiver<R> {
+    /// Create a new `FlowCtrlReceiver`
+    fn new(receivers: InterfaceReceivers<R>) -> Self {
+        let cmd_receiver = receivers.cmd_receiver.peekable();
+        let acl_receiver = receivers.acl_receiver.peekable();
+        let sco_receiver = receivers.sco_receiver.peekable();
+        let le_acl_receiver = receivers.le_acl_receiver.peekable();
+        let le_iso_receiver = receivers.le_iso_receiver.peekable();
+        let last_received = FlowControlId::Cmd;
+        let cmd_flow_control = FlowControl::default();
+        let acl_flow_control = FlowControl::default();
+        let sco_flow_control = FlowControl::default();
+        let le_acl_flow_control = FlowControl::default();
+        let le_iso_flow_control = FlowControl::default();
+        let block_size = 0;
+        let waker = None;
+
+        Self {
+            cmd_receiver,
+            acl_receiver,
+            sco_receiver,
+            le_acl_receiver,
+            le_iso_receiver,
+            last_received,
+            cmd_flow_control,
+            acl_flow_control,
+            sco_flow_control,
+            le_acl_flow_control,
+            le_iso_flow_control,
+            block_size,
+            waker,
+        }
+    }
+
+    fn set_waker(&mut self, waker: &core::task::Waker) {
+        self.waker = Some(waker.clone())
+    }
+
+    fn call_waker(&mut self) {
+        self.waker.take().map(|waker| waker.wake());
+    }
+
+    fn receive_next(&mut self) -> ReceiveNext<'_, R> {
+        ReceiveNext(self)
+    }
+}
+
+/// A future for receiving from a async task
+///
+/// This is the receiver for receiving messages from any other async task.
+///
+/// # Note
+/// When all async tasks are closed, when polled `RecvNext` will return `None`.
+struct ReceiveNext<'a, R: Receiver>(&'a mut FlowCtrlReceiver<R>);
+
+impl<R> Future for ReceiveNext<'_, R>
+where
+    R: Receiver,
+    R::Message: GetPayloadSize,
+{
+    type Output = Option<R::Message>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        macro_rules! fc_rx {
+            ($fcr:expr, $receiver:ident, $fc:ident, $cx:expr, $fc_id:expr, $dead_cnt:expr) => {
+                match $fcr.$receiver.poll_peek($cx) {
+                    core::task::Poll::Pending => {}
+                    core::task::Poll::Ready(None) => $dead_cnt += 1,
+                    core::task::Poll::Ready(Some(message)) => {
+                        if $fcr.$fc.is_capped() {
+                            $fcr.$fc.set_awaiting(message);
+
+                            // set the waker to awake this when the
+                            // flow control information is updated.
+                            $fcr.set_waker($cx.waker())
+                        } else {
+                            $fcr.$fc.reduce(message);
+
+                            $fcr.last_received = $fc_id;
+
+                            let msg = $fcr.$receiver.poll_recv($cx);
+
+                            debug_assert!(msg.is_ready());
+
+                            return msg;
+                        }
+                    }
+                }
+            };
+        }
+
+        let fcr = unsafe { &mut self.get_unchecked_mut().0 };
+
+        let mut dead_cnt = 0;
+
+        for fc_id in fcr.last_received.cycle_after() {
+            match fc_id {
+                FlowControlId::Cmd => fc_rx!(fcr, cmd_receiver, cmd_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::Acl => fc_rx!(fcr, acl_receiver, acl_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::Sco => fc_rx!(fcr, sco_receiver, sco_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::LeAcl => fc_rx!(fcr, le_acl_receiver, le_acl_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::LeIso => fc_rx!(fcr, le_iso_receiver, le_iso_flow_control, cx, fc_id, dead_cnt),
+            }
+        }
+
+        if dead_cnt == 5 {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
     }
 }
 
@@ -442,28 +875,25 @@ where
 ///
 /// An `Interface` is the component of the host that must run with the interface driver. Its the
 /// part of the host that must perpetually await upon the
-pub struct Interface<R, F> {
+pub struct Interface<R> {
     channel_reserve: R,
-    flow_ctrl_queues: F,
-    initial_connection_flow_control: FlowControl,
 }
 
-impl<R, F> Interface<R, F>
+impl<R> Interface<R>
 where
     R: ChannelReserve,
-    F: FlowControlQueues,
 {
     /// Create channels for a new connection
-    pub fn new_connection(&mut self, handle: ConnectionHandle) -> Result<(R::Sender, R::Receiver), R::Error> {
-        let mut channel = self.channel_reserve.try_add(TaskId::Connection(handle))?;
-
-        let sender = self.channel_reserve.get_self_sender();
-
-        channel.set_flow_control(self.initial_connection_flow_control);
-
-        let receiver = channel.get_to_receiver().unwrap();
-
-        Ok((sender, receiver))
+    ///
+    /// This creates the channels for the new connection and returns the channel ends for
+    /// communicating with the interface async task.
+    pub fn new_le_connection(
+        &mut self,
+        handle: ConnectionHandle,
+        flow_control_id: FlowControlId,
+    ) -> Result<R::ChannelEnds, R::Error> {
+        self.channel_reserve
+            .add_new_task(TaskId::Connection(handle), flow_control_id)
     }
 
     /// Buffer received HCI packet from the interface until it can be sent upwards
@@ -588,7 +1018,7 @@ where
     /// # }.ok();
     /// # };
     /// ```
-    pub fn buffered_send(&mut self, packet_type: HciPacketType) -> BufferedSend<'_, R, F> {
+    pub fn buffered_send(&mut self, packet_type: HciPacketType) -> BufferedSend<'_, R> {
         BufferedSend::new(self, packet_type)
     }
 
@@ -613,7 +1043,7 @@ where
     ///
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
-    pub fn recv(&mut self) -> Recv<'_, R, F> {
+    pub fn recv(&mut self) -> Recv<'_, R> {
         Recv { interface: self }
     }
 
@@ -668,11 +1098,7 @@ where
 
         if 0 != cc_data.number_of_hci_command_packets {
             self.channel_reserve
-                .get(TaskId::Host)
-                .ok_or(SendMessageError::HostClosed)?
-                .inc_flow_control_packets(cc_data.number_of_hci_command_packets);
-
-            self.flow_ctrl_queues.set_ready(TaskId::Host);
+                .inc_cmd_flow_ctrl(cc_data.number_of_hci_command_packets.into());
         }
 
         Ok(cc_data.command_opcode.is_some())
@@ -691,11 +1117,7 @@ where
 
         if 0 != cs_data.number_of_hci_command_packets {
             self.channel_reserve
-                .get(TaskId::Host)
-                .ok_or(SendMessageError::HostClosed)?
-                .inc_flow_control_packets(cs_data.number_of_hci_command_packets);
-
-            self.flow_ctrl_queues.set_ready(TaskId::Host);
+                .inc_cmd_flow_ctrl(cs_data.number_of_hci_command_packets.into());
         }
 
         Ok(cs_data.command_opcode.is_some())
@@ -717,14 +1139,21 @@ where
 
         for ncp in ncp_data {
             if 0 != ncp.completed_packets {
-                let channel_id = TaskId::Connection(ncp.connection_handle);
+                let how_many: usize = ncp.completed_packets.into();
 
-                self.channel_reserve
-                    .get(channel_id)
+                let task_id = TaskId::Connection(ncp.connection_handle);
+
+                match self
+                    .channel_reserve
+                    .get_flow_control_id(task_id)
                     .ok_or(SendMessageError::UnknownConnectionHandle(ncp.connection_handle))?
-                    .inc_flow_control_packets(ncp.completed_packets);
-
-                self.flow_ctrl_queues.set_ready(channel_id);
+                {
+                    FlowControlId::Acl => self.channel_reserve.inc_acl_flow_ctrl(how_many),
+                    FlowControlId::Sco => self.channel_reserve.inc_sco_flow_control(how_many),
+                    FlowControlId::LeAcl => self.channel_reserve.inc_le_acl_flow_control(how_many),
+                    FlowControlId::LeIso => self.channel_reserve.inc_le_iso_flow_control(how_many),
+                    FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
+                }
             }
         }
 
@@ -741,22 +1170,45 @@ where
         &mut self,
         event_parameter: &[u8],
     ) -> Result<bool, SendMessageError<E>> {
-        use crate::hci::events::NumberOfCompletedDataBlocksData;
+        use crate::hci::events::{CompletedDataPacketsAndBlocks, NumberOfCompletedDataBlocksData};
         use core::convert::TryFrom;
 
         let ncdb_data = NumberOfCompletedDataBlocksData::try_from(event_parameter)
             .map_err(|_| SendMessageError::InvalidHciEvent(Events::NumberOfCompletedDataBlocks))?;
 
+        // This algorithm for flow control of the block buffers just
+        // counts the total number of *bytes* that the controller can
+        // accept (of one or more HCI payloads) within those buffers.
+        // The total number of data blocks does not need to be counted
+        // **unless** the controller sends back the need for the host
+        // to re-check the block buffer information via the *Read Data
+        // Block Size* command.
+        if let None = ncdb_data.total_data_blocks {
+            self.channel_reserve.get_flow_ctrl_receiver().acl_flow_control.halt();
+
+            self.channel_reserve.get_flow_ctrl_receiver().le_acl_flow_control.halt();
+
+            todo!("process of re-reading the data block buffer sizes not implemented yet")
+        }
+
         for ncdb in ncdb_data.completed_packets_and_blocks {
-            if 0 != ncdb.completed_packets {
-                let channel_id = TaskId::Connection(ncdb.connection_handle);
+            if 0 != ncdb.completed_blocks {
+                let how_many: usize =
+                    self.channel_reserve.get_flow_ctrl_receiver().block_size * <usize>::from(ncdb.completed_blocks);
 
-                self.channel_reserve
-                    .get(channel_id)
+                let task_id = TaskId::Connection(ncdb.connection_handle);
+
+                match self
+                    .channel_reserve
+                    .get_flow_control_id(task_id)
                     .ok_or(SendMessageError::UnknownConnectionHandle(ncdb.connection_handle))?
-                    .inc_flow_control_packets_and_data(ncdb.completed_packets, ncdb.completed_blocks);
-
-                self.flow_ctrl_queues.set_ready(channel_id);
+                {
+                    FlowControlId::Acl => self.channel_reserve.inc_acl_flow_ctrl(how_many),
+                    FlowControlId::Sco => self.channel_reserve.inc_sco_flow_control(how_many),
+                    FlowControlId::LeAcl => self.channel_reserve.inc_le_acl_flow_control(how_many),
+                    FlowControlId::LeIso => self.channel_reserve.inc_le_iso_flow_control(how_many),
+                    FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
+                }
             }
         }
 
@@ -778,7 +1230,7 @@ where
         if self.parse_event(&packet)? {
             let mut prepare_send = self
                 .channel_reserve
-                .prepare_send(TaskId::Host)
+                .prepare_send(TaskId::Host, 0)
                 .ok_or(SendError::<R>::HostClosed)?
                 .await;
 
@@ -812,7 +1264,7 @@ where
 
         let mut prepare_send = self
             .channel_reserve
-            .prepare_send(TaskId::Connection(connection_handle))
+            .prepare_send(TaskId::Connection(connection_handle), 0)
             .ok_or(SendError::<R>::HostClosed)?
             .await;
 
@@ -826,7 +1278,7 @@ where
     }
 }
 
-impl Interface<local_channel::LocalChannelManager, ()> {
+impl Interface<local_channel::LocalChannelManager> {
     /// Create a new local `Interface`
     ///
     /// This host controller interface is local to a single thread. The interface, host, and
@@ -840,18 +1292,11 @@ impl Interface<local_channel::LocalChannelManager, ()> {
     pub fn new_local(channel_size: usize) -> Self {
         let mut channel_reserve = local_channel::LocalChannelManager::new(channel_size);
 
-        // This should always work, hence the usage of unwrap
-        channel_reserve.try_add(TaskId::Host).ok().unwrap();
-
-        Interface {
-            channel_reserve,
-            initial_connection_flow_control: FlowControl::default(),
-            flow_ctrl_queues: todo!(),
-        }
+        Interface { channel_reserve }
     }
 }
 
-impl Interface<(), ()> {
+impl Interface<()> {
     /// Create a statically sized local interface
     ///
     /// This host controller interface is local to a single thread. The interface, host, and
@@ -876,61 +1321,28 @@ impl Interface<(), ()> {
     /// let interface = Interface::new_stack_local::<5, 5, ACLU::MIN_MTU>(channel_reserve);
     /// ```
     #[cfg(feature = "unstable")]
-    pub fn new_stack_local<'a, const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
-        channel_reserve: &'a local_channel::LocalStackChannelReserve<'static, CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
-    ) -> Interface<&'a local_channel::LocalStackChannelReserve<'static, CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, ()>
-    {
-        Interface {
-            channel_reserve,
-            initial_connection_flow_control: FlowControl::default(),
-            flow_ctrl_queues: todo!(),
-        }
+    pub fn new_stack_local<const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
+        channel_reserve_data: &local_channel::LocalStackChannelReserveData<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+    ) -> Interface<local_channel::LocalStackChannelReserve<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>> {
+        let mut channel_reserve = local_channel::LocalStackChannelReserve::new(channel_reserve_data);
+
+        Interface { channel_reserve }
     }
 }
 
 /// Future returned by the method [`recv`](Interface::recv)
-pub struct Recv<'a, R, F> {
-    interface: &'a Interface<R, F>,
+pub struct Recv<'a, R> {
+    interface: &'a Interface<R>,
 }
 
-impl<'a, R, F> Future for Recv<'a, R, F>
+impl<'a, R> Future for Recv<'a, R>
 where
     R: ChannelReserve,
-    F: FlowControlQueues,
 {
     type Output = Option<IntraMessage<R::Buffer>>;
 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
-        use core::task::Poll;
-
-        let this = unsafe { self.get_unchecked_mut() };
-
-        loop {
-            match this.interface.flow_ctrl_queues.next_ready() {
-                Some(id) => {
-                    // this loops to the next ready id if a channel
-                    // doesn't exist for the associated channel id.
-                    if let Some(channel) = this.interface.channel_reserve.get(id) {
-                        // continue if there is not another message
-                        if let ready @ Poll::Ready(_) = channel.get_from_receiver().poll_recv(cx) {
-                            // decrement the number of packets that can be sent and
-                            // put the channel in the pending queue if the controller
-                            // cannot accept any more packets.
-                            if !channel.dec_flow_control_packets() {
-                                this.interface.flow_ctrl_queues.set_pending(id)
-                            }
-
-                            break ready;
-                        }
-                    }
-                }
-                None => {
-                    this.interface.flow_ctrl_queues.set_ready_waker(cx.waker());
-
-                    break Poll::Pending;
-                }
-            }
-        }
+        todo!()
     }
 }
 
@@ -992,8 +1404,7 @@ impl<C, B> From<MessageError<B>> for SendErrorReason<C, B> {
 }
 
 /// Error returned by operations of [`Interface`] or [`BufferedSend`]
-pub type SendError<R> =
-    SendErrorReason<<R as ChannelReserveTypes>::SenderError, <R as ChannelReserveTypes>::TryExtendError>;
+pub type SendError<R> = SendErrorReason<<R as ChannelReserve>::SenderError, <R as ChannelReserve>::TryExtendError>;
 
 enum SendMessageError<T> {
     ChannelError(T),
@@ -1012,8 +1423,8 @@ enum MessageError<B> {
 }
 
 impl<B> From<TaskId> for MessageError<B> {
-    fn from(channel_id: TaskId) -> Self {
-        match channel_id {
+    fn from(task_id: TaskId) -> Self {
+        match task_id {
             TaskId::Host => MessageError::HostClosed,
             TaskId::Connection(handle) => MessageError::UnknownConnectionHandle(handle),
         }
@@ -1028,26 +1439,25 @@ impl<B> From<TaskId> for MessageError<B> {
 /// than necessary will result in the `BufferedSend` ignoring them.
 ///
 /// For information on how to use this see the method [`buffer_send`](Interface::buffered_send)
-pub struct BufferedSend<'a, R: ChannelReserve, F> {
-    interface: &'a mut Interface<R, F>,
+pub struct BufferedSend<'a, R: ChannelReserve> {
+    interface: &'a mut Interface<R>,
     packet_type: HciPacketType,
     packet_len: core::cell::Cell<Option<usize>>,
-    channel_id_state: core::cell::RefCell<BufferedChannelId>,
+    task_id_state: core::cell::RefCell<BufferedTaskId>,
     buffer: core::cell::RefCell<Option<R::Buffer>>,
 }
 
-impl<'a, R, F> BufferedSend<'a, R, F>
+impl<'a, R> BufferedSend<'a, R>
 where
     R: ChannelReserve,
-    F: FlowControlQueues,
 {
     /// Create a new `BufferSend`
-    fn new(interface: &'a mut Interface<R, F>, packet_type: HciPacketType) -> Self {
+    fn new(interface: &'a mut Interface<R>, packet_type: HciPacketType) -> Self {
         BufferedSend {
             interface,
             packet_type,
             packet_len: core::cell::Cell::new(None),
-            channel_id_state: core::cell::RefCell::new(BufferedChannelId::None),
+            task_id_state: core::cell::RefCell::new(BufferedTaskId::None),
             buffer: core::cell::RefCell::new(None),
         }
     }
@@ -1058,11 +1468,14 @@ where
     /// An error is returned if the channel no longer exists
     ///
     /// # Panic
-    /// This will panic if self.channel_id_state cannot be converted into a channel if.
-    fn get_channel(&self) -> Result<R::Channel, MessageError<R::TryExtendError>> {
-        let channel_id = self.channel_id_state.borrow().try_into_channel_id().unwrap();
+    /// This will panic if `self.task_id_state` cannot be converted into a `TaskId`.
+    fn get_channel_and<F, V>(&self, f: F) -> Result<V, MessageError<R::TryExtendError>>
+    where
+        F: FnOnce(&R::Channel) -> V,
+    {
+        let task_id = self.task_id_state.borrow().try_into_task_id().unwrap();
 
-        self.interface.channel_reserve.get(channel_id).ok_or(channel_id.into())
+        self.interface.channel_reserve.get_and(task_id, f).ok_or(task_id.into())
     }
 
     /// Add bytes before the *parameter length* in the Command packet or Event packet is acquired
@@ -1084,9 +1497,11 @@ where
         } else {
             buffer_borrow.take();
 
-            self.channel_id_state.replace(BufferedChannelId::Host);
+            self.task_id_state.replace(BufferedTaskId::Host);
 
-            self.buffer.replace(Some(self.get_channel()?.take(None).await));
+            let buffer = self.get_channel_and(|channel| channel.take(None))?.await;
+
+            self.buffer.replace(Some(buffer));
 
             buffer_borrow = Some(self.buffer.borrow_mut());
 
@@ -1128,14 +1543,16 @@ where
         match *buffer_borrow {
             None => {
                 if let Some(handle) = self
-                    .channel_id_state
+                    .task_id_state
                     .borrow_mut()
                     .add_byte(byte)
                     .map_err(|_| MessageError::InvalidConnectionHandle)?
                 {
                     drop(buffer_borrow);
 
-                    self.buffer.replace(self.get_channel()?.take(None).await.into());
+                    let buffer = self.get_channel_and(|channel| channel.take(None))?.await;
+
+                    self.buffer.replace(Some(buffer));
 
                     self.buffer
                         .borrow_mut()
@@ -1278,13 +1695,13 @@ where
     /// the packet to its destination. An error is returned if this method is called before a
     /// complete HCI packet is stored within this `BufferedSend`.
     pub async fn send(self) -> Result<(), SendError<R>> {
-        BufferedSendSetup::new(self).into_future().await
+        BufferedSendSetup::<R>::new(self).into_future().await
     }
 }
 
 /// The state of a connection handle within a buffered
 #[derive(Copy, Clone)]
-enum BufferedChannelId {
+enum BufferedTaskId {
     /// Connection handle has not been set or acquired yet
     None,
     /// First byte of a connection handle
@@ -1295,7 +1712,7 @@ enum BufferedChannelId {
     ConnectionHandle(ConnectionHandle),
 }
 
-impl BufferedChannelId {
+impl BufferedTaskId {
     /// Add a byte to the connection handle
     ///
     /// Add a byte to the buffered connection handle. When a
@@ -1310,28 +1727,28 @@ impl BufferedChannelId {
     ) -> Result<Option<ConnectionHandle>, <ConnectionHandle as core::convert::TryFrom<[u8; 2]>>::Error> {
         use core::convert::TryFrom;
 
-        match core::mem::replace(self, BufferedChannelId::None) {
-            BufferedChannelId::None => {
-                *self = BufferedChannelId::ConnectionHandleFirstByte(byte);
+        match core::mem::replace(self, BufferedTaskId::None) {
+            BufferedTaskId::None => {
+                *self = BufferedTaskId::ConnectionHandleFirstByte(byte);
 
                 Ok(None)
             }
-            BufferedChannelId::ConnectionHandleFirstByte(first) => {
+            BufferedTaskId::ConnectionHandleFirstByte(first) => {
                 let connection_handle = ConnectionHandle::try_from([first, byte])?;
 
-                *self = BufferedChannelId::ConnectionHandle(connection_handle);
+                *self = BufferedTaskId::ConnectionHandle(connection_handle);
 
                 Ok(Some(connection_handle))
             }
-            BufferedChannelId::ConnectionHandle(_) | BufferedChannelId::Host => unreachable!(),
+            BufferedTaskId::ConnectionHandle(_) | BufferedTaskId::Host => unreachable!(),
         }
     }
 
-    fn try_into_channel_id(&self) -> Option<TaskId> {
+    fn try_into_task_id(&self) -> Option<TaskId> {
         match self {
-            BufferedChannelId::None | BufferedChannelId::ConnectionHandleFirstByte(_) => None,
-            BufferedChannelId::Host => Some(TaskId::Host),
-            BufferedChannelId::ConnectionHandle(handle) => Some(TaskId::Connection(*handle)),
+            BufferedTaskId::None | BufferedTaskId::ConnectionHandleFirstByte(_) => None,
+            BufferedTaskId::Host => Some(TaskId::Host),
+            BufferedTaskId::ConnectionHandle(handle) => Some(TaskId::Connection(*handle)),
         }
     }
 }
@@ -1398,7 +1815,7 @@ impl<R> BufferedSendSetup<R>
 where
     R: ChannelReserve,
 {
-    fn new<F>(bs: BufferedSend<R, F>) -> Self {
+    fn new(bs: BufferedSend<R>) -> Self {
         if bs.is_ready() {
             match bs.packet_type {
                 HciPacketType::Acl => Self::from_acl(bs),
@@ -1412,7 +1829,7 @@ where
         }
     }
 
-    fn from_event<F>(bs: BufferedSend<R, F>) -> Self {
+    fn from_event(bs: BufferedSend<R>) -> Self {
         let buffer = match bs.buffer.take() {
             Some(buffer) => buffer,
             None => return BufferedSendSetup::Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
@@ -1421,14 +1838,12 @@ where
         match bs.interface.parse_event(&buffer) {
             Err(e) => BufferedSendSetup::Err(e.into()),
             Ok(true) => {
-                let channel = match bs.get_channel() {
-                    Ok(channel) => channel,
+                let sender = match bs.get_channel_and(|channel| channel.get_sender()) {
+                    Ok(sender) => sender,
                     Err(e) => return BufferedSendSetup::Err(e.into()),
                 };
 
                 let message = IntraMessageType::Event(buffer).into();
-
-                let sender = channel.get_to_sender();
 
                 BufferedSendSetup::Send(sender, message)
             }
@@ -1436,20 +1851,18 @@ where
         }
     }
 
-    fn from_acl<F>(bs: BufferedSend<R, F>) -> Self {
+    fn from_acl(bs: BufferedSend<R>) -> Self {
         let buffer = match bs.buffer.take() {
             Some(buffer) => buffer,
             None => return BufferedSendSetup::Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
         };
 
-        let channel = match bs.get_channel() {
-            Ok(channel) => channel,
+        let sender = match bs.get_channel_and(|channel| channel.get_sender()) {
+            Ok(sender) => sender,
             Err(e) => return BufferedSendSetup::Err(e.into()),
         };
 
         let message = IntraMessageType::Acl(buffer).into();
-
-        let sender = channel.get_to_sender();
 
         BufferedSendSetup::Send(sender, message)
     }
@@ -1457,9 +1870,10 @@ where
     async fn into_future(self) -> Result<(), SendError<R>> {
         match self {
             BufferedSendSetup::NoOp => Ok(()),
-            BufferedSendSetup::Send(sender, message) => {
-                sender.send(message).await.map_err(|e| SendError::<R>::ChannelError(e))
-            }
+            BufferedSendSetup::Send(sender, message) => sender
+                .send(message.map())
+                .await
+                .map_err(|e| SendError::<R>::ChannelError(e)),
             BufferedSendSetup::Err(e) => Err(e),
         }
     }
@@ -1649,9 +2063,91 @@ pub trait Receiver {
     where
         Self: 'a;
 
-    fn poll_recv(&mut self, cx: &mut core::task::Context<'_>) -> core::task::Poll<Option<Self::Message>>;
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>>;
 
-    fn recv(&self) -> Self::ReceiveFuture<'_>;
+    fn recv(&mut self) -> Self::ReceiveFuture<'_>;
+}
+
+/// Extension method to trait [`Receiver`]
+trait ReceiverExt: Receiver {
+    /// Make a receiver peekable
+    ///
+    /// This converts a `Receiver` into a peekable receiver. This effectively adds the method
+    /// [`peek`] to a receiver which will await for and then return a reference to the next message.
+    /// Further calls to `peek` will return a future that immediately output a reference to the same
+    /// message. Once [`recv`](Receiver::recv) is called the future returned by it will immediately
+    /// output the message previously referenced by `peek`.
+    ///
+    /// # Note
+    /// The issue with a peekable receiver is that
+    fn peekable(self) -> PeekableReceiver<Self>
+    where
+        Self: Sized,
+    {
+        PeekableReceiver {
+            receiver: self,
+            peeked: None,
+        }
+    }
+}
+
+impl<R: Receiver> ReceiverExt for R {}
+
+/// A peekable receiver
+///
+/// This struct is created by the [`peekable`](ReceiverExt::peekable) method on `ReceiverExt`.
+struct PeekableReceiver<R: Receiver> {
+    receiver: R,
+    peeked: Option<R::Message>,
+}
+
+impl<R: Receiver> PeekableReceiver<R> {
+    fn poll_peek(&mut self, cx: &mut Context<'_>) -> Poll<Option<&R::Message>> {
+        if self.peeked.is_some() {
+            Poll::Ready(self.peeked.as_ref())
+        } else {
+            match self.receiver.poll_recv(cx) {
+                Poll::Ready(Some(message)) => {
+                    self.peeked = Some(message);
+
+                    Poll::Ready(Some(self.peeked.as_ref().unwrap()))
+                }
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            }
+        }
+    }
+}
+
+impl<R: Receiver> Receiver for PeekableReceiver<R> {
+    type Message = R::Message;
+    type ReceiveFuture<'a> = PeekableReceiveFuture<'a, R> where Self: 'a,;
+
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+        match self.peeked.take() {
+            Some(message) => Poll::Ready(Some(message)),
+            None => self.receiver.poll_recv(cx),
+        }
+    }
+
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
+        PeekableReceiveFuture(self)
+    }
+}
+
+struct PeekableReceiveFuture<'a, R: Receiver>(&'a mut PeekableReceiver<R>);
+
+impl<R: Receiver> Future for PeekableReceiveFuture<'_, R> {
+    type Output = Option<R::Message>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let peekable_receiver = unsafe { &mut self.get_unchecked_mut().0 };
+
+        match peekable_receiver.peeked.take() {
+            Some(message) => Poll::Ready(Some(message)),
+            None => peekable_receiver.poll_recv(cx),
+        }
+    }
 }
 
 /// The types of HCI packets
@@ -1716,11 +2212,34 @@ impl<T> IntraMessage<T> {
             IntraMessageType::Iso(_) => "Iso",
         }
     }
+
+    /// Map the buffer type to another type
+    fn map<V: From<T>>(self) -> IntraMessage<V> {
+        match self.ty {
+            IntraMessageType::Command(p, t) => IntraMessageType::Command(p, V::from(t)).into(),
+            IntraMessageType::Acl(t) => IntraMessageType::Acl(V::from(t)).into(),
+            IntraMessageType::Sco(t) => IntraMessageType::Sco(V::from(t)).into(),
+            IntraMessageType::Event(t) => IntraMessageType::Event(V::from(t)).into(),
+            IntraMessageType::Iso(t) => IntraMessageType::Iso(V::from(t)).into(),
+        }
+    }
 }
 
 impl<T> From<IntraMessageType<T>> for IntraMessage<T> {
     fn from(ty: IntraMessageType<T>) -> Self {
         Self { ty }
+    }
+}
+
+impl<T: Deref<Target = [u8]>> GetPayloadSize for IntraMessage<T> {
+    fn get_payload_size(&self) -> Option<usize> {
+        match &self.ty {
+            IntraMessageType::Command(_, t) => Some(t[2].into()),
+            IntraMessageType::Acl(t) => Some(<u16>::from_le_bytes([t[2], t[3]]).into()),
+            IntraMessageType::Sco(t) => Some(t[2].into()),
+            IntraMessageType::Event(t) => Some(t[1].into()),
+            IntraMessageType::Iso(t) => Some(<u16>::from_le_bytes([t[2], t[3] & 0x3F]).into()),
+        }
     }
 }
 

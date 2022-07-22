@@ -14,7 +14,10 @@ use super::{
     LocalSendFutureError,
 };
 use crate::hci::interface::local_channel::local_dynamic_channel::dyn_buffer::{DynBufferReserve, TakeDynReserveFuture};
-use crate::hci::interface::{Channel, ChannelReserve, FlowControl, IntraMessage, Receiver, Sender, TaskId};
+use crate::hci::interface::{
+    Channel, ChannelEnds, ChannelReserve, FlowControl, FlowControlId, FlowCtrlReceiver, GetPrepareSend,
+    InterfaceReceivers, IntraMessage, Receiver, Sender, TaskId,
+};
 use crate::hci::BufferReserve;
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
@@ -43,11 +46,11 @@ impl<B, T> Clone for LocalChannelSender<B, T> {
 impl<B, T> LocalQueueBuffer for LocalChannelSender<B, T> {
     type Payload = T;
 
-    fn call_waker(&self) {
+    fn call_waker(&mut self) {
         self.0.borrow_mut().waker.take().map(|w| w.wake());
     }
 
-    fn set_waker(&self, waker: Waker) {
+    fn set_waker(&mut self, waker: Waker) {
         self.0.borrow_mut().waker = Some(waker)
     }
 }
@@ -59,7 +62,7 @@ impl<B, T> LocalQueueBufferSend for LocalChannelSender<B, T> {
         local_channel.channel_buffer.len() == local_channel.channel_buffer.capacity()
     }
 
-    fn push(&self, packet: Self::Payload) {
+    fn push(&mut self, packet: Self::Payload) {
         self.0.borrow_mut().channel_buffer.push_back(packet)
     }
 }
@@ -89,14 +92,20 @@ impl<B, T> Drop for LocalChannelSender<B, T> {
 /// The receiver for a local channel
 pub struct LocalChannelReceiver<B, T>(Rc<RefCell<LocalChannelInner<B, T>>>);
 
+impl<B, T> Clone for LocalChannelReceiver<B, T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
 impl<B, T> LocalQueueBuffer for LocalChannelReceiver<B, T> {
     type Payload = T;
 
-    fn call_waker(&self) {
+    fn call_waker(&mut self) {
         self.0.borrow_mut().waker.take().map(|w| w.wake());
     }
 
-    fn set_waker(&self, waker: Waker) {
+    fn set_waker(&mut self, waker: Waker) {
         self.0.borrow_mut().waker = Some(waker)
     }
 }
@@ -110,7 +119,7 @@ impl<B, T> LocalQueueBufferReceive for LocalChannelReceiver<B, T> {
         self.0.borrow().channel_buffer.is_empty()
     }
 
-    fn pop_next(&self) -> Self::Payload {
+    fn pop_next(&mut self) -> Self::Payload {
         self.0.borrow_mut().channel_buffer.pop_front().unwrap()
     }
 }
@@ -122,6 +131,8 @@ impl<B: Unpin, T: Unpin> Receiver for LocalChannelReceiver<B, T> {
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
         if self.has_senders() {
             if self.is_empty() {
+                self.0.borrow_mut().waker = Some(cx.waker().clone());
+
                 Poll::Pending
             } else {
                 Poll::Ready(Some(self.pop_next()))
@@ -131,7 +142,7 @@ impl<B: Unpin, T: Unpin> Receiver for LocalChannelReceiver<B, T> {
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }
@@ -153,7 +164,6 @@ struct LocalChannelInner<B, T> {
     sender_count: usize,
     channel_buffer: VecDeque<T>,
     waker: Option<Waker>,
-    flow_control: FlowControl,
 }
 
 impl<B, T> LocalChannelInner<B, T> {
@@ -162,14 +172,12 @@ impl<B, T> LocalChannelInner<B, T> {
         let senders_count = 0;
         let buffer = VecDeque::with_capacity(capacity);
         let waker = None;
-        let flow_control = Default::default();
 
         LocalChannelInner {
             reserve,
             sender_count: senders_count,
             channel_buffer: buffer,
             waker,
-            flow_control,
         }
     }
 }
@@ -193,13 +201,6 @@ impl<B: Unpin, T: Unpin> Channel for LocalChannel<B, T> {
     fn take_receiver(&self) -> Option<Self::Receiver> {
         Some(LocalChannelReceiver(self.0.clone()))
     }
-
-    fn on_flow_control<F>(&self, f: F)
-    where
-        F: FnOnce(&mut FlowControl),
-    {
-        f(&mut self.to.borrow_mut().flow_control)
-    }
 }
 
 impl<B, T> BufferReserve for LocalChannel<B, T>
@@ -213,19 +214,59 @@ where
     where
         S: Into<Option<usize>>,
     {
-        self.to
+        self.0
             .borrow_mut()
             .reserve
             .take(front_capacity.into().unwrap_or_default())
     }
 
     fn reclaim(&mut self, buffer: Self::Buffer) {
-        self.to.borrow_mut().reserve.reclaim(buffer)
+        self.0.borrow_mut().reserve.reclaim(buffer)
     }
 }
 
-/// Alias type for ChannelEnds used by a [`LocalChannelManager`]
-type ChannelEnds = crate::hci::interface::ChannelEnds<LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>>;
+#[derive(Clone)]
+pub struct DynChannelEnds {
+    send_channel: LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>,
+    receiver: LocalChannelReceiver<DeVec<u8>, IntraMessage<DeVec<u8>>>,
+}
+
+impl ChannelEnds for DynChannelEnds {
+    type Channel = LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>;
+
+    fn get_prep_send(
+        &self,
+        front_capacity: usize,
+    ) -> GetPrepareSend<<Self::Channel as Channel>::Sender, <Self::Channel as BufferReserve>::TakeBuffer> {
+        GetPrepareSend::new(&self.send_channel, front_capacity)
+    }
+
+    fn get_receiver(&self) -> &<Self::Channel as Channel>::Receiver {
+        &self.receiver
+    }
+
+    fn get_mut_receiver(&mut self) -> &mut <Self::Channel as Channel>::Receiver {
+        &mut self.receiver
+    }
+}
+
+/// Task information
+struct TaskData {
+    sender_channel: LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>,
+    task_id: TaskId,
+    flow_control_id: FlowControlId,
+}
+
+/// Task sender channels
+///
+/// These are the senders used by other async tasks for communicating with the interface task
+struct FromOtherTaskChannels<C> {
+    cmd_channel: C,
+    acl_channel: C,
+    sco_channel: C,
+    le_acl_channel: C,
+    le_iso_channel: C,
+}
 
 /// A Channel Manager for local channels
 ///
@@ -239,25 +280,44 @@ type ChannelEnds = crate::hci::interface::ChannelEnds<LocalChannel<DeVec<u8>, In
 /// further sends will pend.
 pub struct LocalChannelManager {
     channel_size: usize,
-    rx_sender: LocalChannelSender<DeVec<u8>, IntraMessage<DeVec<u8>>>,
-    rx_receiver: LocalChannelReceiver<DeVec<u8>, IntraMessage<DeVec<u8>>>,
-    tx_channels: alloc::vec::Vec<(TaskId, ChannelEnds)>,
+    other_task_data: alloc::vec::Vec<TaskData>,
+    task_senders: FromOtherTaskChannels<LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>>,
+    flow_control_receiver: FlowCtrlReceiver<LocalChannelReceiver<DeVec<u8>, IntraMessage<DeVec<u8>>>>,
 }
 
 impl LocalChannelManager {
     pub fn new(channel_size: usize) -> Self {
-        let rx_channel = LocalChannel::new(channel_size);
+        let other_task_data = alloc::vec::Vec::new();
 
-        let rx_sender = rx_channel.get_to_sender();
-        let rx_receiver = rx_channel.take_to_receiver().unwrap();
+        let cmd_channel = LocalChannel::new(channel_size);
+        let acl_channel = LocalChannel::new(channel_size);
+        let sco_channel = LocalChannel::new(channel_size);
+        let le_acl_channel = LocalChannel::new(channel_size);
+        let le_iso_channel = LocalChannel::new(channel_size);
 
-        let tx_channels = alloc::vec::Vec::new();
+        let interface_receivers = InterfaceReceivers {
+            cmd_receiver: cmd_channel.take_receiver().unwrap(),
+            acl_receiver: acl_channel.take_receiver().unwrap(),
+            sco_receiver: sco_channel.take_receiver().unwrap(),
+            le_acl_receiver: le_acl_channel.take_receiver().unwrap(),
+            le_iso_receiver: le_iso_channel.take_receiver().unwrap(),
+        };
+
+        let flow_control_receiver = FlowCtrlReceiver::new(interface_receivers);
+
+        let task_senders = FromOtherTaskChannels {
+            cmd_channel,
+            acl_channel,
+            sco_channel,
+            le_acl_channel,
+            le_iso_channel,
+        };
 
         Self {
             channel_size,
-            rx_sender,
-            rx_receiver,
-            tx_channels,
+            other_task_data,
+            task_senders,
+            flow_control_receiver,
         }
     }
 }
@@ -269,7 +329,7 @@ impl ChannelReserve for LocalChannelManager {
 
     type TryExtendError = core::convert::Infallible;
 
-    type ForNewTaskError = core::convert::Infallible;
+    type MessageBuffer = Self::Buffer;
 
     type Sender = LocalChannelSender<DeVec<u8>, IntraMessage<DeVec<u8>>>;
 
@@ -279,9 +339,14 @@ impl ChannelReserve for LocalChannelManager {
 
     type Channel = LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>;
 
+    type ChannelEnds = DynChannelEnds;
+
     fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error> {
-        if let Ok(index) = self.tx_channels.binary_search_by(|c| c.0.cmp(&id)) {
-            self.tx_channels.remove(index);
+        if let Ok(index) = self
+            .other_task_data
+            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
+        {
+            self.other_task_data.remove(index);
 
             Ok(())
         } else {
@@ -289,39 +354,65 @@ impl ChannelReserve for LocalChannelManager {
         }
     }
 
-    fn add_new_task(&mut self, task_id: TaskId) -> Result<ChannelEnds, Self::ForNewTaskError>
+    fn add_new_task(
+        &mut self,
+        task_id: TaskId,
+        flow_control_id: FlowControlId,
+    ) -> Result<Self::ChannelEnds, Self::Error>
     where
         Self::Channel: Sized,
     {
-        let from_new_task_channel = LocalChannel::new(self.channel_size);
+        let from_new_task_channel = match flow_control_id {
+            FlowControlId::Cmd => self.task_senders.cmd_channel.clone(),
+            FlowControlId::Acl => self.task_senders.acl_channel.clone(),
+            FlowControlId::Sco => self.task_senders.sco_channel.clone(),
+            FlowControlId::LeAcl => self.task_senders.le_acl_channel.clone(),
+            FlowControlId::LeIso => self.task_senders.le_iso_channel.clone(),
+        };
+
         let to_new_task_channel = LocalChannel::new(self.channel_size);
 
-        let new_task_ends = ChannelEnds::new(
-            from_new_task_channel.get_sender(),
-            to_new_task_channel.take_receiver().unwrap(),
-        );
-
-        let interface_task_ends = ChannelEnds::new(
-            to_new_task_channel.get_sender(),
-            from_new_task_channel.take_receiver().unwrap(),
-        );
+        let new_task_ends = DynChannelEnds {
+            send_channel: from_new_task_channel,
+            receiver: to_new_task_channel.take_receiver().unwrap(),
+        };
 
         let index = self
-            .tx_channels
-            .binary_search_by(|i| i.0.cmp(&task_id))
-            .expect("task id already associated to another async task");
+            .other_task_data
+            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&task_id))
+            .expect_err("task id already associated to another async task");
 
-        self.tx_channels.insert(index, (task_id, interface_task_ends));
+        let channel_data = TaskData {
+            sender_channel: to_new_task_channel,
+            task_id,
+            flow_control_id,
+        };
+
+        self.other_task_data.insert(index, channel_data);
 
         Ok(new_task_ends)
     }
 
-    fn get(&self, id: TaskId) -> Option<&ChannelEnds> {
-        self.tx_channels
-            .binary_search_by(|i| i.0.cmp(&id))
+    fn get_and<F, R>(&self, id: TaskId, f: F) -> Option<R>
+    where
+        F: FnOnce(&Self::Channel) -> R,
+    {
+        self.other_task_data
+            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
             .ok()
-            .and_then(|index| self.tx_channels.get(index))
-            .map(|(_, channel)| channel)
+            .and_then(|index| self.other_task_data.get(index))
+            .map(|TaskData { sender_channel, .. }| f(&sender_channel))
+    }
+
+    fn get_flow_control_id(&self, id: TaskId) -> Option<FlowControlId> {
+        self.other_task_data
+            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
+            .ok()
+            .map(|index| self.other_task_data[index].flow_control_id)
+    }
+
+    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<Self::Receiver> {
+        &mut self.flow_control_receiver
     }
 }
 

@@ -13,7 +13,8 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 pub use local_dynamic_channel::LocalChannelManager;
-pub use local_static_channel::LocalStackChannelReserve;
+pub use local_stack_channel::LocalStackChannelReserve;
+pub use local_stack_channel::LocalStackChannelReserveData;
 
 /// Trait for a buffer of the sender of a local channel
 ///
@@ -25,10 +26,10 @@ pub trait LocalQueueBuffer {
     ///
     /// # Note
     /// This method will do nothing if no current waker is set
-    fn call_waker(&self);
+    fn call_waker(&mut self);
 
     /// Set the waker
-    fn set_waker(&self, waker: Waker);
+    fn set_waker(&mut self, waker: Waker);
 }
 
 /// Trait for a buffer of the sender of a local channel
@@ -42,7 +43,7 @@ trait LocalQueueBufferSend: LocalQueueBuffer {
     ///
     /// # Note
     /// This method is called after `is_full` returns false
-    fn push(&self, packet: Self::Payload);
+    fn push(&mut self, packet: Self::Payload);
 }
 
 /// Trait for a buffer of the receiver of a local channel
@@ -59,7 +60,7 @@ trait LocalQueueBufferReceive: LocalQueueBuffer {
     ///
     /// # Note
     /// This method is called after `is_empty` returns false
-    fn pop_next(&self) -> Self::Payload;
+    fn pop_next(&mut self) -> Self::Payload;
 }
 
 pub struct LocalSendFuture<'a, S, T> {
@@ -72,15 +73,6 @@ impl<'a, S, T> LocalSendFuture<'a, S, T> {
         let packet = Some(packet);
 
         LocalSendFuture { packet, local_sender }
-    }
-}
-
-#[derive(Debug)]
-pub struct LocalSendFutureError;
-
-impl Display for LocalSendFutureError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.write_str("local send future error")
     }
 }
 
@@ -106,6 +98,15 @@ where
 
             Poll::Pending
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct LocalSendFutureError;
+
+impl Display for LocalSendFutureError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("local send future error")
     }
 }
 
@@ -142,5 +143,16 @@ pub struct LocalReceiverFutureError;
 impl Display for LocalReceiverFutureError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.write_str("local receiver future error")
+    }
+}
+
+/// A wrapper for implementing the type [`GetChannelEnds`](ChannelReserve::GetChannelEnds)
+pub struct GetChannelEndsWrapper<C>(C);
+
+impl<C> core::ops::Deref for GetChannelEndsWrapper<C> {
+    type Target = C;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

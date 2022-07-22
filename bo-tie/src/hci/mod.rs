@@ -572,7 +572,7 @@ pub trait Host {
     /// This returns the sender part of the MPSC channel
     fn get_sender(&self) -> &Self::Sender;
 
-    fn get_receiver(&self) -> &Self::Receiver;
+    fn get_receiver(&self) -> &mut Self::Receiver;
 
     fn get_reserve(&self) -> &Self::Reserve;
 }
