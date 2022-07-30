@@ -26,10 +26,10 @@ pub trait LocalQueueBuffer {
     ///
     /// # Note
     /// This method will do nothing if no current waker is set
-    fn call_waker(&mut self);
+    fn call_waker(&self);
 
     /// Set the waker
-    fn set_waker(&mut self, waker: Waker);
+    fn set_waker(&self, waker: Waker);
 }
 
 /// Trait for a buffer of the sender of a local channel
@@ -39,11 +39,14 @@ trait LocalQueueBufferSend: LocalQueueBuffer {
     /// Check if the buffer is full
     fn is_full(&self) -> bool;
 
+    /// Check if the receiver was dropped
+    fn receiver_exists(&self) -> bool;
+
     /// Push an item to the buffer
     ///
     /// # Note
     /// This method is called after `is_full` returns false
-    fn push(&mut self, packet: Self::Payload);
+    fn push(&self, packet: Self::Payload);
 }
 
 /// Trait for a buffer of the receiver of a local channel
@@ -60,7 +63,7 @@ trait LocalQueueBufferReceive: LocalQueueBuffer {
     ///
     /// # Note
     /// This method is called after `is_empty` returns false
-    fn pop_next(&mut self) -> Self::Payload;
+    fn pop_next(&self) -> Self::Payload;
 }
 
 pub struct LocalSendFuture<'a, S, T> {
@@ -85,18 +88,22 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
-        if !this.local_sender.is_full() {
-            this.local_sender.push(this.packet.take().unwrap());
+        match (this.local_sender.is_full(), this.local_sender.receiver_exists()) {
+            (_, true) => Poll::Ready(Err(LocalSendFutureError)),
+            (false, _) => {
+                this.local_sender.push(this.packet.take().unwrap());
 
-            // Wake the receiver if it's awaiting
-            this.local_sender.call_waker();
+                // Wake the receiver if it's awaiting
+                this.local_sender.call_waker();
 
-            Poll::Ready(Ok(()))
-        } else {
-            // Buffer is full, need to await for the receiver to clear a few entries
-            this.local_sender.set_waker(cx.waker().clone());
+                Poll::Ready(Ok(()))
+            }
+            (true, _) => {
+                // Buffer is full, need to await for the receiver to clear a few entries
+                this.local_sender.set_waker(cx.waker().clone());
 
-            Poll::Pending
+                Poll::Pending
+            }
         }
     }
 }

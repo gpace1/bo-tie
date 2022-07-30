@@ -44,7 +44,7 @@
 use crate::hci::common::ConnectionHandle;
 use crate::hci::events::Events;
 use crate::hci::interface::flow_control::FlowControlQueues;
-use crate::hci::{BufferReserve, CommandEventMatcher};
+use crate::hci::{Buffer, BufferReserve, CommandEventMatcher};
 use core::borrow::Borrow;
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
@@ -79,7 +79,7 @@ pub enum TaskId {
 /// `LeAcl` -> LE ACL data buffer
 /// `LeIso` -> LE ISO data buffer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FlowControlId {
+pub enum FlowControlId {
     Cmd,
     Acl,
     Sco,
@@ -351,21 +351,33 @@ pub trait Channel {
 /// Communication between the interface async task and any other task is done through two channels
 /// for bi-directional data transmission. The `ChannelEnds` are the parts of the channels used by
 /// one of the async tasks.
-trait ChannelEnds {
-    /// A channel for sending messages
-    type Channel: Channel + BufferReserve;
+pub trait ChannelEnds {
+    /// The buffer type of messages *to* the interface async task
+    ///
+    /// # Note
+    /// This is equivalent to the [`FromBuffer`](ChannelReserve::FromBuffer) type of
+    /// `ChannelReserve`.
+    type ToBuffer: Buffer;
+
+    /// The buffer type for receiving
+
+    /// The future for acquiring a buffer from the channel to send
+    type TakeBuffer: Future<Output = Self::ToBuffer>;
+
+    /// The type used to send messages to the interface async task
+    type Sender: Sender;
+
+    /// The type used for receiving messages from the interface async task
+    type Receiver: Receiver;
 
     /// Get the sender of messages to the other async task
-    fn get_prep_send(
-        &self,
-        front_capacity: usize,
-    ) -> GetPrepareSend<<Self::Channel as Channel>::Sender, <Self::Channel as BufferReserve>::TakeBuffer>;
+    fn get_prep_send(&self, front_capacity: usize) -> GetPrepareSend<Self::Sender, Self::TakeBuffer>;
 
     /// Get the receiver of messages from the async task
-    fn get_receiver(&self) -> &<Self::Channel as Channel>::Receiver;
+    fn get_receiver(&self) -> &Self::Receiver;
 
     /// Get a mutable reference to the receiver of messages from the async task
-    fn get_mut_receiver(&mut self) -> &mut <Self::Channel as Channel>::Receiver;
+    fn get_mut_receiver(&mut self) -> &mut Self::Receiver;
 }
 
 /// A channel reserve
@@ -384,31 +396,33 @@ pub trait ChannelReserve {
     /// The error that occurs when trying to extend a buffer fails
     type TryExtendError: Debug;
 
-    /// The data type for the buffer of message sent
-    ///
-    /// This type may be "unsafe" with the exception that it must be safe to use within the buffers
-    type MessageBuffer: Unpin + From<Self::Buffer>;
+    /// The buffer for creating a message sent from the interface async task *to* another
+    /// async task
+    type ToBuffer<'a>: Unpin + crate::TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>
+    where
+        Self: 'a;
 
-    /// The type for the sender between async tasks
-    type Sender: Sender<Error = Self::SenderError, Message = IntraMessage<Self::MessageBuffer>>;
+    /// The mpsc channel type for sending messages from the interface async task *to* another async
+    /// task
+    type ToChannel<'a>: BufferReserve<Buffer = Self::ToBuffer<'a>>
+        + Channel<SenderError = Self::SenderError, Message = IntraMessage<Self::ToBuffer<'a>>>
+    where
+        Self: 'a;
 
-    /// The type for the receiver between async tasks
-    type Receiver: Receiver<Message = IntraMessage<Self::MessageBuffer>>;
+    /// The buffer for creating a message sent *from* another async task to the interface async
+    /// task
+    type FromBuffer: Unpin + crate::TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>;
 
-    /// The type for buffering messages between the host and controller
-    type Buffer: Unpin + crate::TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>;
+    /// The mpsc channel type for the interface async task to receiving messages *from* another
+    /// async task
+    type FromChannel: BufferReserve<Buffer = Self::FromBuffer>
+        + Channel<SenderError = Self::SenderError, Message = IntraMessage<Self::FromBuffer>>;
 
-    /// The mpsc channel type
-    type Channel: BufferReserve<Buffer = Self::Buffer>
-        + Channel<
-            SenderError = Self::SenderError,
-            Message = IntraMessage<Self::MessageBuffer>,
-            Sender = Self::Sender,
-            Receiver = Self::Receiver,
-        >;
-
-    /// The ends of the channels used to communicate with the interface async task.
-    type ChannelEnds: ChannelEnds<Channel = Self::Channel>;
+    /// The ends of the channels used by another async task to communicate with the interface async
+    /// task.
+    type OtherTaskEnds<'a>: ChannelEnds<ToBuffer = Self::FromBuffer>
+    where
+        Self: 'a;
 
     /// Try to remove a channel
     fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error>;
@@ -424,16 +438,12 @@ pub trait ChannelReserve {
         &mut self,
         task_id: TaskId,
         flow_control_id: FlowControlId,
-    ) -> Result<Self::ChannelEnds, Self::Error>
-    where
-        Self::Channel: Sized;
+    ) -> Result<Self::OtherTaskEnds<'_>, Self::Error>;
 
     /// Get the channel for sending messages *to* the async task associated by the specified task ID
     ///
     /// `None` is returned if no channel is associated with the input identifier.
-    fn get_and<F, R>(&self, id: TaskId, f: F) -> Option<R>
-    where
-        F: FnOnce(&Self::Channel) -> R;
+    fn get(&self, id: TaskId) -> Option<Self::ToChannel<'_>>;
 
     /// Get the controller flow control identification
     ///
@@ -445,7 +455,7 @@ pub trait ChannelReserve {
     /// Get the [`FlowCtrlReceiver`]
     ///
     /// This returns the `FlowCtrlReceiver` used by this `ChannelReserve`.
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<Self::Receiver>;
+    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>;
 }
 
 macro_rules! inc_flow_ctrl {
@@ -470,12 +480,15 @@ trait ChannelReserveExt: ChannelReserve {
         &self,
         id: TaskId,
         front_capacity: usize,
-    ) -> Option<GetPrepareSend<Self::Sender, <Self::Channel as BufferReserve>::TakeBuffer>> {
-        self.get_and(id, |channel| GetPrepareSend::new(channel, front_capacity))
+    ) -> Option<
+        GetPrepareSend<<Self::ToChannel<'_> as Channel>::Sender, <Self::ToChannel<'_> as BufferReserve>::TakeBuffer>,
+    > {
+        self.get(id)
+            .map(|channel| GetPrepareSend::from_channel(&channel, front_capacity))
     }
 
     /// Receive the next message
-    fn receive_next(&mut self) -> ReceiveNext<'_, Self::Receiver> {
+    fn receive_next(&mut self) -> ReceiveNext<'_, <Self::FromChannel as Channel>::Receiver> {
         self.get_flow_ctrl_receiver().receive_next()
     }
 
@@ -584,12 +597,19 @@ pub struct GetPrepareSend<S, T> {
 }
 
 impl<S, T> GetPrepareSend<S, T> {
-    fn new<C>(channel: &C, front_capacity: usize) -> Self
+    fn from_channel<'a, C>(channel: &'a C, front_capacity: usize) -> Self
     where
         C: Channel<Sender = S> + BufferReserve<TakeBuffer = T>,
+        T: 'a,
     {
         let take_buffer = channel.take(front_capacity);
         let sender = Some(channel.get_sender());
+
+        GetPrepareSend { sender, take_buffer }
+    }
+
+    fn new(take_buffer: T, sender: S) -> Self {
+        let sender = Some(sender);
 
         GetPrepareSend { sender, take_buffer }
     }
@@ -638,13 +658,12 @@ impl<S, B> PrepareSend<S, B> {
     ///
     /// This take a `PrepareSend` and a closure `f` to convert the buffered data into a message (of
     /// type M) and return a future for sending the message.
-    pub async fn and_send<F, M>(ps: Self, f: F) -> Result<(), S::Error>
+    pub async fn and_send<F>(ps: Self, f: F) -> Result<(), S::Error>
     where
-        S: Sender<Message = IntraMessage<M>>,
+        S: Sender<Message = IntraMessage<B>>,
         F: FnOnce(B) -> IntraMessage<B>,
-        M: From<B>,
     {
-        let message = f(ps.buffer).map();
+        let message = f(ps.buffer);
 
         ps.sender.send(message).await
     }
@@ -742,7 +761,7 @@ struct InterfaceReceivers<R> {
 ///
 /// This works by only releasing messages from a channel when the controller can accept it. There is
 /// possibly five different kinds of buffers in a controller. A
-struct FlowCtrlReceiver<R: Receiver> {
+pub struct FlowCtrlReceiver<R: Receiver> {
     cmd_receiver: PeekableReceiver<R>,
     acl_receiver: PeekableReceiver<R>,
     sco_receiver: PeekableReceiver<R>,
@@ -891,7 +910,7 @@ where
         &mut self,
         handle: ConnectionHandle,
         flow_control_id: FlowControlId,
-    ) -> Result<R::ChannelEnds, R::Error> {
+    ) -> Result<R::OtherTaskEnds<'_>, R::Error> {
         self.channel_reserve
             .add_new_task(TaskId::Connection(handle), flow_control_id)
     }
@@ -968,9 +987,9 @@ where
     /// # struct CM;
     /// # impl ChannelReserve for CM {
     /// #    type Error = usize;
-    /// #    type Channel = C;
+    /// #    type ToChannel = C;
     /// #
-    /// #    fn get_self_receiver(&self) -> &Self::Channel {
+    /// #    fn get_self_receiver(&self) -> &Self::ToChannel {
     /// #        unimplemented!()
     /// #    }
     /// #
@@ -978,15 +997,15 @@ where
     /// #        unimplemented!()
     /// #    }
     /// #
-    /// #    fn try_remove(&mut self, id: TaskId) -> Result<Self::Channel, Self::Error> {
+    /// #    fn try_remove(&mut self, id: TaskId) -> Result<Self::ToChannel, Self::Error> {
     /// #        unimplemented!()
     /// #    }
     /// #
-    /// #    fn get(&self, id: TaskId) -> Option<&Self::Channel> {
+    /// #    fn get(&self, id: TaskId) -> Option<&Self::ToChannel> {
     /// #        unimplemented!()
     /// #    }
     /// #
-    /// #    fn get_by_index(&self, index: usize) -> Option<&Self::Channel> {
+    /// #    fn get_by_index(&self, index: usize) -> Option<&Self::ToChannel> {
     /// #        unimplemented!()
     /// #    }
     /// # }
@@ -1043,8 +1062,11 @@ where
     ///
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
-    pub fn recv(&mut self) -> Recv<'_, R> {
-        Recv { interface: self }
+    pub async fn recv(&mut self) -> Option<impl Deref<Target = [u8]>> {
+        self.channel_reserve
+            .receive_next()
+            .await
+            .map(|intra_message| intra_message.into_buffer())
     }
 
     /// Parse an event for information that is relevant to this interface
@@ -1330,22 +1352,6 @@ impl Interface<()> {
     }
 }
 
-/// Future returned by the method [`recv`](Interface::recv)
-pub struct Recv<'a, R> {
-    interface: &'a Interface<R>,
-}
-
-impl<'a, R> Future for Recv<'a, R>
-where
-    R: ChannelReserve,
-{
-    type Output = Option<IntraMessage<R::Buffer>>;
-
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
-        todo!()
-    }
-}
-
 #[derive(Debug)]
 pub enum SendErrorReason<C, B> {
     ChannelError(C),
@@ -1387,6 +1393,7 @@ impl<C, B> From<SendMessageError<C>> for SendErrorReason<C, B> {
             SendMessageError::InvalidHciPacket(ty) => SendErrorReason::InvalidHciPacket(ty),
             SendMessageError::HostClosed => SendErrorReason::HostClosed,
             SendMessageError::InvalidConnectionHandle => SendErrorReason::InvalidConnectionHandle,
+            SendMessageError::Unimplemented(packet_type) => SendErrorReason::Unimplemented(packet_type),
             SendMessageError::UnknownConnectionHandle(h) => SendErrorReason::UnknownConnectionHandle(h),
         }
     }
@@ -1412,6 +1419,7 @@ enum SendMessageError<T> {
     InvalidHciPacket(HciPacketType),
     HostClosed,
     InvalidConnectionHandle,
+    Unimplemented(HciPacketType),
     UnknownConnectionHandle(ConnectionHandle),
 }
 
@@ -1444,9 +1452,30 @@ pub struct BufferedSend<'a, R: ChannelReserve> {
     packet_type: HciPacketType,
     packet_len: core::cell::Cell<Option<usize>>,
     task_id_state: core::cell::RefCell<BufferedTaskId>,
-    buffer: core::cell::RefCell<Option<R::Buffer>>,
+    buffer: core::cell::RefCell<Option<R::ToBuffer<'a>>>,
 }
 
+/// Get the channel
+///
+/// # Error
+/// An error is returned if the channel no longer exists
+///
+/// # Panic
+/// This will panic if `self.task_id_state` cannot be converted into a `TaskId`.
+macro_rules! get_channel {
+    ($buffered_send:expr, $R:ty) => {{
+        let task_id = $buffered_send.task_id_state.borrow().try_into_task_id().unwrap();
+
+        let channel: Result<<$R>::ToChannel<'_>, MessageError<<$R>::TryExtendError>> = $buffered_send
+            .interface
+            .channel_reserve
+            .get(task_id)
+            .map(|channel| channel)
+            .ok_or(MessageError::<<$R>::TryExtendError>::from(task_id));
+
+        channel
+    }};
+}
 impl<'a, R> BufferedSend<'a, R>
 where
     R: ChannelReserve,
@@ -1462,28 +1491,12 @@ where
         }
     }
 
-    /// Get the channel
-    ///
-    /// # Error
-    /// An error is returned if the channel no longer exists
-    ///
-    /// # Panic
-    /// This will panic if `self.task_id_state` cannot be converted into a `TaskId`.
-    fn get_channel_and<F, V>(&self, f: F) -> Result<V, MessageError<R::TryExtendError>>
-    where
-        F: FnOnce(&R::Channel) -> V,
-    {
-        let task_id = self.task_id_state.borrow().try_into_task_id().unwrap();
-
-        self.interface.channel_reserve.get_and(task_id, f).ok_or(task_id.into())
-    }
-
     /// Add bytes before the *parameter length* in the Command packet or Event packet is acquired
     ///
     /// This method is called when member `packet_len` is still `None`. It will set `packet_len` to
     /// a value once three bytes of the Command packet are processed.
     #[inline]
-    async fn add_initial_command_or_event_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_command_or_event_byte(&'a self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
         use crate::TryExtend;
 
         let packet_type = self.packet_type;
@@ -1499,7 +1512,7 @@ where
 
             self.task_id_state.replace(BufferedTaskId::Host);
 
-            let buffer = self.get_channel_and(|channel| channel.take(None))?.await;
+            let buffer = get_channel!(self, R)?.take(None).await;
 
             self.buffer.replace(Some(buffer));
 
@@ -1535,7 +1548,7 @@ where
     /// starting at the byte after. This is for adding bytes to the intra message buffer until the
     /// length bytes are added to the buffer. Once the length is known the member field `packet_len`
     /// will be set and this method cannot be called again.
-    async fn add_initial_data_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_data_byte(&'a self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
         use crate::TryExtend;
 
         let mut buffer_borrow = self.buffer.borrow_mut();
@@ -1550,7 +1563,7 @@ where
                 {
                     drop(buffer_borrow);
 
-                    let buffer = self.get_channel_and(|channel| channel.take(None))?.await;
+                    let buffer = get_channel!(self, R)?.take(None).await;
 
                     self.buffer.replace(Some(buffer));
 
@@ -1605,7 +1618,7 @@ where
     /// These are bytes that are added before the length field has been buffered. Essentially this
     /// is called when `packet_len` is `None`.
     #[inline]
-    async fn add_initial_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_byte(&'a self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
         match self.packet_type {
             HciPacketType::Command => self.add_initial_command_or_event_byte(byte).await,
             HciPacketType::Acl => self.add_initial_data_byte(byte).await,
@@ -1639,7 +1652,7 @@ where
     ///
     /// # Error
     /// An error is returned if this `BufferedSend` already has a complete HCI Packet.
-    pub async fn add(&self, byte: u8) -> Result<bool, SendError<R>> {
+    pub async fn add(&'a self, byte: u8) -> Result<bool, SendError<R>> {
         use crate::TryExtend;
 
         match self.packet_len.get() {
@@ -1670,7 +1683,7 @@ where
     ///
     /// # Return
     /// `true` is returned if the this `BufferSend` contains a complete HCI Packet.
-    pub async fn add_bytes<I: IntoIterator<Item = u8>>(&mut self, iter: I) -> Result<bool, SendError<R>> {
+    pub async fn add_bytes<I: IntoIterator<Item = u8>>(&'a mut self, iter: I) -> Result<bool, SendError<R>> {
         for i in iter {
             if self.add(i).await? {
                 return Ok(true);
@@ -1695,7 +1708,7 @@ where
     /// the packet to its destination. An error is returned if this method is called before a
     /// complete HCI packet is stored within this `BufferedSend`.
     pub async fn send(self) -> Result<(), SendError<R>> {
-        BufferedSendSetup::<R>::new(self).into_future().await
+        buffered_send::send(self).await
     }
 }
 
@@ -1753,129 +1766,67 @@ impl BufferedTaskId {
     }
 }
 
-/// Setup for sending a buffered HCI message
-///
-/// This is necessary as the compiler cannot determine an appropriate lifetime for the returned
-/// future in method [`send`](BufferedSend::send) of `BufferedSend`.
-///
-/// # Why
-/// `BufferedSend` cannot be the one to send the message as it self assigns a reference to another
-/// reference within in itself where by the compiler cannot determine the lifetime of the future
-/// returned by `send` (confused yet? lol).
-///
-/// To specifically explain what is going on, the issue occurs as a reference to a sender of a
-/// channel is acquired from the field in `interface`. If `send` was to be an async method the
-/// returned future would need to keep this sender until the future is dropped. The
-/// problem occurs because `send` moves `self`. In fact if `send` took `self` by reference and used
-/// the implementation scoped lifetime `'a` there would no issue. The compiler will assign the
-/// lifetime `'a` to the returned future and successfully compile. The problem with moving `self` is
-/// that moving actually creates a new lifetime (different to `'a`) so the compiler assigns that to
-/// the future instead causing a compiler error stating that the future could outlive the captured
-/// reference to the sender. Using a `BufferedSendSetup` stops the lifetime created from the move of
-/// `self` being applied to the returned future and instead applies the impl scoped lifetime `'a` to
-/// it.
-///
-/// ```
-/// # use core::future::Future;
-///
-/// # // stubs
-/// # struct BufferedSend<'a, R>(&'a R);
-/// # trait ChannelReserve {}
-/// # struct SendError<R>(R);
-/// # struct BufferedSendSetup<'a, R>(&'a R);
-/// # impl<'a, R> BufferedSendSetup<'a, R> {
-/// #     fn new(bs: BufferedSend<'a, R>) -> Self { Self(bs.0) }
-/// #     async fn into_future(self) -> Result<(), SendError<R>> { unimplemented!() }    
-/// # }
-///
-/// // This is a shadow of what goes on in the method `send` for `BufferedSend`
-/// impl<'a, R> BufferedSend<'a, R>
-/// where
-///     R: ChannelReserve,
-/// {
-///     /* ... other methods ... */
-///
-///               // ⬐ The compiler gives `self` some lifetime like '1
-///     pub fn send(self) -> impl Future<Output = Result<(), SendError<R>>> + 'a {
-///
-///         // ┌ BufferedSendSetup captures the lifetime associated with the send future.
-///         // |
-///         // ↓                         ⬐ `new` moves `self` so lifetime '1 ends here
-///         BufferedSendSetup::<'a, R>::new(self).into_future()
-///     }
-/// }
-/// ```
-enum BufferedSendSetup<R: ChannelReserve> {
-    NoOp,
-    Send(R::Sender, IntraMessage<R::Buffer>),
-    Err(SendError<R>),
-}
+/// module for containing methods that do not fit within the `impl` for [`BufferedSendSetup`]
+mod buffered_send {
+    use super::*;
 
-impl<R> BufferedSendSetup<R>
-where
-    R: ChannelReserve,
-{
-    fn new(bs: BufferedSend<R>) -> Self {
+    pub async fn send<R>(bs: BufferedSend<'_, R>) -> Result<(), SendError<R>>
+    where
+        R: ChannelReserve,
+    {
         if bs.is_ready() {
             match bs.packet_type {
-                HciPacketType::Acl => Self::from_acl(bs),
-                HciPacketType::Sco => unimplemented!("SCO not implemented yet"),
-                HciPacketType::Event => Self::from_event(bs),
-                HciPacketType::Iso => unimplemented!("ISO not implemented yet"),
+                HciPacketType::Acl => from_acl(bs).await,
+                HciPacketType::Sco => Err(SendError::<R>::Unimplemented(HciPacketType::Sco)),
+                HciPacketType::Event => from_event(bs).await,
+                HciPacketType::Iso => Err(SendError::<R>::Unimplemented(HciPacketType::Iso)),
                 HciPacketType::Command => unreachable!(),
             }
         } else {
-            BufferedSendSetup::Err(SendError::<R>::InvalidHciPacket(bs.packet_type))
+            Err(SendError::<R>::InvalidHciPacket(bs.packet_type))
         }
     }
 
-    fn from_event(bs: BufferedSend<R>) -> Self {
+    async fn from_event<R>(bs: BufferedSend<'_, R>) -> Result<(), SendError<R>>
+    where
+        R: ChannelReserve,
+    {
         let buffer = match bs.buffer.take() {
             Some(buffer) => buffer,
-            None => return BufferedSendSetup::Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
+            None => return Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
         };
 
         match bs.interface.parse_event(&buffer) {
-            Err(e) => BufferedSendSetup::Err(e.into()),
+            Err(e) => Err(e.into()),
             Ok(true) => {
-                let sender = match bs.get_channel_and(|channel| channel.get_sender()) {
-                    Ok(sender) => sender,
-                    Err(e) => return BufferedSendSetup::Err(e.into()),
-                };
-
                 let message = IntraMessageType::Event(buffer).into();
 
-                BufferedSendSetup::Send(sender, message)
+                get_channel!(bs, R)?
+                    .get_sender()
+                    .send(message)
+                    .await
+                    .map_err(|e| SendError::<R>::ChannelError(e))
             }
-            Ok(false) => BufferedSendSetup::NoOp,
+            Ok(false) => Ok(()),
         }
     }
 
-    fn from_acl(bs: BufferedSend<R>) -> Self {
+    async fn from_acl<R>(bs: BufferedSend<'_, R>) -> Result<(), SendError<R>>
+    where
+        R: ChannelReserve,
+    {
         let buffer = match bs.buffer.take() {
             Some(buffer) => buffer,
-            None => return BufferedSendSetup::Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
-        };
-
-        let sender = match bs.get_channel_and(|channel| channel.get_sender()) {
-            Ok(sender) => sender,
-            Err(e) => return BufferedSendSetup::Err(e.into()),
+            None => return Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
         };
 
         let message = IntraMessageType::Acl(buffer).into();
 
-        BufferedSendSetup::Send(sender, message)
-    }
-
-    async fn into_future(self) -> Result<(), SendError<R>> {
-        match self {
-            BufferedSendSetup::NoOp => Ok(()),
-            BufferedSendSetup::Send(sender, message) => sender
-                .send(message.map())
-                .await
-                .map_err(|e| SendError::<R>::ChannelError(e)),
-            BufferedSendSetup::Err(e) => Err(e),
-        }
+        get_channel!(bs, R)?
+            .get_sender()
+            .send(message)
+            .await
+            .map_err(|e| SendError::<R>::ChannelError(e))
     }
 }
 
@@ -2065,7 +2016,7 @@ pub trait Receiver {
 
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>>;
 
-    fn recv(&mut self) -> Self::ReceiveFuture<'_>;
+    fn recv(&self) -> Self::ReceiveFuture<'_>;
 }
 
 /// Extension method to trait [`Receiver`]
@@ -2086,7 +2037,7 @@ trait ReceiverExt: Receiver {
     {
         PeekableReceiver {
             receiver: self,
-            peeked: None,
+            peeked: core::cell::Cell::new(None),
         }
     }
 }
@@ -2098,19 +2049,19 @@ impl<R: Receiver> ReceiverExt for R {}
 /// This struct is created by the [`peekable`](ReceiverExt::peekable) method on `ReceiverExt`.
 struct PeekableReceiver<R: Receiver> {
     receiver: R,
-    peeked: Option<R::Message>,
+    peeked: core::cell::Cell<Option<R::Message>>,
 }
 
 impl<R: Receiver> PeekableReceiver<R> {
     fn poll_peek(&mut self, cx: &mut Context<'_>) -> Poll<Option<&R::Message>> {
-        if self.peeked.is_some() {
-            Poll::Ready(self.peeked.as_ref())
+        if self.peeked.get_mut().is_some() {
+            Poll::Ready(self.peeked.get_mut().as_ref())
         } else {
             match self.receiver.poll_recv(cx) {
                 Poll::Ready(Some(message)) => {
-                    self.peeked = Some(message);
+                    self.peeked = Some(message).into();
 
-                    Poll::Ready(Some(self.peeked.as_ref().unwrap()))
+                    Poll::Ready(self.peeked.get_mut().as_ref())
                 }
                 Poll::Ready(None) => Poll::Ready(None),
                 Poll::Pending => Poll::Pending,
@@ -2130,22 +2081,25 @@ impl<R: Receiver> Receiver for PeekableReceiver<R> {
         }
     }
 
-    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
-        PeekableReceiveFuture(self)
+    fn recv(&self) -> Self::ReceiveFuture<'_> {
+        PeekableReceiveFuture(self, None)
     }
 }
 
-struct PeekableReceiveFuture<'a, R: Receiver>(&'a mut PeekableReceiver<R>);
+struct PeekableReceiveFuture<'a, R: Receiver>(&'a PeekableReceiver<R>, Option<R::ReceiveFuture<'a>>);
 
 impl<R: Receiver> Future for PeekableReceiveFuture<'_, R> {
     type Output = Option<R::Message>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let peekable_receiver = unsafe { &mut self.get_unchecked_mut().0 };
+        let this = unsafe { self.get_unchecked_mut() };
 
-        match peekable_receiver.peeked.take() {
-            Some(message) => Poll::Ready(Some(message)),
-            None => peekable_receiver.poll_recv(cx),
+        loop {
+            match (this.0.peeked.take(), &mut this.1) {
+                (None, None) => this.1 = Some(this.0.receiver.recv()),
+                (Some(message), _) => return Poll::Ready(Some(message)),
+                (None, Some(rx)) => return unsafe { Pin::new_unchecked(rx).poll(cx) },
+            }
         }
     }
 }
@@ -2187,6 +2141,17 @@ pub struct IntraMessage<T> {
 }
 
 impl<T> IntraMessage<T> {
+    /// Convert an IntraMessage into its buffer
+    fn into_buffer(self) -> T {
+        match self.ty {
+            IntraMessageType::Command(_, t) => t,
+            IntraMessageType::Acl(t) => t,
+            IntraMessageType::Sco(t) => t,
+            IntraMessageType::Event(t) => t,
+            IntraMessageType::Iso(t) => t,
+        }
+    }
+
     /// Get a mutable reference to the buffer
     ///
     /// This will return a mutable reference the buffer if the `IntraMessageType` contains a buffer.
@@ -2214,13 +2179,16 @@ impl<T> IntraMessage<T> {
     }
 
     /// Map the buffer type to another type
-    fn map<V: From<T>>(self) -> IntraMessage<V> {
+    fn map<V, F>(self, f: F) -> IntraMessage<V>
+    where
+        F: FnOnce(T) -> V,
+    {
         match self.ty {
-            IntraMessageType::Command(p, t) => IntraMessageType::Command(p, V::from(t)).into(),
-            IntraMessageType::Acl(t) => IntraMessageType::Acl(V::from(t)).into(),
-            IntraMessageType::Sco(t) => IntraMessageType::Sco(V::from(t)).into(),
-            IntraMessageType::Event(t) => IntraMessageType::Event(V::from(t)).into(),
-            IntraMessageType::Iso(t) => IntraMessageType::Iso(V::from(t)).into(),
+            IntraMessageType::Command(p, t) => IntraMessageType::Command(p, f(t)).into(),
+            IntraMessageType::Acl(t) => IntraMessageType::Acl(f(t)).into(),
+            IntraMessageType::Sco(t) => IntraMessageType::Sco(f(t)).into(),
+            IntraMessageType::Event(t) => IntraMessageType::Event(f(t)).into(),
+            IntraMessageType::Iso(t) => IntraMessageType::Iso(f(t)).into(),
         }
     }
 }

@@ -22,10 +22,25 @@ use crate::hci::interface::{
 use crate::hci::BufferReserve;
 use core::cell::{Cell, Ref, RefCell};
 use core::fmt::{Display, Formatter};
+use core::ops::Deref;
 use core::task::{Context, Poll, Waker};
 use stack_buffers::{BufferReservation, DeLinearBuffer, LinearBuffer, LinearBufferError, QueueBuffer, StackHotel};
 
 mod stack_buffers;
+
+/// A wrapper around a reference to a reservation
+///
+/// The point of this wrapper is to implement `Deref` to the type that the `Reservation` can
+/// dereference to.
+pub struct RefReservation<'a, 'z, T, const SIZE: usize>(&'a Reservation<'z, T, SIZE>);
+
+impl<T, const SIZE: usize> Deref for RefReservation<'_, '_, T, SIZE> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
 
 /// A channel for sending data between futures within the same task
 ///
@@ -38,11 +53,11 @@ mod stack_buffers;
 pub struct LocalStackChannel<const CHANNEL_SIZE: usize, B, T> {
     // The order of fields `message_queue` and `buffer_reserve` matter.  Dropping `message_queue`
     // before `buffer_reserve` allows for `message_queue` to contain unsafe reservations from
-    // `buffer_reserve` (Note: this does not make any other unsafe reservations safe to use). The
-    // type `UnsafeChannel` is an example scenario  for this issue.
+    // `buffer_reserve`.
     message_queue: RefCell<QueueBuffer<T, CHANNEL_SIZE>>,
     buffer_reserve: StackHotel<B, CHANNEL_SIZE>,
     sender_count: Cell<usize>,
+    receiver_exists: Cell<bool>,
     waker: Cell<Option<Waker>>,
 }
 
@@ -51,103 +66,276 @@ impl<'a, const CHANNEL_SIZE: usize, B, T> LocalStackChannel<CHANNEL_SIZE, B, T> 
         let message_queue = RefCell::new(QueueBuffer::new());
         let buffer_reserve = StackHotel::new();
         let sender_count = Cell::new(0);
+        let receiver_exists = Cell::new(false);
         let waker = Cell::new(None);
 
         Self {
             buffer_reserve,
             message_queue,
             sender_count,
+            receiver_exists,
             waker,
         }
     }
 }
 
-impl<'z, const CHANNEL_SIZE: usize, B, T: Unpin> Channel for &'z LocalStackChannel<CHANNEL_SIZE, B, T> {
-    type SenderError = LocalSendFutureError;
-    type Message = T;
-    type Sender = LocalStackChannelSender<'z, CHANNEL_SIZE, B, T>;
-    type Receiver = LocalStackChannelReceiver<'z, CHANNEL_SIZE, B, T>;
+macro_rules! impl_channel {
+    ($($methods:tt)*) => {
+        type SenderError = LocalSendFutureError;
+        type Message = IntraMessage<BufferReservation<'a, B, CHANNEL_SIZE>>;
+        type Sender =
+            LocalStackChannelSender<CHANNEL_SIZE, Self, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>;
+        type Receiver =
+            LocalStackChannelReceiver<CHANNEL_SIZE, Self, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>;
 
-    fn get_sender(&self) -> Self::Sender {
-        LocalStackChannelSender::new(self)
-    }
+        $($methods)*
+    };
+}
 
-    fn take_receiver(&self) -> Option<Self::Receiver> {
-        Some(LocalStackChannelReceiver(self))
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> Channel
+    for RefReservation<
+        'a,
+        '_,
+        LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+        TASK_COUNT,
+    >
+where
+    B: Unpin,
+{
+    impl_channel! {
+        fn get_sender(&self) -> Self::Sender {
+            LocalStackChannelSender::new(RefReservation(self.0))
+        }
+
+        fn take_receiver(&self) -> Option<Self::Receiver> {
+            Some(LocalStackChannelReceiver::new(RefReservation(self.0)))
+        }
     }
 }
 
-impl<'z, const CHANNEL_SIZE: usize, B, T> BufferReserve for &'z LocalStackChannel<CHANNEL_SIZE, B, T>
+impl<'a, const CHANNEL_SIZE: usize, B> Channel
+    for &'a LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>
 where
-    B: crate::hci::Buffer,
+    B: Unpin,
+{
+    impl_channel! {
+        fn get_sender(&self) -> Self::Sender {
+            LocalStackChannelSender::new(*self)
+        }
+
+        fn take_receiver(&self) -> Option<Self::Receiver> {
+            Some(LocalStackChannelReceiver::new(*self))
+        }
+    }
+}
+
+macro_rules! impl_buffer_reserve {
+    ($($impl_take:tt)*) => {
+        type Buffer = BufferReservation<'a, B, CHANNEL_SIZE>;
+        type TakeBuffer = LocalStackTakeBuffer<Self>;
+
+        $($impl_take)*
+
+        fn reclaim(&mut self, _: Self::Buffer) {}
+    };
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> BufferReserve
+    for RefReservation<'a, '_, LocalStackChannel<CHANNEL_SIZE, B, T>, TASK_COUNT>
+where
+    B: crate::hci::Buffer + 'a,
     T: Unpin,
 {
-    type Buffer = BufferReservation<'z, B, CHANNEL_SIZE>;
-    type TakeBuffer = LocalStackTakeBuffer<'z, CHANNEL_SIZE, B, T>;
-
-    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
-    where
-        S: Into<Option<usize>>,
-    {
-        LocalStackTakeBuffer::new(self, front_capacity.into().unwrap_or_default())
+    impl_buffer_reserve! {
+        fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+        where
+            S: Into<Option<usize>>,
+        {
+            LocalStackTakeBuffer::new(RefReservation(self.0), front_capacity.into().unwrap_or_default())
+        }
     }
+}
 
-    fn reclaim(&mut self, _: Self::Buffer) {}
+impl<'a, const CHANNEL_SIZE: usize, B, T> BufferReserve for &'a LocalStackChannel<CHANNEL_SIZE, B, T>
+where
+    B: crate::hci::Buffer + 'a,
+    T: Unpin,
+{
+    impl_buffer_reserve! {
+        fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+        where
+            S: Into<Option<usize>>,
+        {
+            LocalStackTakeBuffer::new(*self, front_capacity.into().unwrap_or_default())
+        }
+    }
+}
+
+macro_rules! impl_local_queue_buffer {
+    () => {
+        type Payload = IntraMessage<BufferReservation<'a, B, CHANNEL_SIZE>>;
+
+        fn call_waker(&self) {
+            self.0.waker.take().map(|w| w.wake());
+        }
+
+        fn set_waker(&self, waker: Waker) {
+            self.0.waker.set(Some(waker))
+        }
+    };
+}
+
+macro_rules! impl_local_queue_buffer_send {
+    () => {
+        fn is_full(&self) -> bool {
+            self.0.message_queue.borrow().is_full()
+        }
+
+        fn receiver_exists(&self) -> bool {
+            self.0.receiver_exists.get()
+        }
+
+        fn push(&self, intra_message: Self::Payload) {
+            debug_assert!(self.receiver_exists(), "all receivers closed for stack channel");
+
+            self.0
+                .message_queue
+                .borrow_mut()
+                .try_push(
+                    intra_message.map(|buffer_reservation| unsafe { BufferReservation::to_unsafe(buffer_reservation) }),
+                )
+                .unwrap();
+        }
+    };
 }
 
 /// The sender part of a stack allocated channel
 ///
 /// This implements `Sender` for sending messages to the receiver of its channel.
 #[derive(Clone)]
-pub struct LocalStackChannelSender<'a, const CHANNEL_SIZE: usize, B, T>(&'a LocalStackChannel<CHANNEL_SIZE, B, T>);
+pub struct LocalStackChannelSender<const CHANNEL_SIZE: usize, C, B, T>(C)
+where
+    C: Deref<Target = LocalStackChannel<CHANNEL_SIZE, B, T>>;
 
-impl<'a, const CHANNEL_SIZE: usize, B, T> LocalStackChannelSender<'a, CHANNEL_SIZE, B, T> {
-    fn new(channel: &'a LocalStackChannel<CHANNEL_SIZE, B, T>) -> Self {
+impl<const CHANNEL_SIZE: usize, C, B, T> LocalStackChannelSender<CHANNEL_SIZE, C, B, T>
+where
+    C: Deref<Target = LocalStackChannel<CHANNEL_SIZE, B, T>>,
+{
+    fn new(channel: C) -> Self {
         channel.sender_count.set(channel.sender_count.get() + 1);
 
         Self(channel)
     }
 }
 
-impl<'a, const CHANNEL_SIZE: usize, B, T> LocalQueueBuffer for LocalStackChannelSender<'a, CHANNEL_SIZE, B, T> {
-    type Payload = T;
-
-    fn call_waker(&mut self) {
-        self.0.waker.take().map(|w| w.wake());
-    }
-
-    fn set_waker(&mut self, waker: Waker) {
-        self.0.waker.set(Some(waker))
-    }
-}
-
-impl<'a, const CHANNEL_SIZE: usize, B, T> LocalQueueBufferSend for LocalStackChannelSender<'a, CHANNEL_SIZE, B, T>
-where
-    T: Sized,
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> LocalQueueBuffer
+    for LocalStackChannelSender<
+        CHANNEL_SIZE,
+        RefReservation<
+            'a,
+            '_,
+            LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+            TASK_COUNT,
+        >,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
 {
-    fn is_full(&self) -> bool {
-        self.0.message_queue.borrow().is_full()
-    }
-
-    fn push(&mut self, packet: Self::Payload) {
-        self.0.message_queue.borrow_mut().try_push(packet).unwrap();
-    }
+    impl_local_queue_buffer!();
 }
 
-impl<const CHANNEL_SIZE: usize, B, T: Unpin> Sender for LocalStackChannelSender<'_, CHANNEL_SIZE, B, T> {
-    type Error = LocalSendFutureError;
-    type Message = T;
-    type SendFuture<'a> = LocalSendFuture<'a, Self, T> where Self: 'a;
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> LocalQueueBufferSend
+    for LocalStackChannelSender<
+        CHANNEL_SIZE,
+        RefReservation<
+            'a,
+            '_,
+            LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+            TASK_COUNT,
+        >,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Sized,
+{
+    impl_local_queue_buffer_send!();
+}
 
-    fn send(&self, t: Self::Message) -> Self::SendFuture<'_> {
-        LocalSendFuture {
-            packet: Some(t),
-            local_sender: self,
+impl<'a, const CHANNEL_SIZE: usize, B> LocalQueueBuffer
+    for LocalStackChannelSender<
+        CHANNEL_SIZE,
+        &'a LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+{
+    impl_local_queue_buffer!();
+}
+
+impl<'a, const CHANNEL_SIZE: usize, B> LocalQueueBufferSend
+    for LocalStackChannelSender<
+        CHANNEL_SIZE,
+        &'a LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Sized,
+{
+    impl_local_queue_buffer_send!();
+}
+
+macro_rules! impl_sender {
+    ($lif:lifetime) => {
+        type Error = LocalSendFutureError;
+        type Message = IntraMessage<BufferReservation<'a, B, CHANNEL_SIZE>>;
+        type SendFuture<'z> = LocalSendFuture<'z, Self, IntraMessage<BufferReservation<$lif, B, CHANNEL_SIZE>>> where Self: 'z;
+
+        fn send(&self, message: Self::Message) -> Self::SendFuture<'_> {
+            LocalSendFuture {
+                packet: Some(message),
+                local_sender: self,
+            }
         }
-    }
+    };
 }
 
-impl<const CHANNEL_SIZE: usize, B, T> Drop for LocalStackChannelSender<'_, CHANNEL_SIZE, B, T> {
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> Sender
+    for LocalStackChannelSender<
+        CHANNEL_SIZE,
+        RefReservation<
+            'a,
+            '_,
+            LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+            TASK_COUNT,
+        >,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Unpin,
+{
+    impl_sender!('a);
+}
+
+impl<'a, const CHANNEL_SIZE: usize, B> Sender
+    for LocalStackChannelSender<
+        CHANNEL_SIZE,
+        &'a LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Unpin,
+{
+    impl_sender!('a);
+}
+
+impl<const CHANNEL_SIZE: usize, C, B, T> Drop for LocalStackChannelSender<CHANNEL_SIZE, C, B, T>
+where
+    C: Deref<Target = LocalStackChannel<CHANNEL_SIZE, B, T>>,
+{
     fn drop(&mut self) {
         self.0.sender_count.set(self.0.sender_count.get() - 1);
 
@@ -157,58 +345,167 @@ impl<const CHANNEL_SIZE: usize, B, T> Drop for LocalStackChannelSender<'_, CHANN
     }
 }
 
-/// A receiver of a message of a `LocalStackChannel`
-pub struct LocalStackChannelReceiver<'a, const CHANNEL_SIZE: usize, B, T>(&'a LocalStackChannel<CHANNEL_SIZE, B, T>);
-
-impl<'a, const CHANNEL_SIZE: usize, B, T> LocalQueueBuffer for LocalStackChannelReceiver<'a, CHANNEL_SIZE, B, T> {
-    type Payload = T;
-
-    fn call_waker(&mut self) {
-        self.0.waker.take().map(|w| w.wake());
-    }
-
-    fn set_waker(&mut self, waker: Waker) {
-        self.0.waker.set(Some(waker))
-    }
-}
-
-impl<'a, const CHANNEL_SIZE: usize, B, T> LocalQueueBufferReceive for LocalStackChannelReceiver<'a, CHANNEL_SIZE, B, T>
-where
-    T: Sized,
-{
-    fn has_senders(&self) -> bool {
-        self.0.sender_count.get() != 0
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.message_queue.borrow().is_empty()
-    }
-
-    fn pop_next(&mut self) -> Self::Payload {
-        self.0.message_queue.borrow_mut().try_remove().unwrap()
-    }
-}
-
-impl<'z, const CHANNEL_SIZE: usize, B, T: Unpin> Receiver for LocalStackChannelReceiver<'z, CHANNEL_SIZE, B, T> {
-    type Message = T;
-    type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where Self: 'a;
-
-    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
-        if self.has_senders() {
-            if self.is_empty() {
-                self.0.waker.set(Some(cx.waker().clone()));
-
-                Poll::Pending
-            } else {
-                Poll::Ready(Some(self.pop_next()))
-            }
-        } else {
-            Poll::Ready(None)
+macro_rules! impl_local_queue_buffer_receive {
+    () => {
+        fn has_senders(&self) -> bool {
+            self.0.sender_count.get() != 0
         }
-    }
 
-    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
-        LocalReceiverFuture(self)
+        fn is_empty(&self) -> bool {
+            self.0.message_queue.borrow().is_empty()
+        }
+
+        fn pop_next(&self) -> Self::Payload {
+            self.0
+                .message_queue
+                .borrow_mut()
+                .try_remove()
+                .unwrap()
+                .map(|u_buffer_reservation| unsafe {
+                    // This is rebound to lifetime 'a
+                    UnsafeBufferReservation::rebind(u_buffer_reservation)
+                })
+        }
+    };
+}
+
+/// A receiver of a message of a `LocalStackChannel`
+pub struct LocalStackChannelReceiver<const CHANNEL_SIZE: usize, C, B, T>(C)
+where
+    C: Deref<Target = LocalStackChannel<CHANNEL_SIZE, B, T>>;
+
+impl<const CHANNEL_SIZE: usize, C, B, T> LocalStackChannelReceiver<CHANNEL_SIZE, C, B, T>
+where
+    C: Deref<Target = LocalStackChannel<CHANNEL_SIZE, B, T>>,
+{
+    fn new(c: C) -> Self {
+        c.receiver_exists.set(true);
+
+        Self(c)
+    }
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> LocalQueueBuffer
+    for LocalStackChannelReceiver<
+        CHANNEL_SIZE,
+        RefReservation<
+            'a,
+            '_,
+            LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+            TASK_COUNT,
+        >,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+{
+    impl_local_queue_buffer!();
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> LocalQueueBufferReceive
+    for LocalStackChannelReceiver<
+        CHANNEL_SIZE,
+        RefReservation<
+            'a,
+            '_,
+            LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+            TASK_COUNT,
+        >,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Sized,
+{
+    impl_local_queue_buffer_receive!();
+}
+
+impl<'a, const CHANNEL_SIZE: usize, B> LocalQueueBuffer
+    for LocalStackChannelReceiver<
+        CHANNEL_SIZE,
+        &'a LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+{
+    impl_local_queue_buffer!();
+}
+
+impl<'a, const CHANNEL_SIZE: usize, B> LocalQueueBufferReceive
+    for LocalStackChannelReceiver<
+        CHANNEL_SIZE,
+        &'a LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Sized,
+{
+    impl_local_queue_buffer_receive!();
+}
+
+macro_rules! impl_receiver {
+    () => {
+        type Message = IntraMessage<BufferReservation<'a, B, CHANNEL_SIZE>>;
+        type ReceiveFuture<'z> = LocalReceiverFuture<'z, Self> where Self: 'z;
+
+        fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+            if self.has_senders() {
+                if self.is_empty() {
+                    self.0.waker.set(Some(cx.waker().clone()));
+
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Some(self.pop_next()))
+                }
+            } else {
+                Poll::Ready(None)
+            }
+        }
+
+        fn recv(&self) -> Self::ReceiveFuture<'_> {
+            LocalReceiverFuture(self)
+        }
+    };
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> Receiver
+    for LocalStackChannelReceiver<
+        CHANNEL_SIZE,
+        RefReservation<
+            'a,
+            '_,
+            LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+            TASK_COUNT,
+        >,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Unpin,
+{
+    impl_receiver!();
+}
+
+impl<'a, const CHANNEL_SIZE: usize, B> Receiver
+    for LocalStackChannelReceiver<
+        CHANNEL_SIZE,
+        &'a LocalStackChannel<CHANNEL_SIZE, B, IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>,
+        B,
+        IntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>,
+    >
+where
+    B: Unpin,
+{
+    impl_receiver!();
+}
+
+impl<const CHANNEL_SIZE: usize, C, B, T> Drop for LocalStackChannelReceiver<CHANNEL_SIZE, C, B, T>
+where
+    C: Deref<Target = LocalStackChannel<CHANNEL_SIZE, B, T>>,
+{
+    fn drop(&mut self) {
+        self.0.receiver_exists.set(false);
+        self.0.message_queue.borrow_mut().empty()
     }
 }
 
@@ -216,13 +513,13 @@ impl<'z, const CHANNEL_SIZE: usize, B, T: Unpin> Receiver for LocalStackChannelR
 ///
 /// This the type used as the `TakeBuffer` in the implementation of `BufferReserve` for
 /// `LocalStackChannel`.
-pub struct LocalStackTakeBuffer<'a, const CHANNEL_SIZE: usize, B, T> {
-    channel: &'a LocalStackChannel<CHANNEL_SIZE, B, T>,
+pub struct LocalStackTakeBuffer<C> {
+    channel: C,
     front_capacity: usize,
 }
 
-impl<'a, const CHANNEL_SIZE: usize, B, T> LocalStackTakeBuffer<'a, CHANNEL_SIZE, B, T> {
-    fn new(channel: &'a LocalStackChannel<CHANNEL_SIZE, B, T>, front_capacity: usize) -> Self {
+impl<C> LocalStackTakeBuffer<C> {
+    fn new(channel: C, front_capacity: usize) -> Self {
         Self {
             channel,
             front_capacity,
@@ -230,9 +527,37 @@ impl<'a, const CHANNEL_SIZE: usize, B, T> LocalStackTakeBuffer<'a, CHANNEL_SIZE,
     }
 }
 
-impl<'a, const CHANNEL_SIZE: usize, B, T> core::future::Future for LocalStackTakeBuffer<'a, CHANNEL_SIZE, B, T>
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> core::future::Future
+    for LocalStackTakeBuffer<RefReservation<'a, '_, LocalStackChannel<CHANNEL_SIZE, B, T>, TASK_COUNT>>
 where
-    B: crate::hci::Buffer,
+    B: crate::hci::Buffer + 'a,
+    T: Unpin,
+{
+    type Output = BufferReservation<'a, B, CHANNEL_SIZE>;
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        let reservation: &'a Reservation<_, TASK_COUNT> = this.channel.0;
+
+        let opt_buffer: Option<BufferReservation<'a, B, CHANNEL_SIZE>> =
+            StackHotel::<B, CHANNEL_SIZE>::take_buffer(&reservation.buffer_reserve, this.front_capacity);
+
+        match opt_buffer {
+            Some(buffer) => Poll::Ready(buffer),
+            None => {
+                this.channel.buffer_reserve.set_waker(cx.waker());
+
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl<'a, const CHANNEL_SIZE: usize, B, T> core::future::Future
+    for LocalStackTakeBuffer<&'a LocalStackChannel<CHANNEL_SIZE, B, T>>
+where
+    B: crate::hci::Buffer + 'a,
     T: Unpin,
 {
     type Output = BufferReservation<'a, B, CHANNEL_SIZE>;
@@ -253,55 +578,113 @@ where
     }
 }
 
-/// The [`Channel`](crate::hci::interface::Channel) type for a [`LocalStackChannelReserve`]
+/// The deref [`Channel`](crate::hci::interface::Channel) type for [`LocalStackChannelReserve`]
 ///
-/// This is an alias for the `Channel` in the `ChannelReserve` implementation of a
-/// [`LocalStackChannelReserve`].
+/// This is the non-generic type used for the channel types of the implementation of
+/// [`ChannelReserve`](crate::hci::interface::ChannelReserve) for `LocalStackChannelReserve`. The
+/// `ToChannel` and `FromChannel` can both be dereferenced to this type.
 ///
-/// # unsafety
-/// This type must be carefully be used as it is makes a `LocalStackChannel` self-referential. An
-/// `UnsafeChannel` cannot be moved while there is messages within the mpsc buffer for the channel,
-/// with the only exception being that it is safe to drop an `UnsafeChannel`
-type UnsafeChannel<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> = LocalStackChannel<
+/// # Safety
+/// An `UnsafeChannel` does contain `UnsafeBufferReservation`s. An `UnsafeBufferReservation` is
+/// the same as a [`BufferReservation`](stack_buffers::BufferReservation) without any lifetime to
+/// tie it to the [`StackHotel`](stack_buffers::StackHotel) that created it. It requires that user
+/// guarantee that the `UnsafeBufferReservation` is dropped before the `StackHotel` is *moved*. The
+/// user must make sure that a `UnsafeBufferReservation` must have all the same safety guarantees
+/// around a `StackHotel` that the compiler provides for a `BufferReservation` or
+/// [`Reservation`](stack_buffers::Reservation).
+///
+/// `UnsafeBufferReservation`s are used because it removes an extra indirection from a
+/// `LocalStackChannel`. Without it there would need to be another structure to contain the messages
+/// and it would have a lifetime back to the `LocalStackChannel` (because it hast the `StackHotel`).
+/// This is cumbersome as the message queue is expected to be contained within a mpsc data
+/// structure. However, in order to have the message queue as part of the channel
+/// `UnsafeBufferReservation` is used as using a `BufferReservation` would create a
+/// self-referential struct (which the rust compiler will not allow you to do).
+///
+/// ## Safety Requirements
+/// A `LocalStackChannel` must have the same usage requirements with `UnsafeBufferReservation` as a
+/// `BufferReservation` created from it's `buffer_reserve`. It cannot be moved (with the exception
+/// of dropping) while any message exists within the field `message_queue` (of `LocalStackChannel`).
+/// `message_queue` is a collection of the `UnsafeBufferReservation`s that link back to the
+/// `StackHotel` `buffer_reserve` so if an `LocalStackChannel` is moved while any
+/// `UnsafeBufferReservation`s exist for `buffer_reserve` UB will occur.
+///
+/// The requirements for safety are builtin, the user does not need to worry about them. The next
+///
+/// ## Safety Assurance
+/// To make sure that a `ChannelType` is immovable while `message_queue` contains
+/// `UnsafeBufferReservation`s, the trait `Channel` is only implemented for types that contain a
+/// reference back to a `LocalStackChannel`. Consequently [`LocalStackChannelSender`] and
+/// [`LocalStackChannelReceiver`] contain a reference back to the `LocalStackChannel`. These are the
+/// sender and receiver types for the implementation of `Channel` for `LocalStackChannel`. Because
+/// they contain a reference the compiler will ensure that the `LocalStackChannel` is immovable
+/// while either of them exist.
+///
+/// In order to send a message, a `LocalStackChannelReceiver` and at least one
+/// `LocalStackChannelSender` must exist. A `LocalStackChannelSender` will not add a message to the
+/// `message_queue` if no receiver exists, and when a `LocalStackChannelReceiver` is dropped the
+/// `message_queue` is emptied. The only time the message queue contains a message is when the
+/// `LocalStackChannelReceiver` still exists, and because a `LocalStackChannelReceiver` contains a
+/// reference to the `UnsafeChannel` the compiler will guarantee that the `LocalStackChannel` is not
+/// moved. All this results in the compiler assuring that a `LocalStackChannel` will not move while
+/// any message is in `message_queue`, thus making it a safe to use self referential structure.
+type ChannelType<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> = LocalStackChannel<
     CHANNEL_SIZE,
     DeLinearBuffer<BUFFER_SIZE, u8>,
     IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
 >;
 
 struct TaskData<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    channel: Reservation<'a, UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    channel: Reservation<'a, ChannelType<CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
     task_id: TaskId,
     flow_ctrl_id: FlowControlId,
 }
 
 /// Ends of channel for an async task
-pub struct StackChannelEnds<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    sender_channel: &'a UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>,
+pub struct StackChannelEnds<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
+    sender_channel: &'z ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
     receiver: LocalStackChannelReceiver<
-        'a,
         CHANNEL_SIZE,
+        RefReservation<'a, 'z, ChannelType<CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
         DeLinearBuffer<BUFFER_SIZE, u8>,
         IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
     >,
 }
 
-impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> ChannelEnds
-    for StackChannelEnds<'a, CHANNEL_SIZE, BUFFER_SIZE>
+impl<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> ChannelEnds
+    for StackChannelEnds<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
-    type Channel = &'a UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>;
+    type ToBuffer = BufferReservation<'z, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
 
-    fn get_prep_send(
-        &self,
-        front_capacity: usize,
-    ) -> GetPrepareSend<<Self::Channel as Channel>::Sender, <Self::Channel as BufferReserve>::TakeBuffer> {
-        GetPrepareSend::new(&self.sender_channel, front_capacity)
+    type TakeBuffer = LocalStackTakeBuffer<&'z ChannelType<CHANNEL_SIZE, BUFFER_SIZE>>;
+
+    type Sender = LocalStackChannelSender<
+        CHANNEL_SIZE,
+        &'z ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
+        DeLinearBuffer<BUFFER_SIZE, u8>,
+        IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
+    >;
+
+    type Receiver = LocalStackChannelReceiver<
+        CHANNEL_SIZE,
+        RefReservation<'a, 'z, ChannelType<CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        DeLinearBuffer<BUFFER_SIZE, u8>,
+        IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
+    >;
+
+    fn get_prep_send(&self, front_capacity: usize) -> GetPrepareSend<Self::Sender, Self::TakeBuffer> {
+        let take_buffer = LocalStackTakeBuffer::new(self.sender_channel, front_capacity);
+
+        let sender = LocalStackChannelSender(self.sender_channel);
+
+        GetPrepareSend::new(take_buffer, sender)
     }
 
-    fn get_receiver(&self) -> &<Self::Channel as Channel>::Receiver {
+    fn get_receiver(&self) -> &Self::Receiver {
         &self.receiver
     }
 
-    fn get_mut_receiver(&mut self) -> &mut <Self::Channel as Channel>::Receiver {
+    fn get_mut_receiver(&mut self) -> &mut Self::Receiver {
         &mut self.receiver
     }
 }
@@ -314,12 +697,12 @@ impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> ChannelEnds
 /// needs something to put a lifetime to when taking a reservation, and a reserve is made up of
 /// multiple `StackHotels`.
 pub struct LocalStackChannelReserveData<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    to_channels: StackHotel<UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-    cmd_channel: UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>,
-    acl_channel: UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>,
-    sco_channel: UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>,
-    le_acl_channel: UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>,
-    le_iso_channel: UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>,
+    to_channels: StackHotel<ChannelType<CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    cmd_channel: ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
+    acl_channel: ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
+    sco_channel: ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
+    le_acl_channel: ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
+    le_iso_channel: ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
 }
 
 impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
@@ -328,11 +711,11 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
     /// Create a new `LocalStackChannelReserveData`
     fn new() -> Self {
         let to_channels = StackHotel::new();
-        let cmd_channel = UnsafeChannel::new();
-        let acl_channel = UnsafeChannel::new();
-        let sco_channel = UnsafeChannel::new();
-        let le_acl_channel = UnsafeChannel::new();
-        let le_iso_channel = UnsafeChannel::new();
+        let cmd_channel = ChannelType::new();
+        let acl_channel = ChannelType::new();
+        let sco_channel = ChannelType::new();
+        let le_acl_channel = ChannelType::new();
+        let le_iso_channel = ChannelType::new();
 
         Self {
             to_channels,
@@ -357,8 +740,8 @@ pub struct LocalStackChannelReserve<'a, const TASK_COUNT: usize, const CHANNEL_S
     task_data: LinearBuffer<TASK_COUNT, TaskData<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>,
     flow_ctrl_receiver: FlowCtrlReceiver<
         LocalStackChannelReceiver<
-            'a,
             CHANNEL_SIZE,
+            &'a ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
             DeLinearBuffer<BUFFER_SIZE, u8>,
             IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
         >,
@@ -375,24 +758,41 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     /// of stack allocated types. Otherwise using a
     /// [`LocalChannelManager`](super::LocalChannelManager) is preferred.
     pub fn new(data: &'a LocalStackChannelReserveData<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>) -> Self {
-        let to_channel_reservations = LinearBuffer::new();
+        let task_data = LinearBuffer::new();
 
         let receivers = InterfaceReceivers {
-            cmd_receiver: (&data.cmd_channel).take_receiver().unwrap(),
-            acl_receiver: (&data.cmd_channel).take_receiver().unwrap(),
-            sco_receiver: (&data.cmd_channel).take_receiver().unwrap(),
-            le_acl_receiver: (&data.cmd_channel).take_receiver().unwrap(),
-            le_iso_receiver: (&data.cmd_channel).take_receiver().unwrap(),
+            cmd_receiver: LocalStackChannelReceiver(&data.cmd_channel),
+            acl_receiver: LocalStackChannelReceiver(&data.cmd_channel),
+            sco_receiver: LocalStackChannelReceiver(&data.cmd_channel),
+            le_acl_receiver: LocalStackChannelReceiver(&data.cmd_channel),
+            le_iso_receiver: LocalStackChannelReceiver(&data.cmd_channel),
         };
 
         let flow_ctrl_receiver = FlowCtrlReceiver::new(receivers);
 
         Self {
             data,
-            task_data: to_channel_reservations,
+            task_data,
             flow_ctrl_receiver,
         }
     }
+}
+
+trait Foo {
+    type SenderError;
+
+    type MessageBuffer;
+
+    type ToBuffer<'a>
+    where
+        Self: 'a;
+
+    type Foo<'a>: BufferReserve<Buffer = Self::ToBuffer<'a>>
+        + Channel<SenderError = Self::SenderError, Message = IntraMessage<Self::MessageBuffer>>
+    where
+        Self: 'a;
+
+    fn get_foo(&self) -> Self::Foo<'_>;
 }
 
 impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> ChannelReserve
@@ -404,17 +804,15 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 
     type TryExtendError = LinearBufferError;
 
-    type MessageBuffer = UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
+    type ToBuffer<'a> = BufferReservation<'a, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE> where Self: 'a ;
 
-    type Sender = <Self::Channel as Channel>::Sender;
+    type ToChannel<'a> = RefReservation<'a, 'z, ChannelType<CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT> where Self: 'a;
 
-    type Receiver = <Self::Channel as Channel>::Receiver;
+    type FromBuffer = BufferReservation<'z, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
 
-    type Buffer = BufferReservation<'z, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
+    type FromChannel = &'z ChannelType<CHANNEL_SIZE, BUFFER_SIZE>;
 
-    type Channel = &'z UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE>;
-
-    type ChannelEnds = StackChannelEnds<'z, CHANNEL_SIZE, BUFFER_SIZE>;
+    type OtherTaskEnds<'a> = StackChannelEnds<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> where Self: 'a;
 
     /// Try to remove a channel
     ///
@@ -431,10 +829,11 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         }
     }
 
-    fn add_new_task(&mut self, task_id: TaskId, flow_ctrl_id: FlowControlId) -> Result<Self::ChannelEnds, Self::Error>
-    where
-        Self::Channel: Sized,
-    {
+    fn add_new_task(
+        &mut self,
+        task_id: TaskId,
+        flow_ctrl_id: FlowControlId,
+    ) -> Result<Self::OtherTaskEnds<'_>, Self::Error> {
         use core::ops::Deref;
 
         let index = self
@@ -458,11 +857,9 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             .try_insert(new_task_data, index)
             .map_err(|_| LocalStackChannelsError::TaskCountReached)?;
 
-        let task_data_ref = self.task_data.deref().get(index).unwrap();
+        let receiver = LocalStackChannelReceiver(RefReservation(&self.task_data[index].channel));
 
-        let receiver = (&*task_data_ref.channel).take_receiver().unwrap();
-
-        let sender_channel: &UnsafeChannel<CHANNEL_SIZE, BUFFER_SIZE> = match flow_ctrl_id {
+        let sender_channel: &ChannelType<CHANNEL_SIZE, BUFFER_SIZE> = match flow_ctrl_id {
             FlowControlId::Cmd => &self.data.cmd_channel,
             FlowControlId::Acl => &self.data.acl_channel,
             FlowControlId::Sco => &self.data.sco_channel,
@@ -470,22 +867,20 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             FlowControlId::LeIso => &self.data.le_iso_channel,
         };
 
-        let new_task_channel_ends: StackChannelEnds<'z, CHANNEL_SIZE, BUFFER_SIZE> = StackChannelEnds {
+        Ok(StackChannelEnds {
             sender_channel,
             receiver,
-        };
-
-        Ok(new_task_channel_ends)
+        })
     }
 
-    fn get_and<F, R>(&self, id: TaskId, f: F) -> Option<R>
-    where
-        F: FnOnce(&Self::Channel) -> R,
-    {
+    fn get(&self, id: TaskId) -> Option<Self::ToChannel<'_>> {
+        use core::ops::Deref;
+
         self.task_data
             .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
             .ok()
-            .map(|index| f(&&*self.task_data[index].channel))
+            .and_then(|index| self.task_data.get(index))
+            .map(|TaskData { channel, .. }| RefReservation(channel))
     }
 
     fn get_flow_control_id(&self, id: TaskId) -> Option<FlowControlId> {
@@ -495,7 +890,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             .map(|index| self.task_data[index].flow_ctrl_id)
     }
 
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<Self::Receiver> {
+    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver> {
         &mut self.flow_ctrl_receiver
     }
 }

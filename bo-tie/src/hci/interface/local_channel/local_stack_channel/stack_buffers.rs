@@ -443,6 +443,22 @@ impl<T, const SIZE: usize> QueueBuffer<T, SIZE> {
             Err(QueueBufferError::BufferEmpty)
         }
     }
+
+    pub fn empty(&mut self) {
+        while self.count != 0 {
+            unsafe { self.buffer[self.start].assume_init_drop() };
+
+            self.start = (self.start + 1) % SIZE;
+
+            self.count -= 1;
+        }
+    }
+}
+
+impl<T, const SIZE: usize> Drop for QueueBuffer<T, SIZE> {
+    fn drop(&mut self) {
+        self.empty()
+    }
 }
 
 #[derive(Debug)]
@@ -884,7 +900,8 @@ impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
     /// This method assumes that input `link` points to a location that is unique to this
     /// `ReservedBuffer`. It is undefined behaviour if multiple `ReservedBuffer`s exist at the same
     /// time containing the same `link`.
-    unsafe fn new(ur: UnsafeReservation<T, SIZE>, _hotel: &'a StackHotel<T, SIZE>, front_capacity: usize) -> Self
+    #[allow(unused_variables)]
+    unsafe fn new(ur: UnsafeReservation<T, SIZE>, hotel: &'a StackHotel<T, SIZE>, front_capacity: usize) -> Self
     where
         T: crate::hci::Buffer,
     {
@@ -899,6 +916,14 @@ impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
         ret.clear_with_front_capacity(front_capacity);
 
         ret
+    }
+
+    /// Convert a `BufferReservation` into an `UnsafeBufferReservation`
+    ///
+    /// This is unsafe as it creating an `UnsafeBufferReservation` looses the lifetime of the
+    /// [`StackHotel`] that created it.
+    pub unsafe fn to_unsafe(this: Self) -> UnsafeBufferReservation<T, SIZE> {
+        this.ubr
     }
 }
 
@@ -997,6 +1022,19 @@ where
 #[repr(transparent)]
 pub struct UnsafeBufferReservation<T, const SIZE: usize>(UnsafeReservation<T, SIZE>);
 
+impl<T, const SIZE: usize> UnsafeBufferReservation<T, SIZE> {
+    /// Rebind the `UnsafeBufferReservation` to a lifetime
+    ///
+    /// The caller must make sure that the lifetime is correct lifetime.
+    #[allow(unused_variables)]
+    pub unsafe fn rebind<'a>(this: Self) -> BufferReservation<'a, T, SIZE> {
+        let ubr = this;
+        let _pd = core::marker::PhantomData;
+
+        BufferReservation { ubr, _pd }
+    }
+}
+
 impl<T, const SIZE: usize> crate::hci::Buffer for UnsafeBufferReservation<T, SIZE>
 where
     T: crate::hci::Buffer,
@@ -1088,12 +1126,6 @@ where
 
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
         self.0.get_mut().try_front_remove(how_many)
-    }
-}
-
-impl<T, const SIZE: usize> From<BufferReservation<'_, T, SIZE>> for UnsafeBufferReservation<T, SIZE> {
-    fn from(br: BufferReservation<T, SIZE>) -> Self {
-        br.ubr
     }
 }
 

@@ -121,7 +121,7 @@ where
     /// This adds a byte to the buffer. The first byte added to the buffer is always assumed to be
     /// the indicator byte and any following bytes to be HCI packet. `add` will return true when it
     /// is determined that the buffer contains a complete HCI packet
-    pub async fn add(&mut self, byte: u8) -> Result<bool, UartBufferedSendError<R>> {
+    pub async fn add(&'a mut self, byte: u8) -> Result<bool, UartBufferedSendError<R>> {
         use core::mem::replace;
 
         match self.state {
