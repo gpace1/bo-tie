@@ -672,12 +672,15 @@ impl<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SI
         IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
     >;
 
-    fn get_prep_send(&self, front_capacity: usize) -> GetPrepareSend<Self::Sender, Self::TakeBuffer> {
-        let take_buffer = LocalStackTakeBuffer::new(self.sender_channel, front_capacity);
+    fn get_sender(&self) -> Self::Sender {
+        self.sender_channel.get_sender()
+    }
 
-        let sender = LocalStackChannelSender(self.sender_channel);
-
-        GetPrepareSend::new(take_buffer, sender)
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>,
+    {
+        self.sender_channel.take(front_capacity)
     }
 
     fn get_receiver(&self) -> &Self::Receiver {

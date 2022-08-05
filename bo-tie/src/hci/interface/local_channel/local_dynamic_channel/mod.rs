@@ -247,8 +247,15 @@ impl ChannelEnds for DynChannelEnds {
 
     type Receiver = LocalChannelReceiver<DeVec<u8>, IntraMessage<DeVec<u8>>>;
 
-    fn get_prep_send(&self, front_capacity: usize) -> GetPrepareSend<Self::Sender, Self::TakeBuffer> {
-        GetPrepareSend::from_channel(&self.send_channel, front_capacity)
+    fn get_sender(&self) -> Self::Sender {
+        self.send_channel.get_sender()
+    }
+
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>,
+    {
+        self.send_channel.take(front_capacity)
     }
 
     fn get_receiver(&self) -> &Self::Receiver {

@@ -353,13 +353,7 @@ pub trait Channel {
 /// one of the async tasks.
 pub trait ChannelEnds {
     /// The buffer type of messages *to* the interface async task
-    ///
-    /// # Note
-    /// This is equivalent to the [`FromBuffer`](ChannelReserve::FromBuffer) type of
-    /// `ChannelReserve`.
     type ToBuffer: Buffer;
-
-    /// The buffer type for receiving
 
     /// The future for acquiring a buffer from the channel to send
     type TakeBuffer: Future<Output = Self::ToBuffer>;
@@ -371,7 +365,12 @@ pub trait ChannelEnds {
     type Receiver: Receiver;
 
     /// Get the sender of messages to the other async task
-    fn get_prep_send(&self, front_capacity: usize) -> GetPrepareSend<Self::Sender, Self::TakeBuffer>;
+    fn get_sender(&self) -> Self::Sender;
+
+    /// Take a buffer
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>;
 
     /// Get the receiver of messages from the async task
     fn get_receiver(&self) -> &Self::Receiver;
