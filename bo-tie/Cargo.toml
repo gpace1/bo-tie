@@ -5,7 +5,7 @@ authors = ["gpace1 <33923139+gpace1@users.noreply.github.com>"]
 keywords = ["Bluetooth", "BLE", "Low Energy"]
 categories = ["asynchronous"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 
 [package.metadata.docs.rs]
 all-features = true
