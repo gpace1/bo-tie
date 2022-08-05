@@ -9,7 +9,7 @@
 //!
 //! # The Algorithms
 //! The names of each algorithm match the names as stated in the Security Manager section of the
-//! Host Volume of the Bluetooth Specification (V 5.0 | Vol 3, Part H, Section 2.2).
+//! Host Volume of the Bluetooth Specification (Vol 3, Part H, Section 2.2).
 //!
 //! # Note
 //! For the the functions defined in the specification, all array inputs need to be in big-endian

@@ -33,7 +33,7 @@ impl WhiteListedAddressType {
 ///
 /// # Notes
 /// These are the full explanation for the last two enumerations (as copied from
-/// the core 5.0 specification):
+/// the core specification):
 /// - RPAFromLocalIRKPA -> Controller generates Resolvable Private Address based on
 ///     the local IRK from the resolving list. If the resolving list contains no
 ///     matching entry, use the public address.

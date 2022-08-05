@@ -895,7 +895,7 @@ impl Psm {
     /// Create a new *dynamic* PSM
     ///
     /// This will create a dynamic PSM if the input `dyn_psm` is within the acceptable range of
-    /// dynamically allocated PSM values (see the Bluetooth core spec v 5.0 | Vol 3, Part A).
+    /// dynamically allocated PSM values (see the Bluetooth core spec | Vol 3, Part A).
     ///
     /// # Note
     /// For now extended dynamic PSM's are not supported as I do not know how to support them (

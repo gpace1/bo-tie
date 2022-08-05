@@ -253,7 +253,7 @@ impl core::convert::TryFrom<&'_ BasicInfoFrame<Vec<u8>>> for CommandType {
 /// Command Data
 ///
 /// A trait for converting to or from the data format sent over the radio as specified in the
-/// Bluetooth Specification Security Manager Protocol (V.5.0 | Vol 3, Part H
+/// Bluetooth Specification Security Manager Protocol (Vol 3, Part H
 trait CommandData
 where
     Self: Sized,

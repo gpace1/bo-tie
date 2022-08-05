@@ -243,7 +243,7 @@ impl core::fmt::Display for ErrorConversionError {
 /// These are the errors defined in the ATT Protocol. Higher layer protocols can define their own
 /// errors, but the value of those errors must be between 0xA0-DxDF
 ///
-/// See the Bluetooth Specification (V. 5.0) volume 3, part F, section 3.4 for more information on
+/// See the Bluetooth Specification, volume 3, part F, section 3.4 for more information on
 /// the error codes
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {

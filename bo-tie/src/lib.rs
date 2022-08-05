@@ -156,20 +156,20 @@ pub struct UUID {
 }
 
 impl UUID {
-    /// See V 5.0 Vol 3 part B sec 2.5.1 for where this value comes from.
+    /// See Vol 3 part B sec 2.5.1 for where this value comes from.
     /// This can also be found as the Bluetooth Base UUID in the assigned numbers document.
     const BLUETOOTH_BASE_UUID: u128 = 0x0000000000001000800000805F9B34FB;
 
     pub const fn from_u32(v: u32) -> Self {
         UUID {
-            /// See V 5.0 Vol 3 part B sec 2.5.1 for this equation
+            /// See Vol 3 part B sec 2.5.1 for this equation
             base_uuid: ((v as u128) << 96) | Self::BLUETOOTH_BASE_UUID,
         }
     }
 
     pub const fn from_u16(v: u16) -> Self {
         UUID {
-            /// See V 5.0 Vol 3 part B sec 2.5.1 for this equation
+            /// See Vol 3 part B sec 2.5.1 for this equation
             base_uuid: ((v as u128) << 96) | Self::BLUETOOTH_BASE_UUID,
         }
     }

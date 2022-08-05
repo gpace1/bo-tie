@@ -5,7 +5,7 @@
 //! [`TransferFormatInto`](crate::att::TransferFormatInto), and
 //! [`TransferFormatTryFrom`](crate::att::TransferFormatTryFrom). The server organizes the data as
 //! a vectored list, all attributes are forced into a consecutive order. The client can query the
-//! server using the requests specified within the specification (V 5.0, vol 3 part F section 3.4)
+//! server using the requests specified within the specification vol 3 part F section 3.4)
 //! except for 'Read By Group Type Request' as groups are not specified by the attribute server.
 //!
 //! Creating a `Server` requires two things, a L2CAP

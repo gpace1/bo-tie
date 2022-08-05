@@ -5,8 +5,7 @@
 //! The Attribute Protocol is the base for the
 //! `[Generic Attribute Profile](../gatt/index.html)
 //!
-//! This is implementation of the Attribute Protocol as defined in the Bluetooth Specification
-//! (version 5.0), Vol. 3, Part F.
+//! This is implementation of the Attribute Protocol as defined in the Bluetooth Specification, Vol. 3, Part F.
 //!
 //! # Attribute Protocol Permissions
 //! When an attribute is created it is given permissions to *to determine* access of if by a

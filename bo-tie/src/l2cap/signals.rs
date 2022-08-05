@@ -1,7 +1,7 @@
 //! Signaling L2CAP Commands
 //!
 //! L2CAP supports signal packets to provide a L2CAP level configuration. This module contains the
-//! various signaling packets that specified in the Bluetooth Specification V 5.0 | Vol 3, Part A
+//! various signaling packets that specified in the Bluetooth Specification | Vol 3, Part A
 //! sections 4 and 5.
 
 const ACL_U_SIG_CHANNEL_ID: super::ChannelIdentifier =

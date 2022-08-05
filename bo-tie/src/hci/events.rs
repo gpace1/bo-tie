@@ -3488,7 +3488,7 @@ macro_rules! events_markup {
             /// Make an event from a raw HCI event packet
             ///
             /// The input `data` should contain *only* the data that is part of the HCI Event
-            /// Packet as specified in the Bluetooth core specification (V 5.0, vol 2, Part E).
+            /// Packet as specified in the Bluetooth core specification (vol 4, Part E).
             /// Do not include the *HCI packet indicator* as that will (most likely) cause this
             /// method to panic.
             pub fn try_from_packet( data: &[u8] ) -> Result<Self, EventError> {

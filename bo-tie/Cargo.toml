@@ -24,10 +24,7 @@ uuid = { version = "0.8", optional = true }
 lazy_static = "1.4"
 
 [features]
-default = ["v5_0"]
 unstable = []
-v4_2 = [] # bluetooth v4.2
-v5_0 = [] # bluetooth v5.0
 uuid-crate = ["uuid"]
 
 [dev-dependencies]
