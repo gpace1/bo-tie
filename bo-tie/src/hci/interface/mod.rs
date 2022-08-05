@@ -898,6 +898,58 @@ pub struct Interface<R> {
     channel_reserve: R,
 }
 
+impl Interface<local_channel::LocalChannelManager> {
+    /// Create a new local `Interface`
+    ///
+    /// This host controller interface is local to a single thread. The interface, host, and
+    /// connections async tasks must run on an local executor or other type of executor that does
+    /// not require async tasks to be thread safe.
+    ///
+    /// # Note
+    /// A local interface uses dynamic memory allocation for buffering and messages between async
+    /// tasks. A pure `no_std` implementation can be created with
+    /// [`new_local_static`](Interface::new_local_static).
+    pub fn new_local(channel_size: usize) -> Self {
+        let mut channel_reserve = local_channel::LocalChannelManager::new(channel_size);
+
+        Interface { channel_reserve }
+    }
+}
+
+impl Interface<()> {
+    /// Create a statically sized local interface
+    ///
+    /// This host controller interface is local to a single thread. The interface, host, and
+    /// connections async tasks must run on an local executor or other type of executor that does
+    /// not require async tasks to be thread safe.
+    ///
+    /// The number of channels is defined by the constant `CHANNEL_COUNT`. The interface task has
+    /// two channels to ever other task, this constant must be equal to two times the number of
+    /// connection async tasks plus two for the channels to the host async task.
+    ///
+    /// # Using
+    /// A trick is done for this syntax of using method.
+    /// ```
+    /// use bo_tie::hci::interface::{TaskId, Interface, ChannelReserve};
+    /// use bo_tie::l2cap::{ACLU, MinimumMtu};
+    ///
+    /// let mut channel_reserve = local_channel::LocalStaticChannelManager::new();
+    ///
+    /// // This should always work, hence the usage of unwrap
+    /// channel_reserve.try_add(TaskId::Host).ok().unwrap();
+    ///
+    /// let interface = Interface::new_stack_local::<5, 5, ACLU::MIN_MTU>(channel_reserve);
+    /// ```
+    #[cfg(feature = "unstable")]
+    pub fn new_stack_local<const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
+        channel_reserve_data: &local_channel::LocalStackChannelReserveData<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+    ) -> Interface<local_channel::LocalStackChannelReserve<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>> {
+        let mut channel_reserve = local_channel::LocalStackChannelReserve::new(channel_reserve_data);
+
+        Interface { channel_reserve }
+    }
+}
+
 impl<R> Interface<R>
 where
     R: ChannelReserve,
@@ -1297,58 +1349,6 @@ where
         PrepareSend::and_send(prepare_send, |buffer| IntraMessageType::Acl(buffer).into())
             .await
             .map_err(|e| SendMessageError::ChannelError(e).into())
-    }
-}
-
-impl Interface<local_channel::LocalChannelManager> {
-    /// Create a new local `Interface`
-    ///
-    /// This host controller interface is local to a single thread. The interface, host, and
-    /// connections async tasks must run on an local executor or other type of executor that does
-    /// not require async tasks to be thread safe.
-    ///
-    /// # Note
-    /// A local interface uses dynamic memory allocation for buffering and messages between async
-    /// tasks. A pure `no_std` implementation can be created with
-    /// [`new_local_static`](Interface::new_local_static).
-    pub fn new_local(channel_size: usize) -> Self {
-        let mut channel_reserve = local_channel::LocalChannelManager::new(channel_size);
-
-        Interface { channel_reserve }
-    }
-}
-
-impl Interface<()> {
-    /// Create a statically sized local interface
-    ///
-    /// This host controller interface is local to a single thread. The interface, host, and
-    /// connections async tasks must run on an local executor or other type of executor that does
-    /// not require async tasks to be thread safe.
-    ///
-    /// The number of channels is defined by the constant `CHANNEL_COUNT`. The interface task has
-    /// two channels to ever other task, this constant must be equal to two times the number of
-    /// connection async tasks plus two for the channels to the host async task.
-    ///
-    /// # Using
-    /// A trick is done for this syntax of using method.
-    /// ```
-    /// use bo_tie::hci::interface::{TaskId, Interface, ChannelReserve};
-    /// use bo_tie::l2cap::{ACLU, MinimumMtu};
-    ///
-    /// let mut channel_reserve = local_channel::LocalStaticChannelManager::new();
-    ///
-    /// // This should always work, hence the usage of unwrap
-    /// channel_reserve.try_add(TaskId::Host).ok().unwrap();
-    ///
-    /// let interface = Interface::new_stack_local::<5, 5, ACLU::MIN_MTU>(channel_reserve);
-    /// ```
-    #[cfg(feature = "unstable")]
-    pub fn new_stack_local<const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
-        channel_reserve_data: &local_channel::LocalStackChannelReserveData<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
-    ) -> Interface<local_channel::LocalStackChannelReserve<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>> {
-        let mut channel_reserve = local_channel::LocalStackChannelReserve::new(channel_reserve_data);
-
-        Interface { channel_reserve }
     }
 }
 
