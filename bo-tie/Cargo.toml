@@ -7,10 +7,6 @@ categories = ["asynchronous"]
 license = "MIT"
 edition = "2021"
 
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
-
 [dependencies]
 bo-tie-macros = { path = "../bo-tie-macros" }
 # bo-tie-serde = { path = "../bo-tie-serde" }
@@ -21,11 +17,10 @@ elliptic-curve = { version = "0.10", features = ["ecdh"] }
 p256 = { version = "0.9", features = ["ecdh"] }
 aes = { version = "0.7" }
 uuid = { version = "0.8", optional = true }
-lazy_static = "1.4"
 
 [features]
-unstable = []
 uuid-crate = ["uuid"]
+unstable = []
 
 [dev-dependencies]
 futures = { version = "0.3", features = ["async-await", "thread-pool"] }
@@ -35,4 +30,9 @@ tinymt = "1.0.4"
 rayon = "1.3.0"
 bo-tie-linux = {path = "../base-crates/bo-tie-linux"}
 tokio = { version = "1.0", features = ["sync"]}
+
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
