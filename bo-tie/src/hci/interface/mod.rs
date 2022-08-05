@@ -54,7 +54,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 mod flow_control;
-mod local_channel;
+pub(super) mod local_channel;
 pub mod uart;
 
 /// Identifiers of channels
@@ -898,7 +898,7 @@ pub struct Interface<R> {
     channel_reserve: R,
 }
 
-impl Interface<local_channel::LocalChannelManager> {
+impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
     /// Create a new local `Interface`
     ///
     /// This host controller interface is local to a single thread. The interface, host, and
@@ -910,7 +910,7 @@ impl Interface<local_channel::LocalChannelManager> {
     /// tasks. A pure `no_std` implementation can be created with
     /// [`new_local_static`](Interface::new_local_static).
     pub fn new_local(channel_size: usize) -> Self {
-        let mut channel_reserve = local_channel::LocalChannelManager::new(channel_size);
+        let mut channel_reserve = local_channel::local_dynamic_channel::LocalChannelManager::new(channel_size);
 
         Interface { channel_reserve }
     }
@@ -942,9 +942,15 @@ impl Interface<()> {
     /// ```
     #[cfg(feature = "unstable")]
     pub fn new_stack_local<const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
-        channel_reserve_data: &local_channel::LocalStackChannelReserveData<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
-    ) -> Interface<local_channel::LocalStackChannelReserve<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>> {
-        let mut channel_reserve = local_channel::LocalStackChannelReserve::new(channel_reserve_data);
+        channel_reserve_data: &local_channel::local_stack_channel::LocalStackChannelReserveData<
+            CHANNEL_COUNT,
+            CHANNEL_SIZE,
+            BUFFER_SIZE,
+        >,
+    ) -> Interface<local_channel::local_stack_channel::LocalStackChannelReserve<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>
+    {
+        let mut channel_reserve =
+            local_channel::local_stack_channel::LocalStackChannelReserve::new(channel_reserve_data);
 
         Interface { channel_reserve }
     }

@@ -5,19 +5,14 @@
 //! communication. This channel consists of statically allocated buffer to store the messages that
 //! are sent from the sender to the receiver.
 
-mod local_dynamic_channel;
+pub mod local_dynamic_channel;
 #[cfg(feature = "unstable")]
-mod local_stack_channel;
+pub mod local_stack_channel;
 
 use core::fmt::{Display, Formatter};
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
-pub use local_dynamic_channel::LocalChannelManager;
-#[cfg(feature = "unstable")]
-pub use local_stack_channel::LocalStackChannelReserve;
-#[cfg(feature = "unstable")]
-pub use local_stack_channel::LocalStackChannelReserveData;
 
 /// Trait for a buffer of the sender of a local channel
 ///
