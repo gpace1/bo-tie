@@ -17,7 +17,7 @@ use std::sync::{
 };
 
 async fn advertise_setup(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>,
+    hi: &hci::Host<bo_tie_linux::HCIAdapter>,
     data: set_advertising_data::AdvertisingData,
     flag: Arc<AtomicBool>,
 ) {
@@ -46,7 +46,7 @@ async fn advertise_setup(
     println!("{:5>}", "Advertising Enabled");
 }
 
-async fn advertise_teardown(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter>) {
+async fn advertise_teardown(hi: &hci::Host<bo_tie_linux::HCIAdapter>) {
     set_advertising_enable::send(&hi, false).await.unwrap();
 }
 
@@ -135,7 +135,7 @@ fn main() {
 
     let adv_flag = Arc::new(AtomicBool::new(true));
 
-    let interface = hci::HostInterface::default();
+    let interface = hci::Host::default();
 
     let adv_name = assigned::local_name::LocalName::new("Adv Test", false);
 

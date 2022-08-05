@@ -84,8 +84,8 @@ pub mod remote_connection_parameter_request_reply {
         }
     }
 
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameters: CommandParameters,
     ) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(parameters).await
@@ -161,8 +161,8 @@ pub mod remote_connection_parameter_request_negative_reply {
     /// [`NoError`](crate::hci::error::Error::NoError) nor
     /// [`Message`](crate::hci::error::Error::Message)
     /// as they are translated into the value of 0 on the interface.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         handle: ConnectionHandle,
         reason: error::Error,
     ) -> Result<Return, CommandError<H>> {

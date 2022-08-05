@@ -36,7 +36,7 @@ impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
 
 /// Scan for a specific address
 async fn start_scanning_for_addr<M: Send + 'static>(
-    hi: &hci::HostInterface<Base, M>,
+    hi: &hci::Host<Base, M>,
     local_name: &str,
 ) -> bo_tie::hci::events::LEAdvertisingReportData {
     use bo_tie::hci::cb::set_event_mask::{self, EventMask};
@@ -105,7 +105,7 @@ fn match_report(report: &&hci::events::LEAdvertisingReportData, name: &str) -> b
 }
 
 async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
-    hi: Arc<hci::HostInterface<Base, M>>,
+    hi: Arc<hci::Host<Base, M>>,
     peer_address: &bo_tie::BluetoothDeviceAddress,
     peer_address_type: bo_tie::hci::le::commonAddressType,
     raw_handle: Arc<AtomicU16>,
@@ -191,7 +191,7 @@ where
 
 /// Start encryption
 async fn encrypt<M: Send + 'static>(
-    hi: &hci::HostInterface<Base, M>,
+    hi: &hci::Host<Base, M>,
     connection_handle: hci::common::ConnectionHandle,
     ltk: u128,
 ) {
@@ -231,10 +231,7 @@ async fn encrypt<M: Send + 'static>(
     }
 }
 
-async fn disconnect<M: Send + 'static>(
-    hi: &hci::HostInterface<Base, M>,
-    connection_handle: hci::common::ConnectionHandle,
-) {
+async fn disconnect<M: Send + 'static>(hi: &hci::Host<Base, M>, connection_handle: hci::common::ConnectionHandle) {
     use hci::link_control::disconnect::{self, DisconnectParameters, DisconnectReason};
 
     let dp = DisconnectParameters {
@@ -245,7 +242,7 @@ async fn disconnect<M: Send + 'static>(
     disconnect::send(hi, dp).await.ok();
 }
 
-fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::HostInterface<Base, M>>, raw_handle: Arc<AtomicU16>) {
+fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::Host<Base, M>>, raw_handle: Arc<AtomicU16>) {
     use hci::common::ConnectionHandle;
     use hci::le::connection::create_connection_cancel;
 
@@ -266,7 +263,7 @@ fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::HostInterface<Base, M>>, ra
         // bluetooth controller if the HCI is not closed cleanly, espically when running
         // with a superuser.
         unsafe {
-            let b = Box::from_raw(Arc::into_raw(hi.clone()) as *mut hci::HostInterface<Base, M>);
+            let b = Box::from_raw(Arc::into_raw(hi.clone()) as *mut hci::Host<Base, M>);
 
             std::mem::drop(b)
         };
@@ -276,7 +273,7 @@ fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::HostInterface<Base, M>>, ra
 }
 
 async fn bonding<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
-    interface: Arc<hci::HostInterface<Base, M>>,
+    interface: Arc<hci::Host<Base, M>>,
     raw_ch: Arc<AtomicU16>,
     adv_local_name: &str,
 ) {
@@ -340,7 +337,7 @@ fn main() {
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
-    let interface = futures::executor::block_on(hci::HostInterface::<_, AsyncLock>::new());
+    let interface = futures::executor::block_on(hci::Host::<_, AsyncLock>::new());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 

@@ -246,10 +246,7 @@ mod heart_rate_service {
 }
 
 /// This sets up the advertising and waits for the connection complete event
-async fn advertise_setup<'a, M: Send + 'static>(
-    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
-    local_name: &'a str,
-) {
+async fn advertise_setup<'a, M: Send + 'static>(hi: &'a hci::Host<bo_tie_linux::HCIAdapter, M>, local_name: &'a str) {
     let adv_name = assigned::local_name::LocalName::new(local_name, false);
 
     let mut adv_flags = assigned::flags::Flags::new();
@@ -297,7 +294,7 @@ async fn advertise_setup<'a, M: Send + 'static>(
 // For simplicity, I've left the a race condition in here. There could be a case where the
 // connection is made and the ConnectionComplete event isn't propagated & processed
 async fn wait_for_connection<M: Send + 'static>(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
+    hi: &hci::Host<bo_tie_linux::HCIAdapter, M>,
 ) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
@@ -324,7 +321,7 @@ async fn wait_for_connection<M: Send + 'static>(
 }
 
 async fn disconnect<M: Send + 'static>(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
+    hi: &hci::Host<bo_tie_linux::HCIAdapter, M>,
     connection_handle: hci::common::ConnectionHandle,
 ) {
     use bo_tie::hci::le::connection::disconnect;
@@ -337,10 +334,7 @@ async fn disconnect<M: Send + 'static>(
     disconnect::send(&hi, prams).await.expect("Failed to disconnect");
 }
 
-fn handle_sig<M: Sync + Send + 'static>(
-    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter, M>>,
-    raw_handle: Arc<AtomicU16>,
-) {
+fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::Host<bo_tie_linux::HCIAdapter, M>>, raw_handle: Arc<AtomicU16>) {
     simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
         // Cancel advertising if advertising (there is no consequence if not advertising)
         futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
@@ -372,7 +366,7 @@ fn main() {
 
     let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
 
-    let interface = executor::block_on(hci::HostInterface::<_, AsyncLock>::new());
+    let interface = executor::block_on(hci::Host::<_, AsyncLock>::new());
 
     handle_sig(interface.clone(), raw_connection_handle.clone());
 

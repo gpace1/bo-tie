@@ -163,8 +163,8 @@ pub mod set_event_mask {
     }
 
     /// Send the event mask to the controller
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         events: &[EventMask],
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let parameter = Parameter {
@@ -199,7 +199,7 @@ pub mod reset {
     }
 
     /// Send the reset command to the controller
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
@@ -284,8 +284,8 @@ pub mod read_transmit_power_level {
     /// Send a read transmit power level command to the controller
     ///
     /// This will send the command to the controller and wait for the transmit power level to be returned by it.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameter: Parameter,
     ) -> Result<TransmitPowerLevel, CommandError<H>> {
         host.send_command_expect_complete(parameter).await

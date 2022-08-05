@@ -113,7 +113,7 @@ pub mod set_event_mask {
     /// #     }
     /// # }
     /// #
-    /// # let host_interface = bo_tie::hci::HostInterface::<StubHi>::default();
+    /// # let host_interface = bo_tie::hci::Host::<StubHi>::default();
     ///
     /// use bo_tie::hci::le::mandatory::set_event_mask::{self, send};
     /// use bo_tie::hci::events::LeMeta;
@@ -125,8 +125,8 @@ pub mod set_event_mask {
     /// // This will enable the LE Connection Complete Event and LE Advertising Report Event
     /// send(&host_interface, &events);
     /// ```
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         enabled_events: &[LeMeta],
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let mask = LeMeta::build_mask(enabled_events);
@@ -276,14 +276,14 @@ pub mod read_buffer_size {
     /// Request information on the LE data buffers (version 1)
     ///
     /// This only returns the buffer information for LE ACL data packets.
-    pub async fn send_v1<H: Host>(host: &mut HostInterface<H>) -> Result<BufferSizeV1, CommandError<H>> {
+    pub async fn send_v1<H: HostInterface>(host: &mut Host<H>) -> Result<BufferSizeV1, CommandError<H>> {
         host.send_command_expect_complete(ParameterV1).await
     }
 
     /// Request information on the LE data buffers (version 2)
     ///
     /// This returns the buffer information for the LE ACL and LE ISO data packets.
-    pub async fn send_v2<H: Host>(host: &mut HostInterface<H>) -> Result<BufferSizeV2, CommandError<H>> {
+    pub async fn send_v2<H: HostInterface>(host: &mut Host<H>) -> Result<BufferSizeV2, CommandError<H>> {
         host.send_command_expect_complete(ParameterV2).await
     }
 }
@@ -354,7 +354,7 @@ pub mod read_local_supported_features {
         }
     }
 
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<EnabledLeFeatures, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<EnabledLeFeatures, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -415,7 +415,7 @@ pub mod read_white_list_size {
         }
     }
 
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<WhiteListSize, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<WhiteListSize, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -436,7 +436,7 @@ pub mod clear_white_list {
     }
 
     /// Send the command to clear the white list
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
@@ -466,8 +466,8 @@ macro_rules! add_remove_white_list_setup {
             }
         }
 
-        pub async fn send<H: Host>(
-            host: &mut HostInterface<H>,
+        pub async fn send<H: HostInterface>(
+            host: &mut Host<H>,
             address_type: crate::hci::le::common::WhiteListedAddressType,
             address: crate::BluetoothDeviceAddress,
         ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -700,7 +700,7 @@ pub mod read_supported_states {
         }
     }
 
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -752,7 +752,7 @@ pub mod test_end {
     }
 
     /// Send the command
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }

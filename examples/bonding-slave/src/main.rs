@@ -43,7 +43,7 @@ struct Keys {
 
 #[derive(Clone)]
 struct Bonder {
-    hi: Arc<hci::HostInterface<bo_tie_linux::HCIAdapter, AsyncLock>>,
+    hi: Arc<hci::Host<bo_tie_linux::HCIAdapter, AsyncLock>>,
     event_mask: Arc<Mutex<HashSet<hci::cb::set_event_mask::EventMask>>>,
     le_event_mask: Arc<Mutex<HashSet<hci::events::LeMeta>>>,
     handle: Arc<Mutex<Option<hci::common::ConnectionHandle>>>,
@@ -55,7 +55,7 @@ struct Bonder {
 impl Bonder {
     async fn new(use_pub_address: bool) -> Self {
         Bonder {
-            hi: hci::HostInterface::new().await,
+            hi: hci::Host::new().await,
             handle: Arc::new(Mutex::new(None)),
             event_mask: Arc::new(Mutex::new(HashSet::new())),
             le_event_mask: Arc::new(Mutex::new(HashSet::new())),
@@ -752,7 +752,7 @@ impl Bonder {
             // with a superuser.
             unsafe {
                 let b = Box::from_raw(
-                    Arc::into_raw(self.hi.clone()) as *mut hci::HostInterface<bo_tie_linux::HCIAdapter, AsyncLock>
+                    Arc::into_raw(self.hi.clone()) as *mut hci::Host<bo_tie_linux::HCIAdapter, AsyncLock>
                 );
 
                 std::mem::drop(b)

@@ -24,8 +24,8 @@ pub mod read_remote_version_information {
     /// [`CommandStatus`](events::Events::CommandStatus) event. The event
     /// [`ReadRemoteVersionInformationComplete`](events::Events::ReadRemoteVersionInformationComplete)
     /// must be awaited upon by the `host` to get the version information of the remote controller.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         host.send_command_expect_status(CmdParameter(connection_handle)).await
@@ -135,8 +135,8 @@ pub mod disconnect {
     /// is disconnected. The event
     /// [`DisconnectionComplete`](events::Events::DisconnectionComplete)
     /// must be awaited upon by the `host` to know the device has disconnected.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameter: DisconnectParameters,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         host.send_command_expect_status(parameter).await

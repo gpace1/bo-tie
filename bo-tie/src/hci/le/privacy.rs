@@ -40,8 +40,8 @@ pub mod set_address_resolution_enable {
     }
 
     /// Send the LE Set Address Resolution Enable command
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         enable: bool,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let parameter = Parameter { enable };
@@ -73,7 +73,7 @@ pub mod set_resolvable_private_address_timeout {
 
     pub enum RpaTimeoutCommandError<H>
     where
-        H: Host,
+        H: HostInterface,
     {
         TooSmall(Duration),
         TooLarge(Duration),
@@ -82,7 +82,7 @@ pub mod set_resolvable_private_address_timeout {
 
     impl<H> core::fmt::Debug for RpaTimeoutCommandError<H>
     where
-        H: Host,
+        H: HostInterface,
         CommandError<H>: core::fmt::Debug,
     {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
@@ -96,7 +96,7 @@ pub mod set_resolvable_private_address_timeout {
 
     impl<H> core::fmt::Display for RpaTimeoutCommandError<H>
     where
-        H: Host,
+        H: HostInterface,
         CommandError<H>: core::fmt::Display,
     {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
@@ -110,7 +110,7 @@ pub mod set_resolvable_private_address_timeout {
 
     impl<H> From<CommandError<H>> for RpaTimeoutCommandError<H>
     where
-        H: Host,
+        H: HostInterface,
     {
         fn from(ce: CommandError<H>) -> Self {
             Self::CommandError(ce)
@@ -127,8 +127,8 @@ pub mod set_resolvable_private_address_timeout {
     /// # Note
     /// Using the [`Default`](core::default::Default) value of `Duration` for the input `time_out`
     /// will set the resolvable private address timeout to it's default value of 15 minutes.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         time_out: Duration,
     ) -> Result<impl FlowControlInfo, RpaTimeoutCommandError<H>> {
         let time_out = if time_out == Duration::default() {
@@ -183,8 +183,8 @@ pub mod add_device_to_resolving_list {
     }
 
     /// Send the LE Add Device To Resolving List command
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
@@ -220,8 +220,8 @@ pub mod remove_device_from_resolving_list {
     }
 
     /// Send the LE Remove Device To Resolving List command
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;
@@ -246,7 +246,7 @@ pub mod clear_resolving_list {
     }
 
     /// Send the LE Clear Resolving List command
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(Parameter).await;
 
         r
@@ -295,8 +295,8 @@ pub mod set_privacy_mode {
         }
     }
 
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameter).await;

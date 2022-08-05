@@ -75,8 +75,8 @@ pub mod encrypt {
     ///
     /// # Note
     /// The input 'key' must be in native byte order.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         key: u128,
         plain_text: [u8; 16],
     ) -> Result<Cypher, CommandError<H>> {
@@ -146,7 +146,7 @@ pub mod rand {
     }
 
     /// Send the LE Rand command
-    pub async fn send<H: Host>(host: &mut HostInterface<H>) -> Result<Random, CommandError<H>> {
+    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<Random, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -233,8 +233,8 @@ pub mod enable_encryption {
     /// encrypted, sending this command will instead cause the controller to issue the
     /// [EncryptionKeyRefreshComplete](crate::hci::events::Events::EncryptionKeyRefreshComplete)
     /// event once the encryption is updated.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameter: Parameter,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         host.send_command_expect_status(parameter).await
@@ -305,8 +305,8 @@ pub mod long_term_key_request_reply {
     ///
     /// # Note
     /// The input 'long_term_key' must be in native byte order.
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         connection_handle: ConnectionHandle,
         long_term_key: u128,
     ) -> Result<Return, CommandError<H>> {
@@ -373,8 +373,8 @@ pub mod long_term_key_request_negative_reply {
     }
 
     /// Send the LE Long Term Key Request Negative Reply Command
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<Return, CommandError<H>> {
         let parameter = Parameter { connection_handle };

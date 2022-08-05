@@ -105,8 +105,8 @@ pub mod set_scan_parameters {
     }
 
     /// Send the LE Set Scan Parameters command
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         parameters: ScanningParameters,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let r: Result<OnlyStatus, _> = host.send_command_expect_complete(parameters).await;
@@ -138,8 +138,8 @@ pub mod set_scan_enable {
     }
 
     /// Send the LE Set Scan Enable command
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         enable: bool,
         filter_duplicates: bool,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
@@ -174,8 +174,8 @@ pub mod receiver_test {
     }
 
     /// Send LE Receiver Test (v1) command
-    pub async fn send_v1<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send_v1<H: HostInterface>(
+        host: &mut Host<H>,
         frequency: Frequency,
     ) -> Result<impl FlowControlInfo, CommandError<H>> {
         let parameter = ParameterV1 { frequency };

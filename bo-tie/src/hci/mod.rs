@@ -551,10 +551,15 @@ impl CommandEventMatcher {
     }
 }
 
-/// The `Host`
+/// The trait for a [`Host`] to communicate with the interface
 ///
-/// This trait is for the implementation of the host asynchronous task.
-pub trait Host {
+/// This trait is used for communication by a host async task with an interface async task. It
+/// provides access to the sender and receiver used by a `Host` and the buffer reserve for creating
+/// an [`IntraMessage`](interface::IntraMessage) to send to an interface.
+///
+/// There are three types `HostInterface`s. These types are modeled to be flexible for various
+/// kinds of platforms that would use the `bo-tie`. The *preferred*  implementation.
+pub trait HostInterface {
     type TryExtendError: core::fmt::Debug;
 
     type SenderError: core::fmt::Debug;
@@ -568,55 +573,34 @@ pub trait Host {
     type Reserve: BufferReserve<Buffer = Self::Buffer>;
 
     /// Get the sender of messages to the interface async task
-    ///
-    /// This returns the sender part of the MPSC channel
     fn get_sender(&self) -> &Self::Sender;
 
+    /// Get the receiver for messages from the interface async task
     fn get_receiver(&self) -> &mut Self::Receiver;
 
+    /// Get the buffer reserve
     fn get_reserve(&self) -> &Self::Reserve;
 }
+
+// /// An interface for a singled threaded HCI
+// ///
+// /// When an async task executor does not require the async tasks to be [`Send`] safe, a
+// /// `LocalHostInterface` can be used
+// pub struct LocalHostInterface {
+//     sender: interface::local_channel::,
+// }
 
 /// The host interface
 ///
 /// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
 /// host controller interface.
-///
-/// # Feature *flow-ctrl*
-/// The default implementation of `HostInterface` provides no flow control for HCI data sent from
-/// the host to the controller. HCI data packets that are too large or too many packets within too
-/// short of time frame can be sent. It is up to the user of a HostInterface to be sure that the
-/// HCI data packets sent to the controller are not too big or overflow the buffers.
-///
-/// Building this library with the "flow-ctrl" feature adds a flow controller to a `HostInterface`.
-/// This flow controller monitors the *Number of Completed Packets Event* sent from the controller
-/// and allows packets to be sent to the controller so long as there is space in the controllers
-/// buffers. Every [`ConnectionChannel`](crate::l2cap::ConnectionChannel) made from a
-/// `HostInterface` will be regulated by the flow controller when sending data to the controller.
-///
-/// A flow controller is not built with a HostInterface by default since there are a few issues with
-/// having it. First is that a flow controller must be initialized. Without a flow controller a
-/// `HostInterface` can be created with either `default()` or `from(your_interface)`, but with it
-/// the only way to create a `HostInterface` is with the `initialize()` async method. The flow
-/// controller's initialization process is to query the controller for the HCI send buffer
-/// information, to get both the maximum HCI data packet size and number of HCI data packets the
-/// size of the buffer. The next issue is that the *Number of Completed Packets Event* cannot be
-/// awaited upon. The flow-controller must be the only user of this event. Lastly the 'raw'
-/// `ConnectionChannel` implementations are not available, you are forced to use the flow
-/// controller when creating a `ConnectionChannel`.
-///
-/// The main reason why feature *flow-ctrl* is not a part of the default features list is that for
-/// most use cases a flow controller is unnecessary. It should really only be needed for when
-/// numerous connections are made or for some reason the buffer information is unknown. Most of the
-/// time the raw connections will suffice with the MTU value set to the maximum packet size of the
-/// HCI receive data buffer on the controller.
-pub struct HostInterface<H> {
+pub struct Host<H> {
     host: H,
 }
 
-impl<H> HostInterface<H>
+impl<H> Host<H>
 where
-    H: Host,
+    H: HostInterface,
 {
     /// Send a command with the provided matcher to the interface async task
     ///
@@ -804,7 +788,7 @@ where
 /// An error when trying to send a command
 pub enum CommandError<H>
 where
-    H: Host,
+    H: HostInterface,
 {
     TryExtendBufferError(H::TryExtendError),
     CommandError(error::Error),
@@ -816,7 +800,7 @@ where
 
 impl<H> core::fmt::Debug for CommandError<H>
 where
-    H: Host,
+    H: HostInterface,
     H::TryExtendError: core::fmt::Debug,
     H::SenderError: core::fmt::Debug,
 {
@@ -834,7 +818,7 @@ where
 
 impl<H> core::fmt::Display for CommandError<H>
 where
-    H: Host,
+    H: HostInterface,
     H::TryExtendError: core::fmt::Display,
     H::SenderError: core::fmt::Display,
 {
@@ -850,19 +834,19 @@ where
     }
 }
 
-impl<H: Host> From<events::EventError> for CommandError<H> {
+impl<H: HostInterface> From<events::EventError> for CommandError<H> {
     fn from(e: events::EventError) -> Self {
         CommandError::EventError(e)
     }
 }
 
-impl<H: Host> From<error::Error> for CommandError<H> {
+impl<H: HostInterface> From<error::Error> for CommandError<H> {
     fn from(e: error::Error) -> Self {
         CommandError::CommandError(e)
     }
 }
 
-impl<H: Host> From<CCParameterError> for CommandError<H> {
+impl<H: HostInterface> From<CCParameterError> for CommandError<H> {
     fn from(e: CCParameterError) -> Self {
         match e {
             CCParameterError::CommandError(e) => CommandError::CommandError(e),

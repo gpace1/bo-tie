@@ -55,8 +55,8 @@ pub mod read_rssi {
     }
 
     /// Get the RSSI value for a specific connection
-    pub async fn send<H: Host>(
-        host: &mut HostInterface<H>,
+    pub async fn send<H: HostInterface>(
+        host: &mut Host<H>,
         handle: ConnectionHandle,
     ) -> Result<RSSIInfo, CommandError<H>> {
         host.send_command_expect_complete(Parameter(handle)).await

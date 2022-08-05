@@ -33,7 +33,7 @@ where
 }
 
 async fn remove_from_white_list<M: Send + 'static>(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
+    hi: &hci::Host<bo_tie_linux::HCIAdapter, M>,
     address: bo_tie::BluetoothDeviceAddress,
 ) {
     use bo_tie::hci::le::common::WhiteListedAddressType::RandomDeviceAddress;
@@ -43,7 +43,7 @@ async fn remove_from_white_list<M: Send + 'static>(
 }
 
 async fn scan_for_local_name<'a, M: Send + 'static>(
-    hi: &'a hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
+    hi: &'a hci::Host<bo_tie_linux::HCIAdapter, M>,
     name: &'a str,
 ) -> Option<Box<::bo_tie::hci::events::LEAdvertisingReportData>> {
     use bo_tie::gap::assigned::{local_name, TryFromRawAdvData};
@@ -96,7 +96,7 @@ async fn scan_for_local_name<'a, M: Send + 'static>(
 }
 
 async fn connect<M: Send + 'static>(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
+    hi: &hci::Host<bo_tie_linux::HCIAdapter, M>,
     address: bo_tie::BluetoothDeviceAddress,
 ) -> Result<EventsData, impl std::fmt::Debug> {
     use bo_tie::hci::common;
@@ -141,14 +141,14 @@ async fn connect<M: Send + 'static>(
     hi.wait_for_event(awaited_event).await
 }
 
-async fn cancel_connect<M: Send + 'static>(hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>) {
+async fn cancel_connect<M: Send + 'static>(hi: &hci::Host<bo_tie_linux::HCIAdapter, M>) {
     use bo_tie::hci::le::connection::create_connection_cancel;
 
     create_connection_cancel::send(&hi).await.unwrap();
 }
 
 async fn disconnect<M: Send + 'static>(
-    hi: &hci::HostInterface<bo_tie_linux::HCIAdapter, M>,
+    hi: &hci::Host<bo_tie_linux::HCIAdapter, M>,
     connection_handle: hci::common::ConnectionHandle,
 ) {
     use bo_tie::hci::le::connection::disconnect;
@@ -167,7 +167,7 @@ fn main() {
     use std::io::stdin;
     use std::io::BufRead;
 
-    let host_interface = futures::executor::block_on(hci::HostInterface::<_, AsyncLock>::new());
+    let host_interface = futures::executor::block_on(hci::Host::<_, AsyncLock>::new());
 
     let mut name = String::new();
 
