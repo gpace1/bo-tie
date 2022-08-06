@@ -656,6 +656,8 @@ impl<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SI
 {
     type ToBuffer = BufferReservation<'z, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
 
+    type FromBuffer = BufferReservation<'a, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
+
     type TakeBuffer = LocalStackTakeBuffer<&'z ChannelType<CHANNEL_SIZE, BUFFER_SIZE>>;
 
     type Sender = LocalStackChannelSender<
@@ -712,7 +714,7 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
     LocalStackChannelReserveData<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
     /// Create a new `LocalStackChannelReserveData`
-    fn new() -> Self {
+    pub fn new() -> Self {
         let to_channels = StackHotel::new();
         let cmd_channel = ChannelType::new();
         let acl_channel = ChannelType::new();

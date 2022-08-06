@@ -241,6 +241,8 @@ pub struct DynChannelEnds {
 impl ChannelEnds for DynChannelEnds {
     type ToBuffer = DeVec<u8>;
 
+    type FromBuffer = DeVec<u8>;
+
     type TakeBuffer = <LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>> as BufferReserve>::TakeBuffer;
 
     type Sender = LocalChannelSender<DeVec<u8>, IntraMessage<DeVec<u8>>>;

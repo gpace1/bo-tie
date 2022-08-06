@@ -11,6 +11,7 @@ pub mod events;
 // mod flow_ctrl;
 pub mod interface;
 
+use crate::hci::interface::{ChannelEnds, ChannelReserve, FlowControlId, TaskId};
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -560,42 +561,249 @@ impl CommandEventMatcher {
 /// There are three types `HostInterface`s. These types are modeled to be flexible for various
 /// kinds of platforms that would use the `bo-tie`. The *preferred*  implementation.
 pub trait HostInterface {
-    type TryExtendError: core::fmt::Debug;
+    /// Buffer type for messages to the interface async task
+    type ToBuffer: Buffer;
 
-    type SenderError: core::fmt::Debug;
+    /// Buffer type for messages from the interface async task
+    type FromBuffer: Buffer;
 
-    type Buffer: core::ops::DerefMut<Target = [u8]> + crate::TryExtend<u8, Error = Self::TryExtendError>;
+    /// Sender for messages to the interface
+    type Sender: interface::Sender<Message = interface::IntraMessage<Self::ToBuffer>>;
 
-    type Sender: interface::Sender<Error = Self::SenderError, Message = interface::IntraMessage<Self::Buffer>>;
+    /// The receiver of messages from the interface
+    type Receiver: interface::Receiver<Message = interface::IntraMessage<Self::FromBuffer>>;
 
-    type Receiver: interface::Receiver<Message = interface::IntraMessage<Self::Buffer>>;
-
-    type Reserve: BufferReserve<Buffer = Self::Buffer>;
+    /// The future used for taking a buffer
+    type TakeBuffer: Future<Output = Self::ToBuffer>;
 
     /// Get the sender of messages to the interface async task
-    fn get_sender(&self) -> &Self::Sender;
+    fn get_sender(&self) -> Self::Sender;
 
     /// Get the receiver for messages from the interface async task
-    fn get_receiver(&self) -> &mut Self::Receiver;
+    fn get_receiver(&self) -> &Self::Receiver;
 
-    /// Get the buffer reserve
-    fn get_reserve(&self) -> &Self::Reserve;
+    /// Take a buffer
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>;
 }
 
-// /// An interface for a singled threaded HCI
-// ///
-// /// When an async task executor does not require the async tasks to be [`Send`] safe, a
-// /// `LocalHostInterface` can be used
-// pub struct LocalHostInterface {
-//     sender: interface::local_channel::,
-// }
+/// An interface for a singled threaded HCI
+///
+/// When an async task executor does not require the async tasks to be [`Send`] safe, a
+/// `LocalHostInterface` can be used
+struct DynLocalHostInterface {
+    ends: interface::local_channel::local_dynamic_channel::DynChannelEnds,
+}
+
+impl HostInterface for DynLocalHostInterface {
+    type ToBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::ToBuffer;
+    type FromBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::FromBuffer;
+    type Sender = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::Sender;
+    type Receiver = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::Receiver;
+    type TakeBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::TakeBuffer;
+
+    fn get_sender(&self) -> Self::Sender {
+        self.ends.get_sender()
+    }
+
+    fn get_receiver(&self) -> &Self::Receiver {
+        self.ends.get_receiver()
+    }
+
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>,
+    {
+        self.ends.take_buffer(front_capacity)
+    }
+}
+
+/// Create locally used Host Controller Interface
+pub fn new_local_hci(max_connections: usize) -> (Host<impl HostInterface>, interface::Interface<impl ChannelReserve>) {
+    let mut interface = interface::Interface::new_local(max_connections + 1);
+
+    let ends = interface
+        .get_mut_reserve()
+        .add_new_task(TaskId::Host, FlowControlId::Cmd)
+        .unwrap();
+
+    let host_interface = DynLocalHostInterface { ends };
+
+    let host = Host { host_interface };
+
+    (host, interface)
+}
+
+struct StackLocalHostInterface<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
+    ends:
+        interface::local_channel::local_stack_channel::StackChannelEnds<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+}
+
+impl<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> HostInterface
+    for StackLocalHostInterface<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
+{
+    type ToBuffer = <interface::local_channel::local_stack_channel::StackChannelEnds<
+        'a,
+        'z,
+        TASK_COUNT,
+        CHANNEL_SIZE,
+        BUFFER_SIZE,
+    > as ChannelEnds>::ToBuffer;
+
+    type FromBuffer = <interface::local_channel::local_stack_channel::StackChannelEnds<
+        'a,
+        'z,
+        TASK_COUNT,
+        CHANNEL_SIZE,
+        BUFFER_SIZE,
+    > as ChannelEnds>::FromBuffer;
+
+    type Sender = <interface::local_channel::local_stack_channel::StackChannelEnds<
+        'a,
+        'z,
+        TASK_COUNT,
+        CHANNEL_SIZE,
+        BUFFER_SIZE,
+    > as ChannelEnds>::Sender;
+
+    type Receiver = <interface::local_channel::local_stack_channel::StackChannelEnds<
+        'a,
+        'z,
+        TASK_COUNT,
+        CHANNEL_SIZE,
+        BUFFER_SIZE,
+    > as ChannelEnds>::Receiver;
+
+    type TakeBuffer = <interface::local_channel::local_stack_channel::StackChannelEnds<
+        'a,
+        'z,
+        TASK_COUNT,
+        CHANNEL_SIZE,
+        BUFFER_SIZE,
+    > as ChannelEnds>::TakeBuffer;
+
+    fn get_sender(&self) -> Self::Sender {
+        self.ends.get_sender()
+    }
+
+    fn get_receiver(&self) -> &Self::Receiver {
+        self.ends.get_receiver()
+    }
+
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>,
+    {
+        self.ends.take_buffer(front_capacity)
+    }
+}
+
+/// The primer for a stack local HCI
+///
+/// This is the "allocation area" for the stack local HCI implementation. The stack local host,
+/// connection, and interface async tasks utilize rust by borrowing from this primer to ensure that
+/// they can safely allocate on the stack. For more information see the method
+/// [`new_stack_local_hci`].
+#[cfg(feature = "unstable")]
+pub struct StackLocalHciPrimer<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
+    data: interface::local_channel::local_stack_channel::LocalStackChannelReserveData<
+        TASK_COUNT,
+        CHANNEL_SIZE,
+        BUFFER_SIZE,
+    >,
+    has_interface: core::cell::Cell<bool>,
+}
+
+#[cfg(feature = "unstable")]
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
+    StackLocalHciPrimer<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
+{
+    /// Take the interface for the `StackLocalHciPrimer`
+    ///
+    /// If there is already an interface taken for this `StackLocalHciPrimer`, `take_interface` will
+    /// return `None`.
+    pub fn take_interface(&self) -> Option<StackLocalInterfacePrimer<'_, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>> {
+        (!self.has_interface.get()).then(|| {
+            self.has_interface.set(true);
+
+            let has_interface = &self.has_interface;
+
+            let has_host = core::cell::Cell::new(false);
+
+            let interface = interface::Interface::new_stack_local(&self.data);
+
+            StackLocalInterfacePrimer {
+                has_interface,
+                has_host,
+                interface,
+            }
+        })
+    }
+}
+
+#[cfg(feature = "unstable")]
+pub struct StackLocalInterfacePrimer<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
+    has_interface: &'a core::cell::Cell<bool>,
+    has_host: core::cell::Cell<bool>,
+    interface: interface::Interface<
+        interface::local_channel::local_stack_channel::LocalStackChannelReserve<
+            'a,
+            TASK_COUNT,
+            CHANNEL_SIZE,
+            BUFFER_SIZE,
+        >,
+    >,
+}
+
+#[cfg(feature = "unstable")]
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
+    StackLocalInterfacePrimer<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
+{
+    pub fn take_host(&mut self) -> Option<Host<impl HostInterface + '_>> {
+        (!self.has_host.get()).then(|| {
+            self.has_host.set(true);
+
+            let ends = self
+                .interface
+                .get_mut_reserve()
+                .add_new_task(TaskId::Host, FlowControlId::Cmd)
+                .unwrap();
+
+            let host_interface = StackLocalHostInterface { ends };
+
+            Host { host_interface }
+        })
+    }
+}
+
+/// Create a local, stack buffered HCI
+///
+/// This is used to create a host controller interface whereby async tasks must run on a local
+/// executor. The host, connection, and interface async tasks are *not* [`Send`] safe and cannot be
+/// run on an executor that requires send safe async tasks. Using a locally restricted HCI can be
+/// advantageous where there is a light usage of Bluetooth by the application or where environments
+/// cannot support
+#[cfg(feature = "unstable")]
+pub fn new_stack_local_hci<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
+) -> StackLocalHciPrimer<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> {
+    let has_interface = core::cell::Cell::new(false);
+
+    let data = interface::local_channel::local_stack_channel::LocalStackChannelReserveData::<
+        TASK_COUNT,
+        CHANNEL_SIZE,
+        BUFFER_SIZE,
+    >::new();
+
+    StackLocalHciPrimer { has_interface, data }
+}
 
 /// The host interface
 ///
 /// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
 /// host controller interface.
 pub struct Host<H> {
-    host: H,
+    host_interface: H,
 }
 
 impl<H> Host<H>
@@ -614,26 +822,26 @@ where
         &mut self,
         parameter: CP,
         event_matcher: CommandEventMatcher,
-    ) -> Result<interface::IntraMessage<H::Buffer>, CommandError<H>>
+    ) -> Result<interface::IntraMessage<H::FromBuffer>, CommandError<H>>
     where
         CP: CommandParameter<CP_SIZE>,
     {
         use interface::IntraMessageType;
         use interface::{Receiver, Sender};
 
-        let mut buffer = self.host.get_reserve().take(None).await;
+        let mut buffer = self.host_interface.take_buffer(None).await;
 
         parameter
             .as_command_packet(&mut buffer)
             .map_err(|e| CommandError::TryExtendBufferError(e))?;
 
-        self.host
+        self.host_interface
             .get_sender()
             .send(IntraMessageType::Command(event_matcher, buffer).into())
             .await
             .map_err(|e| CommandError::SendError(e))?;
 
-        self.host
+        self.host_interface
             .get_receiver()
             .recv()
             .await
@@ -761,7 +969,7 @@ where
 
         loop {
             let intra_message = self
-                .host
+                .host_interface
                 .get_receiver()
                 .recv()
                 .await
@@ -790,9 +998,9 @@ pub enum CommandError<H>
 where
     H: HostInterface,
 {
-    TryExtendBufferError(H::TryExtendError),
+    TryExtendBufferError(<H::ToBuffer as crate::TryExtend<u8>>::Error),
     CommandError(error::Error),
-    SendError(H::SenderError),
+    SendError(<H::Sender as interface::Sender>::Error),
     EventError(events::EventError),
     InvalidEventParameter,
     ReceiverClosed,
@@ -801,8 +1009,8 @@ where
 impl<H> core::fmt::Debug for CommandError<H>
 where
     H: HostInterface,
-    H::TryExtendError: core::fmt::Debug,
-    H::SenderError: core::fmt::Debug,
+    <H::ToBuffer as crate::TryExtend<u8>>::Error: core::fmt::Debug,
+    <H::Sender as interface::Sender>::Error: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -819,8 +1027,8 @@ where
 impl<H> core::fmt::Display for CommandError<H>
 where
     H: HostInterface,
-    H::TryExtendError: core::fmt::Display,
-    H::SenderError: core::fmt::Display,
+    <H::ToBuffer as crate::TryExtend<u8>>::Error: core::fmt::Display,
+    <H::Sender as interface::Sender>::Error: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {

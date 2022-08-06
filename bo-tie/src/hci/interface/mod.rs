@@ -355,14 +355,17 @@ pub trait ChannelEnds {
     /// The buffer type of messages *to* the interface async task
     type ToBuffer: Buffer;
 
+    /// The buffer type of messages *from* the interface async task
+    type FromBuffer: Buffer;
+
     /// The future for acquiring a buffer from the channel to send
     type TakeBuffer: Future<Output = Self::ToBuffer>;
 
     /// The type used to send messages to the interface async task
-    type Sender: Sender;
+    type Sender: Sender<Message = IntraMessage<Self::ToBuffer>>;
 
     /// The type used for receiving messages from the interface async task
-    type Receiver: Receiver;
+    type Receiver: Receiver<Message = IntraMessage<Self::FromBuffer>>;
 
     /// Get the sender of messages to the other async task
     fn get_sender(&self) -> Self::Sender;
@@ -908,14 +911,19 @@ impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
     /// A local interface uses dynamic memory allocation for buffering and messages between async
     /// tasks. A pure `no_std` implementation can be created with
     /// [`new_local_static`](Interface::new_local_static).
-    pub fn new_local(channel_size: usize) -> Self {
-        let mut channel_reserve = local_channel::local_dynamic_channel::LocalChannelManager::new(channel_size);
+    ///
+    /// # Panic
+    /// Input `task_count` must be greater or equal to one.
+    pub(super) fn new_local(task_count: usize) -> Self {
+        let mut channel_reserve = local_channel::local_dynamic_channel::LocalChannelManager::new(task_count);
 
         Interface { channel_reserve }
     }
 }
 
-impl Interface<()> {
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
+    Interface<local_channel::local_stack_channel::LocalStackChannelReserve<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>
+{
     /// Create a statically sized local interface
     ///
     /// This host controller interface is local to a single thread. The interface, host, and
@@ -925,29 +933,14 @@ impl Interface<()> {
     /// The number of channels is defined by the constant `CHANNEL_COUNT`. The interface task has
     /// two channels to ever other task, this constant must be equal to two times the number of
     /// connection async tasks plus two for the channels to the host async task.
-    ///
-    /// # Using
-    /// A trick is done for this syntax of using method.
-    /// ```
-    /// use bo_tie::hci::interface::{TaskId, Interface, ChannelReserve};
-    /// use bo_tie::l2cap::{ACLU, MinimumMtu};
-    ///
-    /// let mut channel_reserve = local_channel::LocalStaticChannelManager::new();
-    ///
-    /// // This should always work, hence the usage of unwrap
-    /// channel_reserve.try_add(TaskId::Host).ok().unwrap();
-    ///
-    /// let interface = Interface::new_stack_local::<5, 5, ACLU::MIN_MTU>(channel_reserve);
-    /// ```
     #[cfg(feature = "unstable")]
-    pub fn new_stack_local<const CHANNEL_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
-        channel_reserve_data: &local_channel::local_stack_channel::LocalStackChannelReserveData<
-            CHANNEL_COUNT,
+    pub(super) fn new_stack_local(
+        channel_reserve_data: &'a local_channel::local_stack_channel::LocalStackChannelReserveData<
+            TASK_COUNT,
             CHANNEL_SIZE,
             BUFFER_SIZE,
         >,
-    ) -> Interface<local_channel::local_stack_channel::LocalStackChannelReserve<CHANNEL_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>
-    {
+    ) -> Self {
         let mut channel_reserve =
             local_channel::local_stack_channel::LocalStackChannelReserve::new(channel_reserve_data);
 
@@ -959,17 +952,9 @@ impl<R> Interface<R>
 where
     R: ChannelReserve,
 {
-    /// Create channels for a new connection
-    ///
-    /// This creates the channels for the new connection and returns the channel ends for
-    /// communicating with the interface async task.
-    pub fn new_le_connection(
-        &mut self,
-        handle: ConnectionHandle,
-        flow_control_id: FlowControlId,
-    ) -> Result<R::OtherTaskEnds<'_>, R::Error> {
-        self.channel_reserve
-            .add_new_task(TaskId::Connection(handle), flow_control_id)
+    /// Get the channel reserve
+    pub(super) fn get_mut_reserve(&mut self) -> &mut R {
+        &mut self.channel_reserve
     }
 
     /// Buffer received HCI packet from the interface until it can be sent upwards
