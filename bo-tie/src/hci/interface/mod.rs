@@ -44,7 +44,7 @@
 use crate::hci::common::ConnectionHandle;
 use crate::hci::events::Events;
 use crate::hci::interface::flow_control::FlowControlQueues;
-use crate::hci::{Buffer, BufferReserve, CommandEventMatcher};
+use crate::hci::{events, Buffer, BufferReserve, CommandEventMatcher};
 use core::borrow::Borrow;
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
@@ -243,7 +243,7 @@ impl FlowControl {
     /// # Panic
     /// Input `payload_info` must not return `None` from method
     /// [`get_payload_size`](GetPayloadSize::get_payload_size)
-    fn reduce<T: GetPayloadSize>(&mut self, payload_info: &T) {
+    fn reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) {
         match self {
             FlowControl::Packets { how_many, awaiting } => {
                 how_many.checked_sub(1).map(|new| *how_many = new);
@@ -266,7 +266,7 @@ impl FlowControl {
     /// # Panic
     /// Input `payload_info` must not return `None` from method
     /// [`get_payload_size`](GetPayloadSize::get_payload_size)
-    fn set_awaiting<T: GetPayloadSize>(&mut self, payload_info: &T) {
+    fn set_awaiting<T: GetDataPayloadSize>(&mut self, payload_info: &T) {
         match self {
             FlowControl::Packets { awaiting, .. } => *awaiting = true,
             FlowControl::DataBlocks { awaiting, .. } => *awaiting = Some(payload_info.get_payload_size().unwrap()),
@@ -295,10 +295,9 @@ impl FlowControl {
 
 /// A trait for getting the size of the payload
 ///
-/// The use of this trait is really for the method [`set_awaiting`](FlowControl::set_awaiting) of
-/// `FlowControl` to extract the payload size of an HCI packet from an [`IntraMessage`]. This trait
-/// is only implemented by `IntraMessage`.
-trait GetPayloadSize {
+/// This trait is required to extract the size of the payload of an HCI data message (ACL, SCO, or
+/// ISO). Its used for block-based flow control to determine if the controller can accept
+trait GetDataPayloadSize {
     /// Get the size of the payload of an HCI packet
     ///
     /// # Note
@@ -837,7 +836,7 @@ struct ReceiveNext<'a, R: Receiver>(&'a mut FlowCtrlReceiver<R>);
 impl<R> Future for ReceiveNext<'_, R>
 where
     R: Receiver,
-    R::Message: GetPayloadSize,
+    R::Message: GetDataPayloadSize,
 {
     type Output = Option<R::Message>;
 
@@ -1104,11 +1103,14 @@ where
     ///
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
-    pub async fn recv(&mut self) -> Option<impl Deref<Target = [u8]>> {
+    pub async fn recv<I>(&mut self, driver: &mut I) -> Option<I::Message>
+    where
+        I: InterfaceDriver<R::FromBuffer>,
+    {
         self.channel_reserve
             .receive_next()
             .await
-            .map(|intra_message| intra_message.into_buffer())
+            .map(|intra_message| intra_message.into_driver_message(driver).unwrap())
     }
 
     /// Parse an event for information that is relevant to this interface
@@ -2120,6 +2122,25 @@ impl Display for HciPacketType {
         }
     }
 }
+
+/// Message sent from the Host to the Controller
+///
+/// The host sends these HCI messages to the controller. It is up to the interface driver to
+/// convert this enum into the format for the interface.
+pub enum HostMessage<T> {
+    Command(T),
+    Acl(T),
+    Sco(T),
+    Iso(T),
+}
+
+pub trait InterfaceDriver<T> {
+    type Message;
+
+    /// Convert a [`HostMessage`] into a `Message`
+    fn convert_host_message(&mut self, host_message: HostMessage<T>) -> Self::Message;
+}
+
 /// Inner interface messaging
 ///
 /// This is the type for messages sent between the interface async task and either the host or a
@@ -2131,15 +2152,21 @@ pub struct IntraMessage<T> {
 }
 
 impl<T> IntraMessage<T> {
-    /// Convert an IntraMessage into its buffer
-    fn into_buffer(self) -> T {
-        match self.ty {
-            IntraMessageType::Command(_, t) => t,
-            IntraMessageType::Acl(t) => t,
-            IntraMessageType::Sco(t) => t,
-            IntraMessageType::Event(t) => t,
-            IntraMessageType::Iso(t) => t,
-        }
+    /// Convert an IntraMessage into the message type used by the driver
+    fn into_driver_message<I>(self, id: &mut I) -> Result<I::Message, &'static str>
+    where
+        I: InterfaceDriver<T>,
+        T: Deref<Target = [u8]>,
+    {
+        let host_message = match self.ty {
+            IntraMessageType::Command(_, t) => Ok(HostMessage::Command(t)),
+            IntraMessageType::Acl(t) => Ok(HostMessage::Acl(t)),
+            IntraMessageType::Sco(t) => Ok(HostMessage::Sco(t)),
+            IntraMessageType::Iso(t) => Ok(HostMessage::Iso(t)),
+            _ => Err(self.kind()),
+        }?;
+
+        Ok(id.convert_host_message(host_message))
     }
 
     /// Get a mutable reference to the buffer
@@ -2152,19 +2179,24 @@ impl<T> IntraMessage<T> {
             IntraMessageType::Sco(t) => Some(t),
             IntraMessageType::Event(t) => Some(t),
             IntraMessageType::Iso(t) => Some(t),
+            _ => None,
         }
     }
 
     /// Print the kind of message
     ///
     /// This is used for debugging purposes
-    pub(crate) fn kind(&self) -> &'static str {
+    pub(crate) const fn kind(&self) -> &'static str {
         match self.ty {
             IntraMessageType::Command(_, _) => "Command",
             IntraMessageType::Acl(_) => "Acl",
             IntraMessageType::Sco(_) => "Sco",
             IntraMessageType::Event(_) => "Event",
             IntraMessageType::Iso(_) => "Iso",
+            IntraMessageType::Disconnect => "Disconnect",
+            IntraMessageType::Connection(_) => "(BR/EDR) Connection",
+            IntraMessageType::LeConnection(_) => "LE Connection",
+            IntraMessageType::LeEnhancedConnection(_) => "LE Enhanced Connection",
         }
     }
 
@@ -2179,6 +2211,10 @@ impl<T> IntraMessage<T> {
             IntraMessageType::Sco(t) => IntraMessageType::Sco(f(t)).into(),
             IntraMessageType::Event(t) => IntraMessageType::Event(f(t)).into(),
             IntraMessageType::Iso(t) => IntraMessageType::Iso(f(t)).into(),
+            IntraMessageType::Disconnect => IntraMessageType::Disconnect.into(),
+            IntraMessageType::Connection(c) => IntraMessageType::Connection(c).into(),
+            IntraMessageType::LeConnection(c) => IntraMessageType::LeConnection(c).into(),
+            IntraMessageType::LeEnhancedConnection(c) => IntraMessageType::LeEnhancedConnection(c).into(),
         }
     }
 }
@@ -2189,14 +2225,14 @@ impl<T> From<IntraMessageType<T>> for IntraMessage<T> {
     }
 }
 
-impl<T: Deref<Target = [u8]>> GetPayloadSize for IntraMessage<T> {
+impl<T: Deref<Target = [u8]>> GetDataPayloadSize for IntraMessage<T> {
+    /// A payload size is only returned for the data type (ACL, SCO, ISO) HCI messages.
     fn get_payload_size(&self) -> Option<usize> {
         match &self.ty {
-            IntraMessageType::Command(_, t) => Some(t[2].into()),
             IntraMessageType::Acl(t) => Some(<u16>::from_le_bytes([t[2], t[3]]).into()),
             IntraMessageType::Sco(t) => Some(t[2].into()),
-            IntraMessageType::Event(t) => Some(t[1].into()),
             IntraMessageType::Iso(t) => Some(<u16>::from_le_bytes([t[2], t[3] & 0x3F]).into()),
+            _ => None,
         }
     }
 }
@@ -2212,13 +2248,24 @@ pub(crate) enum IntraMessageType<T> {
     Acl(T),
     /// HCI synchronous Connection-Oriented Data Packet
     Sco(T),
-    /// HCI Event Packet
+    /// HCI Event Packet.
+    ///
+    /// Connection events are sent
     Event(T),
     /// HCI isochronous Data Packet
     Iso(T),
     /*----------------------------
-     Meta information messages
+     Connection specific messages
     ----------------------------*/
+    /// The interface async task sends this message to the connection async task who's connection
+    /// has disconnected.
+    Disconnect,
+    /// BR/EDR Connection Complete event sent to the host
+    Connection(events::ConnectionCompleteData),
+    /// LE Connection Complete event sent to the host
+    LeConnection(events::LEConnectionCompleteData),
+    /// LE Enhanced Connection Complete event sent to the host
+    LeEnhancedConnection(events::LEEnhancedConnectionCompleteData),
 }
 
 #[cfg(test)]
