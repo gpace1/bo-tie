@@ -743,12 +743,14 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
 pub struct LocalStackChannelReserve<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
     data: &'a LocalStackChannelReserveData<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     task_data: LinearBuffer<TASK_COUNT, TaskData<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>,
-    flow_ctrl_receiver: FlowCtrlReceiver<
-        LocalStackChannelReceiver<
-            CHANNEL_SIZE,
-            &'a ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
-            DeLinearBuffer<BUFFER_SIZE, u8>,
-            IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
+    flow_ctrl_receiver: RefCell<
+        FlowCtrlReceiver<
+            LocalStackChannelReceiver<
+                CHANNEL_SIZE,
+                &'a ChannelType<CHANNEL_SIZE, BUFFER_SIZE>,
+                DeLinearBuffer<BUFFER_SIZE, u8>,
+                IntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>,
+            >,
         >,
     >,
 }
@@ -773,7 +775,7 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             le_iso_receiver: LocalStackChannelReceiver(&data.cmd_channel),
         };
 
-        let flow_ctrl_receiver = FlowCtrlReceiver::new(receivers);
+        let flow_ctrl_receiver = RefCell::new(FlowCtrlReceiver::new(receivers));
 
         Self {
             data,
@@ -878,8 +880,8 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             .map(|index| self.task_data[index].flow_ctrl_id)
     }
 
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver> {
-        &mut self.flow_ctrl_receiver
+    fn get_flow_ctrl_receiver(&self) -> &RefCell<FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>> {
+        &self.flow_ctrl_receiver
     }
 }
 

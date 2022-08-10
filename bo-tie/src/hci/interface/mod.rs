@@ -29,23 +29,48 @@
 //! efficiently within the same thread. They also do not require allocation when using a local
 //! static channel.
 //!
-//! ## Specification Defined Interfaces
+//! # The Physical Interface
+//! The type `Interface` is a high-level implementation of the interface requirements for
+//! interacting with the other async tasks of the Host. It does not provide capability for
+//! controlling and driving the physical interface used for communication between the Host and
+//! Controller. This must be implemented by a separate crate and integrated into the user's
+//! application of this library (TBD Note: there may be an exception in the future when both the
+//! host and controller are built by `bo-tie` and run on the same CPU).
+//!
 //! There are four types of interfaces mentioned within the Bluetooth Specification (v5.2) but
 //! interfacing between the host and controller can be done via any interface so long as the host
-//! to controller functional specification can be applied to it. As a general rule any interface
-//! can work so long as there is a way to send and receive data between the host and controller
-//! asynchronously in respect to either side's CPU.
+//! to controller functional specification can be applied to it. Any interface should work so long
+//! as there is a way to asynchronously send and receive data between the host and controller.
 //!
-//! UART, USB, Secure Digital (SD), and Three-Wire UART interfaces have defined specification for
-//! how to use them with the functional specification. Everything that is defined within the
-//! specification is implemented within this library, but this only covers the data encapsulation
-//! and some of configuration details.
-
+//! ## Specification Defined Interfaces
+//! UART, USB, Secure Digital (SD), and Three-Wire UART interfaces have specification defined for
+//! them within the Bluetooth Specification. This library only provides wrappers around an
+//! `Interface` for converting [`HciPacket`] data into the data format for these interfaces (TBD:
+//! only [`UART`](uart::UartInterface) is currently implemented). The rest of the driver is left to
+//! be implemented by another crate. The methods of the wrappers are designed to mirror the methods
+//! of `Interface` as they have the same name, but they accept/return data pre-formatted to be used
+//! for the interface.
+//!
+//! ## Custom Interfaces
+//! An interface not defined by the Bluetooth Specification must have its own data format,
+//! regardless of the interface not requiring this. The Bluetooth Specification does not define a
+//! way to differentiate the different kinds of HCI packets. HCI packets contain no marker within
+//! them to indicate what HCI packet they are, so the interface driver must be able to find out
+//! the HCI packet type itself.
+//!
+//! The simplest way for an interface to label HCI packets is to just repurpose the
+//! implementation for [`UART`](uart::UartInterface) or one of the other wrappers used for
+//! specification defined interfaces. Otherwise an interface must be able to convert data from its
+//! interface format to a [`HciPacket`] format (or at least the [`HciPacketType`] when using a
+//! buffered) used by `Interface`.
+//!
+//! ## Buffering
+//! Many interfaces in embedded systems can only store less bytes than a complete HCI packet
+//!
 use crate::hci::common::ConnectionHandle;
 use crate::hci::events::Events;
 use crate::hci::interface::flow_control::FlowControlQueues;
 use crate::hci::{events, Buffer, BufferReserve, CommandEventMatcher};
-use core::borrow::Borrow;
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
 use core::mem::take;
@@ -456,17 +481,19 @@ pub trait ChannelReserve {
     /// Get the [`FlowCtrlReceiver`]
     ///
     /// This returns the `FlowCtrlReceiver` used by this `ChannelReserve`.
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>;
+    fn get_flow_ctrl_receiver(
+        &self,
+    ) -> &core::cell::RefCell<FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>>;
 }
 
 macro_rules! inc_flow_ctrl {
     ($fc:expr, $ty:ident, $how_many:expr $(,)?) => {{
-        match &mut $fc.$ty {
+        match &mut $fc.borrow_mut().$ty {
             FlowControl::Packets { how_many, .. } => *how_many += $how_many,
             FlowControl::DataBlocks { how_many, .. } => *how_many += $how_many,
         }
 
-        $fc.call_waker()
+        $fc.borrow_mut().call_waker()
     }};
 }
 
@@ -490,14 +517,14 @@ trait ChannelReserveExt: ChannelReserve {
 
     /// Receive the next message
     fn receive_next(&mut self) -> ReceiveNext<'_, <Self::FromChannel as Channel>::Receiver> {
-        self.get_flow_ctrl_receiver().receive_next()
+        ReceiveNext(self.get_flow_ctrl_receiver())
     }
 
     /// Increment the flow control for commands
     ///
     /// This increments the number of commands that can be sent to the controller by the number
     /// provided by input `how_many`.
-    fn inc_cmd_flow_ctrl(&mut self, how_many: usize) {
+    fn inc_cmd_flow_ctrl(&self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), cmd_flow_control, how_many);
     }
 
@@ -523,7 +550,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
     /// information through the
     /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
-    fn inc_acl_flow_ctrl(&mut self, how_many: usize) {
+    fn inc_acl_flow_ctrl(&self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), acl_flow_control, how_many);
     }
 
@@ -538,7 +565,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
     /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
-    fn inc_sco_flow_control(&mut self, how_many: usize) {
+    fn inc_sco_flow_control(&self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), sco_flow_control, how_many);
     }
 
@@ -564,7 +591,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
     /// information through the
     /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
-    fn inc_le_acl_flow_control(&mut self, how_many: usize) {
+    fn inc_le_acl_flow_control(&self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_acl_flow_control, how_many);
     }
 
@@ -579,7 +606,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
     /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
-    fn inc_le_iso_flow_control(&mut self, how_many: usize) {
+    fn inc_le_iso_flow_control(&self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_iso_flow_control, how_many);
     }
 }
@@ -819,10 +846,6 @@ impl<R: Receiver> FlowCtrlReceiver<R> {
     fn call_waker(&mut self) {
         self.waker.take().map(|waker| waker.wake());
     }
-
-    fn receive_next(&mut self) -> ReceiveNext<'_, R> {
-        ReceiveNext(self)
-    }
 }
 
 /// A future for receiving from a async task
@@ -831,7 +854,7 @@ impl<R: Receiver> FlowCtrlReceiver<R> {
 ///
 /// # Note
 /// When all async tasks are closed, when polled `RecvNext` will return `None`.
-struct ReceiveNext<'a, R: Receiver>(&'a mut FlowCtrlReceiver<R>);
+struct ReceiveNext<'a, R: Receiver>(&'a core::cell::RefCell<FlowCtrlReceiver<R>>);
 
 impl<R> Future for ReceiveNext<'_, R>
 where
@@ -843,22 +866,22 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         macro_rules! fc_rx {
             ($fcr:expr, $receiver:ident, $fc:ident, $cx:expr, $fc_id:expr, $dead_cnt:expr) => {
-                match $fcr.$receiver.poll_peek($cx) {
+                match $fcr.borrow_mut().$receiver.poll_peek($cx) {
                     core::task::Poll::Pending => {}
                     core::task::Poll::Ready(None) => $dead_cnt += 1,
                     core::task::Poll::Ready(Some(message)) => {
-                        if $fcr.$fc.is_capped() {
-                            $fcr.$fc.set_awaiting(message);
+                        if $fcr.borrow().$fc.is_capped() {
+                            $fcr.borrow_mut().$fc.set_awaiting(message);
 
                             // set the waker to awake this when the
                             // flow control information is updated.
-                            $fcr.set_waker($cx.waker())
+                            $fcr.borrow_mut().set_waker($cx.waker())
                         } else {
-                            $fcr.$fc.reduce(message);
+                            $fcr.borrow_mut().$fc.reduce(message);
 
-                            $fcr.last_received = $fc_id;
+                            $fcr.borrow_mut().last_received = $fc_id;
 
-                            let msg = $fcr.$receiver.poll_recv($cx);
+                            let msg = $fcr.borrow_mut().$receiver.poll_recv($cx);
 
                             debug_assert!(msg.is_ready());
 
@@ -873,7 +896,7 @@ where
 
         let mut dead_cnt = 0;
 
-        for fc_id in fcr.last_received.cycle_after() {
+        for fc_id in fcr.borrow().last_received.cycle_after() {
             match fc_id {
                 FlowControlId::Cmd => fc_rx!(fcr, cmd_receiver, cmd_flow_control, cx, fc_id, dead_cnt),
                 FlowControlId::Acl => fc_rx!(fcr, acl_receiver, acl_flow_control, cx, fc_id, dead_cnt),
@@ -913,7 +936,7 @@ impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
     ///
     /// # Panic
     /// Input `task_count` must be greater or equal to one.
-    pub(super) fn new_local(task_count: usize) -> Self {
+    pub fn new_local(task_count: usize) -> Self {
         let mut channel_reserve = local_channel::local_dynamic_channel::LocalChannelManager::new(task_count);
 
         Interface { channel_reserve }
@@ -933,7 +956,7 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     /// The number of channels is defined by the constant `CHANNEL_COUNT`. The interface task has
     /// two channels to ever other task, this constant must be equal to two times the number of
     /// connection async tasks plus two for the channels to the host async task.
-    pub(super) fn new_stack_local(
+    pub fn new_stack_local(
         channel_reserve_data: &'a local_channel::local_stack_channel::LocalStackChannelReserveData<
             TASK_COUNT,
             CHANNEL_SIZE,
@@ -956,161 +979,103 @@ where
         &mut self.channel_reserve
     }
 
-    /// Buffer received HCI packet from the interface until it can be sent upwards
+    /// Send a complete HCI packet from the controller to the Host
     ///
-    /// An interface may be unable to receive complete HCI packets from the interface. Instead of
-    /// having the driver process the fragmented HCI packet into complete fragment, a buffered send
-    /// can be used to do this. This buffers interface data until a complete packet is held within
-    /// the buffer. The buffered send is consumed and then the HCI packet is sent upward (either to
-    /// the host or connection async task).
+    /// After the interface driver converts an interface packet into a *complete* [`HciPacket`], it
+    /// must call this method to send the `HciPacket` to it's destination async task. If the
+    /// interface driver cannot receive a complete HCI packet, it may buffer the data with a
+    /// [`BufferedUpSend`] which can be acquired by the method `buffered_up_send`.
     ///
-    /// ```
-    /// # #![feature(generic_associated_types)]
-    /// # use std::future::Future;
-    /// # use std::pin::Pin;
-    /// # use std::task::{Context, Poll};
-    /// # use std::fmt::Debug;
-    /// # use crate::bo_tie::hci::interface::{BufferSend, Channel, TaskId, ChannelReserve, HciPacket, HciPacketType, Interface, Receiver, Sender};
-    /// #
-    /// # struct Sf;
-    /// # impl Future for Sf {
-    /// #     type Output = Result<(), ()>;
-    /// #
-    /// #     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-    /// #         unimplemented!()
-    /// #     }
-    /// # }
-    /// #
-    /// # struct Rf;
-    /// # impl Future for Rf {
-    /// #     type Output = Option<HciPacket<()>>;
-    /// #
-    /// #     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-    /// #         unimplemented!()
-    /// #     }
-    /// # }
-    /// #
-    /// # struct S;
-    /// # impl Sender for S {
-    /// #     type Error = ();
-    /// #     type Payload = ();
-    /// #     type SendFuture<'a> = Sf;
-    /// #
-    /// #     fn send<'a>(&'a mut self, t: HciPacket<Self::Message>) -> Self::SendFuture<'a> {
-    /// #         unimplemented!()
-    /// #     }
-    /// # }
-    /// #
-    /// # struct R;
-    /// # impl Receiver for R {
-    /// # type Message = ();
-    /// # type ReceiveFuture<'a> = Rf;
-    /// #
-    /// #     fn recv<'a>(&'a mut self) -> Self::ReceiveFuture<'a> {
-    /// #         unimplemented!()
-    /// #     }
-    /// # }
-    /// #
-    /// # struct C;
-    /// # impl Channel for C {
-    /// #    type Sender<'a> = S;
-    /// #    type Receiver<'a> = R;
-    /// #    
-    /// #    fn get_to_sender<'a>(&'a self) -> Self::Sender<'a> {
-    /// #        unimplemented!()
-    /// #    }
-    /// #    
-    /// #    fn get_to_receiver<'a>(&'a self) -> Self::Receiver<'a> {
-    /// #        unimplemented!()
-    /// #    }
-    /// # }
-    /// #
-    /// # struct CM;
-    /// # impl ChannelReserve for CM {
-    /// #    type Error = usize;
-    /// #    type ToChannel = C;
-    /// #
-    /// #    fn get_self_receiver(&self) -> &Self::ToChannel {
-    /// #        unimplemented!()
-    /// #    }
-    /// #
-    /// #    fn try_add(&mut self, id: TaskId) -> Result<usize, Self::Error> {
-    /// #        unimplemented!()
-    /// #    }
-    /// #
-    /// #    fn try_remove(&mut self, id: TaskId) -> Result<Self::ToChannel, Self::Error> {
-    /// #        unimplemented!()
-    /// #    }
-    /// #
-    /// #    fn get(&self, id: TaskId) -> Option<&Self::ToChannel> {
-    /// #        unimplemented!()
-    /// #    }
-    /// #
-    /// #    fn get_by_index(&self, index: usize) -> Option<&Self::ToChannel> {
-    /// #        unimplemented!()
-    /// #    }
-    /// # }
-    /// #
-    /// # struct Driver;
-    /// # impl Driver {
-    /// #    fn read_packet_type(&self) -> HciPacketType { unimplemented!() }
-    /// #
-    /// #    async fn read_byte(&self) -> u8 { unimplemented!() }
-    /// # }
-    /// #
-    /// # async {
-    /// # let mut interface = Interface::<Vec<u8>>::new_local(0);
-    /// # let driver = Driver;
-    /// # let packet_type = HciPacketType::Command;
-    /// # let _ = {
-    /// // The Bluetooth Specification leaves how to determine the type
-    /// // of a HCI packet to the interface implementation. Here this
-    /// // is magically done in the dummy method `read_packet_type`. How
-    /// // it is done for a driver is a bit more complicated.
-    /// let packet_type: HciPacketType = driver.read_packet_type();
-    ///
-    /// let mut buffer_send = interface.buffer_send(packet_type);
-    ///
-    /// // Bytes are
-    /// while !buffer_send.add(driver.read_byte().await) {}
-    ///
-    /// buffer_send.send().await
-    /// # }.ok();
-    /// # };
-    /// ```
-    pub fn buffered_send(&mut self, packet_type: HciPacketType) -> BufferedSend<'_, R> {
-        BufferedSend::new(self, packet_type)
-    }
-
-    /// Send a complete HCI packet
-    ///
-    /// This sends a complete `HciPacket` to the correct destination (either the host or a
-    /// connection async task). It is up to the implementation to guarantee that the data within
-    /// the packet is complete.
-    pub async fn send(&mut self, packet_type: HciPacketType, packet: &[u8]) -> Result<(), SendError<R>> {
-        match packet_type {
-            HciPacketType::Command => Err(SendError::<R>::Command),
-            HciPacketType::Acl => self.send_acl(packet).await.map_err(|e| e.into()),
-            HciPacketType::Sco => Err(SendError::<R>::Unimplemented(HciPacketType::Sco)),
-            HciPacketType::Event => self.maybe_send_event(packet).await.map_err(|e| e.into()),
-            HciPacketType::Iso => Err(SendError::<R>::Unimplemented(HciPacketType::Iso)),
+    /// # Error
+    /// The data within the `HciPacket` is expected to be a properly formatted HCI packet. If it is
+    /// not formatted correctly, or there are no other async tasks, `up_send` will return an error.
+    pub async fn up_send<T>(&mut self, packet: &HciPacket<T>) -> Result<(), SendError<R>>
+    where
+        T: Deref<Target = [u8]>,
+    {
+        match packet {
+            HciPacket::Command(_) => Err(SendError::<R>::Command),
+            HciPacket::Acl(packet) => self.send_acl(packet).await.map_err(|e| e.into()),
+            HciPacket::Sco(_packet) => Err(SendError::<R>::Unimplemented(HciPacketType::Sco)),
+            HciPacket::Event(packet) => self.maybe_send_event(packet).await.map_err(|e| e.into()),
+            HciPacket::Iso(_packet) => Err(SendError::<R>::Unimplemented(HciPacketType::Iso)),
         }
     }
 
-    /// Receive a HCI packet
+    /// Buffer HCI packet data from the controller.
     ///
-    /// Await for the next `HciPacket` to be sent to the interface.
+    /// A `BufferedUpSend` is used for interfaces that do not send a single complete HCI packet as
+    /// part of the interface's payload. This can be because the interface can only support sending
+    /// less data than the minimum size of a HCI packet (which is the minimum size of a command
+    /// packet, 259 bytes) or it sends multiple HCI data packets within a single interface packet.
+    /// Either way a `BufferedUpSend` will buffer bytes within itself until it has determined to
+    /// contain a complete HCI packet.
+    ///
+    /// Bytes are added to a `BufferedUpSend` through the method [`add`](BufferedUpSend::add) for a
+    /// single byte or via method [`add_bytes`](BufferedUpSend::add_bytes) for a chunk of bytes.
+    /// Both of these methods will add bytes to the buffer until the buffer contains a complete
+    /// HCI Packet. Further calls to either of these methods when there is a complete HCI packet
+    /// results in both methods doing nothing. Instead the `BufferedUpSend` must be consumed by the
+    /// method [`up_send`](BufferedUpSend::up_send) to send the HCI packet to its destination.
+    ///
+    /// # Usage Requirements
+    /// There are some requirements for using a `BufferedUpSend`. First, the type of HCI packet must
+    /// be known upon creation of a `BufferedUpSend`. HCI packets have no self labeling information
+    /// in them, so without knowing the packet type, a `BufferedUpSend` would not be able to figure
+    /// when the buffered data is a complete HCI packet. Secondly, data must be fed in the order
+    /// they should appear in the HCI packet. It is impossible for a `BufferedUpSend` to order the
+    /// bytes fed to it, so providing unordered data would just create undefined HCI packets.
+    /// Lastly, and most importantly, a `BufferedUpSend` can only really be dropped when the
+    /// interface async task is exiting. If a `BufferedUpSend contains any bytes within it and it id
+    /// dropped then those bytes are gone. At best this would mess up the protocols further up the
+    /// Bluetooth stack, at worst every following HCI packet will be badly formatted.
+    /// ```
+    /// use bo_tie::hci::interface::{HciPacketType, Interface};
+    ///
+    /// # async {
+    /// # let interface = Interface::doc_dirty();
+    ///
+    /// // Two HCI ACL data packets with a part of a third ACL data packet.
+    /// let mut data = &[
+    ///     0x1, 0x0, 0x3, 0x0, 0xa, 0xb, 0xc, // first packet
+    ///     0x1, 0x0, 0x2, 0x0, 0x10, 0x11,    // second packet
+    ///     0x1, 0x0, 0x2,                     // part of the third packet
+    /// ];
+    ///
+    /// let mut buffer_send_1 = interface.buffered_up_send(HciPacketType::Acl);
+    ///
+    /// for _ in data.iter().filter(|byte| !buffer_send_1.add(byte)) {}
+    ///
+    /// buffer_send_1.send().await?;
+    ///
+    /// let mut buffer_send_2 = interface.buffered_up_send(HciPacketType::Acl);
+    ///
+    /// //buffer_send_2.
+    /// # }.ok();
+    /// # }
+    /// ```
+    pub fn buffered_up_send(&mut self, packet_type: HciPacketType) -> BufferedUpSend<'_, R> {
+        BufferedUpSend::new(self, packet_type)
+    }
+
+    /// Get the next HCI packet to send to the controller
+    ///
+    /// Awaiting on `next` returns a `HostMessage` that is ready to be sent to the controller. This
+    /// message should be immediately sent to the controller before `next` is awaited upon again.
+    /// HCI Packets can be ordered, so they *must* be sent in the order in which they are received
+    /// from calls to `next`.
+    ///
+    /// HCI flow control is built into the polling process for `next`, so for concerning the
+    /// controller, it is always safe to immediately send the message to it. Flow control for the
+    /// interface is not dealt with, so that must be done by the interface driver.
     ///
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
-    pub async fn recv<I>(&mut self, driver: &mut I) -> Option<I::Message>
-    where
-        I: InterfaceDriver<R::FromBuffer>,
-    {
+    pub async fn down_send(&mut self) -> Option<HciPacket<impl Deref<Target = [u8]>>> {
         self.channel_reserve
             .receive_next()
             .await
-            .map(|intra_message| intra_message.into_driver_message(driver).unwrap())
+            .map(|intra_message| intra_message.into_host_message().unwrap())
     }
 
     /// Parse an event for information that is relevant to this interface
@@ -1126,7 +1091,7 @@ where
     ///   a specific connection.
     /// * *Number of Completed Data Blocks* event contains information on the number of packets sent
     ///   and
-    fn parse_event<E>(&mut self, event_data: &[u8]) -> Result<bool, SendMessageError<E>> {
+    fn parse_event<E>(&self, event_data: &[u8]) -> Result<bool, SendMessageError<E>> {
         let first_byte = *event_data
             .get(0)
             .ok_or(SendMessageError::InvalidHciPacket(HciPacketType::Event))?;
@@ -1155,7 +1120,7 @@ where
     ///
     /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
     /// packet.
-    fn parse_command_complete_event<E>(&mut self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
+    fn parse_command_complete_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
         use crate::hci::events::CommandCompleteData;
         use core::convert::TryFrom;
 
@@ -1174,7 +1139,7 @@ where
     ///
     /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
     /// packet.
-    fn parse_command_status_event<E>(&mut self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
+    fn parse_command_status_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
         use crate::hci::events::CommandStatusData;
         use core::convert::TryFrom;
 
@@ -1193,10 +1158,7 @@ where
     ///
     /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
     /// packet.
-    fn parse_number_of_completed_packets_event<E>(
-        &mut self,
-        event_parameter: &[u8],
-    ) -> Result<bool, SendMessageError<E>> {
+    fn parse_number_of_completed_packets_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
         use crate::hci::events::{Multiple, NumberOfCompletedPacketsData};
         use core::convert::TryFrom;
 
@@ -1233,7 +1195,7 @@ where
     ///
     /// If the return is `Ok` then it always contains `false`.
     fn parse_number_of_completed_data_blocks_event<E>(
-        &mut self,
+        &self,
         event_parameter: &[u8],
     ) -> Result<bool, SendMessageError<E>> {
         use crate::hci::events::{CompletedDataPacketsAndBlocks, NumberOfCompletedDataBlocksData};
@@ -1250,17 +1212,25 @@ where
         // to re-check the block buffer information via the *Read Data
         // Block Size* command.
         if let None = ncdb_data.total_data_blocks {
-            self.channel_reserve.get_flow_ctrl_receiver().acl_flow_control.halt();
+            self.channel_reserve
+                .get_flow_ctrl_receiver()
+                .borrow_mut()
+                .acl_flow_control
+                .halt();
 
-            self.channel_reserve.get_flow_ctrl_receiver().le_acl_flow_control.halt();
+            self.channel_reserve
+                .get_flow_ctrl_receiver()
+                .borrow_mut()
+                .le_acl_flow_control
+                .halt();
 
             todo!("process of re-reading the data block buffer sizes not implemented yet")
         }
 
         for ncdb in ncdb_data.completed_packets_and_blocks {
             if 0 != ncdb.completed_blocks {
-                let how_many: usize =
-                    self.channel_reserve.get_flow_ctrl_receiver().block_size * <usize>::from(ncdb.completed_blocks);
+                let how_many: usize = self.channel_reserve.get_flow_ctrl_receiver().borrow().block_size
+                    * <usize>::from(ncdb.completed_blocks);
 
                 let task_id = TaskId::Connection(ncdb.connection_handle);
 
@@ -1402,7 +1372,7 @@ impl<C, B> From<MessageError<B>> for SendErrorReason<C, B> {
     }
 }
 
-/// Error returned by operations of [`Interface`] or [`BufferedSend`]
+/// Error returned by operations of [`Interface`] or [`BufferedUpSend`]
 pub type SendError<R> = SendErrorReason<<R as ChannelReserve>::SenderError, <R as ChannelReserve>::TryExtendError>;
 
 enum SendMessageError<T> {
@@ -1433,14 +1403,14 @@ impl<B> From<TaskId> for MessageError<B> {
 
 /// Type for method `maybe_send`
 ///
-/// A `BufferedSend` is used whenever the interface cannot send complete HCI packets. Either the
+/// A `BufferedUpSend` is used whenever the interface cannot send complete HCI packets. Either the
 /// buffers for the interface is too small or data is sent indiscriminately. The only requirement
-/// is that bytes are fed to a `BufferedSend` in correct order. Trying to "overfeed" with more bytes
-/// than necessary will result in the `BufferedSend` ignoring them.
+/// is that bytes are fed to a `BufferedUpSend` in correct order. Trying to "overfeed" with more bytes
+/// than necessary will result in the `BufferedUpSend` ignoring them.
 ///
 /// For information on how to use this see the method [`buffer_send`](Interface::buffered_send)
-pub struct BufferedSend<'a, R: ChannelReserve> {
-    interface: &'a mut Interface<R>,
+pub struct BufferedUpSend<'a, R: ChannelReserve> {
+    interface: &'a Interface<R>,
     packet_type: HciPacketType,
     packet_len: core::cell::Cell<Option<usize>>,
     task_id_state: core::cell::RefCell<BufferedTaskId>,
@@ -1468,13 +1438,13 @@ macro_rules! get_channel {
         channel
     }};
 }
-impl<'a, R> BufferedSend<'a, R>
+impl<'a, R> BufferedUpSend<'a, R>
 where
     R: ChannelReserve,
 {
-    /// Create a new `BufferSend`
+    /// Create a new `BufferedUpSend`
     fn new(interface: &'a mut Interface<R>, packet_type: HciPacketType) -> Self {
-        BufferedSend {
+        BufferedUpSend {
             interface,
             packet_type,
             packet_len: core::cell::Cell::new(None),
@@ -1488,7 +1458,7 @@ where
     /// This method is called when member `packet_len` is still `None`. It will set `packet_len` to
     /// a value once three bytes of the Command packet are processed.
     #[inline]
-    async fn add_initial_command_or_event_byte(&'a self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_command_or_event_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
         use crate::TryExtend;
 
         let packet_type = self.packet_type;
@@ -1540,7 +1510,7 @@ where
     /// starting at the byte after. This is for adding bytes to the intra message buffer until the
     /// length bytes are added to the buffer. Once the length is known the member field `packet_len`
     /// will be set and this method cannot be called again.
-    async fn add_initial_data_byte(&'a self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_data_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
         use crate::TryExtend;
 
         let mut buffer_borrow = self.buffer.borrow_mut();
@@ -1610,7 +1580,7 @@ where
     /// These are bytes that are added before the length field has been buffered. Essentially this
     /// is called when `packet_len` is `None`.
     #[inline]
-    async fn add_initial_byte(&'a self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
         match self.packet_type {
             HciPacketType::Command => self.add_initial_command_or_event_byte(byte).await,
             HciPacketType::Acl => self.add_initial_data_byte(byte).await,
@@ -1623,28 +1593,28 @@ where
     /// Add a byte to the buffer
     ///
     /// This adds a single byte to the buffer. If the added byte is determined to be the last byte
-    /// of the HCI packet, `true` is returned to indicate that this `BufferedSend` is ready to send.
+    /// of the HCI packet, `true` is returned to indicate that this `BufferedUpSend` is ready to send.
     ///
     /// ```
     /// use bo_tie::hci::interface::{HciPacketType, Interface};
-    ///
+    /// # let doc_test = async {
     /// # let mut interface = Interface::new_local(1);
-    /// # async fn example() {
-    /// let mut buffered_send = interface.buffered_send(HciPacketType::Event);
     ///
-    /// for byte in driver_bytes {
-    ///     if buffered_send.add(*byte).await {
-    ///         break
-    ///     }
-    /// }
+    /// let mut buffered_send = interface.buffered_up_send(HciPacketType::Event);
     ///
-    /// buffered_send.send().await
-    /// # }
+    /// // Adding the bytes of an HCI Event packet containing the Inquiry Complete event
+    /// assert!(!buffered_send.add(0x1).await?);
+    /// assert!(!buffered_send.add(0x1).await?);
+    /// assert!( buffered_send.add(0x0).await?);
+    ///
+    /// buffered_send.up_send().await
+    /// # };
+    /// # tokio_test::block_on(doc_test).unwrap()
     /// ```
     ///
     /// # Error
-    /// An error is returned if this `BufferedSend` already has a complete HCI Packet.
-    pub async fn add(&'a self, byte: u8) -> Result<bool, SendError<R>> {
+    /// An error is returned if this `BufferedUpSend` already has a complete HCI Packet.
+    pub async fn add(&self, byte: u8) -> Result<bool, SendError<R>> {
         use crate::TryExtend;
 
         match self.packet_len.get() {
@@ -1670,12 +1640,12 @@ where
 
     /// Add bytes to the buffer
     ///
-    /// This add multiple bytes to the buffer, stopping iteration of `iter` early when a complete
-    /// HCI Packet is formed.
+    /// This add multiple bytes to the buffer, stopping the iteration of `iter` early when a
+    /// complete HCI Packet is formed within this `BufferedUpSend`.
     ///
     /// # Return
-    /// `true` is returned if the this `BufferSend` contains a complete HCI Packet.
-    pub async fn add_bytes<I: IntoIterator<Item = u8>>(&'a mut self, iter: I) -> Result<bool, SendError<R>> {
+    /// `true` is returned if the this `BufferedUpSend` contains a complete HCI Packet.
+    pub async fn add_bytes<I: IntoIterator<Item = u8>>(&mut self, iter: I) -> Result<bool, SendError<R>> {
         for i in iter {
             if self.add(i).await? {
                 return Ok(true);
@@ -1696,10 +1666,10 @@ where
 
     /// Send the HCI Packet to its destination
     ///
-    /// When a complete packet is sored within this `BufferSend`, this method is called to transfer
-    /// the packet to its destination. An error is returned if this method is called before a
-    /// complete HCI packet is stored within this `BufferedSend`.
-    pub async fn send(self) -> Result<(), SendError<R>> {
+    /// When a complete packet is sored within this `BufferedUpSend`, this method is must be called
+    /// to transfer the packet to its destination. An error is returned if this method is called
+    /// and this `BufferedUpSend` does not contain a complete HCI packet.
+    pub async fn up_send(self) -> Result<(), SendError<R>> {
         buffered_send::send(self).await
     }
 }
@@ -1762,7 +1732,7 @@ impl BufferedTaskId {
 mod buffered_send {
     use super::*;
 
-    pub async fn send<R>(bs: BufferedSend<'_, R>) -> Result<(), SendError<R>>
+    pub async fn send<R>(bs: BufferedUpSend<'_, R>) -> Result<(), SendError<R>>
     where
         R: ChannelReserve,
     {
@@ -1779,7 +1749,7 @@ mod buffered_send {
         }
     }
 
-    async fn from_event<R>(bs: BufferedSend<'_, R>) -> Result<(), SendError<R>>
+    async fn from_event<R>(bs: BufferedUpSend<'_, R>) -> Result<(), SendError<R>>
     where
         R: ChannelReserve,
     {
@@ -1803,7 +1773,7 @@ mod buffered_send {
         }
     }
 
-    async fn from_acl<R>(bs: BufferedSend<'_, R>) -> Result<(), SendError<R>>
+    async fn from_acl<R>(bs: BufferedUpSend<'_, R>) -> Result<(), SendError<R>>
     where
         R: ChannelReserve,
     {
@@ -2123,22 +2093,15 @@ impl Display for HciPacketType {
     }
 }
 
-/// Message sent from the Host to the Controller
+/// HCI packet kind
 ///
-/// The host sends these HCI messages to the controller. It is up to the interface driver to
-/// convert this enum into the format for the interface.
-pub enum HostMessage<T> {
+/// This is an enu
+pub enum HciPacket<T: Deref<Target = [u8]>> {
     Command(T),
     Acl(T),
     Sco(T),
+    Event(T),
     Iso(T),
-}
-
-pub trait InterfaceDriver<T> {
-    type Message;
-
-    /// Convert a [`HostMessage`] into a `Message`
-    fn convert_host_message(&mut self, host_message: HostMessage<T>) -> Self::Message;
 }
 
 /// Inner interface messaging
@@ -2153,20 +2116,17 @@ pub struct IntraMessage<T> {
 
 impl<T> IntraMessage<T> {
     /// Convert an IntraMessage into the message type used by the driver
-    fn into_driver_message<I>(self, id: &mut I) -> Result<I::Message, &'static str>
+    fn into_host_message(self) -> Result<HciPacket<T>, &'static str>
     where
-        I: InterfaceDriver<T>,
         T: Deref<Target = [u8]>,
     {
-        let host_message = match self.ty {
-            IntraMessageType::Command(_, t) => Ok(HostMessage::Command(t)),
-            IntraMessageType::Acl(t) => Ok(HostMessage::Acl(t)),
-            IntraMessageType::Sco(t) => Ok(HostMessage::Sco(t)),
-            IntraMessageType::Iso(t) => Ok(HostMessage::Iso(t)),
+        match self.ty {
+            IntraMessageType::Command(_, t) => Ok(HciPacket::Command(t)),
+            IntraMessageType::Acl(t) => Ok(HciPacket::Acl(t)),
+            IntraMessageType::Sco(t) => Ok(HciPacket::Sco(t)),
+            IntraMessageType::Iso(t) => Ok(HciPacket::Iso(t)),
             _ => Err(self.kind()),
-        }?;
-
-        Ok(id.convert_host_message(host_message))
+        }
     }
 
     /// Get a mutable reference to the buffer

@@ -301,7 +301,7 @@ pub struct LocalChannelManager {
     channel_size: usize,
     other_task_data: alloc::vec::Vec<TaskData>,
     task_senders: FromOtherTaskChannels<LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>>,
-    flow_control_receiver: FlowCtrlReceiver<LocalChannelReceiver<DeVec<u8>, IntraMessage<DeVec<u8>>>>,
+    flow_control_receiver: RefCell<FlowCtrlReceiver<LocalChannelReceiver<DeVec<u8>, IntraMessage<DeVec<u8>>>>>,
 }
 
 impl LocalChannelManager {
@@ -322,7 +322,7 @@ impl LocalChannelManager {
             le_iso_receiver: le_iso_channel.take_receiver().unwrap(),
         };
 
-        let flow_control_receiver = FlowCtrlReceiver::new(interface_receivers);
+        let flow_control_receiver = RefCell::new(FlowCtrlReceiver::new(interface_receivers));
 
         let task_senders = FromOtherTaskChannels {
             cmd_channel,
@@ -409,6 +409,7 @@ impl ChannelReserve for LocalChannelManager {
 
         Ok(new_task_ends)
     }
+
     fn get(&self, id: TaskId) -> Option<Self::ToChannel<'_>> {
         self.other_task_data
             .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
@@ -416,14 +417,16 @@ impl ChannelReserve for LocalChannelManager {
             .and_then(|index| self.other_task_data.get(index))
             .map(|TaskData { sender_channel, .. }| sender_channel.clone())
     }
+
     fn get_flow_control_id(&self, id: TaskId) -> Option<FlowControlId> {
         self.other_task_data
             .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
             .ok()
             .map(|index| self.other_task_data[index].flow_control_id)
     }
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver> {
-        &mut self.flow_control_receiver
+
+    fn get_flow_ctrl_receiver(&self) -> &RefCell<FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>> {
+        &self.flow_control_receiver
     }
 }
 

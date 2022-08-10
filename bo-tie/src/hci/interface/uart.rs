@@ -8,7 +8,7 @@
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
 use crate::hci::interface::flow_control::FlowControlQueues;
-use crate::hci::interface::{BufferedSend, ChannelReserve, HciPacketType, Interface, SendError};
+use crate::hci::interface::{BufferedUpSend, ChannelReserve, HciPacketType, Interface, SendError};
 use core::fmt::{Debug, Display, Formatter};
 
 /// UART wrapper around an [`Interface`](Interface)
@@ -37,10 +37,10 @@ where
     /// This the `UartInterface` equivalent of the method [`buffered_send`] within `Interface` with
     /// the exception that it does not need to be initialized with the HCI packet type. Instead it
     /// is able to determine the packet type by assuming the first byte put into the buffer is the
-    /// packet indicator. Otherwise the returned `UartBufferedSend` acts the same as the return of
+    /// packet indicator. Otherwise the returned `UartBufferedUpSend` acts the same as the return of
     /// method `buffered_send` within `Interface`.
-    pub async fn buffered_send(&mut self) -> UartBufferedSend<'_, R> {
-        UartBufferedSend::new(&mut self.interface)
+    pub async fn buffered_send(&mut self) -> UartBufferedUpSend<'_, R> {
+        UartBufferedUpSend::new(&mut self.interface)
     }
 }
 
@@ -81,7 +81,7 @@ impl Display for UartInterfaceError {
 enum UartSendState<'a, R: ChannelReserve> {
     Swap,
     Interface(&'a mut Interface<R>),
-    BufferedSender(BufferedSend<'a, R>),
+    BufferedSender(BufferedUpSend<'a, R>),
 }
 
 impl<'a, R: ChannelReserve> UartSendState<'a, R> {
@@ -102,11 +102,11 @@ impl<'a, R: ChannelReserve> UartSendState<'a, R> {
 ///
 /// This is the return of the method [`buffered_send`](UartInterface::buffered_send) within
 /// `UartInterface`.
-pub struct UartBufferedSend<'a, R: ChannelReserve> {
+pub struct UartBufferedUpSend<'a, R: ChannelReserve> {
     state: UartSendState<'a, R>,
 }
 
-impl<'a, R> UartBufferedSend<'a, R>
+impl<'a, R> UartBufferedUpSend<'a, R>
 where
     R: ChannelReserve,
 {
@@ -131,7 +131,7 @@ where
 
                 let buffered_sender = replace(&mut self.state, UartSendState::Swap)
                     .unwrap_interface()
-                    .buffered_send(packet_type);
+                    .buffered_up_send(packet_type);
 
                 drop(replace(&mut self.state, UartSendState::BufferedSender(buffered_sender)));
 
@@ -144,10 +144,15 @@ where
         }
     }
 
-    pub async fn send(self) -> Result<(), UartBufferedSendError<R>> {
+    /// Send the HCI Packet to its destination
+    ///
+    /// When a complete packet is sored within this `UartBufferedSendError`, this method is must be
+    /// called to transfer the packet to its destination. An error is returned if this method is
+    /// called  and this `UartBufferedSendError` does not contain a complete HCI packet.
+    pub async fn up_send(self) -> Result<(), UartBufferedSendError<R>> {
         match self.state {
             UartSendState::BufferedSender(bs) => {
-                bs.send().await.map_err(|e| UartBufferedSendError::BufferedSendError(e))
+                bs.up_send().await.map_err(|e| UartBufferedSendError::BufferedSendError(e))
             }
             _ => Err(UartBufferedSendError::NothingBuffered),
         }
