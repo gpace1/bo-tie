@@ -227,8 +227,6 @@ pub mod read_transmit_power_level {
 
     impl TryFromCommandComplete for TransmitPowerLevel {
         fn try_from(cc: &events::CommandCompleteData) -> Result<Self, CCParameterError> {
-            use core::convert::TryFrom;
-
             check_status!(cc.raw_data);
 
             let raw_connection_handle = <u16>::from_le_bytes([

@@ -447,8 +447,6 @@ where
         &mut self,
         acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
     ) -> Result<Option<&super::Keys>, Error> {
-        use core::convert::TryFrom;
-
         let command = match CommandType::try_from(acl_data) {
             Err(e) => {
                 self.send_err(pairing::PairingFailedReason::UnspecifiedReason).await?;

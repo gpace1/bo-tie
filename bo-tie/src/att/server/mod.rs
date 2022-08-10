@@ -337,8 +337,6 @@ where
         X: ServerAttributeValue<Value = V> + Send + Sized + 'static,
         V: TransferFormatTryFrom + TransferFormatInto + 'static,
     {
-        use core::convert::TryInto;
-
         let ret = self
             .attributes
             .count()
@@ -565,11 +563,9 @@ where
     /// server for communication with a client device.
     pub fn parse_acl_packet<'a>(
         &self,
-        acl_packet: &'a crate::l2cap::BasicInfoFrame<Vec<u8>>,
-    ) -> Result<(super::client::ClientPduName, &'a [u8]), super::Error> {
+        acl_packet: &'a l2cap::BasicInfoFrame<Vec<u8>>,
+    ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
         use crate::l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
-        use core::convert::TryFrom;
-
         match acl_packet.get_channel_id() {
             ChannelIdentifier::LE(LEUserChannelIdentifier::AttributeProtocol) => {
                 let (att_type, payload) = acl_packet.get_payload().split_at(1);
@@ -1371,8 +1367,6 @@ impl ServerAttributes {
         C: ServerAttributeValue<Value = V> + Send + Sized + 'static,
         V: TransferFormatTryFrom + TransferFormatInto + 'static,
     {
-        use core::convert::TryInto;
-
         let handle = self
             .attributes
             .len()

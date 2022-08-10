@@ -24,8 +24,6 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
         F: Future<Output = C>,
         D: core::ops::Deref<Target = [u8]>,
     {
-        use core::convert::TryInto;
-
         let byte_count = 0;
 
         let len: u16 = frame.data.len().try_into().expect("Couldn't convert into u16");

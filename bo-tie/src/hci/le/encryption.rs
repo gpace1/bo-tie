@@ -276,8 +276,6 @@ pub mod long_term_key_request_reply {
 
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
-            use core::convert::TryFrom;
-
             check_status!(cc.raw_data);
 
             let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([
@@ -347,8 +345,6 @@ pub mod long_term_key_request_negative_reply {
 
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
-            use core::convert::TryFrom;
-
             check_status!(cc.raw_data);
 
             let connection_handle = ConnectionHandle::try_from(<u16>::from_le_bytes([

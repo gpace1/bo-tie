@@ -113,16 +113,6 @@ pub enum FlowControlId {
 }
 
 impl FlowControlId {
-    const fn to_mask(&self) -> usize {
-        match self {
-            FlowControlId::Cmd => 1 << 0,
-            FlowControlId::Acl => 1 << 1,
-            FlowControlId::Sco => 1 << 2,
-            FlowControlId::LeAcl => 1 << 3,
-            FlowControlId::LeIso => 1 << 4,
-        }
-    }
-
     /// Create an iterator to cycles through the enumerations starting at the enumeration after
     ///
     /// This creates an iterator that is used iterate through the enumerations within
@@ -307,13 +297,6 @@ impl FlowControl {
     fn halt(&mut self) {
         if let FlowControl::DataBlocks { halted, .. } = self {
             *halted = true
-        }
-    }
-
-    /// Release from the halted state
-    fn release(&mut self) {
-        if let FlowControl::DataBlocks { halted, .. } = self {
-            *halted = false
         }
     }
 }
@@ -632,12 +615,6 @@ impl<S, T> GetPrepareSend<S, T> {
     {
         let take_buffer = channel.take(front_capacity);
         let sender = Some(channel.get_sender());
-
-        GetPrepareSend { sender, take_buffer }
-    }
-
-    fn new(take_buffer: T, sender: S) -> Self {
-        let sender = Some(sender);
 
         GetPrepareSend { sender, take_buffer }
     }
@@ -1122,8 +1099,6 @@ where
     /// packet.
     fn parse_command_complete_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
         use crate::hci::events::CommandCompleteData;
-        use core::convert::TryFrom;
-
         let cc_data = CommandCompleteData::try_from(event_parameter)
             .map_err(|_| SendMessageError::InvalidHciEvent(Events::CommandComplete))?;
 
@@ -1141,7 +1116,6 @@ where
     /// packet.
     fn parse_command_status_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
         use crate::hci::events::CommandStatusData;
-        use core::convert::TryFrom;
 
         let cs_data = CommandStatusData::try_from(event_parameter)
             .map_err(|_| SendMessageError::InvalidHciEvent(Events::CommandStatus))?;
@@ -1160,7 +1134,6 @@ where
     /// packet.
     fn parse_number_of_completed_packets_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
         use crate::hci::events::{Multiple, NumberOfCompletedPacketsData};
-        use core::convert::TryFrom;
 
         let ncp_data = Multiple::<NumberOfCompletedPacketsData>::try_from(event_parameter)
             .map_err(|_| SendMessageError::InvalidHciEvent(Events::NumberOfCompletedPackets))?;
@@ -1198,8 +1171,7 @@ where
         &self,
         event_parameter: &[u8],
     ) -> Result<bool, SendMessageError<E>> {
-        use crate::hci::events::{NumberOfCompletedDataBlocksData};
-        use core::convert::TryFrom;
+        use crate::hci::events::NumberOfCompletedDataBlocksData;
 
         let ncdb_data = NumberOfCompletedDataBlocksData::try_from(event_parameter)
             .map_err(|_| SendMessageError::InvalidHciEvent(Events::NumberOfCompletedDataBlocks))?;
@@ -1284,7 +1256,6 @@ where
 
     async fn send_acl(&mut self, packet: &[u8]) -> Result<(), SendError<R>> {
         use crate::TryExtend;
-        use core::convert::TryFrom;
 
         let raw_handle = <u16>::from_le_bytes([
             *packet
@@ -1353,9 +1324,7 @@ impl<C, B> From<SendMessageError<C>> for SendErrorReason<C, B> {
             SendMessageError::ChannelError(c) => SendErrorReason::ChannelError(c),
             SendMessageError::InvalidHciEvent(event) => SendErrorReason::InvalidHciEvent(event),
             SendMessageError::InvalidHciPacket(ty) => SendErrorReason::InvalidHciPacket(ty),
-            SendMessageError::HostClosed => SendErrorReason::HostClosed,
             SendMessageError::InvalidConnectionHandle => SendErrorReason::InvalidConnectionHandle,
-            SendMessageError::Unimplemented(packet_type) => SendErrorReason::Unimplemented(packet_type),
             SendMessageError::UnknownConnectionHandle(h) => SendErrorReason::UnknownConnectionHandle(h),
         }
     }
@@ -1379,9 +1348,7 @@ enum SendMessageError<T> {
     ChannelError(T),
     InvalidHciEvent(Events),
     InvalidHciPacket(HciPacketType),
-    HostClosed,
     InvalidConnectionHandle,
-    Unimplemented(HciPacketType),
     UnknownConnectionHandle(ConnectionHandle),
 }
 
@@ -1700,8 +1667,6 @@ impl BufferedTaskId {
         &mut self,
         byte: u8,
     ) -> Result<Option<ConnectionHandle>, <ConnectionHandle as core::convert::TryFrom<[u8; 2]>>::Error> {
-        use core::convert::TryFrom;
-
         match core::mem::replace(self, BufferedTaskId::None) {
             BufferedTaskId::None => {
                 *self = BufferedTaskId::ConnectionHandleFirstByte(byte);

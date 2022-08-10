@@ -245,8 +245,6 @@ where
     }
 
     fn process_incorrect_response(self, opcode: Option<u8>) -> Result<Client<'c, C>, super::Error> {
-        use core::convert::TryFrom;
-
         // Convert the first byte into the
         match opcode.and_then(|b| Some(ServerPduName::try_from(b))) {
             Some(Ok(pdu)) => Err(TransferFormatError::from(format!(
@@ -298,8 +296,6 @@ where
     where
         P: TransferFormatTryFrom + pdu::ExpectedOpcode,
     {
-        use core::convert::TryFrom;
-
         if bytes.len() == 0 {
             Err(super::Error::Empty)
         } else if expected_response.is_convertible_from(bytes) {
@@ -650,8 +646,6 @@ where
     where
         D: TransferFormatInto,
     {
-        use core::convert::TryFrom;
-
         let op: u8 = pdu.get_opcode().as_raw();
 
         if ClientPduName::try_from(op).is_err() && ServerPduName::try_from(op).is_err() {

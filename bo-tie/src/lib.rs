@@ -212,8 +212,6 @@ impl UUID {
         F2: FnOnce(&u32, &mut core::fmt::Formatter) -> core::fmt::Result,
         F3: FnOnce(&u128, &mut core::fmt::Formatter) -> core::fmt::Result,
     {
-        use core::convert::TryFrom;
-
         if let Ok(val) = <u16>::try_from(*self) {
             fn_16(&val, f)?;
 

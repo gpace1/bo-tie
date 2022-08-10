@@ -87,8 +87,6 @@ impl PduOpcode {
 
 impl From<u8> for PduOpcode {
     fn from(val: u8) -> Self {
-        use core::convert::TryFrom;
-
         if let Ok(client) = ClientPduName::try_from(val) {
             PduOpcode::Client(client)
         } else if let Ok(server) = ServerPduName::try_from(val) {
@@ -836,8 +834,6 @@ impl TransferFormatInto for FormattedHandlesWithType {
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         match self {
             FormattedHandlesWithType::HandlesWithShortUuids(v) => {
-                use core::convert::TryInto;
-
                 into_ret[0] = Self::UUID_16_BIT;
 
                 v.iter()

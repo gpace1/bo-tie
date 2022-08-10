@@ -313,8 +313,6 @@ pub mod read_channel_map {
 
     impl TryFromCommandComplete for ChannelMapInfo {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
-            use core::convert::TryFrom;
-
             check_status!(cc.raw_data);
 
             let handle = ConnectionHandle::try_from(<u16>::from_le_bytes([

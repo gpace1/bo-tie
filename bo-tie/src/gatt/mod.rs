@@ -259,8 +259,6 @@ impl<'a> IncludesAdder<'a> {
         service: &Service<'_>,
         permissions: P,
     ) -> Self {
-        use core::convert::TryInto;
-
         let include = ServiceInclude {
             service_handle: service.get_handle(),
             end_group_handle: service.get_end_group_handle(),

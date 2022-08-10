@@ -303,8 +303,6 @@ impl<T> HciACLData<T> {
     where
         T: crate::TryFrontRemove<u8> + crate::TryRemove<u8> + core::ops::Deref<Target = [u8]>,
     {
-        use core::convert::TryFrom;
-
         let first_2_bytes = <u16>::from_le_bytes([
             buffer.try_front_pop().ok_or(HciACLPacketError::PacketTooSmall)?,
             buffer.try_front_pop().ok_or(HciACLPacketError::PacketTooSmall)?,

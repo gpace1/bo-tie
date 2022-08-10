@@ -234,8 +234,6 @@ impl<'a> StructIntermediate<'a> {
     where
         T: crate::att::TransferFormatInto,
     {
-        use core::convert::TryInto;
-
         let to_add_len = crate::att::TransferFormatInto::len_of_into(t);
 
         self.len.checked_add(to_add_len.try_into().ok()?).and_then(|len| {

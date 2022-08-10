@@ -25,8 +25,6 @@ pub mod read_rssi {
 
     impl TryFromCommandComplete for RSSIInfo {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
-            use core::convert::TryFrom;
-
             check_status!(cc.raw_data);
 
             let raw_handle = <u16>::from_le_bytes([
