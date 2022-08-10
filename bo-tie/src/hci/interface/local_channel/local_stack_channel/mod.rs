@@ -783,23 +783,6 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     }
 }
 
-trait Foo {
-    type SenderError;
-
-    type MessageBuffer;
-
-    type ToBuffer<'a>
-    where
-        Self: 'a;
-
-    type Foo<'a>: BufferReserve<Buffer = Self::ToBuffer<'a>>
-        + Channel<SenderError = Self::SenderError, Message = IntraMessage<Self::MessageBuffer>>
-    where
-        Self: 'a;
-
-    fn get_foo(&self) -> Self::Foo<'_>;
-}
-
 impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> ChannelReserve
     for LocalStackChannelReserve<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
