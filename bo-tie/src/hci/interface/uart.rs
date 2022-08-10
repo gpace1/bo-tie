@@ -7,7 +7,7 @@
 //! A `UartInterface` is a wrapper around an `Interface` to integrate processing of this packet
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
-use crate::hci::interface::flow_control::FlowControlQueues;
+
 use crate::hci::interface::{BufferedUpSend, ChannelReserve, HciPacketType, Interface, SendError};
 use core::fmt::{Debug, Display, Formatter};
 

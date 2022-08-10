@@ -69,11 +69,11 @@
 //!
 use crate::hci::common::ConnectionHandle;
 use crate::hci::events::Events;
-use crate::hci::interface::flow_control::FlowControlQueues;
+
 use crate::hci::{events, Buffer, BufferReserve, CommandEventMatcher};
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
-use core::mem::take;
+
 use core::ops::Deref;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -937,7 +937,7 @@ impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
     /// # Panic
     /// Input `task_count` must be greater or equal to one.
     pub fn new_local(task_count: usize) -> Self {
-        let mut channel_reserve = local_channel::local_dynamic_channel::LocalChannelManager::new(task_count);
+        let channel_reserve = local_channel::local_dynamic_channel::LocalChannelManager::new(task_count);
 
         Interface { channel_reserve }
     }
@@ -1198,7 +1198,7 @@ where
         &self,
         event_parameter: &[u8],
     ) -> Result<bool, SendMessageError<E>> {
-        use crate::hci::events::{CompletedDataPacketsAndBlocks, NumberOfCompletedDataBlocksData};
+        use crate::hci::events::{NumberOfCompletedDataBlocksData};
         use core::convert::TryFrom;
 
         let ncdb_data = NumberOfCompletedDataBlocksData::try_from(event_parameter)

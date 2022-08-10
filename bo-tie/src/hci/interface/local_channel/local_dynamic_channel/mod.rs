@@ -15,13 +15,13 @@ use super::{
 };
 use crate::hci::interface::local_channel::local_dynamic_channel::dyn_buffer::{DynBufferReserve, TakeDynReserveFuture};
 use crate::hci::interface::{
-    Channel, ChannelEnds, ChannelReserve, FlowControl, FlowControlId, FlowCtrlReceiver, GetPrepareSend,
+    Channel, ChannelEnds, ChannelReserve, FlowControlId, FlowCtrlReceiver,
     InterfaceReceivers, IntraMessage, Receiver, Sender, TaskId,
 };
 use crate::hci::BufferReserve;
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
-use core::cell::{Ref, RefCell};
+use core::cell::{RefCell};
 use core::fmt::{Display, Formatter};
 use core::task::{Context, Poll, Waker};
 use dyn_buffer::DeVec;
@@ -349,9 +349,8 @@ impl ChannelReserve for LocalChannelManager {
     type TryExtendError = core::convert::Infallible;
 
     type ToBuffer<'a>
-    where
-        Self: 'a,
-    = Self::FromBuffer;
+    
+    = Self::FromBuffer where Self: 'a;
 
     type ToChannel<'a> = LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>;
 

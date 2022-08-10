@@ -14,9 +14,9 @@
 //! Each send channel to the interface async task doubles as a flow control device to controller.
 //! The controller will "receive" from a channel so long as it knows that the
 
-use crate::hci::interface::{Receiver, TaskId};
-use alloc::collections::BTreeSet;
-use core::fmt::{Debug, Display, Formatter, Write};
+use crate::hci::interface::{TaskId};
+
+
 use core::task::Waker;
 
 /// A trait for flow controlling channels
