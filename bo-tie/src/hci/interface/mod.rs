@@ -920,6 +920,7 @@ impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
     }
 }
 
+#[cfg(feature = "unstable")]
 impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
     Interface<local_channel::local_stack_channel::LocalStackChannelReserve<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>
 {
@@ -932,7 +933,6 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     /// The number of channels is defined by the constant `CHANNEL_COUNT`. The interface task has
     /// two channels to ever other task, this constant must be equal to two times the number of
     /// connection async tasks plus two for the channels to the host async task.
-    #[cfg(feature = "unstable")]
     pub(super) fn new_stack_local(
         channel_reserve_data: &'a local_channel::local_stack_channel::LocalStackChannelReserveData<
             TASK_COUNT,

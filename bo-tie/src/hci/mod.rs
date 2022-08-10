@@ -635,11 +635,13 @@ pub fn new_local_hci(max_connections: usize) -> (Host<impl HostInterface>, inter
     (host, interface)
 }
 
+#[cfg(feature = "unstable")]
 struct StackLocalHostInterface<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
     ends:
         interface::local_channel::local_stack_channel::StackChannelEnds<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
 }
 
+#[cfg(feature = "unstable")]
 impl<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> HostInterface
     for StackLocalHostInterface<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
