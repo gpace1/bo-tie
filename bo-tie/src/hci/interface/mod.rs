@@ -427,9 +427,9 @@ pub trait ChannelReserve {
     type FromChannel: BufferReserve<Buffer = Self::FromBuffer>
         + Channel<SenderError = Self::SenderError, Message = IntraMessage<Self::FromBuffer>>;
 
-    /// The ends of the channels used by another async task to communicate with the interface async
-    /// task.
-    type OtherTaskEnds<'a>: ChannelEnds<ToBuffer = Self::FromBuffer>
+    /// The ends of the channels used by another async task to communicate with the channel ends
+    /// stored by this `ChannelReserve`.
+    type TaskChannelEnds<'a>: ChannelEnds<ToBuffer = Self::FromBuffer>
     where
         Self: 'a;
 
@@ -447,7 +447,7 @@ pub trait ChannelReserve {
         &mut self,
         task_id: TaskId,
         flow_control_id: FlowControlId,
-    ) -> Result<Self::OtherTaskEnds<'_>, Self::Error>;
+    ) -> Result<Self::TaskChannelEnds<'_>, Self::Error>;
 
     /// Get the channel for sending messages *to* the async task associated by the specified task ID
     ///

@@ -358,7 +358,7 @@ impl ChannelReserve for LocalChannelManager {
 
     type FromChannel = LocalChannel<DeVec<u8>, IntraMessage<DeVec<u8>>>;
 
-    type OtherTaskEnds<'a> = DynChannelEnds;
+    type TaskChannelEnds<'a> = DynChannelEnds;
 
     fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error> {
         if let Ok(index) = self
@@ -377,7 +377,7 @@ impl ChannelReserve for LocalChannelManager {
         &mut self,
         task_id: TaskId,
         flow_control_id: FlowControlId,
-    ) -> Result<Self::OtherTaskEnds<'_>, Self::Error> {
+    ) -> Result<Self::TaskChannelEnds<'_>, Self::Error> {
         let from_new_task_channel = match flow_control_id {
             FlowControlId::Cmd => self.task_senders.cmd_channel.clone(),
             FlowControlId::Acl => self.task_senders.acl_channel.clone(),

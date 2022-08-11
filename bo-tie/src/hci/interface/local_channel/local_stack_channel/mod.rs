@@ -802,7 +802,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 
     type FromChannel = &'z ChannelType<CHANNEL_SIZE, BUFFER_SIZE>;
 
-    type OtherTaskEnds<'a> = StackChannelEnds<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> where Self: 'a;
+    type TaskChannelEnds<'a> = StackChannelEnds<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> where Self: 'a;
 
     /// Try to remove a channel
     ///
@@ -823,7 +823,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         &mut self,
         task_id: TaskId,
         flow_ctrl_id: FlowControlId,
-    ) -> Result<Self::OtherTaskEnds<'_>, Self::Error> {
+    ) -> Result<Self::TaskChannelEnds<'_>, Self::Error> {
         use core::ops::Deref;
 
         let index = self
