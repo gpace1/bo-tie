@@ -1001,14 +1001,18 @@ where
     /// interface async task is exiting. If a `BufferedUpSend contains any bytes within it and it id
     /// dropped then those bytes are gone. At best this would mess up the protocols further up the
     /// Bluetooth stack, at worst every following HCI packet will be badly formatted.
+    ///
     /// ```
-    /// use bo_tie::hci::interface::{HciPacketType, Interface};
+    /// use bo_tie::hci::interface::{HciPacketType, Interface, SendError};
     ///
-    /// # async {
-    /// # let interface = Interface::doc_dirty();
+    /// # use bo_tie::hci::interface::InitHostTaskEnds;
+    /// # let doc_test = async {
+    /// # let mut interface = Interface::new_local(1);
+    /// # let _host_ends = interface.init_host_task_ends();
     ///
-    /// // Two HCI ACL data packets with a part of a third ACL data packet.
-    /// let mut data = &[
+    /// // This is two HCI ACL data packets with
+    /// // a part of a third ACL data packet.
+    /// let data: &[u8] = &[
     ///     0x1, 0x0, 0x3, 0x0, 0xa, 0xb, 0xc, // first packet
     ///     0x1, 0x0, 0x2, 0x0, 0x10, 0x11,    // second packet
     ///     0x1, 0x0, 0x2,                     // part of the third packet
@@ -1016,15 +1020,34 @@ where
     ///
     /// let mut buffer_send_1 = interface.buffered_up_send(HciPacketType::Acl);
     ///
-    /// for _ in data.iter().filter(|byte| !buffer_send_1.add(byte)) {}
+    /// assert!(!buffer_send_1.add(data[0]).await.unwrap());
+    /// assert!(!buffer_send_1.add(data[1]).await.unwrap());
+    /// assert!(!buffer_send_1.add(data[2]).await.unwrap());
+    /// assert!(!buffer_send_1.add(data[3]).await.unwrap());
+    /// assert!(!buffer_send_1.add(data[4]).await.unwrap());
+    /// assert!(!buffer_send_1.add(data[5]).await.unwrap());
+    /// assert!( buffer_send_1.add(data[6]).await.unwrap());
     ///
-    /// buffer_send_1.send().await?;
+    /// buffer_send_1.up_send().await.unwrap();
     ///
     /// let mut buffer_send_2 = interface.buffered_up_send(HciPacketType::Acl);
     ///
-    /// //buffer_send_2.
-    /// # }.ok();
-    /// # }
+    /// assert!(buffer_send_2.add_bytes(data[7..].iter().copied()).await.unwrap());
+    ///
+    /// buffer_send_2.up_send().await.unwrap();
+    ///
+    /// let mut buffer_send_3 = interface.buffered_up_send(HciPacketType::Acl);
+    ///
+    /// // `add_bytes` returns false because the third packet is incomplete
+    /// assert!(!buffer_send_3.add_bytes(data[13..].iter().copied()).await.unwrap());
+    ///
+    /// assert!(!buffer_send_3.is_ready());
+    ///
+    /// // This produces an error as method up_send can only be called
+    /// // when a `BufferedUpSend` contains a complete HCI packet.
+    /// assert!(buffer_send_3.up_send().await.is_err())
+    /// # };
+    /// # tokio_test::block_on(doc_test);
     /// ```
     pub fn buffered_up_send(&mut self, packet_type: HciPacketType) -> BufferedUpSend<'_, R> {
         BufferedUpSend::new(self, packet_type)
@@ -1480,12 +1503,13 @@ where
 
         match *buffer_borrow {
             None => {
-                if let Some(handle) = self
+                let opt_handle = self
                     .task_id_state
                     .borrow_mut()
                     .add_byte(byte)
-                    .map_err(|_| MessageError::InvalidConnectionHandle)?
-                {
+                    .map_err(|_| MessageError::InvalidConnectionHandle)?;
+
+                if let Some(handle) = opt_handle {
                     drop(buffer_borrow);
 
                     let buffer = get_channel!(self, R)?.take(None).await;
@@ -1556,7 +1580,8 @@ where
     /// Add a byte to the buffer
     ///
     /// This adds a single byte to the buffer. If the added byte is determined to be the last byte
-    /// of the HCI packet, `true` is returned to indicate that this `BufferedUpSend` is ready to send.
+    /// of the HCI packet, `true` is returned to indicate that this `BufferedUpSend` is ready to
+    /// be sent.
     ///
     /// ```
     /// use bo_tie::hci::interface::{HciPacketType, Interface};
