@@ -1420,10 +1420,11 @@ where
         }
     }
 
-    /// Add bytes before the *parameter length* in the Command packet or Event packet is acquired
+    /// Buffer the bytes before the *parameter length* field in the Command packet or Event packet
     ///
     /// This method is called when member `packet_len` is still `None`. It will set `packet_len` to
-    /// a value once three bytes of the Command packet are processed.
+    /// a value once three bytes of the Command packet or two bytes of the Event packet are
+    /// processed.
     #[inline]
     async fn add_initial_command_or_event_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
         use crate::TryExtend;
@@ -1462,7 +1463,7 @@ where
             }
             HciPacketType::Event => {
                 if 2 == prepare_send.len() {
-                    self.packet_len.set(Some(2usize + prepare_send[2] as usize));
+                    self.packet_len.set(Some(2usize + prepare_send[1] as usize));
                 }
             }
             HciPacketType::Acl | HciPacketType::Sco | HciPacketType::Iso => unreachable!(),
