@@ -3500,10 +3500,10 @@ macro_rules! events_markup {
 
                 let mut packet = data;
 
-                // packet[1] is the LeMeta specific sub event code if the event is LeMeta
-                let event_code = crate::hci::events::$EnumName::try_from_event_codes(chew!(packet), packet[1])?;
+                // packet[2] is the LeMeta specific sub event code if the event is LeMeta
+                let event_code = crate::hci::events::$EnumName::try_from_event_codes(chew!(packet), packet[2])?;
 
-                // The length of the packet and convert it into a usize
+                // Get the length of the packet and convert it into a usize
                 let event_len = chew!(packet).into();
 
                 match event_code {
