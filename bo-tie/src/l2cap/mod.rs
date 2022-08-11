@@ -534,22 +534,26 @@ impl<T> L2capFragment<T> {
 /// [`HostInterface`](crate::hci::HostInterface), but it can also be implemented directly for
 /// systems that do not support a host controller interface.
 pub trait ConnectionChannel {
+    /// The buffer type
+    ///
+    /// This buffer is for containing data of L2CAP and protocols that use L2CAP.
     type Buffer: core::ops::Deref<Target = [u8]> + crate::TryExtend<u8>;
 
     /// Sending future
     ///
-    /// The controller will probably have limits on the number of L2CAP PDU's that can be sent. This
-    /// future is used for awaiting the sending process until the entire L2CAP PDU is sent.
+    /// This is the future returned by [`send`](ConnectionChannel::send).
     type SendFut<'a>: Future<Output = Result<(), Self::SendFutErr>>
     where
         Self: 'a;
 
+    /// Sending error
+    ///
+    /// This is the error type for the output of the future [`SendFut`](ConnectionChannel::SendFut)
     type SendFutErr: core::fmt::Debug;
 
     /// Receiving future
     ///
-    /// Awaits for the controller to send a data packet
-    ///
+    /// This is the future returned by [`receive`](ConnectionChannel::receive).
     type RecvFut<'a>: Future<
         Output = Option<
             Result<L2capFragment<Self::Buffer>, BasicFrameError<<Self::Buffer as crate::TryExtend<u8>>::Error>>,
