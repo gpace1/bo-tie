@@ -456,11 +456,11 @@ impl<'a> Iterator for EirOrAdIterator<'a> {
 ///
 /// ```
 /// # use bo_tie::gap::assigned;
-/// # let buffer = &mut [u8;32];
+/// # let buffer = &mut [0u8;32];
 ///
 /// let local_name = assigned::local_name::LocalName::new("My Device", None);
 ///
-/// assigned::Sequence::new(buffer).try_add(&local_name)?;
+/// assigned::Sequence::new(buffer).try_add(&local_name).unwrap();
 ///
 /// assert_eq!(buffer[0..11], [0xa, 0x9, 0x4d, 0x79, 0x20, 0x44, 0x65, 0x76, 0x69, 0x63, 0x65,]);
 /// ```
@@ -533,11 +533,10 @@ impl core::fmt::Display for SequenceAddError {
 /// buffered space.
 /// ```
 /// # use bo_tie::gap::assigned;
-/// # let buffer = &mut [u8;32];
 ///
 /// let local_name = assigned::local_name::LocalName::new("My Device", None);
 ///
-/// let buffer = assigned::Sequence::new(buffer).add(&local_name).take_inner();
+/// let buffer = assigned::SequenceVec::new().add(local_name).take_inner();
 ///
 /// assert_eq!(buffer, [0xa, 0x9, 0x4d, 0x79, 0x20, 0x44, 0x65, 0x76, 0x69, 0x63, 0x65,]);
 /// ```
