@@ -951,11 +951,6 @@ impl<R> Interface<R>
 where
     R: ChannelReserve,
 {
-    /// Get the channel reserve
-    pub(super) fn get_mut_reserve(&mut self) -> &mut R {
-        &mut self.channel_reserve
-    }
-
     /// Send a complete HCI packet from the controller to the Host
     ///
     /// After the interface driver converts an interface packet into a *complete* [`HciPacket`], it
@@ -1755,6 +1750,33 @@ mod buffered_send {
             .send(message)
             .await
             .map_err(|e| SendError::<R>::ChannelError(e))
+    }
+}
+
+/// Get channel ends for the host async task
+pub trait InitHostTaskEnds {
+    type TaskChannelEnds<'a>
+    where
+        Self: 'a;
+    type Error;
+
+    /// Get the channel ends for the host async task
+    ///
+    /// Gets the channel ends for the host async task. These channel ends can only be acquired once,
+    /// so calling this method multiple times for the same identifier will return an error.
+    ///
+    /// # Error
+    /// Either `id` was already has channel ends created for it or an implementation specific error
+    /// occurred while trying to create them.
+    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds<'_>, Self::Error>;
+}
+
+impl<R: ChannelReserve> InitHostTaskEnds for Interface<R> {
+    type TaskChannelEnds<'a> = R::TaskChannelEnds<'a> where Self: 'a;
+    type Error = R::Error;
+
+    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds<'_>, Self::Error> {
+        self.channel_reserve.add_new_task(TaskId::Host, FlowControlId::Cmd)
     }
 }
 

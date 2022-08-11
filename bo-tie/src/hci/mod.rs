@@ -11,7 +11,7 @@ pub mod events;
 // mod flow_ctrl;
 pub mod interface;
 
-use crate::hci::interface::{ChannelEnds, ChannelReserve, FlowControlId, TaskId};
+use crate::hci::interface::{ChannelEnds, ChannelReserve};
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -617,14 +617,13 @@ impl HostInterface for DynLocalHostInterface {
     }
 }
 
-/// Create locally used Host Controller Interface
+/// Create a locally used Host Controller Interface
 pub fn new_local_hci(max_connections: usize) -> (Host<impl HostInterface>, interface::Interface<impl ChannelReserve>) {
+    use interface::InitHostTaskEnds;
+
     let mut interface = interface::Interface::new_local(max_connections + 1);
 
-    let ends = interface
-        .get_mut_reserve()
-        .add_new_task(TaskId::Host, FlowControlId::Cmd)
-        .unwrap();
+    let ends = interface.init_host_task_ends().unwrap();
 
     let host_interface = DynLocalHostInterface { ends };
 
@@ -762,13 +761,11 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 {
     pub fn take_host(&mut self) -> Option<Host<impl HostInterface + '_>> {
         (!self.has_host.get()).then(|| {
+            use interface::InitHostTaskEnds;
+
             self.has_host.set(true);
 
-            let ends = self
-                .interface
-                .get_mut_reserve()
-                .add_new_task(TaskId::Host, FlowControlId::Cmd)
-                .unwrap();
+            let ends = self.init_host_task_ends().unwrap();
 
             let host_interface = StackLocalHostInterface { ends };
 
