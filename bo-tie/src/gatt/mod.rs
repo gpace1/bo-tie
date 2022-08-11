@@ -520,24 +520,28 @@ impl Default for GapServiceBuilder<'_> {
 /// architecture of the server before the server is created.
 ///
 /// ```
+/// # #![feature(generic_associated_types)]
 /// use bo_tie::gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
 /// use bo_tie::att::{FULL_PERMISSIONS, server::NoQueuedWrites};
-/// use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment};
-/// use std::task::Waker;
-/// use std::future::Future;
 ///
+/// # use bo_tie::l2cap::{BasicFrameError,BasicInfoFrame, L2capFragment};
+/// # use std::convert::Infallible;
+/// # use std::task::Waker;
+/// # use std::future::Future;
 /// # const MY_SERVICE_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0);
 /// # const MY_CHARACTERISTIC_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0);
 /// # struct CC;
 /// # impl bo_tie::l2cap::ConnectionChannel for CC {
-/// #     type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
+/// #     type Buffer = Vec<u8>;
+/// #     type SendFut<'a> = futures::future::Ready<Result<(), Self::SendFutErr>>;
 /// #     type SendFutErr = usize;
-/// #     fn send(&self,data: BasicInfoFrame) -> Self::SendFut { unimplemented!() }
+/// #     type RecvFut<'a> = futures::future::Ready<Option<Result<L2capFragment<Self::Buffer>, BasicFrameError<Infallible>>>>;
+/// #     fn send(&self,data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
 /// #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
 /// #     fn get_mtu(&self) -> usize { unimplemented!() }
 /// #     fn max_mtu(&self) -> usize { unimplemented!() }
 /// #     fn min_mtu(&self) -> usize { unimplemented!() }
-/// #     fn receive(&self,waker: &Waker) -> Option<Vec<L2capFragment>> { unimplemented!()}
+/// #     fn receive(&self) -> Self::RecvFut<'_> { unimplemented!()}
 /// # }
 /// # let connection_channel = CC;
 ///
