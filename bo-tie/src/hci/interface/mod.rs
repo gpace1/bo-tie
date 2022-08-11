@@ -1560,19 +1560,22 @@ where
     ///
     /// ```
     /// use bo_tie::hci::interface::{HciPacketType, Interface};
+    /// # use bo_tie::hci::interface::InitHostTaskEnds;
     /// # let doc_test = async {
     /// # let mut interface = Interface::new_local(1);
+    /// # let _host_ends = interface.init_host_task_ends();
     ///
     /// let mut buffered_send = interface.buffered_up_send(HciPacketType::Event);
     ///
-    /// // Adding the bytes of an HCI Event packet containing the Inquiry Complete event
-    /// assert!(!buffered_send.add(0x1).await?);
-    /// assert!(!buffered_send.add(0x1).await?);
-    /// assert!( buffered_send.add(0x0).await?);
+    /// // Adding the bytes of an HCI Event packet
+    /// // containing the "Inquiry Complete" event
+    /// assert!(!buffered_send.add(0x1).await.unwrap());
+    /// assert!(!buffered_send.add(0x1).await.unwrap());
+    /// assert!( buffered_send.add(0x0).await.unwrap());
     ///
-    /// buffered_send.up_send().await
+    /// buffered_send.up_send().await.unwrap();
     /// # };
-    /// # tokio_test::block_on(doc_test).unwrap()
+    /// # tokio_test::block_on(doc_test)
     /// ```
     ///
     /// # Error
