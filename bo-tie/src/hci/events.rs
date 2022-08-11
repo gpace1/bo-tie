@@ -3661,7 +3661,7 @@ impl From<alloc::string::String> for EventError {
 
 #[derive(Debug)]
 enum EventErrorReason {
-    // Temporary error message until strings are no longer used for event errors
+    // TODO: Temporary error message until strings are no longer used for event errors
     Error(alloc::string::String),
     EventCode(EventCodeError),
 }
