@@ -202,7 +202,7 @@ impl<B: Unpin, T: Unpin> Channel for LocalChannel<B, T> {
     type Receiver = LocalChannelReceiver<B, T>;
 
     fn get_sender(&self) -> Self::Sender {
-        LocalChannelSender(self.0.clone())
+        LocalChannelSender::new(&self.0)
     }
 
     fn take_receiver(&self) -> Option<Self::Receiver> {
