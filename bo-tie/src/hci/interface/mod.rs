@@ -484,18 +484,23 @@ trait ChannelReserveExt: ChannelReserve {
     /// Prepare for sending a message
     ///
     /// If there is a channel with provided `ChannelId` in this `ChannelReserve`, then a
-    /// `GetPrepareSend` is returned. The return is a future that outputs a `PrepareSend` when it
-    /// can acquire a message from this buffer reserve. The output `PrepareSend` can then be used
-    /// to modify the message before it can be used as a future to send the message.
-    fn prepare_send(
+    /// [`PrepareBufferMsg`] is returned. A `PrepareBufferMsg` is a future for acquiring the buffer
+    /// from the channel used by the interface to send messages to the task associated by `id`. Upon
+    /// polling to completion a pair containing the buffer to use and the channels sender are output
+    /// by the `PrepareBufferMsg`.
+    ///
+    /// `prepare_buffer_msg` should not be used if no buffer is required in the `IntraMessage` to
+    /// send to the async task. Instead use method
+    /// [`get_sender`](ChannelReserveExt::get_sender) to skip trying to acquire a buffer.
+    fn prepare_buffer_msg(
         &self,
         id: TaskId,
         front_capacity: usize,
     ) -> Option<
-        GetPrepareSend<<Self::ToChannel<'_> as Channel>::Sender, <Self::ToChannel<'_> as BufferReserve>::TakeBuffer>,
+        PrepareBufferMsg<<Self::ToChannel<'_> as Channel>::Sender, <Self::ToChannel<'_> as BufferReserve>::TakeBuffer>,
     > {
         self.get(id)
-            .map(|channel| GetPrepareSend::from_channel(&channel, front_capacity))
+            .map(|channel| PrepareBufferMsg::from_channel(&channel, front_capacity))
     }
 
     /// Receive the next message
@@ -602,12 +607,12 @@ impl<T: ChannelReserve> ChannelReserveExt for T {}
 /// future returns right away, but it is needed in the case where the reserve is waiting to free up
 /// a buffer for this send process. When the future does poll to completion it returns a
 /// `PrepareSend`.
-pub struct GetPrepareSend<S, T> {
+pub struct PrepareBufferMsg<S, T> {
     sender: Option<S>,
     take_buffer: T,
 }
 
-impl<S, T> GetPrepareSend<S, T> {
+impl<S, T> PrepareBufferMsg<S, T> {
     fn from_channel<'a, C>(channel: &'a C, front_capacity: usize) -> Self
     where
         C: Channel<Sender = S> + BufferReserve<TakeBuffer = T>,
@@ -616,15 +621,15 @@ impl<S, T> GetPrepareSend<S, T> {
         let take_buffer = channel.take(front_capacity);
         let sender = Some(channel.get_sender());
 
-        GetPrepareSend { sender, take_buffer }
+        PrepareBufferMsg { sender, take_buffer }
     }
 }
 
-impl<S, T> Future for GetPrepareSend<S, T>
+impl<S, T> Future for PrepareBufferMsg<S, T>
 where
     T: Future,
 {
-    type Output = PrepareSend<S, T::Output>;
+    type Output = (T::Output, S);
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
@@ -634,118 +639,8 @@ where
             .map(|buffer| {
                 let sender = this.sender.take().expect("GetPrepareSend already polled to completion");
 
-                PrepareSend::new(sender, buffer)
+                (buffer, sender)
             })
-    }
-}
-
-/// A Preparer for sending a message
-///
-/// The point of a `PrepareSend` is to write the message before sending the message. The main point
-/// of this is for optimizing where buffers reserves benefit being written in-place, such as static
-/// allocated memory.
-///
-/// A `PrepareSend` contains the message to be sent. It can be modified through `AsRef`/`AsMut` as
-/// well as the crate traits `TryExtend`/`TryRemove`/`TryFrontExtend`/`TryFrontRemove`. Once
-/// modification of the message is done, a `PrepareSend` can be converted into a future with the
-/// function [`and_send`](PrepareSend::and_send) to send the message.
-pub struct PrepareSend<S, B> {
-    sender: S,
-    buffer: B,
-}
-
-impl<S, B> PrepareSend<S, B> {
-    fn new(sender: S, buffer: B) -> Self {
-        Self { sender, buffer }
-    }
-
-    /// Take a `PrepareSend` and return a future to send a message
-    ///
-    /// This take a `PrepareSend` and a closure `f` to convert the buffered data into a message (of
-    /// type M) and return a future for sending the message.
-    pub async fn and_send<F>(ps: Self, f: F) -> Result<(), S::Error>
-    where
-        S: Sender<Message = IntraMessage<B>>,
-        F: FnOnce(B) -> IntraMessage<B>,
-    {
-        let message = f(ps.buffer);
-
-        ps.sender.send(message).await
-    }
-}
-
-impl<S, B> AsRef<B> for PrepareSend<S, B> {
-    fn as_ref(&self) -> &B {
-        &self.buffer
-    }
-}
-
-impl<S, B> AsMut<B> for PrepareSend<S, B> {
-    fn as_mut(&mut self) -> &mut B {
-        &mut self.buffer
-    }
-}
-
-impl<S, B> Deref for PrepareSend<S, B>
-where
-    B: Deref<Target = [u8]>,
-{
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
-    }
-}
-
-impl<S, B> crate::TryExtend<u8> for PrepareSend<S, B>
-where
-    B: crate::TryExtend<u8>,
-{
-    type Error = B::Error;
-
-    fn try_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
-    where
-        T: IntoIterator<Item = u8>,
-    {
-        self.buffer.try_extend(iter)
-    }
-}
-
-impl<S, B> crate::TryRemove<u8> for PrepareSend<S, B>
-where
-    B: crate::TryRemove<u8>,
-{
-    type Error = B::Error;
-    type RemoveIter<'a> = B::RemoveIter<'a> where Self: 'a;
-
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
-        self.buffer.try_remove(how_many)
-    }
-}
-
-impl<S, B> crate::TryFrontExtend<u8> for PrepareSend<S, B>
-where
-    B: crate::TryFrontExtend<u8>,
-{
-    type Error = B::Error;
-
-    fn try_front_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
-    where
-        T: IntoIterator<Item = u8>,
-    {
-        self.buffer.try_front_extend(iter)
-    }
-}
-
-impl<S, B> crate::TryFrontRemove<u8> for PrepareSend<S, B>
-where
-    B: crate::TryFrontRemove<u8>,
-{
-    type Error = B::Error;
-    type FrontRemoveIter<'a> = B::FrontRemoveIter<'a> where Self: 'a;
-
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
-        self.buffer.try_front_remove(how_many)
     }
 }
 
@@ -1238,7 +1133,32 @@ where
             }
         }
 
-        Ok(false)
+        Ok(())
+    }
+
+    pub async fn parse_connection_complete_event(
+        &mut self,
+        cc_data: &events::ConnectionCompleteData,
+    ) -> Result<(), SendError<R>> {
+        let task_id = TaskId::Connection(cc_data.connection_handle);
+
+        let flow_control_id = match cc_data.link_type {
+            events::LinkType::SCOConnection => FlowControlId::Sco,
+            events::LinkType::ACLConnection => FlowControlId::Acl,
+            _ => unreachable!(),
+        };
+
+        let channel_ends = self
+            .channel_reserve
+            .add_new_task(task_id, flow_control_id)
+            .map_err(|e| SendError::ReserveError(e))?;
+
+        let message = IntraMessageType::Connection(channel_ends);
+
+        self.channel_reserve
+            .get_sender(TaskId::Host)
+            .ok_or(SendError::HostClosed)?
+            .send(message)
     }
 
     /// Send an event to the host
@@ -1254,17 +1174,20 @@ where
         use crate::TryExtend;
 
         if self.parse_event(&packet)? {
-            let mut prepare_send = self
+            let (mut buffer, sender) = self
                 .channel_reserve
-                .prepare_send(TaskId::Host, 0)
+                .prepare_buffer_msg(TaskId::Host, 0)
                 .ok_or(SendError::<R>::HostClosed)?
                 .await;
 
-            prepare_send
+            buffer
                 .try_extend(packet.iter().cloned())
                 .map_err(|e| SendError::<R>::BufferExtend(e))?;
 
-            PrepareSend::and_send(prepare_send, |buffer| IntraMessageType::Event(buffer).into())
+            let message = IntraMessageType::Event(buffer).into();
+
+            sender
+                .send(message)
                 .await
                 .map_err(|e| SendMessageError::ChannelError(e))?
         }
@@ -1287,17 +1210,20 @@ where
         let connection_handle =
             ConnectionHandle::try_from(raw_handle).map_err(|_| SendMessageError::InvalidConnectionHandle)?;
 
-        let mut prepare_send = self
+        let (mut buffer, sender) = self
             .channel_reserve
-            .prepare_send(TaskId::Connection(connection_handle), 0)
+            .prepare_buffer_msg(TaskId::Connection(connection_handle), 0)
             .ok_or(SendError::<R>::HostClosed)?
             .await;
 
-        prepare_send
+        buffer
             .try_extend(packet.iter().cloned())
             .map_err(|e| SendError::<R>::BufferExtend(e))?;
 
-        PrepareSend::and_send(prepare_send, |buffer| IntraMessageType::Acl(buffer).into())
+        let message = IntraMessageType::Acl(buffer).into();
+
+        sender
+            .send(message)
             .await
             .map_err(|e| SendMessageError::ChannelError(e).into())
     }
