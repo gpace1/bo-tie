@@ -630,7 +630,10 @@ impl<T, const SIZE: usize> StackHotel<T, SIZE> {
         }
     }
 
-    /// Take a reservation from a `StackHotel` wrapped in a [`Ref`](std::cell::Ref)
+    /// Take a reservation from a `StackHotel`
+    ///
+    /// A `Reservation` is returned to a new data location within the hotel if there is still
+    /// unreserved locations.
     pub fn take(&self, init: T) -> Option<Reservation<'_, T, SIZE>> {
         self.take_inner(init).map(|ur| Reservation::new(ur, self))
     }
@@ -684,6 +687,7 @@ impl<T, const SIZE: usize> StackLinkedListInner<T, SIZE> {
 /// A wrapper type to construct link list elements containing an uninitialized buffer
 struct MaybeReserveLink<T> {
     buffer: MaybeUninit<T>,
+    ref_count: core::cell::Cell<usize>,
     prev: *mut Self,
     next: *mut Self,
 }
@@ -695,6 +699,7 @@ impl<T> MaybeReserveLink<T> {
     fn uninit() -> Self {
         Self {
             buffer: MaybeUninit::uninit(),
+            ref_count: Default::default(),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
         }
@@ -706,14 +711,33 @@ impl<T> MaybeReserveLink<T> {
 /// This contains the information that points back to the hotel without any lifetime. As a result
 /// the compiler cannot guarantee the the lifetime of an UnsafeReservation does not outlive the
 /// `StackHotel` that created it.
-struct UnsafeReservation<T, const SIZE: usize> {
+///
+/// # Reference Count
+/// A `UnsafeReservation` is a counted reference, and cloning increases the reference count. The
+/// clone must still follow the same lifetime requirements as the originating `UnsafeReservation`.
+pub struct UnsafeReservation<T, const SIZE: usize> {
     index: usize,
     reserve: ptr::NonNull<StackHotel<T, SIZE>>,
 }
 
 impl<T, const SIZE: usize> UnsafeReservation<T, SIZE> {
     fn new(index: usize, reserve: ptr::NonNull<StackHotel<T, SIZE>>) -> Self {
-        Self { index, reserve }
+        let mut this = Self { index, reserve };
+
+        this.get_mut_link().ref_count.set(1);
+
+        this
+    }
+
+    /// Rebind the `UnsafeReservation` to its [`StackHotel`]
+    ///
+    /// The caller must make sure that the lifetime is linked to the correct instance of the
+    /// `StackHotel` that created this reservation.
+    pub unsafe fn rebind<'a>(this: Self) -> Reservation<'a, T, SIZE> {
+        let ur = this;
+        let _pd = core::marker::PhantomData;
+
+        Reservation { ur, _pd }
     }
 
     #[inline]
@@ -824,19 +848,38 @@ impl<T, const SIZE: usize> UnsafeReservation<T, SIZE> {
     }
 }
 
+impl<T, const SIZE: usize> Clone for UnsafeReservation<T, SIZE> {
+    fn clone(&self) -> Self {
+        let link = self.get_link();
+
+        link.ref_count.set(link.ref_count.get() + 1);
+
+        let index = self.index;
+        let reserve = self.reserve;
+
+        Self { index, reserve }
+    }
+}
+
 impl<T, const SIZE: usize> Drop for UnsafeReservation<T, SIZE> {
     fn drop(&mut self) {
         unsafe {
-            self.get_mut_link().buffer.assume_init_drop();
+            let link = self.get_mut_link();
 
-            match (self.get_mut_link().prev.is_null(), self.get_mut_link().next.is_null()) {
-                (false, false) => self.drop_middle_of_link_list(),
-                (true, false) => self.drop_front_of_link_list(),
-                (false, true) => self.drop_end_of_link_list(),
-                (true, true) => {
-                    // This occurs when the link list only has one
-                    // link in it (reserved by this `ReservedBuffer`)
-                    self.get_reserve_mut().get_inner_mut().last = ptr::null_mut();
+            link.ref_count.set(link.ref_count.get() - 1);
+
+            if link.ref_count.get() == 0 {
+                link.buffer.assume_init_drop();
+
+                match (link.prev.is_null(), link.next.is_null()) {
+                    (false, false) => self.drop_middle_of_link_list(),
+                    (true, false) => self.drop_front_of_link_list(),
+                    (false, true) => self.drop_end_of_link_list(),
+                    (true, true) => {
+                        // This occurs when the link list only has one
+                        // link in it (reserved by this `ReservedBuffer`)
+                        self.get_reserve_mut().get_inner_mut().last = ptr::null_mut();
+                    }
                 }
             }
         }
@@ -859,8 +902,21 @@ impl<'a, T, const SIZE: usize> Reservation<'a, T, SIZE> {
 
         Self { ur, _pd }
     }
+
+    /// Convert a `Reservation` into an `UnsafeReservation`
+    pub unsafe fn to_unsafe(this: Self) -> UnsafeReservation<T, SIZE> {
+        this.ur
+    }
 }
 
+impl<T, const SIZE: usize> Clone for Reservation<'_, T, SIZE> {
+    fn clone(&self) -> Self {
+        let ur = self.ur.clone();
+        let _pd = core::marker::PhantomData;
+
+        Self { ur, _pd }
+    }
+}
 impl<T, const SIZE: usize> Deref for Reservation<'_, T, SIZE> {
     type Target = T;
 
@@ -919,11 +975,18 @@ impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
     }
 
     /// Convert a `BufferReservation` into an `UnsafeBufferReservation`
-    ///
-    /// This is unsafe as it creating an `UnsafeBufferReservation` looses the lifetime of the
-    /// [`StackHotel`] that created it.
     pub unsafe fn to_unsafe(this: Self) -> UnsafeBufferReservation<T, SIZE> {
         this.ubr
+    }
+}
+
+impl<T, const SIZE: usize> Clone for BufferReservation<'_, T, SIZE> {
+    fn clone(&self) -> Self {
+        let ubr = self.ubr.clone();
+
+        let _pd = core::marker::PhantomData;
+
+        BufferReservation { ubr, _pd }
     }
 }
 
@@ -939,7 +1002,7 @@ where
     }
 
     fn clear_with_capacity(&mut self, front: usize, back: usize) {
-        unsafe { self.ubr.clear_with_capacity(front, back) }
+        self.ubr.clear_with_capacity(front, back)
     }
 }
 
@@ -1011,7 +1074,7 @@ where
     type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
 
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
-        self.try_front_remove(how_many)
+        self.ubr.try_front_remove(how_many)
     }
 }
 
@@ -1023,15 +1086,21 @@ where
 pub struct UnsafeBufferReservation<T, const SIZE: usize>(UnsafeReservation<T, SIZE>);
 
 impl<T, const SIZE: usize> UnsafeBufferReservation<T, SIZE> {
-    /// Rebind the `UnsafeBufferReservation` to a lifetime
+    /// Rebind the `UnsafeBufferReservation` to its [`StackHotel`]
     ///
-    /// The caller must make sure that the lifetime is correct lifetime.
-    #[allow(unused_variables)]
+    /// The caller must make sure that the lifetime is linked to the correct instance of the
+    /// `StackHotel` that created this reservation.
     pub unsafe fn rebind<'a>(this: Self) -> BufferReservation<'a, T, SIZE> {
         let ubr = this;
         let _pd = core::marker::PhantomData;
 
         BufferReservation { ubr, _pd }
+    }
+}
+
+impl<T, const SIZE: usize> Clone for UnsafeBufferReservation<T, SIZE> {
+    fn clone(&self) -> Self {
+        UnsafeBufferReservation(self.0.clone())
     }
 }
 

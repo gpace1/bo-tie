@@ -68,12 +68,9 @@
 //! Many interfaces in embedded systems can only store less bytes than a complete HCI packet
 //!
 use crate::hci::common::ConnectionHandle;
-use crate::hci::events::Events;
-
 use crate::hci::{events, Buffer, BufferReserve, CommandEventMatcher};
 use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
-
 use core::ops::Deref;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -358,7 +355,7 @@ pub trait Channel {
 /// Communication between the interface async task and any other task is done through two channels
 /// for bi-directional data transmission. The `ChannelEnds` are the parts of the channels used by
 /// one of the async tasks.
-pub trait ChannelEnds {
+pub trait ChannelEnds: Sized {
     /// The buffer type of messages *to* the interface async task
     type ToBuffer: Buffer;
 
@@ -369,10 +366,10 @@ pub trait ChannelEnds {
     type TakeBuffer: Future<Output = Self::ToBuffer>;
 
     /// The type used to send messages to the interface async task
-    type Sender: Sender<Message = IntraMessage<Self::ToBuffer>>;
+    type Sender: Sender<Message = ToIntraMessage<Self::ToBuffer>>;
 
     /// The type used for receiving messages from the interface async task
-    type Receiver: Receiver<Message = IntraMessage<Self::FromBuffer>>;
+    type Receiver: Receiver<Message = FromIntraMessage<Self::FromBuffer, Self>>;
 
     /// Get the sender of messages to the other async task
     fn get_sender(&self) -> Self::Sender;
@@ -395,7 +392,7 @@ pub trait ChannelEnds {
 /// and receiver. This includes the initial writing of data into the message.
 pub trait ChannelReserve {
     /// The error type associated with the `try_*` method within `ChannelReserve`
-    type Error;
+    type Error: Debug;
 
     /// The error returned by the implementation of Sender
     ///
@@ -407,16 +404,12 @@ pub trait ChannelReserve {
 
     /// The buffer for creating a message sent from the interface async task *to* another
     /// async task
-    type ToBuffer<'a>: Unpin + crate::TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>
-    where
-        Self: 'a;
+    type ToBuffer: Unpin + crate::TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>;
 
     /// The mpsc channel type for sending messages from the interface async task *to* another async
     /// task
-    type ToChannel<'a>: BufferReserve<Buffer = Self::ToBuffer<'a>>
-        + Channel<SenderError = Self::SenderError, Message = IntraMessage<Self::ToBuffer<'a>>>
-    where
-        Self: 'a;
+    type ToChannel: BufferReserve<Buffer = Self::ToBuffer>
+        + Channel<SenderError = Self::SenderError, Message = FromIntraMessage<Self::ToBuffer, Self::TaskChannelEnds>>;
 
     /// The buffer for creating a message sent *from* another async task to the interface async
     /// task
@@ -425,13 +418,11 @@ pub trait ChannelReserve {
     /// The mpsc channel type for the interface async task to receiving messages *from* another
     /// async task
     type FromChannel: BufferReserve<Buffer = Self::FromBuffer>
-        + Channel<SenderError = Self::SenderError, Message = IntraMessage<Self::FromBuffer>>;
+        + Channel<SenderError = Self::SenderError, Message = ToIntraMessage<Self::FromBuffer>>;
 
     /// The ends of the channels used by another async task to communicate with the channel ends
     /// stored by this `ChannelReserve`.
-    type TaskChannelEnds<'a>: ChannelEnds<ToBuffer = Self::FromBuffer>
-    where
-        Self: 'a;
+    type TaskChannelEnds: ChannelEnds<ToBuffer = Self::FromBuffer>;
 
     /// Try to remove a channel
     fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error>;
@@ -444,15 +435,15 @@ pub trait ChannelReserve {
     /// # Panic
     /// This method may panic if `task_id` is already used.
     fn add_new_task(
-        &mut self,
+        &self,
         task_id: TaskId,
         flow_control_id: FlowControlId,
-    ) -> Result<Self::TaskChannelEnds<'_>, Self::Error>;
+    ) -> Result<Self::TaskChannelEnds, Self::Error>;
 
     /// Get the channel for sending messages *to* the async task associated by the specified task ID
     ///
     /// `None` is returned if no channel is associated with the input identifier.
-    fn get(&self, id: TaskId) -> Option<Self::ToChannel<'_>>;
+    fn get(&self, id: TaskId) -> Option<Self::ToChannel>;
 
     /// Get the controller flow control identification
     ///
@@ -464,19 +455,17 @@ pub trait ChannelReserve {
     /// Get the [`FlowCtrlReceiver`]
     ///
     /// This returns the `FlowCtrlReceiver` used by this `ChannelReserve`.
-    fn get_flow_ctrl_receiver(
-        &self,
-    ) -> &core::cell::RefCell<FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>>;
+    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>;
 }
 
 macro_rules! inc_flow_ctrl {
     ($fc:expr, $ty:ident, $how_many:expr $(,)?) => {{
-        match &mut $fc.borrow_mut().$ty {
+        match &mut $fc.$ty {
             FlowControl::Packets { how_many, .. } => *how_many += $how_many,
             FlowControl::DataBlocks { how_many, .. } => *how_many += $how_many,
         }
 
-        $fc.borrow_mut().call_waker()
+        $fc.call_waker()
     }};
 }
 
@@ -496,11 +485,18 @@ trait ChannelReserveExt: ChannelReserve {
         &self,
         id: TaskId,
         front_capacity: usize,
-    ) -> Option<
-        PrepareBufferMsg<<Self::ToChannel<'_> as Channel>::Sender, <Self::ToChannel<'_> as BufferReserve>::TakeBuffer>,
-    > {
+    ) -> Option<PrepareBufferMsg<<Self::ToChannel as Channel>::Sender, <Self::ToChannel as BufferReserve>::TakeBuffer>>
+    {
         self.get(id)
             .map(|channel| PrepareBufferMsg::from_channel(&channel, front_capacity))
+    }
+
+    /// Get a sender to another async task
+    ///
+    /// The return is the sender used for sending messages to the async task associated by `id`.
+    /// None is returned if no channel information exists for the provided `id` this method.
+    fn get_sender(&self, id: TaskId) -> Option<<Self::ToChannel as Channel>::Sender> {
+        self.get(id).map(|channel| channel.get_sender())
     }
 
     /// Receive the next message
@@ -512,7 +508,7 @@ trait ChannelReserveExt: ChannelReserve {
     ///
     /// This increments the number of commands that can be sent to the controller by the number
     /// provided by input `how_many`.
-    fn inc_cmd_flow_ctrl(&self, how_many: usize) {
+    fn inc_cmd_flow_ctrl(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), cmd_flow_control, how_many);
     }
 
@@ -538,7 +534,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
     /// information through the
     /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
-    fn inc_acl_flow_ctrl(&self, how_many: usize) {
+    fn inc_acl_flow_ctrl(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), acl_flow_control, how_many);
     }
 
@@ -553,7 +549,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
     /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
-    fn inc_sco_flow_control(&self, how_many: usize) {
+    fn inc_sco_flow_control(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), sco_flow_control, how_many);
     }
 
@@ -579,7 +575,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
     /// information through the
     /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
-    fn inc_le_acl_flow_control(&self, how_many: usize) {
+    fn inc_le_acl_flow_control(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_acl_flow_control, how_many);
     }
 
@@ -594,7 +590,7 @@ trait ChannelReserveExt: ChannelReserve {
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
     /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
-    fn inc_le_iso_flow_control(&self, how_many: usize) {
+    fn inc_le_iso_flow_control(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_iso_flow_control, how_many);
     }
 }
@@ -726,7 +722,7 @@ impl<R: Receiver> FlowCtrlReceiver<R> {
 ///
 /// # Note
 /// When all async tasks are closed, when polled `RecvNext` will return `None`.
-struct ReceiveNext<'a, R: Receiver>(&'a core::cell::RefCell<FlowCtrlReceiver<R>>);
+struct ReceiveNext<'a, R: Receiver>(&'a mut FlowCtrlReceiver<R>);
 
 impl<R> Future for ReceiveNext<'_, R>
 where
@@ -738,22 +734,22 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         macro_rules! fc_rx {
             ($fcr:expr, $receiver:ident, $fc:ident, $cx:expr, $fc_id:expr, $dead_cnt:expr) => {
-                match $fcr.borrow_mut().$receiver.poll_peek($cx) {
+                match $fcr.$receiver.poll_peek($cx) {
                     core::task::Poll::Pending => {}
                     core::task::Poll::Ready(None) => $dead_cnt += 1,
                     core::task::Poll::Ready(Some(message)) => {
-                        if $fcr.borrow().$fc.is_capped() {
-                            $fcr.borrow_mut().$fc.set_awaiting(message);
+                        if $fcr.$fc.is_capped() {
+                            $fcr.$fc.set_awaiting(message);
 
                             // set the waker to awake this when the
                             // flow control information is updated.
-                            $fcr.borrow_mut().set_waker($cx.waker())
+                            $fcr.set_waker($cx.waker())
                         } else {
-                            $fcr.borrow_mut().$fc.reduce(message);
+                            $fcr.$fc.reduce(message);
 
-                            $fcr.borrow_mut().last_received = $fc_id;
+                            $fcr.last_received = $fc_id;
 
-                            let msg = $fcr.borrow_mut().$receiver.poll_recv($cx);
+                            let msg = $fcr.$receiver.poll_recv($cx);
 
                             debug_assert!(msg.is_ready());
 
@@ -768,7 +764,7 @@ where
 
         let mut dead_cnt = 0;
 
-        for fc_id in fcr.borrow().last_received.cycle_after() {
+        for fc_id in fcr.last_received.cycle_after() {
             match fc_id {
                 FlowControlId::Cmd => fc_rx!(fcr, cmd_receiver, cmd_flow_control, cx, fc_id, dead_cnt),
                 FlowControlId::Acl => fc_rx!(fcr, acl_receiver, acl_flow_control, cx, fc_id, dead_cnt),
@@ -791,7 +787,7 @@ where
 /// An `Interface` is the component of the host that must run with the interface driver. Its the
 /// part of the host that must perpetually await upon the
 pub struct Interface<R> {
-    channel_reserve: R,
+    channel_reserve: core::cell::RefCell<R>,
 }
 
 impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
@@ -809,7 +805,9 @@ impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
     /// # Panic
     /// Input `task_count` must be greater or equal to one.
     pub fn new_local(task_count: usize) -> Self {
-        let channel_reserve = local_channel::local_dynamic_channel::LocalChannelManager::new(task_count);
+        let channel_reserve = core::cell::RefCell::new(local_channel::local_dynamic_channel::LocalChannelManager::new(
+            task_count,
+        ));
 
         Interface { channel_reserve }
     }
@@ -835,8 +833,9 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             BUFFER_SIZE,
         >,
     ) -> Self {
-        let mut channel_reserve =
-            local_channel::local_stack_channel::LocalStackChannelReserve::new(channel_reserve_data);
+        let channel_reserve = core::cell::RefCell::new(
+            local_channel::local_stack_channel::LocalStackChannelReserve::new(channel_reserve_data),
+        );
 
         Interface { channel_reserve }
     }
@@ -863,9 +862,9 @@ where
         match packet {
             HciPacket::Command(_) => Err(SendError::<R>::Command),
             HciPacket::Acl(packet) => self.send_acl(packet).await.map_err(|e| e.into()),
-            HciPacket::Sco(_packet) => Err(SendError::<R>::Unimplemented(HciPacketType::Sco)),
+            HciPacket::Sco(_packet) => Err(SendError::<R>::Unimplemented("HCI SCO packets are unimplemented")),
             HciPacket::Event(packet) => self.maybe_send_event(packet).await.map_err(|e| e.into()),
-            HciPacket::Iso(_packet) => Err(SendError::<R>::Unimplemented(HciPacketType::Iso)),
+            HciPacket::Iso(_packet) => Err(SendError::<R>::Unimplemented("HCI SCO packets are unimplemented")),
         }
     }
 
@@ -963,9 +962,237 @@ where
     /// receiver. The interface async task should exit after `None` is received.
     pub async fn down_send(&mut self) -> Option<HciPacket<impl Deref<Target = [u8]>>> {
         self.channel_reserve
+            .get_mut()
             .receive_next()
             .await
-            .map(|intra_message| intra_message.into_host_message().unwrap())
+            .map(|intra_message| intra_message.into_hci_packet())
+    }
+
+    /// Parse a command complete event
+    ///
+    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
+    /// packet.
+    fn parse_command_complete_event(&self, cc_data: &events::CommandCompleteData) -> Result<bool, SendError<R>> {
+        if 0 != cc_data.number_of_hci_command_packets {
+            self.channel_reserve
+                .borrow_mut()
+                .inc_cmd_flow_ctrl(cc_data.number_of_hci_command_packets.into());
+        }
+
+        Ok(cc_data.command_opcode.is_some())
+    }
+
+    /// Parse a command status event
+    ///
+    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
+    /// packet.
+    fn parse_command_status_event(&self, cs_data: &events::CommandStatusData) -> Result<bool, SendError<R>> {
+        if 0 != cs_data.number_of_hci_command_packets {
+            self.channel_reserve
+                .borrow_mut()
+                .inc_cmd_flow_ctrl(cs_data.number_of_hci_command_packets.into());
+        }
+
+        Ok(cs_data.command_opcode.is_some())
+    }
+
+    /// Parse a Number of Completed Packets event
+    ///
+    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
+    /// packet.
+    fn parse_number_of_completed_packets_event(
+        &self,
+        ncp_data: &events::Multiple<events::NumberOfCompletedPacketsData>,
+    ) -> Result<(), SendError<R>> {
+        for ncp in ncp_data {
+            if 0 != ncp.completed_packets {
+                let how_many: usize = ncp.completed_packets.into();
+
+                let task_id = TaskId::Connection(ncp.connection_handle);
+
+                let fc_id = self
+                    .channel_reserve
+                    .borrow()
+                    .get_flow_control_id(task_id)
+                    .ok_or(SendError::<R>::UnknownConnectionHandle(ncp.connection_handle))?;
+
+                match fc_id {
+                    FlowControlId::Acl => self.channel_reserve.borrow_mut().inc_acl_flow_ctrl(how_many),
+                    FlowControlId::Sco => self.channel_reserve.borrow_mut().inc_sco_flow_control(how_many),
+                    FlowControlId::LeAcl => self.channel_reserve.borrow_mut().inc_le_acl_flow_control(how_many),
+                    FlowControlId::LeIso => self.channel_reserve.borrow_mut().inc_le_iso_flow_control(how_many),
+                    FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse a Number of Completed Data Blocks event
+    ///
+    /// Parsing this event is only enabled with feature `unstable`.
+    #[cfg(not(feature = "unstable"))]
+    fn parse_number_of_completed_data_blocks_event(
+        &self,
+        _: &events::NumberOfCompletedDataBlocksData,
+    ) -> Result<(), SendError<R>> {
+        Err(SendError::<R>::Unimplemented(
+            "Block-based flow control is unimplemented",
+        ))
+    }
+
+    /// Parse a Number of Completed Data Blocks event
+    ///
+    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
+    /// packet.
+    ///
+    /// If the return is `Ok` then it always contains `false`.
+    ///
+    /// # TODO Note
+    /// This is unlikely to be a correct implementation.
+    #[cfg(feature = "unstable")]
+    fn parse_number_of_completed_data_blocks_event(
+        &self,
+        ncdb_data: &events::NumberOfCompletedDataBlocksData,
+    ) -> Result<(), SendError<R>> {
+        // This algorithm for flow control of the block buffers just
+        // counts the total number of *bytes* that the controller can
+        // accept (of one or more HCI payloads) within those buffers.
+        // The total number of data blocks does not need to be counted
+        // **unless** the controller sends back the need for the host
+        // to re-check the block buffer information via the *Read Data
+        // Block Size* command.
+        if let None = ncdb_data.total_data_blocks {
+            self.channel_reserve
+                .borrow_mut()
+                .get_flow_ctrl_receiver()
+                .acl_flow_control
+                .halt();
+
+            self.channel_reserve
+                .borrow_mut()
+                .get_flow_ctrl_receiver()
+                .le_acl_flow_control
+                .halt();
+
+            todo!("process of re-reading the data block buffer sizes not implemented yet")
+        }
+
+        for ncdb in &ncdb_data.completed_packets_and_blocks {
+            if 0 != ncdb.completed_blocks {
+                let how_many: usize = self.channel_reserve.borrow_mut().get_flow_ctrl_receiver().block_size
+                    * <usize>::from(ncdb.completed_blocks);
+
+                let task_id = TaskId::Connection(ncdb.connection_handle);
+
+                let fc_id = self
+                    .channel_reserve
+                    .borrow()
+                    .get_flow_control_id(task_id)
+                    .ok_or(SendError::<R>::UnknownConnectionHandle(ncdb.connection_handle))?;
+
+                match fc_id {
+                    FlowControlId::Acl => self.channel_reserve.borrow_mut().inc_acl_flow_ctrl(how_many),
+                    FlowControlId::Sco => self.channel_reserve.borrow_mut().inc_sco_flow_control(how_many),
+                    FlowControlId::LeAcl => self.channel_reserve.borrow_mut().inc_le_acl_flow_control(how_many),
+                    FlowControlId::LeIso => self.channel_reserve.borrow_mut().inc_le_iso_flow_control(how_many),
+                    FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Initiate a connection async task
+    ///
+    /// This creates the channels ends required for creating a new connection async task and sends
+    /// this information within a [`IntraMessageType::Connection`] message to the host async task.
+    pub async fn create_connection(&self, task_id: TaskId, flow_control_id: FlowControlId) -> Result<(), SendError<R>> {
+        let channel_ends = self
+            .channel_reserve
+            .borrow()
+            .add_new_task(task_id, flow_control_id)
+            .map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
+
+        let message = IntraMessageType::Connection(channel_ends).into();
+
+        self.channel_reserve
+            .borrow()
+            .get_sender(TaskId::Host)
+            .ok_or(SendError::<R>::HostClosed)?
+            .send(message)
+            .await
+            .map_err(|e| SendError::<R>::ChannelError(e))
+    }
+
+    pub async fn parse_connection_complete_event(
+        &self,
+        data: &events::ConnectionCompleteData,
+    ) -> Result<(), SendError<R>> {
+        let task_id = TaskId::Connection(data.connection_handle);
+
+        let flow_control_id = match data.link_type {
+            events::LinkType::ACLConnection => FlowControlId::Acl,
+            events::LinkType::SCOConnection => FlowControlId::Sco,
+            events::LinkType::ESCOConnection => unreachable!(),
+        };
+
+        self.create_connection(task_id, flow_control_id).await
+    }
+
+    pub async fn parse_synchronous_connection_complete_event(
+        &self,
+        data: &events::SynchronousConnectionCompleteData,
+    ) -> Result<(), SendError<R>> {
+        let task_id = TaskId::Connection(data.connection_handle);
+
+        let flow_control_id = FlowControlId::Sco;
+
+        self.create_connection(task_id, flow_control_id).await
+    }
+
+    pub async fn parse_le_connection_complete_event(
+        &self,
+        data: &events::LEConnectionCompleteData,
+    ) -> Result<(), SendError<R>> {
+        let task_id = TaskId::Connection(data.connection_handle);
+
+        let flow_control_id = FlowControlId::Acl;
+
+        self.create_connection(task_id, flow_control_id).await
+    }
+
+    pub async fn parse_le_enhanced_connection_complete_event(
+        &self,
+        data: &events::LEEnhancedConnectionCompleteData,
+    ) -> Result<(), SendError<R>> {
+        let task_id = TaskId::Connection(data.connection_handle);
+
+        let flow_control_id = FlowControlId::Acl;
+
+        self.create_connection(task_id, flow_control_id).await
+    }
+
+    pub async fn parse_disconnect(&self, disconnect: &events::DisconnectionCompleteData) -> Result<(), SendError<R>> {
+        let task_id = TaskId::Connection(disconnect.connection_handle);
+
+        let error = super::error::Error::from(disconnect.reason);
+
+        if let Some(sender) = self.channel_reserve.borrow().get_sender(task_id) {
+            sender
+                .send(IntraMessageType::Disconnect(error).into())
+                .await
+                .map_err(|e| SendError::<R>::ChannelError(e))?;
+
+            self.channel_reserve
+                .borrow_mut()
+                .try_remove(task_id)
+                .map_err(|e| SendError::<R>::ReserveError(e))
+        } else {
+            Ok(())
+        }
     }
 
     /// Parse an event for information that is relevant to this interface
@@ -981,184 +1208,35 @@ where
     ///   a specific connection.
     /// * *Number of Completed Data Blocks* event contains information on the number of packets sent
     ///   and
-    fn parse_event<E>(&self, event_data: &[u8]) -> Result<bool, SendMessageError<E>> {
-        let first_byte = *event_data
-            .get(0)
-            .ok_or(SendMessageError::InvalidHciPacket(HciPacketType::Event))?;
+    async fn parse_event(&self, data: &[u8]) -> Result<Option<events::EventsData>, SendError<R>> {
+        use events::{EventsData, LeMetaData};
 
-        let len = 2usize
-            + *event_data
-                .get(1)
-                .ok_or(SendMessageError::InvalidHciPacket(HciPacketType::Event))? as usize;
+        let ed = EventsData::try_from_packet(data).map_err(|e| SendError::<R>::InvalidHciEventData(e))?;
 
-        let event_parameter = event_data
-            .get(2..len)
-            .ok_or(SendMessageError::InvalidHciPacket(HciPacketType::Event))?;
-
-        match Events::try_from_event_codes(first_byte, 0 /* does not matter */) {
-            Ok(Events::CommandComplete) => self.parse_command_complete_event(event_parameter),
-            Ok(Events::CommandStatus) => self.parse_command_status_event(event_parameter),
-            Ok(Events::NumberOfCompletedPackets) => self.parse_number_of_completed_packets_event(event_parameter),
-            Ok(Events::NumberOfCompletedDataBlocks) => {
-                self.parse_number_of_completed_data_blocks_event(event_parameter)
+        match &ed {
+            EventsData::CommandComplete(data) => self.parse_command_complete_event(data).map(|b| b.then_some(ed)),
+            EventsData::CommandStatus(data) => self.parse_command_status_event(data).map(|b| b.then_some(ed)),
+            EventsData::NumberOfCompletedPackets(data) => {
+                self.parse_number_of_completed_packets_event(data).map(|_| None)
             }
-            _ => Ok(true),
-        }
-    }
-
-    /// Parse a command complete event
-    ///
-    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
-    /// packet.
-    fn parse_command_complete_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
-        use crate::hci::events::CommandCompleteData;
-        let cc_data = CommandCompleteData::try_from(event_parameter)
-            .map_err(|_| SendMessageError::InvalidHciEvent(Events::CommandComplete))?;
-
-        if 0 != cc_data.number_of_hci_command_packets {
-            self.channel_reserve
-                .inc_cmd_flow_ctrl(cc_data.number_of_hci_command_packets.into());
-        }
-
-        Ok(cc_data.command_opcode.is_some())
-    }
-
-    /// Parse a command status event
-    ///
-    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
-    /// packet.
-    fn parse_command_status_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
-        use crate::hci::events::CommandStatusData;
-
-        let cs_data = CommandStatusData::try_from(event_parameter)
-            .map_err(|_| SendMessageError::InvalidHciEvent(Events::CommandStatus))?;
-
-        if 0 != cs_data.number_of_hci_command_packets {
-            self.channel_reserve
-                .inc_cmd_flow_ctrl(cs_data.number_of_hci_command_packets.into());
-        }
-
-        Ok(cs_data.command_opcode.is_some())
-    }
-
-    /// Parse a Number of Completed Packets event
-    ///
-    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
-    /// packet.
-    fn parse_number_of_completed_packets_event<E>(&self, event_parameter: &[u8]) -> Result<bool, SendMessageError<E>> {
-        use crate::hci::events::{Multiple, NumberOfCompletedPacketsData};
-
-        let ncp_data = Multiple::<NumberOfCompletedPacketsData>::try_from(event_parameter)
-            .map_err(|_| SendMessageError::InvalidHciEvent(Events::NumberOfCompletedPackets))?;
-
-        for ncp in ncp_data {
-            if 0 != ncp.completed_packets {
-                let how_many: usize = ncp.completed_packets.into();
-
-                let task_id = TaskId::Connection(ncp.connection_handle);
-
-                match self
-                    .channel_reserve
-                    .get_flow_control_id(task_id)
-                    .ok_or(SendMessageError::UnknownConnectionHandle(ncp.connection_handle))?
-                {
-                    FlowControlId::Acl => self.channel_reserve.inc_acl_flow_ctrl(how_many),
-                    FlowControlId::Sco => self.channel_reserve.inc_sco_flow_control(how_many),
-                    FlowControlId::LeAcl => self.channel_reserve.inc_le_acl_flow_control(how_many),
-                    FlowControlId::LeIso => self.channel_reserve.inc_le_iso_flow_control(how_many),
-                    FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
-                }
+            EventsData::NumberOfCompletedDataBlocks(data) => {
+                self.parse_number_of_completed_data_blocks_event(data).map(|_| None)
             }
-        }
-
-        Ok(false)
-    }
-
-    /// Parse a Number of Completed Data Blocks event
-    ///
-    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
-    /// packet.
-    ///
-    /// If the return is `Ok` then it always contains `false`.
-    fn parse_number_of_completed_data_blocks_event<E>(
-        &self,
-        event_parameter: &[u8],
-    ) -> Result<bool, SendMessageError<E>> {
-        use crate::hci::events::NumberOfCompletedDataBlocksData;
-
-        let ncdb_data = NumberOfCompletedDataBlocksData::try_from(event_parameter)
-            .map_err(|_| SendMessageError::InvalidHciEvent(Events::NumberOfCompletedDataBlocks))?;
-
-        // This algorithm for flow control of the block buffers just
-        // counts the total number of *bytes* that the controller can
-        // accept (of one or more HCI payloads) within those buffers.
-        // The total number of data blocks does not need to be counted
-        // **unless** the controller sends back the need for the host
-        // to re-check the block buffer information via the *Read Data
-        // Block Size* command.
-        if let None = ncdb_data.total_data_blocks {
-            self.channel_reserve
-                .get_flow_ctrl_receiver()
-                .borrow_mut()
-                .acl_flow_control
-                .halt();
-
-            self.channel_reserve
-                .get_flow_ctrl_receiver()
-                .borrow_mut()
-                .le_acl_flow_control
-                .halt();
-
-            todo!("process of re-reading the data block buffer sizes not implemented yet")
-        }
-
-        for ncdb in ncdb_data.completed_packets_and_blocks {
-            if 0 != ncdb.completed_blocks {
-                let how_many: usize = self.channel_reserve.get_flow_ctrl_receiver().borrow().block_size
-                    * <usize>::from(ncdb.completed_blocks);
-
-                let task_id = TaskId::Connection(ncdb.connection_handle);
-
-                match self
-                    .channel_reserve
-                    .get_flow_control_id(task_id)
-                    .ok_or(SendMessageError::UnknownConnectionHandle(ncdb.connection_handle))?
-                {
-                    FlowControlId::Acl => self.channel_reserve.inc_acl_flow_ctrl(how_many),
-                    FlowControlId::Sco => self.channel_reserve.inc_sco_flow_control(how_many),
-                    FlowControlId::LeAcl => self.channel_reserve.inc_le_acl_flow_control(how_many),
-                    FlowControlId::LeIso => self.channel_reserve.inc_le_iso_flow_control(how_many),
-                    FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
-                }
+            EventsData::ConnectionComplete(data) => self.parse_connection_complete_event(data).await.map(|_| Some(ed)),
+            EventsData::SynchronousConnectionComplete(data) => self
+                .parse_synchronous_connection_complete_event(data)
+                .await
+                .map(|_| Some(ed)),
+            EventsData::LeMeta(LeMetaData::ConnectionComplete(data)) => {
+                self.parse_le_connection_complete_event(data).await.map(|_| Some(ed))
             }
+            EventsData::LeMeta(LeMetaData::EnhancedConnectionComplete(data)) => self
+                .parse_le_enhanced_connection_complete_event(data)
+                .await
+                .map(|_| Some(ed)),
+            EventsData::DisconnectionComplete(data) => self.parse_disconnect(data).await.map(|_| Some(ed)),
+            _ => Ok(Some(ed)),
         }
-
-        Ok(())
-    }
-
-    pub async fn parse_connection_complete_event(
-        &mut self,
-        cc_data: &events::ConnectionCompleteData,
-    ) -> Result<(), SendError<R>> {
-        let task_id = TaskId::Connection(cc_data.connection_handle);
-
-        let flow_control_id = match cc_data.link_type {
-            events::LinkType::SCOConnection => FlowControlId::Sco,
-            events::LinkType::ACLConnection => FlowControlId::Acl,
-            _ => unreachable!(),
-        };
-
-        let channel_ends = self
-            .channel_reserve
-            .add_new_task(task_id, flow_control_id)
-            .map_err(|e| SendError::ReserveError(e))?;
-
-        let message = IntraMessageType::Connection(channel_ends);
-
-        self.channel_reserve
-            .get_sender(TaskId::Host)
-            .ok_or(SendError::HostClosed)?
-            .send(message)
     }
 
     /// Send an event to the host
@@ -1171,25 +1249,16 @@ where
     /// *Command Complete* and *Command Status* does not contain a command code are not sent to the
     /// host. All the information within those events is only relevant to the interface async task.
     async fn maybe_send_event(&mut self, packet: &[u8]) -> Result<(), SendError<R>> {
-        use crate::TryExtend;
+        if let Some(events_data) = self.parse_event(&packet).await? {
+            let message = IntraMessageType::Event(events_data).into();
 
-        if self.parse_event(&packet)? {
-            let (mut buffer, sender) = self
-                .channel_reserve
-                .prepare_buffer_msg(TaskId::Host, 0)
+            self.channel_reserve
+                .borrow()
+                .get_sender(TaskId::Host)
                 .ok_or(SendError::<R>::HostClosed)?
-                .await;
-
-            buffer
-                .try_extend(packet.iter().cloned())
-                .map_err(|e| SendError::<R>::BufferExtend(e))?;
-
-            let message = IntraMessageType::Event(buffer).into();
-
-            sender
                 .send(message)
                 .await
-                .map_err(|e| SendMessageError::ChannelError(e))?
+                .map_err(|e| SendError::<R>::ChannelError(e))?
         }
 
         Ok(())
@@ -1201,17 +1270,18 @@ where
         let raw_handle = <u16>::from_le_bytes([
             *packet
                 .get(0)
-                .ok_or(SendMessageError::InvalidHciPacket(HciPacketType::Acl))?,
+                .ok_or(SendError::<R>::InvalidHciPacket(HciPacketType::Acl))?,
             *packet
                 .get(1)
-                .ok_or(SendMessageError::InvalidHciPacket(HciPacketType::Acl))?,
+                .ok_or(SendError::<R>::InvalidHciPacket(HciPacketType::Acl))?,
         ]);
 
         let connection_handle =
-            ConnectionHandle::try_from(raw_handle).map_err(|_| SendMessageError::InvalidConnectionHandle)?;
+            ConnectionHandle::try_from(raw_handle).map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
 
-        let (mut buffer, sender) = self
-            .channel_reserve
+        let reserve_ref = self.channel_reserve.borrow();
+
+        let (mut buffer, sender) = reserve_ref
             .prepare_buffer_msg(TaskId::Connection(connection_handle), 0)
             .ok_or(SendError::<R>::HostClosed)?
             .await;
@@ -1225,56 +1295,47 @@ where
         sender
             .send(message)
             .await
-            .map_err(|e| SendMessageError::ChannelError(e).into())
+            .map_err(|e| SendError::<R>::ChannelError(e).into())
     }
 }
 
 #[derive(Debug)]
-pub enum SendErrorReason<C, B> {
+pub enum SendErrorReason<E, C, B> {
+    ReserveError(E),
     ChannelError(C),
     BufferExtend(B),
     Command,
     InvalidHciPacket(HciPacketType),
-    InvalidHciEvent(Events),
+    InvalidHciEventData(events::EventError),
     InvalidConnectionHandle,
     UnknownConnectionHandle(ConnectionHandle),
     HostClosed,
-    Unimplemented(HciPacketType),
+    Unimplemented(&'static str),
 }
 
-impl<C, B> Display for SendErrorReason<C, B>
+impl<E, C, B> Display for SendErrorReason<E, C, B>
 where
+    E: Display,
     C: Display,
     B: Display,
 {
     fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
         match self {
+            SendErrorReason::ReserveError(e) => Display::fmt(e, f),
             SendErrorReason::ChannelError(c) => Display::fmt(c, f),
             SendErrorReason::BufferExtend(b) => Display::fmt(b, f),
             SendErrorReason::Command => f.write_str("cannot send command to host"),
-            SendErrorReason::InvalidHciEvent(event) => write!(f, "received invalid HCI event for '{}'", event),
-            SendErrorReason::InvalidHciPacket(ty) => write!(f, "invalid HCI packet for '{}'", ty),
+            SendErrorReason::InvalidHciPacket(packet) => write!(f, "Invalid packet {packet}"),
+            SendErrorReason::InvalidHciEventData(e) => Display::fmt(e, f),
             SendErrorReason::InvalidConnectionHandle => f.write_str("invalid connection handle"),
-            SendErrorReason::UnknownConnectionHandle(h) => write!(f, "no connection for handle: {}", h),
+            SendErrorReason::UnknownConnectionHandle(h) => write!(f, "no connection for handle: {h}"),
             SendErrorReason::HostClosed => f.write_str("Host task is closed"),
-            SendErrorReason::Unimplemented(p_type) => write!(f, "HCI message type {} is unimplemented", p_type),
+            SendErrorReason::Unimplemented(reason) => f.write_str(reason),
         }
     }
 }
 
-impl<C, B> From<SendMessageError<C>> for SendErrorReason<C, B> {
-    fn from(sme: SendMessageError<C>) -> Self {
-        match sme {
-            SendMessageError::ChannelError(c) => SendErrorReason::ChannelError(c),
-            SendMessageError::InvalidHciEvent(event) => SendErrorReason::InvalidHciEvent(event),
-            SendMessageError::InvalidHciPacket(ty) => SendErrorReason::InvalidHciPacket(ty),
-            SendMessageError::InvalidConnectionHandle => SendErrorReason::InvalidConnectionHandle,
-            SendMessageError::UnknownConnectionHandle(h) => SendErrorReason::UnknownConnectionHandle(h),
-        }
-    }
-}
-
-impl<C, B> From<MessageError<B>> for SendErrorReason<C, B> {
+impl<E, C, B> From<MessageError<B>> for SendErrorReason<E, C, B> {
     fn from(me: MessageError<B>) -> Self {
         match me {
             MessageError::BufferExtend(e) => SendErrorReason::BufferExtend(e),
@@ -1286,15 +1347,11 @@ impl<C, B> From<MessageError<B>> for SendErrorReason<C, B> {
 }
 
 /// Error returned by operations of [`Interface`] or [`BufferedUpSend`]
-pub type SendError<R> = SendErrorReason<<R as ChannelReserve>::SenderError, <R as ChannelReserve>::TryExtendError>;
-
-enum SendMessageError<T> {
-    ChannelError(T),
-    InvalidHciEvent(Events),
-    InvalidHciPacket(HciPacketType),
-    InvalidConnectionHandle,
-    UnknownConnectionHandle(ConnectionHandle),
-}
+pub type SendError<R> = SendErrorReason<
+    <R as ChannelReserve>::Error,
+    <R as ChannelReserve>::SenderError,
+    <R as ChannelReserve>::TryExtendError,
+>;
 
 enum MessageError<B> {
     BufferExtend(B),
@@ -1325,7 +1382,7 @@ pub struct BufferedUpSend<'a, R: ChannelReserve> {
     packet_type: HciPacketType,
     packet_len: core::cell::Cell<Option<usize>>,
     task_id_state: core::cell::RefCell<BufferedTaskId>,
-    buffer: core::cell::RefCell<Option<R::ToBuffer<'a>>>,
+    buffer: core::cell::RefCell<Option<R::ToBuffer>>,
 }
 
 /// Get the channel
@@ -1339,9 +1396,10 @@ macro_rules! get_channel {
     ($buffered_send:expr, $R:ty) => {{
         let task_id = $buffered_send.task_id_state.borrow().try_into_task_id().unwrap();
 
-        let channel: Result<<$R>::ToChannel<'_>, MessageError<<$R>::TryExtendError>> = $buffered_send
+        let channel: Result<<$R>::ToChannel, MessageError<<$R>::TryExtendError>> = $buffered_send
             .interface
             .channel_reserve
+            .borrow()
             .get(task_id)
             .map(|channel| channel)
             .ok_or(MessageError::<<$R>::TryExtendError>::from(task_id));
@@ -1654,9 +1712,9 @@ mod buffered_send {
         if bs.is_ready() {
             match bs.packet_type {
                 HciPacketType::Acl => from_acl(bs).await,
-                HciPacketType::Sco => Err(SendError::<R>::Unimplemented(HciPacketType::Sco)),
+                HciPacketType::Sco => Err(SendError::<R>::Unimplemented("SCO packets are unimplemented")),
                 HciPacketType::Event => from_event(bs).await,
-                HciPacketType::Iso => Err(SendError::<R>::Unimplemented(HciPacketType::Iso)),
+                HciPacketType::Iso => Err(SendError::<R>::Unimplemented("ISO packets are unimplemented")),
                 HciPacketType::Command => unreachable!(),
             }
         } else {
@@ -1673,10 +1731,10 @@ mod buffered_send {
             None => return Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
         };
 
-        match bs.interface.parse_event(&buffer) {
+        match bs.interface.parse_event(&buffer).await {
             Err(e) => Err(e.into()),
-            Ok(true) => {
-                let message = IntraMessageType::Event(buffer).into();
+            Ok(Some(event)) => {
+                let message = IntraMessageType::Event(event).into();
 
                 get_channel!(bs, R)?
                     .get_sender()
@@ -1684,7 +1742,7 @@ mod buffered_send {
                     .await
                     .map_err(|e| SendError::<R>::ChannelError(e))
             }
-            Ok(false) => Ok(()),
+            Ok(None) => Ok(()),
         }
     }
 
@@ -1709,9 +1767,7 @@ mod buffered_send {
 
 /// Get channel ends for the host async task
 pub trait InitHostTaskEnds {
-    type TaskChannelEnds<'a>
-    where
-        Self: 'a;
+    type TaskChannelEnds;
     type Error;
 
     /// Get the channel ends for the host async task
@@ -1722,15 +1778,17 @@ pub trait InitHostTaskEnds {
     /// # Error
     /// Either `id` was already has channel ends created for it or an implementation specific error
     /// occurred while trying to create them.
-    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds<'_>, Self::Error>;
+    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds, Self::Error>;
 }
 
 impl<R: ChannelReserve> InitHostTaskEnds for Interface<R> {
-    type TaskChannelEnds<'a> = R::TaskChannelEnds<'a> where Self: 'a;
+    type TaskChannelEnds = R::TaskChannelEnds;
     type Error = R::Error;
 
-    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds<'_>, Self::Error> {
-        self.channel_reserve.add_new_task(TaskId::Host, FlowControlId::Cmd)
+    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds, Self::Error> {
+        self.channel_reserve
+            .borrow_mut()
+            .add_new_task(TaskId::Host, FlowControlId::Cmd)
     }
 }
 
@@ -2046,88 +2104,49 @@ pub enum HciPacket<T: Deref<Target = [u8]>> {
     Iso(T),
 }
 
-/// Inner interface messaging
+/// Intra messages sent to the interface async task
 ///
-/// This is the type for messages sent between the interface async task and either the host or a
-/// connection async tasks. HCI packets are the most common message, but there is also other types
-/// of messages sent for task related things.
-#[repr(transparent)]
-pub struct IntraMessage<T> {
-    pub(crate) ty: IntraMessageType<T>,
+/// This is the type for messages sent to the interface async task from another async task. All
+/// message except for [`IntraMessageType::Event`] are received by the interface async task.
+///
+/// ## Generics
+/// * Generic `T` is the type used as the buffer for HCI data and command messages.
+pub struct ToIntraMessage<T> {
+    // The enum of `IntraMessageType` that uses
+    // its second generic not sent by another
+    // async task to the interface async task.
+    pub(crate) ty: IntraMessageType<T, ()>,
 }
 
-impl<T> IntraMessage<T> {
-    /// Convert an IntraMessage into the message type used by the driver
-    fn into_host_message(self) -> Result<HciPacket<T>, &'static str>
+impl<T> ToIntraMessage<T> {
+    /// Convert a ToIntraMessage into a HciPacket
+    ///
+    /// This method may only be called when field `ty` is a `Command`, `Acl`, `Sco` or `Iso`
+    /// `IntraMessageType`.
+    ///
+    /// # Panic
+    /// This method panics if field `ty` is not one of the valid enums.
+    fn into_hci_packet(self) -> HciPacket<T>
     where
         T: Deref<Target = [u8]>,
     {
         match self.ty {
-            IntraMessageType::Command(_, t) => Ok(HciPacket::Command(t)),
-            IntraMessageType::Acl(t) => Ok(HciPacket::Acl(t)),
-            IntraMessageType::Sco(t) => Ok(HciPacket::Sco(t)),
-            IntraMessageType::Iso(t) => Ok(HciPacket::Iso(t)),
-            _ => Err(self.kind()),
-        }
-    }
-
-    /// Get a mutable reference to the buffer
-    ///
-    /// This will return a mutable reference the buffer if the `IntraMessageType` contains a buffer.
-    pub(crate) fn get_mut_buffer(&mut self) -> Option<&mut T> {
-        match &mut self.ty {
-            IntraMessageType::Command(_, t) => Some(t),
-            IntraMessageType::Acl(t) => Some(t),
-            IntraMessageType::Sco(t) => Some(t),
-            IntraMessageType::Event(t) => Some(t),
-            IntraMessageType::Iso(t) => Some(t),
-            _ => None,
-        }
-    }
-
-    /// Print the kind of message
-    ///
-    /// This is used for debugging purposes
-    pub(crate) const fn kind(&self) -> &'static str {
-        match self.ty {
-            IntraMessageType::Command(_, _) => "Command",
-            IntraMessageType::Acl(_) => "Acl",
-            IntraMessageType::Sco(_) => "Sco",
-            IntraMessageType::Event(_) => "Event",
-            IntraMessageType::Iso(_) => "Iso",
-            IntraMessageType::Disconnect => "Disconnect",
-            IntraMessageType::Connection(_) => "(BR/EDR) Connection",
-            IntraMessageType::LeConnection(_) => "LE Connection",
-            IntraMessageType::LeEnhancedConnection(_) => "LE Enhanced Connection",
-        }
-    }
-
-    /// Map the buffer type to another type
-    fn map<V, F>(self, f: F) -> IntraMessage<V>
-    where
-        F: FnOnce(T) -> V,
-    {
-        match self.ty {
-            IntraMessageType::Command(p, t) => IntraMessageType::Command(p, f(t)).into(),
-            IntraMessageType::Acl(t) => IntraMessageType::Acl(f(t)).into(),
-            IntraMessageType::Sco(t) => IntraMessageType::Sco(f(t)).into(),
-            IntraMessageType::Event(t) => IntraMessageType::Event(f(t)).into(),
-            IntraMessageType::Iso(t) => IntraMessageType::Iso(f(t)).into(),
-            IntraMessageType::Disconnect => IntraMessageType::Disconnect.into(),
-            IntraMessageType::Connection(c) => IntraMessageType::Connection(c).into(),
-            IntraMessageType::LeConnection(c) => IntraMessageType::LeConnection(c).into(),
-            IntraMessageType::LeEnhancedConnection(c) => IntraMessageType::LeEnhancedConnection(c).into(),
+            IntraMessageType::Command(_, t) => HciPacket::Command(t),
+            IntraMessageType::Acl(t) => HciPacket::Acl(t),
+            IntraMessageType::Sco(t) => HciPacket::Sco(t),
+            IntraMessageType::Iso(t) => HciPacket::Iso(t),
+            _ => panic!("invalid intra message {}", self.ty.kind()),
         }
     }
 }
 
-impl<T> From<IntraMessageType<T>> for IntraMessage<T> {
-    fn from(ty: IntraMessageType<T>) -> Self {
+impl<T> From<IntraMessageType<T, ()>> for ToIntraMessage<T> {
+    fn from(ty: IntraMessageType<T, ()>) -> Self {
         Self { ty }
     }
 }
 
-impl<T: Deref<Target = [u8]>> GetDataPayloadSize for IntraMessage<T> {
+impl<T: Deref<Target = [u8]>> GetDataPayloadSize for ToIntraMessage<T> {
     /// A payload size is only returned for the data type (ACL, SCO, ISO) HCI messages.
     fn get_payload_size(&self) -> Option<usize> {
         match &self.ty {
@@ -2139,8 +2158,45 @@ impl<T: Deref<Target = [u8]>> GetDataPayloadSize for IntraMessage<T> {
     }
 }
 
+/// Intra messages sent from the interface async task
+///
+/// This is the type for messages sent from the interface async task to another async task. All
+/// message except for [`IntraMessageType::Command`] are sent from the interface async task.
+///
+/// ## Generics
+/// * Generic `T` is the type used as the buffer for HCI data and command messages.
+/// * Generic `C` implements [`ChannelEnds`]
+#[repr(transparent)]
+pub struct FromIntraMessage<T, C> {
+    pub(crate) ty: IntraMessageType<T, C>,
+}
+
+// impl<T, C> FromIntraMessage<T, C> {
+//     /// Map the buffer type to another type
+//     fn map<V, F>(self, f: F) -> FromIntraMessage<V, C>
+//     where
+//         F: FnOnce(T) -> V,
+//     {
+//         match self.ty {
+//             IntraMessageType::Command(p, t) => IntraMessageType::Command(p, f(t)).into(),
+//             IntraMessageType::Acl(t) => IntraMessageType::Acl(f(t)).into(),
+//             IntraMessageType::Sco(t) => IntraMessageType::Sco(f(t)).into(),
+//             IntraMessageType::Event(ed) => IntraMessageType::Event(ed).into(),
+//             IntraMessageType::Iso(t) => IntraMessageType::Iso(f(t)).into(),
+//             IntraMessageType::Disconnect(r) => IntraMessageType::Disconnect(r).into(),
+//             IntraMessageType::Connection(c) => IntraMessageType::Connection(c).into(),
+//         }
+//     }
+// }
+
+impl<T, C> From<IntraMessageType<T, C>> for FromIntraMessage<T, C> {
+    fn from(ty: IntraMessageType<T, C>) -> Self {
+        Self { ty }
+    }
+}
+
 /// An enum of the type of message sent between two async tasks
-pub(crate) enum IntraMessageType<T> {
+pub(crate) enum IntraMessageType<T, C> {
     /*----------------------------
      HCI Packet messages
     ----------------------------*/
@@ -2151,23 +2207,52 @@ pub(crate) enum IntraMessageType<T> {
     /// HCI synchronous Connection-Oriented Data Packet
     Sco(T),
     /// HCI Event Packet.
-    ///
-    /// Connection events are sent
-    Event(T),
+    Event(events::EventsData),
     /// HCI isochronous Data Packet
     Iso(T),
     /*----------------------------
-     Connection specific messages
+     Inner host specific messages
+
+     These messages do not translate to HCI Packet messages
     ----------------------------*/
-    /// The interface async task sends this message to the connection async task who's connection
-    /// has disconnected.
-    Disconnect,
-    /// BR/EDR Connection Complete event sent to the host
-    Connection(events::ConnectionCompleteData),
-    /// LE Connection Complete event sent to the host
-    LeConnection(events::LEConnectionCompleteData),
-    /// LE Enhanced Connection Complete event sent to the host
-    LeEnhancedConnection(events::LEEnhancedConnectionCompleteData),
+    /// Connection information
+    ///
+    /// When the interface async task receives an event that indicates that a connection was made,
+    /// it will send this intra message to the host async task. `Connection` contains the channel
+    /// ends for that can be used to create a new connection async task. This intra message is sent
+    /// before the event that indicated the connection.
+    ///
+    /// The events connection complete, synchronous connection complete, LE connection complete, and
+    /// LE enhanced connection complete all trigger the sending of this intra message.
+    Connection(C),
+    /// This is sent by a connection async task or the interface async task to indicate that a
+    /// connection is disconnected.
+    ///
+    /// When sent by a connection async task it means that the connection is to be disconnected on
+    /// the host end and the disconnection should be made by the Controller. The task must provide
+    /// a reason for the disconnection.
+    ///
+    /// When send by the interface async task to a connection async task then it means that the
+    /// Controller has been disconnected from the peer device. The disconnect reason is the same
+    /// as reason as provided by the Controller in the disconnection event.
+    Disconnect(super::error::Error),
+}
+
+impl<T, C> IntraMessageType<T, C> {
+    /// Print the kind of message
+    ///
+    /// This is used for debugging purposes
+    pub(crate) const fn kind(&self) -> &'static str {
+        match self {
+            IntraMessageType::Command(_, _) => "Command",
+            IntraMessageType::Acl(_) => "Acl",
+            IntraMessageType::Sco(_) => "Sco",
+            IntraMessageType::Event(_) => "Event",
+            IntraMessageType::Iso(_) => "Iso",
+            IntraMessageType::Disconnect(_) => "Disconnect",
+            IntraMessageType::Connection(_) => "(BR/EDR) Connection",
+        }
+    }
 }
 
 #[cfg(test)]

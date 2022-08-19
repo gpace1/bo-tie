@@ -11,7 +11,7 @@ pub mod events;
 // mod flow_ctrl;
 pub mod interface;
 
-use crate::hci::interface::{ChannelEnds, ChannelReserve};
+use crate::hci::interface::{Channel, ChannelEnds, ChannelReserve};
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -394,7 +394,9 @@ impl<'a> HciACLData<&'a [u8]> {
 /// because a HCI packet ends up being a nesting of multiple different protocols. Bytes of protocol
 /// header information are pushed to the front of a buffer while payload data is pushed to the end
 /// of the buffer.
-pub trait Buffer: core::ops::DerefMut<Target = [u8]> + crate::TryExtend<u8> + Unpin {
+pub trait Buffer:
+    core::ops::DerefMut<Target = [u8]> + crate::TryExtend<u8> + crate::TryRemove<u8> + crate::TryFrontRemove<u8> + Unpin
+{
     /// Create a Buffer with the front and back capacities
     fn with_capacity(front: usize, back: usize) -> Self
     where
@@ -471,33 +473,6 @@ pub trait BufferReserve {
     fn reclaim(&mut self, buffer: Self::Buffer);
 }
 
-/// Extension trait for `BufferReserve`
-trait BufferReserveExt: BufferReserve {
-    /// Use a `BufferReserve` as in iterator
-    ///
-    /// This is an iterator over taking a `BufferReserve`. Every iteration calls the method `take`
-    /// and returns the future. The iterator will never return `None`.
-    fn as_take_iter(&self, front_capacity: usize) -> BufferReserveTakeIterator<'_, Self>
-    where
-        Self: Sized,
-    {
-        BufferReserveTakeIterator(self, front_capacity)
-    }
-}
-
-impl<T: BufferReserve> BufferReserveExt for T {}
-
-/// An iterator for continuously taking a `BufferReserve`
-struct BufferReserveTakeIterator<'a, T>(&'a T, usize);
-
-impl<'a, T: BufferReserve> Iterator for BufferReserveTakeIterator<'a, T> {
-    type Item = T::TakeBuffer;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(self.0.take(self.1))
-    }
-}
-
 /// A matcher of events in response to a command
 ///
 /// This is used for matching a HCI packet from the controller to the events Command Complete and
@@ -565,11 +540,14 @@ pub trait HostInterface {
     /// Buffer type for messages from the interface async task
     type FromBuffer: Buffer;
 
+    /// The type containing the channels ends used for communicating with the interface async task
+    type ChannelEnds: ChannelEnds;
+
     /// Sender for messages to the interface
-    type Sender: interface::Sender<Message = interface::IntraMessage<Self::ToBuffer>>;
+    type Sender: interface::Sender<Message = interface::ToIntraMessage<Self::ToBuffer>>;
 
     /// The receiver of messages from the interface
-    type Receiver: interface::Receiver<Message = interface::IntraMessage<Self::FromBuffer>>;
+    type Receiver: interface::Receiver<Message = interface::FromIntraMessage<Self::FromBuffer, Self::ChannelEnds>>;
 
     /// The future used for taking a buffer
     type TakeBuffer: Future<Output = Self::ToBuffer>;
@@ -596,9 +574,15 @@ struct DynLocalHostInterface {
 
 impl HostInterface for DynLocalHostInterface {
     type ToBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::ToBuffer;
+
     type FromBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::FromBuffer;
+
+    type ChannelEnds = interface::local_channel::local_dynamic_channel::DynChannelEnds;
+
     type Sender = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::Sender;
+
     type Receiver = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::Receiver;
+
     type TakeBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::TakeBuffer;
 
     fn get_sender(&self) -> Self::Sender {
@@ -618,7 +602,9 @@ impl HostInterface for DynLocalHostInterface {
 }
 
 /// Create a locally used Host Controller Interface
-pub fn new_local_hci(max_connections: usize) -> (Host<impl HostInterface>, interface::Interface<impl ChannelReserve>) {
+pub async fn new_local_hci(
+    max_connections: usize,
+) -> Result<(Host<impl HostInterface>, interface::Interface<impl ChannelReserve>), CommandError<impl HostInterface>> {
     use interface::InitHostTaskEnds;
 
     let mut interface = interface::Interface::new_local(max_connections + 1);
@@ -627,55 +613,52 @@ pub fn new_local_hci(max_connections: usize) -> (Host<impl HostInterface>, inter
 
     let host_interface = DynLocalHostInterface { ends };
 
-    let host = Host { host_interface };
+    let host = Host::init(host_interface).await?;
 
-    (host, interface)
+    Ok((host, interface))
 }
 
 #[cfg(feature = "unstable")]
-struct StackLocalHostInterface<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    ends:
-        interface::local_channel::local_stack_channel::StackChannelEnds<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+struct StackLocalHostInterface<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
+    ends: interface::local_channel::local_stack_channel::ChannelEndsType<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
 }
 
 #[cfg(feature = "unstable")]
-impl<'a, 'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> HostInterface
-    for StackLocalHostInterface<'a, 'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
+impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> HostInterface
+    for StackLocalHostInterface<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
-    type ToBuffer = <interface::local_channel::local_stack_channel::StackChannelEnds<
-        'a,
+    type ToBuffer = <interface::local_channel::local_stack_channel::ChannelEndsType<
         'z,
         TASK_COUNT,
         CHANNEL_SIZE,
         BUFFER_SIZE,
     > as ChannelEnds>::ToBuffer;
 
-    type FromBuffer = <interface::local_channel::local_stack_channel::StackChannelEnds<
-        'a,
+    type FromBuffer = <interface::local_channel::local_stack_channel::ChannelEndsType<
         'z,
         TASK_COUNT,
         CHANNEL_SIZE,
         BUFFER_SIZE,
     > as ChannelEnds>::FromBuffer;
 
-    type Sender = <interface::local_channel::local_stack_channel::StackChannelEnds<
-        'a,
+    type ChannelEnds =
+        interface::local_channel::local_stack_channel::ChannelEndsType<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+
+    type Sender = <interface::local_channel::local_stack_channel::ChannelEndsType<
         'z,
         TASK_COUNT,
         CHANNEL_SIZE,
         BUFFER_SIZE,
     > as ChannelEnds>::Sender;
 
-    type Receiver = <interface::local_channel::local_stack_channel::StackChannelEnds<
-        'a,
+    type Receiver = <interface::local_channel::local_stack_channel::ChannelEndsType<
         'z,
         TASK_COUNT,
         CHANNEL_SIZE,
         BUFFER_SIZE,
     > as ChannelEnds>::Receiver;
 
-    type TakeBuffer = <interface::local_channel::local_stack_channel::StackChannelEnds<
-        'a,
+    type TakeBuffer = <interface::local_channel::local_stack_channel::ChannelEndsType<
         'z,
         TASK_COUNT,
         CHANNEL_SIZE,
@@ -711,66 +694,36 @@ pub struct StackLocalHciPrimer<const TASK_COUNT: usize, const CHANNEL_SIZE: usiz
         CHANNEL_SIZE,
         BUFFER_SIZE,
     >,
-    has_interface: core::cell::Cell<bool>,
 }
 
 #[cfg(feature = "unstable")]
 impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
     StackLocalHciPrimer<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
-    /// Take the interface for the `StackLocalHciPrimer`
-    ///
-    /// If there is already an interface taken for this `StackLocalHciPrimer`, `take_interface` will
-    /// return `None`.
-    pub fn take_interface(&self) -> Option<StackLocalInterfacePrimer<'_, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>> {
-        (!self.has_interface.get()).then(|| {
-            self.has_interface.set(true);
+    /// Create a new host and interface
+    // There should not be multiple interfaces created at the same time per `StackLocalHciPrimer`.
+    // Here we're abusing rust's borrow checker a bit as this returns an interface that depends on
+    // the lifetime of a mutable reference to a `StackLocalHciPrimer`.
+    pub async fn init<'a>(
+        &'a self,
+    ) -> Result<
+        (
+            Host<impl HostInterface + 'a>,
+            interface::Interface<impl ChannelReserve + 'a>,
+        ),
+        CommandError<impl HostInterface + 'a>,
+    > {
+        use interface::InitHostTaskEnds;
 
-            let has_interface = &self.has_interface;
+        let mut interface = interface::Interface::new_stack_local(&self.data);
 
-            let has_host = core::cell::Cell::new(false);
+        let ends = interface.init_host_task_ends().unwrap();
 
-            let interface = interface::Interface::new_stack_local(&self.data);
+        let host_interface = StackLocalHostInterface { ends };
 
-            StackLocalInterfacePrimer {
-                has_interface,
-                has_host,
-                interface,
-            }
-        })
-    }
-}
+        let host = Host::init(host_interface).await?;
 
-#[cfg(feature = "unstable")]
-pub struct StackLocalInterfacePrimer<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    has_interface: &'a core::cell::Cell<bool>,
-    has_host: core::cell::Cell<bool>,
-    interface: interface::Interface<
-        interface::local_channel::local_stack_channel::LocalStackChannelReserve<
-            'a,
-            TASK_COUNT,
-            CHANNEL_SIZE,
-            BUFFER_SIZE,
-        >,
-    >,
-}
-
-#[cfg(feature = "unstable")]
-impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
-    StackLocalInterfacePrimer<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
-{
-    pub fn take_host(&mut self) -> Option<Host<impl HostInterface + '_>> {
-        (!self.has_host.get()).then(|| {
-            use interface::InitHostTaskEnds;
-
-            self.has_host.set(true);
-
-            let ends = self.init_host_task_ends().unwrap();
-
-            let host_interface = StackLocalHostInterface { ends };
-
-            Host { host_interface }
-        })
+        Ok((host, interface))
     }
 }
 
@@ -784,33 +737,65 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 #[cfg(feature = "unstable")]
 pub fn new_stack_local_hci<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
 ) -> StackLocalHciPrimer<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> {
-    let has_interface = core::cell::Cell::new(false);
-
     let data = interface::local_channel::local_stack_channel::LocalStackChannelReserveData::<
         TASK_COUNT,
         CHANNEL_SIZE,
         BUFFER_SIZE,
     >::new();
 
-    StackLocalHciPrimer { has_interface, data }
+    StackLocalHciPrimer { data }
 }
 
 /// The host interface
 ///
 /// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
 /// host controller interface.
-pub struct Host<H> {
+pub struct Host<H: HostInterface> {
     host_interface: H,
+    next_connection: Option<H::ChannelEnds>,
+    acl_max_mtu: usize,
+    sco_max_mtu: usize,
+    le_acl_max_mtu: usize,
+    le_iso_max_mtu: usize,
 }
 
 impl<H> Host<H>
 where
     H: HostInterface,
 {
+    /// Initialize the host
+    async fn init(host_interface: H) -> Result<Self, CommandError<H>> {
+        let mut host = Host {
+            host_interface,
+            next_connection: None,
+            acl_max_mtu: 0,
+            sco_max_mtu: 0,
+            le_acl_max_mtu: 0,
+            le_iso_max_mtu: 0,
+        };
+
+        let buffer_info = info_params::read_buffer_size::send(&mut host).await?;
+
+        host.acl_max_mtu = buffer_info.hc_acl_data_packet_len;
+
+        host.sco_max_mtu = buffer_info.hc_synchronous_data_packet_len;
+
+        let buffer_info = le::mandatory::read_buffer_size::send_v2(&mut host).await?;
+
+        host.le_acl_max_mtu = match buffer_info.acl {
+            Some(bs) => bs.len.into(),
+            None => host.acl_max_mtu,
+        };
+
+        host.le_iso_max_mtu = buffer_info.iso.map(|bs| bs.len.into()).unwrap_or_default();
+
+        Ok(host)
+    }
+
     /// Send a command with the provided matcher to the interface async task
     ///
-    /// Returns the intra message received from the interface async task (hopefully) containing the
-    /// expected controller response to the sent command.
+    /// Returns the event received from the interface async task (hopefully) contains the event sent
+    /// in response to the command.
     ///
     /// # Note
     /// This method is intended to only be used internally
@@ -819,7 +804,7 @@ where
         &mut self,
         parameter: CP,
         event_matcher: CommandEventMatcher,
-    ) -> Result<interface::IntraMessage<H::FromBuffer>, CommandError<H>>
+    ) -> Result<events::EventsData, CommandError<H>>
     where
         CP: CommandParameter<CP_SIZE>,
     {
@@ -838,11 +823,19 @@ where
             .await
             .map_err(|e| CommandError::SendError(e))?;
 
-        self.host_interface
+        let received = self
+            .host_interface
             .get_receiver()
             .recv()
             .await
-            .ok_or(CommandError::ReceiverClosed)
+            .map(|from_im| from_im.ty)
+            .ok_or(CommandError::ReceiverClosed)?;
+
+        match received {
+            IntraMessageType::Event(e @ events::EventsData::CommandComplete(_))
+            | IntraMessageType::Event(e @ events::EventsData::CommandStatus(_)) => Ok(e),
+            _ => todo!("need to queue intra messages that are not the correct events"),
+        }
     }
 
     /// Send a command to the controller expecting a returned parameter
@@ -869,18 +862,14 @@ where
         T: TryFromCommandComplete,
     {
         use events::EventsData;
-        use interface::IntraMessageType;
 
         let event_matcher = CommandEventMatcher::new_command_complete(CP::COMMAND);
 
-        let intra_message = self.send_command(parameter, event_matcher).await?;
+        let command_return = self.send_command(parameter, event_matcher).await?;
 
-        match intra_message.ty {
-            IntraMessageType::Event(data) => match EventsData::try_from_packet(&data)? {
-                EventsData::CommandComplete(data) => Ok(T::try_from(&data)?),
-                e => unreachable!("invalid event matched for command: {:?}", e),
-            },
-            _ => unreachable!("host task expected event intra message"),
+        match command_return {
+            EventsData::CommandComplete(data) => Ok(T::try_from(&data)?),
+            e => unreachable!("invalid event matched for command: {:?}", e),
         }
     }
 
@@ -908,24 +897,20 @@ where
         CP: CommandParameter<CP_SIZE> + 'static,
     {
         use events::EventsData;
-        use interface::IntraMessageType;
 
         let event_matcher = CommandEventMatcher::new_command_status(CP::COMMAND);
 
-        let intra_message = self.send_command(parameter, event_matcher).await?;
+        let command_return = self.send_command(parameter, event_matcher).await?;
 
-        match intra_message.ty {
-            IntraMessageType::Event(data) => match EventsData::try_from_packet(&data)? {
-                EventsData::CommandStatus(data) => {
-                    if error::Error::NoError == data.status {
-                        Ok(data.number_of_hci_command_packets.into())
-                    } else {
-                        Err(data.status.into())
-                    }
+        match command_return {
+            EventsData::CommandStatus(data) => {
+                if error::Error::NoError == data.status {
+                    Ok(data.number_of_hci_command_packets.into())
+                } else {
+                    Err(data.status.into())
                 }
-                e => unreachable!("invalid event matched for command: {:?}", e),
-            },
-            _ => unreachable!("host task expected event intra message"),
+            }
+            e => unreachable!("invalid event matched for command: {:?}", e),
         }
     }
 
@@ -959,7 +944,6 @@ where
     where
         E: Into<Option<events::Events>>,
     {
-        use events::EventsData;
         use interface::{IntraMessageType, Receiver};
 
         let event_opt = event.into();
@@ -972,19 +956,17 @@ where
                 .await
                 .ok_or(WaitForEventError::ReceiverClosed)?;
 
-            if let IntraMessageType::Event(data) = intra_message.ty {
-                let ed = EventsData::try_from_packet(&data)?;
-
+            if let IntraMessageType::Event(event_data) = intra_message.ty {
                 match event_opt {
                     Some(ref event) => {
-                        if ed.get_event_name() == *event {
-                            break Ok(ed);
+                        if event_data.get_event_name() == *event {
+                            break Ok(event_data);
                         }
                     }
-                    None => break Ok(ed),
+                    None => break Ok(event_data),
                 }
             } else {
-                break Err(WaitForEventError::UnexpectedIntraMessage(intra_message.kind()));
+                break Err(WaitForEventError::UnexpectedIntraMessage(intra_message.ty.kind()));
             }
         }
     }
@@ -1131,51 +1113,36 @@ impl FlowControlInfo for OnlyStatus {
     }
 }
 
-/// Trait for a connection async task
-///
-/// The purpose of this trait is to allow for connections to be made for send safe, local, and
-/// stack local implementations of the HCI.
-trait Connection {
-    type Buffer: core::ops::DerefMut<Target = [u8]>
-        + crate::TryExtend<u8>
-        + crate::TryFrontRemove<u8>
-        + crate::TryRemove<u8>
-        + Unpin;
-
-    type Reserve: BufferReserve<Buffer = Self::Buffer>;
-
-    type SendFutErr: core::fmt::Debug;
-
-    type Sender: interface::Sender<Error = Self::SendFutErr, Message = interface::IntraMessage<Self::Buffer>>;
-
-    type Receiver: interface::Receiver<Message = interface::IntraMessage<Self::Buffer>>;
-}
-
-struct AclConnection<C: Connection> {
+struct AclConnection<C: ChannelEnds> {
     max_mtu: usize,
     min_mtu: usize,
     mtu: core::cell::Cell<usize>,
+    channel_ends: C,
     sender: C::Sender,
-    receiver: C::Receiver,
-    buffer_reserve: C::Reserve,
 }
 
 impl<C> crate::l2cap::ConnectionChannel for AclConnection<C>
 where
-    C: Connection,
+    C: ChannelEnds,
 {
-    type Buffer = C::Buffer;
-    type SendFut<'a> = ConnectionChannelSender<'a, C::Sender, C::Reserve> where Self: 'a;
-    type SendFutErr = C::SendFutErr;
-    type RecvFut<'a> = AclReceiverMap<'a, C::Receiver> where Self: 'a;
+    type SendBuffer = C::ToBuffer;
+    type SendFut<'a> = ConnectionChannelSender<'a, C> where Self: 'a;
+    type SendFutErr = <C::Sender as interface::Sender>::Error;
+    type RecvBuffer = C::FromBuffer;
+    type RecvFut<'a> = AclReceiverMap<'a, C> where Self: 'a;
 
     fn send(&self, data: crate::l2cap::BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
         // todo: not sure if this will be necessary when the type of input data is `BasicInfoFrame<Self::Buffer<'_>>`
         let front_capacity = HciACLData::<()>::HEADER_SIZE;
 
-        let iter = SelfSendBufferMap {
-            sender: &self.sender,
-            iterator: self.buffer_reserve.as_take_iter(front_capacity),
+        let channel_ends = &self.channel_ends;
+
+        let sender = &self.sender;
+
+        let iter = SelfSendBufferIter {
+            front_capacity,
+            channel_ends,
+            sender,
         };
 
         ConnectionChannelSender {
@@ -1201,7 +1168,7 @@ where
 
     fn receive(&self) -> Self::RecvFut<'_> {
         AclReceiverMap {
-            receiver: &self.receiver,
+            receiver: self.channel_ends.get_receiver(),
             receive_future: None,
         }
     }
@@ -1211,39 +1178,38 @@ where
 ///
 /// This is a wrapper around a buffer and a sender. When it is created it is in buffer mode and can
 /// be de-referenced as a slice or extended,
-struct AclBufferSender<'a, S: interface::Sender> {
-    sender: &'a S,
-    message: S::Message,
+struct AclBufferBuilder<'a, C: ChannelEnds> {
+    sender: &'a C::Sender,
+    buffer: C::ToBuffer,
 }
 
-impl<'a, S, T> crate::TryExtend<u8> for AclBufferSender<'a, S>
+impl<'a, C> crate::TryExtend<u8> for AclBufferBuilder<'a, C>
 where
-    S: interface::Sender<Message = interface::IntraMessage<T>>,
-    T: crate::TryExtend<u8>,
+    C: ChannelEnds,
 {
-    type Error = AclBufferError<T>;
+    type Error = AclBufferError<C::ToBuffer>;
 
     fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
     where
         I: IntoIterator<Item = u8>,
     {
-        self.message
-            .get_mut_buffer()
-            .ok_or(AclBufferError::IncorrectIntraMessageType)?
-            .try_extend(iter)
-            .map_err(|e| AclBufferError::Buffer(e))
+        self.buffer.try_extend(iter).map_err(|e| AclBufferError::Buffer(e))
     }
 }
 
-impl<'a, S> core::future::IntoFuture for AclBufferSender<'a, S>
+impl<'a, C> core::future::IntoFuture for AclBufferBuilder<'a, C>
 where
-    S: interface::Sender,
+    C: ChannelEnds,
 {
-    type Output = <S::SendFuture<'a> as Future>::Output;
-    type IntoFuture = S::SendFuture<'a>;
+    type Output = <<C::Sender as interface::Sender>::SendFuture<'a> as Future>::Output;
+    type IntoFuture = <C::Sender as interface::Sender>::SendFuture<'a>;
 
     fn into_future(self) -> Self::IntoFuture {
-        self.sender.send(self.message)
+        use interface::Sender;
+
+        let message = interface::IntraMessageType::Acl(self.buffer).into();
+
+        self.sender.send(message)
     }
 }
 
@@ -1277,99 +1243,91 @@ where
     }
 }
 
-struct SelfSendBufferFutureMap<'a, S, F> {
-    sender: &'a S,
-    future: F,
+struct SelfSendBufferIter<'a, C: ChannelEnds> {
+    front_capacity: usize,
+    channel_ends: &'a C,
+    sender: &'a C::Sender,
 }
 
-impl<'a, F, S, T> Future for SelfSendBufferFutureMap<'a, S, F>
+impl<'a, C> Iterator for SelfSendBufferIter<'a, C>
 where
-    S: interface::Sender<Message = interface::IntraMessage<T>>,
-    F: Future<Output = T>,
-    T: 'a + crate::TryExtend<u8> + Unpin,
+    C: ChannelEnds,
 {
-    type Output = AclBufferSender<'a, S>;
+    type Item = SelfSendBufferFutureMap<'a, C>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let take_buffer = self.channel_ends.take_buffer(self.front_capacity);
+
+        let sender = self.sender;
+
+        Some(SelfSendBufferFutureMap { sender, take_buffer })
+    }
+}
+
+struct SelfSendBufferFutureMap<'a, C: ChannelEnds> {
+    sender: &'a C::Sender,
+    take_buffer: C::TakeBuffer,
+}
+
+impl<'a, C> Future for SelfSendBufferFutureMap<'a, C>
+where
+    C: ChannelEnds,
+{
+    type Output = AclBufferBuilder<'a, C>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
-        unsafe { Pin::new_unchecked(&mut this.future) }.poll(cx).map(|buffer| {
-            let message = interface::IntraMessage {
-                ty: interface::IntraMessageType::Acl(buffer),
-            };
+        unsafe { Pin::new_unchecked(&mut this.take_buffer) }
+            .poll(cx)
+            .map(|buffer| {
+                let ends = this.sender;
 
-            let sender = this.sender;
-
-            AclBufferSender { sender, message }
-        })
+                AclBufferBuilder { sender: ends, buffer }
+            })
     }
 }
 
-struct SelfSendBufferMap<'a, S, I> {
-    sender: &'a S,
-    iterator: I,
-}
-
-impl<'a, I, S, F, T> Iterator for SelfSendBufferMap<'a, S, I>
-where
-    S: interface::Sender<Message = interface::IntraMessage<T>>,
-    I: Iterator<Item = F>,
-    F: Future<Output = T>,
-    T: 'a,
-{
-    type Item = SelfSendBufferFutureMap<'a, S, F>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iterator.next().map(|future| SelfSendBufferFutureMap {
-            sender: self.sender,
-            future,
-        })
-    }
-}
-
-struct ConnectionChannelSender<'a, S: 'a + interface::Sender, B: BufferReserve> {
+struct ConnectionChannelSender<'a, C: ChannelEnds> {
     sliced_future: crate::l2cap::send_future::AsSlicedPacketFuture<
-        SelfSendBufferMap<'a, S, BufferReserveTakeIterator<'a, B>>,
+        SelfSendBufferIter<'a, C>,
         Vec<u8>,
-        SelfSendBufferFutureMap<'a, S, B::TakeBuffer>,
-        AclBufferSender<'a, S>,
-        S::SendFuture<'a>,
+        SelfSendBufferFutureMap<'a, C>,
+        AclBufferBuilder<'a, C>,
+        <C::Sender as interface::Sender>::SendFuture<'a>,
     >,
 }
 
-impl<'a, S, B, T> Future for ConnectionChannelSender<'a, S, B>
+impl<'a, C> Future for ConnectionChannelSender<'a, C>
 where
-    S: interface::Sender<Message = interface::IntraMessage<T>>,
-    B: BufferReserve<Buffer = T>,
-    T: 'a + crate::TryExtend<u8> + Unpin,
+    C: ChannelEnds,
 {
-    type Output = Result<(), S::Error>;
+    type Output = Result<(), <C::Sender as interface::Sender>::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         unsafe { self.map_unchecked_mut(|this| &mut this.sliced_future) }.poll(cx)
     }
 }
 
-pub struct AclReceiverMap<'a, R: interface::Receiver> {
-    receiver: &'a R,
-    receive_future: Option<R::ReceiveFuture<'a>>,
+pub struct AclReceiverMap<'a, C: ChannelEnds> {
+    receiver: &'a C::Receiver,
+    receive_future: Option<<C::Receiver as interface::Receiver>::ReceiveFuture<'a>>,
 }
 
-impl<'a, R, T> Future for AclReceiverMap<'a, R>
+impl<'a, C> Future for AclReceiverMap<'a, C>
 where
-    R: interface::Receiver<Message = interface::IntraMessage<T>>,
-    T: crate::TryExtend<u8>
-        + crate::TryFrontRemove<u8>
-        + crate::TryRemove<u8>
-        + core::ops::Deref<Target = [u8]>
-        + Unpin,
+    C: ChannelEnds,
 {
     type Output = Option<
-        Result<crate::l2cap::L2capFragment<T>, crate::l2cap::BasicFrameError<<T as crate::TryExtend<u8>>::Error>>,
+        Result<
+            crate::l2cap::L2capFragment<C::FromBuffer>,
+            crate::l2cap::BasicFrameError<<C::FromBuffer as crate::TryExtend<u8>>::Error>,
+        >,
     >;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         use crate::l2cap::BasicFrameError;
+        use interface::Receiver;
 
         let this = unsafe { self.get_unchecked_mut() };
 

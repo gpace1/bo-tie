@@ -165,12 +165,30 @@ impl<T> core::ops::Deref for Multiple<T> {
     }
 }
 
-impl<T> core::iter::IntoIterator for Multiple<T> {
+impl<T> IntoIterator for Multiple<T> {
     type Item = T;
-    type IntoIter = <BufferType<T> as core::iter::IntoIterator>::IntoIter;
+    type IntoIter = <BufferType<T> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.data.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Multiple<T> {
+    type Item = &'a T;
+    type IntoIter = <&'a BufferType<T> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        (&self.data).into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut Multiple<T> {
+    type Item = &'a mut T;
+    type IntoIter = <&'a mut BufferType<T> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        (&mut self.data).into_iter()
     }
 }
 

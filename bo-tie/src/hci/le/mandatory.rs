@@ -166,6 +166,17 @@ pub mod read_buffer_size {
         }
     }
 
+    /// Buffer size information
+    ///
+    /// This is the information about a specific buffer in the Controller. The field `len` is the
+    /// maximum size of a HCI packet's payload that can be stored in the buffer, and field `cnt` is
+    /// the number of HCI packets that can be stored within the buffer.
+    #[derive(Debug)]
+    pub struct BufferSize {
+        pub len: u16,
+        pub cnt: u8,
+    }
+
     /// Buffer Size (version 1)
     ///
     /// This type consists of the ACL packet data length and total number of ACL data
@@ -176,15 +187,13 @@ pub mod read_buffer_size {
     /// instead.
     #[derive(Debug)]
     pub struct BufferSizeV1 {
-        /// The maximum size of each ACL packet
-        pub packet_len: Option<u16>,
-        /// The maximum number of ACL packets that the controller can hold
-        pub packet_cnt: Option<u8>,
+        /// Information on the LE ACL buffer
+        pub acl: BufferSize,
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
 
-    impl TryFromCommandComplete for BufferSizeV1 {
+    impl TryFromCommandComplete for Option<BufferSizeV1> {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
             check_status!(cc.raw_data);
 
@@ -195,17 +204,32 @@ pub mod read_buffer_size {
 
             let raw_packet_cnt = *cc.raw_data.get(3).ok_or(CCParameterError::InvalidEventParameter)?;
 
-            let packet_len = (raw_packet_len != 0).then(|| raw_packet_len);
+            let len = match (raw_packet_len != 0).then(|| raw_packet_len) {
+                Some(packet_len) => packet_len,
+                None => return Ok(None),
+            };
 
-            let packet_cnt = (raw_packet_cnt != 0).then(|| raw_packet_cnt);
+            let cnt = match (raw_packet_cnt != 0).then(|| raw_packet_cnt) {
+                Some(packet_cnt) => packet_cnt,
+                None => {
+                    log::info!(
+                        "within the return parameters for the LE read buffer size (v1) \
+                        command, the packet count is unexpectedly zero as the packet length was \
+                        not zero"
+                    );
+
+                    return Ok(None);
+                }
+            };
+
+            let acl = BufferSize { len, cnt };
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
-            Ok(Self {
-                packet_len,
-                packet_cnt,
+            Ok(Some(BufferSizeV1 {
+                acl,
                 completed_packets_cnt,
-            })
+            }))
         }
     }
 
@@ -217,14 +241,10 @@ pub mod read_buffer_size {
 
     #[derive(Debug)]
     pub struct BufferSizeV2 {
-        /// The maximum size of each ACL packet
-        pub acl_packet_len: Option<u16>,
-        /// The maximum number of ACL packets that the controller can hold
-        pub acl_packet_cnt: Option<u8>,
-        /// The maximum size of each ISO packet
-        pub iso_packet_len: Option<u16>,
-        /// The maximum number of ISO packets that the controller can hold
-        pub iso_packet_cnt: Option<u8>,
+        /// Information on the LE ACL buffer
+        pub acl: Option<BufferSize>,
+        /// Information on the LE ISO buffer
+        pub iso: Option<BufferSize>,
         /// The number of HCI command packets completed by the controller
         completed_packets_cnt: usize,
     }
@@ -247,21 +267,45 @@ pub mod read_buffer_size {
 
             let raw_iso_packet_cnt = *cc.raw_data.get(5).ok_or(CCParameterError::InvalidEventParameter)?;
 
-            let acl_packet_len = (raw_acl_packet_len != 0).then(|| raw_acl_packet_len);
+            let acl = (raw_acl_packet_len != 0)
+                .then_some(raw_acl_packet_len)
+                .and_then(|len| {
+                    if raw_acl_packet_cnt != 0 {
+                        Some((len, raw_acl_packet_cnt))
+                    } else {
+                        log::info!(
+                            "within the return parameters for the LE read buffer size (v2) \
+                        command, the ACL packet count is unexpectedly zero as the ACL packet \
+                        length was not zero"
+                        );
 
-            let acl_packet_cnt = (raw_acl_packet_cnt != 0).then(|| raw_acl_packet_cnt);
+                        None
+                    }
+                })
+                .map(|(len, cnt)| BufferSize { len, cnt });
 
-            let iso_packet_len = (raw_iso_packet_len != 0).then(|| raw_iso_packet_len);
+            let iso = (raw_iso_packet_len != 0)
+                .then_some(raw_iso_packet_len)
+                .and_then(|len| {
+                    if raw_iso_packet_cnt != 0 {
+                        Some((len, raw_iso_packet_cnt))
+                    } else {
+                        log::info!(
+                            "within the return parameters for the LE read buffer size (v2) \
+                        command, the ISO packet count is unexpectedly zero as the ISO packet \
+                        length was not zero"
+                        );
 
-            let iso_packet_cnt = (raw_iso_packet_cnt != 0).then(|| raw_iso_packet_cnt);
+                        None
+                    }
+                })
+                .map(|(len, cnt)| BufferSize { len, cnt });
 
             let completed_packets_cnt = cc.number_of_hci_command_packets.into();
 
             Ok(Self {
-                acl_packet_len,
-                acl_packet_cnt,
-                iso_packet_len,
-                iso_packet_cnt,
+                acl,
+                iso,
                 completed_packets_cnt,
             })
         }
@@ -276,13 +320,21 @@ pub mod read_buffer_size {
     /// Request information on the LE data buffers (version 1)
     ///
     /// This only returns the buffer information for LE ACL data packets.
-    pub async fn send_v1<H: HostInterface>(host: &mut Host<H>) -> Result<BufferSizeV1, CommandError<H>> {
+    ///
+    /// `send_v1` will return `Ok(None)` when there is no dedicated LE buffer. The information
+    /// parameters command *read buffer size* ([`bo_tie::hci::info_params::read_buffer_size`]) should
+    /// be used instead to get the buffer information for LE.
+    pub async fn send_v1<H: HostInterface>(host: &mut Host<H>) -> Result<Option<BufferSizeV1>, CommandError<H>> {
         host.send_command_expect_complete(ParameterV1).await
     }
 
     /// Request information on the LE data buffers (version 2)
     ///
     /// This returns the buffer information for the LE ACL and LE ISO data packets.
+    ///
+    /// `send_v1` will return `Ok(None)` when there is no dedicated LE buffer. The information
+    /// parameters command *read buffer size* ([`bo_tie::hci::info_params::read_buffer_size`]) should
+    /// be used instead to get the buffer information for LE.
     pub async fn send_v2<H: HostInterface>(host: &mut Host<H>) -> Result<BufferSizeV2, CommandError<H>> {
         host.send_command_expect_complete(ParameterV2).await
     }

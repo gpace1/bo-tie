@@ -534,10 +534,11 @@ impl<T> L2capFragment<T> {
 /// [`HostInterface`](crate::hci::HostInterface), but it can also be implemented directly for
 /// systems that do not support a host controller interface.
 pub trait ConnectionChannel {
-    /// The buffer type
+    /// The buffer type for sent L2CAP fragments
     ///
-    /// This buffer is for containing data of L2CAP and protocols that use L2CAP.
-    type Buffer: core::ops::Deref<Target = [u8]> + crate::TryExtend<u8>;
+    /// This buffer is for containing the raw data of a L2CAP packet sent by the future returned
+    /// from the method `send`.
+    type SendBuffer: core::ops::Deref<Target = [u8]> + crate::TryExtend<u8>;
 
     /// Sending future
     ///
@@ -551,12 +552,18 @@ pub trait ConnectionChannel {
     /// This is the error type for the output of the future [`SendFut`](ConnectionChannel::SendFut)
     type SendFutErr: core::fmt::Debug;
 
+    /// The buffer type for received L2CAP fragments
+    ///
+    /// This buffer is for containing the raw data of a L2CAP packet received by the future returned
+    /// from the method `recv`.
+    type RecvBuffer: core::ops::Deref<Target = [u8]> + crate::TryExtend<u8>;
+
     /// Receiving future
     ///
     /// This is the future returned by [`receive`](ConnectionChannel::receive).
     type RecvFut<'a>: Future<
         Output = Option<
-            Result<L2capFragment<Self::Buffer>, BasicFrameError<<Self::Buffer as crate::TryExtend<u8>>::Error>>,
+            Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as crate::TryExtend<u8>>::Error>>,
         >,
     >
     where
@@ -833,7 +840,7 @@ where
 impl<C> Future for ConChanFutureRx<'_, C>
 where
     C: ?Sized + ConnectionChannel,
-    C::Buffer: core::ops::Deref<Target = [u8]> + crate::TryExtend<u8>,
+    C::SendBuffer: core::ops::Deref<Target = [u8]> + crate::TryExtend<u8>,
 {
     type Output = Result<Vec<BasicInfoFrame<Vec<u8>>>, BasicFrameError<core::convert::Infallible>>;
 

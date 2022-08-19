@@ -7,7 +7,6 @@
 //! A `UartInterface` is a wrapper around an `Interface` to integrate processing of this packet
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
-
 use crate::hci::interface::{BufferedUpSend, ChannelReserve, HciPacketType, Interface, SendError};
 use core::fmt::{Debug, Display, Formatter};
 
@@ -151,9 +150,10 @@ where
     /// called  and this `UartBufferedSendError` does not contain a complete HCI packet.
     pub async fn up_send(self) -> Result<(), UartBufferedSendError<R>> {
         match self.state {
-            UartSendState::BufferedSender(bs) => {
-                bs.up_send().await.map_err(|e| UartBufferedSendError::BufferedSendError(e))
-            }
+            UartSendState::BufferedSender(bs) => bs
+                .up_send()
+                .await
+                .map_err(|e| UartBufferedSendError::BufferedSendError(e)),
             _ => Err(UartBufferedSendError::NothingBuffered),
         }
     }
@@ -177,6 +177,7 @@ where
 
 impl<R: ChannelReserve> Display for UartBufferedSendError<R>
 where
+    R::Error: Display,
     R::SenderError: Display,
     R::TryExtendError: Display,
 {
