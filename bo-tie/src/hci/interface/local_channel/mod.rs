@@ -126,7 +126,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = &mut self.get_mut().0;
 
-        if !this.has_senders() {
+        if this.is_empty() && !this.has_senders() {
             Poll::Ready(None)
         } else if !this.is_empty() {
             let ret = this.pop_next();
