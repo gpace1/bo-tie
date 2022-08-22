@@ -762,7 +762,7 @@ where
 // note:
 // the field order matters here as the `unsafe_buffer`
 // field must drop before the field `reservation`.
-struct StackFromBuffer<'z, B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> {
+pub struct StackFromBuffer<'z, B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> {
     unsafe_buffer: UnsafeBufferReservation<B, CHANNEL_SIZE>,
     channel_reservation: Reservation<
         'z,
@@ -872,7 +872,7 @@ where
     }
 }
 
-struct UnsafeStackFromBuffer<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> {
+pub struct UnsafeStackFromBuffer<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> {
     unsafe_buffer: UnsafeBufferReservation<B, CHANNEL_SIZE>,
     unsafe_channel_reservation: UnsafeReservation<
         LocalStackChannel<

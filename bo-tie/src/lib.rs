@@ -472,7 +472,7 @@ where
 /// Try to remove items
 ///
 /// This trait is used to remove items from the end of the collection and return them.
-trait TryRemove<A> {
+pub trait TryRemove<A> {
     type Error;
     type RemoveIter<'a>: Iterator<Item = A>
     where
@@ -525,7 +525,7 @@ trait TryFrontExtend<A> {
 /// This is used for trying to removing items at the front of a collection. In order for a
 /// collection to implement this trait it must have a capacity at the front. Removing items from the
 /// front must also increase this capacity.
-trait TryFrontRemove<A> {
+pub trait TryFrontRemove<A> {
     type Error;
     type FrontRemoveIter<'a>: Iterator<Item = A>
     where
@@ -587,7 +587,7 @@ where
 }
 
 #[derive(Debug, Copy, Clone)]
-enum BufferError {
+pub enum BufferError {
     LengthOfBuffer,
     FrontReserveSize,
 }
