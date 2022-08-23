@@ -2,19 +2,14 @@
 default-members = [
     "bo-tie",
     "bo-tie-macros",
+    "bo-tie-host/*"
 ]
 
 members = [
     "bo-tie",
     "bo-tie-macros",
     "bo-tie-serde",
-
-    "base-crates/bo-tie-linux",
-
-    "examples/advertiser",
-    "examples/connect-slave",
-    "examples/connect-master",
-    "examples/bonding-master",
-    "examples/bonding-slave",
-    "examples/heart-rate-profile",
+    "bo-tie-host/*",
+    "examples/*",
+    "base-crates/*",
 ]
