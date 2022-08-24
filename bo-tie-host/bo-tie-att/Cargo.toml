@@ -7,10 +7,10 @@ edition = "2021"
 
 [dependencies]
 log = "0.4"
-bo-tie-host-common = { path = "../bo-tie-host-common" }
+bo-tie-host-util = { path = "../bo-tie-host-util" }
 
 [dev-dependencies]
 tinymt = "1"
 
 [features]
-uuid-crate = ["bo-tie-host-common/uuid-crate"]
+uuid-crate = ["bo-tie-host-util/uuid-crate"]
