@@ -1,13 +1,16 @@
 [package]
-name = "bo-tie-gatt"
+name = "bo-tie-att"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bo-tie-att = { path = "../bo-tie-att" }
 log = "0.4"
+bo-tie-host-common = { path = "../bo-tie-host-common" }
+
+[dev-dependencies]
+tinymt = "1"
 
 [features]
-uuid-crate = ["bo-tie-att/uuid-crate"]
+uuid-crate = ["bo-tie-host-common/uuid-crate"]

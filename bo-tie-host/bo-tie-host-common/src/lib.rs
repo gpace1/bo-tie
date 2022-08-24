@@ -4,6 +4,9 @@
 //! for the other host protocol crates within `bo-tie-host`. Generally things within this lib are
 //! re-exported by the crate using them.
 
+#![no_std]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 /// Universally Unique Identifier
 ///
 /// A UUID in Bluetooth has some differences from the UUID of
@@ -13,16 +16,16 @@
 /// and 32 bit. A shortened UUID can always be converted into a larger UUID or full sized UUID.
 ///
 /// ```
-/// # use bo_tie_host_common::UUID;
+/// # use bo_tie_host_common::Uuid;
 ///
-/// let uuid_16 = UUID::from(123u16);
+/// let uuid_16 = Uuid::from(123u16);
 ///
 /// assert!(uuid_16.can_be_16_bit());
 ///
 /// // The mapped region for shortened values does
 /// // not begin a zero, so `123u128` cannot be a
 /// // 16 bit sized UUID.
-/// let uuid_128 = UUID::from(123u128);
+/// let uuid_128 = Uuid::from(123u128);
 ///
 /// assert!(!uuid_128.can_be_16_bit());
 /// ```
@@ -31,49 +34,49 @@
 /// A UUID can be converted to a [uuid::Uuid](https://github.com/uuid-rs/uuid) if the feature
 /// `uuid-crate` is enabled.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct UUID {
+pub struct Uuid {
     base_uuid: u128,
 }
 
-impl UUID {
+impl Uuid {
     /// See Vol 3 part B sec 2.5.1 for where this value comes from.
     /// This can also be found as the Bluetooth Base UUID in the assigned numbers document.
     const BLUETOOTH_BASE_UUID: u128 = 0x0000000000001000800000805F9B34FB;
 
     pub const fn from_u32(v: u32) -> Self {
-        UUID {
+        Uuid {
             /// See Vol 3 part B sec 2.5.1 for this equation
             base_uuid: ((v as u128) << 96) | Self::BLUETOOTH_BASE_UUID,
         }
     }
 
     pub const fn from_u16(v: u16) -> Self {
-        UUID {
+        Uuid {
             /// See Vol 3 part B sec 2.5.1 for this equation
             base_uuid: ((v as u128) << 96) | Self::BLUETOOTH_BASE_UUID,
         }
     }
 
     pub const fn from_u128(v: u128) -> Self {
-        UUID { base_uuid: v }
+        Uuid { base_uuid: v }
     }
 
     /// Returns true if the UUID can be a 16 bit shortened UUID
     pub fn can_be_16_bit(&self) -> bool {
-        !((!0u16 as u128) << 96) & self.base_uuid == UUID::BLUETOOTH_BASE_UUID
+        !((!0u16 as u128) << 96) & self.base_uuid == Uuid::BLUETOOTH_BASE_UUID
     }
 
     /// Returns true if the UUID can be a 32 bit shortened UUID
     pub fn can_be_32_bit(&self) -> bool {
-        !(((!0u32) as u128) << 96) & self.base_uuid == UUID::BLUETOOTH_BASE_UUID
+        !(((!0u32) as u128) << 96) & self.base_uuid == Uuid::BLUETOOTH_BASE_UUID
     }
 
     /// Get the UUID version
     ///
     /// Returns the UUID version if the version field is valid, otherwise returns an error to
     /// indicate that the version field is
-    pub fn get_version(&self) -> Result<UUIDVersion, ()> {
-        UUIDVersion::try_from_uuid(self)
+    pub fn get_version(&self) -> Result<UuidVersion, ()> {
+        UuidVersion::try_from_uuid(self)
     }
 
     /// Display format for UUID
@@ -108,13 +111,13 @@ impl UUID {
     }
 }
 
-impl core::fmt::Debug for UUID {
+impl core::fmt::Debug for Uuid {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         core::fmt::LowerHex::fmt(self, f)
     }
 }
 
-impl core::fmt::LowerHex for UUID {
+impl core::fmt::LowerHex for Uuid {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         self.display_type(
             f,
@@ -125,7 +128,7 @@ impl core::fmt::LowerHex for UUID {
     }
 }
 
-impl core::fmt::UpperHex for UUID {
+impl core::fmt::UpperHex for Uuid {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         self.display_type(
             f,
@@ -136,60 +139,60 @@ impl core::fmt::UpperHex for UUID {
     }
 }
 
-impl From<u128> for UUID {
-    fn from(v: u128) -> UUID {
+impl From<u128> for Uuid {
+    fn from(v: u128) -> Uuid {
         Self::from_u128(v)
     }
 }
 
-impl From<u32> for UUID {
-    fn from(v: u32) -> UUID {
+impl From<u32> for Uuid {
+    fn from(v: u32) -> Uuid {
         Self::from_u32(v)
     }
 }
 
-impl From<u16> for UUID {
-    fn from(v: u16) -> UUID {
+impl From<u16> for Uuid {
+    fn from(v: u16) -> Uuid {
         Self::from_u16(v)
     }
 }
 
 #[cfg(feature = "uuid-crate")]
-impl From<uuid::Uuid> for UUID {
-    fn from(uuid: uuid::Uuid) -> UUID {
+impl From<uuid::Uuid> for Uuid {
+    fn from(uuid: uuid::Uuid) -> Uuid {
         <u128>::from_be_bytes(uuid.as_bytes().clone()).into()
     }
 }
 
 #[cfg(feature = "uuid-crate")]
-impl From<UUID> for uuid::Uuid {
-    fn from(uuid: UUID) -> uuid::Uuid {
+impl From<Uuid> for uuid::Uuid {
+    fn from(uuid: Uuid) -> uuid::Uuid {
         uuid::Uuid::from_bytes(uuid.base_uuid.to_be_bytes())
     }
 }
 
 /// Create a UUID from a *little endian* ordered array
-impl From<[u8; 16]> for UUID {
-    fn from(v: [u8; 16]) -> UUID {
+impl From<[u8; 16]> for Uuid {
+    fn from(v: [u8; 16]) -> Uuid {
         Self::from_u128(<u128>::from_le_bytes(v))
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum UUIDFormatError<'a> {
+pub enum UuidFormatError<'a> {
     IncorrectFieldLength(&'a str),
     IncorrectLength,
     IncorrectDigit(&'a str, &'a str),
 }
 
-impl<'a> core::fmt::Display for UUIDFormatError<'a> {
+impl<'a> core::fmt::Display for UuidFormatError<'a> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
         match *self {
-            UUIDFormatError::IncorrectFieldLength(field) => {
+            UuidFormatError::IncorrectFieldLength(field) => {
                 write!(f, "Field with '{}' has an incorrect number of characters", field)
             }
-            UUIDFormatError::IncorrectLength => write!(f, "Incorrect Length"),
-            UUIDFormatError::IncorrectDigit(digits, field) => {
+            UuidFormatError::IncorrectLength => write!(f, "Incorrect Length"),
+            UuidFormatError::IncorrectDigit(digits, field) => {
                 write!(f, "Digits '{}' in field '{}' are not hexadecimal", digits, field)
             }
         }
@@ -201,8 +204,8 @@ impl<'a> core::fmt::Display for UUIDFormatError<'a> {
 /// The format is a 16 octet UUID in the form of \[8\]-\[4\]-\[4\]-\[4\]-\[12\] where each number represents
 /// the number of characters for the field. An example UUID would be
 /// '68d82662-0305-4e6f-a679-6be1475f5e04'
-impl<'a> TryFrom<&'a str> for UUID {
-    type Error = UUIDFormatError<'a>;
+impl<'a> TryFrom<&'a str> for Uuid {
+    type Error = UuidFormatError<'a>;
 
     fn try_from(v: &'a str) -> Result<Self, Self::Error> {
         let mut fields = v.split("-");
@@ -212,7 +215,7 @@ impl<'a> TryFrom<&'a str> for UUID {
 
         macro_rules! parse_uuid_field {
             ( $bytes:expr) => {{
-                let field = fields.next().ok_or(UUIDFormatError::IncorrectLength)?;
+                let field = fields.next().ok_or(UuidFormatError::IncorrectLength)?;
                 let mut bytes = $bytes.iter_mut();
 
                 let mut cnt = 0;
@@ -220,8 +223,8 @@ impl<'a> TryFrom<&'a str> for UUID {
                 while let Some(hex_str) = field.get((cnt * 2)..(cnt * 2 + 2)) {
                     cnt += 1;
 
-                    *bytes.next().ok_or(UUIDFormatError::IncorrectFieldLength(field))? =
-                        <u8>::from_str_radix(hex_str, 16).or(Err(UUIDFormatError::IncorrectDigit(hex_str, field)))?;
+                    *bytes.next().ok_or(UuidFormatError::IncorrectFieldLength(field))? =
+                        <u8>::from_str_radix(hex_str, 16).or(Err(UuidFormatError::IncorrectDigit(hex_str, field)))?;
                 }
 
                 Ok(())
@@ -235,24 +238,24 @@ impl<'a> TryFrom<&'a str> for UUID {
         parse_uuid_field!(bytes_be[8..10])?;
         parse_uuid_field!(bytes_be[10..])?;
 
-        Ok(UUID {
+        Ok(Uuid {
             base_uuid: <u128>::from_be_bytes(bytes_be),
         })
     }
 }
 
-impl From<UUID> for u128 {
-    fn from(uuid: UUID) -> u128 {
+impl From<Uuid> for u128 {
+    fn from(uuid: Uuid) -> u128 {
         uuid.base_uuid
     }
 }
 
-impl TryFrom<UUID> for u32 {
+impl TryFrom<Uuid> for u32 {
     type Error = ();
 
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is
     /// pre-allocated (a.k.a. assigned number) from the Bluetooth SIG.
-    fn try_from(uuid: UUID) -> Result<u32, ()> {
+    fn try_from(uuid: Uuid) -> Result<u32, ()> {
         if uuid.can_be_32_bit() {
             Ok((uuid.base_uuid >> 96) as u32)
         } else {
@@ -261,12 +264,12 @@ impl TryFrom<UUID> for u32 {
     }
 }
 
-impl TryFrom<UUID> for u16 {
+impl TryFrom<Uuid> for u16 {
     type Error = ();
 
     /// Try to convert a UUID into its 32 bit shortened form. This doesn't check that the value is
     /// pre-allocated (a.k.a. assigned number) from the Bluetooth SIG.
-    fn try_from(uuid: UUID) -> Result<u16, ()> {
+    fn try_from(uuid: Uuid) -> Result<u16, ()> {
         if uuid.can_be_16_bit() {
             Ok((uuid.base_uuid >> 96) as u16)
         } else {
@@ -280,32 +283,32 @@ impl TryFrom<UUID> for u16 {
 /// There are 4 UUID versions.
 /// *
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UUIDVersion {
+pub enum UuidVersion {
     Time,
     NameMDA5,
     RandomNumber,
     NameSHA1,
 }
 
-impl UUIDVersion {
-    fn try_from_uuid(uuid: &UUID) -> Result<Self, ()> {
+impl UuidVersion {
+    fn try_from_uuid(uuid: &Uuid) -> Result<Self, ()> {
         match (uuid.base_uuid >> 76) & 0xF {
-            1 => Ok(UUIDVersion::Time),
-            3 => Ok(UUIDVersion::NameMDA5),
-            4 => Ok(UUIDVersion::RandomNumber),
-            5 => Ok(UUIDVersion::NameSHA1),
+            1 => Ok(UuidVersion::Time),
+            3 => Ok(UuidVersion::NameMDA5),
+            4 => Ok(UuidVersion::RandomNumber),
+            5 => Ok(UuidVersion::NameSHA1),
             _ => Err(()),
         }
     }
 }
 
-impl core::fmt::Display for UUIDVersion {
+impl core::fmt::Display for UuidVersion {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match *self {
-            UUIDVersion::Time => write!(f, "Time-based version"),
-            UUIDVersion::NameMDA5 => write!(f, "Name-based (with MD5 hash) version"),
-            UUIDVersion::RandomNumber => write!(f, "Random-number-based version"),
-            UUIDVersion::NameSHA1 => write!(f, "Name-based (with SHA-1 hash) version"),
+            UuidVersion::Time => write!(f, "Time-based version"),
+            UuidVersion::NameMDA5 => write!(f, "Name-based (with MD5 hash) version"),
+            UuidVersion::RandomNumber => write!(f, "Random-number-based version"),
+            UuidVersion::NameSHA1 => write!(f, "Name-based (with SHA-1 hash) version"),
         }
     }
 }
@@ -322,11 +325,11 @@ mod tests {
         // expected full 128 bit form of uuid_val
         let uuid_128_val: u128 = 0x0000123400001000800000805F9B34FB;
 
-        let uuid = UUID::from_u16(uuid_val);
+        let uuid = Uuid::from_u16(uuid_val);
 
-        let uuid_128 = UUID::from_u128(uuid_128_val);
+        let uuid_128 = Uuid::from_u128(uuid_128_val);
 
-        let uuid_2 = UUID::from_u16(0xabcd);
+        let uuid_2 = Uuid::from_u16(0xabcd);
 
         assert!(uuid.can_be_16_bit());
 
@@ -359,11 +362,11 @@ mod tests {
         // expected full 128 bit form of uuid_val
         let uuid_128_val: u128 = 0x1234567800001000800000805F9B34FB;
 
-        let uuid = UUID::from_u32(uuid_val);
+        let uuid = Uuid::from_u32(uuid_val);
 
-        let uuid_128 = UUID::from_u128(uuid_128_val);
+        let uuid_128 = Uuid::from_u128(uuid_128_val);
 
-        let uuid_2 = UUID::from_u32(0xabcdef);
+        let uuid_2 = Uuid::from_u32(0xabcdef);
 
         assert!(!uuid.can_be_16_bit());
 
@@ -392,9 +395,9 @@ mod tests {
     fn uuid_128_test() {
         let uuid_val = 0x1234567890abcdef;
 
-        let uuid = UUID::from_u128(uuid_val);
+        let uuid = Uuid::from_u128(uuid_val);
 
-        assert_eq!(uuid, UUID::from(uuid_val));
+        assert_eq!(uuid, Uuid::from(uuid_val));
 
         assert!(!uuid.can_be_16_bit());
 

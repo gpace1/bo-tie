@@ -14,8 +14,9 @@
 
 extern crate alloc;
 
-use crate::{att, l2cap, UUID};
+use crate::l2cap;
 use alloc::vec::Vec;
+use att::UUID;
 pub mod characteristic;
 
 struct ServiceDefinition;
