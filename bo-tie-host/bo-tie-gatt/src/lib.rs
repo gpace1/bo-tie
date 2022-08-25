@@ -14,10 +14,13 @@
 
 extern crate alloc;
 
-use crate::l2cap;
-use alloc::vec::Vec;
-use att::UUID;
 pub mod characteristic;
+
+use alloc::vec::Vec;
+
+pub use bo_tie_att as att;
+pub use bo_tie_host_util::Uuid;
+pub use bo_tie_l2cap as l2cap;
 
 struct ServiceDefinition;
 
@@ -26,10 +29,10 @@ impl ServiceDefinition {
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 
     /// The primary service UUID
-    pub const PRIMARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2800);
+    pub const PRIMARY_SERVICE_TYPE: Uuid = Uuid::from_u16(0x2800);
 
     /// The secondary service UUID
-    pub const SECONDARY_SERVICE_TYPE: UUID = UUID::from_u16(0x2801);
+    pub const SECONDARY_SERVICE_TYPE: Uuid = Uuid::from_u16(0x2801);
 }
 
 #[derive(PartialEq)]
@@ -87,7 +90,7 @@ impl att::TransferFormatInto for ServiceInclude {
 }
 
 impl ServiceInclude {
-    const TYPE: UUID = UUID::from_u16(0x2802);
+    const TYPE: Uuid = Uuid::from_u16(0x2802);
 
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
@@ -111,7 +114,7 @@ impl ServiceInclude {
 /// enforce all include definition to come after the service definition but before any other
 /// characteristics.
 pub struct ServiceBuilder<'a> {
-    service_uuid: UUID,
+    service_uuid: Uuid,
     is_primary: bool,
     server_builder: &'a mut ServerBuilder,
     default_permissions: Option<&'a [att::AttributePermissions]>,
@@ -138,7 +141,7 @@ macro_rules! make_service {
 }
 
 impl<'a> ServiceBuilder<'a> {
-    fn new(server_builder: &'a mut ServerBuilder, service_uuid: UUID, is_primary: bool) -> Self {
+    fn new(server_builder: &'a mut ServerBuilder, service_uuid: Uuid, is_primary: bool) -> Self {
         ServiceBuilder {
             service_uuid,
             is_primary,
@@ -357,7 +360,7 @@ impl<'a> Service<'a> {
         server_attributes: &'a crate::att::server::ServerAttributes,
         service_handle: u16,
         end_group_handle: u16,
-        service_uuid: UUID,
+        service_uuid: Uuid,
     ) -> Self {
         let group_data = ServiceGroupData {
             service_handle,
@@ -379,7 +382,7 @@ impl<'a> Service<'a> {
     /// Get the service type
     ///
     /// This returns the UUID of the Service.
-    pub fn get_uuid(&self) -> crate::UUID {
+    pub fn get_uuid(&self) -> crate::Uuid {
         self.group_data.service_uuid
     }
 
@@ -411,7 +414,7 @@ struct ServiceGroupData {
     /// The handle of the last attribute in the service.
     end_group_handle: u16,
     /// The UUID of the service.
-    service_uuid: UUID,
+    service_uuid: Uuid,
 }
 
 pub struct GapServiceBuilder<'a> {
@@ -424,13 +427,13 @@ pub struct GapServiceBuilder<'a> {
 
 impl<'a> GapServiceBuilder<'a> {
     /// Service UUID
-    const GAP_SERVICE_TYPE: UUID = UUID::from_u16(0x1800);
+    const GAP_SERVICE_TYPE: Uuid = Uuid::from_u16(0x1800);
 
     /// Device Name Characteristic UUID
-    const DEVICE_NAME_TYPE: UUID = UUID::from_u16(0x2a00);
+    const DEVICE_NAME_TYPE: Uuid = Uuid::from_u16(0x2a00);
 
     /// Device Appearance Characteristic UUID
-    const DEVICE_APPEARANCE_TYPE: UUID = UUID::from_u16(0x2a01);
+    const DEVICE_APPEARANCE_TYPE: Uuid = Uuid::from_u16(0x2a01);
 
     /// Default attribute permissions
     const DEFAULT_ATTRIBUTE_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
@@ -533,8 +536,8 @@ impl Default for GapServiceBuilder<'_> {
 /// # use std::convert::Infallible;
 /// # use std::task::Waker;
 /// # use std::future::Future;
-/// # const MY_SERVICE_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0);
-/// # const MY_CHARACTERISTIC_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0);
+/// # const MY_SERVICE_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0);
+/// # const MY_CHARACTERISTIC_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0);
 /// # struct CC;
 /// # impl bo_tie::l2cap::ConnectionChannel for CC {
 /// #     type Buffer = Vec<u8>;
@@ -583,7 +586,7 @@ impl ServerBuilder {
     }
 
     /// Construct a new service
-    pub fn new_service(&mut self, service_uuid: UUID, is_primary: bool) -> ServiceBuilder<'_> {
+    pub fn new_service(&mut self, service_uuid: Uuid, is_primary: bool) -> ServiceBuilder<'_> {
         ServiceBuilder::new(self, service_uuid, is_primary)
     }
 
@@ -685,7 +688,7 @@ where
                     Some(Ok(first_service)) => {
                         // pdu header size is 2 bytes
                         let payload_size = self.server.get_mtu() - 2;
-                        let is_16_bit = first_service.service_uuid.is_16_bit();
+                        let can_be_16_bit = first_service.service_uuid.can_be_16_bit();
 
                         let build_response_iter =
                             service_iter.take_while(|rslt| rslt.is_ok()).map(|rslt| rslt.unwrap());
@@ -695,9 +698,9 @@ where
                         //
                         // Each collection is made to take while the *current* iteration does not
                         // overrun the maximum payload size.
-                        let response = if is_16_bit {
+                        let response = if can_be_16_bit {
                             build_response_iter
-                                .take_while(|s| s.service_uuid.is_16_bit())
+                                .take_while(|s| s.service_uuid.can_be_16_bit())
                                 .enumerate()
                                 .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 2))
                                 .by_ref()
@@ -804,7 +807,7 @@ mod tests {
     use super::*;
     use crate::att::server::NoQueuedWrites;
     use crate::l2cap::{ConnectionChannel, L2capFragment, MinimumMtu};
-    use crate::UUID;
+    use crate::Uuid;
     use alloc::boxed::Box;
     use att::TransferFormatInto;
     use std::{
@@ -866,12 +869,12 @@ mod tests {
         let mut server_builder = ServerBuilder::new_with_gap(gap_service);
 
         let test_service_1 = server_builder
-            .new_service_constructor(UUID::from_u16(0x1234), false)
+            .new_service_constructor(Uuid::from_u16(0x1234), false)
             .set_att_permissions(test_att_permissions)
             .add_characteristics()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
-                UUID::from(0x1234u16),
+                Uuid::from(0x1234u16),
                 Box::new(0usize),
                 None,
             )
@@ -883,7 +886,7 @@ mod tests {
             .finish_service();
 
         let _test_service_2 = server_builder
-            .new_service_constructor(UUID::from_u16(0x3456), true)
+            .new_service_constructor(Uuid::from_u16(0x3456), true)
             .set_att_permissions(test_att_permissions)
             .into_includes_adder()
             .include_service(&test_service_1, None)
@@ -941,15 +944,15 @@ mod tests {
 
         let mut server_builder = ServerBuilder::new();
 
-        let first_test_uuid = UUID::from(0x1000u16);
-        let second_test_uuid = UUID::from(0x1001u128);
+        let first_test_uuid = Uuid::from(0x1000u16);
+        let second_test_uuid = Uuid::from(0x1001u128);
 
         server_builder
             .new_service_constructor(first_test_uuid, true)
             .add_characteristics()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
-                UUID::from(0x2000u16),
+                Uuid::from(0x2000u16),
                 Box::new(0usize),
                 None,
             )
@@ -961,7 +964,7 @@ mod tests {
             .add_characteristics()
             .build_characteristic(
                 vec![characteristic::Properties::Read],
-                UUID::from(0x2001u16),
+                Uuid::from(0x2001u16),
                 Box::new(0usize),
                 None,
             )

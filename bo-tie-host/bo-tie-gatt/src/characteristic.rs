@@ -1,4 +1,4 @@
-use crate::{att, UUID};
+use crate::{att, Uuid};
 use alloc::{format, string::String, vec::Vec};
 
 /// Characteristic Properties
@@ -34,7 +34,7 @@ impl Properties {
         properties.iter().fold(0u8, |u, p| u | p.to_val())
     }
 
-    fn from_bit_field(field: u8) -> Vec<Self> {
+    fn from_bit_field(field: u8) -> VecWrap<Self> {
         let from_raw = |raw| match raw {
             0x01 => Properties::Broadcast,
             0x02 => Properties::Read,
@@ -53,11 +53,32 @@ impl Properties {
             vec.push(from_raw(field & (1 << shift)))
         }
 
-        vec
+        VecWrap(vec)
     }
 }
 
-impl att::TransferFormatTryFrom for Vec<Properties> {
+/// A wrapper around Vec
+///
+/// This is used for implementing [`TransferFormatTryFrom`](crate::att::TransferFormatTryFrom) and
+/// [`TransferFormatInto`](crate::att::TransferFormatInto).
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
+struct VecWrap<T>(Vec<T>);
+
+impl<T> core::ops::Deref for VecWrap<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> core::ops::DerefMut for VecWrap<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl att::TransferFormatTryFrom for VecWrap<Properties> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 1 {
             Ok(Properties::from_bit_field(raw[0]))
@@ -71,7 +92,7 @@ impl att::TransferFormatTryFrom for Vec<Properties> {
     }
 }
 
-impl att::TransferFormatInto for Vec<Properties> {
+impl att::TransferFormatInto for VecWrap<Properties> {
     fn len_of_into(&self) -> usize {
         1
     }
@@ -83,9 +104,9 @@ impl att::TransferFormatInto for Vec<Properties> {
 
 #[derive(PartialEq)]
 struct Declaration {
-    properties: Vec<Properties>,
+    properties: VecWrap<Properties>,
     value_handle: u16,
-    uuid: UUID,
+    uuid: Uuid,
 }
 
 impl att::TransferFormatTryFrom for Declaration {
@@ -123,14 +144,14 @@ impl att::TransferFormatInto for Declaration {
 }
 
 impl Declaration {
-    const TYPE: UUID = UUID::from_u16(0x2803);
+    const TYPE: Uuid = Uuid::from_u16(0x2803);
 
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 struct ValueDeclaration<'a, V> {
     /// The attribute type
-    att_type: UUID,
+    att_type: Uuid,
     /// The attribute value
     value: V,
     /// The attribute permissions
@@ -151,12 +172,12 @@ impl ExtendedProperties {
     const BIT_FIELD_CNT: usize = 2;
 }
 
-impl att::TransferFormatTryFrom for Vec<ExtendedProperties> {
+impl att::TransferFormatTryFrom for VecWrap<ExtendedProperties> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             let flags = <u16>::from_le_bytes([raw[0], raw[1]]);
 
-            (0..ExtendedProperties::BIT_FIELD_CNT)
+            let v = (0..ExtendedProperties::BIT_FIELD_CNT)
                 .map(|shift| flags & (1 << shift))
                 .filter(|flag| flag != &0)
                 .try_fold(Vec::new(), |mut v, flag| {
@@ -171,7 +192,9 @@ impl att::TransferFormatTryFrom for Vec<ExtendedProperties> {
                         }
                     });
                     Ok(v)
-                })
+                })?;
+
+            Ok(VecWrap(v))
         } else {
             Err(att::TransferFormatError::bad_size(
                 stringify!(ExtendedProperties),
@@ -182,7 +205,7 @@ impl att::TransferFormatTryFrom for Vec<ExtendedProperties> {
     }
 }
 
-impl att::TransferFormatInto for Vec<ExtendedProperties> {
+impl att::TransferFormatInto for VecWrap<ExtendedProperties> {
     fn len_of_into(&self) -> usize {
         2
     }
@@ -199,7 +222,7 @@ impl att::TransferFormatInto for Vec<ExtendedProperties> {
 }
 
 impl ExtendedProperties {
-    const TYPE: UUID = UUID::from_u16(0x2900);
+    const TYPE: Uuid = Uuid::from_u16(0x2900);
 
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
@@ -210,7 +233,7 @@ pub struct UserDescription<'a> {
 }
 
 impl<'a> UserDescription<'a> {
-    const TYPE: UUID = UUID::from_u16(0x2901);
+    const TYPE: Uuid = Uuid::from_u16(0x2901);
 
     pub fn new<D, P>(description: D, permissions: P) -> Self
     where
@@ -244,18 +267,20 @@ impl ClientConfiguration {
     /// Convert from native-endian bits
     ///
     /// Bits that are specification defined as reserved are ignored
-    fn from_bits(bits: u16) -> Vec<ClientConfiguration> {
-        (0..2)
+    fn from_bits(bits: u16) -> VecWrap<ClientConfiguration> {
+        let v = (0..2)
             .filter_map(|bit| match bits & 1 << bit {
                 0x1 => Some(ClientConfiguration::Notification),
                 0x2 => Some(ClientConfiguration::Indication),
                 _ => None,
             })
-            .collect()
+            .collect();
+
+        VecWrap(v)
     }
 }
 
-impl att::TransferFormatInto for Vec<ClientConfiguration> {
+impl att::TransferFormatInto for VecWrap<ClientConfiguration> {
     fn len_of_into(&self) -> usize {
         2
     }
@@ -265,7 +290,7 @@ impl att::TransferFormatInto for Vec<ClientConfiguration> {
     }
 }
 
-impl att::TransferFormatTryFrom for Vec<ClientConfiguration> {
+impl att::TransferFormatTryFrom for VecWrap<ClientConfiguration> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             Ok(ClientConfiguration::from_bits(<u16>::from_le_bytes([raw[0], raw[1]])))
@@ -295,7 +320,7 @@ impl att::TransferFormatInto for ClientConfiguration {
 }
 
 impl ClientConfiguration {
-    const TYPE: UUID = UUID::from_u16(2902);
+    const TYPE: Uuid = Uuid::from_u16(2902);
 
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
@@ -318,17 +343,19 @@ impl ServerConfiguration {
     /// Convert from native-endian bits
     ///
     /// Bits that are specification defined as reserved are ignored
-    fn from_bits(bits: u16) -> Vec<ServerConfiguration> {
-        (0..2)
+    fn from_bits(bits: u16) -> VecWrap<ServerConfiguration> {
+        let v = (0..2)
             .filter_map(|bit| match bits & 1 << bit {
                 0x1 => Some(ServerConfiguration::Broadcast),
                 _ => None,
             })
-            .collect()
+            .collect();
+
+        VecWrap(v)
     }
 }
 
-impl att::TransferFormatInto for Vec<ServerConfiguration> {
+impl att::TransferFormatInto for VecWrap<ServerConfiguration> {
     fn len_of_into(&self) -> usize {
         2
     }
@@ -338,7 +365,7 @@ impl att::TransferFormatInto for Vec<ServerConfiguration> {
     }
 }
 
-impl att::TransferFormatTryFrom for Vec<ServerConfiguration> {
+impl att::TransferFormatTryFrom for VecWrap<ServerConfiguration> {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         if raw.len() == 2 {
             Ok(ServerConfiguration::from_bits(<u16>::from_le_bytes([raw[0], raw[1]])))
@@ -367,23 +394,23 @@ impl att::TransferFormatInto for ServerConfiguration {
 }
 
 impl ServerConfiguration {
-    const TYPE: UUID = UUID::from_u16(2903);
+    const TYPE: Uuid = Uuid::from_u16(2903);
 
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
 pub struct CharacteristicBuilder<'a, 'c, U, C, V> {
     characteristic_adder: super::CharacteristicAdder<'a>,
-    properties: Vec<Properties>,
+    properties: VecWrap<Properties>,
     uuid: Option<U>,
     value: Option<C>,
     value_permissions: &'c [att::AttributePermissions],
-    ext_prop: Option<Vec<ExtendedProperties>>,
+    ext_prop: Option<VecWrap<ExtendedProperties>>,
     ext_prop_permissions: Option<&'c [att::AttributePermissions]>,
     user_desc: Option<UserDescription<'c>>,
-    client_cfg: Option<Vec<ClientConfiguration>>,
+    client_cfg: Option<VecWrap<ClientConfiguration>>,
     client_cfg_permissions: Option<&'c [att::AttributePermissions]>,
-    server_cfg: Option<Vec<ServerConfiguration>>,
+    server_cfg: Option<VecWrap<ServerConfiguration>>,
     server_cfg_permissions: Option<&'c [att::AttributePermissions]>,
     pd: core::marker::PhantomData<V>,
 }
@@ -392,7 +419,7 @@ impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V> {
     pub(super) fn new(characteristic_adder: super::CharacteristicAdder<'a>) -> Self {
         CharacteristicBuilder {
             characteristic_adder,
-            properties: Vec::new(),
+            properties: VecWrap(Vec::new()),
             uuid: None,
             value: None,
             value_permissions: &[],
@@ -410,7 +437,7 @@ impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V> {
 
 impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V>
 where
-    U: Into<UUID>,
+    U: Into<Uuid>,
     C: att::server::ServerAttributeValue<Value = V> + Sized + Send + 'static,
     V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
 {
@@ -438,7 +465,7 @@ where
 
     /// Set the properties of the characteristic
     pub fn set_properties(mut self, properties: Vec<Properties>) -> Self {
-        self.properties = properties;
+        self.properties = VecWrap(properties);
 
         self
     }
@@ -463,7 +490,7 @@ where
         E: Into<Option<Vec<ExtendedProperties>>>,
         P: Into<Option<&'c [att::AttributePermissions]>>,
     {
-        self.ext_prop = extended_properties.into();
+        self.ext_prop = extended_properties.into().map(|v| VecWrap(v));
         self.ext_prop_permissions = permissions.into();
         self
     }
@@ -485,7 +512,7 @@ where
         Cfg: Into<Option<Vec<ClientConfiguration>>>,
         P: Into<Option<&'c [att::AttributePermissions]>>,
     {
-        self.client_cfg = client_cfg.into();
+        self.client_cfg = client_cfg.into().map(|v| VecWrap(v));
         self.client_cfg_permissions = permissions.into();
         self
     }
@@ -497,7 +524,7 @@ where
         Cfg: Into<Option<Vec<ServerConfiguration>>>,
         P: Into<Option<&'c [att::AttributePermissions]>>,
     {
-        self.server_cfg = server_cfg.into();
+        self.server_cfg = server_cfg.into().map(|v| VecWrap(v));
         self.server_cfg_permissions = permissions.into();
         self
     }
@@ -627,7 +654,7 @@ macro_rules! find_descriptor {
 
 impl Characteristic<'_> {
     /// Get the UUID of the characteristic's value
-    pub fn get_uuid(&self) -> crate::UUID {
+    pub fn get_uuid(&self) -> Uuid {
         *self
             .server_attributes
             .get_info(self.get_value_handle())
