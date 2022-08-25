@@ -402,9 +402,8 @@ pub struct TransferFormatError {
 }
 
 impl TransferFormatError {
-    /// Create a `TransferFormatError` for when the processed bytes does not match the expected
-    /// number of bytes
-    pub(crate) fn bad_size<D1, D2>(name: &'static str, expected_len: D1, incorrect_len: D2) -> Self
+    /// Create a `TransferFormatError` for incorrect size
+    pub fn bad_size<D1, D2>(name: &'static str, expected_len: D1, incorrect_len: D2) -> Self
     where
         D1: core::fmt::Display,
         D2: core::fmt::Display,
@@ -418,7 +417,8 @@ impl TransferFormatError {
         }
     }
 
-    pub(crate) fn bad_min_size<D1, D2>(name: &'static str, min_size: D1, data_len: D2) -> Self
+    /// Create a `TransferFormatError` when the size is smaller than the minimum
+    pub fn bad_min_size<D1, D2>(name: &'static str, min_size: D1, data_len: D2) -> Self
     where
         D1: core::fmt::Display,
         D2: core::fmt::Display,
@@ -433,9 +433,8 @@ impl TransferFormatError {
         }
     }
     /// Create a `TransferFormattedError` for when
-    /// `[chunks_exact]`(https://doc.rust-lang.org/nightly/std/primitive.slice.html#method.chunks_exact)
-    /// created an `ChunksExact` object that contained a remainder that isn't zero
-    pub(crate) fn bad_exact_chunks<D1, D2>(name: &'static str, chunk_size: D1, data_len: D2) -> Self
+    /// [`chunks_exact`](slice::chunks_exact) has a remainder that is not zero
+    pub fn bad_exact_chunks<D1, D2>(name: &'static str, chunk_size: D1, data_len: D2) -> Self
     where
         D1: core::fmt::Display,
         D2: core::fmt::Display,
@@ -450,14 +449,15 @@ impl TransferFormatError {
         }
     }
 
-    pub(crate) fn error_response(err: &pdu::ErrorResponse) -> Self {
+    /// Create a `TransferFormatError` from an [`ErrorResponse`](pdu::ErrorResponse)
+    pub fn error_response(err: &pdu::ErrorResponse) -> Self {
         TransferFormatError {
             pdu_err: err.error,
             message: format!("({})", err),
         }
     }
 
-    pub(crate) fn incorrect_opcode(expected: pdu::PduOpcode, received: pdu::PduOpcode) -> Self {
+    pub fn incorrect_opcode(expected: pdu::PduOpcode, received: pdu::PduOpcode) -> Self {
         TransferFormatError {
             pdu_err: pdu::Error::InvalidPDU,
             message: format!("Expected ATT PDU opcode {:?}, received opcode {:?}", expected, received),
