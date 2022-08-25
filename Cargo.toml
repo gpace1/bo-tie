@@ -2,12 +2,14 @@
 default-members = [
     "bo-tie",
     "bo-tie-macros",
+    "bo-tie-util",
     "bo-tie-host/*"
 ]
 
 members = [
     "bo-tie",
     "bo-tie-macros",
+    "bo-tie-util",
     "bo-tie-serde",
     "bo-tie-host/*",
     "examples/*",

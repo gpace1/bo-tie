@@ -1,0 +1,21 @@
+[package]
+name = "bo-tie-util"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+aes = { version = "0.8", optional = true }
+elliptic-curve = { version = "0.12", features = ["ecdh"], optional = true }
+p256 = { version = "0.11", features = ["ecdh"], optional = true }
+rand_core = { version = "0.6", default-features = false }
+
+[features]
+default = ["sys-rand"]
+sys-rand = ["rand_core/getrandom"]
+cryptography = ["aes", "elliptic-curve", "p256"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
