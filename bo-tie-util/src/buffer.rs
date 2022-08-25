@@ -113,7 +113,7 @@ pub trait BufferReserve {
 
 /// Try to extend a collection with an iterator
 ///
-/// This is the try equivalent to [`Extend`](std::iter::Extend)
+/// This is the try equivalent to [`Extend`](core::iter::Extend)
 ///
 /// # Note
 /// `TryExtend` is auto-implemented for anything that already implements

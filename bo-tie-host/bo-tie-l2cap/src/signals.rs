@@ -1,8 +1,9 @@
 //! Signaling L2CAP Commands
 //!
-//! L2CAP supports signal packets to provide a L2CAP level configuration. This module contains the
-//! various signaling packets that specified in the Bluetooth Specification | Vol 3, Part A
-//! sections 4 and 5.
+//! L2CAP supports signal packets to provide a L2CAP level configuration.
+//!
+//! # Note
+//! This module is very unfinished and is gated behind the feature `unstable`
 
 const ACL_U_SIG_CHANNEL_ID: super::ChannelIdentifier =
     super::ChannelIdentifier::ACL(super::ACLUserChannelIdentifier::SignalingChannel);
@@ -16,7 +17,7 @@ pub enum SignalCode {
 }
 
 impl SignalCode {
-    fn try_from_raw(val: u8) -> Result<Self, ()> {
+    pub fn try_from_raw(val: u8) -> Result<Self, ()> {
         match val {
             0x1 => Ok(SignalCode::CommandReject),
             _ => Err(()),
@@ -55,6 +56,9 @@ impl CommandRejectReason {
     }
 }
 
+/// The `reason` for a command rejection
+///
+/// See [`CommandReject`]
 enum CommandRejectData {
     None,
     Mtu(u16),
@@ -85,7 +89,7 @@ impl CommandRejectData {
 /// Command Rejection
 ///
 /// This L2CAP signaling packet is sent in response when this device rejects a signaling packet
-struct CommandReject {
+pub struct CommandReject {
     rejected_sig_id: SignalCode,
     reason: CommandRejectReason,
     data: CommandRejectData,

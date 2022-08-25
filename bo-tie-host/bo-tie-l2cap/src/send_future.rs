@@ -26,13 +26,13 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
     {
         let byte_count = 0;
 
-        let len: u16 = frame.data.len().try_into().expect("Couldn't convert into u16");
+        let len: u16 = frame.payload.len().try_into().expect("Couldn't convert into u16");
 
         let len = len.to_le_bytes();
 
         let channel_id = frame.channel_id.to_val().to_le_bytes();
 
-        let data = frame.data;
+        let data = frame.payload;
 
         let mut iter = into_iterator.into_iter();
 
