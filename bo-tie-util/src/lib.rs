@@ -2,9 +2,12 @@
 //!
 //! These are things that are used throughout the other crates within the `bo-tie` workspace and are
 //! collected here as a common place to put them.
+
+#![feature(generic_associated_types)]
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+pub mod buffer;
 #[cfg(feature = "cryptography")]
 pub mod cryptography;
 pub mod errors;
