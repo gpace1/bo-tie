@@ -1,5 +1,6 @@
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
+use bo_tie_l2cap as l2cap;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ClientPduName {

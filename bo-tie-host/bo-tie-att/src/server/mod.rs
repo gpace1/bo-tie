@@ -74,6 +74,7 @@ use crate::{
     TransferFormatTryFrom,
 };
 use alloc::{boxed::Box, vec::Vec};
+use bo_tie_l2cap as l2cap;
 use core::{
     future::Future,
     pin::Pin,
@@ -564,7 +565,8 @@ where
         &self,
         acl_packet: &'a l2cap::BasicInfoFrame<Vec<u8>>,
     ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
-        use crate::l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
+        use l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
+
         match acl_packet.get_channel_id() {
             ChannelIdentifier::LE(LEUserChannelIdentifier::AttributeProtocol) => {
                 let (att_type, payload) = acl_packet.get_payload().split_at(1);
@@ -892,7 +894,7 @@ where
                 false,
                 self.attributes.attributes[start..stop]
                     .iter()
-                    .filter(|att| att.get_uuid().is_16_bit())
+                    .filter(|att| att.get_uuid().can_be_16_bit())
                     .take_while(|att| self.client_can_write_attribute(att).is_none())
                     .enumerate()
                     .take_while(|(cnt, _)| (cnt + 1) * item_size_16 < payload_max)
@@ -986,7 +988,7 @@ where
                 let mut transfer = Vec::new();
 
                 for att in self.attributes.attributes[start..end].iter() {
-                    if att.get_uuid().is_16_bit()
+                    if att.get_uuid().can_be_16_bit()
                         && att.get_uuid() == &att_type
                         && att.get_value().cmp_value_to_raw_transfer_format(raw_value).await
                     {

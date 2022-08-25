@@ -52,6 +52,7 @@
 //! the attribute, but only one of the errors can be described with the error PDU sent from the
 //! server to the client.
 
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
@@ -61,7 +62,9 @@ use alloc::{boxed::Box, format, string::String, vec::Vec};
 pub mod client;
 pub mod server;
 
-pub use bo_tie_host_common::{Uuid, UuidFormatError, UuidVersion};
+use bo_tie_l2cap as l2cap;
+
+pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
 pub use client::Client;
 pub use server::Server;
 
@@ -724,7 +727,7 @@ impl TransferFormatTryFrom for crate::Uuid {
 
 impl TransferFormatInto for crate::Uuid {
     fn len_of_into(&self) -> usize {
-        if self.is_16_bit() {
+        if self.can_be_16_bit() {
             core::mem::size_of::<u16>()
         } else {
             core::mem::size_of::<u128>()
@@ -865,29 +868,29 @@ where
     }
 }
 
-impl TransferFormatInto for crate::BluetoothDeviceAddress {
+impl TransferFormatInto for bo_tie_util::BluetoothDeviceAddress {
     fn len_of_into(&self) -> usize {
         6
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        into_ret.copy_from_slice(self)
+        into_ret.copy_from_slice(&self.0)
     }
 }
 
-impl TransferFormatTryFrom for crate::BluetoothDeviceAddress {
+impl TransferFormatTryFrom for bo_tie_util::BluetoothDeviceAddress {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
     where
         Self: Sized,
     {
-        let mut address = crate::BluetoothDeviceAddress::default();
+        let mut address = [0u8; 6];
 
         if raw.len() != 6 {
             Err(TransferFormatError::bad_size("BluetoothDeviceAddress", 6, raw.len()))
         } else {
             address.copy_from_slice(raw);
 
-            Ok(address)
+            Ok(Self(address))
         }
     }
 }
