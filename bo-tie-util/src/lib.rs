@@ -81,12 +81,13 @@ impl BluetoothDeviceAddress {
     /// The marker bits for a static device address do not need to be in `addr`. This method will
     /// add the bits to the address before returning a `BluetoothDeviceAddress`.
     pub fn try_from_static(mut addr: [u8; 6]) -> Result<Self, errors::StaticDeviceError> {
-        // tag for static random in address is 0b11 in the two most significant bits
+        // The tag for static device address is 0b11 in the
+        // two most significant bits.
         addr[5] |= 0b1100_0000;
 
         if addr == [0xFF; 6] {
             Err(errors::StaticDeviceError::AddressIsAllOnes)
-        } else if addr != [0xC0, 0, 0, 0, 0, 0] {
+        } else if addr == [0, 0, 0, 0, 0, 0xC0] {
             Err(errors::StaticDeviceError::AddressIsZero)
         } else {
             Ok(Self(addr))
@@ -120,12 +121,13 @@ impl BluetoothDeviceAddress {
     /// The marker bits for a non-resolvable private address do not need to be in `addr`. This
     /// method will add the bits to the address before returning a `BluetoothDeviceAddress`.
     pub fn try_from_non_resolvable(mut addr: [u8; 6]) -> Result<Self, errors::NonResolvableError> {
-        // tag for static random in address is 00 in most significant 2 bits
+        // The tag for a non resolvable private address is
+        // 0b00 in the two most significant bits
         addr[5] &= 0b0011_1111;
 
         if [0u8; 6] == addr {
             Err(errors::NonResolvableError::AddressIsZero)
-        } else if [0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF] == addr {
+        } else if [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F] == addr {
             Err(errors::NonResolvableError::AddressIsAllOnes)
         } else {
             return Ok(Self(addr));
@@ -169,12 +171,16 @@ impl BluetoothDeviceAddress {
     /// will set those bits to `0b01`.
     #[cfg(feature = "cryptography")]
     pub fn try_from_resolvable(irk: u128, mut p_rand: [u8; 3]) -> Result<Self, errors::ResolvableError> {
-        // tag for static random in address is 0b01 in the most significant 2 bits
+        // The tag for a resolvable private address is 0b01
+        // in the two most significant bits.
+        //
+        // `p_rand[2]` will become the most significant
+        // byte of the resolvable private address.
         p_rand[2] = p_rand[2] & 0b0011_1111 | 0b0100_0000;
 
-        if [0u8; 3] == p_rand {
+        if [0, 0, 0x40] == p_rand {
             Err(errors::ResolvableError::PRandIsZero)
-        } else if [0x7F, 0xFF, 0xFF] == p_rand {
+        } else if [0xFF, 0xFF, 0x7F] == p_rand {
             Err(errors::ResolvableError::PRandIsAllOnes)
         } else {
             let mut address = [0, 0, 0, p_rand[0], p_rand[1], p_rand[2]];
@@ -326,6 +332,73 @@ impl UpperHex for BluetoothDeviceAddress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_static_device_address() {
+        assert_eq!(
+            Err(errors::StaticDeviceError::AddressIsZero),
+            BluetoothDeviceAddress::try_from_static([0; 6])
+        );
+
+        assert_eq!(
+            Err(errors::StaticDeviceError::AddressIsAllOnes),
+            BluetoothDeviceAddress::try_from_static([0xFF; 6])
+        );
+
+        assert_eq!(
+            Err(errors::StaticDeviceError::AddressIsAllOnes),
+            BluetoothDeviceAddress::try_from_static([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F])
+        )
+    }
+
+    #[test]
+    fn invalid_non_resolvable_private_address() {
+        assert_eq!(
+            Err(errors::NonResolvableError::AddressIsZero),
+            BluetoothDeviceAddress::try_from_non_resolvable([0; 6])
+        );
+
+        assert_eq!(
+            Err(errors::NonResolvableError::AddressIsAllOnes),
+            BluetoothDeviceAddress::try_from_non_resolvable([0xFF; 6])
+        );
+
+        assert_eq!(
+            Err(errors::NonResolvableError::AddressIsAllOnes),
+            BluetoothDeviceAddress::try_from_non_resolvable([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F])
+        );
+    }
+
+    #[test]
+    fn invalid_resolvable_private_address() {
+        let irk = 1234u128;
+
+        assert_eq!(
+            Err(errors::ResolvableError::PRandIsZero),
+            BluetoothDeviceAddress::try_from_resolvable(irk, [0; 3])
+        );
+
+        assert_eq!(
+            Err(errors::ResolvableError::PRandIsAllOnes),
+            BluetoothDeviceAddress::try_from_resolvable(irk, [0xFF; 3])
+        );
+
+        assert_eq!(
+            Err(errors::ResolvableError::PRandIsAllOnes),
+            BluetoothDeviceAddress::try_from_resolvable(irk, [0xFF, 0xFF, 0x3F])
+        );
+    }
+
+    #[test]
+    fn resolve_resolvable_private_address() {
+        let irk = 123456u128;
+
+        let p_rand = [0x12, 0x23, 0x34];
+
+        let rpa = BluetoothDeviceAddress::try_from_resolvable(irk, p_rand).unwrap();
+
+        assert!(rpa.resolve(irk));
+    }
 
     #[test]
     fn bluetooth_addr_ui_representation() {
