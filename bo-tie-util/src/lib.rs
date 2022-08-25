@@ -329,36 +329,36 @@ mod tests {
 
     #[test]
     fn bluetooth_addr_ui_representation() {
-        // assert_eq!(
-        //     Ok(BluetoothDeviceAddress([0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12])),
-        //     BluetoothDeviceAddress::try_from("123456789abc")
-        // );
-        //
-        // assert_eq!(
-        //     Ok(BluetoothDeviceAddress([0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12])),
-        //     BluetoothDeviceAddress::try_from("12:34:56:78:9a:bc")
-        // );
-        //
-        // // The Bluetooth Specification does not have a common format
-        // // when using colons to split an address into sub-slices. This
-        // // might be shown in a UI where the address is split into the
-        // // LAP, UAP, and NAP parts.
-        // assert_eq!(
-        //     Ok(BluetoothDeviceAddress([0x56, 0x34, 0x12, 0xef, 0xcd, 0xab])),
-        //     BluetoothDeviceAddress::try_from("abcdef:12:3456")
-        // );
-        //
-        // // Repetitions of colons are not allowed.
-        // assert_eq!(
-        //     Err(BluetoothDeviceAddress::REPEATED_COLONS),
-        //     BluetoothDeviceAddress::try_from("ab::cd::ef::12::34::56")
-        // );
-        //
-        // // Colon(s) at the front are not allowed
-        // assert_eq!(
-        //     Err(BluetoothDeviceAddress::COLON_AT_FRONT),
-        //     BluetoothDeviceAddress::try_from(":abcdef123456")
-        // );
+        assert_eq!(
+            Ok(BluetoothDeviceAddress([0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12])),
+            BluetoothDeviceAddress::try_from("123456789abc")
+        );
+
+        assert_eq!(
+            Ok(BluetoothDeviceAddress([0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12])),
+            BluetoothDeviceAddress::try_from("12:34:56:78:9a:bc")
+        );
+
+        // The Bluetooth Specification does not have a common format
+        // when using colons to split an address into sub-slices. This
+        // might be shown in a UI where the address is split into the
+        // LAP, UAP, and NAP parts.
+        assert_eq!(
+            Ok(BluetoothDeviceAddress([0x56, 0x34, 0x12, 0xef, 0xcd, 0xab])),
+            BluetoothDeviceAddress::try_from("abcdef:12:3456")
+        );
+
+        // Repetitions of colons are not allowed.
+        assert_eq!(
+            Err(BluetoothDeviceAddress::REPEATED_COLONS),
+            BluetoothDeviceAddress::try_from("ab::cd::ef::12::34::56")
+        );
+
+        // Colon(s) at the front are not allowed
+        assert_eq!(
+            Err(BluetoothDeviceAddress::COLON_AT_FRONT),
+            BluetoothDeviceAddress::try_from(":abcdef123456")
+        );
 
         // Colon(s) at the back are not allowed
         assert_eq!(
