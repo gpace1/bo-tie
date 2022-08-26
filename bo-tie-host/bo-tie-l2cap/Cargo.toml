@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bo-tie-util = { path = "../../bo-tie-util", default-features = false }
+bo-tie-util = { path = "../../bo-tie-util" }
 
 [features]
 unstable = []

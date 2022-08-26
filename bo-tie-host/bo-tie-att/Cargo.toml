@@ -9,7 +9,7 @@ edition = "2021"
 log = "0.4"
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-host-util = { path = "../bo-tie-host-util" }
-bo-tie-util = { path = "../../bo-tie-util", default-features = false }
+bo-tie-util = { path = "../../bo-tie-util" }
 
 [dev-dependencies]
 tinymt = "1"
