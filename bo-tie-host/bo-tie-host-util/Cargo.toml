@@ -8,3 +8,7 @@ uuid = { version = "1.0", optional = true }
 
 [features]
 "uuid-crate" = ["uuid"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

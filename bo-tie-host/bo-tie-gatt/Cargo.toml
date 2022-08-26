@@ -14,3 +14,7 @@ log = "0.4"
 
 [features]
 uuid-crate = ["bo-tie-att/uuid-crate"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

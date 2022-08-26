@@ -16,3 +16,7 @@ tinymt = "1"
 
 [features]
 uuid-crate = ["bo-tie-host-util/uuid-crate"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
