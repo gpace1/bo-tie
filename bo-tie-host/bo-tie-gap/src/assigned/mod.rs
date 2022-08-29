@@ -335,7 +335,7 @@ pub trait TryFromStruct<'a> {
 /// there is not enough room in the buffer. `ConvertError` contains the number of bytes `required`
 /// for creating the structure along with the number of bytes `remaining` in the buffer that can be
 /// used for data structures.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConvertError {
     /// The required number of bytes that need to be available for the struct
     pub required: usize,

@@ -1,24 +1,120 @@
 //! Local name data type
+//!
+//! The local name is the name for the Bluetooth device. The data for the local name structure is
+//! just a sequence of utf-8 characters. However the name of the device may be too long for a
+//! transport payload to contain so there is two versions of a local name. The complete local name
+//! is the full local name of the device. This should be the same name as reported by other methods
+//! to get the full name. The shortened local name is an alternative name or abbreviation of the
+//! device name that should be easily relatable to the complete local name.
+//!
+//! The type [`LocalName`] is used as a local name. It is created with the string for the local name
+//! and a shortening policy. The shortening policy is a fallback to use alternative shortened names
+//! when the full local name is too large. A local name can be shortened to an alternative name or
+//! an abbreviated size. The shortener will use the first shortened name that fits.
+//!
+//! # Name Shortener
+//! A name shortener must implement the trait [`shorts::NameShortener`]. More often this trait is
+//! not deliberately implemented, and instead a `NameShortener` is derived from the a type that
+//! implements [`shorts::IntoNameShortener`]. This trait is implemented for a number of types that
+//! get converted into one of the structs in `shorts` that already implement `NameShortener`.
+//!
+//! ## Alternative Names
+//! When creating a `LocalName` a list of strings can be used to provide alternative names. A slice
+//! or array of strings (any type that implements [`Borrow<str>`](core::borrow::Borrow)) will be
+//! converted into the name shortener [`sizes::Substitutions`]. `Substitutions` will iterate
+//! through the alternative names and pick the first one that will fit.
+//!
+//! ```
+//! # use bo_tie_gap::assigned::local_name::LocalName;
+//! # use bo_tie_gap::assigned::{AssignedTypes, Sequence};
+//! # use core::str;
+//! // Create a `LocalName` with the alternatives "example local name" and "example"
+//! let local_name = LocalName::new("example local name of a device", ["example local name", "🙈 🙉 🙊", "example"]);
+//!
+//! let complete_buffer = &mut [0u8; 40];
+//!
+//! let mut complete_sequence = Sequence::new(complete_buffer);
+//!
+//! complete_sequence.try_add(&local_name).unwrap();
+//!
+//! let complete_structure = complete_sequence.into_inner();
+//!
+//! assert_eq!(AssignedTypes::CompleteLocalName.val(), complete_structure[1]);
+//!
+//! assert_eq!("example local name of a device", str::from_utf8(&complete_structure[2..32]).unwrap());
+//!
+//! // This is a buffer that will exactly fit the local
+//! // name data structure containing "example".
+//! //
+//! // Note: "🙈 🙉 🙊" is skipped because each emoji
+//! // is actually represented in utf-8 with four bytes.
+//! let short_buffer = &mut [0u8; 9];
+//!
+//! let mut short_sequence = Sequence::new(short_buffer);
+//!
+//! short_sequence.try_add(&local_name).unwrap();
+//!
+//! let short_structure = short_sequence.into_inner();
+//!
+//! assert_eq!(AssignedTypes::ShortenedLocalName.val(), short_structure[1]);
+//!
+//! assert_eq!("example", str::from_utf8(&short_structure[2..]).unwrap() )
+//! ```
+//!
+//! ## Abbreviations
+//! A list of positive integers can be used to abbreviate a local name. This list is converted into
+//! a [`shorts::Abbreviations`] when creating a new `LocalName`. Each integer is used as the number
+//! of *characters* to abbreviate the name to
+//!
+//! ```
+//! # use bo_tie_gap::assigned::local_name::LocalName;
+//! # use bo_tie_gap::assigned::{AssignedTypes, Sequence};
+//! # use core::str;
+//! let local_name = LocalName::new("LocalName abbreviations example", [23, 9]);
+//!
+//! let buffer = &mut [0u8; 11];
+//!
+//! let mut sequence = Sequence::new(buffer);
+//!
+//! sequence.try_add(&local_name).unwrap();
+//!
+//! assert_eq!("LocalName", str::from_utf8(&sequence.into_inner()[2..]).unwrap());
+//! ```
+//! As a shortcut for a single abbreviation, a single number can be used to create the name
+//! shortener [`shorts::SingleAbbreviation`].
+//!
+//! ```
+//! # use bo_tie_gap::assigned::local_name::LocalName;
+//! let local_name = LocalName::new("My Device", 6);
+//! ```
+//!
+//! ## Complete Name Only
+//! Using `None` when creating a `LocalName` will disable the ability to shorten or further shorten
+//! the name.
+//!
+//! ```
+//! # use bo_tie_gap::assigned::local_name::LocalName;
+//! # use bo_tie_gap::assigned::{ConvertError, Sequence};
+//! let local_name = LocalName::new("My Full Device Name", None);
+//!
+//! let buffer = &mut [0u8; 13];
+//!
+//! let mut sequence = Sequence::new(buffer);
+//!
+//! assert!(sequence.try_add(&local_name).is_err());
+//!
+//! # // just a hidden unit test of the error :)
+//! # assert_eq!(Err(ConvertError { required: 21, remaining: 13 }), sequence.try_add(&local_name));
+//! ```
+pub mod shorts;
+
 use super::*;
 use core::borrow::Borrow;
-use name_short::{HowToShort, IntoNameShortener, NameShortener};
+use shorts::{HowToShort, IntoNameShortener, NameShortener};
 
-/// An advertised Local Name
+/// A Local Name
 ///
-/// Local names are either complete or incomplete within the advertising packet. As part of the
-/// format of the local name, there is a flag to indicate if the name has been shortened from its
-/// full length. A `LocalName` can be crated with this flag deliberately set or have it
-/// automatically set if the size of the name is larger than the remaining bytes in an advertising
-/// payload.
-///
-/// # Automatic Sizing
-/// When the local name is to be automatically sized, it is sized down to the remaining bytes
-/// available within an advertising payload. There is no limit to this size, so it can be sized down
-/// to zero characters.
-///
-/// # Deliberate Sizing
-/// When the size is deliberately set, the full length of the name that is assigned as part of the
-/// creation of a `LocalName` must fit in the remaining bytes of an advertising payload.
+/// This is the type used for a `LocalName`
 pub struct LocalName<N, S> {
     name: N,
     is_complete: bool,
@@ -35,7 +131,7 @@ where
     ///
     /// When this `LocalName` is to be added to a buffer for EIR or AD structures, the complete name
     /// will try to be put into the buffer. However, if there is not enough room then the
-    /// [`NameShortener`](name_short::NameShortener) `S` will be referred to to create a
+    /// [`NameShortener`](shorts::NameShortener) `S` will be referred to to create a
     /// shortened local name to put into the buffer.
     pub fn new<T>(complete_name: N, name_shortener: T) -> Self
     where
@@ -62,7 +158,7 @@ where
     ///
     /// When this `LocalName` is to be added to a buffer for EIR or AD structures, the complete name
     /// will try to be put into the buffer. However, if there is not enough room then the
-    /// [`NameShortener`](name_short::NameShortener) `S` will be referred to to create a *further*
+    /// [`NameShortener`](shorts::NameShortener) `S` will be referred to to create a *further*
     /// shortened local name to put into the buffer.
     pub fn new_short<T>(shortened_name: N, further_shortener: T) -> Self
     where
@@ -162,8 +258,8 @@ where
         Z: ?Sized + Borrow<str>,
     {
         match by {
-            HowToShort::Size(size) => self.short_by_size(size, interim),
-            HowToShort::AltName(alt) => self.short_by_alt(alt.borrow(), interim),
+            HowToShort::Abbreviation(size) => self.short_by_size(size, interim),
+            HowToShort::AlternativeName(alt) => self.short_by_alt(alt.borrow(), interim),
         }
     }
 }
@@ -249,7 +345,7 @@ where
     }
 }
 
-impl<'a> TryFromStruct<'a> for LocalName<&'a str, name_short::BaseNameNameOnly> {
+impl<'a> TryFromStruct<'a> for LocalName<&'a str, shorts::BaseNameOnly> {
     fn try_from_struct(r#struct: EirOrAdStruct<'a>) -> Result<Self, Error> {
         use core::str::from_utf8;
 
@@ -259,7 +355,7 @@ impl<'a> TryFromStruct<'a> for LocalName<&'a str, name_short::BaseNameNameOnly> 
 
         let name = from_utf8(r#struct.get_data()).map_err(|e| Error::UTF8Error(e))?;
 
-        let short = name_short::BaseNameNameOnly;
+        let short = shorts::BaseNameOnly;
 
         let is_complete = match r#struct.get_type() {
             COMPLETE => Ok(true),
@@ -273,355 +369,6 @@ impl<'a> TryFromStruct<'a> for LocalName<&'a str, name_short::BaseNameNameOnly> 
             short,
         })
     }
-}
-
-/// Traits and types for shortening a local name
-///
-/// When converting a [`LocalName`] into an EIR or AD structure, the data of the structure needs
-/// to be placed within a buffer. These buffers have limited space and may be unable to or have no
-/// more room to contain a specific complete local name. As an alternative, a name is allowed to be
-/// shortened from its full representation. How names are shortened is the point of this module.
-///
-/// The trait `NameShortener` is used to indicate how a name should be shortened.
-pub mod name_short {
-    use core::borrow::Borrow;
-
-    /// How to short a local name
-    ///
-    /// A name can either be shortened by a size or an alternative name.
-    #[derive(Debug)]
-    pub enum HowToShort<S> {
-        Size(usize),
-        AltName(S),
-    }
-
-    /// A trait for shortening a local name
-    ///
-    /// See the [module] level documentation for details.
-    ///
-    /// [module]: self
-    pub trait NameShortener {
-        type StrAlt: ?Sized + Borrow<str>;
-        type Alternatives<'a>: Iterator<Item = HowToShort<&'a Self::StrAlt>>
-        where
-            Self: 'a;
-
-        /// Iterate over the
-        fn iter(&self) -> Self::Alternatives<'_>;
-
-        /// Check if this shortener shorten the name
-        ///
-        /// If the local name can be shortened then this method will return true.
-        ///
-        /// # Note
-        /// If this returns `false` then `minimum` should return `None` or the length of the
-        /// complete name.
-        fn can_shorten(&self) -> bool;
-    }
-
-    /// A trait for creating a name shortener
-    pub trait IntoNameShortener {
-        type StrAlt: ?Sized + Borrow<str>;
-        type IntoShorter: NameShortener<StrAlt = Self::StrAlt>;
-
-        fn into_shorter(self) -> Self::IntoShorter;
-    }
-
-    impl<T> IntoNameShortener for T
-    where
-        T: NameShortener,
-    {
-        type StrAlt = T::StrAlt;
-        type IntoShorter = T;
-
-        fn into_shorter(self) -> Self::IntoShorter {
-            self
-        }
-    }
-
-    /// Marker for a only using only the assigned name
-    ///
-    /// The string for the local name will not be shortened if it is a complete name nor further
-    /// shortened if it is an already shortened name.
-    ///
-    /// This is used whenever a [`LocalName`](super::LocalName) is derived from an EIR or AD struct
-    /// through the implementation of [`TryFromStruct`](crate::assigned::TryFromStruct).
-    pub struct BaseNameNameOnly;
-
-    impl NameShortener for BaseNameNameOnly {
-        type StrAlt = str;
-        type Alternatives<'a> = core::iter::Empty<HowToShort<&'a Self::StrAlt>>;
-
-        fn iter(&self) -> Self::Alternatives<'_> {
-            core::iter::empty()
-        }
-
-        fn can_shorten(&self) -> bool {
-            false
-        }
-    }
-
-    impl IntoNameShortener for Option<()> {
-        type StrAlt = str;
-        type IntoShorter = BaseNameNameOnly;
-
-        fn into_shorter(self) -> Self::IntoShorter {
-            BaseNameNameOnly
-        }
-    }
-
-    /// Shorten a local name to a minimum size
-    ///
-    /// This name shortener will not return any suggested sizes, instead it will only contain the
-    /// minimum size a name can be. When a local name is converted into an EIR or AD structure it
-    /// will greedily use as many characters of the name as the structure generator can fit within
-    /// the data buffer.
-    pub struct MinimumSize(usize);
-
-    impl NameShortener for MinimumSize {
-        type StrAlt = str;
-        type Alternatives<'a> = core::iter::Once<HowToShort<&'a Self::StrAlt>>;
-
-        fn iter(&self) -> Self::Alternatives<'_> {
-            core::iter::once(HowToShort::Size(self.0))
-        }
-
-        fn can_shorten(&self) -> bool {
-            true
-        }
-    }
-
-    impl IntoNameShortener for usize {
-        type StrAlt = str;
-        type IntoShorter = MinimumSize;
-
-        fn into_shorter(self) -> Self::IntoShorter {
-            MinimumSize(self)
-        }
-    }
-
-    /// This is a name shortener containing suggested sizes
-    ///
-    /// This is an iterator over suggested shortened sizes of a local name. If none of the suggested
-    /// sizes can be used then the local name cannot be turned into a struct.
-    pub struct SuggestedSizes<T>(T);
-
-    /// Iterator for `SuggestedSizes`
-    pub struct SuggestedSizesIter<'a, T>(T, core::marker::PhantomData<&'a ()>);
-
-    impl<'a, T> Iterator for SuggestedSizesIter<'a, T>
-    where
-        T: Iterator<Item = usize>,
-    {
-        type Item = HowToShort<&'a str>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            self.0.next().map(|size| HowToShort::Size(size))
-        }
-    }
-
-    impl<T> NameShortener for SuggestedSizes<T>
-    where
-        T: Clone + Iterator<Item = usize> + ExactSizeIterator,
-    {
-        type StrAlt = str;
-        type Alternatives<'a> = SuggestedSizesIter<'a, T> where Self: 'a;
-
-        fn iter(&self) -> Self::Alternatives<'_> {
-            SuggestedSizesIter(self.0.clone(), core::marker::PhantomData)
-        }
-
-        fn can_shorten(&self) -> bool {
-            self.0.len() != 0
-        }
-    }
-
-    impl<'a> IntoNameShortener for &'a [usize] {
-        type StrAlt = str;
-        type IntoShorter = SuggestedSizes<core::iter::Copied<core::slice::Iter<'a, usize>>>;
-
-        fn into_shorter(self) -> Self::IntoShorter {
-            SuggestedSizes(self.iter().copied())
-        }
-    }
-
-    impl<'a, const SIZE: usize> IntoNameShortener for &'a [usize; SIZE] {
-        type StrAlt = str;
-        type IntoShorter = SuggestedSizes<core::iter::Copied<core::slice::Iter<'a, usize>>>;
-
-        fn into_shorter(self) -> Self::IntoShorter {
-            SuggestedSizes(self.iter().copied())
-        }
-    }
-
-    impl<const SIZE: usize> IntoNameShortener for [usize; SIZE] {
-        type StrAlt = str;
-        type IntoShorter = SuggestedSizes<core::array::IntoIter<usize, SIZE>>;
-
-        fn into_shorter(self) -> Self::IntoShorter {
-            SuggestedSizes(self.into_iter())
-        }
-    }
-
-    /// Substitute names
-    ///
-    /// This is a list of other names to be used when the local name must be shortened.
-    pub struct Substitutions<T>(T);
-
-    /// Iterator for [`Substitutions`]
-    pub struct SubstitutionsIter<T>(T);
-
-    impl<T, N> Iterator for SubstitutionsIter<T>
-    where
-        T: Iterator<Item = N>,
-    {
-        type Item = HowToShort<N>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            self.0.next().map(|n| HowToShort::AltName(n))
-        }
-    }
-
-    macro_rules! impl_substitutions {
-        ($for_ty:ty) => {
-            impl IntoNameShortener for &[$for_ty] {
-                type StrAlt = $for_ty;
-                type IntoShorter = Substitutions<Self>;
-
-                fn into_shorter(self) -> Self::IntoShorter {
-                    Substitutions(self)
-                }
-            }
-
-            impl NameShortener for Substitutions<&[$for_ty]> {
-                type StrAlt = $for_ty;
-                type Alternatives<'a> = SubstitutionsIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
-
-                fn iter(&self) -> Self::Alternatives<'_> {
-                    SubstitutionsIter(self.0.iter())
-                }
-
-                fn can_shorten(&self) -> bool {
-                    self.0.len() != 0
-                }
-            }
-
-            impl IntoNameShortener for &[&$for_ty] {
-                type StrAlt = $for_ty;
-                type IntoShorter = Substitutions<Self>;
-
-                fn into_shorter(self) -> Self::IntoShorter {
-                    Substitutions(self)
-                }
-            }
-
-            impl NameShortener for Substitutions<&[&$for_ty]> {
-                type StrAlt = $for_ty;
-                type Alternatives<'a> = SubstitutionsIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
-
-                fn iter(&self) -> Self::Alternatives<'_> {
-                    SubstitutionsIter(self.0.iter().copied())
-                }
-
-                fn can_shorten(&self) -> bool {
-                    self.0.len() != 0
-                }
-            }
-
-            impl<const SIZE: usize> IntoNameShortener for &[$for_ty; SIZE] {
-                type StrAlt = $for_ty;
-                type IntoShorter = Substitutions<Self>;
-
-                fn into_shorter(self) -> Self::IntoShorter {
-                    Substitutions(self)
-                }
-            }
-
-            impl<const SIZE: usize> NameShortener for Substitutions<&[$for_ty; SIZE]> {
-                type StrAlt = $for_ty;
-                type Alternatives<'a> = SubstitutionsIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
-
-                fn iter(&self) -> Self::Alternatives<'_> {
-                    SubstitutionsIter(self.0.into_iter())
-                }
-
-                fn can_shorten(&self) -> bool {
-                    self.0.len() != 0
-                }
-            }
-
-            impl<const SIZE: usize> IntoNameShortener for &[&$for_ty; SIZE] {
-                type StrAlt = $for_ty;
-                type IntoShorter = Substitutions<Self>;
-
-                fn into_shorter(self) -> Self::IntoShorter {
-                    Substitutions(self)
-                }
-            }
-
-            impl<const SIZE: usize> NameShortener for Substitutions<&[&$for_ty; SIZE]> {
-                type StrAlt = $for_ty;
-                type Alternatives<'a> = SubstitutionsIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
-
-                fn iter(&self) -> Self::Alternatives<'_> {
-                    SubstitutionsIter(self.0.iter().copied())
-                }
-
-                fn can_shorten(&self) -> bool {
-                    self.0.len() != 0
-                }
-            }
-
-            impl<const SIZE: usize> IntoNameShortener for [$for_ty; SIZE] {
-                type StrAlt = $for_ty;
-                type IntoShorter = Substitutions<Self>;
-
-                fn into_shorter(self) -> Self::IntoShorter {
-                    Substitutions(self)
-                }
-            }
-
-            impl<const SIZE: usize> NameShortener for Substitutions<[$for_ty; SIZE]> {
-                type StrAlt = $for_ty;
-                type Alternatives<'a> = SubstitutionsIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
-
-                fn iter(&self) -> Self::Alternatives<'_> {
-                    SubstitutionsIter(self.0.iter())
-                }
-
-                fn can_shorten(&self) -> bool {
-                    self.0.len() != 0
-                }
-            }
-
-            impl<const SIZE: usize> IntoNameShortener for [&$for_ty; SIZE] {
-                type StrAlt = $for_ty;
-                type IntoShorter = Substitutions<Self>;
-
-                fn into_shorter(self) -> Self::IntoShorter {
-                    Substitutions(self)
-                }
-            }
-
-            impl<const SIZE: usize> NameShortener for Substitutions<[&$for_ty; SIZE]> {
-                type StrAlt = $for_ty;
-                type Alternatives<'a> = SubstitutionsIter<core::array::IntoIter<&'a $for_ty, SIZE>> where Self: 'a;
-
-                fn iter(&self) -> Self::Alternatives<'_> {
-                    SubstitutionsIter(self.0.into_iter())
-                }
-
-                fn can_shorten(&self) -> bool {
-                    self.0.len() != 0
-                }
-            }
-        };
-    }
-
-    impl_substitutions!(alloc::string::String);
-    impl_substitutions!(alloc::boxed::Box<str>);
-    impl_substitutions!(alloc::borrow::Cow<'static, str>);
-    impl_substitutions!(&'static str);
 }
 
 #[cfg(test)]
