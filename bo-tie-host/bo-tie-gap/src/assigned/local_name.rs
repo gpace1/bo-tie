@@ -688,6 +688,44 @@ mod tests {
         assert!(LocalName::try_from_struct(test_name_4).is_err());
     }
 
+    fn err_ptr(at: usize, data: &[u8]) -> impl core::fmt::Display + '_ {
+        use core::fmt;
+
+        struct ErrPointer<'a> {
+            at: usize,
+            data: &'a [u8],
+        }
+
+        impl fmt::Display for ErrPointer<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                for (cnt, byte) in self.data.iter().enumerate() {
+                    if cnt != self.at {
+                        match *byte {
+                            0..=9 => f.write_str("  ")?,
+                            10..=99 => f.write_str("   ")?,
+                            _ => f.write_str("    ")?,
+                        }
+                    } else {
+                        match *byte {
+                            0..=9 => write!(f, "{:^2}", '^')?,
+                            10..=99 => write!(f, "{:^3}", '^')?,
+                            _ => write!(f, "{:^4}", '^')?,
+                        }
+                    }
+
+                    if cnt != self.data.len() - 1 {
+                        f.write_str(" ")?;
+                    }
+                }
+
+                Ok(())
+            }
+        }
+
+        ErrPointer { at, data }
+    }
+
+    #[track_caller]
     fn short_name_test<N, S>(buffer: &mut [u8], local_name: &LocalName<N, S>, expected_bytes: impl Iterator<Item = u8>)
     where
         LocalName<N, S>: IntoStruct,
@@ -698,9 +736,9 @@ mod tests {
 
         let data = sequencer.into_inner();
 
-        expected_bytes
-            .zip(data.iter())
-            .for_each(|(e, r)| assert_eq!(e, *r, "data: {:#?}", data))
+        for (at, (e, r)) in expected_bytes.zip(data.iter()).enumerate() {
+            assert_eq!(e, *r, "\n{:?}\n{}\n", data, err_ptr(at, data))
+        }
     }
 
     #[test]
@@ -744,5 +782,40 @@ mod tests {
                 .into_iter()
                 .chain("name".bytes()),
         );
+    }
+
+    #[test]
+    fn alt_size_short_name() {
+        let local_name = LocalName::new("alt size short name", [14, 8]);
+
+        short_name_test(
+            &mut [0u8; 22],
+            &local_name,
+            [
+                "alt size short name".len() as u8 + 1,
+                AssignedTypes::CompleteLocalName.val(),
+            ]
+            .into_iter()
+            .chain("alt size short name".bytes()),
+        );
+
+        short_name_test(
+            &mut [0u8; 17],
+            &local_name,
+            [
+                "alt size short".len() as u8 + 1,
+                AssignedTypes::ShortenedLocalName.val(),
+            ]
+            .into_iter()
+            .chain("alt size short".bytes()),
+        );
+
+        short_name_test(
+            &mut [0u8; 10],
+            &local_name,
+            ["alt size".len() as u8 + 1, AssignedTypes::ShortenedLocalName.val()]
+                .into_iter()
+                .chain("alt size".bytes()),
+        )
     }
 }
