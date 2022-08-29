@@ -1,0 +1,11 @@
+[package]
+name = "bo-tie-gap"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bo-tie-att = { path = "../bo-tie-att" }
+bo-tie-util = { path = "../../bo-tie-util" }
+bo-tie-host-util = { path = "../bo-tie-host-util" }
