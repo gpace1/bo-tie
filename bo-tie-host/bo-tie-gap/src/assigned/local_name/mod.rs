@@ -89,8 +89,8 @@
 //! ```
 //!
 //! ## Complete Name Only
-//! Using `None` when creating a `LocalName` will disable the ability to shorten or further shorten
-//! the name.
+//! Using `None` when creating a `LocalName` will cause the local name to never shorten nor further
+//! shorten the name.
 //!
 //! ```
 //! # use bo_tie_gap::assigned::local_name::LocalName;
@@ -101,6 +101,7 @@
 //!
 //! let mut sequence = Sequence::new(buffer);
 //!
+//! // buffer is too small to fit the local name
 //! assert!(sequence.try_add(&local_name).is_err());
 //!
 //! # // just a hidden unit test of the error :)
@@ -114,7 +115,9 @@ use shorts::{HowToShort, IntoNameShortener, NameShortener};
 
 /// A Local Name
 ///
-/// This is the type used for a `LocalName`
+/// See the [module] level documentation for details.
+///
+/// [module]: self
 pub struct LocalName<N, S> {
     name: N,
     is_complete: bool,
@@ -127,12 +130,7 @@ where
 {
     /// Create a new local name
     ///
-    /// Create a `LocalName` from the complete name for the device and a name shortener.
-    ///
-    /// When this `LocalName` is to be added to a buffer for EIR or AD structures, the complete name
-    /// will try to be put into the buffer. However, if there is not enough room then the
-    /// [`NameShortener`](shorts::NameShortener) `S` will be referred to to create a
-    /// shortened local name to put into the buffer.
+    /// Create a `LocalName` where `complete_name` is the full local name.
     pub fn new<T>(complete_name: N, name_shortener: T) -> Self
     where
         T: IntoNameShortener<IntoShorter = S>,
@@ -152,14 +150,8 @@ where
 
     /// Create a shortened local name
     ///
-    /// Create a `LocalName` from an already shortened local name and a further shortener. As this
-    /// is already a shortened name the local name will always have the EIR or AD tag for a
-    /// shortened local name.
-    ///
-    /// When this `LocalName` is to be added to a buffer for EIR or AD structures, the complete name
-    /// will try to be put into the buffer. However, if there is not enough room then the
-    /// [`NameShortener`](shorts::NameShortener) `S` will be referred to to create a *further*
-    /// shortened local name to put into the buffer.
+    /// Create a `LocalName` from an already shortened local name. Input `further_shortener` is used
+    /// to further shorten the name in the event where `shortened_name` is still too large.
     pub fn new_short<T>(shortened_name: N, further_shortener: T) -> Self
     where
         T: IntoNameShortener<IntoShorter = S>,
@@ -189,8 +181,12 @@ where
 
     /// Change the name shortener
     ///
-    /// This returns a `LocalName` with the same name contained within it but with a new name
-    /// shortener.
+    /// Chane the name shortener to a different shortener. This is useful when a `LocalName` is
+    /// created from a structure as [`TryFromStruct`] is only implemented for a `LocalName` with the
+    /// shortener [`BaseNameOnly`].
+    ///
+    /// [`TryFromStruct`]: super::TryFromStruct
+    /// [`BaseNameOnly`]: shorts::BaseNameOnly
     pub fn change_shortener<T, R>(self, new_shortener: T) -> LocalName<N, R>
     where
         T: IntoNameShortener<IntoShorter = R>,
@@ -345,7 +341,7 @@ where
     }
 }
 
-impl<'a> TryFromStruct<'a> for LocalName<&'a str, shorts::BaseNameOnly> {
+impl<'a> TryFromStruct<'a> for LocalName<&'a str, shorts::NeverShorten> {
     fn try_from_struct(r#struct: EirOrAdStruct<'a>) -> Result<Self, Error> {
         use core::str::from_utf8;
 
@@ -355,7 +351,7 @@ impl<'a> TryFromStruct<'a> for LocalName<&'a str, shorts::BaseNameOnly> {
 
         let name = from_utf8(r#struct.get_data()).map_err(|e| Error::UTF8Error(e))?;
 
-        let short = shorts::BaseNameOnly;
+        let short = shorts::NeverShorten;
 
         let is_complete = match r#struct.get_type() {
             COMPLETE => Ok(true),

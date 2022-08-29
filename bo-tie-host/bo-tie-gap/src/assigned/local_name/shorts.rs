@@ -71,17 +71,12 @@ where
     }
 }
 
-/// Marker for a only using only the full local name
+/// Never shortening a local name
 ///
-/// The string for the local name will not be shortened if it is a complete name nor further
-/// shortened if it is an already shortened name.
-///
-/// # Note
-/// This is used whenever a [`LocalName`](super::LocalName) is derived from an EIR or AD struct
-/// through the implementation of [`TryFromStruct`](crate::assigned::TryFromStruct).
-pub struct BaseNameOnly;
+/// This is used whenever the local name is to never be shortened nor further shortened.
+pub struct NeverShorten;
 
-impl NameShortener for BaseNameOnly {
+impl NameShortener for NeverShorten {
     type StrAlt = str;
     type Shorts<'a> = core::iter::Empty<HowToShort<&'a Self::StrAlt>>;
 
@@ -96,18 +91,16 @@ impl NameShortener for BaseNameOnly {
 
 impl IntoNameShortener for Option<()> {
     type StrAlt = str;
-    type IntoShorter = BaseNameOnly;
+    type IntoShorter = NeverShorten;
 
     fn into_shorter(self) -> Self::IntoShorter {
-        BaseNameOnly
+        NeverShorten
     }
 }
 
-/// A single Abbreviation
+/// Name shortener for a single abbreviation
 ///
-/// This name shortener is normally created when a `usize` is used for creating a [`LocalName`].
-///
-/// [`LocalName`]: super::LocalName
+/// This has one abbreviation size for shortening a local name.
 pub struct SingleAbbreviation(usize);
 
 impl NameShortener for SingleAbbreviation {
@@ -132,10 +125,9 @@ impl IntoNameShortener for usize {
     }
 }
 
-/// Abbreviations shortener
+/// Abbreviating name shortener
 ///
-/// This is an iterator over suggested shortened sizes of a local name. If none of the suggested
-/// sizes can be used then the local name cannot be turned into a struct.
+/// This contains a list of sizes to abbreviate a local name with.
 pub struct Abbreviations<T>(T);
 
 /// Iterator for `SuggestedSizes`
@@ -195,15 +187,15 @@ impl<const SIZE: usize> IntoNameShortener for [usize; SIZE] {
     }
 }
 
-/// Substitute names
+/// Alternative names name shortener
 ///
-/// This is a list of other names to be used when the local name must be shortened.
-pub struct Substitutions<T>(T);
+/// This is a list of other names to shorten a local name by.
+pub struct Alternatives<T>(T);
 
-/// Iterator for [`Substitutions`]
-pub struct SubstitutionsIter<T>(T);
+/// Iterator for [`Alternatives`]
+pub struct AlternativesIter<T>(T);
 
-impl<T, N> Iterator for SubstitutionsIter<T>
+impl<T, N> Iterator for AlternativesIter<T>
 where
     T: Iterator<Item = N>,
 {
@@ -218,19 +210,19 @@ macro_rules! impl_substitutions {
     ($for_ty:ty) => {
         impl IntoNameShortener for &[$for_ty] {
             type StrAlt = $for_ty;
-            type IntoShorter = Substitutions<Self>;
+            type IntoShorter = Alternatives<Self>;
 
             fn into_shorter(self) -> Self::IntoShorter {
-                Substitutions(self)
+                Alternatives(self)
             }
         }
 
-        impl NameShortener for Substitutions<&[$for_ty]> {
+        impl NameShortener for Alternatives<&[$for_ty]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = SubstitutionsIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
+            type Shorts<'a> = AlternativesIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
-                SubstitutionsIter(self.0.iter())
+                AlternativesIter(self.0.iter())
             }
 
             fn can_shorten(&self) -> bool {
@@ -240,19 +232,19 @@ macro_rules! impl_substitutions {
 
         impl IntoNameShortener for &[&$for_ty] {
             type StrAlt = $for_ty;
-            type IntoShorter = Substitutions<Self>;
+            type IntoShorter = Alternatives<Self>;
 
             fn into_shorter(self) -> Self::IntoShorter {
-                Substitutions(self)
+                Alternatives(self)
             }
         }
 
-        impl NameShortener for Substitutions<&[&$for_ty]> {
+        impl NameShortener for Alternatives<&[&$for_ty]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = SubstitutionsIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
+            type Shorts<'a> = AlternativesIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
-                SubstitutionsIter(self.0.iter().copied())
+                AlternativesIter(self.0.iter().copied())
             }
 
             fn can_shorten(&self) -> bool {
@@ -262,19 +254,19 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> IntoNameShortener for &[$for_ty; SIZE] {
             type StrAlt = $for_ty;
-            type IntoShorter = Substitutions<Self>;
+            type IntoShorter = Alternatives<Self>;
 
             fn into_shorter(self) -> Self::IntoShorter {
-                Substitutions(self)
+                Alternatives(self)
             }
         }
 
-        impl<const SIZE: usize> NameShortener for Substitutions<&[$for_ty; SIZE]> {
+        impl<const SIZE: usize> NameShortener for Alternatives<&[$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = SubstitutionsIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
+            type Shorts<'a> = AlternativesIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
-                SubstitutionsIter(self.0.into_iter())
+                AlternativesIter(self.0.into_iter())
             }
 
             fn can_shorten(&self) -> bool {
@@ -284,19 +276,19 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> IntoNameShortener for &[&$for_ty; SIZE] {
             type StrAlt = $for_ty;
-            type IntoShorter = Substitutions<Self>;
+            type IntoShorter = Alternatives<Self>;
 
             fn into_shorter(self) -> Self::IntoShorter {
-                Substitutions(self)
+                Alternatives(self)
             }
         }
 
-        impl<const SIZE: usize> NameShortener for Substitutions<&[&$for_ty; SIZE]> {
+        impl<const SIZE: usize> NameShortener for Alternatives<&[&$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = SubstitutionsIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
+            type Shorts<'a> = AlternativesIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
-                SubstitutionsIter(self.0.iter().copied())
+                AlternativesIter(self.0.iter().copied())
             }
 
             fn can_shorten(&self) -> bool {
@@ -306,19 +298,19 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> IntoNameShortener for [$for_ty; SIZE] {
             type StrAlt = $for_ty;
-            type IntoShorter = Substitutions<Self>;
+            type IntoShorter = Alternatives<Self>;
 
             fn into_shorter(self) -> Self::IntoShorter {
-                Substitutions(self)
+                Alternatives(self)
             }
         }
 
-        impl<const SIZE: usize> NameShortener for Substitutions<[$for_ty; SIZE]> {
+        impl<const SIZE: usize> NameShortener for Alternatives<[$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = SubstitutionsIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
+            type Shorts<'a> = AlternativesIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
-                SubstitutionsIter(self.0.iter())
+                AlternativesIter(self.0.iter())
             }
 
             fn can_shorten(&self) -> bool {
@@ -328,19 +320,19 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> IntoNameShortener for [&$for_ty; SIZE] {
             type StrAlt = $for_ty;
-            type IntoShorter = Substitutions<Self>;
+            type IntoShorter = Alternatives<Self>;
 
             fn into_shorter(self) -> Self::IntoShorter {
-                Substitutions(self)
+                Alternatives(self)
             }
         }
 
-        impl<const SIZE: usize> NameShortener for Substitutions<[&$for_ty; SIZE]> {
+        impl<const SIZE: usize> NameShortener for Alternatives<[&$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = SubstitutionsIter<core::array::IntoIter<&'a $for_ty, SIZE>> where Self: 'a;
+            type Shorts<'a> = AlternativesIter<core::array::IntoIter<&'a $for_ty, SIZE>> where Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
-                SubstitutionsIter(self.0.into_iter())
+                AlternativesIter(self.0.into_iter())
             }
 
             fn can_shorten(&self) -> bool {
