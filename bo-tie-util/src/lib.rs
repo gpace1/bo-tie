@@ -47,8 +47,8 @@ use core::ops::{Deref, DerefMut};
 ///
 /// # UI Representation
 /// A `BluetoothDeviceAddress` can be created from the UI Representation form. This is a string
-/// formatted as either twelve consecutive hexadecimals (`"XXXXXXXXXXXX"`) or separated at every
-/// two by a colon (`"XX:XX:XX:XX:XX:XX").
+/// formatted as either twelve consecutive hexadecimals (`"XXXXXXXXXXXX"`) or separated using
+/// a colon (e.g. `"XX:XX:XX:XX:XX:XX"`).
 ///
 /// A `BluetoothDeviceAddress` can be converted into the UI representation with colons through its
 /// implementation of [`Display`](core::fmt::Display). If the format with just twelve hexidecimal
