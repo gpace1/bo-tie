@@ -46,7 +46,7 @@ use core::ops::{Deref, DerefMut};
 /// used.
 ///
 /// # UI Representation
-/// A `BluetoothDeviceAddress` can be created from the UI Rfepresentation form. This is a string
+/// A `BluetoothDeviceAddress` can be created from the UI Representation form. This is a string
 /// formatted as either twelve consecutive hexadecimals (`"XXXXXXXXXXXX"`) or separated at every
 /// two by a colon (`"XX:XX:XX:XX:XX:XX").
 ///
