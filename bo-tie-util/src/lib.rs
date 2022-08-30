@@ -54,7 +54,7 @@ use core::ops::{Deref, DerefMut};
 /// implementation of [`Display`](core::fmt::Display). If the format with just twelve hexidecimal
 /// digits is desired, it can be done using either the implementation for
 /// [`LowerHex`](core::fmt::LowerHex) or [`UpperHex`](core::fmt::UpperHex).
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BluetoothDeviceAddress(pub [u8; 6]);
 
 impl BluetoothDeviceAddress {
