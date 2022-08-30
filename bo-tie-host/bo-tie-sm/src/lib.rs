@@ -115,6 +115,7 @@ pub use bo_tie_util::BluetoothDeviceAddress;
 
 use l2cap::BasicInfoFrame;
 use oob::OobDirection;
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 pub mod encrypt_info;
@@ -124,11 +125,21 @@ pub mod pairing;
 pub mod responder;
 pub mod toolbox;
 
-// const ENCRYPTION_KEY_MIN_SIZE: usize = 7; << this may never be used as it is unsafe
+// /// The encryption key minimum size
+// ///
+// /// Note:
+// /// This may be forever left out as it is cryptographically unsafe to reduce the key size.
+// const ENCRYPTION_KEY_MIN_SIZE: usize = 7;
+
+/// The maximum encryption key size
+///
+/// This is the size of the encryption key in bytes. It is also the default key size as the larger
+/// the key size the harder it is to crack encryption.
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
-pub const L2CAP_CHANNEL_ID: crate::l2cap::ChannelIdentifier =
-    crate::l2cap::ChannelIdentifier::LE(crate::l2cap::LEUserChannelIdentifier::SecurityManagerProtocol);
+/// The L2CAP channel identifier for the Security Manager
+pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
+    l2cap::ChannelIdentifier::LE(crate::l2cap::LEUserChannelIdentifier::SecurityManagerProtocol);
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -152,7 +163,7 @@ pub enum Error {
     /// Send related error
     DataSend(alloc::string::String),
     /// ACL Data related
-    ACLData(crate::l2cap::BasicFrameError<core::convert::Infallible>), // temporarily using infallible
+    ACLData(l2cap::BasicFrameError<core::convert::Infallible>), // temporarily using infallible
     /// Out of band data was not provided to the Security Manager via the `received_oob_data`
     /// method of either the initiator or responder security manager before continuing the process
     /// of pairing.
@@ -453,7 +464,8 @@ struct PairingData {
 /// # Equality, Ordering, and Hashing
 /// Comparisons and hashing are implemented for `Keys`, but these operations only use the
 /// identity address within a `Keys` for the calculations.
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Keys {
     /// The Long Term Key (private key)
     ///
@@ -476,10 +488,11 @@ pub struct Keys {
     peer_addr: Option<BluAddr>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 enum BluAddr {
-    Public(crate::BluetoothDeviceAddress),
-    StaticRandom(crate::BluetoothDeviceAddress),
+    Public(BluetoothDeviceAddress),
+    StaticRandom(BluetoothDeviceAddress),
 }
 
 impl Keys {
@@ -659,7 +672,7 @@ impl core::hash::Hash for Keys {
 /// # Panics
 /// Trying to add `Keys`s without an identity address or identity resolving key will incur a
 /// panic.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 struct KeyDB {
     entries: Vec<Keys>,
 }
@@ -740,7 +753,8 @@ impl Default for KeyDB {
 /// sorted using the
 /// [compare_entry](crate::sm::Keys::compare_keys)
 /// method.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SecurityManagerKeys {
     keys_db: KeyDB,
 }

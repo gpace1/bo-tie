@@ -3,7 +3,7 @@
 //! This contains the setup for enabling the usage of out of band pairing with the Security Manager
 //! implementations in this library.
 
-use crate::sm::oob::sealed_receiver_type::OobReceiverTypeVariant;
+use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
 use alloc::vec::Vec;
 use core::future::Future;
 

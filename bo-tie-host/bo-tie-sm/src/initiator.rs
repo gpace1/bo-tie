@@ -4,8 +4,8 @@ use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
 };
 use crate::l2cap::ConnectionChannel;
-use crate::sm::oob::sealed_receiver_type::OobReceiverTypeVariant;
-use crate::sm::oob::{ExternalOobReceiver, OobDirection, OobReceiverType};
+use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
+use crate::oob::{ExternalOobReceiver, OobDirection, OobReceiverType};
 use alloc::vec::Vec;
 
 pub struct MasterSecurityManagerBuilder<'a, C> {
@@ -453,7 +453,7 @@ where
             let initiator_io_cap = self.pairing_request.get_io_cap();
             let responder_io_cap = response.get_io_cap();
 
-            let (private_key, public_key) = toolbox::ecc_gen().expect("Failed to fill bytes for generated random");
+            let (private_key, public_key) = toolbox::ecc_gen();
 
             self.pairing_data = Some(PairingData {
                 pairing_method,
@@ -774,7 +774,7 @@ where
     /// This method will panic if the pairing information and public keys were not already generated
     /// in the pairing process.
     async fn send_oob(&mut self) {
-        use crate::gap::assigned::{
+        use bo_tie_gap::assigned::{
             le_device_address::LeDeviceAddress, le_role::LeRole, sc_confirm_value::ScConfirmValue,
             sc_random_value::ScRandomValue, Sequence,
         };
@@ -799,17 +799,14 @@ where
 
             let confirm = ScConfirmValue::new(toolbox::f4(pka, pka, ra, 0));
 
-            Sequence::new(data)
-                .try_add(&address)
-                .unwrap()
-                .try_add(&role)
-                .unwrap()
-                .try_add(&random)
-                .unwrap()
-                .try_add(&confirm)
-                .unwrap();
+            let mut sequence = Sequence::new(data);
 
-            self.oob_send.send(data).await;
+            sequence.try_add(&address).unwrap();
+            sequence.try_add(&role).unwrap();
+            sequence.try_add(&random).unwrap();
+            sequence.try_add(&confirm).unwrap();
+
+            self.oob_send.send(sequence.into_inner()).await;
         }
     }
 
@@ -836,7 +833,7 @@ where
     /// This will check the OOB to determine the validity of the raw data and the confirm within the
     /// raw data. True is returned if everything within `raw` is validated.
     fn process_received_oob(&self, raw: Vec<u8>) -> bool {
-        use crate::gap::assigned::{sc_confirm_value, sc_random_value, AssignedTypes, EirOrAdIterator, TryFromStruct};
+        use bo_tie_gap::assigned::{sc_confirm_value, sc_random_value, AssignedTypes, EirOrAdIterator, TryFromStruct};
 
         let mut rb = None;
         let mut cb = None;

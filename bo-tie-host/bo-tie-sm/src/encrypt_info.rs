@@ -191,7 +191,7 @@ impl CommandData for IdentityAddressInformation {
 
         let mut v = alloc::vec![addr_type_val];
 
-        v.extend_from_slice(&self.address);
+        v.extend_from_slice(&self.address.0);
 
         v
     }
@@ -204,7 +204,7 @@ impl CommandData for IdentityAddressInformation {
                 _ => return Err(Error::Value),
             };
 
-            let mut address = crate::BluetoothDeviceAddress::default();
+            let mut address = crate::BluetoothDeviceAddress::zeroed();
 
             address.copy_from_slice(&icd[1..]);
 

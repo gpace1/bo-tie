@@ -35,7 +35,7 @@ pub(super) type DHSharedSecret = [u8; 32];
 
 impl super::GetXOfP256Key for PubKey {
     fn x(&self) -> [u8; 32] {
-        let encoded_point = elliptic_curve::sec1::EncodedPoint::from(self);
+        let encoded_point = elliptic_curve::sec1::EncodedPoint::<p256::NistP256>::from(self);
 
         let mut ret = [0; 32];
 
@@ -49,7 +49,7 @@ impl super::CommandData for PubKey {
     /// # Panics
     /// This will panic if `PubKey` is compressed
     fn into_icd(self) -> alloc::vec::Vec<u8> {
-        let encoded_point = elliptic_curve::sec1::EncodedPoint::from(&self);
+        let encoded_point = elliptic_curve::sec1::EncodedPoint::<p256::NistP256>::from(&self);
 
         let mut key = alloc::vec::Vec::with_capacity(64);
 
@@ -387,46 +387,6 @@ pub fn g2(u: [u8; 32], v: [u8; 32], x: u128, y: u128) -> u32 {
     m[64..80].copy_from_slice(&y.to_be_bytes());
 
     aes_cmac_generate(x, &m) as u32
-}
-
-/// AES-CMAC subkey generation algorithm
-///
-/// Derived from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
-fn aes_cmac_subkey_gen(k: u128) -> (u128, u128) {
-    const RB: u128 = 0x87;
-
-    let l = e(k, 0);
-
-    let k1 = if (l & (1 << 127)) == 0 { l << 1 } else { (l << 1) ^ RB };
-
-    let k2 = if (k1 & (1 << 127)) == 0 {
-        k1 << 1
-    } else {
-        (k1 << 1) ^ RB
-    };
-
-    (k1, k2)
-}
-
-fn aes_cmac_padding(r: &[u8]) -> u128 {
-    let unpad = r
-        .iter()
-        .enumerate()
-        .fold(0u128, |p, (i, v)| p | (<u128>::from(*v) << (8 * (15 - i))));
-
-    unpad | (1 << (127 - (8 * r.len())))
-}
-
-/// Convert a slice of *plain text* with a length of 16 into a u128, big endian value.
-///
-/// The AES algorithm require that the plain text be in big endian order to produce a *cypher text*
-/// that is also in big endian order.
-fn to_u128_be(chunk_16_bytes: &[u8]) -> u128 {
-    let mut c = [0u8; 16];
-
-    c.clone_from_slice(chunk_16_bytes);
-
-    <u128>::from_ne_bytes(c).to_be()
 }
 
 /// A structure used to create the address structures used in pairing function [`f5`] and [`f6`]
