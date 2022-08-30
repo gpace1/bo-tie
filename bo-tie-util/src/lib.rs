@@ -55,6 +55,7 @@ use core::ops::{Deref, DerefMut};
 /// digits is desired, it can be done using either the implementation for
 /// [`LowerHex`](core::fmt::LowerHex) or [`UpperHex`](core::fmt::UpperHex).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BluetoothDeviceAddress(pub [u8; 6]);
 
 impl BluetoothDeviceAddress {
