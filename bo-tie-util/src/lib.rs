@@ -232,7 +232,7 @@ impl BluetoothDeviceAddress {
 }
 
 impl Deref for BluetoothDeviceAddress {
-    type Target = [u8; 6];
+    type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         &self.0
