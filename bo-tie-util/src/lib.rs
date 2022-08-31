@@ -333,6 +333,346 @@ impl UpperHex for BluetoothDeviceAddress {
     }
 }
 
+/// Device Features
+///
+/// This is the list of the general supported device features of the BR/EDR Controller. This list
+/// does not include the LE supported features nor the Extended supported features. This list can be
+/// found within the Bluetooth Specification in volume 2, part C, section 3.
+///
+/// # Note
+/// If a features begins with a number or symbol, the number or symbol will be spelled out.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Features {
+    ThreeSlotEnhancedDataRateAclPackets,
+    ThreeSlotEnhancedDataRateEscoPackets,
+    ThreeSlotPackets,
+    FiveSlotEnhancedDataRateAclPackets,
+    FiveSlotPackets,
+    ALawLogSynchronousData,
+    AfhCapableCentral,
+    AfhCapablePeripheral,
+    AfhClassificationCentral,
+    AfhClassificationPeripheral,
+    BrEdrNotSupported,
+    BroadcastEncryption,
+    ChannelQualityDrivenDataRate,
+    ConnectionlessPeripheralBroadcastReceiverOperation,
+    ConnectionlessPeripheralBroadcastTransmissionOperation,
+    CvsdSynchronousData,
+    CoarseClockAdjustment,
+    EncapsulatedPdu,
+    Encryption,
+    EnhancedDataRateAcl2MbsMode,
+    EnhancedDataRateAcl3MbsMode,
+    EnhancedDataRateEsco2MbsMode,
+    EnhancedDataRateEsco3MbsMode,
+    EnhancedInquiryScan,
+    EnhancedPowerControl,
+    ErroneousDataReporting,
+    Ev4Packets,
+    Ev5Packets,
+    ExtendedFeatures,
+    ExtendedInquiryResponse,
+    ExtendedScoLink,
+    FlowControlLag(u8),
+    GeneralizedInterlacedScan,
+    HoldMode,
+    Hv2Packets,
+    Hv3Packets,
+    InquiryResponseNotificationEvent,
+    InterlacedInquiryScan,
+    InterlacedPageScan,
+    LeSupportedController,
+    LeSupportedHost,
+    LinkSupervisionTimeoutChangeEvent,
+    MuLawLogSynchronousData,
+    NonFlushablePacketBoundaryFlag,
+    PagingParameterNegotiation,
+    PauseEncryption,
+    Ping,
+    PowerControl,
+    PowerControlRequests,
+    RoleSwitch,
+    RssiWithInquiryResults,
+    ScoLink,
+    SecureConnectionsControllerSupport,
+    SecureConnectionsHostSupport,
+    SecureSimplePairingControllerSupport,
+    SecureSimplePairingHostSupport,
+    SimultaneousLeAndBrEdrToSameDeviceCapable,
+    SlotAvailabilityMask,
+    SlotOffset,
+    SniffMode,
+    SniffSubrating,
+    SynchronizationScan,
+    SynchronizationTrain,
+    TimingAccuracy,
+    TrainNudging,
+    TransparentSynchronousData,
+    VariableInquiryTxPowerLevel,
+}
+
+macro_rules! is_bit_set {
+    ( $bits:ident, ($index:expr,$bit:expr), $enumeration:expr) => {{
+        if ($bits[$index] & (1 << $bit)) != 0 {
+            Some($enumeration)
+        } else {
+            None
+        }
+    }};
+}
+
+impl Features {
+    /// Check if a feature is enabled
+    ///
+    /// This is used to check if a feature is enabled within the array `flags`. This takes the
+    /// positions `byte` and `bit` to check within `flags`. `byte` is the index of the byte that
+    /// contains the flag and `bit` is the mask for the bit within the flag.
+    pub fn from_bit(page: usize, byte: usize, bit: u8, flags: &[u8; 8]) -> Option<Self> {
+        match (page, byte, bit) {
+            (0, 0, 0) => is_bit_set!(flags, (0, 0), Features::ThreeSlotPackets),
+            (0, 0, 1) => is_bit_set!(flags, (0, 1), Features::FiveSlotPackets),
+            (0, 0, 2) => is_bit_set!(flags, (0, 2), Features::Encryption),
+            (0, 0, 3) => is_bit_set!(flags, (0, 3), Features::SlotOffset),
+            (0, 0, 4) => is_bit_set!(flags, (0, 4), Features::TimingAccuracy),
+            (0, 0, 5) => is_bit_set!(flags, (0, 5), Features::RoleSwitch),
+            (0, 0, 6) => is_bit_set!(flags, (0, 6), Features::HoldMode),
+            (0, 0, 7) => is_bit_set!(flags, (0, 7), Features::SniffMode),
+            (0, 1, 1) => is_bit_set!(flags, (1, 1), Features::PowerControlRequests),
+            (0, 1, 2) => is_bit_set!(flags, (1, 2), Features::ChannelQualityDrivenDataRate),
+            (0, 1, 3) => is_bit_set!(flags, (1, 3), Features::ScoLink),
+            (0, 1, 4) => is_bit_set!(flags, (1, 4), Features::Hv2Packets),
+            (0, 1, 5) => is_bit_set!(flags, (1, 5), Features::Hv3Packets),
+            (0, 1, 6) => is_bit_set!(flags, (1, 6), Features::MuLawLogSynchronousData),
+            (0, 1, 7) => is_bit_set!(flags, (1, 7), Features::ALawLogSynchronousData),
+            (0, 2, 0) => is_bit_set!(flags, (2, 0), Features::CvsdSynchronousData),
+            (0, 2, 1) => is_bit_set!(flags, (2, 1), Features::PagingParameterNegotiation),
+            (0, 2, 2) => is_bit_set!(flags, (2, 2), Features::PowerControl),
+            (0, 2, 3) => is_bit_set!(flags, (2, 3), Features::TransparentSynchronousData),
+            (0, 2, 4) => {
+                let flow_control_lag = flags[2] & (7 << 4);
+
+                if flow_control_lag != 0 {
+                    Some(Features::FlowControlLag(flow_control_lag >> 4))
+                } else {
+                    None
+                }
+            }
+            (0, 2, 7) => is_bit_set!(flags, (2, 7), Features::BroadcastEncryption),
+            (0, 3, 1) => is_bit_set!(flags, (3, 1), Features::EnhancedDataRateAcl2MbsMode),
+            (0, 3, 2) => is_bit_set!(flags, (3, 2), Features::EnhancedDataRateAcl3MbsMode),
+            (0, 3, 3) => is_bit_set!(flags, (3, 3), Features::EnhancedInquiryScan),
+            (0, 3, 4) => is_bit_set!(flags, (3, 4), Features::InterlacedInquiryScan),
+            (0, 3, 5) => is_bit_set!(flags, (3, 5), Features::InterlacedPageScan),
+            (0, 3, 6) => is_bit_set!(flags, (2, 6), Features::RssiWithInquiryResults),
+            (0, 3, 7) => is_bit_set!(flags, (3, 7), Features::ExtendedScoLink),
+            (0, 4, 0) => is_bit_set!(flags, (4, 0), Features::Ev4Packets),
+            (0, 4, 1) => is_bit_set!(flags, (4, 1), Features::Ev5Packets),
+            (0, 4, 3) => is_bit_set!(flags, (4, 2), Features::AfhCapablePeripheral),
+            (0, 4, 4) => is_bit_set!(flags, (4, 4), Features::AfhClassificationPeripheral),
+            (0, 4, 5) => is_bit_set!(flags, (4, 5), Features::BrEdrNotSupported),
+            (0, 4, 6) => is_bit_set!(flags, (4, 6), Features::LeSupportedController),
+            (0, 4, 7) => is_bit_set!(flags, (4, 7), Features::ThreeSlotEnhancedDataRateAclPackets),
+            (0, 5, 0) => is_bit_set!(flags, (5, 0), Features::FiveSlotEnhancedDataRateAclPackets),
+            (0, 5, 1) => is_bit_set!(flags, (5, 1), Features::SniffSubrating),
+            (0, 5, 2) => is_bit_set!(flags, (5, 2), Features::PauseEncryption),
+            (0, 5, 3) => is_bit_set!(flags, (5, 3), Features::AfhCapableCentral),
+            (0, 5, 4) => is_bit_set!(flags, (5, 4), Features::AfhClassificationCentral),
+            (0, 5, 5) => is_bit_set!(flags, (5, 5), Features::EnhancedDataRateEsco2MbsMode),
+            (0, 5, 6) => is_bit_set!(flags, (5, 6), Features::EnhancedDataRateEsco3MbsMode),
+            (0, 5, 7) => is_bit_set!(flags, (5, 7), Features::ThreeSlotEnhancedDataRateEscoPackets),
+            (0, 6, 0) => is_bit_set!(flags, (6, 0), Features::ExtendedInquiryResponse),
+            (0, 6, 7) => is_bit_set!(flags, (6, 7), Features::SimultaneousLeAndBrEdrToSameDeviceCapable),
+            (0, 6, 3) => is_bit_set!(flags, (6, 3), Features::SecureSimplePairingControllerSupport),
+            (0, 6, 4) => is_bit_set!(flags, (6, 4), Features::EncapsulatedPdu),
+            (0, 6, 5) => is_bit_set!(flags, (6, 5), Features::ErroneousDataReporting),
+            (0, 6, 6) => is_bit_set!(flags, (6, 6), Features::NonFlushablePacketBoundaryFlag),
+            (0, 7, 0) => is_bit_set!(flags, (7, 0), Features::LinkSupervisionTimeoutChangeEvent),
+            (0, 7, 1) => is_bit_set!(flags, (7, 1), Features::VariableInquiryTxPowerLevel),
+            (0, 7, 2) => is_bit_set!(flags, (7, 2), Features::EnhancedPowerControl),
+            (0, 7, 7) => is_bit_set!(flags, (7, 7), Features::ExtendedFeatures),
+            (1, 0, 0) => is_bit_set!(flags, (0, 0), Features::SecureSimplePairingHostSupport),
+            (1, 0, 1) => is_bit_set!(flags, (0, 1), Features::LeSupportedHost),
+            (1, 0, 3) => is_bit_set!(flags, (0, 3), Features::SecureConnectionsHostSupport),
+            (2, 0, 0) => is_bit_set!(
+                flags,
+                (0, 0),
+                Features::ConnectionlessPeripheralBroadcastReceiverOperation
+            ),
+            (2, 0, 1) => is_bit_set!(
+                flags,
+                (0, 1),
+                Features::ConnectionlessPeripheralBroadcastTransmissionOperation
+            ),
+            (2, 0, 2) => is_bit_set!(flags, (0, 2), Features::SynchronizationTrain),
+            (2, 0, 3) => is_bit_set!(flags, (0, 3), Features::SynchronizationScan),
+            (2, 0, 4) => is_bit_set!(flags, (0, 4), Features::InquiryResponseNotificationEvent),
+            (2, 0, 5) => is_bit_set!(flags, (0, 5), Features::GeneralizedInterlacedScan),
+            (2, 0, 6) => is_bit_set!(flags, (0, 6), Features::CoarseClockAdjustment),
+            (2, 1, 0) => is_bit_set!(flags, (1, 0), Features::SecureConnectionsControllerSupport),
+            (2, 1, 1) => is_bit_set!(flags, (1, 1), Features::Ping),
+            (2, 1, 2) => is_bit_set!(flags, (1, 2), Features::SlotAvailabilityMask),
+            (2, 1, 3) => is_bit_set!(flags, (1, 3), Features::TrainNudging),
+            _ => None,
+        }
+    }
+
+    /// Get the page
+    ///
+    /// Features are grouped into pages. Most of the features are on page zero, but some of the
+    /// other features are on the other pages. Features on page zero can be discovered
+    pub fn page(&self) -> usize {
+        match self {
+            Features::ThreeSlotEnhancedDataRateAclPackets => 0,
+            Features::ThreeSlotEnhancedDataRateEscoPackets => 0,
+            Features::ThreeSlotPackets => 0,
+            Features::FiveSlotEnhancedDataRateAclPackets => 0,
+            Features::FiveSlotPackets => 0,
+            Features::ALawLogSynchronousData => 0,
+            Features::AfhCapableCentral => 0,
+            Features::AfhCapablePeripheral => 0,
+            Features::AfhClassificationCentral => 0,
+            Features::AfhClassificationPeripheral => 0,
+            Features::BrEdrNotSupported => 0,
+            Features::BroadcastEncryption => 0,
+            Features::ChannelQualityDrivenDataRate => 0,
+            Features::ConnectionlessPeripheralBroadcastReceiverOperation => 2,
+            Features::ConnectionlessPeripheralBroadcastTransmissionOperation => 2,
+            Features::CvsdSynchronousData => 0,
+            Features::CoarseClockAdjustment => 2,
+            Features::EncapsulatedPdu => 0,
+            Features::Encryption => 0,
+            Features::EnhancedDataRateAcl2MbsMode => 0,
+            Features::EnhancedDataRateAcl3MbsMode => 0,
+            Features::EnhancedDataRateEsco2MbsMode => 0,
+            Features::EnhancedDataRateEsco3MbsMode => 0,
+            Features::EnhancedInquiryScan => 0,
+            Features::EnhancedPowerControl => 0,
+            Features::ErroneousDataReporting => 0,
+            Features::Ev4Packets => 0,
+            Features::Ev5Packets => 0,
+            Features::ExtendedFeatures => 0,
+            Features::ExtendedInquiryResponse => 0,
+            Features::ExtendedScoLink => 0,
+            Features::FlowControlLag(_) => 0,
+            Features::GeneralizedInterlacedScan => 2,
+            Features::HoldMode => 0,
+            Features::Hv2Packets => 0,
+            Features::Hv3Packets => 0,
+            Features::InquiryResponseNotificationEvent => 2,
+            Features::InterlacedInquiryScan => 0,
+            Features::InterlacedPageScan => 0,
+            Features::LeSupportedController => 0,
+            Features::LeSupportedHost => 1,
+            Features::LinkSupervisionTimeoutChangeEvent => 0,
+            Features::MuLawLogSynchronousData => 0,
+            Features::NonFlushablePacketBoundaryFlag => 0,
+            Features::PagingParameterNegotiation => 0,
+            Features::PauseEncryption => 0,
+            Features::Ping => 2,
+            Features::PowerControl => 0,
+            Features::PowerControlRequests => 0,
+            Features::RoleSwitch => 0,
+            Features::RssiWithInquiryResults => 0,
+            Features::ScoLink => 0,
+            Features::SecureConnectionsControllerSupport => 2,
+            Features::SecureConnectionsHostSupport => 1,
+            Features::SecureSimplePairingControllerSupport => 0,
+            Features::SecureSimplePairingHostSupport => 1,
+            Features::SimultaneousLeAndBrEdrToSameDeviceCapable => 0,
+            Features::SlotAvailabilityMask => 2,
+            Features::SlotOffset => 0,
+            Features::SniffMode => 0,
+            Features::SniffSubrating => 0,
+            Features::SynchronizationScan => 2,
+            Features::SynchronizationTrain => 2,
+            Features::TimingAccuracy => 0,
+            Features::TrainNudging => 2,
+            Features::TransparentSynchronousData => 0,
+            Features::VariableInquiryTxPowerLevel => 0,
+        }
+    }
+}
+
+/// Features iterator
+#[derive(Debug, Clone, Copy)]
+pub struct EnabledFeaturesIter {
+    page: usize,
+    byte: usize,
+    bit: u8,
+    flags: [u8; 8],
+}
+
+impl EnabledFeaturesIter {
+    pub fn new(page: usize, flags: [u8; 8]) -> Self {
+        EnabledFeaturesIter {
+            page,
+            byte: 0,
+            bit: 0,
+            flags,
+        }
+    }
+
+    /// Resets the iterator back to the beginning of the feature list
+    pub fn reset(&mut self) {
+        self.byte = 0;
+        self.bit = 0;
+    }
+
+    /// Get the page of the features
+    pub fn page(&self) -> usize {
+        self.page
+    }
+}
+
+impl Iterator for EnabledFeaturesIter {
+    type Item = Features;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use core::iter::successors;
+
+        let max_byte = match self.page {
+            0 => 7,
+            1 => 0,
+            2 => 2,
+            _ => unreachable!(),
+        };
+
+        for byte in successors(Some(self.byte), |byte| (*byte != max_byte).then_some(byte + 1)) {
+            for bit in successors(Some(self.bit), |bit| (*bit != 8).then_some(bit + 1)) {
+                match Features::from_bit(self.page, byte, bit, &self.flags) {
+                    Some(feature) => {
+                        self.bit = (bit + 1) % 8;
+                        self.byte = if bit + 1 == 8 { byte + 1 } else { byte };
+
+                        return Some(feature);
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        None
+    }
+}
+
+impl Display for EnabledFeaturesIter {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        write!(f, "page: {},", self.page)?;
+        write!(f, "Enabled features: [")?;
+
+        let mut features = self.clone();
+
+        features.reset();
+
+        for ref feature in features {
+            write!(f, "{:?}", feature)?;
+        }
+
+        write!(f, "]")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
