@@ -1,0 +1,7 @@
+[package]
+name = "bo-tie-hci-util"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bo-tie-util = { path = "../../bo-tie-util" }
