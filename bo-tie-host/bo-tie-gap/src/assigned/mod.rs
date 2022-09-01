@@ -469,6 +469,9 @@ impl<'a> EirOrAdStruct<'a> {
 pub struct EirOrAdIterator<'a>(&'a [u8]);
 
 impl<'a> EirOrAdIterator<'a> {
+    /// Create a new `EirOrAdIterator`
+    ///
+    /// The created iterator will iterate over the EIR or AD structures within `data`.
     pub fn new(data: &'a [u8]) -> Self {
         EirOrAdIterator(data)
     }
