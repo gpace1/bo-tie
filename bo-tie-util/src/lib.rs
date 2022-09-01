@@ -695,6 +695,7 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "cryptography")]
     #[test]
     fn invalid_non_resolvable_private_address() {
         assert_eq!(
@@ -713,6 +714,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cryptography")]
     #[test]
     fn invalid_resolvable_private_address() {
         let irk = 1234u128;
@@ -733,6 +735,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cryptography")]
     #[test]
     fn resolve_resolvable_private_address() {
         let irk = 123456u128;
@@ -802,5 +805,42 @@ mod tests {
             Err(BluetoothDeviceAddress::TOO_FEW_CHARS),
             BluetoothDeviceAddress::try_from("123456789a")
         );
+    }
+
+    #[test]
+    fn enabled_features_iter_test() {
+        use self::Features::*;
+
+        let features = [
+            ThreeSlotPackets,
+            FiveSlotPackets,
+            Encryption,
+            SlotOffset,
+            TimingAccuracy,
+            RoleSwitch,
+            HoldMode,
+            SniffMode,
+            PowerControlRequests,
+            Hv2Packets,
+            Hv3Packets,
+            PagingParameterNegotiation,
+            FlowControlLag(2),
+            BroadcastEncryption,
+            Ev4Packets,
+            AfhCapablePeripheral,
+            BrEdrNotSupported,
+            LeSupportedController,
+            VariableInquiryTxPowerLevel,
+        ];
+
+        let raw = [0xFF, 0x32, 0xA2, 0x00, 0x65, 0x00, 0x00, 0x02];
+
+        for feature in EnabledFeaturesIter::new(0, raw) {
+            assert!(
+                features.iter().find(|&&x| x == feature).is_some(),
+                "Didn't find feature {:?} in list",
+                feature
+            );
+        }
     }
 }
