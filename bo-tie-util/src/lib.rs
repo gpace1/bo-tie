@@ -54,7 +54,7 @@ use core::ops::{Deref, DerefMut};
 /// implementation of [`Display`](core::fmt::Display). If the format with just twelve hexidecimal
 /// digits is desired, it can be done using either the implementation for
 /// [`LowerHex`](core::fmt::LowerHex) or [`UpperHex`](core::fmt::UpperHex).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BluetoothDeviceAddress(pub [u8; 6]);
 
@@ -307,7 +307,7 @@ impl Display for BluetoothDeviceAddress {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:X}:{:X}:{:X}:{:X}:{:X}:{:X}",
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
             self.0[5], self.0[4], self.0[3], self.0[2], self.0[1], self.0[0]
         )
     }
@@ -317,7 +317,7 @@ impl LowerHex for BluetoothDeviceAddress {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:x}{:x}{:x}{:x}{:x}{:x}",
+            "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
             self.0[5], self.0[4], self.0[3], self.0[2], self.0[1], self.0[0]
         )
     }
@@ -327,7 +327,7 @@ impl UpperHex for BluetoothDeviceAddress {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{:X}{:X}{:X}{:X}{:X}{:X}",
+            "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
             self.0[5], self.0[4], self.0[3], self.0[2], self.0[1], self.0[0]
         )
     }
