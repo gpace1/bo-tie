@@ -54,5 +54,6 @@ extern crate alloc;
 pub use bo_tie_util::BluetoothDeviceAddress;
 
 pub mod assigned;
+pub mod eir;
 pub mod oob_block;
 pub mod scan;
