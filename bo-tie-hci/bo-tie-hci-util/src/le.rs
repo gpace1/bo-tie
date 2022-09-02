@@ -1,4 +1,4 @@
-//! HCI Utilites specific to LE
+//! HCI Utilities specific to LE
 //!
 //! These utilities are specific to HCI LE events and LE commands.
 
@@ -33,18 +33,18 @@ impl WhiteListedAddressType {
 /// # Notes
 /// These are the full explanation for the last two enumerations (as copied from
 /// the core specification):
-/// - RPAFromLocalIRKPA -> Controller generates Resolvable Private Address based on
+/// - RpaFromLocalIrkOrPublicAddress -> Controller generates Resolvable Private Address based on
 ///     the local IRK from the resolving list. If the resolving list contains no
 ///     matching entry, use the public address.
-/// - RPAFromLocalIRKRA -> Controller generates Resolvable Private Address based on
+/// - RpaFromLocalIrkOrRandomAddress -> Controller generates Resolvable Private Address based on
 ///     the local IRK from the resolving list. If the resolving list contains no
 ///     matching entry, use the random address from LE_Set_Random_Address.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum OwnAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
-    RPAFromLocalIRKOrPA,
-    RPAFromLocalIRKOrRA,
+    RpaFromLocalIrkOrPublicAddress,
+    RpaFromLocalIrkOrRandomAddress,
 }
 
 impl OwnAddressType {
@@ -52,8 +52,8 @@ impl OwnAddressType {
         match self {
             OwnAddressType::PublicDeviceAddress => 0x00,
             OwnAddressType::RandomDeviceAddress => 0x01,
-            OwnAddressType::RPAFromLocalIRKOrPA => 0x02,
-            OwnAddressType::RPAFromLocalIRKOrRA => 0x03,
+            OwnAddressType::RpaFromLocalIrkOrPublicAddress => 0x02,
+            OwnAddressType::RpaFromLocalIrkOrRandomAddress => 0x03,
         }
     }
 }

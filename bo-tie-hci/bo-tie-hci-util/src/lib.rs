@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod events;
 pub mod le;
+pub mod opcodes;
 
 use core::fmt;
 
