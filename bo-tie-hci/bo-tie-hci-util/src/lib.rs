@@ -95,3 +95,58 @@ pub enum EncryptionLevel {
     E0,
     AESCCM,
 }
+
+/// A matcher of events in response to a command
+///
+/// This is used for matching a HCI packet from the controller to the events [Command Complete] or
+/// [Command Status]. Either one will match so long as the opcode within the event matches the
+/// opcode within the `CommandEventMatcher`.
+///
+/// [Command Complete]: events::parameters::CommandCompleteData
+/// [Command Status]: events::parameters::CommandStatusData
+#[derive(Clone, Copy)]
+pub struct CommandEventMatcher {
+    op_code: opcodes::HCICommand,
+    event: events::Events,
+    get_op_code: for<'a> fn(&'a [u8]) -> Option<u16>,
+}
+
+impl CommandEventMatcher {
+    /// Create a new `CommandEventMatcher` for the event `CommandComplete`
+    fn new_command_complete(op_code: opcodes::HCICommand) -> Self {
+        fn get_op_code(raw: &[u8]) -> Option<u16> {
+            // bytes 3 and 4 are the opcode within an HCI event
+            // packet containing a Command Complete event.
+
+            let b1 = raw.get(3)?;
+            let b2 = raw.get(4)?;
+
+            Some(<u16>::from_le_bytes([*b1, *b2]))
+        }
+
+        Self {
+            op_code,
+            event: events::Events::CommandComplete,
+            get_op_code,
+        }
+    }
+
+    /// Create a new `CommandEventMatcher` for the event `CommandStatus`
+    fn new_command_status(op_code: opcodes::HCICommand) -> Self {
+        fn get_op_code(raw: &[u8]) -> Option<u16> {
+            // bytes 4 and 5 are the opcode within an HCI event
+            // packet containing a Command Status event.
+
+            let b1 = raw.get(4)?;
+            let b2 = raw.get(5)?;
+
+            Some(<u16>::from_le_bytes([*b1, *b2]))
+        }
+
+        Self {
+            op_code,
+            event: events::Events::CommandStatus,
+            get_op_code,
+        }
+    }
+}
