@@ -11,17 +11,6 @@ pub mod events;
 pub mod le;
 
 use core::fmt;
-use core::iter::Iterator;
-
-macro_rules! is_bit_set {
-    ( $bits:ident, ($indx:expr,$bit:expr), $enum:tt) => {
-        if ($bits[$indx] & (1 << $bit)) != 0 {
-            Some($enum)
-        } else {
-            None
-        }
-    };
-}
 
 /// The connection handle
 ///

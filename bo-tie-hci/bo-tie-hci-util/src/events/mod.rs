@@ -39,7 +39,7 @@ macro_rules! make_baddr {
     ( $packet:ident, $start:expr ) => {{
         let mut address = [0u8; 6];
         address.copy_from_slice(&$packet[$start..($start + 6)]);
-        BluetoothDeviceAddress::from(address)
+        BluetoothDeviceAddress(address)
     }};
 }
 
@@ -325,23 +325,23 @@ impl_try_from_for_raw_packet! {
     {
         match chew!(packet) {
             0x01 => Ok(LeMetaData::ConnectionComplete(LEConnectionCompleteData::try_from(packet)?)),
-            0x02 => Ok(LeMetaData::AdvertisingReport(LEAdvertisingReportData::buf_from(packet))),
+            0x02 => Ok(LeMetaData::AdvertisingReport(Multiple::<Result<LEAdvertisingReportData, alloc::string::String>>::try_from(packet)?)),
             0x03 => Ok(LeMetaData::ConnectionUpdateComplete(LEConnectionUpdateCompleteData::try_from(packet)?)),
             0x04 => Ok(LeMetaData::ReadRemoteFeaturesComplete(LEReadRemoteFeaturesCompleteData::try_from(packet)?)),
-            0x05 => Ok(LeMetaData::LongTermKeyRequest(LELongTermKeyRequestData::from(packet))),
+            0x05 => Ok(LeMetaData::LongTermKeyRequest(LELongTermKeyRequestData::try_from(packet)?)),
             0x06 => Ok(LeMetaData::RemoteConnectionParameterRequest(LERemoteConnectionParameterRequestData::try_from(packet)?)),
             0x07 => Ok(LeMetaData::DataLengthChange(LEDataLengthChangeData::try_from(packet)?)),
-            0x08 => Ok(LeMetaData::ReadLocalP256PublicKeyComplete(LEReadLocalP256PublicKeyCompleteData::from(packet))),
-            0x09 => Ok(LeMetaData::GenerateDHKeyComplete(LEGenerateDHKeyCompleteData::from(packet))),
+            0x08 => Ok(LeMetaData::ReadLocalP256PublicKeyComplete(LEReadLocalP256PublicKeyCompleteData::try_from(packet)?)),
+            0x09 => Ok(LeMetaData::GenerateDHKeyComplete(LEGenerateDHKeyCompleteData::try_from(packet)?)),
             0x0A => Ok(LeMetaData::EnhancedConnectionComplete(LEEnhancedConnectionCompleteData::try_from(packet)?)),
-            0x0B => Ok(LeMetaData::DirectedAdvertisingReport(LEDirectedAdvertisingReportData::buf_from(packet))),
+            0x0B => Ok(LeMetaData::DirectedAdvertisingReport(Multiple::<Result<LEDirectedAdvertisingReportData, alloc::string::String>>::try_from(packet)?)),
             0x0C => Ok(LeMetaData::PHYUpdateComplete(LEPHYUpdateCompleteData::try_from(packet)?)),
-            0x0D => Ok(LeMetaData::ExtendedAdvertisingReport(LEExtendedAdvertisingReportData::buf_from(packet))),
+            0x0D => Ok(LeMetaData::ExtendedAdvertisingReport(Multiple::<Result<LEExtendedAdvertisingReportData, alloc::string::String>>::try_from(packet)?)),
             0x0E => Ok(LeMetaData::PeriodicAdvertisingSyncEstablished(LEPeriodicAdvertisingSyncEstablishedData::try_from(packet)?)),
             0x0F => Ok(LeMetaData::PeriodicAdvertisingReport(LEPeriodicAdvertisingReportData::try_from(packet)?)),
-            0x10 => Ok(LeMetaData::PeriodicAdvertisingSyncLost(LEPeriodicAdvertisingSyncLostData::from(packet))),
+            0x10 => Ok(LeMetaData::PeriodicAdvertisingSyncLost(LEPeriodicAdvertisingSyncLostData::try_from(packet)?)),
             0x11 => Ok(LeMetaData::ScanTimeout),
-            0x12 => Ok(LeMetaData::AdvertisingSetTerminated(LEAdvertisingSetTerminatedData::from(packet))),
+            0x12 => Ok(LeMetaData::AdvertisingSetTerminated(LEAdvertisingSetTerminatedData::try_from(packet)?)),
             0x13 => Ok(LeMetaData::ScanRequestReceived(LEScanRequestReceivedData::try_from(packet)?)),
             0x14 => Ok(LeMetaData::ChannelSelectionAlgorithm(LEChannelSelectionAlgorithmData::try_from(packet)?)),
             _    => Err(alloc::format!("Unknown LE meta event ID: {}", packet[0])),
@@ -459,15 +459,15 @@ macro_rules! events_markup {
                 let mut packet = data;
 
                 // packet[2] is the LeMeta specific sub event code if the event is LeMeta
-                let event_code = crate::hci::events::$EnumName::try_from_event_codes(chew!(packet), packet[2])?;
+                let event_code = crate::events::$EnumName::try_from_event_codes(chew!(packet), packet[2])?;
 
                 // Get the length of the packet and convert it into a usize
                 let event_len = chew!(packet).into();
 
                 match event_code {
                     $( crate::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
-                        Ok(crate::hci::events::$EnumDataName::$name(
-                            crate::hci::events::$data::<$( $type ),*>::try_from( &packet[..event_len] )?)),
+                        Ok(crate::events::$EnumDataName::$name(
+                            crate::events::$data::<$( $type ),*>::try_from( &packet[..event_len] )?)),
                     )*
                 }
             }

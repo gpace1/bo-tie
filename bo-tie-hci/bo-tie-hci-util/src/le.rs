@@ -49,7 +49,7 @@ pub enum OwnAddressType {
 
 impl OwnAddressType {
     pub fn val(self) -> u8 {
-        match *self {
+        match self {
             OwnAddressType::PublicDeviceAddress => 0x00,
             OwnAddressType::RandomDeviceAddress => 0x01,
             OwnAddressType::RPAFromLocalIRKOrPA => 0x02,
@@ -300,7 +300,10 @@ impl AddressType {
         }
     }
 
-    pub(crate) fn into_raw(&self) -> u8 {
+    /// Get the coded value for the `AddressType`
+    ///
+    /// The return is the value that is passed over the HCI.
+    pub fn into_raw(&self) -> u8 {
         match *self {
             AddressType::PublicDeviceAddress => 0x0,
             AddressType::RandomDeviceAddress => 0x1,
@@ -333,7 +336,7 @@ impl ExtendedAdvertisingAndScanResponseData {
     /// [`EirOrAdStruct`]: bo_tie_gap::EirOrAdStruct
     #[cfg(feature = "gap")]
     pub fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator {
-        crate::gap::assigned::EirOrAdIterator::from(self.data.as_ref())
+        bo_tie_gap::assigned::EirOrAdIterator::from(self.data.as_ref())
     }
 }
 

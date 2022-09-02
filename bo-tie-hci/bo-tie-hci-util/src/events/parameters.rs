@@ -541,8 +541,7 @@ where
 pub struct CommandCompleteData {
     pub number_of_hci_command_packets: u8,
     pub command_opcode: Option<u16>,
-    /// only public for hci
-    pub(super) raw_data: BufferType<u8>,
+    pub return_parameter: BufferType<u8>,
 }
 
 impl_try_from_for_raw_packet! {
@@ -560,7 +559,7 @@ impl_try_from_for_raw_packet! {
 
                 if opcode_exists { Some(opcode) } else { None }
             },
-            raw_data: if opcode_exists {
+            return_parameter: if opcode_exists {
                 packet.to_vec()
             }
             else {
@@ -1217,7 +1216,7 @@ impl_try_from_for_raw_packet! {
             maximum_page_number: chew!(packet),
             // DeviceFeatures::new does not need the exact size
             // for the features map associated to the page
-            extended_lmp_features: DeviceFeatures::new(page, chew!(packet, 8)).unwrap()
+            extended_lmp_features: DeviceFeatures::new(page.into(), chew!(packet, 8)).unwrap()
         })
     }
 }
@@ -1796,10 +1795,10 @@ pub struct LEConnectionCompleteData {
     pub master_clock_accuracy: ClockAccuracy,
 }
 
-impl LEConnectionCompleteData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
+impl_try_from_for_raw_packet! {
+    LEConnectionCompleteData,
+    packet,
+    {
         Ok(LEConnectionCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
@@ -1847,16 +1846,20 @@ pub struct LEAdvertisingReportData {
 }
 
 impl LEAdvertisingReportData {
-    /// Iterator over the AD structures
+    /// Get an iterator over the AD structures
+    ///
+    /// This returns an iterator that will return the AD structures within field `data`.
     #[cfg(feature = "gap")]
-    fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator<'_> {
+    pub fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator<'_> {
         bo_tie_gap::assigned::EirOrAdIterator::new(&self.data)
     }
+}
 
-    fn buf_from(data: &[u8]) -> BufferType<Result<Self, alloc::string::String>> {
-        let mut packet = data;
-
-        // The value of 127 indicates no rssi functionality
+impl_try_from_for_raw_packet! {
+    Multiple<Result<LEAdvertisingReportData, alloc::string::String>>,
+    packet,
+    {
+        // The value of 127 indicates no RSSI functionality
         fn get_rssi(val: u8) -> Option<i8> {
             if val != 127 {
                 Some(val as i8)
@@ -1889,7 +1892,7 @@ impl LEAdvertisingReportData {
             );
         }
 
-        reports
+        Ok(Multiple { data: reports})
     }
 }
 
@@ -1902,11 +1905,10 @@ pub struct LEConnectionUpdateCompleteData {
     pub supervision_timeout: SupervisionTimeout,
 }
 
-impl LEConnectionUpdateCompleteData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    LEConnectionUpdateCompleteData,
+    packet,
+    {
         Ok(LEConnectionUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
@@ -1924,11 +1926,10 @@ pub struct LEReadRemoteFeaturesCompleteData {
     pub features: LeDeviceFeatures,
 }
 
-impl LEReadRemoteFeaturesCompleteData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    LEReadRemoteFeaturesCompleteData,
+    packet,
+    {
         Ok(LEReadRemoteFeaturesCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
@@ -1944,16 +1945,15 @@ pub struct LELongTermKeyRequestData {
     pub encryption_diversifier: u16,
 }
 
-impl LELongTermKeyRequestData {
-    #[allow(unused_assignments)]
-    fn from(data: &[u8]) -> Self {
-        let mut packet = data;
-
-        LELongTermKeyRequestData {
+impl_try_from_for_raw_packet! {
+    LELongTermKeyRequestData,
+    packet,
+    {
+        Ok(LELongTermKeyRequestData {
             connection_handle: chew_handle!(packet),
             random_number: chew_u64!(packet),
             encryption_diversifier: chew_u16!(packet),
-        }
+        })
     }
 }
 
@@ -1966,11 +1966,10 @@ pub struct LERemoteConnectionParameterRequestData {
     pub timeout: SupervisionTimeout,
 }
 
-impl LERemoteConnectionParameterRequestData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    LERemoteConnectionParameterRequestData,
+    packet,
+    {
         Ok(LERemoteConnectionParameterRequestData {
             connection_handle: chew_handle!(packet),
             minimum_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))
@@ -2020,12 +2019,11 @@ pub struct LEDataLengthChangeData {
     pub max_rx_time: LEMaxTime,
 }
 
-impl LEDataLengthChangeData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
-        Ok(LEDataLengthChangeData {
+impl_try_from_for_raw_packet! {
+    LEDataLengthChangeData,
+    packet,
+    {
+                Ok(LEDataLengthChangeData {
             connection_handle: chew_handle!(packet),
             max_tx_octets: LEMaxOctets::from(chew_u16!(packet)),
             max_tx_time: LEMaxTime::from(chew_u16!(packet)),
@@ -2041,19 +2039,18 @@ pub struct LEReadLocalP256PublicKeyCompleteData {
     pub key: [u8; 64],
 }
 
-impl LEReadLocalP256PublicKeyCompleteData {
-    #[allow(unused_assignments)]
-    fn from(data: &[u8]) -> Self {
-        let mut packet = data;
-
-        LEReadLocalP256PublicKeyCompleteData {
+impl_try_from_for_raw_packet! {
+    LEReadLocalP256PublicKeyCompleteData,
+    packet,
+    {
+        Ok(LEReadLocalP256PublicKeyCompleteData {
             status: Error::from(chew!(packet)),
             key: {
                 let mut pub_key = [0u8; 64];
                 pub_key.copy_from_slice(chew!(packet, 256));
                 pub_key
             },
-        }
+        })
     }
 }
 
@@ -2064,19 +2061,18 @@ pub struct LEGenerateDHKeyCompleteData {
     pub key: [u8; 32],
 }
 
-impl LEGenerateDHKeyCompleteData {
-    #[allow(unused_assignments)]
-    fn from(data: &[u8]) -> Self {
-        let mut packet = data;
-
-        LEGenerateDHKeyCompleteData {
+impl_try_from_for_raw_packet! {
+    LEGenerateDHKeyCompleteData,
+    packet,
+    {
+        Ok(LEGenerateDHKeyCompleteData {
             status: Error::from(chew!(packet)),
             key: {
                 let mut dh_key = [0u8; 32];
                 dh_key.copy_from_slice(&packet[2..34]);
                 dh_key
             },
-        }
+        })
     }
 }
 
@@ -2095,11 +2091,10 @@ pub struct LEEnhancedConnectionCompleteData {
     pub master_clock_accuracy: ClockAccuracy,
 }
 
-impl LEEnhancedConnectionCompleteData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    LEEnhancedConnectionCompleteData,
+    packet,
+    {
         let peer_address_type: AddressType;
 
         macro_rules! if_rpa_is_used {
@@ -2181,11 +2176,10 @@ pub struct LEDirectedAdvertisingReportData {
     pub rssi: Option<i8>,
 }
 
-impl LEDirectedAdvertisingReportData {
-    #[allow(unused_assignments)]
-    fn buf_from(data: &[u8]) -> BufferType<Result<Self, alloc::string::String>> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    Multiple<Result<LEDirectedAdvertisingReportData, alloc::string::String>>,
+    packet,
+    {
         let report_count = chew!(packet) as usize;
 
         let mut vec = packet
@@ -2208,11 +2202,11 @@ impl LEDirectedAdvertisingReportData {
                     },
                 })
             })
-            .collect::<alloc::vec::Vec<Result<Self, alloc::string::String>>>();
+            .collect::<alloc::vec::Vec<_>>();
 
         vec.truncate(report_count);
 
-        vec
+        Ok(Multiple { data: vec })
     }
 }
 
@@ -2242,10 +2236,10 @@ pub struct LEPHYUpdateCompleteData {
     pub rx_phy: LEPhy,
 }
 
-impl LEPHYUpdateCompleteData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
+impl_try_from_for_raw_packet! {
+    LEPHYUpdateCompleteData,
+    packet,
+    {
         Ok(LEPHYUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
@@ -2388,10 +2382,10 @@ pub struct LEExtendedAdvertisingReportData {
     pub data: ExtendedAdvertisingAndScanResponseData,
 }
 
-impl LEExtendedAdvertisingReportData {
-    fn buf_from(data: &[u8]) -> BufferType<Result<LEExtendedAdvertisingReportData, alloc::string::String>> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    Multiple<Result<LEExtendedAdvertisingReportData, alloc::string::String>>,
+    packet,
+    {
         let mut reports = alloc::vec::Vec::with_capacity(chew!(packet) as usize);
 
         let mut process_packet = || {
@@ -2474,7 +2468,7 @@ impl LEExtendedAdvertisingReportData {
             reports.push(process_packet());
         }
 
-        reports
+        Ok(Multiple { data: reports })
     }
 }
 
@@ -2490,11 +2484,10 @@ pub struct LEPeriodicAdvertisingSyncEstablishedData {
     pub advertiser_clock_accuracy: ClockAccuracy,
 }
 
-impl LEPeriodicAdvertisingSyncEstablishedData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    LEPeriodicAdvertisingSyncEstablishedData,
+    packet,
+    {
         Ok(LEPeriodicAdvertisingSyncEstablishedData {
             status: Error::from(chew!(packet)),
             sync_handle: chew_handle!(packet),
@@ -2517,9 +2510,10 @@ pub struct LEPeriodicAdvertisingReportData {
     pub data: BufferType<u8>,
 }
 
-impl LEPeriodicAdvertisingReportData {
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
+impl_try_from_for_raw_packet! {
+    LEPeriodicAdvertisingReportData,
+    packet,
+    {
         Ok(LEPeriodicAdvertisingReportData {
             sync_handle: chew_handle!(packet),
             tx_power: {
@@ -2553,13 +2547,13 @@ pub struct LEPeriodicAdvertisingSyncLostData {
     pub sync_handle: ConnectionHandle,
 }
 
-impl LEPeriodicAdvertisingSyncLostData {
-    #[allow(unused_assignments)]
-    fn from(data: &[u8]) -> Self {
-        let mut packet = data;
-        LEPeriodicAdvertisingSyncLostData {
+impl_try_from_for_raw_packet! {
+    LEPeriodicAdvertisingSyncLostData,
+    packet,
+    {
+        Ok(LEPeriodicAdvertisingSyncLostData {
             sync_handle: chew_handle!(packet),
-        }
+        })
     }
 }
 
@@ -2571,17 +2565,16 @@ pub struct LEAdvertisingSetTerminatedData {
     pub num_completed_extended_advertising_events: u8,
 }
 
-impl LEAdvertisingSetTerminatedData {
-    #[allow(unused_assignments)]
-    fn from(data: &[u8]) -> Self {
-        let mut packet = data;
-
-        LEAdvertisingSetTerminatedData {
+impl_try_from_for_raw_packet! {
+    LEAdvertisingSetTerminatedData,
+    packet,
+    {
+        Ok(LEAdvertisingSetTerminatedData {
             status: Error::from(chew!(packet)),
             advertising_handle: chew!(packet),
             connection_handle: chew_handle!(packet),
             num_completed_extended_advertising_events: chew!(packet),
-        }
+        })
     }
 }
 
@@ -2592,11 +2585,10 @@ pub struct LEScanRequestReceivedData {
     pub scanner_address: BluetoothDeviceAddress,
 }
 
-impl LEScanRequestReceivedData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    LEScanRequestReceivedData,
+    packet,
+    {
         Ok(LEScanRequestReceivedData {
             advertising_handle: chew!(packet),
             scanner_address_type: AddressType::try_from_raw(chew!(packet))?,
@@ -2627,11 +2619,10 @@ pub struct LEChannelSelectionAlgorithmData {
     pub channel_selection_algorithm: LEChannelSelectionAlgorithm,
 }
 
-impl LEChannelSelectionAlgorithmData {
-    #[allow(unused_assignments)]
-    fn try_from(data: &[u8]) -> Result<Self, alloc::string::String> {
-        let mut packet = data;
-
+impl_try_from_for_raw_packet! {
+    LEChannelSelectionAlgorithmData,
+    packet,
+    {
         Ok(LEChannelSelectionAlgorithmData {
             connection_handle: chew_handle!(packet),
             channel_selection_algorithm: LEChannelSelectionAlgorithm::try_from(chew!(packet))?,
