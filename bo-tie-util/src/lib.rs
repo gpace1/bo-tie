@@ -333,15 +333,16 @@ impl UpperHex for BluetoothDeviceAddress {
     }
 }
 
-/// Device Features
+/// List of Device Features
 ///
-/// This is the list of the general supported device features of the BR/EDR Controller. This list
-/// does not include the LE supported features nor the Extended supported features. This list can be
-/// found within the Bluetooth Specification in volume 2, part C, section 3.
+/// This is the list of the general supported device features of the BR/EDR Controller, but they are
+/// also used by a LE (only) Controller. This does not include the LE supported features (which can
+/// be found within [`LeDeviceFeatures`]. This list can be found within the Bluetooth Specification
+/// in volume 2, part C, section 3.
 ///
 /// # Note
 /// If a features begins with a number or symbol, the number or symbol will be spelled out.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Ord, PartialOrd, Hash)]
 pub enum Features {
     ThreeSlotEnhancedDataRateAclPackets,
     ThreeSlotEnhancedDataRateEscoPackets,
@@ -448,30 +449,31 @@ impl Features {
 
     /// Check by position for a feature within a bit map of features.
     ///
-    /// This is used to check if a feature is enabled within the byte slice `features`. Features are
+    /// This is used to check if a feature is enabled within the bit map `features`. Features are
     /// group by their `page`. The normal LMP features are on page zero and the extended LMP
-    /// features are on page one or two. Different pages have different features. Input `index` is
-    /// used to get the byte containing the future, and input `bit` is the bit position of the bit
-    /// flag for the feature. If this bit is one then the corresponding `Future` is returned. If the
-    /// bit is zero then `None` is returned. `None` is also returned if any of the inputs are
-    /// invalid.
+    /// features are on page one or two. Different pages have different features and so the bit
+    /// within `features` are interpreted differently depending on the value of `page`. Input `byte`
+    /// is used as the indexer to get the byte within `features`. Input `bit` is the bit position
+    /// of the feature within the byte indexed by `byte`. If this bit is one then the corresponding
+    /// `Feature` is returned, but if the bit is zero then `None` is returned. `None` is also
+    /// returned if any of the inputs are invalid.
     ///
     /// Method [`check_within`] is much easier to use and should be used over `check_by_pos`.
     ///
     /// # Input Validation
     /// * `page` can be 0, 1, or 2.
-    /// * `index` must be less than the size of the features page.
-    ///   - If `page` is 0 then `index` must be less than 8.
-    ///   - If `page` is 1 then `index` must be equal to 0.
-    ///   - If `page` is 2 then `index` must be less than 3.
+    /// * `byte` must be less than the size of the features page.
+    ///   - If `page` is 0 then `byte` must be less than 8.
+    ///   - If `page` is 1 then `byte` must be equal to 0.
+    ///   - If `page` is 2 then `byte` must be less than 3.
     /// * `bit` mut be less than 8.
     /// * `features` *should* match the size of the page. If it is less than the expected size any
     ///   feature flags that map beyond the bounds of `features` are assumed to be disabled.
     ///   - `features` should be 8 bytes long if `page` is 0.
     ///   - `features` should be 1 byte long if `page` is 1.
     ///   - `features` should be 3 bytes long if `page` is 2.
-    pub fn check_by_pos(page: usize, index: usize, bit: usize, features: &[u8]) -> Option<Self> {
-        match (page, index, bit) {
+    pub fn check_by_pos(page: usize, byte: usize, bit: usize, features: &[u8]) -> Option<Self> {
+        match (page, byte, bit) {
             (0, 0, 0) => is_bit_set!(features, (0, 0), Features::ThreeSlotPackets),
             (0, 0, 1) => is_bit_set!(features, (0, 1), Features::FiveSlotPackets),
             (0, 0, 2) => is_bit_set!(features, (0, 2), Features::Encryption),
@@ -726,17 +728,17 @@ impl Display for Features {
 /// The features page
 ///
 /// This is used by [`FeaturesIter`] so that it can own
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum FeaturesPage {
     Page0([u8; Features::PAGE_0_SIZE]),
     Page1([u8; Features::PAGE_1_SIZE]),
     Page2([u8; Features::PAGE_2_SIZE]),
 }
 
-/// The LMP Features of a device
+/// Features of a device
 ///
-/// This is the list of features enabled by a device's Bluetooth Controller.
-#[derive(Debug, Clone, Copy)]
+/// This is a *page* of LMP features enabled by a device.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DeviceFeatures {
     features_page: FeaturesPage,
 }
@@ -791,11 +793,13 @@ impl DeviceFeatures {
 
     /// Iterate over the enabled features
     pub fn iter(&self) -> FeaturesIter<'_> {
-        FeaturesIter {
-            byte: 0,
-            bit: 0,
-            device_features: self,
-        }
+        let size = match self.features_page {
+            FeaturesPage::Page0(_) => Features::PAGE_0_SIZE,
+            FeaturesPage::Page1(_) => Features::PAGE_1_SIZE,
+            FeaturesPage::Page2(_) => Features::PAGE_2_SIZE,
+        };
+
+        FeaturesIter::new(size, self)
     }
 }
 
@@ -803,8 +807,8 @@ impl Display for DeviceFeatures {
     fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
         match &self.features_page {
             FeaturesPage::Page0(_) => f.write_str("default LMP features:")?,
-            FeaturesPage::Page1(_) => f.write_str("extended LMP features (page 1):")?,
-            FeaturesPage::Page2(_) => f.write_str("extended LMP features (page 2):")?,
+            FeaturesPage::Page1(_) => f.write_str("extended LMP features page 1 (host features):")?,
+            FeaturesPage::Page2(_) => f.write_str("extended LMP features page 2:")?,
         };
 
         if f.alternate() {
@@ -819,6 +823,56 @@ impl Display for DeviceFeatures {
     }
 }
 
+/// An iterator over byte and bit positions
+///
+/// This iterator returns a tuple after each iteration containing a byte value and a bit value. This
+/// is used as part of the iteration procedure for enabled features.
+///
+/// # Panic
+/// This will run forever and eventually panic when self.byte > <usize>::MAX
+#[derive(Debug)]
+struct PositionIter {
+    byte: usize,
+    bit: usize,
+    byte_count: usize,
+}
+
+impl PositionIter {
+    /// Create a `PositionIter`
+    ///
+    /// Input `byte_count` is the upper bound on the iterated byte value. The byte value will
+    /// increase up to `byte_count` as `PositionIter` is iterated, but once it reaches it further
+    /// iterations will return `None`.
+    fn new(byte_count: usize) -> Self {
+        let byte = 0;
+        let bit = 0;
+
+        PositionIter { byte, bit, byte_count }
+    }
+}
+
+impl Iterator for PositionIter {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.byte == self.byte_count {
+            return None;
+        }
+
+        let current_byte = self.byte;
+        let current_bit = self.bit;
+
+        if (self.bit + 1) > 8 {
+            self.byte += 1;
+            self.bit = 0;
+        } else {
+            self.bit += 1;
+        }
+
+        Some((current_byte, current_bit))
+    }
+}
+
 /// Iterator over the [`Features`] within [`DeviceFeatures`]
 ///
 /// This is returned by the method [`iter`] of `DeviceFeatures`.
@@ -826,34 +880,313 @@ impl Display for DeviceFeatures {
 /// [`iter`]: DeviceFeatures::iter
 #[derive(Debug)]
 pub struct FeaturesIter<'a> {
-    byte: usize,
-    bit: usize,
+    position: PositionIter,
     device_features: &'a DeviceFeatures,
+}
+
+impl<'a> FeaturesIter<'a> {
+    fn new(features_size: usize, device_features: &'a DeviceFeatures) -> Self {
+        let position = PositionIter::new(features_size);
+
+        Self {
+            position,
+            device_features,
+        }
+    }
 }
 
 impl Iterator for FeaturesIter<'_> {
     type Item = Features;
 
     fn next(&mut self) -> Option<Self::Item> {
-        use core::iter::successors;
-
-        let (flags, page, max_byte): (&[u8], _, _) = match &self.device_features.features_page {
-            FeaturesPage::Page0(flags) => (flags, 0, Features::PAGE_0_SIZE),
-            FeaturesPage::Page1(flags) => (flags, 1, Features::PAGE_1_SIZE),
-            FeaturesPage::Page2(flags) => (flags, 2, Features::PAGE_2_SIZE),
+        let (flags, page): (&[u8], _) = match &self.device_features.features_page {
+            FeaturesPage::Page0(flags) => (flags, 0),
+            FeaturesPage::Page1(flags) => (flags, 1),
+            FeaturesPage::Page2(flags) => (flags, 2),
         };
 
-        for byte in successors(Some(self.byte), |byte| (*byte != max_byte).then_some(byte + 1)) {
-            for bit in successors(Some(self.bit), |bit| (*bit != 8).then_some(bit + 1)) {
-                match Features::check_by_pos(page, byte, bit, flags) {
-                    Some(feature) => {
-                        self.bit = (bit + 1) % 8;
-                        self.byte = if bit + 1 == 8 { byte + 1 } else { byte };
+        for (byte, bit) in &mut self.position {
+            match Features::check_by_pos(page, byte, bit, flags) {
+                feature @ Some(_) => return feature,
+                None => {}
+            }
+        }
 
-                        return Some(feature);
-                    }
-                    None => {}
-                }
+        None
+    }
+}
+
+/// The list of LE Device Features
+///
+/// This is the list of device features used by a LE Controller. They can be found within volume 6,
+/// part B, section 4.6 of the Bluetooth Core Specification.
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Ord, PartialOrd, Hash)]
+pub enum LeFeatures {
+    LeEncryption,
+    ConnectionParametersRequestProcedure,
+    ExtendedRejectIndication,
+    PeripheralInitiatedFeaturesExchange,
+    LePing,
+    LeDataPacketLengthExtension,
+    LlPrivacy,
+    ExtendedScannerFilterPolicies,
+    Le2MPhy,
+    StableModulationIndexTransmitter,
+    StableModulationIndexReceiver,
+    LeCodedPhy,
+    LeExtendedAdvertising,
+    LePeriodicAdvertising,
+    ChannelSelectionAlgorithm2,
+    LePowerClass1,
+    MinimumNumberOfUsedChannelsProcedure,
+    ConnectionCteRequest,
+    ConnectionCteResponse,
+    ConnectionCteTransmitter,
+    ConnectionCteReceiver,
+    AntennaSwitchingDuringCteTransmission,
+    AntennaSwitchingDuringCteReception,
+    ReceivingConstantToneExtensions,
+    PeriodicAdvertisingSyncTransferSender,
+    PeriodicAdvertisingSyncTransferRecipient,
+    SleepClockAccuracyUpdates,
+    RemotePublicKeyValidation,
+    ConnectedIsochronousStreamCentral,
+    ConnectedIsochronousStreamPeripheral,
+    IsochronousBroadcaster,
+    SynchronizedReceiver,
+}
+
+impl LeFeatures {
+    /// Check if a feature is enabled within a bit map
+    ///
+    /// This checks if this feature was enabled within the bit map `features`.
+    pub fn check_within(self, features: &[u8]) -> bool {
+        let (byte, bit) = match self {
+            LeFeatures::LeEncryption => (0, 0),
+            LeFeatures::ConnectionParametersRequestProcedure => (0, 1),
+            LeFeatures::ExtendedRejectIndication => (0, 2),
+            LeFeatures::PeripheralInitiatedFeaturesExchange => (0, 3),
+            LeFeatures::LePing => (0, 4),
+            LeFeatures::LeDataPacketLengthExtension => (0, 5),
+            LeFeatures::LlPrivacy => (0, 6),
+            LeFeatures::ExtendedScannerFilterPolicies => (0, 7),
+            LeFeatures::Le2MPhy => (1, 0),
+            LeFeatures::StableModulationIndexTransmitter => (1, 1),
+            LeFeatures::StableModulationIndexReceiver => (1, 2),
+            LeFeatures::LeCodedPhy => (1, 3),
+            LeFeatures::LeExtendedAdvertising => (1, 4),
+            LeFeatures::LePeriodicAdvertising => (1, 5),
+            LeFeatures::ChannelSelectionAlgorithm2 => (1, 6),
+            LeFeatures::LePowerClass1 => (1, 7),
+            LeFeatures::MinimumNumberOfUsedChannelsProcedure => (2, 0),
+            LeFeatures::ConnectionCteRequest => (2, 1),
+            LeFeatures::ConnectionCteResponse => (2, 2),
+            LeFeatures::ConnectionCteTransmitter => (2, 3),
+            LeFeatures::ConnectionCteReceiver => (2, 4),
+            LeFeatures::AntennaSwitchingDuringCteTransmission => (2, 5),
+            LeFeatures::AntennaSwitchingDuringCteReception => (2, 6),
+            LeFeatures::ReceivingConstantToneExtensions => (2, 7),
+            LeFeatures::PeriodicAdvertisingSyncTransferSender => (3, 0),
+            LeFeatures::PeriodicAdvertisingSyncTransferRecipient => (3, 1),
+            LeFeatures::SleepClockAccuracyUpdates => (3, 2),
+            LeFeatures::RemotePublicKeyValidation => (3, 3),
+            LeFeatures::ConnectedIsochronousStreamCentral => (3, 4),
+            LeFeatures::ConnectedIsochronousStreamPeripheral => (3, 5),
+            LeFeatures::IsochronousBroadcaster => (3, 6),
+            LeFeatures::SynchronizedReceiver => (3, 7),
+        };
+
+        Self::check_by_pos_raw(byte, bit, features).is_some()
+    }
+
+    /// Check by position for a feature within a bit map of LE features.
+    ///
+    /// This is used to check if a LE feature is enabled within the bit map `features`.
+    ///
+    /// If the `position` is valid and the bit at that position is one, then the corresponding LE
+    /// feature is returned.
+    ///
+    /// Method [`check_within`] is much easier to use and should be used over `check_by_pos`.
+    ///
+    /// # Note
+    /// `None` is returned if `position` is larger than the bit count of features.
+    pub fn check_by_pos(position: usize, features: &[u8]) -> Option<Self> {
+        Self::check_by_pos_raw(position >> 3, position & 0xF, features)
+    }
+
+    /// Inner method of `check_by_pos`
+    ///
+    /// This is the same as [`check_by_pos`] except the `byte` and `bit` are calculated from the bit
+    /// position already.
+    fn check_by_pos_raw(byte: usize, bit: usize, features: &[u8]) -> Option<Self> {
+        match (byte, bit) {
+            (0, 0) => is_bit_set!(features, (0, 0), LeFeatures::LeEncryption),
+            (0, 1) => is_bit_set!(features, (0, 1), LeFeatures::ConnectionParametersRequestProcedure),
+            (0, 2) => is_bit_set!(features, (0, 2), LeFeatures::ExtendedRejectIndication),
+            (0, 3) => is_bit_set!(features, (0, 3), LeFeatures::PeripheralInitiatedFeaturesExchange),
+            (0, 4) => is_bit_set!(features, (0, 4), LeFeatures::LePing),
+            (0, 5) => is_bit_set!(features, (0, 5), LeFeatures::LeDataPacketLengthExtension),
+            (0, 6) => is_bit_set!(features, (0, 6), LeFeatures::LlPrivacy),
+            (0, 7) => is_bit_set!(features, (0, 7), LeFeatures::ExtendedScannerFilterPolicies),
+            (1, 0) => is_bit_set!(features, (1, 0), LeFeatures::Le2MPhy),
+            (1, 1) => is_bit_set!(features, (1, 1), LeFeatures::StableModulationIndexTransmitter),
+            (1, 2) => is_bit_set!(features, (1, 2), LeFeatures::StableModulationIndexReceiver),
+            (1, 3) => is_bit_set!(features, (1, 3), LeFeatures::LeCodedPhy),
+            (1, 4) => is_bit_set!(features, (1, 4), LeFeatures::LeExtendedAdvertising),
+            (1, 5) => is_bit_set!(features, (1, 5), LeFeatures::LePeriodicAdvertising),
+            (1, 6) => is_bit_set!(features, (1, 6), LeFeatures::ChannelSelectionAlgorithm2),
+            (1, 7) => is_bit_set!(features, (1, 7), LeFeatures::LePowerClass1),
+            (2, 0) => is_bit_set!(features, (2, 0), LeFeatures::MinimumNumberOfUsedChannelsProcedure),
+            (2, 1) => is_bit_set!(features, (2, 1), LeFeatures::ConnectionCteRequest),
+            (2, 2) => is_bit_set!(features, (2, 2), LeFeatures::ConnectionCteResponse),
+            (2, 3) => is_bit_set!(features, (2, 3), LeFeatures::ConnectionCteTransmitter),
+            (2, 4) => is_bit_set!(features, (2, 4), LeFeatures::ConnectionCteReceiver),
+            (2, 5) => is_bit_set!(features, (2, 5), LeFeatures::AntennaSwitchingDuringCteTransmission),
+            (2, 6) => is_bit_set!(features, (2, 6), LeFeatures::AntennaSwitchingDuringCteReception),
+            (2, 7) => is_bit_set!(features, (2, 7), LeFeatures::ReceivingConstantToneExtensions),
+            (3, 0) => is_bit_set!(features, (3, 0), LeFeatures::PeriodicAdvertisingSyncTransferSender),
+            (3, 1) => is_bit_set!(features, (3, 1), LeFeatures::PeriodicAdvertisingSyncTransferRecipient),
+            (3, 2) => is_bit_set!(features, (3, 2), LeFeatures::SleepClockAccuracyUpdates),
+            (3, 3) => is_bit_set!(features, (3, 3), LeFeatures::RemotePublicKeyValidation),
+            (3, 4) => is_bit_set!(features, (3, 4), LeFeatures::ConnectedIsochronousStreamCentral),
+            (3, 5) => is_bit_set!(features, (3, 5), LeFeatures::ConnectedIsochronousStreamPeripheral),
+            (3, 6) => is_bit_set!(features, (3, 6), LeFeatures::IsochronousBroadcaster),
+            (3, 7) => is_bit_set!(features, (3, 7), LeFeatures::SynchronizedReceiver),
+            _ => None,
+        }
+    }
+}
+
+impl Display for LeFeatures {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LeFeatures::LeEncryption => f.write_str("LE encryption"),
+            LeFeatures::ConnectionParametersRequestProcedure => f.write_str("connection parameters request procedure"),
+            LeFeatures::ExtendedRejectIndication => f.write_str("extended reject indication"),
+            LeFeatures::PeripheralInitiatedFeaturesExchange => f.write_str("peripheral initiated features exchange"),
+            LeFeatures::LePing => f.write_str("LE ping"),
+            LeFeatures::LeDataPacketLengthExtension => f.write_str("LE data packet length extension"),
+            LeFeatures::LlPrivacy => f.write_str("LL privacy"),
+            LeFeatures::ExtendedScannerFilterPolicies => f.write_str("extended scanner filter policies"),
+            LeFeatures::Le2MPhy => f.write_str("LE 2M phy"),
+            LeFeatures::StableModulationIndexTransmitter => f.write_str("stable modulation index transmitter"),
+            LeFeatures::StableModulationIndexReceiver => f.write_str("stable modulation index receiver"),
+            LeFeatures::LeCodedPhy => f.write_str("LE coded phy"),
+            LeFeatures::LeExtendedAdvertising => f.write_str("LE extended advertising"),
+            LeFeatures::LePeriodicAdvertising => f.write_str("LE periodic advertising"),
+            LeFeatures::ChannelSelectionAlgorithm2 => f.write_str("channel selection algorithm2"),
+            LeFeatures::LePowerClass1 => f.write_str("LE power class1"),
+            LeFeatures::MinimumNumberOfUsedChannelsProcedure => {
+                f.write_str("minimum number of used channels procedure")
+            }
+            LeFeatures::ConnectionCteRequest => f.write_str("connection CTE request"),
+            LeFeatures::ConnectionCteResponse => f.write_str("connection CTE response"),
+            LeFeatures::ConnectionCteTransmitter => f.write_str("connection CTE transmitter"),
+            LeFeatures::ConnectionCteReceiver => f.write_str("connection CTE receiver"),
+            LeFeatures::AntennaSwitchingDuringCteTransmission => {
+                f.write_str("antenna switching during CTE transmission")
+            }
+            LeFeatures::AntennaSwitchingDuringCteReception => f.write_str("antenna switching during cte reception"),
+            LeFeatures::ReceivingConstantToneExtensions => f.write_str("receiving constant tone extensions"),
+            LeFeatures::PeriodicAdvertisingSyncTransferSender => {
+                f.write_str("periodic advertising sync transfer sender")
+            }
+            LeFeatures::PeriodicAdvertisingSyncTransferRecipient => {
+                f.write_str("periodic advertising sync transfer recipient")
+            }
+            LeFeatures::SleepClockAccuracyUpdates => f.write_str("sleep clock accuracy updates"),
+            LeFeatures::RemotePublicKeyValidation => f.write_str("remote public key validation"),
+            LeFeatures::ConnectedIsochronousStreamCentral => f.write_str("connected isochronous stream central"),
+            LeFeatures::ConnectedIsochronousStreamPeripheral => f.write_str("connected isochronous stream peripheral"),
+            LeFeatures::IsochronousBroadcaster => f.write_str("isochronous broadcaster"),
+            LeFeatures::SynchronizedReceiver => f.write_str("synchronized receiver"),
+        }
+    }
+}
+
+/// The LE Features of a device
+///
+/// This is the LE features enabled by a device.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct LeDeviceFeatures {
+    bit_mask: [u8; 8],
+}
+
+impl LeDeviceFeatures {
+    /// Create a new `LeDeviceFeatures`
+    ///
+    /// This will create a new `LeDeviceFeatures` if the length of `features` is eight. Otherwise it
+    /// will return an error with the length of `features`.
+    pub fn new(features: &[u8]) -> Result<Self, usize> {
+        if features.len() == 8 {
+            let mut bit_mask = [0u8; 8];
+
+            bit_mask.copy_from_slice(features);
+
+            Ok(LeDeviceFeatures { bit_mask })
+        } else {
+            Err(features.len())
+        }
+    }
+
+    /// Check if a LE feature is enabled
+    pub fn check(&self, feature: LeFeatures) -> bool {
+        feature.check_within(&self.bit_mask)
+    }
+
+    /// Iterate over the enabled features
+    pub fn iter(&self) -> LeFeaturesItr<'_> {
+        LeFeaturesItr::new(self)
+    }
+}
+
+impl Display for LeDeviceFeatures {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        f.write_str("LE device features:")?;
+
+        if f.alternate() {
+            self.iter().try_for_each(|feature| writeln!(f, "    {}", feature))
+        } else {
+            let mut iter = self.iter();
+
+            iter.next().map(|first| write!(f, " {}", first)).transpose()?;
+
+            self.iter().try_for_each(|feature| write!(f, ", {}", feature))
+        }
+    }
+}
+
+/// Iterator over enabled LE features
+///
+/// This is returned by the method [`iter`] of [`LeDeviceFeatures`].
+#[derive(Debug)]
+pub struct LeFeaturesItr<'a> {
+    position: PositionIter,
+    le_device_features: &'a LeDeviceFeatures,
+}
+
+impl<'a> LeFeaturesItr<'a> {
+    const MAX_LE_FEATURE_POSITION: usize = 39;
+
+    /// Create a `LeFeaturesItr`
+    fn new(le_device_features: &'a LeDeviceFeatures) -> Self {
+        let position = PositionIter::new((Self::MAX_LE_FEATURE_POSITION >> 3) + 1);
+
+        Self {
+            position,
+            le_device_features,
+        }
+    }
+}
+
+impl Iterator for LeFeaturesItr<'_> {
+    type Item = LeFeatures;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for (byte, bit) in &mut self.position {
+            match LeFeatures::check_by_pos_raw(byte, bit, &self.le_device_features.bit_mask) {
+                feature @ Some(_) => return feature,
+                None => (),
             }
         }
 
@@ -993,42 +1326,5 @@ mod tests {
             Err(BluetoothDeviceAddress::TOO_FEW_CHARS),
             BluetoothDeviceAddress::try_from("123456789a")
         );
-    }
-
-    #[test]
-    fn enabled_features_iter_test() {
-        use self::Features::*;
-
-        let features = [
-            ThreeSlotPackets,
-            FiveSlotPackets,
-            Encryption,
-            SlotOffset,
-            TimingAccuracy,
-            RoleSwitch,
-            HoldMode,
-            SniffMode,
-            PowerControlRequests,
-            Hv2Packets,
-            Hv3Packets,
-            PagingParameterNegotiation,
-            FlowControlLag(2),
-            BroadcastEncryption,
-            Ev4Packets,
-            AfhCapablePeripheral,
-            BrEdrNotSupported,
-            LeSupportedController,
-            VariableInquiryTxPowerLevel,
-        ];
-
-        let raw = [0xFF, 0x32, 0xA2, 0x00, 0x65, 0x00, 0x00, 0x02];
-
-        for feature in FeaturesIter::new(0, raw) {
-            assert!(
-                features.iter().find(|&&x| x == feature).is_some(),
-                "Didn't find feature {:?} in list",
-                feature
-            );
-        }
     }
 }
