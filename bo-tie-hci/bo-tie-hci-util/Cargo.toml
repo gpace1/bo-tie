@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 bo-tie-util = { path = "../../bo-tie-util" }
+
+[features]
+std = []
