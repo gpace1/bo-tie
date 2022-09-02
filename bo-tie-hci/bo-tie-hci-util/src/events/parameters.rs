@@ -2,6 +2,9 @@
 //!
 //! `parameters` contains the data structures used to represent the event parameters.
 
+use crate::le::{
+    AddressType, ConnectionInterval, ConnectionLatency, ExtendedAdvertisingAndScanResponseData, SupervisionTimeout,
+};
 use crate::{ConnectionHandle, EncryptionLevel};
 use bo_tie_util::errors::Error;
 use bo_tie_util::{BluetoothDeviceAddress, DeviceFeatures, LeDeviceFeatures};
@@ -1327,7 +1330,21 @@ pub struct ExtendedInquiryResultData {
     pub class_of_device: ClassOfDevice,
     pub clock_offset: u32,
     pub rssi: i8,
-    pub extended_inquiry_response_data: ExtendedInquiryResponseDataItr,
+    pub extended_inquiry_response_data: [u8; 240],
+}
+
+impl ExtendedInquiryResultData {
+    /// Iterate over the extended inquiry response structures
+    ///
+    /// This returns an iterator that iterates over [`EirStruct`]s. `EirStruct`s can be converted
+    /// into either an assigned data type (see the Supplement to the Bluetooth Core Specification)
+    /// or a custom extended inquiry response data type.
+    ///
+    /// [`EirStruct`]: bo_tie_gap::eir::EirStruct
+    #[cfg(feature = "gap")]
+    pub fn eir_iter(&self) -> bo_tie_gap::eir::EirStructIter<'_> {
+        bo_tie_gap::eir::EirStructIter::new(&self.extended_inquiry_response_data)
+    }
 }
 
 impl_try_from_for_raw_packet! {
@@ -1344,7 +1361,13 @@ impl_try_from_for_raw_packet! {
             }),
             clock_offset: (chew_u16!(packet) as u32) << 2,
             rssi: chew!(packet) as i8,
-            extended_inquiry_response_data: ExtendedInquiryResponseDataItr::from(chew!(packet,240)),
+            extended_inquiry_response_data: {
+                let mut buffer = [0u8; 240];
+
+                buffer.copy_from_slice(chew!(packet,240));
+
+                buffer
+            },
         })
     }
 }
@@ -1813,41 +1836,6 @@ impl LEAdvEventType {
     }
 }
 
-pub struct ReportDataIter<'a> {
-    data: &'a [u8],
-}
-
-impl<'a> core::iter::Iterator for ReportDataIter<'a> {
-    type Item = Result<&'a [u8], crate::gap::assigned::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.data.len() > 0 {
-            let len = self.data[0] as usize;
-
-            if len > 0 {
-                if len + 1 <= self.data.len() {
-                    let (ret, rest_of) = self.data.split_at(len + 1);
-
-                    self.data = rest_of;
-
-                    // No need to include the length byte because the length is included in the slice
-                    // fat pointer.
-                    Some(Ok(&ret[1..]))
-                } else {
-                    // short data so that None is returned the next iteration
-                    self.data = &self.data[self.data.len()..];
-
-                    Some(Err(crate::gap::assigned::Error::IncorrectLength))
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct LEAdvertisingReportData {
     pub event_type: LEAdvEventType,
@@ -1859,8 +1847,10 @@ pub struct LEAdvertisingReportData {
 }
 
 impl LEAdvertisingReportData {
-    pub fn data_iter(&self) -> ReportDataIter<'_> {
-        ReportDataIter { data: &self.data }
+    /// Iterator over the AD structures
+    #[cfg(feature = "gap")]
+    fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator<'_> {
+        bo_tie_gap::assigned::EirOrAdIterator::new(&self.data)
     }
 
     fn buf_from(data: &[u8]) -> BufferType<Result<Self, alloc::string::String>> {
@@ -1970,8 +1960,8 @@ impl LELongTermKeyRequestData {
 #[derive(Debug, Clone)]
 pub struct LERemoteConnectionParameterRequestData {
     pub connection_handle: ConnectionHandle,
-    pub minimum_interval: le::common::ConnectionInterval,
-    pub maximum_interval: le::common::ConnectionInterval,
+    pub minimum_interval: ConnectionInterval,
+    pub maximum_interval: ConnectionInterval,
     pub latency: ConnectionLatency,
     pub timeout: SupervisionTimeout,
 }
@@ -1983,9 +1973,9 @@ impl LERemoteConnectionParameterRequestData {
 
         Ok(LERemoteConnectionParameterRequestData {
             connection_handle: chew_handle!(packet),
-            minimum_interval: le::common::ConnectionInterval::try_from_raw(chew_u16!(packet))
+            minimum_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))
                 .map_err(|e| alloc::string::String::from(e))?,
-            maximum_interval: le::common::ConnectionInterval::try_from_raw(chew_u16!(packet))
+            maximum_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))
                 .map_err(|e| alloc::string::String::from(e))?,
             latency: ConnectionLatency::try_from_raw(chew_u16!(packet)).map_err(|e| alloc::string::String::from(e))?,
             timeout: SupervisionTimeout::try_from_raw(chew_u16!(packet)).map_err(|e| alloc::string::String::from(e))?,
@@ -2099,7 +2089,7 @@ pub struct LEEnhancedConnectionCompleteData {
     pub peer_address: BluetoothDeviceAddress,
     pub local_resolvable_private_address: Option<BluetoothDeviceAddress>,
     pub peer_resolvable_private_address: Option<BluetoothDeviceAddress>,
-    pub connection_interval: le::common::ConnectionInterval,
+    pub connection_interval: ConnectionInterval,
     pub connection_latency: ConnectionLatency,
     pub supervision_timeout: SupervisionTimeout,
     pub master_clock_accuracy: ClockAccuracy,
@@ -2137,7 +2127,7 @@ impl LEEnhancedConnectionCompleteData {
             peer_address: chew_baddr!(packet),
             local_resolvable_private_address: if_rpa_is_used!(),
             peer_resolvable_private_address: if_rpa_is_used!(),
-            connection_interval: le::common::ConnectionInterval::try_from_raw(chew_u16!(packet)).unwrap(),
+            connection_interval: ConnectionInterval::try_from_raw(chew_u16!(packet)).unwrap(),
             connection_latency: ConnectionLatency::try_from_raw(chew_u16!(packet))?,
             supervision_timeout: SupervisionTimeout::try_from_raw(chew_u16!(packet))?,
             master_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,
@@ -2716,10 +2706,10 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct SlavePageRespoinseTimeoutData {}
+pub struct SlavePageResponseTimeoutData {}
 
 impl_try_from_for_raw_packet! {
-    SlavePageRespoinseTimeoutData,
+    SlavePageResponseTimeoutData,
     _packet_placeholder,
     {
         unimplemented!()

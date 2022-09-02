@@ -143,6 +143,32 @@ macro_rules! chew_handle {
 
 pub mod parameters;
 
+use parameters::{
+    AuthenticatedPayloadTimeoutExpiredData, AuthenticationCompleteData, ChangeConnectionLinkKeyCompleteData,
+    CommandCompleteData, CommandStatusData, ConnectionCompleteData, ConnectionPacketTypeChangedData,
+    ConnectionRequestData, ConnectionlessSlaveBroadcastChannelMapChangeData, ConnectionlessSlaveBroadcastReceiveData,
+    ConnectionlessSlaveBroadcastTimeoutData, DataBufferOverflowData, DisconnectionCompleteData, EncryptionChangeData,
+    EncryptionKeyRefreshCompleteData, EnhancedFlushCompleteData, ExtendedInquiryResultData,
+    FlowSpecificationCompleteData, FlushOccuredData, HardwareErrorData, IOCapabilityRequestData,
+    IOCapabilityResponseData, InquiryCompleteData, InquiryResponseNotificationData, InquiryResultData,
+    InquiryResultWithRSSIData, KeypressNotificationData, LEAdvertisingReportData, LEAdvertisingSetTerminatedData,
+    LEChannelSelectionAlgorithmData, LEConnectionCompleteData, LEConnectionUpdateCompleteData, LEDataLengthChangeData,
+    LEDirectedAdvertisingReportData, LEEnhancedConnectionCompleteData, LEExtendedAdvertisingReportData,
+    LEGenerateDHKeyCompleteData, LELongTermKeyRequestData, LEPHYUpdateCompleteData, LEPeriodicAdvertisingReportData,
+    LEPeriodicAdvertisingSyncEstablishedData, LEPeriodicAdvertisingSyncLostData, LEReadLocalP256PublicKeyCompleteData,
+    LEReadRemoteFeaturesCompleteData, LERemoteConnectionParameterRequestData, LEScanRequestReceivedData,
+    LinkKeyNotificationData, LinkKeyRequestData, LinkSupervisionTimeoutChangedData, LoopbackCommandData,
+    MasterLinkKeyCompleteData, MaxSlotsChangeData, ModeChangeData, Multiple, NumberOfCompletedDataBlocksData,
+    NumberOfCompletedPacketsData, PINCodeRequestData, PageScanRepetitionModeChangeData, QoSViolationData,
+    QosSetupCompleteData, ReadClockOffsetCompleteData, ReadRemoteExtendedFeaturesCompleteData,
+    ReadRemoteSupportedFeaturesCompleteData, ReadRemoteVersionInformationCompleteData,
+    RemoteHostSupportedFeaturesNotificationData, RemoteNameRequestCompleteData, RemoteOOBDataRequestData,
+    ReturnLinkKeysData, RoleChangeData, SAMStatusChangeData, SimplePairingCompleteData, SlavePageResponseTimeoutData,
+    SniffSubratingData, SynchronizationTrainCompleteData, SynchronizationTrainReceivedData,
+    SynchronousConnectionChangedData, SynchronousConnectionCompleteData, TriggeredClockCaptureData,
+    TruncatedPageCompleteData, UserConfirmationRequestData, UserPasskeyNotificationData, UserPasskeyRequestData,
+};
+
 /// Used for splitting up the enumeration - one for without data and one with the data
 macro_rules! enumerate_split {
     ( $( #[ $attrs_1:meta ] )* pub enum $EnumName:tt ( $( #[ $attrs_2:meta ] )* enum $EnumDataName:tt ) {
@@ -165,7 +191,7 @@ enumerate_split! {
     #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
     pub enum LeMeta ( #[derive(Debug,Clone)] enum LeMetaData ) {
         ConnectionComplete{LEConnectionCompleteData},
-        AdvertisingReport{BufferType<Result<LEAdvertisingReportData, alloc::string::String>>},
+        AdvertisingReport{Multiple<Result<LEAdvertisingReportData, alloc::string::String>>},
         ConnectionUpdateComplete{LEConnectionUpdateCompleteData},
         ReadRemoteFeaturesComplete{LEReadRemoteFeaturesCompleteData},
         LongTermKeyRequest{LELongTermKeyRequestData},
@@ -174,9 +200,9 @@ enumerate_split! {
         ReadLocalP256PublicKeyComplete{LEReadLocalP256PublicKeyCompleteData},
         GenerateDHKeyComplete{LEGenerateDHKeyCompleteData},
         EnhancedConnectionComplete{LEEnhancedConnectionCompleteData},
-        DirectedAdvertisingReport{BufferType<Result<LEDirectedAdvertisingReportData, alloc::string::String>>},
+        DirectedAdvertisingReport{Multiple<Result<LEDirectedAdvertisingReportData, alloc::string::String>>},
         PHYUpdateComplete{LEPHYUpdateCompleteData},
-        ExtendedAdvertisingReport{BufferType<Result<LEExtendedAdvertisingReportData, alloc::string::String>>},
+        ExtendedAdvertisingReport{Multiple<Result<LEExtendedAdvertisingReportData, alloc::string::String>>},
         PeriodicAdvertisingSyncEstablished{LEPeriodicAdvertisingSyncEstablishedData},
         PeriodicAdvertisingReport{LEPeriodicAdvertisingReportData},
         PeriodicAdvertisingSyncLost{LEPeriodicAdvertisingSyncLostData},
@@ -371,7 +397,7 @@ macro_rules! events_markup {
             /// input is used to determine the LeMeta sub event otherwise input `sub_event` is
             /// ignored.
             pub fn try_from_event_codes<S>(event: u8, sub_event: S)
-            -> core::result::Result<crate::hci::events::$EnumName, EventError>
+            -> core::result::Result<crate::events::$EnumName, EventError>
             where
                 S: Into<Option<u8>>
             {
@@ -401,7 +427,7 @@ macro_rules! events_markup {
             }
         }
 
-        impl crate::hci::events::$EnumDataName {
+        impl crate::events::$EnumDataName {
 
             pub fn get_event_name(&self) -> $EnumName {
                 #[cfg(not(test))]
@@ -439,7 +465,7 @@ macro_rules! events_markup {
                 let event_len = chew!(packet).into();
 
                 match event_code {
-                    $( crate::hci::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
+                    $( crate::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
                         Ok(crate::hci::events::$EnumDataName::$name(
                             crate::hci::events::$data::<$( $type ),*>::try_from( &packet[..event_len] )?)),
                     )*
@@ -509,7 +535,7 @@ events_markup! {
         ConnectionlessSlaveBroadcastReceive{ConnectionlessSlaveBroadcastReceiveData} -> 0x51,
         ConnectionlessSlaveBroadcastTimeout{ConnectionlessSlaveBroadcastTimeoutData} -> 0x52,
         TruncatedPageComplete{TruncatedPageCompleteData} -> 0x53,
-        SlavePageRespoinseTimeout{SlavePageRespoinseTimeoutData} -> 0x54,
+        SlavePageResponseTimeout{SlavePageResponseTimeoutData} -> 0x54,
         ConnectionlessSlaveBroadcastChannelMapChange{ConnectionlessSlaveBroadcastChannelMapChangeData} -> 0x55,
         InquiryResponseNotification{InquiryResponseNotificationData} -> 0x56,
         AuthenticatedPayloadTimeoutExpired{AuthenticatedPayloadTimeoutExpiredData} -> 0x57,

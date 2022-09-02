@@ -2,11 +2,13 @@
 //!
 //! This crate carries the parts of the HCI that are used by multiple HCI crates.
 
-#![cfg_attr(not(feature = "std")), no_std]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
 pub mod events;
+pub mod le;
 
 use core::fmt;
 use core::iter::Iterator;

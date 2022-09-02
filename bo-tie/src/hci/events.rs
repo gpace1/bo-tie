@@ -154,7 +154,7 @@ type BufferType<T> = alloc::vec::Vec<T>;
 
 #[derive(Debug, Clone)]
 pub struct Multiple<T> {
-    data: BufferType<T>,
+    data: super::BufferType<T>,
 }
 
 impl<T> core::ops::Deref for Multiple<T> {
