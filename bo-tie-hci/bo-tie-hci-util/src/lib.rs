@@ -793,12 +793,27 @@ impl<R: Receiver> FlowCtrlReceiver<R> {
         }
     }
 
-    fn set_waker(&mut self, waker: &core::task::Waker) {
+    pub fn set_waker(&mut self, waker: &core::task::Waker) {
         self.waker = Some(waker.clone())
     }
 
-    fn call_waker(&mut self) {
+    pub fn call_waker(&mut self) {
         self.waker.take().map(|waker| waker.wake());
+    }
+
+    #[cfg(feature = "unstable")]
+    pub fn get_mut_acl_flow_control(&mut self) -> &mut FlowControl {
+        &mut self.acl_flow_control
+    }
+
+    #[cfg(feature = "unstable")]
+    pub fn get_mut_le_acl_flow_control(&mut self) -> &mut FlowControl {
+        &mut self.le_acl_flow_control
+    }
+
+    #[cfg(feature = "unstable")]
+    pub fn get_block_size(&mut self) -> usize {
+        self.block_size
     }
 }
 
