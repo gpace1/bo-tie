@@ -94,7 +94,7 @@ impl TryFrom<[u8; 2]> for ConnectionHandle {
 pub enum EncryptionLevel {
     Off,
     E0,
-    AESCCM,
+    AesCcm,
 }
 
 /// A matcher of events in response to a command
@@ -107,14 +107,14 @@ pub enum EncryptionLevel {
 /// [Command Status]: events::parameters::CommandStatusData
 #[derive(Clone, Copy)]
 pub struct CommandEventMatcher {
-    op_code: opcodes::HCICommand,
+    op_code: opcodes::HciCommand,
     event: events::Events,
     get_op_code: for<'a> fn(&'a [u8]) -> Option<u16>,
 }
 
 impl CommandEventMatcher {
     /// Create a new `CommandEventMatcher` for the event `CommandComplete`
-    fn new_command_complete(op_code: opcodes::HCICommand) -> Self {
+    fn new_command_complete(op_code: opcodes::HciCommand) -> Self {
         fn get_op_code(raw: &[u8]) -> Option<u16> {
             // bytes 3 and 4 are the opcode within an HCI event
             // packet containing a Command Complete event.
@@ -133,7 +133,7 @@ impl CommandEventMatcher {
     }
 
     /// Create a new `CommandEventMatcher` for the event `CommandStatus`
-    fn new_command_status(op_code: opcodes::HCICommand) -> Self {
+    fn new_command_status(op_code: opcodes::HciCommand) -> Self {
         fn get_op_code(raw: &[u8]) -> Option<u16> {
             // bytes 4 and 5 are the opcode within an HCI event
             // packet containing a Command Status event.

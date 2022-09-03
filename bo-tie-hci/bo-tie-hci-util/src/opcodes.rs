@@ -32,7 +32,7 @@ use core::convert::TryFrom;
 /// All opcodes are based from this enum, which is broken up into the opcode groups. Each opcode
 /// group is further broken up into
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum HCICommand {
+pub enum HciCommand {
     LinkControl(LinkControl),
     ControllerAndBaseband(ControllerAndBaseband),
     InformationParameters(InformationParameters),
@@ -40,14 +40,14 @@ pub enum HCICommand {
     LEController(LEController),
 }
 
-impl HCICommand {
+impl HciCommand {
     pub fn as_opcode_pair(&self) -> OpCodePair {
         match *self {
-            HCICommand::LinkControl(ref ocf) => ocf.as_opcode_pair(),
-            HCICommand::ControllerAndBaseband(ref ocf) => ocf.as_opcode_pair(),
-            HCICommand::InformationParameters(ref ocf) => ocf.as_opcode_pair(),
-            HCICommand::StatusParameters(ref ocf) => ocf.as_opcode_pair(),
-            HCICommand::LEController(ref ocf) => ocf.as_opcode_pair(),
+            HciCommand::LinkControl(ref ocf) => ocf.as_opcode_pair(),
+            HciCommand::ControllerAndBaseband(ref ocf) => ocf.as_opcode_pair(),
+            HciCommand::InformationParameters(ref ocf) => ocf.as_opcode_pair(),
+            HciCommand::StatusParameters(ref ocf) => ocf.as_opcode_pair(),
+            HciCommand::LEController(ref ocf) => ocf.as_opcode_pair(),
         }
     }
 }
@@ -90,26 +90,26 @@ impl OpCodePair {
     }
 }
 
-impl From<HCICommand> for OpCodePair {
-    fn from(cmd: HCICommand) -> OpCodePair {
+impl From<HciCommand> for OpCodePair {
+    fn from(cmd: HciCommand) -> OpCodePair {
         cmd.as_opcode_pair()
     }
 }
 
-impl TryFrom<OpCodePair> for HCICommand {
+impl TryFrom<OpCodePair> for HciCommand {
     type Error = alloc::string::String;
 
     fn try_from(opc_pair: OpCodePair) -> Result<Self, Self::Error> {
         match opc_pair.ogf {
-            0x1 => Ok(HCICommand::LinkControl(LinkControl::try_from(opc_pair.ocf)?)),
-            0x3 => Ok(HCICommand::ControllerAndBaseband(ControllerAndBaseband::try_from(
+            0x1 => Ok(HciCommand::LinkControl(LinkControl::try_from(opc_pair.ocf)?)),
+            0x3 => Ok(HciCommand::ControllerAndBaseband(ControllerAndBaseband::try_from(
                 opc_pair.ocf,
             )?)),
-            0x4 => Ok(HCICommand::InformationParameters(InformationParameters::try_from(
+            0x4 => Ok(HciCommand::InformationParameters(InformationParameters::try_from(
                 opc_pair.ocf,
             )?)),
-            0x5 => Ok(HCICommand::StatusParameters(StatusParameters::try_from(opc_pair.ocf)?)),
-            0x8 => Ok(HCICommand::LEController(LEController::try_from(opc_pair.ocf)?)),
+            0x5 => Ok(HciCommand::StatusParameters(StatusParameters::try_from(opc_pair.ocf)?)),
+            0x8 => Ok(HciCommand::LEController(LEController::try_from(opc_pair.ocf)?)),
             _ => Err(alloc::format!("Unknown OpCode Group Field value: 0x{:x}", opc_pair.ogf)),
         }
     }
@@ -410,8 +410,8 @@ mod tests {
     fn op_code_test() {
         let ogf = 0x8;
         let ocf = 0xa;
-        let oc = HCICommand::LEController(LEController::SetAdvertisingEnable);
+        let oc = HciCommand::LEController(LEController::SetAdvertisingEnable);
 
-        assert_eq!(oc, HCICommand::try_from(OpCodePair { ogf, ocf }).unwrap());
+        assert_eq!(oc, HciCommand::try_from(OpCodePair { ogf, ocf }).unwrap());
     }
 }

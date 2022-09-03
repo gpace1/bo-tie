@@ -93,11 +93,12 @@ impl ClassOfDevice {
     }
 }
 
+/// The kind of data link established
 #[derive(Debug, Clone)]
 pub enum LinkType {
-    SCOConnection,
-    ACLConnection,
-    ESCOConnection,
+    ScoConnection,
+    AclConnection,
+    EscoConnection,
 }
 
 impl LinkType {
@@ -105,9 +106,9 @@ impl LinkType {
         use self::LinkType::*;
 
         match raw {
-            0x00 => Ok(SCOConnection),
-            0x01 => Ok(ACLConnection),
-            0x02 => Ok(ESCOConnection),
+            0x00 => Ok(ScoConnection),
+            0x01 => Ok(AclConnection),
+            0x02 => Ok(EscoConnection),
             _ => Err(alloc::format!("Unknown Link Type: {}", raw)),
         }
     }
@@ -139,7 +140,7 @@ pub struct EncryptionEnabled {
 impl EncryptionEnabled {
     pub fn get_for_le(&self) -> EncryptionLevel {
         if self.raw == 0x01 {
-            EncryptionLevel::AESCCM
+            EncryptionLevel::AesCcm
         } else {
             EncryptionLevel::Off
         }
@@ -149,7 +150,7 @@ impl EncryptionEnabled {
         match self.raw {
             0x00 => EncryptionLevel::Off,
             0x01 => EncryptionLevel::E0,
-            0x02 => EncryptionLevel::AESCCM,
+            0x02 => EncryptionLevel::AesCcm,
             _ => EncryptionLevel::Off,
         }
     }
@@ -495,10 +496,8 @@ pub enum CommandDataErr<UnpackErrorType>
 where
     UnpackErrorType: core::fmt::Debug,
 {
-    /// If the api doesn't have a bug in it, then the controller is faulty if this error occurs
     RawDataLenTooSmall,
-    /// The first value is the expected ocf the second value is the actual ocf given in the event
-    IncorrectOCF(u16, u16),
+    IncorrectOcf { expected: u16, actual: u16 },
     UnpackError(UnpackErrorType),
 }
 
@@ -514,11 +513,11 @@ where
                     "Command complete data error, the size of the data was too small for type"
                 )
             }
-            CommandDataErr::IncorrectOCF(exp, act) => {
+            CommandDataErr::IncorrectOcf { expected, actual } => {
                 write!(
                     f,
                     "Command complete data error, expected opcode is 0x{:X}, actual opcode is 0x{:X}",
-                    exp, act
+                    expected, actual
                 )
             }
             CommandDataErr::UnpackError(ref e) => {
@@ -789,15 +788,15 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct PINCodeRequestData {
+pub struct PinCodeRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
 
 impl_try_from_for_raw_packet! {
-    PINCodeRequestData,
+    PinCodeRequestData,
     packet,
     {
-        Ok(PINCodeRequestData {
+        Ok(PinCodeRequestData {
             bluetooth_address: chew_baddr!(packet),
         })
     }
@@ -923,34 +922,34 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub enum LMPMaxSlots {
+pub enum LmpMaxSlots {
     One,
     Three,
     Five,
 }
 
-impl LMPMaxSlots {
+impl LmpMaxSlots {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x01 => Ok(LMPMaxSlots::One),
-            0x03 => Ok(LMPMaxSlots::Three),
-            0x05 => Ok(LMPMaxSlots::Five),
+            0x01 => Ok(LmpMaxSlots::One),
+            0x03 => Ok(LmpMaxSlots::Three),
+            0x05 => Ok(LmpMaxSlots::Five),
             _ => Err(alloc::format!("Unknown LMP Max Slots: {}", raw)),
         }
     }
 
     pub fn val(&self) -> u8 {
         match *self {
-            LMPMaxSlots::One => 0x01,
-            LMPMaxSlots::Three => 0x03,
-            LMPMaxSlots::Five => 0x05,
+            LmpMaxSlots::One => 0x01,
+            LmpMaxSlots::Three => 0x03,
+            LmpMaxSlots::Five => 0x05,
         }
     }
 }
 #[derive(Debug, Clone)]
 pub struct MaxSlotsChangeData {
     pub connection_handle: ConnectionHandle,
-    pub lmp_max_slots: LMPMaxSlots,
+    pub lmp_max_slots: LmpMaxSlots,
 }
 
 impl_try_from_for_raw_packet! {
@@ -959,7 +958,7 @@ impl_try_from_for_raw_packet! {
     {
         Ok(MaxSlotsChangeData {
             connection_handle: chew_handle!(packet),
-            lmp_max_slots: LMPMaxSlots::try_from(chew!(packet))?,
+            lmp_max_slots: LmpMaxSlots::try_from(chew!(packet))?,
         })
     }
 }
@@ -986,41 +985,41 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 pub enum PacketType {
-    ACL(ACLPacketType),
+    Acl(AclPacketType),
     Sco(ScoPacketType),
 }
 
 #[derive(Debug, Clone)]
-pub enum ACLPacketType {
-    TwoDH1ShallNotBeUsed,
-    ThreeDH1ShallNotBeUsed,
-    DM1MayBeUsed,
-    DH1MayBeUsed,
-    TwoDH3ShallNotBeUsed,
-    ThreeDH3ShallNotBeUsed,
-    DM3MayBeUsed,
-    DH3MayBeUsed,
-    TwoDH5ShallNotBeUsed,
-    ThreeDH5ShallNotBeUsed,
-    DM5MayBeUsed,
-    DH5MayBeUsed,
+pub enum AclPacketType {
+    TwoDh1ShallNotBeUsed,
+    ThreeDh1ShallNotBeUsed,
+    Dm1MayBeUsed,
+    Dh1MayBeUsed,
+    TwoDh3ShallNotBeUsed,
+    ThreeDh3ShallNotBeUsed,
+    Dm3MayBeUsed,
+    Dh3MayBeUsed,
+    TwoDh5ShallNotBeUsed,
+    ThreeDh5ShallNotBeUsed,
+    Dm5MayBeUsed,
+    Dh5MayBeUsed,
 }
 
-impl ACLPacketType {
+impl AclPacketType {
     fn try_from(raw: u16) -> Result<Self, &'static str> {
         match raw {
-            0x0002 => Ok(ACLPacketType::TwoDH1ShallNotBeUsed),
-            0x0004 => Ok(ACLPacketType::ThreeDH1ShallNotBeUsed),
-            0x0008 => Ok(ACLPacketType::DM1MayBeUsed),
-            0x0010 => Ok(ACLPacketType::DH1MayBeUsed),
-            0x0100 => Ok(ACLPacketType::TwoDH3ShallNotBeUsed),
-            0x0200 => Ok(ACLPacketType::ThreeDH3ShallNotBeUsed),
-            0x0400 => Ok(ACLPacketType::DM3MayBeUsed),
-            0x0800 => Ok(ACLPacketType::DH3MayBeUsed),
-            0x1000 => Ok(ACLPacketType::TwoDH5ShallNotBeUsed),
-            0x2000 => Ok(ACLPacketType::ThreeDH5ShallNotBeUsed),
-            0x4000 => Ok(ACLPacketType::DM5MayBeUsed),
-            0x8000 => Ok(ACLPacketType::DH5MayBeUsed),
+            0x0002 => Ok(AclPacketType::TwoDh1ShallNotBeUsed),
+            0x0004 => Ok(AclPacketType::ThreeDh1ShallNotBeUsed),
+            0x0008 => Ok(AclPacketType::Dm1MayBeUsed),
+            0x0010 => Ok(AclPacketType::Dh1MayBeUsed),
+            0x0100 => Ok(AclPacketType::TwoDh3ShallNotBeUsed),
+            0x0200 => Ok(AclPacketType::ThreeDh3ShallNotBeUsed),
+            0x0400 => Ok(AclPacketType::Dm3MayBeUsed),
+            0x0800 => Ok(AclPacketType::Dh3MayBeUsed),
+            0x1000 => Ok(AclPacketType::TwoDh5ShallNotBeUsed),
+            0x2000 => Ok(AclPacketType::ThreeDh5ShallNotBeUsed),
+            0x4000 => Ok(AclPacketType::Dm5MayBeUsed),
+            0x8000 => Ok(AclPacketType::Dh5MayBeUsed),
             _ => Err("Packet type not matched for ACLConnection"),
         }
     }
@@ -1028,17 +1027,17 @@ impl ACLPacketType {
 
 #[derive(Debug, Clone)]
 pub enum ScoPacketType {
-    HV1,
-    HV2,
-    HV3,
+    Hv1,
+    Hv2,
+    Hv3,
 }
 
 impl ScoPacketType {
     fn try_from(raw: u16) -> Result<Self, &'static str> {
         match raw {
-            0x0020 => Ok(ScoPacketType::HV1),
-            0x0040 => Ok(ScoPacketType::HV2),
-            0x0080 => Ok(ScoPacketType::HV3),
+            0x0020 => Ok(ScoPacketType::Hv1),
+            0x0040 => Ok(ScoPacketType::Hv2),
+            0x0080 => Ok(ScoPacketType::Hv3),
             _ => Err("Packet type not matched for SCOConnection"),
         }
     }
@@ -1058,8 +1057,8 @@ impl ConnectionPacketTypeChangedData {
     /// be converted to a packet type from the proveded link type
     pub fn get_packet_type(&self, link_type: LinkType) -> Result<PacketType, &'static str> {
         match link_type {
-            LinkType::ACLConnection => Ok(PacketType::ACL(ACLPacketType::try_from(self.packet_type)?)),
-            LinkType::SCOConnection => Ok(PacketType::Sco(ScoPacketType::try_from(self.packet_type)?)),
+            LinkType::AclConnection => Ok(PacketType::Acl(AclPacketType::try_from(self.packet_type)?)),
+            LinkType::ScoConnection => Ok(PacketType::Sco(ScoPacketType::try_from(self.packet_type)?)),
             _ => Err("Link Type is not SCOConnection or ACLConnection"),
         }
     }
@@ -1078,15 +1077,15 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct QoSViolationData {
+pub struct QosViolationData {
     pub connection_handle: ConnectionHandle,
 }
 
 impl_try_from_for_raw_packet! {
-    QoSViolationData,
+    QosViolationData,
     packet,
     {
-        Ok(QoSViolationData {
+        Ok(QosViolationData {
             connection_handle: chew_handle!(packet),
         })
     }
@@ -1157,7 +1156,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct InquiryResultWithRSSIData {
+pub struct InquiryResultWithRssiData {
     pub bluetooth_address: BluetoothDeviceAddress,
     pub page_scan_repition_mode: PageScanRepetitionMode,
     pub class_of_device: ClassOfDevice,
@@ -1166,7 +1165,7 @@ pub struct InquiryResultWithRSSIData {
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<Result<InquiryResultWithRSSIData, alloc::string::String>>,
+    Multiple<Result<InquiryResultWithRssiData, alloc::string::String>>,
     packet,
     {
         Ok(Multiple {
@@ -1174,7 +1173,7 @@ impl_try_from_for_raw_packet! {
 
                 let mut vec = packet[1..].chunks_exact( 14 )
                 .map( |mut chunk| {
-                    Ok(InquiryResultWithRSSIData {
+                    Ok(InquiryResultWithRssiData {
                         bluetooth_address: chew_baddr!(chunk),
                         page_scan_repition_mode: PageScanRepetitionMode::try_from(chew!(chunk))?,
                         class_of_device: ClassOfDevice::from({
@@ -1186,7 +1185,7 @@ impl_try_from_for_raw_packet! {
                         rssi: chew!(chunk) as i8,
                     })
                 })
-                .collect::<alloc::vec::Vec<Result<InquiryResultWithRSSIData, alloc::string::String>>>();
+                .collect::<alloc::vec::Vec<Result<InquiryResultWithRssiData, alloc::string::String>>>();
                 vec.truncate(packet[0] as usize);
                 vec
             }
@@ -1225,7 +1224,7 @@ impl_try_from_for_raw_packet! {
 pub enum AirMode {
     MicroLawLog,
     ALawLog,
-    CVSD,
+    Cvsd,
     TransparentData,
 }
 
@@ -1234,7 +1233,7 @@ impl AirMode {
         match raw {
             0x00 => Ok(AirMode::MicroLawLog),
             0x01 => Ok(AirMode::ALawLog),
-            0x02 => Ok(AirMode::CVSD),
+            0x02 => Ok(AirMode::Cvsd),
             0x03 => Ok(AirMode::TransparentData),
             _ => Err(alloc::format!("Unknown Air Mode: {}", raw)),
         }
@@ -1389,95 +1388,115 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct IOCapabilityRequestData {
+pub struct IoCapabilityRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
 
 impl_try_from_for_raw_packet! {
-    IOCapabilityRequestData,
+    IoCapabilityRequestData,
     packet,
     {
-        Ok(IOCapabilityRequestData {
+        Ok(IoCapabilityRequestData {
             bluetooth_address: chew_baddr!(packet),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum IOCapability {
+pub enum IoCapability {
     DisplayOnly,
     DisplayYesNo,
     KeyboardOnly,
     NoInputNoOutput,
 }
 
-impl IOCapability {
+impl IoCapability {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(IOCapability::DisplayOnly),
-            0x01 => Ok(IOCapability::DisplayYesNo),
-            0x02 => Ok(IOCapability::KeyboardOnly),
-            0x03 => Ok(IOCapability::NoInputNoOutput),
+            0x00 => Ok(IoCapability::DisplayOnly),
+            0x01 => Ok(IoCapability::DisplayYesNo),
+            0x02 => Ok(IoCapability::KeyboardOnly),
+            0x03 => Ok(IoCapability::NoInputNoOutput),
             _ => Err(alloc::format!("Unknown IO Capability: {}", raw)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum OOBDataPresent {
-    OOBAuthenticationDataNotPresent,
-    OOBAuthenticationDataFromRemoteDevicePresent,
+pub enum OobDataPresent {
+    OobAuthenticationDataNotPresent,
+    OobAuthenticationDataFromRemoteDevicePresent,
 }
 
-impl OOBDataPresent {
+impl OobDataPresent {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(OOBDataPresent::OOBAuthenticationDataNotPresent),
-            0x01 => Ok(OOBDataPresent::OOBAuthenticationDataFromRemoteDevicePresent),
+            0x00 => Ok(OobDataPresent::OobAuthenticationDataNotPresent),
+            0x01 => Ok(OobDataPresent::OobAuthenticationDataFromRemoteDevicePresent),
             _ => Err(alloc::format!("Unknown OOB Data Present: {}", raw)),
         }
     }
 }
 
+/// Authentication and Bonding Requirements
+///
+/// This is an enum of the different authentication and bonding requirements. The enumerations are
+/// essentially the various permutations of 'is man in the middle protection is required', 'is
+/// bonding required', and 'what authentication procedure should be done'.
+///   
+/// # Note
+/// The authentication procedure is essentially how to prevent a man in the middle attack.
 #[derive(Debug, Clone)]
 pub enum AuthenticationRequirements {
-    MITMProtectionNotRequiredNoBonding,
-    MITMProtectionRequiredNoBonding,
-    MITMProtectionNoRequiredDedicatedBonding,
-    MITMProtectionRequiredDedicatedBonding,
-    MITMProtectionNotRequiredGeneralBonding,
-    MITMProtectionRequiredGeneralBonding,
+    /// Man in the middle protection is not required, no bonding, and automatic numeric comparison
+    /// is allowed to be the authentication procedure.
+    MitmProtectionNotRequiredNoBonding,
+    /// Man in the middle protection is required, but no bonding. The IO capabilities are used to
+    /// determine the authentication procedure.
+    MitmProtectionRequiredNoBonding,
+    /// Man in the middle protection is not required, but dedicated bonding is required. Numeric
+    /// comparison is allowed to be used.
+    MitmProtectionNoRequiredDedicatedBonding,
+    /// Man in the middle protection and dedicated bonding are required. The IO capabilities are
+    /// used to determine how authentication is procedure.
+    MitmProtectionRequiredDedicatedBonding,
+    /// Man in the middle protection is not required but general bonding is. Automatic numeric
+    /// comparison is allowed to be the authentication procedure.
+    MitmProtectionNotRequiredGeneralBonding,
+    /// Man in the middle protection and general bonding is required. The IO capabilities are
+    /// used to determine how authentication is performed.
+    MitmProtectionRequiredGeneralBonding,
 }
 
 impl AuthenticationRequirements {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(AuthenticationRequirements::MITMProtectionNotRequiredNoBonding),
-            0x01 => Ok(AuthenticationRequirements::MITMProtectionRequiredNoBonding),
-            0x02 => Ok(AuthenticationRequirements::MITMProtectionNoRequiredDedicatedBonding),
-            0x03 => Ok(AuthenticationRequirements::MITMProtectionRequiredDedicatedBonding),
-            0x04 => Ok(AuthenticationRequirements::MITMProtectionNotRequiredGeneralBonding),
-            0x05 => Ok(AuthenticationRequirements::MITMProtectionRequiredGeneralBonding),
+            0x00 => Ok(AuthenticationRequirements::MitmProtectionNotRequiredNoBonding),
+            0x01 => Ok(AuthenticationRequirements::MitmProtectionRequiredNoBonding),
+            0x02 => Ok(AuthenticationRequirements::MitmProtectionNoRequiredDedicatedBonding),
+            0x03 => Ok(AuthenticationRequirements::MitmProtectionRequiredDedicatedBonding),
+            0x04 => Ok(AuthenticationRequirements::MitmProtectionNotRequiredGeneralBonding),
+            0x05 => Ok(AuthenticationRequirements::MitmProtectionRequiredGeneralBonding),
             _ => Err(alloc::format!("Unknown Authentication Requirement: {}", raw)),
         }
     }
 }
 #[derive(Debug, Clone)]
-pub struct IOCapabilityResponseData {
+pub struct IoCapabilityResponseData {
     pub bluetooth_address: BluetoothDeviceAddress,
-    pub io_capability: IOCapability,
-    pub oob_data_present: OOBDataPresent,
+    pub io_capability: IoCapability,
+    pub oob_data_present: OobDataPresent,
     pub authentication_requirements: AuthenticationRequirements,
 }
 
 impl_try_from_for_raw_packet! {
-    IOCapabilityResponseData,
+    IoCapabilityResponseData,
     packet,
     {
-        Ok(IOCapabilityResponseData {
+        Ok(IoCapabilityResponseData {
             bluetooth_address: chew_baddr!(packet),
-            io_capability: IOCapability::try_from(chew!(packet))?,
-            oob_data_present: OOBDataPresent::try_from(chew!(packet))?,
+            io_capability: IoCapability::try_from(chew!(packet))?,
+            oob_data_present: OobDataPresent::try_from(chew!(packet))?,
             authentication_requirements: AuthenticationRequirements::try_from(chew!(packet))?,
         })
     }
@@ -1516,15 +1535,15 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct RemoteOOBDataRequestData {
+pub struct RemoteOobDataRequestData {
     pub bluetooth_address: BluetoothDeviceAddress,
 }
 
 impl_try_from_for_raw_packet! {
-    RemoteOOBDataRequestData,
+    RemoteOobDataRequestData,
     packet,
     {
-        Ok(RemoteOOBDataRequestData {
+        Ok(RemoteOobDataRequestData {
             bluetooth_address: chew_baddr!(packet),
         })
     }
@@ -1723,32 +1742,32 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub enum LERole {
-    Master,
-    Slave,
+pub enum LeRole {
+    Central,
+    Peripheral,
 }
 
-impl LERole {
+impl LeRole {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(LERole::Master),
-            0x01 => Ok(LERole::Slave),
+            0x00 => Ok(LeRole::Central),
+            0x01 => Ok(LeRole::Peripheral),
             _ => Err(alloc::format!("Unknown Le Role: {}", raw)),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LEConnectionAddressType {
+pub enum LeConnectionAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
 }
 
-impl LEConnectionAddressType {
+impl LeConnectionAddressType {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(LEConnectionAddressType::PublicDeviceAddress),
-            0x01 => Ok(LEConnectionAddressType::RandomDeviceAddress),
+            0x00 => Ok(LeConnectionAddressType::PublicDeviceAddress),
+            0x01 => Ok(LeConnectionAddressType::RandomDeviceAddress),
             _ => Err(alloc::format!("Unknown Le Connection Address Type: {}", raw)),
         }
     }
@@ -1783,11 +1802,11 @@ impl ClockAccuracy {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEConnectionCompleteData {
+pub struct LeConnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
-    pub role: LERole,
-    pub peer_address_type: LEConnectionAddressType,
+    pub role: LeRole,
+    pub peer_address_type: LeConnectionAddressType,
     pub peer_address: BluetoothDeviceAddress,
     pub connection_interval: ConnectionInterval,
     pub connection_latency: ConnectionLatency,
@@ -1796,14 +1815,14 @@ pub struct LEConnectionCompleteData {
 }
 
 impl_try_from_for_raw_packet! {
-    LEConnectionCompleteData,
+    LeConnectionCompleteData,
     packet,
     {
-        Ok(LEConnectionCompleteData {
+        Ok(LeConnectionCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
-            role: LERole::try_from(chew!(packet))?,
-            peer_address_type: LEConnectionAddressType::try_from(chew!(packet))?,
+            role: LeRole::try_from(chew!(packet))?,
+            peer_address_type: LeConnectionAddressType::try_from(chew!(packet))?,
             peer_address: chew_baddr!(packet),
             connection_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))?,
             connection_latency: ConnectionLatency::try_from_raw(chew_u16!(packet))?,
@@ -1813,8 +1832,9 @@ impl_try_from_for_raw_packet! {
     }
 }
 
+/// The kind of Advertising event
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LEAdvEventType {
+pub enum LeAdvEventType {
     ConnectableAndScannableUndirectedAdvertising,
     ConnectableDirectedAdvertising,
     ScannableUndirectedAdvertising,
@@ -1822,22 +1842,22 @@ pub enum LEAdvEventType {
     ScanResponse,
 }
 
-impl LEAdvEventType {
+impl LeAdvEventType {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(LEAdvEventType::ConnectableAndScannableUndirectedAdvertising),
-            0x01 => Ok(LEAdvEventType::ConnectableDirectedAdvertising),
-            0x02 => Ok(LEAdvEventType::ScannableUndirectedAdvertising),
-            0x03 => Ok(LEAdvEventType::NonConnectableUndirectedAdvertising),
-            0x04 => Ok(LEAdvEventType::ScanResponse),
+            0x00 => Ok(LeAdvEventType::ConnectableAndScannableUndirectedAdvertising),
+            0x01 => Ok(LeAdvEventType::ConnectableDirectedAdvertising),
+            0x02 => Ok(LeAdvEventType::ScannableUndirectedAdvertising),
+            0x03 => Ok(LeAdvEventType::NonConnectableUndirectedAdvertising),
+            0x04 => Ok(LeAdvEventType::ScanResponse),
             _ => Err(alloc::format!("Unknown LE Event Type: {}", raw)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEAdvertisingReportData {
-    pub event_type: LEAdvEventType,
+pub struct LeAdvertisingReportData {
+    pub event_type: LeAdvEventType,
     pub address_type: AddressType,
     pub address: BluetoothDeviceAddress,
     pub data: alloc::vec::Vec<u8>,
@@ -1845,7 +1865,7 @@ pub struct LEAdvertisingReportData {
     pub rssi: Option<i8>,
 }
 
-impl LEAdvertisingReportData {
+impl LeAdvertisingReportData {
     /// Get an iterator over the AD structures
     ///
     /// This returns an iterator that will return the AD structures within field `data`.
@@ -1856,7 +1876,7 @@ impl LEAdvertisingReportData {
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<Result<LEAdvertisingReportData, alloc::string::String>>,
+    Multiple<Result<LeAdvertisingReportData, alloc::string::String>>,
     packet,
     {
         // The value of 127 indicates no RSSI functionality
@@ -1874,10 +1894,10 @@ impl_try_from_for_raw_packet! {
             // packet[index + 8] is the data length value as given by the controller
             reports.push(
                 match (
-                    LEAdvEventType::try_from(chew!(packet)),
+                    LeAdvEventType::try_from(chew!(packet)),
                     AddressType::try_from_raw(chew!(packet)),
                 ) {
-                    (Ok(event_type), Ok(address_type)) => Ok(LEAdvertisingReportData {
+                    (Ok(event_type), Ok(address_type)) => Ok(LeAdvertisingReportData {
                         event_type,
                         address_type,
                         address: chew_baddr!(packet),
@@ -1897,7 +1917,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEConnectionUpdateCompleteData {
+pub struct LeConnectionUpdateCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
     pub connection_interval: ConnectionInterval,
@@ -1906,10 +1926,10 @@ pub struct LEConnectionUpdateCompleteData {
 }
 
 impl_try_from_for_raw_packet! {
-    LEConnectionUpdateCompleteData,
+    LeConnectionUpdateCompleteData,
     packet,
     {
-        Ok(LEConnectionUpdateCompleteData {
+        Ok(LeConnectionUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
             connection_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))?,
@@ -1920,17 +1940,17 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEReadRemoteFeaturesCompleteData {
+pub struct LeReadRemoteFeaturesCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
     pub features: LeDeviceFeatures,
 }
 
 impl_try_from_for_raw_packet! {
-    LEReadRemoteFeaturesCompleteData,
+    LeReadRemoteFeaturesCompleteData,
     packet,
     {
-        Ok(LEReadRemoteFeaturesCompleteData {
+        Ok(LeReadRemoteFeaturesCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
             features: LeDeviceFeatures::new(chew!(packet, 8)).unwrap(),
@@ -1939,17 +1959,17 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LELongTermKeyRequestData {
+pub struct LeLongTermKeyRequestData {
     pub connection_handle: ConnectionHandle,
     pub random_number: u64,
     pub encryption_diversifier: u16,
 }
 
 impl_try_from_for_raw_packet! {
-    LELongTermKeyRequestData,
+    LeLongTermKeyRequestData,
     packet,
     {
-        Ok(LELongTermKeyRequestData {
+        Ok(LeLongTermKeyRequestData {
             connection_handle: chew_handle!(packet),
             random_number: chew_u64!(packet),
             encryption_diversifier: chew_u16!(packet),
@@ -1958,7 +1978,7 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LERemoteConnectionParameterRequestData {
+pub struct LeRemoteConnectionParameterRequestData {
     pub connection_handle: ConnectionHandle,
     pub minimum_interval: ConnectionInterval,
     pub maximum_interval: ConnectionInterval,
@@ -1967,10 +1987,10 @@ pub struct LERemoteConnectionParameterRequestData {
 }
 
 impl_try_from_for_raw_packet! {
-    LERemoteConnectionParameterRequestData,
+    LeRemoteConnectionParameterRequestData,
     packet,
     {
-        Ok(LERemoteConnectionParameterRequestData {
+        Ok(LeRemoteConnectionParameterRequestData {
             connection_handle: chew_handle!(packet),
             minimum_interval: ConnectionInterval::try_from_raw(chew_u16!(packet))
                 .map_err(|e| alloc::string::String::from(e))?,
@@ -1983,67 +2003,65 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEMaxOctets {
+pub struct LeMaxOctets {
     pub octets: u16,
 }
 
-impl LEMaxOctets {
-    /// Raw is a pair for (minimum, maximum)
-    fn from(raw: u16) -> Self {
+impl LeMaxOctets {
+    fn new(raw: u16) -> Self {
         debug_assert!(raw >= 0x001B && raw <= 0x00FB);
 
-        LEMaxOctets { octets: raw }
+        LeMaxOctets { octets: raw }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEMaxTime {
+pub struct LeMaxTime {
     pub time: u16,
 }
 
-impl LEMaxTime {
-    /// Raw is a pair for (minimum, maximum)
-    fn from(raw: u16) -> Self {
+impl LeMaxTime {
+    fn new(raw: u16) -> Self {
         debug_assert!(raw >= 0x0148 && raw <= 0x4290);
 
-        LEMaxTime { time: raw }
+        LeMaxTime { time: raw }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEDataLengthChangeData {
+pub struct LeDataLengthChangeData {
     pub connection_handle: ConnectionHandle,
-    pub max_tx_octets: LEMaxOctets,
-    pub max_tx_time: LEMaxTime,
-    pub max_rx_octets: LEMaxOctets,
-    pub max_rx_time: LEMaxTime,
+    pub max_tx_octets: LeMaxOctets,
+    pub max_tx_time: LeMaxTime,
+    pub max_rx_octets: LeMaxOctets,
+    pub max_rx_time: LeMaxTime,
 }
 
 impl_try_from_for_raw_packet! {
-    LEDataLengthChangeData,
+    LeDataLengthChangeData,
     packet,
     {
-                Ok(LEDataLengthChangeData {
+                Ok(LeDataLengthChangeData {
             connection_handle: chew_handle!(packet),
-            max_tx_octets: LEMaxOctets::from(chew_u16!(packet)),
-            max_tx_time: LEMaxTime::from(chew_u16!(packet)),
-            max_rx_octets: LEMaxOctets::from(chew_u16!(packet)),
-            max_rx_time: LEMaxTime::from(chew_u16!(packet)),
+            max_tx_octets: LeMaxOctets::new(chew_u16!(packet)),
+            max_tx_time: LeMaxTime::new(chew_u16!(packet)),
+            max_rx_octets: LeMaxOctets::new(chew_u16!(packet)),
+            max_rx_time: LeMaxTime::new(chew_u16!(packet)),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEReadLocalP256PublicKeyCompleteData {
+pub struct LeReadLocalP256PublicKeyCompleteData {
     pub status: Error,
     pub key: [u8; 64],
 }
 
 impl_try_from_for_raw_packet! {
-    LEReadLocalP256PublicKeyCompleteData,
+    LeReadLocalP256PublicKeyCompleteData,
     packet,
     {
-        Ok(LEReadLocalP256PublicKeyCompleteData {
+        Ok(LeReadLocalP256PublicKeyCompleteData {
             status: Error::from(chew!(packet)),
             key: {
                 let mut pub_key = [0u8; 64];
@@ -2056,16 +2074,16 @@ impl_try_from_for_raw_packet! {
 
 #[derive(Debug, Clone)]
 /// DHKey stands for diffie Hellman Key
-pub struct LEGenerateDHKeyCompleteData {
+pub struct LeGenerateDhKeyCompleteData {
     pub status: Error,
     pub key: [u8; 32],
 }
 
 impl_try_from_for_raw_packet! {
-    LEGenerateDHKeyCompleteData,
+    LeGenerateDhKeyCompleteData,
     packet,
     {
-        Ok(LEGenerateDHKeyCompleteData {
+        Ok(LeGenerateDhKeyCompleteData {
             status: Error::from(chew!(packet)),
             key: {
                 let mut dh_key = [0u8; 32];
@@ -2077,10 +2095,10 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEEnhancedConnectionCompleteData {
+pub struct LeEnhancedConnectionCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
-    pub role: LERole,
+    pub role: LeRole,
     pub peer_address_type: AddressType,
     pub peer_address: BluetoothDeviceAddress,
     pub local_resolvable_private_address: Option<BluetoothDeviceAddress>,
@@ -2092,7 +2110,7 @@ pub struct LEEnhancedConnectionCompleteData {
 }
 
 impl_try_from_for_raw_packet! {
-    LEEnhancedConnectionCompleteData,
+    LeEnhancedConnectionCompleteData,
     packet,
     {
         let peer_address_type: AddressType;
@@ -2111,10 +2129,10 @@ impl_try_from_for_raw_packet! {
             }};
         }
 
-        Ok(LEEnhancedConnectionCompleteData {
+        Ok(LeEnhancedConnectionCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
-            role: LERole::try_from(chew!(packet))?,
+            role: LeRole::try_from(chew!(packet))?,
             peer_address_type: {
                 peer_address_type = AddressType::try_from_raw(chew!(packet))?;
                 peer_address_type.clone()
@@ -2131,21 +2149,23 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub enum LEAdvertisingEventType {
+pub enum LeAdvertisingEventType {
     ConnectableDirectedLegacyAdvertising,
 }
 
-impl LEAdvertisingEventType {
-    fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
-        match raw {
-            0x01 => Ok(LEAdvertisingEventType::ConnectableDirectedLegacyAdvertising),
-            _ => Err(alloc::format!("Unknown LE Advertising Event Type: {}", raw)),
+impl TryFrom<u8> for LeAdvertisingEventType {
+    type Error = alloc::string::String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x01 => Ok(LeAdvertisingEventType::ConnectableDirectedLegacyAdvertising),
+            _ => Err(alloc::format!("Unknown LE Advertising Event Type: {}", value)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum LEDirectAddressType {
+pub enum LeDirectAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
     PublicIdentityAddress,
@@ -2153,31 +2173,31 @@ pub enum LEDirectAddressType {
     UnresolvableRandomDeviceAddress,
 }
 
-impl LEDirectAddressType {
+impl LeDirectAddressType {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(LEDirectAddressType::PublicDeviceAddress),
-            0x01 => Ok(LEDirectAddressType::RandomDeviceAddress),
-            0x02 => Ok(LEDirectAddressType::PublicIdentityAddress),
-            0x03 => Ok(LEDirectAddressType::RandomIdentityAddress),
-            0xFE => Ok(LEDirectAddressType::UnresolvableRandomDeviceAddress),
+            0x00 => Ok(LeDirectAddressType::PublicDeviceAddress),
+            0x01 => Ok(LeDirectAddressType::RandomDeviceAddress),
+            0x02 => Ok(LeDirectAddressType::PublicIdentityAddress),
+            0x03 => Ok(LeDirectAddressType::RandomIdentityAddress),
+            0xFE => Ok(LeDirectAddressType::UnresolvableRandomDeviceAddress),
             _ => Err(alloc::format!("Unknown LE Direct Address Type: {}", raw)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEDirectedAdvertisingReportData {
-    pub event_type: LEAdvertisingEventType,
+pub struct LeDirectedAdvertisingReportData {
+    pub event_type: LeAdvertisingEventType,
     pub address_type: AddressType,
     pub address: BluetoothDeviceAddress,
-    pub direct_address_type: LEDirectAddressType,
+    pub direct_address_type: LeDirectAddressType,
     pub direct_address: BluetoothDeviceAddress,
     pub rssi: Option<i8>,
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<Result<LEDirectedAdvertisingReportData, alloc::string::String>>,
+    Multiple<Result<LeDirectedAdvertisingReportData, alloc::string::String>>,
     packet,
     {
         let report_count = chew!(packet) as usize;
@@ -2185,11 +2205,11 @@ impl_try_from_for_raw_packet! {
         let mut vec = packet
             .chunks_exact(16)
             .map(|mut chunk| {
-                Ok(LEDirectedAdvertisingReportData {
-                    event_type: LEAdvertisingEventType::try_from(chew!(chunk))?,
+                Ok(LeDirectedAdvertisingReportData {
+                    event_type: LeAdvertisingEventType::try_from(chew!(chunk))?,
                     address_type: AddressType::try_from_raw(chew!(chunk))?,
                     address: chew_baddr!(chunk),
-                    direct_address_type: LEDirectAddressType::try_from(chew!(chunk))?,
+                    direct_address_type: LeDirectAddressType::try_from(chew!(chunk))?,
                     direct_address: chew_baddr!(chunk),
                     rssi: {
                         let rssi_val = chew!(chunk) as i8;
@@ -2211,40 +2231,40 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub enum LEPhy {
+pub enum LePhy {
     _1M,
     _2M,
     Coded,
 }
 
-impl LEPhy {
+impl LePhy {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x01 => Ok(LEPhy::_1M),
-            0x02 => Ok(LEPhy::_2M),
-            0x03 => Ok(LEPhy::Coded),
+            0x01 => Ok(LePhy::_1M),
+            0x02 => Ok(LePhy::_2M),
+            0x03 => Ok(LePhy::Coded),
             _ => Err(alloc::format!("Unknown LE Phy: {}", raw)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEPHYUpdateCompleteData {
+pub struct LePHYUpdateCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
-    pub tx_phy: LEPhy,
-    pub rx_phy: LEPhy,
+    pub tx_phy: LePhy,
+    pub rx_phy: LePhy,
 }
 
 impl_try_from_for_raw_packet! {
-    LEPHYUpdateCompleteData,
+    LePHYUpdateCompleteData,
     packet,
     {
-        Ok(LEPHYUpdateCompleteData {
+        Ok(LePHYUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
-            tx_phy: LEPhy::try_from(chew!(packet))?,
-            rx_phy: LEPhy::try_from(chew!(packet))?,
+            tx_phy: LePhy::try_from(chew!(packet))?,
+            rx_phy: LePhy::try_from(chew!(packet))?,
         })
     }
 }
@@ -2253,18 +2273,18 @@ impl_try_from_for_raw_packet! {
 /// AUX_CHAIN_IND (Secondary advertising channel fragmented data) PDU, where as Incomplete means
 /// that there is more data to come.
 #[derive(Debug, Clone)]
-pub enum LEDataStatus {
+pub enum LeDataStatus {
     Complete,
     Incomplete,
     IncompleteTruncated,
 }
 
-impl LEDataStatus {
+impl LeDataStatus {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0 => Ok(LEDataStatus::Complete),
-            1 => Ok(LEDataStatus::Incomplete),
-            2 => Ok(LEDataStatus::IncompleteTruncated),
+            0 => Ok(LeDataStatus::Complete),
+            1 => Ok(LeDataStatus::Incomplete),
+            2 => Ok(LeDataStatus::IncompleteTruncated),
             _ => Err(alloc::format!("Unknown LE Data Status: {}", raw)),
         }
     }
@@ -2278,7 +2298,7 @@ impl LEDataStatus {
 /// ScanResponseToAdvertisingInd             -- SCAN_RSP to an ADV_IND
 /// ScanResponseToAdvertisingScanInd         -- SCAN_RSP to an ADV_SCAN_IN
 #[derive(Debug, Clone)]
-pub enum LELegacyExtAdvEventTypePDUType {
+pub enum LeLegacyExtAdvEventTypePduType {
     AdvertisingInd,
     ConnectableAdvertisingInd,
     AdvertisingScanInd,
@@ -2288,13 +2308,13 @@ pub enum LELegacyExtAdvEventTypePDUType {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEExtAdvEventType {
+pub struct LeExtAdvEventType {
     raw: u16,
 }
 
-impl LEExtAdvEventType {
+impl LeExtAdvEventType {
     fn from(raw: u16) -> Self {
-        LEExtAdvEventType { raw: raw }
+        LeExtAdvEventType { raw: raw }
     }
 
     pub fn is_advertising_connectable(&self) -> bool {
@@ -2317,37 +2337,37 @@ impl LEExtAdvEventType {
         self.raw & (1 << 4) != 0
     }
 
-    pub fn data_status(&self) -> Result<LEDataStatus, alloc::string::String> {
-        LEDataStatus::try_from(((self.raw >> 5) & 3) as u8)
+    pub fn data_status(&self) -> Result<LeDataStatus, alloc::string::String> {
+        LeDataStatus::try_from(((self.raw >> 5) & 3) as u8)
     }
 
     /// Returns the Legacy PDU type if the event type indicates the PDU type is legacy
-    pub fn legacy_pdu_type(&self) -> Option<LELegacyExtAdvEventTypePDUType> {
+    pub fn legacy_pdu_type(&self) -> Option<LeLegacyExtAdvEventTypePduType> {
         match self.raw {
-            0b0010011 => Some(LELegacyExtAdvEventTypePDUType::AdvertisingInd),
-            0b0010101 => Some(LELegacyExtAdvEventTypePDUType::ConnectableAdvertisingInd),
-            0b0010010 => Some(LELegacyExtAdvEventTypePDUType::AdvertisingScanInd),
-            0b0010000 => Some(LELegacyExtAdvEventTypePDUType::AdvertisingNonConnectableNonScannableInd),
-            0b0011011 => Some(LELegacyExtAdvEventTypePDUType::ScanResponseToAdvertisingInd),
-            0b0011010 => Some(LELegacyExtAdvEventTypePDUType::ScanResponseToAdvertisingScanInd),
+            0b0010011 => Some(LeLegacyExtAdvEventTypePduType::AdvertisingInd),
+            0b0010101 => Some(LeLegacyExtAdvEventTypePduType::ConnectableAdvertisingInd),
+            0b0010010 => Some(LeLegacyExtAdvEventTypePduType::AdvertisingScanInd),
+            0b0010000 => Some(LeLegacyExtAdvEventTypePduType::AdvertisingNonConnectableNonScannableInd),
+            0b0011011 => Some(LeLegacyExtAdvEventTypePduType::ScanResponseToAdvertisingInd),
+            0b0011010 => Some(LeLegacyExtAdvEventTypePduType::ScanResponseToAdvertisingScanInd),
             _ => None,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEAdvertiseInterval {
+pub struct LeAdvertiseInterval {
     interval: u16,
 }
 
-impl LEAdvertiseInterval {
+impl LeAdvertiseInterval {
     const CNV: u64 = 1250; // unit: microseconds
 
     /// Raw is a pair for (minimum, maximum)
     fn from(raw: u16) -> Self {
         debug_assert!(raw >= 0x0006);
 
-        LEAdvertiseInterval { interval: raw }
+        LeAdvertiseInterval { interval: raw }
     }
 
     /// Get the minimum interval value as a duration
@@ -2367,30 +2387,30 @@ impl LEAdvertiseInterval {
 /// - If rssi is None, rssi is not available
 /// - If the periodic_advertising_interval is None, then there si no periodic advertising
 #[derive(Debug, Clone)]
-pub struct LEExtendedAdvertisingReportData {
-    pub event_type: LEExtAdvEventType,
+pub struct LeExtendedAdvertisingReportData {
+    pub event_type: LeExtAdvEventType,
     pub address_type: Option<AddressType>,
     pub address: BluetoothDeviceAddress,
-    pub primary_phy: LEPhy,
-    pub secondary_phy: Option<LEPhy>,
+    pub primary_phy: LePhy,
+    pub secondary_phy: Option<LePhy>,
     pub advertising_sid: Option<u8>,
     pub tx_power: Option<i8>,
     pub rssi: Option<i8>,
-    pub periodic_advertising_interval: Option<LEAdvertiseInterval>,
-    pub direct_address_type: LEDirectAddressType,
+    pub periodic_advertising_interval: Option<LeAdvertiseInterval>,
+    pub direct_address_type: LeDirectAddressType,
     pub direct_address: BluetoothDeviceAddress,
     pub data: ExtendedAdvertisingAndScanResponseData,
 }
 
 impl_try_from_for_raw_packet! {
-    Multiple<Result<LEExtendedAdvertisingReportData, alloc::string::String>>,
+    Multiple<Result<LeExtendedAdvertisingReportData, alloc::string::String>>,
     packet,
     {
         let mut reports = alloc::vec::Vec::with_capacity(chew!(packet) as usize);
 
         let mut process_packet = || {
-            Ok(LEExtendedAdvertisingReportData {
-                event_type: LEExtAdvEventType::from(chew_u16!(packet)),
+            Ok(LeExtendedAdvertisingReportData {
+                event_type: LeExtAdvEventType::from(chew_u16!(packet)),
                 address_type: {
                     let val = chew!(packet);
 
@@ -2402,12 +2422,12 @@ impl_try_from_for_raw_packet! {
                     }
                 },
                 address: chew_baddr!(packet),
-                primary_phy: LEPhy::try_from(chew!(packet))?,
+                primary_phy: LePhy::try_from(chew!(packet))?,
                 secondary_phy: {
                     let val = chew!(packet);
 
                     if val != 0 {
-                        Some(LEPhy::try_from(val)?)
+                        Some(LePhy::try_from(val)?)
                     } else {
                         // A value of 0 indicates that there are no packets on the secondary
                         // advertising channel
@@ -2448,13 +2468,13 @@ impl_try_from_for_raw_packet! {
                     let val = chew_u16!(packet);
 
                     if val != 0 {
-                        Some(LEAdvertiseInterval::from(val))
+                        Some(LeAdvertiseInterval::from(val))
                     } else {
                         // A value of 0 indicates no periodic advertising
                         None
                     }
                 },
-                direct_address_type: LEDirectAddressType::try_from(chew!(packet))?,
+                direct_address_type: LeDirectAddressType::try_from(chew!(packet))?,
                 direct_address: chew_baddr!(packet),
                 data: {
                     let data_len = chew!(packet);
@@ -2473,48 +2493,48 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEPeriodicAdvertisingSyncEstablishedData {
+pub struct LePeriodicAdvertisingSyncEstablishedData {
     pub status: Error,
     pub sync_handle: ConnectionHandle,
     pub advertising_sid: u8,
     pub advertiser_address_type: AddressType,
     pub advertiser_address: BluetoothDeviceAddress,
-    pub advertiser_phy: LEPhy,
-    pub periodic_advertising_interval: LEAdvertiseInterval,
+    pub advertiser_phy: LePhy,
+    pub periodic_advertising_interval: LeAdvertiseInterval,
     pub advertiser_clock_accuracy: ClockAccuracy,
 }
 
 impl_try_from_for_raw_packet! {
-    LEPeriodicAdvertisingSyncEstablishedData,
+    LePeriodicAdvertisingSyncEstablishedData,
     packet,
     {
-        Ok(LEPeriodicAdvertisingSyncEstablishedData {
+        Ok(LePeriodicAdvertisingSyncEstablishedData {
             status: Error::from(chew!(packet)),
             sync_handle: chew_handle!(packet),
             advertising_sid: chew!(packet),
             advertiser_address_type: AddressType::try_from_raw(chew!(packet))?,
             advertiser_address: chew_baddr!(packet),
-            advertiser_phy: LEPhy::try_from(chew!(packet))?,
-            periodic_advertising_interval: LEAdvertiseInterval::from(chew_u16!(packet)),
+            advertiser_phy: LePhy::try_from(chew!(packet))?,
+            periodic_advertising_interval: LeAdvertiseInterval::from(chew_u16!(packet)),
             advertiser_clock_accuracy: ClockAccuracy::try_from(chew!(packet))?,
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEPeriodicAdvertisingReportData {
+pub struct LePeriodicAdvertisingReportData {
     pub sync_handle: ConnectionHandle,
     pub tx_power: Option<i8>,
     pub rssi: Option<i8>,
-    pub data_status: LEDataStatus,
+    pub data_status: LeDataStatus,
     pub data: BufferType<u8>,
 }
 
 impl_try_from_for_raw_packet! {
-    LEPeriodicAdvertisingReportData,
+    LePeriodicAdvertisingReportData,
     packet,
     {
-        Ok(LEPeriodicAdvertisingReportData {
+        Ok(LePeriodicAdvertisingReportData {
             sync_handle: chew_handle!(packet),
             tx_power: {
                 let val = chew!(packet) as i8;
@@ -2533,7 +2553,7 @@ impl_try_from_for_raw_packet! {
                 }
             },
             // There is a unused byte here, so the next chew needs to account for that
-            data_status: LEDataStatus::try_from(chew!(packet, 1, 1)[0])?,
+            data_status: LeDataStatus::try_from(chew!(packet, 1, 1)[0])?,
             data: {
                 let len = chew!(packet) as usize;
                 packet[..len].to_vec()
@@ -2543,22 +2563,22 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEPeriodicAdvertisingSyncLostData {
+pub struct LePeriodicAdvertisingSyncLostData {
     pub sync_handle: ConnectionHandle,
 }
 
 impl_try_from_for_raw_packet! {
-    LEPeriodicAdvertisingSyncLostData,
+    LePeriodicAdvertisingSyncLostData,
     packet,
     {
-        Ok(LEPeriodicAdvertisingSyncLostData {
+        Ok(LePeriodicAdvertisingSyncLostData {
             sync_handle: chew_handle!(packet),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEAdvertisingSetTerminatedData {
+pub struct LeAdvertisingSetTerminatedData {
     pub status: Error,
     pub advertising_handle: u8,
     pub connection_handle: ConnectionHandle,
@@ -2566,10 +2586,10 @@ pub struct LEAdvertisingSetTerminatedData {
 }
 
 impl_try_from_for_raw_packet! {
-    LEAdvertisingSetTerminatedData,
+    LeAdvertisingSetTerminatedData,
     packet,
     {
-        Ok(LEAdvertisingSetTerminatedData {
+        Ok(LeAdvertisingSetTerminatedData {
             status: Error::from(chew!(packet)),
             advertising_handle: chew!(packet),
             connection_handle: chew_handle!(packet),
@@ -2579,17 +2599,17 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct LEScanRequestReceivedData {
+pub struct LeScanRequestReceivedData {
     pub advertising_handle: u8,
     pub scanner_address_type: AddressType,
     pub scanner_address: BluetoothDeviceAddress,
 }
 
 impl_try_from_for_raw_packet! {
-    LEScanRequestReceivedData,
+    LeScanRequestReceivedData,
     packet,
     {
-        Ok(LEScanRequestReceivedData {
+        Ok(LeScanRequestReceivedData {
             advertising_handle: chew!(packet),
             scanner_address_type: AddressType::try_from_raw(chew!(packet))?,
             scanner_address: chew_baddr!(packet),
@@ -2598,34 +2618,34 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub enum LEChannelSelectionAlgorithm {
+pub enum LeChannelSelectionAlgorithm {
     Algorithm1,
     Algorithm2,
 }
 
-impl LEChannelSelectionAlgorithm {
+impl LeChannelSelectionAlgorithm {
     fn try_from(raw: u8) -> Result<Self, alloc::string::String> {
         match raw {
-            0x00 => Ok(LEChannelSelectionAlgorithm::Algorithm1),
-            0x01 => Ok(LEChannelSelectionAlgorithm::Algorithm2),
+            0x00 => Ok(LeChannelSelectionAlgorithm::Algorithm1),
+            0x01 => Ok(LeChannelSelectionAlgorithm::Algorithm2),
             _ => Err(alloc::format!("Unknown LE Channel Selection Algorithm: {}", raw)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct LEChannelSelectionAlgorithmData {
+pub struct LeChannelSelectionAlgorithmData {
     pub connection_handle: ConnectionHandle,
-    pub channel_selection_algorithm: LEChannelSelectionAlgorithm,
+    pub channel_selection_algorithm: LeChannelSelectionAlgorithm,
 }
 
 impl_try_from_for_raw_packet! {
-    LEChannelSelectionAlgorithmData,
+    LeChannelSelectionAlgorithmData,
     packet,
     {
-        Ok(LEChannelSelectionAlgorithmData {
+        Ok(LeChannelSelectionAlgorithmData {
             connection_handle: chew_handle!(packet),
-            channel_selection_algorithm: LEChannelSelectionAlgorithm::try_from(chew!(packet))?,
+            channel_selection_algorithm: LeChannelSelectionAlgorithm::try_from(chew!(packet))?,
         })
     }
 }
@@ -2745,10 +2765,10 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct SAMStatusChangeData {}
+pub struct SamStatusChangeData {}
 
 impl_try_from_for_raw_packet! {
-    SAMStatusChangeData,
+    SamStatusChangeData,
     _packet_placeholder,
     {
         unimplemented!()
