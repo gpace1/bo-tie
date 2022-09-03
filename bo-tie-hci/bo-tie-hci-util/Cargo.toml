@@ -12,3 +12,4 @@ bo-tie-gap = { path = "../../bo-tie-host/bo-tie-gap", optional = true }
 default = ["gap"]
 std = []
 gap = [ "bo-tie-gap" ]
+unstable = []

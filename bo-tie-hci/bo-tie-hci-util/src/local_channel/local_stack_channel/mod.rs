@@ -14,15 +14,15 @@ use super::{
     LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture,
     LocalSendFutureError,
 };
-use crate::hci::interface::local_channel::local_stack_channel::stack_buffers::{
+use crate::local_channel::local_stack_channel::stack_buffers::{
     Reservation, UnsafeBufferReservation, UnsafeReservation,
 };
-use crate::hci::interface::{
-    Channel, ChannelEnds as ChannelEndsTrait, ChannelReserve, FlowControl, FlowControlId, FlowCtrlReceiver,
-    FromIntraMessage, InterfaceReceivers, IntraMessageType, PrepareBufferMsg, Receiver, Sender, TaskId, ToIntraMessage,
+use crate::{
+    Channel, ChannelEnds as ChannelEndsTrait, ChannelReserve, FlowControlId, FlowCtrlReceiver, FromIntraMessage,
+    InterfaceReceivers, IntraMessageType, Receiver, Sender, TaskId, ToIntraMessage,
 };
-use crate::hci::BufferReserve;
-use core::cell::{Cell, Ref, RefCell};
+use bo_tie_util::buffer::BufferReserve;
+use core::cell::{Cell, RefCell};
 use core::fmt::{Display, Formatter};
 use core::ops::Deref;
 use core::task::{Context, Poll, Waker};
@@ -143,7 +143,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> BufferReserve
         TASK_COUNT,
     >
 where
-    B: crate::hci::Buffer,
+    B: bo_tie_util::buffer::Buffer,
 {
     type Buffer = StackFromBuffer<'z, B, TASK_COUNT, CHANNEL_SIZE>;
     type TakeBuffer = LocalStackTakeBuffer<Self>;
@@ -161,7 +161,7 @@ where
 impl<'z, const CHANNEL_SIZE: usize, B> BufferReserve
     for &'z LocalStackChannel<CHANNEL_SIZE, B, ToIntraMessage<UnsafeBufferReservation<B, CHANNEL_SIZE>>>
 where
-    B: crate::hci::Buffer,
+    B: bo_tie_util::buffer::Buffer,
 {
     type Buffer = BufferReservation<'z, B, CHANNEL_SIZE>;
     type TakeBuffer = LocalStackTakeBuffer<Self>;
@@ -186,54 +186,6 @@ macro_rules! impl_local_queue_buffer {
 
         fn set_waker(&self, waker: Waker) {
             self.0.waker.set(Some(waker))
-        }
-    };
-}
-
-macro_rules! impl_local_queue_buffer_send {
-    ($channel_ends:pat, $channel_ends_convert:expr) => {
-        fn is_full(&self) -> bool {
-            self.0.message_queue.borrow().is_full()
-        }
-
-        fn receiver_exists(&self) -> bool {
-            self.0.receiver_exists.get()
-        }
-
-        fn push(&self, intra_message: Self::Payload) {
-            debug_assert!(self.receiver_exists(), "all receivers closed for stack channel");
-
-            let message_type = match intra_message.ty {
-                IntraMessageType::Command(m, buffer) => {
-                    let unsafe_buffer = unsafe { BufferReservation::to_unsafe(buffer) };
-
-                    IntraMessageType::Command(m, unsafe_buffer)
-                }
-                IntraMessageType::Acl(buffer) => {
-                    let unsafe_buffer = unsafe { BufferReservation::to_unsafe(buffer) };
-
-                    IntraMessageType::Acl(unsafe_buffer)
-                }
-                IntraMessageType::Sco(buffer) => {
-                    let unsafe_buffer = unsafe { BufferReservation::to_unsafe(buffer) };
-
-                    IntraMessageType::Sco(unsafe_buffer)
-                }
-                IntraMessageType::Iso(buffer) => {
-                    let unsafe_buffer = unsafe { BufferReservation::to_unsafe(buffer) };
-
-                    IntraMessageType::Iso(unsafe_buffer)
-                }
-                IntraMessageType::Event(ed) => IntraMessageType::Event(ed),
-                IntraMessageType::Disconnect(r) => IntraMessageType::Disconnect(r),
-                IntraMessageType::Connection($channel_ends) => $channel_ends_convert,
-            };
-
-            self.0
-                .message_queue
-                .borrow_mut()
-                .try_push(message_type.into())
-                .unwrap();
         }
     };
 }
@@ -778,10 +730,10 @@ pub struct StackFromBuffer<'z, B, const TASK_COUNT: usize, const CHANNEL_SIZE: u
     >,
 }
 
-impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> crate::hci::Buffer
+impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> bo_tie_util::buffer::Buffer
     for StackFromBuffer<'_, B, TASK_COUNT, CHANNEL_SIZE>
 where
-    B: crate::hci::Buffer,
+    B: bo_tie_util::buffer::Buffer,
 {
     fn with_capacity(_front: usize, _back: usize) -> Self
     where
@@ -831,10 +783,10 @@ where
     }
 }
 
-impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> crate::TryRemove<u8>
+impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> bo_tie_util::buffer::TryRemove<u8>
     for StackFromBuffer<'_, B, TASK_COUNT, CHANNEL_SIZE>
 where
-    B: crate::TryRemove<u8>,
+    B: bo_tie_util::buffer::TryRemove<u8>,
 {
     type Error = B::Error;
     type RemoveIter<'a> = B::RemoveIter<'a> where Self: 'a;
@@ -844,10 +796,10 @@ where
     }
 }
 
-impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> crate::TryFrontExtend<u8>
+impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> bo_tie_util::buffer::TryFrontExtend<u8>
     for StackFromBuffer<'_, B, TASK_COUNT, CHANNEL_SIZE>
 where
-    B: crate::TryFrontExtend<u8>,
+    B: bo_tie_util::buffer::TryFrontExtend<u8>,
 {
     type Error = B::Error;
 
@@ -859,10 +811,10 @@ where
     }
 }
 
-impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> crate::TryFrontRemove<u8>
+impl<B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> bo_tie_util::buffer::TryFrontRemove<u8>
     for StackFromBuffer<'_, B, TASK_COUNT, CHANNEL_SIZE>
 where
-    B: crate::TryFrontRemove<u8>,
+    B: bo_tie_util::buffer::TryFrontRemove<u8>,
 {
     type Error = B::Error;
     type FrontRemoveIter<'a> = B::FrontRemoveIter<'a> where Self: 'a;
@@ -945,7 +897,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B> core::future::Fu
         >,
     >
 where
-    B: crate::hci::Buffer + 'z,
+    B: bo_tie_util::buffer::Buffer + 'z,
 {
     type Output = StackFromBuffer<'z, B, TASK_COUNT, CHANNEL_SIZE>;
 
@@ -977,7 +929,7 @@ where
 impl<'z, const CHANNEL_SIZE: usize, B, T> core::future::Future
     for LocalStackTakeBuffer<&'z LocalStackChannel<CHANNEL_SIZE, B, T>>
 where
-    B: crate::hci::Buffer + 'z,
+    B: bo_tie_util::buffer::Buffer + 'z,
     T: Unpin,
 {
     type Output = BufferReservation<'z, B, CHANNEL_SIZE>;
@@ -1076,7 +1028,7 @@ pub type ChannelEndsType<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize,
 impl<'z, B, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> ChannelEndsTrait
     for ChannelEnds<'z, B, TASK_COUNT, CHANNEL_SIZE>
 where
-    B: crate::hci::Buffer + 'z,
+    B: bo_tie_util::buffer::Buffer + 'z,
 {
     type ToBuffer = BufferReservation<'z, B, CHANNEL_SIZE>;
 
@@ -1303,8 +1255,6 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     }
 
     fn add_new_task(&self, task_id: TaskId, flow_ctrl_id: FlowControlId) -> Result<Self::TaskChannelEnds, Self::Error> {
-        use core::ops::Deref;
-
         let insertion_index = self
             .task_data
             .borrow()
@@ -1347,8 +1297,6 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     }
 
     fn get(&self, id: TaskId) -> Option<Self::ToChannel> {
-        use core::ops::Deref;
-
         let ref_task_data = self.task_data.borrow();
 
         ref_task_data

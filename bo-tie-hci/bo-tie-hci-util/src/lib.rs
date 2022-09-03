@@ -16,10 +16,10 @@ pub mod opcodes;
 use bo_tie_util::buffer::{Buffer, BufferReserve, TryExtend};
 use core::fmt;
 use core::fmt::{Debug, Display, Formatter};
-use std::future::Future;
-use std::ops::Deref;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::ops::Deref;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// The connection handle
 ///
