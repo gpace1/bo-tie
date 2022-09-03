@@ -3,8 +3,10 @@ name = "bo-tie-hci-interface"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 bo-tie-hci-util = { path = "../bo-tie-hci-util" }
 bo-tie-util = { path = "../../bo-tie-util"}
+
+[features]
+std = []
+unstable = ["bo-tie-hci-util/unstable"]

@@ -7,7 +7,8 @@
 //! A `UartInterface` is a wrapper around an `Interface` to integrate processing of this packet
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
-use crate::hci::interface::{BufferedUpSend, ChannelReserve, HciPacketType, Interface, SendError};
+use crate::{BufferedUpSend, Interface, SendError};
+use bo_tie_hci_util::{ChannelReserve, HciPacketType};
 use core::fmt::{Debug, Display, Formatter};
 
 /// UART wrapper around an [`Interface`](Interface)
