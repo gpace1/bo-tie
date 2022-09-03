@@ -13,18 +13,18 @@ use super::{
     LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture,
     LocalSendFutureError,
 };
-use crate::hci::interface::local_channel::local_dynamic_channel::dyn_buffer::{DynBufferReserve, TakeDynReserveFuture};
-use crate::hci::interface::{
+use crate::{
     Channel, ChannelEnds, ChannelReserve, FlowControlId, FlowCtrlReceiver, FromIntraMessage, InterfaceReceivers,
     Receiver, Sender, TaskId, ToIntraMessage,
 };
-use crate::hci::BufferReserve;
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
+use bo_tie_util::buffer::BufferReserve;
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
 use core::task::{Context, Poll, Waker};
 use dyn_buffer::DeVec;
+use dyn_buffer::{DynBufferReserve, TakeDynReserveFuture};
 
 /// The sender for a local channel
 pub struct LocalChannelSender<B, T>(Rc<RefCell<LocalChannelInner<B, T>>>);
@@ -212,7 +212,7 @@ impl<B: Unpin, T: Unpin> Channel for LocalChannel<B, T> {
 
 impl<B, T> BufferReserve for LocalChannel<B, T>
 where
-    B: crate::hci::Buffer,
+    B: bo_tie_util::buffer::Buffer,
 {
     type Buffer = B;
     type TakeBuffer = TakeDynReserveFuture<B>;
@@ -452,7 +452,7 @@ impl Display for LocalChannelManagerError {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test::*;
+    use bo_tie_hci_interface::test::*;
 
     #[test]
     fn local_init_usize() {
