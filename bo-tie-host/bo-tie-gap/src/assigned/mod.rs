@@ -356,8 +356,8 @@ impl core::fmt::Display for ConvertError {
 
 #[derive(Debug)]
 pub struct DataTooLargeError {
-    pub(crate) overflow: usize,
-    pub(crate) remaining: usize,
+    pub overflow: usize,
+    pub remaining: usize,
 }
 
 impl DataTooLargeError {
