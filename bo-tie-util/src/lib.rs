@@ -885,8 +885,8 @@ pub struct FeaturesIter<'a> {
 }
 
 impl<'a> FeaturesIter<'a> {
-    fn new(features_size: usize, device_features: &'a DeviceFeatures) -> Self {
-        let position = PositionIter::new(features_size);
+    fn new(page_size: usize, device_features: &'a DeviceFeatures) -> Self {
+        let position = PositionIter::new(page_size);
 
         Self {
             position,
