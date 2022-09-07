@@ -102,19 +102,6 @@ pub enum Error {
     PacketTooLong,
 }
 
-impl Error {
-    pub fn ok_or_else<F, E>(self, err: F) -> Result<(), E>
-    where
-        F: FnOnce(Self) -> E,
-    {
-        if let Error::NoError = self {
-            Ok(())
-        } else {
-            Err(err(self))
-        }
-    }
-}
-
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
