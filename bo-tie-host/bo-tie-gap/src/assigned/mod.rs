@@ -354,30 +354,8 @@ impl core::fmt::Display for ConvertError {
     }
 }
 
-#[derive(Debug)]
-pub struct DataTooLargeError {
-    pub overflow: usize,
-    pub remaining: usize,
-}
-
-impl DataTooLargeError {
-    /// Return the number of bytes that would overflow the advertising packet buffer
-    pub fn overflow(&self) -> usize {
-        self.overflow
-    }
-
-    /// The number of bytes remaining in the advertising buffer at the time that this error was
-    /// generated.
-    pub fn remaining(&self) -> usize {
-        self.remaining
-    }
-}
-
-impl core::fmt::Display for DataTooLargeError {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "Advertising Data Too Large")
-    }
-}
+#[cfg(feature = "std")]
+impl std::error::Error for ConvertError {}
 
 /// A wrapper around an EIR or AD structure
 ///
