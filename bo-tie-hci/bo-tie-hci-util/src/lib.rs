@@ -7,6 +7,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+extern crate core;
 
 pub mod events;
 pub mod le;
@@ -1046,12 +1047,12 @@ pub trait Sender {
 /// #![feature(generic_associated_types)]
 /// #![feature(type_alias_impl_trait)]
 /// # use std::future::Future;
+/// # use bo_tie_hci_util::Receiver;
 /// use tokio::sync::mpsc;
-/// use bo_tie::hci::interface::Receiver;
 ///
-/// struct TokioSender<T>(mpsc::Receiver<T>);
+/// struct TokioReceiver<T>(mpsc::Receiver<T>);
 ///
-/// impl<T> Receiver for TokioSender<T> {
+/// impl<T> Receiver for TokioReceiver<T> {
 ///     type Message = T;
 ///     type ReceiveFuture<'a> = impl Future<Output = Option<T>> + 'a where T: 'a;
 ///

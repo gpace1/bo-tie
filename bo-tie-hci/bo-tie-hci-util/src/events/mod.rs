@@ -147,24 +147,24 @@ use parameters::{
     AuthenticatedPayloadTimeoutExpiredData, AuthenticationCompleteData, ChangeConnectionLinkKeyCompleteData,
     CommandCompleteData, CommandStatusData, ConnectionCompleteData, ConnectionPacketTypeChangedData,
     ConnectionRequestData, ConnectionlessSlaveBroadcastChannelMapChangeData, ConnectionlessSlaveBroadcastReceiveData,
-    ConnectionlessSlaveBroadcastTimeoutData, DataBufferOverflowData, DisconnectionCompleteData, EncryptionChangeData,
-    EncryptionKeyRefreshCompleteData, EnhancedFlushCompleteData, ExtendedInquiryResultData,
-    FlowSpecificationCompleteData, FlushOccuredData, HardwareErrorData, InquiryCompleteData,
+    ConnectionlessSlaveBroadcastTimeoutData, DataBufferOverflowData, DisconnectionCompleteData, EncryptionChangeV1Data,
+    EncryptionChangeV2Data, EncryptionKeyRefreshCompleteData, EnhancedFlushCompleteData, ExtendedInquiryResultData,
+    FlowSpecificationCompleteData, FlushOccurredData, HardwareErrorData, InquiryCompleteData,
     InquiryResponseNotificationData, InquiryResultData, InquiryResultWithRssiData, IoCapabilityRequestData,
     IoCapabilityResponseData, KeypressNotificationData, LeAdvertisingReportData, LeAdvertisingSetTerminatedData,
     LeChannelSelectionAlgorithmData, LeConnectionCompleteData, LeConnectionUpdateCompleteData, LeDataLengthChangeData,
     LeDirectedAdvertisingReportData, LeEnhancedConnectionCompleteData, LeExtendedAdvertisingReportData,
-    LeGenerateDhKeyCompleteData, LeLongTermKeyRequestData, LePHYUpdateCompleteData, LePeriodicAdvertisingReportData,
-    LePeriodicAdvertisingSyncEstablishedData, LePeriodicAdvertisingSyncLostData, LeReadLocalP256PublicKeyCompleteData,
-    LeReadRemoteFeaturesCompleteData, LeRemoteConnectionParameterRequestData, LeScanRequestReceivedData,
-    LinkKeyNotificationData, LinkKeyRequestData, LinkSupervisionTimeoutChangedData, LoopbackCommandData,
-    MasterLinkKeyCompleteData, MaxSlotsChangeData, ModeChangeData, Multiple, NumberOfCompletedDataBlocksData,
-    NumberOfCompletedPacketsData, PageScanRepetitionModeChangeData, PinCodeRequestData, QosSetupCompleteData,
-    QosViolationData, ReadClockOffsetCompleteData, ReadRemoteExtendedFeaturesCompleteData,
-    ReadRemoteSupportedFeaturesCompleteData, ReadRemoteVersionInformationCompleteData,
-    RemoteHostSupportedFeaturesNotificationData, RemoteNameRequestCompleteData, RemoteOobDataRequestData,
-    ReturnLinkKeysData, RoleChangeData, SamStatusChangeData, SimplePairingCompleteData, SlavePageResponseTimeoutData,
-    SniffSubratingData, SynchronizationTrainCompleteData, SynchronizationTrainReceivedData,
+    LeGenerateDhKeyCompleteData, LeLongTermKeyRequestData, LePeriodicAdvertisingReportData,
+    LePeriodicAdvertisingSyncEstablishedData, LePeriodicAdvertisingSyncLostData, LePhyUpdateCompleteData,
+    LeReadLocalP256PublicKeyCompleteData, LeReadRemoteFeaturesCompleteData, LeRemoteConnectionParameterRequestData,
+    LeScanRequestReceivedData, LinkKeyNotificationData, LinkKeyRequestData, LinkKeyTypeChangedData,
+    LinkSupervisionTimeoutChangedData, LoopbackCommandData, MaxSlotsChangeData, ModeChangeData, Multiple,
+    NumberOfCompletedDataBlocksData, NumberOfCompletedPacketsData, PageScanRepetitionModeChangeData,
+    PeripheralPageResponseTimeoutData, PinCodeRequestData, QosSetupCompleteData, QosViolationData,
+    ReadClockOffsetCompleteData, ReadRemoteExtendedFeaturesCompleteData, ReadRemoteSupportedFeaturesCompleteData,
+    ReadRemoteVersionInformationCompleteData, RemoteHostSupportedFeaturesNotificationData,
+    RemoteNameRequestCompleteData, RemoteOobDataRequestData, ReturnLinkKeysData, RoleChangeData, SamStatusChangeData,
+    SimplePairingCompleteData, SniffSubratingData, SynchronizationTrainCompleteData, SynchronizationTrainReceivedData,
     SynchronousConnectionChangedData, SynchronousConnectionCompleteData, TriggeredClockCaptureData,
     TruncatedPageCompleteData, UserConfirmationRequestData, UserPasskeyNotificationData, UserPasskeyRequestData,
 };
@@ -201,7 +201,7 @@ enumerate_split! {
         GenerateDhKeyComplete{LeGenerateDhKeyCompleteData},
         EnhancedConnectionComplete{LeEnhancedConnectionCompleteData},
         DirectedAdvertisingReport{Multiple<Result<LeDirectedAdvertisingReportData, alloc::string::String>>},
-        PhyUpdateComplete{LePHYUpdateCompleteData},
+        PhyUpdateComplete{LePhyUpdateCompleteData},
         ExtendedAdvertisingReport{Multiple<Result<LeExtendedAdvertisingReportData, alloc::string::String>>},
         PeriodicAdvertisingSyncEstablished{LePeriodicAdvertisingSyncEstablishedData},
         PeriodicAdvertisingReport{LePeriodicAdvertisingReportData},
@@ -214,8 +214,35 @@ enumerate_split! {
 }
 
 impl LeMeta {
-    pub fn try_from(raw: u8) -> Result<LeMeta, alloc::string::String> {
-        match raw {
+    /// Get the sub event code for the `LeMeta` event
+    pub fn get_sub_code(&self) -> u8 {
+        match *self {
+            LeMeta::ConnectionComplete => 0x01,
+            LeMeta::AdvertisingReport => 0x02,
+            LeMeta::ConnectionUpdateComplete => 0x03,
+            LeMeta::ReadRemoteFeaturesComplete => 0x04,
+            LeMeta::LongTermKeyRequest => 0x05,
+            LeMeta::RemoteConnectionParameterRequest => 0x06,
+            LeMeta::DataLengthChange => 0x07,
+            LeMeta::ReadLocalP256PublicKeyComplete => 0x08,
+            LeMeta::GenerateDhKeyComplete => 0x09,
+            LeMeta::EnhancedConnectionComplete => 0x0A,
+            LeMeta::DirectedAdvertisingReport => 0x0B,
+            LeMeta::PhyUpdateComplete => 0x0C,
+            LeMeta::ExtendedAdvertisingReport => 0x0D,
+            LeMeta::PeriodicAdvertisingSyncEstablished => 0x0E,
+            LeMeta::PeriodicAdvertisingReport => 0x0F,
+            LeMeta::PeriodicAdvertisingSyncLost => 0x10,
+            LeMeta::ScanTimeout => 0x11,
+            LeMeta::AdvertisingSetTerminated => 0x12,
+            LeMeta::ScanRequestReceived => 0x13,
+            LeMeta::ChannelSelectionAlgorithm => 0x14,
+        }
+    }
+
+    /// Try to create a `LeMeta` event from its sub event code
+    pub fn try_from_sub_code(sub_event_code: u8) -> Result<Self, InvalidLeMetaCode> {
+        match sub_event_code {
             0x01 => Ok(LeMeta::ConnectionComplete),
             0x02 => Ok(LeMeta::AdvertisingReport),
             0x03 => Ok(LeMeta::ConnectionUpdateComplete),
@@ -236,8 +263,22 @@ impl LeMeta {
             0x12 => Ok(LeMeta::AdvertisingSetTerminated),
             0x13 => Ok(LeMeta::ScanRequestReceived),
             0x14 => Ok(LeMeta::ChannelSelectionAlgorithm),
-            _ => Err(alloc::format!("Unknown LE Meta: {}", raw)),
+            _ => Err(InvalidLeMetaCode(sub_event_code)),
         }
+    }
+}
+
+impl TryFrom<u8> for LeMeta {
+    type Error = InvalidLeMetaCode;
+
+    fn try_from(sub_event_code: u8) -> Result<LeMeta, Self::Error> {
+        Self::try_from_sub_code(sub_event_code)
+    }
+}
+
+impl From<LeMeta> for u8 {
+    fn from(le_meta: LeMeta) -> Self {
+        le_meta.get_sub_code()
     }
 }
 
@@ -293,7 +334,8 @@ impl core::fmt::Display for LeMeta {
 }
 
 impl LeMetaData {
-    fn into_simple(&self) -> LeMeta {
+    /// Get the [`LeMeta`] enumeration for this `LeMetaData`
+    fn get_le_event_name(&self) -> LeMeta {
         match *self {
             LeMetaData::ConnectionComplete(_) => LeMeta::ConnectionComplete,
             LeMetaData::AdvertisingReport(_) => LeMeta::AdvertisingReport,
@@ -335,7 +377,7 @@ impl_try_from_for_raw_packet! {
             0x09 => Ok(LeMetaData::GenerateDhKeyComplete(LeGenerateDhKeyCompleteData::try_from(packet)?)),
             0x0A => Ok(LeMetaData::EnhancedConnectionComplete(LeEnhancedConnectionCompleteData::try_from(packet)?)),
             0x0B => Ok(LeMetaData::DirectedAdvertisingReport(Multiple::<Result<LeDirectedAdvertisingReportData, alloc::string::String>>::try_from(packet)?)),
-            0x0C => Ok(LeMetaData::PhyUpdateComplete(LePHYUpdateCompleteData::try_from(packet)?)),
+            0x0C => Ok(LeMetaData::PhyUpdateComplete(LePhyUpdateCompleteData::try_from(packet)?)),
             0x0D => Ok(LeMetaData::ExtendedAdvertisingReport(Multiple::<Result<LeExtendedAdvertisingReportData, alloc::string::String>>::try_from(packet)?)),
             0x0E => Ok(LeMetaData::PeriodicAdvertisingSyncEstablished(LePeriodicAdvertisingSyncEstablishedData::try_from(packet)?)),
             0x0F => Ok(LeMetaData::PeriodicAdvertisingReport(LePeriodicAdvertisingReportData::try_from(packet)?)),
@@ -348,6 +390,26 @@ impl_try_from_for_raw_packet! {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct InvalidLeMetaCode(u8);
+
+impl From<InvalidLeMetaCode> for EventError {
+    fn from(i: InvalidLeMetaCode) -> Self {
+        let event_code_error = EventCodeError::new(0x3E, i.0);
+
+        EventError::from(event_code_error)
+    }
+}
+
+impl core::fmt::Display for InvalidLeMetaCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "invalid le meta code {:#x}", self.0)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for InvalidLeMetaCode {}
 
 impl From<LeMeta> for Events {
     fn from(meta: LeMeta) -> Events {
@@ -363,7 +425,7 @@ macro_rules! put_ {
 
 macro_rules! data_into_simple {
     ($unused_rpt:tt, $data_var:expr) => {
-        $data_var.into_simple()
+        $data_var.get_le_event_name()
     };
 }
 
@@ -484,16 +546,16 @@ events_markup! {
         DisconnectionComplete{DisconnectionCompleteData} -> 0x05,
         AuthenticationComplete{AuthenticationCompleteData} -> 0x06,
         RemoteNameRequestComplete{RemoteNameRequestCompleteData} -> 0x07,
-        EncryptionChange{EncryptionChangeData} -> 0x08,
+        EncryptionChangeV1{EncryptionChangeV1Data} -> 0x08,
         ChangeConnectionLinkKeyComplete{ChangeConnectionLinkKeyCompleteData} -> 0x09,
-        MasterLinkKeyComplete{MasterLinkKeyCompleteData} -> 0x0A,
+        LinkKeyTypeChanged{LinkKeyTypeChangedData} -> 0x0A,
         ReadRemoteSupportedFeaturesComplete{ReadRemoteSupportedFeaturesCompleteData} -> 0x0B,
         ReadRemoteVersionInformationComplete{ReadRemoteVersionInformationCompleteData} -> 0x0C,
         QosSetupComplete{QosSetupCompleteData} -> 0x0D,
         CommandComplete{CommandCompleteData} -> 0x0E,
         CommandStatus{CommandStatusData} -> 0x0F,
         HardwareError{HardwareErrorData} -> 0x10,
-        FlushOccured{FlushOccuredData} -> 0x11,
+        FlushOccurred{FlushOccurredData} -> 0x11,
         RoleChange{RoleChangeData} -> 0x12,
         NumberOfCompletedPackets{Multiple<NumberOfCompletedPacketsData>} -> 0x13,
         ModeChange{ModeChangeData} -> 0x14,
@@ -509,7 +571,7 @@ events_markup! {
         QosViolation{QosViolationData} -> 0x1E,
         PageScanRepetitionModeChange{PageScanRepetitionModeChangeData} -> 0x20,
         FlowSpecificationComplete{FlowSpecificationCompleteData} -> 0x21,
-        InquiryResultWithRSSI{Multiple<Result<InquiryResultWithRssiData,alloc::string::String>>} -> 0x22,
+        InquiryResultWithRssi{Multiple<Result<InquiryResultWithRssiData,alloc::string::String>>} -> 0x22,
         ReadRemoteExtendedFeaturesComplete{ReadRemoteExtendedFeaturesCompleteData} -> 0x23,
         SynchronousConnectionComplete{SynchronousConnectionCompleteData} -> 0x2C,
         SynchronousConnectionChanged{SynchronousConnectionChangedData} -> 0x2D,
@@ -520,7 +582,7 @@ events_markup! {
         IoCapabilityResponse{IoCapabilityResponseData} -> 0x32,
         UserConfirmationRequest{UserConfirmationRequestData} -> 0x33,
         UserPasskeyRequest{UserPasskeyRequestData} -> 0x34,
-        RemoteOOBDataRequest{RemoteOobDataRequestData} -> 0x35,
+        RemoteOobDataRequest{RemoteOobDataRequestData} -> 0x35,
         SimplePairingComplete{SimplePairingCompleteData} -> 0x36,
         LinkSupervisionTimeoutChanged{LinkSupervisionTimeoutChangedData} -> 0x38,
         EnhancedFlushComplete{EnhancedFlushCompleteData} -> 0x39,
@@ -532,14 +594,15 @@ events_markup! {
         TriggeredClockCapture{TriggeredClockCaptureData} -> 0x4E,
         SynchronizationTrainComplete{SynchronizationTrainCompleteData} -> 0x4F,
         SynchronizationTrainReceived{SynchronizationTrainReceivedData} -> 0x50,
-        ConnectionlessSlaveBroadcastReceive{ConnectionlessSlaveBroadcastReceiveData} -> 0x51,
-        ConnectionlessSlaveBroadcastTimeout{ConnectionlessSlaveBroadcastTimeoutData} -> 0x52,
+        ConnectionlessPeripheralBroadcastReceive{ConnectionlessSlaveBroadcastReceiveData} -> 0x51,
+        ConnectionlessPeripheralBroadcastTimeout{ConnectionlessSlaveBroadcastTimeoutData} -> 0x52,
         TruncatedPageComplete{TruncatedPageCompleteData} -> 0x53,
-        SlavePageResponseTimeout{SlavePageResponseTimeoutData} -> 0x54,
+        PeripheralPageResponseTimeout{PeripheralPageResponseTimeoutData} -> 0x54,
         ConnectionlessSlaveBroadcastChannelMapChange{ConnectionlessSlaveBroadcastChannelMapChangeData} -> 0x55,
         InquiryResponseNotification{InquiryResponseNotificationData} -> 0x56,
         AuthenticatedPayloadTimeoutExpired{AuthenticatedPayloadTimeoutExpiredData} -> 0x57,
         SamStatusChange{SamStatusChangeData} -> 0x58,
+        EncryptionChangeV2{EncryptionChangeV2Data} -> 0x59,
     }
 }
 

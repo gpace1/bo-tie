@@ -362,20 +362,41 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct EncryptionChangeData {
+pub struct EncryptionChangeV1Data {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
     pub encryption_enabled: EncryptionEnabled,
 }
 
 impl_try_from_for_raw_packet! {
-    EncryptionChangeData,
+    EncryptionChangeV1Data,
     packet,
     {
-        Ok(EncryptionChangeData {
+        Ok(EncryptionChangeV1Data {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
             encryption_enabled: EncryptionEnabled::from(chew!(packet)),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EncryptionChangeV2Data {
+    pub status: Error,
+    pub connection_handle: ConnectionHandle,
+    pub encryption_enabled: EncryptionEnabled,
+    pub encryption_key_size: usize,
+}
+
+impl_try_from_for_raw_packet! {
+    EncryptionChangeV2Data,
+    packet,
+    {
+        Ok(EncryptionChangeV2Data {
+            status: Error::from(chew!(packet)),
+            connection_handle: chew_handle!(packet),
+            encryption_enabled: EncryptionEnabled::from(chew!(packet)),
+            encryption_key_size: chew!(packet).into(),
         })
     }
 }
@@ -398,17 +419,17 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct MasterLinkKeyCompleteData {
+pub struct LinkKeyTypeChangedData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
     pub key: KeyFlag,
 }
 
 impl_try_from_for_raw_packet! {
-    MasterLinkKeyCompleteData,
+    LinkKeyTypeChangedData,
     packet,
     {
-        Ok(MasterLinkKeyCompleteData {
+        Ok(LinkKeyTypeChangedData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
             key: KeyFlag::try_from(chew!(packet))?,
@@ -607,15 +628,15 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct FlushOccuredData {
+pub struct FlushOccurredData {
     pub handle: ConnectionHandle,
 }
 
 impl_try_from_for_raw_packet! {
-    FlushOccuredData,
+    FlushOccurredData,
     packet,
     {
-        Ok(FlushOccuredData {
+        Ok(FlushOccurredData {
             handle: chew_handle!(packet),
         })
     }
@@ -2249,7 +2270,7 @@ impl LePhy {
 }
 
 #[derive(Debug, Clone)]
-pub struct LePHYUpdateCompleteData {
+pub struct LePhyUpdateCompleteData {
     pub status: Error,
     pub connection_handle: ConnectionHandle,
     pub tx_phy: LePhy,
@@ -2257,10 +2278,10 @@ pub struct LePHYUpdateCompleteData {
 }
 
 impl_try_from_for_raw_packet! {
-    LePHYUpdateCompleteData,
+    LePhyUpdateCompleteData,
     packet,
     {
-        Ok(LePHYUpdateCompleteData {
+        Ok(LePhyUpdateCompleteData {
             status: Error::from(chew!(packet)),
             connection_handle: chew_handle!(packet),
             tx_phy: LePhy::try_from(chew!(packet))?,
@@ -2717,10 +2738,10 @@ impl_try_from_for_raw_packet! {
 }
 
 #[derive(Debug, Clone)]
-pub struct SlavePageResponseTimeoutData {}
+pub struct PeripheralPageResponseTimeoutData {}
 
 impl_try_from_for_raw_packet! {
-    SlavePageResponseTimeoutData,
+    PeripheralPageResponseTimeoutData,
     _packet_placeholder,
     {
         unimplemented!()
