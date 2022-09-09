@@ -188,7 +188,7 @@ macro_rules! enumerate_split {
 }
 
 enumerate_split! {
-    #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+    #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,bo_tie_macros::DepthCount)]
     pub enum LeMeta ( #[derive(Debug,Clone)] enum LeMetaData ) {
         ConnectionComplete{LeConnectionCompleteData},
         AdvertisingReport{Multiple<Result<LeAdvertisingReportData, alloc::string::String>>},
@@ -435,7 +435,7 @@ macro_rules! events_markup {
     } ) => (
 
         enumerate_split! {
-            #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+            #[derive(Debug,Hash,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,bo_tie_macros::DepthCount)]
             pub enum $EnumName ( #[derive(Debug,Clone)] enum $EnumDataName ){
                 $( $name $(( $($enum_val),* ))* {$data $(< $type >)*}, )*
             }
