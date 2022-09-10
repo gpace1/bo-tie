@@ -11,7 +11,7 @@ use quote::quote;
 pub fn display_enum_ident(pattern: syn::Ident) -> TokenStream {
     let name = pattern.to_string().to_case(Case::Title);
 
-    let displayed = "enum ".to_string() + &name;
+    let displayed = "event ".to_string() + &name;
 
     let lit_str = syn::LitStr::new(&displayed, Span::call_site());
 
