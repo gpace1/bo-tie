@@ -109,6 +109,42 @@ pub fn display_hci_event(enumeration: TokenStream) -> TokenStream {
 /// # assert_eq!(TestEnum2::Tb(TestEnum1::C, TestEnum1::C, TestEnum1::C).get_depth(), 30);
 /// # assert_eq!(TestEnum2::B.get_depth(), 31);
 /// ```
+///
+/// ## Method from_depth
+/// This is used to get the enumeration permutation from the depth value.
+///
+/// ```
+/// # use bo_tie_macros::DepthCount;
+/// #
+/// # #[derive(DepthCount, Debug, Eq, PartialEq)]
+/// # enum TestEnum1 {
+/// #     A,
+/// #     B,
+/// #     C,
+/// # }
+/// #
+/// # #[derive(DepthCount, Debug, Eq, PartialEq)]
+/// # enum TestEnum2 {
+/// #     A,
+/// #     Ta(TestEnum1),
+/// #     Tb(TestEnum1, TestEnum1, TestEnum1),
+/// #     B,
+/// # }
+///
+/// # assert_eq!(TestEnum1::A, TestEnum1::from_depth(0));
+/// assert_eq!(TestEnum1::C, TestEnum1::from_depth(2));
+/// # assert_eq!(TestEnum2::A, TestEnum2::from_depth(0));
+/// # assert_eq!(TestEnum2::Ta(TestEnum1::B), TestEnum2::from_depth(2));
+/// assert_eq!(
+///     TestEnum2::Tb(TestEnum1::C, TestEnum1::A, TestEnum1::B),
+///     TestEnum2::from_depth(15)
+/// );
+/// # assert_eq!(
+/// #     TestEnum2::Tb(TestEnum1::C, TestEnum1::C, TestEnum1::C),
+/// #     TestEnum2::from_depth(30)
+/// # );
+/// # assert_eq!(TestEnum2::B, TestEnum2::from_depth(31));
+/// ```
 #[proc_macro_derive(DepthCount)]
 pub fn depth_count(r#enum: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(r#enum as syn::DeriveInput);

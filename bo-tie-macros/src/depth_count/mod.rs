@@ -1,7 +1,8 @@
 //! Implementation of the proc_macro_derive `DepthCount`
 
-use crate::depth_count::depth_counter::DepthCounter;
+use crate::depth_count::depth_counter::{FromDepthConsts, FromDepthMatchArms, GetDepthCounter};
 use proc_macro2::{Span, TokenStream};
+use quote::ToTokens;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{parse_quote, parse_quote_spanned};
@@ -48,13 +49,15 @@ fn process_enum(enum_name: syn::Ident, enumeration: syn::DataEnum) -> Result<Tok
 
     let impl_full_depth = impl_full_depth(&enum_kinds)?;
 
+    let impl_from_depth = impl_from_depth(&enum_kinds)?;
+
     let impl_depth_count = quote::quote! {
         impl #enum_name {
-            #[doc(hidden)]
             #impl_full_depth
 
-            #[doc(hidden)]
             #impl_get_depth
+
+            #impl_from_depth
         }
     };
 
@@ -124,7 +127,7 @@ fn process_fields_unnamed(ident: syn::Ident, fields_unnamed: syn::FieldsUnnamed)
 
 /// Create the token stream implementing method `get_depth`
 fn impl_get_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
-    let depth_counter = &mut DepthCounter::new();
+    let depth_counter = &mut GetDepthCounter::new();
 
     let match_arm_iter = enum_kinds
         .into_iter()
@@ -135,7 +138,7 @@ fn impl_get_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
         .collect::<TokenStream>();
 
     let method = quote::quote! {
-        const fn get_depth(&self) -> usize {
+        pub const fn get_depth(&self) -> usize {
             match self {
                 #match_arm_iter
             }
@@ -146,7 +149,7 @@ fn impl_get_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
 }
 
 /// Used in [`impl_get_depth`](impl_get_depth)
-fn impl_get_depth_for_unit(depth_counter: &mut DepthCounter, ident: &syn::Ident) -> TokenStream {
+fn impl_get_depth_for_unit(depth_counter: &mut GetDepthCounter, ident: &syn::Ident) -> TokenStream {
     let unit_depth = depth_counter.unit_depth();
 
     let ts = quote::quote! {
@@ -162,7 +165,7 @@ fn impl_get_depth_for_unit(depth_counter: &mut DepthCounter, ident: &syn::Ident)
 
 /// Used in [`impl_get_depth`](impl_get_depth)
 fn impl_get_depth_for_unnamed(
-    depth_counter: &mut DepthCounter,
+    depth_counter: &mut GetDepthCounter,
     ident: &syn::Ident,
     paths: &[syn::Path],
 ) -> TokenStream {
@@ -216,10 +219,73 @@ fn impl_full_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
     calculation.push(parse_quote!(0));
 
     let ts = quote::quote! {
-        const fn full_depth() -> usize {
+        pub const fn full_depth() -> usize {
             #calculation
         }
     };
+
+    Ok(ts)
+}
+
+fn impl_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
+    let constants = impl_consts_for_from_depth(enum_kinds)?;
+    let matches = impl_match_arms_for_from_depth(enum_kinds)?;
+
+    let ts = quote::quote! {
+        pub const fn from_depth(depth: usize) -> Self {
+            #constants
+
+            match depth {
+                #matches
+
+                _ => panic!("cannot create enumeration at this depth")
+            }
+        }
+    };
+
+    Ok(ts)
+}
+
+fn impl_consts_for_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
+    let mut from_depth = FromDepthConsts::new();
+
+    let ts = enum_kinds
+        .iter()
+        .map(|kind| match kind {
+            EnumKind::Unit(name) => {
+                let ts = from_depth.unit_depth_const(name.clone()).into_token_stream();
+
+                from_depth.inc_unit_count();
+
+                ts
+            }
+            EnumKind::Unnamed { ident, paths } => {
+                let ts = from_depth
+                    .unnamed_depth_const(ident.clone(), paths.clone())
+                    .into_token_stream();
+
+                from_depth.inc_types_used(paths.clone());
+
+                ts
+            }
+        })
+        .collect::<TokenStream>();
+
+    Ok(ts)
+}
+
+fn impl_match_arms_for_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
+    let match_depth = FromDepthMatchArms::new();
+
+    let ts = enum_kinds
+        .iter()
+        .map(|kind| match kind {
+            EnumKind::Unit(name) => match_depth.unit_match_arm(name.clone()).into_token_stream(),
+            EnumKind::Unnamed { ident, paths } => match_depth
+                .unnamed_match_arm(ident.clone(), paths.clone())
+                .into_token_stream(),
+        })
+        .collect::<TokenStream>();
 
     Ok(ts)
 }
