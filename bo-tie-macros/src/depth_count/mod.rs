@@ -228,14 +228,16 @@ fn impl_full_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
 }
 
 fn impl_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
+    let matched: syn::Ident = syn::parse_quote!(depth);
+
     let constants = impl_consts_for_from_depth(enum_kinds)?;
-    let matches = impl_match_arms_for_from_depth(enum_kinds)?;
+    let matches = impl_match_arms_for_from_depth(enum_kinds, matched.clone())?;
 
     let ts = quote::quote! {
-        pub const fn from_depth(depth: usize) -> Self {
+        pub const fn from_depth(#matched: usize) -> Self {
             #constants
 
-            match depth {
+            match #matched {
                 #matches
 
                 _ => panic!("cannot create enumeration at this depth")
@@ -274,7 +276,7 @@ fn impl_consts_for_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, sy
     Ok(ts)
 }
 
-fn impl_match_arms_for_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
+fn impl_match_arms_for_from_depth(enum_kinds: &[EnumKind], matched: syn::Ident) -> Result<TokenStream, syn::Error> {
     let match_depth = FromDepthMatchArms::new();
 
     let ts = enum_kinds
@@ -282,7 +284,7 @@ fn impl_match_arms_for_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream
         .map(|kind| match kind {
             EnumKind::Unit(name) => match_depth.unit_match_arm(name.clone()).into_token_stream(),
             EnumKind::Unnamed { ident, paths } => match_depth
-                .unnamed_match_arm(ident.clone(), paths.clone())
+                .unnamed_match_arm(ident.clone(), matched.clone(), paths.clone())
                 .into_token_stream(),
         })
         .collect::<TokenStream>();

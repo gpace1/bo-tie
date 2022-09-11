@@ -265,9 +265,10 @@ impl FromDepthMatchArms {
         }
     }
 
-    pub fn unnamed_match_arm(&self, name: syn::Ident, paths: Vec<syn::Path>) -> impl ToTokens {
+    pub fn unnamed_match_arm(&self, name: syn::Ident, matched: syn::Ident, paths: Vec<syn::Path>) -> impl ToTokens {
         struct Unnamed {
             enumeration: syn::Ident,
+            matched: syn::Ident,
             const_name_lower: syn::Ident,
             const_name_upper: syn::Ident,
             paths: Vec<syn::Path>,
@@ -276,6 +277,7 @@ impl FromDepthMatchArms {
         impl ToTokens for Unnamed {
             fn to_tokens(&self, tokens: &mut TokenStream) {
                 let enumeration = self.enumeration.clone();
+                let matched = self.matched.clone();
                 let const_name_lower = self.const_name_lower.clone();
                 let const_name_upper = self.const_name_upper.clone();
 
@@ -292,7 +294,7 @@ impl FromDepthMatchArms {
 
                         if cnt == 0 || self.paths.is_empty() {
                             syn::parse_quote_spanned! {path.span()=>
-                                #path :: from_depth( (val - #const_name_lower) % #modulator )
+                                #path :: from_depth( (#matched - #const_name_lower) % #modulator )
                             }
                         } else {
                             // This is the divisor for the depth of an unnamed field
@@ -314,17 +316,16 @@ impl FromDepthMatchArms {
 
                             // this is the calculation used for supplying each named
                             // field with the correct number to call the method
-                            // from_depth with. Variable `val` here will be from the
-                            // pattern (its type is a usize).
+                            // from_depth with.
                             syn::parse_quote_spanned! {path.span()=>
-                                #path :: from_depth( ( (val - #const_name_lower) / ( #divisor ) ) % #modulator )
+                                #path :: from_depth( ( (#matched - #const_name_lower) / ( #divisor ) ) % #modulator )
                             }
                         }
                     })
                     .collect::<Punctuated<syn::Expr, syn::Token![,]>>();
 
                 tokens.extend(
-                    quote::quote!( val @ #const_name_lower ..= #const_name_upper => Self :: #enumeration ( #unnamed ), ),
+                    quote::quote!( #const_name_lower ..= #const_name_upper => Self :: #enumeration ( #unnamed ), ),
                 );
             }
         }
@@ -337,6 +338,7 @@ impl FromDepthMatchArms {
 
         Unnamed {
             enumeration,
+            matched,
             const_name_lower,
             const_name_upper,
             paths,

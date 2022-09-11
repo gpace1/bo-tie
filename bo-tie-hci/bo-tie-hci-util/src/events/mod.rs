@@ -464,7 +464,12 @@ macro_rules! events_markup {
                 S: Into<Option<u8>>
             {
                 match event {
-                    $( $val => Ok( $EnumName::$name $(( $($enum_val::try_from(sub_event.into().unwrap())?)* ))* ), )*
+                    $( $val => Ok( $EnumName::$name $(( $(
+                        $enum_val::try_from(sub_event.into().ok_or(EventError {
+                            for_event: None,
+                            reason: EventErrorReason::MissingSubEventCode,
+                        })?)?
+                    )* ))* ), )*
                     _ => Err(EventCodeError::new(event, sub_event.into().unwrap_or_default()).into()),
                 }
             }
@@ -672,6 +677,7 @@ enum EventErrorReason {
     // TODO: Temporary error message until strings are no longer used for event errors
     Error(alloc::string::String),
     EventCode(EventCodeError),
+    MissingSubEventCode,
 }
 
 impl core::fmt::Display for EventErrorReason {
@@ -679,6 +685,7 @@ impl core::fmt::Display for EventErrorReason {
         match self {
             EventErrorReason::Error(reason) => core::fmt::Display::fmt(reason, f),
             EventErrorReason::EventCode(code) => core::fmt::Display::fmt(code, f),
+            EventErrorReason::MissingSubEventCode => f.write_str("missing sub event code"),
         }
     }
 }
