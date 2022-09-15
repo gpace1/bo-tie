@@ -14,8 +14,9 @@ use super::{
     LocalSendFutureError,
 };
 use crate::{
-    Channel, ChannelEnds, ChannelReserve, FlowControlId, FlowCtrlReceiver, FromIntraMessage, InterfaceReceivers,
-    Receiver, Sender, TaskId, ToIntraMessage,
+    Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
+    FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannel, HostChannelEnds, InterfaceReceivers,
+    Receiver, Sender, TaskId, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
@@ -27,24 +28,35 @@ use dyn_buffer::DeVec;
 use dyn_buffer::{DynBufferReserve, TakeDynReserveFuture};
 
 /// The sender for a local channel
-pub struct LocalChannelSender<B, T>(Rc<RefCell<LocalChannelInner<B, T>>>);
+pub struct LocalChannelSender<T, M>(T)
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>;
 
-impl<B, T> LocalChannelSender<B, T> {
-    fn new(ref_cell_inner: &Rc<RefCell<LocalChannelInner<B, T>>>) -> Self {
-        ref_cell_inner.borrow_mut().sender_count += 1;
-
-        Self(ref_cell_inner.clone())
-    }
-}
-
-impl<B, T> Clone for LocalChannelSender<B, T> {
+impl<T, M> Clone for LocalChannelSender<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>> + Clone,
+{
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<B, T> LocalQueueBuffer for LocalChannelSender<B, T> {
-    type Payload = T;
+impl<T, M> LocalChannelSender<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
+    fn new(t: T) -> Self {
+        t.borrow_mut().sender_count += 1;
+
+        Self(t)
+    }
+}
+
+impl<T, M> LocalQueueBuffer for LocalChannelSender<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
+    type Payload = M;
 
     fn call_waker(&self) {
         self.0.borrow_mut().waker.take().map(|w| w.wake());
@@ -55,7 +67,10 @@ impl<B, T> LocalQueueBuffer for LocalChannelSender<B, T> {
     }
 }
 
-impl<B, T> LocalQueueBufferSend for LocalChannelSender<B, T> {
+impl<T, M> LocalQueueBufferSend for LocalChannelSender<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
     fn is_full(&self) -> bool {
         let local_channel = self.0.borrow();
 
@@ -71,17 +86,23 @@ impl<B, T> LocalQueueBufferSend for LocalChannelSender<B, T> {
     }
 }
 
-impl<B: Unpin, T: Unpin> Sender for LocalChannelSender<B, T> {
+impl<T, M: Unpin> Sender for LocalChannelSender<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
     type Error = LocalSendFutureError;
-    type Message = T;
-    type SendFuture<'a> = LocalSendFuture<'a, Self, T> where Self: 'a;
+    type Message = M;
+    type SendFuture<'a> = LocalSendFuture<'a, Self, M> where Self: 'a;
 
     fn send<'a>(&'a self, t: Self::Message) -> Self::SendFuture<'a> {
         LocalSendFuture::new(self, t)
     }
 }
 
-impl<B, T> Drop for LocalChannelSender<B, T> {
+impl<T, M> Drop for LocalChannelSender<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
     fn drop(&mut self) {
         let mut sender = self.0.borrow_mut();
 
@@ -94,16 +115,24 @@ impl<B, T> Drop for LocalChannelSender<B, T> {
 }
 
 /// The receiver for a local channel
-pub struct LocalChannelReceiver<B, T>(Rc<RefCell<LocalChannelInner<B, T>>>);
+pub struct LocalChannelReceiver<T, M>(T)
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>;
 
-impl<B, T> Clone for LocalChannelReceiver<B, T> {
+impl<T, M> Clone for LocalChannelReceiver<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>> + Clone,
+{
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<B, T> LocalQueueBuffer for LocalChannelReceiver<B, T> {
-    type Payload = T;
+impl<T, M> LocalQueueBuffer for LocalChannelReceiver<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
+    type Payload = M;
 
     fn call_waker(&self) {
         self.0.borrow_mut().waker.take().map(|w| w.wake());
@@ -114,7 +143,10 @@ impl<B, T> LocalQueueBuffer for LocalChannelReceiver<B, T> {
     }
 }
 
-impl<B, T> LocalQueueBufferReceive for LocalChannelReceiver<B, T> {
+impl<T, M> LocalQueueBufferReceive for LocalChannelReceiver<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
     fn has_senders(&self) -> bool {
         self.0.borrow().sender_count != 0
     }
@@ -128,8 +160,11 @@ impl<B, T> LocalQueueBufferReceive for LocalChannelReceiver<B, T> {
     }
 }
 
-impl<B: Unpin, T: Unpin> Receiver for LocalChannelReceiver<B, T> {
-    type Message = T;
+impl<T, M: Unpin> Receiver for LocalChannelReceiver<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
+    type Message = M;
     type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where Self: 'a,;
 
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
@@ -151,36 +186,71 @@ impl<B: Unpin, T: Unpin> Receiver for LocalChannelReceiver<B, T> {
     }
 }
 
-/// A local channel
+/// A local channel for sending a message type
 ///
+/// ## Local Type
 /// This is a channel for sending messages between async tasks running on the same thread. A local
-/// channel is not `Send` safe
-pub struct LocalChannel<B, T>(Rc<RefCell<LocalChannelInner<B, T>>>);
+/// channel is not `Send` safe so it cannot pass messages outside of the same thread. However it
+/// can be put within green threads that run on the same task, so long as the scheduler is not
+/// pre-emptive.
+pub struct LocalChannel<T>(Rc<RefCell<LocalChannelInner<T>>>);
 
-impl<B, T> Clone for LocalChannel<B, T> {
+impl<T> Clone for LocalChannel<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-struct LocalChannelInner<B, T> {
-    reserve: DynBufferReserve<B>,
+impl<T> core::ops::Deref for LocalChannel<T> {
+    type Target = RefCell<LocalChannelInner<T>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> LocalChannel<T> {
+    fn new(capacity: usize) -> Self {
+        let inner = Rc::new(RefCell::new(LocalChannelInner::new(capacity)));
+
+        LocalChannel(inner)
+    }
+}
+
+impl<T: Unpin> Channel for LocalChannel<T> {
+    type SenderError = LocalSendFutureError;
+    type Message = T;
+    type Sender = LocalChannelSender<Self, T>;
+    type Receiver = LocalChannelReceiver<Self, T>;
+
+    fn get_sender(&self) -> Self::Sender {
+        LocalChannelSender::new(self.clone())
+    }
+
+    fn take_receiver(&self) -> Option<Self::Receiver> {
+        Some(LocalChannelReceiver(self.clone()))
+    }
+}
+
+/// The inner part of a local channel
+///
+/// This is not really used outside of the library, so it hidden from the doc.
+#[doc(hidden)]
+pub struct LocalChannelInner<T> {
     sender_count: usize,
     receiver_exists: bool,
     channel_buffer: VecDeque<T>,
     waker: Option<Waker>,
 }
 
-impl<B, T> LocalChannelInner<B, T> {
+impl<T> LocalChannelInner<T> {
     fn new(capacity: usize) -> Self {
-        let reserve = DynBufferReserve::new(capacity);
         let senders_count = 0;
         let receiver_exists = false;
         let buffer = VecDeque::with_capacity(capacity);
         let waker = None;
 
         LocalChannelInner {
-            reserve,
             sender_count: senders_count,
             receiver_exists,
             channel_buffer: buffer,
@@ -189,28 +259,54 @@ impl<B, T> LocalChannelInner<B, T> {
     }
 }
 
-impl<B, T> LocalChannel<B, T> {
-    fn new(capacity: usize) -> Self {
-        Self(Rc::new(RefCell::new(LocalChannelInner::new(capacity))))
+/// A local channel with buffering support
+///
+/// This channel acts as both a message channel and a buffer reserve. The reserve of buffers is
+/// associated with this channel but are not bound to it (they can be used by something else).
+///
+/// ## Local Type
+/// This is a channel for sending messages between async tasks running on the same thread. A local
+/// channel is not `Send` safe so it cannot pass messages outside of the same thread. However it
+/// can be put within green threads that run on the same task, so long as the scheduler is not
+/// pre-emptive.
+pub struct LocalBufferedChannel<B, T>(Rc<LocalBufferedChannelInner<B, T>>);
+
+impl<B, T> Clone for LocalBufferedChannel<B, T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
-impl<B: Unpin, T: Unpin> Channel for LocalChannel<B, T> {
+impl<B, T> core::ops::Deref for LocalBufferedChannel<B, T> {
+    type Target = RefCell<LocalChannelInner<T>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.channel
+    }
+}
+
+impl<B, T> LocalBufferedChannel<B, T> {
+    fn new(capacity: usize) -> Self {
+        Self(Rc::new(LocalBufferedChannelInner::new(capacity)))
+    }
+}
+
+impl<B: Unpin, T: Unpin> Channel for LocalBufferedChannel<B, T> {
     type SenderError = LocalSendFutureError;
     type Message = T;
-    type Sender = LocalChannelSender<B, T>;
-    type Receiver = LocalChannelReceiver<B, T>;
+    type Sender = LocalChannelSender<Self, T>;
+    type Receiver = LocalChannelReceiver<Self, T>;
 
     fn get_sender(&self) -> Self::Sender {
-        LocalChannelSender::new(&self.0)
+        LocalChannelSender::new(self.clone())
     }
 
     fn take_receiver(&self) -> Option<Self::Receiver> {
-        Some(LocalChannelReceiver(self.0.clone()))
+        Some(LocalChannelReceiver(self.clone()))
     }
 }
 
-impl<B, T> BufferReserve for LocalChannel<B, T>
+impl<B, T> BufferReserve for LocalBufferedChannel<B, T>
 where
     B: bo_tie_util::buffer::Buffer,
 {
@@ -222,32 +318,61 @@ where
         S: Into<Option<usize>>,
     {
         self.0
-            .borrow_mut()
             .reserve
+            .borrow_mut()
             .take(front_capacity.into().unwrap_or_default())
     }
 
     fn reclaim(&mut self, buffer: Self::Buffer) {
-        self.0.borrow_mut().reserve.reclaim(buffer)
+        self.0.reserve.borrow_mut().reclaim(buffer)
     }
 }
 
-#[derive(Clone)]
-pub struct DynChannelEnds {
-    send_channel: LocalChannel<DeVec<u8>, ToIntraMessage<DeVec<u8>>>,
-    receiver: LocalChannelReceiver<DeVec<u8>, FromIntraMessage<DeVec<u8>, Self>>,
+/// The inner part of a local buffered channel
+///
+/// This is not really used outside of the library, so it hidden from the doc.
+#[doc(hidden)]
+pub struct LocalBufferedChannelInner<B, T> {
+    reserve: RefCell<DynBufferReserve<B>>,
+    channel: RefCell<LocalChannelInner<T>>,
 }
 
-impl ChannelEnds for DynChannelEnds {
+impl<B, T> LocalBufferedChannelInner<B, T> {
+    fn new(capacity: usize) -> Self {
+        let reserve = RefCell::new(DynBufferReserve::new(capacity));
+        let channel = RefCell::new(LocalChannelInner::new(capacity));
+
+        LocalBufferedChannelInner { reserve, channel }
+    }
+}
+
+/// Channel ends for a connection
+#[derive(Clone)]
+pub struct ConnectionDynChannelEnds {
+    send_channel: LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
+    receiver: LocalChannelReceiver<
+        LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>,
+        ToConnectionIntraMessage<DeVec<u8>>,
+    >,
+}
+
+impl ConnectionChannelEnds for ConnectionDynChannelEnds {
     type ToBuffer = DeVec<u8>;
 
     type FromBuffer = DeVec<u8>;
 
-    type TakeBuffer = <LocalChannel<DeVec<u8>, ToIntraMessage<DeVec<u8>>> as BufferReserve>::TakeBuffer;
+    type TakeBuffer =
+        <LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>> as BufferReserve>::TakeBuffer;
 
-    type Sender = LocalChannelSender<DeVec<u8>, ToIntraMessage<DeVec<u8>>>;
+    type Sender = LocalChannelSender<
+        LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
+        FromConnectionIntraMessage<DeVec<u8>>,
+    >;
 
-    type Receiver = LocalChannelReceiver<DeVec<u8>, FromIntraMessage<DeVec<u8>, Self>>;
+    type Receiver = LocalChannelReceiver<
+        LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>,
+        ToConnectionIntraMessage<DeVec<u8>>,
+    >;
 
     fn get_sender(&self) -> Self::Sender {
         self.send_channel.get_sender()
@@ -269,22 +394,35 @@ impl ChannelEnds for DynChannelEnds {
     }
 }
 
-/// Task information
-struct TaskData {
-    sender_channel: LocalChannel<DeVec<u8>, FromIntraMessage<DeVec<u8>, DynChannelEnds>>,
-    task_id: TaskId,
+/// Connection async task information
+///
+/// This is the information required for communicating to a connection async task.
+struct ConnectionData {
+    sender_channel: LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>,
+    handle: ConnectionHandle,
     flow_control_id: FlowControlId,
 }
 
-/// Task sender channels
+struct OutgoingChannels {
+    host_command_response: LocalChannel<ToHostCommandIntraMessage>,
+    host_general: LocalChannel<ToHostGeneralIntraMessage<ConnectionDynChannelEnds>>,
+}
+
+struct IncomingChannels {
+    acl: LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
+    sco: LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
+    le_acl: LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
+    le_iso: LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
+}
+
+/// Dedicated Task Channels
 ///
-/// These are the senders used by other async tasks for communicating with the interface task
-struct FromOtherTaskChannels<C> {
-    cmd_channel: C,
-    acl_channel: C,
-    sco_channel: C,
-    le_acl_channel: C,
-    le_iso_channel: C,
+/// These channels are dedicated to exist so lang as the interface and host async tasks exist. All
+/// Channels except for the `event_channel` are directed from another task to the interface async
+/// task. The `event_channel` is a channel from the interface async task to the host async task.
+struct DedicatedChannels {
+    incoming: IncomingChannels,
+    outgoing: OutgoingChannels,
 }
 
 /// A Channel Manager for local channels
@@ -298,46 +436,73 @@ struct FromOtherTaskChannels<C> {
 /// the maximum capacity of the channel. If a channel's buffer reaches maximum capacity, then any
 /// further sends will pend.
 pub struct LocalChannelManager {
-    channel_size: usize,
-    other_task_data: RefCell<alloc::vec::Vec<TaskData>>,
-    task_senders: FromOtherTaskChannels<LocalChannel<DeVec<u8>, ToIntraMessage<DeVec<u8>>>>,
-    flow_control_receiver: FlowCtrlReceiver<LocalChannelReceiver<DeVec<u8>, ToIntraMessage<DeVec<u8>>>>,
+    new_channels_size: usize,
+    connections: RefCell<alloc::vec::Vec<ConnectionData>>,
+    dedicated: DedicatedChannels,
+    flow_control_receiver: FlowCtrlReceiver<
+        LocalChannelReceiver<
+            LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
+            FromHostIntraMessage<DeVec<u8>>,
+        >,
+        LocalChannelReceiver<
+            LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
+            FromConnectionIntraMessage<DeVec<u8>>,
+        >,
+    >,
 }
 
 impl LocalChannelManager {
-    pub fn new(channel_size: usize) -> Self {
-        let other_task_data = RefCell::new(alloc::vec::Vec::new());
+    fn new(builder: LocalChannelBuilder) -> (Self, impl HostChannelEnds) {
+        let connections = RefCell::new(alloc::vec::Vec::new());
 
-        let cmd_channel = LocalChannel::new(channel_size);
-        let acl_channel = LocalChannel::new(channel_size);
-        let sco_channel = LocalChannel::new(channel_size);
-        let le_acl_channel = LocalChannel::new(channel_size);
-        let le_iso_channel = LocalChannel::new(channel_size);
+        let host_command_response = LocalChannel::new(builder.get_command_return_channel_size());
+        let host_general = LocalChannel::new(builder.get_general_events_channel_size());
+        let commands = LocalBufferedChannel::new(builder.get_command_channel_size());
+        let acl = LocalBufferedChannel::new(builder.get_acl_data_channel_size());
+        let sco = LocalBufferedChannel::new(builder.get_sco_data_channel_size());
+        let le_acl = LocalBufferedChannel::new(builder.get_le_acl_data_channel_size());
+        let le_iso = LocalBufferedChannel::new(builder.get_le_iso_data_channel_size());
+        let new_channels_size = builder.get_connection_receive_channel_size();
 
         let interface_receivers = InterfaceReceivers {
-            cmd_receiver: cmd_channel.take_receiver().unwrap(),
-            acl_receiver: acl_channel.take_receiver().unwrap(),
-            sco_receiver: sco_channel.take_receiver().unwrap(),
-            le_acl_receiver: le_acl_channel.take_receiver().unwrap(),
-            le_iso_receiver: le_iso_channel.take_receiver().unwrap(),
+            cmd_receiver: commands.take_receiver().unwrap(),
+            acl_receiver: acl.take_receiver().unwrap(),
+            sco_receiver: sco.take_receiver().unwrap(),
+            le_acl_receiver: le_acl.take_receiver().unwrap(),
+            le_iso_receiver: le_iso.take_receiver().unwrap(),
         };
 
         let flow_control_receiver = FlowCtrlReceiver::new(interface_receivers);
 
-        let task_senders = FromOtherTaskChannels {
-            cmd_channel,
-            acl_channel,
-            sco_channel,
-            le_acl_channel,
-            le_iso_channel,
+        let host_ends = HostDynChannelEnds {
+            command_channel: commands.clone(),
+            command_response: host_command_response.take_receiver().unwrap(),
+            general: host_general.take_receiver().unwrap(),
         };
 
-        Self {
-            channel_size,
-            other_task_data,
-            task_senders,
+        let incoming = IncomingChannels {
+            acl,
+            sco,
+            le_acl,
+            le_iso,
+        };
+
+        let outgoing = OutgoingChannels {
+            host_command_response,
+            host_general,
+        };
+
+        let dedicated = DedicatedChannels { incoming, outgoing };
+
+        let manager = Self {
+            new_channels_size,
+            connections,
+            dedicated,
             flow_control_receiver,
-        }
+        };
+        let this = manager;
+
+        (this, host_ends)
     }
 }
 
@@ -346,25 +511,25 @@ impl ChannelReserve for LocalChannelManager {
 
     type SenderError = LocalSendFutureError;
 
-    type TryExtendError = core::convert::Infallible;
+    type ToHostCmdChannel = LocalChannel<ToHostCommandIntraMessage>;
 
-    type ToBuffer = Self::FromBuffer;
+    type ToHostGenChannel = LocalChannel<ToHostGeneralIntraMessage<Self::ConnectionChannelEnds>>;
 
-    type ToChannel = LocalChannel<DeVec<u8>, FromIntraMessage<DeVec<u8>, DynChannelEnds>>;
+    type FromHostChannel = LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>;
 
-    type FromBuffer = DeVec<u8>;
+    type ToConnectionChannel = LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>;
 
-    type FromChannel = LocalChannel<DeVec<u8>, ToIntraMessage<DeVec<u8>>>;
+    type FromConnectionChannel = LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>;
 
-    type TaskChannelEnds = DynChannelEnds;
+    type ConnectionChannelEnds = ConnectionDynChannelEnds;
 
-    fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error> {
+    fn try_remove(&mut self, to_remove: ConnectionHandle) -> Result<(), Self::Error> {
         if let Ok(index) = self
-            .other_task_data
+            .connections
             .get_mut()
-            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
+            .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&to_remove))
         {
-            self.other_task_data.get_mut().remove(index);
+            self.connections.get_mut().remove(index);
 
             Ok(())
         } else {
@@ -372,64 +537,82 @@ impl ChannelReserve for LocalChannelManager {
         }
     }
 
-    fn add_new_task(
+    fn add_new_connection(
         &self,
-        task_id: TaskId,
+        connection_handle: ConnectionHandle,
         flow_control_id: FlowControlId,
-    ) -> Result<Self::TaskChannelEnds, Self::Error> {
+    ) -> Result<Self::ConnectionChannelEnds, Self::Error> {
         let from_new_task_channel = match flow_control_id {
-            FlowControlId::Cmd => self.task_senders.cmd_channel.clone(),
-            FlowControlId::Acl => self.task_senders.acl_channel.clone(),
-            FlowControlId::Sco => self.task_senders.sco_channel.clone(),
-            FlowControlId::LeAcl => self.task_senders.le_acl_channel.clone(),
-            FlowControlId::LeIso => self.task_senders.le_iso_channel.clone(),
+            FlowControlId::Cmd => unreachable!(),
+            FlowControlId::Acl => self.dedicated.incoming.acl.clone(),
+            FlowControlId::Sco => self.dedicated.incoming.sco.clone(),
+            FlowControlId::LeAcl => self.dedicated.incoming.le_acl.clone(),
+            FlowControlId::LeIso => self.dedicated.incoming.le_iso.clone(),
         };
 
-        let to_new_task_channel = LocalChannel::new(self.channel_size);
+        let to_new_task_channel = LocalBufferedChannel::new(self.new_channels_size);
 
-        let new_task_ends = DynChannelEnds {
+        let new_task_ends = ConnectionDynChannelEnds {
             send_channel: from_new_task_channel,
             receiver: to_new_task_channel.take_receiver().unwrap(),
         };
 
         let index = self
-            .other_task_data
+            .connections
             .borrow()
-            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&task_id))
-            .expect_err("task id already associated to another async task");
+            .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
+            .expect_err("connection handle already associated to another connection async task");
 
-        let channel_data = TaskData {
+        let channel_data = ConnectionData {
             sender_channel: to_new_task_channel,
-            task_id,
+            handle: connection_handle,
             flow_control_id,
         };
 
-        self.other_task_data.borrow_mut().insert(index, channel_data);
+        self.connections.borrow_mut().insert(index, channel_data);
 
         Ok(new_task_ends)
     }
 
-    fn get(&self, id: TaskId) -> Option<Self::ToChannel> {
-        let ref_other_task_data = self.other_task_data.borrow();
+    fn get_channel(
+        &self,
+        id: TaskId,
+    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
+        match id {
+            TaskId::Host(HostChannel::Command) => Some(FromInterface::HostCommand(
+                self.dedicated.outgoing.host_command_response.clone(),
+            )),
+            TaskId::Host(HostChannel::GeneralEvent) => {
+                Some(FromInterface::HostGeneral(self.dedicated.outgoing.host_general.clone()))
+            }
+            TaskId::Connection(connection_handle) => {
+                let ref_connections = self.connections.borrow();
 
-        ref_other_task_data
-            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
-            .ok()
-            .and_then(|index| ref_other_task_data.get(index))
-            .map(|TaskData { sender_channel, .. }| sender_channel.clone())
+                ref_connections
+                    .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
+                    .ok()
+                    .and_then(|index| ref_connections.get(index))
+                    .map(|ConnectionData { sender_channel, .. }| FromInterface::Connection(sender_channel.clone()))
+            }
+        }
     }
 
-    fn get_flow_control_id(&self, id: TaskId) -> Option<FlowControlId> {
-        let ref_other_task_data = self.other_task_data.borrow();
+    fn get_flow_control_id(&self, connection_handle: ConnectionHandle) -> Option<FlowControlId> {
+        let ref_other_task_data = self.connections.borrow();
 
         ref_other_task_data
-            .binary_search_by(|TaskData { task_id, .. }| task_id.cmp(&id))
+            .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
             .ok()
             .and_then(|index| ref_other_task_data.get(index))
-            .map(|TaskData { flow_control_id, .. }| *flow_control_id)
+            .map(|ConnectionData { flow_control_id, .. }| *flow_control_id)
     }
 
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver> {
+    fn get_flow_ctrl_receiver(
+        &mut self,
+    ) -> &mut FlowCtrlReceiver<
+        <Self::FromHostChannel as Channel>::Receiver,
+        <Self::FromConnectionChannel as Channel>::Receiver,
+    > {
         &mut self.flow_control_receiver
     }
 }
@@ -449,6 +632,212 @@ impl Display for LocalChannelManagerError {
     }
 }
 
+struct HostDynChannelEnds {
+    command_channel: LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
+    command_response: LocalChannelReceiver<LocalChannel<ToHostCommandIntraMessage>, ToHostCommandIntraMessage>,
+    general: LocalChannelReceiver<
+        LocalChannel<ToHostGeneralIntraMessage<ConnectionDynChannelEnds>>,
+        ToHostGeneralIntraMessage<ConnectionDynChannelEnds>,
+    >,
+}
+
+impl HostChannelEnds for HostDynChannelEnds {
+    type ToBuffer = DeVec<u8>;
+
+    type FromBuffer = DeVec<u8>;
+
+    type TakeBuffer = <LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>> as BufferReserve>::TakeBuffer;
+
+    type Sender = LocalChannelSender<
+        LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
+        FromHostIntraMessage<DeVec<u8>>,
+    >;
+
+    type CmdReceiver = LocalChannelReceiver<LocalChannel<ToHostCommandIntraMessage>, ToHostCommandIntraMessage>;
+
+    type GenReceiver = LocalChannelReceiver<
+        LocalChannel<ToHostGeneralIntraMessage<ConnectionDynChannelEnds>>,
+        ToHostGeneralIntraMessage<ConnectionDynChannelEnds>,
+    >;
+
+    type ConnectionChannelEnds = ConnectionDynChannelEnds;
+
+    fn get_sender(&self) -> Self::Sender {
+        self.command_channel.get_sender()
+    }
+
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>,
+    {
+        self.command_channel.take(front_capacity)
+    }
+
+    fn get_cmd_recv(&self) -> &Self::CmdReceiver {
+        &self.command_response
+    }
+
+    fn get_mut_cmd_recv(&mut self) -> &mut Self::CmdReceiver {
+        &mut self.command_response
+    }
+
+    fn get_gen_recv(&self) -> &Self::GenReceiver {
+        &self.general
+    }
+
+    fn get_mut_gen_recv(&mut self) -> &mut Self::GenReceiver {
+        &mut self.general
+    }
+}
+
+/// A builder for a local channel
+///
+/// This is used to configure the build of the local channels before creating the interface using
+/// a [`LocalChannelManager`].
+///
+/// ## Data Channels
+/// All connection async tasks use the same channel to the interface for sending the same type of
+/// data to the Controller. The main reason for this is flow control. The interface async task will
+/// only receive from the data channel when it knows that there is room on the Controller to store
+/// the data packet.
+///
+/// There are four kinds of data channels, two for BR/EDR packets and two or three for LE
+/// data packets. While the requirements for usage are listed below, in reality the requirements are
+/// met internally and do not need to be worried about. The requirements are listed to better help
+/// in determining custom sizes for these channels.
+///
+/// ### ACL Data Channel
+/// BR/EDR ACL data packets must be sent to the Controller through the ACL data channel. If the
+/// Controller does not support a separate LE ACl buffer (it uses the same buffer for both BR/EDR
+/// and LE ACL Data) this channel must also be used LE ACL Data.
+///
+/// ### SCO Data Channel
+/// BR/EDR SCO data packets must be sent to the Controller through the SCO data channel.
+///
+/// ### LE ACL Data Channel
+/// If the controller supports a separate buffer for LE ACL Data, then this data must be sent to the
+/// Controller through the LE ACL data channel.
+///
+/// ### LE ISO Data Channel
+/// LE ISO data must be sent to the Controller through the LE ISO data channel.
+pub struct LocalChannelBuilder {
+    command_channel_size: Option<usize>,
+    command_return_channel_size: Option<usize>,
+    general_events_channel_size: Option<usize>,
+    acl_data_channel_size: Option<usize>,
+    sco_data_channel_size: Option<usize>,
+    le_acl_data_channel_size: Option<usize>,
+    le_iso_data_channel_size: Option<usize>,
+    connection_receive_channel_size: Option<usize>,
+}
+
+impl LocalChannelBuilder {
+    const DEFAULT_CHANNEL_SIZE: usize = 32; // arbitrary default
+
+    /// Create a new `LocalChannelBuilder`
+    pub fn new() -> Self {
+        Self {
+            command_channel_size: None,
+            command_return_channel_size: None,
+            general_events_channel_size: None,
+            acl_data_channel_size: None,
+            sco_data_channel_size: None,
+            le_acl_data_channel_size: None,
+            le_iso_data_channel_size: None,
+            connection_receive_channel_size: None,
+        }
+    }
+
+    /// Set the maximum size of the command channels
+    ///
+    /// This sets the size of the command channels used for communicating with the host async task.
+    /// The channel used by the host to send commands to the controller and the channel used for
+    /// sending the events containing the events Command Complete and Command Status are sized to
+    /// this.
+    pub fn set_command_channel_sizes(&mut self, channel_size: usize) -> &mut Self {
+        self.command_channel_size = channel_size.into();
+        self.command_return_channel_size = channel_size.into();
+        self
+    }
+
+    /// Set the size of the channel for sending ACL data to the interface async task
+    ///
+    /// This will generally only be used by BR/EDR operation, but it is also used by LE operation
+    /// whenever the Controller shares the same flow control buffers for both BR/EDR and LE ACL
+    /// data.
+    pub fn set_acl_data_channel_size(&mut self, channel_size: usize) -> &mut Self {
+        self.acl_data_channel_size = channel_size.into();
+        self
+    }
+
+    /// Set the size of the channel for sending SCO data to the interface async task
+    pub fn set_sco_data_channel_size(&mut self, channel_size: usize) -> &mut Self {
+        self.sco_data_channel_size = channel_size.into();
+        self
+    }
+
+    /// Set the size of the channel for sending LE ACL data to the interface async task
+    ///
+    /// This will be the
+    pub fn set_le_acl_data_channel_size(&mut self, channel_size: usize) -> &mut Self {
+        self.le_acl_data_channel_size = channel_size.into();
+        self
+    }
+
+    pub fn set_le_iso_data_channel_size(&mut self, channel_size: usize) -> &mut Self {
+        self.le_iso_data_channel_size = channel_size.into();
+        self
+    }
+
+    /// Get the command_channel_size
+    fn get_command_channel_size(&self) -> usize {
+        self.command_channel_size.unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Get the command return channel size
+    fn get_command_return_channel_size(&self) -> usize {
+        self.command_return_channel_size.unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Get the general events channel size
+    fn get_general_events_channel_size(&self) -> usize {
+        self.general_events_channel_size.unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Get the ACL data channel size
+    fn get_acl_data_channel_size(&self) -> usize {
+        self.acl_data_channel_size.unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Get the SCO data channel size
+    fn get_sco_data_channel_size(&self) -> usize {
+        self.sco_data_channel_size.unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Get the LE ACL data channel size
+    fn get_le_acl_data_channel_size(&self) -> usize {
+        self.le_acl_data_channel_size.unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Get the LE ISO data channel size
+    fn get_le_iso_data_channel_size(&self) -> usize {
+        self.le_iso_data_channel_size.unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Get the LE connection receive channel size
+    fn get_connection_receive_channel_size(&self) -> usize {
+        self.connection_receive_channel_size
+            .unwrap_or(Self::DEFAULT_CHANNEL_SIZE)
+    }
+
+    /// Build the `LocalChannelManager`
+    ///
+    /// The return is the local channel manager along with the host channel ends for it.
+    pub fn build(self) -> (LocalChannelManager, impl HostChannelEnds) {
+        LocalChannelManager::new(self)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -456,17 +845,17 @@ mod test {
 
     #[test]
     fn local_init_usize() {
-        let _: LocalChannel<usize, usize> = LocalChannel::new(20);
+        let _: LocalBufferedChannel<usize, usize> = LocalBufferedChannel::new(20);
     }
 
     #[test]
     fn local_init_ref_mut_usize() {
-        let _: LocalChannel<&mut usize, &mut usize> = LocalChannel::new(20);
+        let _: LocalBufferedChannel<&mut usize, &mut usize> = LocalBufferedChannel::new(20);
     }
 
     #[tokio::test]
     async fn local_add_remove_usize() {
-        let l: LocalChannel<HciPacket<usize>> = LocalChannel::new(5);
+        let l: LocalBufferedChannel<HciPacket<usize>> = LocalBufferedChannel::new(5);
 
         let test_vals = [21, 32, 44, 26, 84, 321, 123, 4321, 24, 2142, 485961, 1, 55];
 
@@ -475,7 +864,7 @@ mod test {
 
     #[tokio::test]
     async fn local_add_remove_usize_single_capacity() {
-        let l: LocalChannel<HciPacket<usize>> = LocalChannel::new(1);
+        let l: LocalBufferedChannel<HciPacket<usize>> = LocalBufferedChannel::new(1);
 
         let test_vals = [21, 32, 44, 26, 84, 321, 123, 4321, 24, 2142, 485961, 1, 55];
 
@@ -484,7 +873,7 @@ mod test {
 
     #[tokio::test]
     async fn local_add_remove_byte_slice() {
-        let l: LocalChannel<HciPacket<&[u8]>> = LocalChannel::new(4);
+        let l: LocalBufferedChannel<HciPacket<&[u8]>> = LocalBufferedChannel::new(4);
 
         let test_vals: &[&[u8]] = &[
             "Hello world".as_bytes(),
@@ -504,7 +893,7 @@ mod test {
     async fn local_add_remove_array() {
         const SIZE: usize = 20;
 
-        let l: LocalChannel<HciPacket<[usize; SIZE]>> = LocalChannel::new(4);
+        let l: LocalBufferedChannel<HciPacket<[usize; SIZE]>> = LocalBufferedChannel::new(4);
 
         let test_vals: &[[usize; SIZE]] = &[
             [0; SIZE], [1; SIZE], [2; SIZE], [3; SIZE], [4; SIZE], [5; SIZE], [6; SIZE], [7; SIZE], [8; SIZE],

@@ -18,8 +18,8 @@ use crate::local_channel::local_stack_channel::stack_buffers::{
     Reservation, UnsafeBufferReservation, UnsafeReservation,
 };
 use crate::{
-    Channel, ChannelEnds as ChannelEndsTrait, ChannelReserve, FlowControlId, FlowCtrlReceiver, FromIntraMessage,
-    InterfaceReceivers, IntraMessageType, Receiver, Sender, TaskId, ToIntraMessage,
+    Channel, ChannelReserve, ConnectionChannelEnds as ChannelEndsTrait, FlowControlId, FlowCtrlReceiver,
+    InterfaceReceivers, Receiver, Sender, TaskId,
 };
 use bo_tie_util::buffer::BufferReserve;
 use core::cell::{Cell, RefCell};
@@ -1230,13 +1230,13 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 
     type ToBuffer = StackFromBuffer<'z, DeLinearBuffer<BUFFER_SIZE, u8>, TASK_COUNT, CHANNEL_SIZE>;
 
-    type ToChannel = Reservation<'z, FromChannelType<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>;
+    type ToConnectionChannel = Reservation<'z, FromChannelType<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>;
 
     type FromBuffer = BufferReservation<'z, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
 
-    type FromChannel = &'z ToChannelType<CHANNEL_SIZE, BUFFER_SIZE>;
+    type FromConnectionChannel = &'z ToChannelType<CHANNEL_SIZE, BUFFER_SIZE>;
 
-    type TaskChannelEnds = ChannelEnds<'z, DeLinearBuffer<BUFFER_SIZE, u8>, TASK_COUNT, CHANNEL_SIZE>;
+    type ConnectionChannelEnds = ChannelEnds<'z, DeLinearBuffer<BUFFER_SIZE, u8>, TASK_COUNT, CHANNEL_SIZE>;
 
     fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error> {
         if let Ok(at) = self
@@ -1254,7 +1254,11 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         }
     }
 
-    fn add_new_task(&self, task_id: TaskId, flow_ctrl_id: FlowControlId) -> Result<Self::TaskChannelEnds, Self::Error> {
+    fn add_new_task(
+        &self,
+        task_id: TaskId,
+        flow_ctrl_id: FlowControlId,
+    ) -> Result<Self::ConnectionChannelEnds, Self::Error> {
         let insertion_index = self
             .task_data
             .borrow()
@@ -1296,7 +1300,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         })
     }
 
-    fn get(&self, id: TaskId) -> Option<Self::ToChannel> {
+    fn get_channel(&self, id: TaskId) -> Option<Self::ToConnectionChannel> {
         let ref_task_data = self.task_data.borrow();
 
         ref_task_data
@@ -1316,7 +1320,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             .map(|TaskData { flow_ctrl_id, .. }| *flow_ctrl_id)
     }
 
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver> {
+    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromConnectionChannel as Channel>::Receiver> {
         &mut self.flow_ctrl_receiver
     }
 }

@@ -7,16 +7,14 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
-extern crate core;
 
 pub mod events;
 pub mod le;
 pub mod local_channel;
 pub mod opcodes;
 
-use bo_tie_util::buffer::{Buffer, BufferReserve, TryExtend};
+use bo_tie_util::buffer::{Buffer, BufferReserve};
 use core::fmt;
-use core::fmt::{Debug, Display, Formatter};
 use core::future::Future;
 use core::ops::Deref;
 use core::pin::Pin;
@@ -177,8 +175,19 @@ impl CommandEventMatcher {
 /// A `ChannelId` is used for identifying the channels in this collection.
 #[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone)]
 pub enum TaskId {
-    Host,
+    Host(HostChannel),
     Connection(ConnectionHandle),
+}
+
+/// The interface async task has two channels for sending to the Host async task, whereas the Host
+/// only has one channel for sending commands to the interface async task. The `CommandEvent`
+/// channel is for sending the `CommandComplete` and `CommandStatus` events to the host. The
+/// `GeneralEvent` channel is for sending all other events except for those that pertain to flow
+/// control to the Controller.
+#[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone)]
+pub enum HostChannel {
+    Command,
+    GeneralEvent,
 }
 
 /// Identification for a flow controller
@@ -258,7 +267,8 @@ impl FlowControlId {
 /// A trait for getting the size of the payload
 ///
 /// This trait is required to extract the size of the payload of an HCI data message (ACL, SCO, or
-/// ISO). Its used for block-based flow control to determine if the controller can accept
+/// ISO). Its used for block-based flow control to determine if the controller can accept the data
+/// within its buffers.
 trait GetDataPayloadSize {
     /// Get the size of the payload of an HCI packet
     ///
@@ -437,12 +447,16 @@ pub trait Channel {
     fn take_receiver(&self) -> Option<Self::Receiver>;
 }
 
-/// Ends of the channels for an async task
+/// Channel ends for a connection async task
 ///
-/// Communication between the interface async task and any other task is done through two channels
-/// for bi-directional data transmission. The `ChannelEnds` are the parts of the channels used by
-/// one of the async tasks.
-pub trait ChannelEnds: Sized {
+/// A connection's channel ends are the parts of the channels used for communicating between it and
+/// the interface async task.
+///
+/// ### The `TakeBuffer`
+/// Before a connection can send a messages to the interface async task it must acquire a buffer and
+/// fill it with the data of the HCI data packet. The point of the `TakeBuffer` type is to provide
+/// a future for awaiting a 'pool' of buffers and acquire one from it.
+pub trait ConnectionChannelEnds: Sized {
     /// The buffer type of messages *to* the interface async task
     type ToBuffer: Buffer;
 
@@ -453,12 +467,12 @@ pub trait ChannelEnds: Sized {
     type TakeBuffer: Future<Output = Self::ToBuffer>;
 
     /// The type used to send messages to the interface async task
-    type Sender: Sender<Message = ToIntraMessage<Self::ToBuffer>>;
+    type Sender: Sender<Message = FromConnectionIntraMessage<Self::ToBuffer>>;
 
     /// The type used for receiving messages from the interface async task
-    type Receiver: Receiver<Message = FromIntraMessage<Self::FromBuffer, Self>>;
+    type Receiver: Receiver<Message = ToConnectionIntraMessage<Self::FromBuffer>>;
 
-    /// Get the sender of messages to the other async task
+    /// Get the sender of messages to the interface async task
     fn get_sender(&self) -> Self::Sender;
 
     /// Take a buffer
@@ -466,11 +480,66 @@ pub trait ChannelEnds: Sized {
     where
         C: Into<Option<usize>>;
 
-    /// Get the receiver of messages from the async task
+    /// Get the receiver of messages from the interface async task
     fn get_receiver(&self) -> &Self::Receiver;
 
-    /// Get a mutable reference to the receiver of messages from the async task
+    /// Get a mutable reference to the receiver of messages from the interface async task
     fn get_mut_receiver(&mut self) -> &mut Self::Receiver;
+}
+
+/// Ends of the channels used by the Host
+///
+/// The host async task has one channel for sending to the interface async task, but two channels
+/// for receiving from it. The interface task splits the events sent from the Controller into the
+/// two channels going to the host async task. Command response events (Command Status/Complete)
+/// are sent within the 'command' channel and all other events sent to the host (excluding those
+/// never sent to the host task) are sent within the 'generic events' channel.
+///
+/// ### The `TakeBuffer`
+/// Before a host can send a messages to the interface async task it must acquire a buffer and
+/// fill it with the data of the HCI command packet. The point of the `TakeBuffer` type is to
+/// provide a future for awaiting a 'pool' of buffers and acquire one from it.
+pub trait HostChannelEnds {
+    /// The buffer type of messages *to* the interface async task
+    type ToBuffer: Buffer;
+
+    /// The buffer type of messages *from* the interface async task
+    type FromBuffer: Buffer;
+
+    /// The future for acquiring a buffer from the channel to send
+    type TakeBuffer: Future<Output = Self::ToBuffer>;
+
+    /// The type used to send messages to the interface async task
+    type Sender: Sender<Message = FromHostIntraMessage<Self::ToBuffer>>;
+
+    /// The type used for receiving command response messages from the interface async task
+    type CmdReceiver: Receiver<Message = ToHostCommandIntraMessage>;
+
+    /// The type used for receiving general messages from the interface async task
+    type GenReceiver: Receiver<Message = ToHostGeneralIntraMessage<Self::ConnectionChannelEnds>>;
+
+    /// The channel ends type for a connection
+    type ConnectionChannelEnds: ConnectionChannelEnds;
+
+    /// Get the sender of messages to the interface async task
+    fn get_sender(&self) -> Self::Sender;
+
+    /// Take a buffer
+    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    where
+        C: Into<Option<usize>>;
+
+    /// Get the receiver of command response messages from the interface async task
+    fn get_cmd_recv(&self) -> &Self::CmdReceiver;
+
+    /// Get a mutable reference to the receiver of command response messages from the interface async task
+    fn get_mut_cmd_recv(&mut self) -> &mut Self::CmdReceiver;
+
+    /// Get the receiver of general response messages from the interface async task
+    fn get_gen_recv(&self) -> &Self::GenReceiver;
+
+    /// Get a mutable reference to the receiver of general response messages from the interface async task
+    fn get_mut_gen_recv(&mut self) -> &mut Self::GenReceiver;
 }
 
 /// A channel reserve
@@ -479,70 +548,84 @@ pub trait ChannelEnds: Sized {
 /// and receiver. This includes the initial writing of data into the message.
 pub trait ChannelReserve {
     /// The error type associated with the `try_*` method within `ChannelReserve`
-    type Error: Debug;
+    type Error: fmt::Debug;
 
     /// The error returned by the implementation of Sender
     ///
     /// This is the same type as `Error` of [`Sender`]
-    type SenderError: Debug;
+    type SenderError: fmt::Debug;
 
-    /// The error that occurs when trying to extend a buffer fails
-    type TryExtendError: Debug;
+    /// The channel type for sending command response messages to the host async task
+    type ToHostCmdChannel: Channel<SenderError = Self::SenderError, Message = ToHostCommandIntraMessage>;
 
-    /// The buffer for creating a message sent from the interface async task *to* another
-    /// async task
-    type ToBuffer: Unpin + TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>;
+    /// The channel type for sending general messages to the host async task
+    type ToHostGenChannel: Channel<
+        SenderError = Self::SenderError,
+        Message = ToHostGeneralIntraMessage<Self::ConnectionChannelEnds>,
+    >;
 
-    /// The mpsc channel type for sending messages from the interface async task *to* another async
-    /// task
-    type ToChannel: BufferReserve<Buffer = Self::ToBuffer>
-        + Channel<SenderError = Self::SenderError, Message = FromIntraMessage<Self::ToBuffer, Self::TaskChannelEnds>>;
+    /// The channel type for messages sent from the host async task
+    type FromHostChannel: BufferReserve
+        + Channel<
+            SenderError = Self::SenderError,
+            Message = FromHostIntraMessage<<Self::FromHostChannel as BufferReserve>::Buffer>,
+        >;
 
-    /// The buffer for creating a message sent *from* another async task to the interface async
-    /// task
-    type FromBuffer: Unpin + TryExtend<u8, Error = Self::TryExtendError> + Deref<Target = [u8]>;
+    /// The channel type for sending messages to another connection async task
+    type ToConnectionChannel: BufferReserve
+        + Channel<
+            SenderError = Self::SenderError,
+            Message = ToConnectionIntraMessage<<Self::ToConnectionChannel as BufferReserve>::Buffer>,
+        >;
 
-    /// The mpsc channel type for the interface async task to receiving messages *from* another
-    /// async task
-    type FromChannel: BufferReserve<Buffer = Self::FromBuffer>
-        + Channel<SenderError = Self::SenderError, Message = ToIntraMessage<Self::FromBuffer>>;
+    /// The channel type for messages sent from another connection async task
+    type FromConnectionChannel: BufferReserve
+        + Channel<
+            SenderError = Self::SenderError,
+            Message = FromConnectionIntraMessage<<Self::FromConnectionChannel as BufferReserve>::Buffer>,
+        >;
 
-    /// The ends of the channels used by another async task to communicate with the channel ends
-    /// stored by this `ChannelReserve`.
-    type TaskChannelEnds: ChannelEnds<ToBuffer = Self::FromBuffer>;
+    /// Channel ends for a connection async task
+    type ConnectionChannelEnds: ConnectionChannelEnds;
 
-    /// Try to remove a channel
-    fn try_remove(&mut self, id: TaskId) -> Result<(), Self::Error>;
+    /// Try to remove a connection
+    fn try_remove(&mut self, handle: ConnectionHandle) -> Result<(), Self::Error>;
 
-    /// Add a new async task
+    /// Add a new connection async task
     ///
-    /// This creates a new channel for the task identified by `task_id`. The return is the channel
-    /// ends used by the async task to communicate with the interface async task.
-    ///
-    /// # Panic
-    /// This method may panic if `task_id` is already used.
-    fn add_new_task(
+    /// The interface async task begins the creation of a new connection async task by creating the
+    /// channel used by it to send messages to the new connection async task. The return of this
+    /// method is the connection ends for the new connection.
+    fn add_new_connection(
         &self,
-        task_id: TaskId,
+        handle: ConnectionHandle,
         flow_control_id: FlowControlId,
-    ) -> Result<Self::TaskChannelEnds, Self::Error>;
+    ) -> Result<Self::ConnectionChannelEnds, Self::Error>;
 
-    /// Get the channel for sending messages *to* the async task associated by the specified task ID
+    /// Get the channel for sending messages to `id`
     ///
-    /// `None` is returned if no channel is associated with the input identifier.
-    fn get(&self, id: TaskId) -> Option<Self::ToChannel>;
+    /// `None` is returned if no channel is associated with the task identifier.
+    fn get_channel(
+        &self,
+        id: TaskId,
+    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>>;
 
-    /// Get the controller flow control identification
+    /// Get the controller flow control identification for a connection
     ///
     /// This gets the flow control identifier that is associated to the task ID.
     ///
     /// `None` is returned if no data flow control id is associated with the input identifier.
-    fn get_flow_control_id(&self, id: TaskId) -> Option<FlowControlId>;
+    fn get_flow_control_id(&self, handle: ConnectionHandle) -> Option<FlowControlId>;
 
     /// Get the [`FlowCtrlReceiver`]
     ///
     /// This returns the `FlowCtrlReceiver` used by this `ChannelReserve`.
-    fn get_flow_ctrl_receiver(&mut self) -> &mut FlowCtrlReceiver<<Self::FromChannel as Channel>::Receiver>;
+    fn get_flow_ctrl_receiver(
+        &mut self,
+    ) -> &mut FlowCtrlReceiver<
+        <Self::FromHostChannel as Channel>::Receiver,
+        <Self::FromConnectionChannel as Channel>::Receiver,
+    >;
 }
 
 macro_rules! inc_flow_ctrl {
@@ -557,24 +640,38 @@ macro_rules! inc_flow_ctrl {
 }
 
 pub trait ChannelReserveExt: ChannelReserve {
-    /// Prepare for sending a message
+    /// Prepare HCI data to be sent to a connection async task
     ///
-    /// If there is a channel with provided `ChannelId` in this `ChannelReserve`, then a
-    /// [`PrepareBufferMsg`] is returned. A `PrepareBufferMsg` is a future for acquiring the buffer
-    /// from the channel used by the interface to send messages to the task associated by `id`. Upon
-    /// polling to completion a pair containing the buffer to use and the channels sender are output
-    /// by the `PrepareBufferMsg`.
+    /// HCI data (ACL, SCO, and ISO) must be buffered before it can be transferred to a connection
+    /// task. When the buffer is not already present, this method is used to get a buffer associated
+    /// to the channel for sending to a connection async task.
     ///
-    /// `prepare_buffer_msg` should not be used if no buffer is required in the `IntraMessage` to
-    /// send to the async task. Instead use method
-    /// [`get_sender`](ChannelReserveExt::get_sender) to skip trying to acquire a buffer.
-    fn prepare_buffer_msg(
+    /// The returned `PrepareBufferMsg` is a wrapper around both the buffer and channel. Adding
+    /// bytes to the return fills the buffer and consuming the return sends the message containing
+    /// the buffer to the connection.
+    ///
+    /// `prepare_data_message` should not be used if no buffer is required in the `IntraMessage` to
+    /// send to a connection async task. Instead use method the method [`get_sender`] to skip trying
+    /// to acquire a buffer.
+    ///
+    /// [`get_sender`]: ChannelReserveExt::get_sender
+    fn prepare_data_message(
         &self,
-        id: TaskId,
+        handle: ConnectionHandle,
         front_capacity: usize,
-    ) -> Option<PrepareBufferMsg<<Self::ToChannel as Channel>::Sender, <Self::ToChannel as BufferReserve>::TakeBuffer>>
-    {
-        self.get(id)
+    ) -> Option<
+        PrepareBufferMsg<
+            <Self::ToConnectionChannel as Channel>::Sender,
+            <Self::ToConnectionChannel as BufferReserve>::TakeBuffer,
+        >,
+    > {
+        let id = TaskId::Connection(handle);
+
+        self.get_channel(id)
+            .and_then(|channel| match channel {
+                FromInterface::Connection(channel) => Some(channel),
+                _ => None, // actually unreachable
+            })
             .map(|channel| PrepareBufferMsg::from_channel(&channel, front_capacity))
     }
 
@@ -582,12 +679,28 @@ pub trait ChannelReserveExt: ChannelReserve {
     ///
     /// The return is the sender used for sending messages to the async task associated by `id`.
     /// None is returned if no channel information exists for the provided `id` this method.
-    fn get_sender(&self, id: TaskId) -> Option<<Self::ToChannel as Channel>::Sender> {
-        self.get(id).map(|channel| channel.get_sender())
+    fn get_sender(
+        &self,
+        id: TaskId,
+    ) -> Option<
+        FromInterface<
+            <Self::ToHostCmdChannel as Channel>::Sender,
+            <Self::ToHostGenChannel as Channel>::Sender,
+            <Self::ToConnectionChannel as Channel>::Sender,
+        >,
+    > {
+        self.get_channel(id).map(|channel_type| match channel_type {
+            FromInterface::HostCommand(hc) => FromInterface::HostCommand(hc.get_sender()),
+            FromInterface::HostGeneral(hg) => FromInterface::HostGeneral(hg.get_sender()),
+            FromInterface::Connection(c) => FromInterface::Connection(c.get_sender()),
+        })
     }
 
     /// Receive the next message
-    fn receive_next(&mut self) -> ReceiveNext<'_, <Self::FromChannel as Channel>::Receiver> {
+    fn receive_next(
+        &mut self,
+    ) -> ReceiveNext<'_, <Self::FromHostChannel as Channel>::Receiver, <Self::FromConnectionChannel as Channel>::Receiver>
+    {
         ReceiveNext(self.get_flow_ctrl_receiver())
     }
 
@@ -728,8 +841,8 @@ where
 }
 
 /// Receivers used by an interface async task
-pub struct InterfaceReceivers<R> {
-    pub cmd_receiver: R,
+pub struct InterfaceReceivers<H, R> {
+    pub cmd_receiver: H,
     pub acl_receiver: R,
     pub sco_receiver: R,
     pub le_acl_receiver: R,
@@ -744,8 +857,8 @@ pub struct InterfaceReceivers<R> {
 ///
 /// This works by only releasing messages from a channel when the controller can accept it. There is
 /// possibly five different kinds of buffers in a controller. A
-pub struct FlowCtrlReceiver<R: Receiver> {
-    cmd_receiver: PeekableReceiver<R>,
+pub struct FlowCtrlReceiver<H: Receiver, R: Receiver> {
+    cmd_receiver: PeekableReceiver<H>,
     acl_receiver: PeekableReceiver<R>,
     sco_receiver: PeekableReceiver<R>,
     le_acl_receiver: PeekableReceiver<R>,
@@ -760,9 +873,9 @@ pub struct FlowCtrlReceiver<R: Receiver> {
     waker: Option<core::task::Waker>,
 }
 
-impl<R: Receiver> FlowCtrlReceiver<R> {
+impl<H: Receiver, R: Receiver> FlowCtrlReceiver<H, R> {
     /// Create a new `FlowCtrlReceiver`
-    pub fn new(receivers: InterfaceReceivers<R>) -> Self {
+    pub fn new(receivers: InterfaceReceivers<H, R>) -> Self {
         let cmd_receiver = receivers.cmd_receiver.peekable();
         let acl_receiver = receivers.acl_receiver.peekable();
         let sco_receiver = receivers.sco_receiver.peekable();
@@ -824,18 +937,29 @@ impl<R: Receiver> FlowCtrlReceiver<R> {
 ///
 /// # Note
 /// When all async tasks are closed, when polled `RecvNext` will return `None`.
-pub struct ReceiveNext<'a, R: Receiver>(&'a mut FlowCtrlReceiver<R>);
+pub struct ReceiveNext<'a, H: Receiver, R: Receiver>(&'a mut FlowCtrlReceiver<H, R>);
 
-impl<R> Future for ReceiveNext<'_, R>
+impl<H, R> Future for ReceiveNext<'_, H, R>
 where
+    H: Receiver,
+    H::Message: GetDataPayloadSize,
     R: Receiver,
     R::Message: GetDataPayloadSize,
 {
-    type Output = Option<R::Message>;
+    type Output = Option<TaskSource<H::Message, R::Message>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        macro_rules! task_wrap {
+            (Host, $msg:expr) => {
+                $msg.map(|o_msg| o_msg.map(|msg| $crate::TaskSource::Host(msg)))
+            };
+            (Conn, $msg:expr) => {
+                $msg.map(|o_msg| o_msg.map(|msg| $crate::TaskSource::Connection(msg)))
+            };
+        }
+
         macro_rules! fc_rx {
-            ($fcr:expr, $receiver:ident, $fc:ident, $cx:expr, $fc_id:expr, $dead_cnt:expr) => {
+            ($source:tt, $fcr:expr, $receiver:ident, $fc:ident, $cx:expr, $fc_id:expr, $dead_cnt:expr) => {
                 match $fcr.$receiver.poll_peek($cx) {
                     core::task::Poll::Pending => {}
                     core::task::Poll::Ready(None) => $dead_cnt += 1,
@@ -855,7 +979,7 @@ where
 
                             debug_assert!(msg.is_ready());
 
-                            return msg;
+                            return task_wrap!($source, msg);
                         }
                     }
                 }
@@ -868,11 +992,11 @@ where
 
         for fc_id in fcr.last_received.cycle_after() {
             match fc_id {
-                FlowControlId::Cmd => fc_rx!(fcr, cmd_receiver, cmd_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::Acl => fc_rx!(fcr, acl_receiver, acl_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::Sco => fc_rx!(fcr, sco_receiver, sco_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::LeAcl => fc_rx!(fcr, le_acl_receiver, le_acl_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::LeIso => fc_rx!(fcr, le_iso_receiver, le_iso_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::Cmd => fc_rx!(Host, fcr, cmd_receiver, cmd_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::Acl => fc_rx!(Conn, fcr, acl_receiver, acl_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::Sco => fc_rx!(Conn, fcr, sco_receiver, sco_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::LeAcl => fc_rx!(Conn, fcr, le_acl_receiver, le_acl_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::LeIso => fc_rx!(Conn, fcr, le_iso_receiver, le_iso_flow_control, cx, fc_id, dead_cnt),
             }
         }
 
@@ -973,7 +1097,7 @@ where
 /// }
 /// ```
 pub trait Sender {
-    type Error: Debug;
+    type Error: fmt::Debug;
     type Message: Unpin;
     type SendFuture<'a>: Future<Output = Result<(), Self::Error>>
     where
@@ -1173,8 +1297,8 @@ pub enum HciPacketType {
     Iso,
 }
 
-impl Display for HciPacketType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+impl fmt::Display for HciPacketType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             HciPacketType::Command => f.write_str("Command"),
             HciPacketType::Acl => f.write_str("ACL"),
@@ -1185,9 +1309,10 @@ impl Display for HciPacketType {
     }
 }
 
-/// HCI packet kind
+/// A HCI packet
 ///
-/// This is an enu
+/// This is a wrapper around a buffer containing a HCI packet. `HciPacket` is used to describe what
+/// kind of HCI packet is contained within the buffer.
 pub enum HciPacket<T: Deref<Target = [u8]>> {
     Command(T),
     Acl(T),
@@ -1196,140 +1321,130 @@ pub enum HciPacket<T: Deref<Target = [u8]>> {
     Iso(T),
 }
 
-/// Intra messages sent to the interface async task
-///
-/// This is the type for messages sent to the interface async task from another async task. All
-/// message except for [`IntraMessageType::Event`] are received by the interface async task.
-///
-/// ## Generics
-/// * Generic `T` is the type used as the buffer for HCI data and command messages.
-pub struct ToIntraMessage<T> {
-    // The enum of `IntraMessageType` that uses
-    // its second generic not sent by another
-    // async task to the interface async task.
-    pub(crate) ty: IntraMessageType<T, ()>,
+impl<T: Deref<Target = [u8]>> From<FromHostIntraMessage<T>> for HciPacket<T> {
+    fn from(i: FromHostIntraMessage<T>) -> Self {
+        HciPacket::Command(i.command)
+    }
 }
 
-impl<T> ToIntraMessage<T> {
-    /// Convert a ToIntraMessage into a HciPacket
-    ///
-    /// This method may only be called when field `ty` is a `Command`, `Acl`, `Sco` or `Iso`
-    /// `IntraMessageType`.
-    ///
-    /// # Panic
-    /// This method panics if field `ty` is not one of the valid enums.
-    pub fn into_hci_packet(self) -> HciPacket<T>
-    where
-        T: Deref<Target = [u8]>,
-    {
-        match self.ty {
-            IntraMessageType::Command(_, t) => HciPacket::Command(t),
-            IntraMessageType::Acl(t) => HciPacket::Acl(t),
-            IntraMessageType::Sco(t) => HciPacket::Sco(t),
-            IntraMessageType::Iso(t) => HciPacket::Iso(t),
-            _ => panic!("invalid intra message {}", self.ty.kind()),
+impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPacket<T> {
+    type Error = &'static str;
+
+    fn try_from(i: FromConnectionIntraMessage<T>) -> Result<Self, Self::Error> {
+        match i {
+            FromConnectionIntraMessage::Acl(t) => Ok(HciPacket::Acl(t)),
+            FromConnectionIntraMessage::Sco(t) => Ok(HciPacket::Sco(t)),
+            FromConnectionIntraMessage::Iso(t) => Ok(HciPacket::Iso(t)),
+            FromConnectionIntraMessage::Disconnect(_) => {
+                Err("'FromConnectionIntraMessage::Disconnect' cannot be converted to a HciPacket")
+            }
         }
     }
 }
 
-impl<T> From<IntraMessageType<T, ()>> for ToIntraMessage<T> {
-    fn from(ty: IntraMessageType<T, ()>) -> Self {
-        Self { ty }
+/// A messages sent from the host async task
+///
+/// The host async task sends HCI commands to the interface async task, and the interface async task
+/// sends these commands on to the controller (after performing command flow control).
+pub struct FromHostIntraMessage<T> {
+    pub command: T,
+}
+
+impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
+    // This method is never called as there is no block-like flow control for commands, but might as
+    // well implement it in case that changes. If this ever does change then the cold attribute
+    // needs to be removed.
+    #[cold]
+    fn get_payload_size(&self) -> Option<usize> {
+        Some(self.command[2] as usize)
     }
 }
 
-impl<T: Deref<Target = [u8]>> GetDataPayloadSize for ToIntraMessage<T> {
-    /// A payload size is only returned for the data type (ACL, SCO, ISO) HCI messages.
+/// A command responses sent to the host async task
+///
+/// When the controller has finished processing a command it sends either the [`CommandComplete`] or
+/// [`CommandStatus`] events to the Host. The interface async task will send these events within
+/// the command response channel to the host async task.
+///
+/// [`CommandComplete`]: events::EventsData::CommandComplete
+/// [`CommandStatus`]: events::EventsData::CommandStatus
+pub enum ToHostCommandIntraMessage {
+    CommandComplete(events::parameters::CommandCompleteData),
+    CommandStatus(events::parameters::CommandStatusData),
+}
+
+/// A general message sent to the host async task
+///
+/// Messages that are not in response to a command are sent within the general message channel.
+///
+/// ### Events
+/// All events except for command response and the flow control events
+/// [`NumberOfCompletedPacketsData`], and [`NumberOfCompletedDataBlocks`] are sent via the general
+/// channel.
+///
+/// ### Connection Channel Ends
+/// A new connection's channel ends used for communicating with the interface are sent to the host
+/// through the general channel.
+pub enum ToHostGeneralIntraMessage<T> {
+    Event(events::EventsData),
+    NewConnection(T),
+}
+
+/// A messages from a connection async task
+///
+/// This is a message sent from a connection async task to the interface async task.
+pub enum FromConnectionIntraMessage<T> {
+    /// HCI asynchronous Connection-Oriented Data Packet
+    Acl(T),
+    /// HCI synchronous Connection-Oriented Data Packet
+    Sco(T),
+    /// HCI isochronous Data Packet
+    Iso(T),
+    /// A disconnection indication
+    Disconnect(bo_tie_util::errors::Error),
+}
+
+impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromConnectionIntraMessage<T> {
     fn get_payload_size(&self) -> Option<usize> {
-        match &self.ty {
-            IntraMessageType::Acl(t) => Some(<u16>::from_le_bytes([t[2], t[3]]).into()),
-            IntraMessageType::Sco(t) => Some(t[2].into()),
-            IntraMessageType::Iso(t) => Some(<u16>::from_le_bytes([t[2], t[3] & 0x3F]).into()),
+        match self {
+            FromConnectionIntraMessage::Acl(t) => Some(<u16>::from_le_bytes([t[2], t[3]]).into()),
+            FromConnectionIntraMessage::Sco(t) => Some(t[2].into()),
+            FromConnectionIntraMessage::Iso(t) => Some(<u16>::from_le_bytes([t[2], t[3] & 0x3F]).into()),
             _ => None,
         }
     }
 }
 
-/// Intra messages sent from the interface async task
+/// A messages to a connection async task
 ///
-/// This is the type for messages sent from the interface async task to another async task. All
-/// message except for [`IntraMessageType::Command`] are sent from the interface async task.
-///
-/// ## Generics
-/// * Generic `T` is the type used as the buffer for HCI data and command messages.
-/// * Generic `C` implements [`ChannelEnds`]
-#[repr(transparent)]
-pub struct FromIntraMessage<T, C> {
-    pub ty: IntraMessageType<T, C>,
-}
-
-impl<T, C> From<IntraMessageType<T, C>> for FromIntraMessage<T, C> {
-    fn from(ty: IntraMessageType<T, C>) -> Self {
-        Self { ty }
-    }
-}
-
-/// An enum for the kinds of message sent between two async tasks
-///
-/// This is the message sent between the interface, host, and connection async tasks.
-pub enum IntraMessageType<T, C> {
-    /*----------------------------
-     HCI Packet messages
-    ----------------------------*/
-    /// HCI Command Packet
-    Command(CommandEventMatcher, T),
+/// This is a message sent to a connection async task from the interface async task.
+pub enum ToConnectionIntraMessage<T> {
     /// HCI asynchronous Connection-Oriented Data Packet
     Acl(T),
     /// HCI synchronous Connection-Oriented Data Packet
     Sco(T),
-    /// HCI Event Packet.
-    Event(events::EventsData),
     /// HCI isochronous Data Packet
     Iso(T),
-    /*----------------------------
-     Inner host specific messages
-
-     These messages do not translate to HCI Packet messages
-    ----------------------------*/
-    /// Connection information
-    ///
-    /// When the interface async task receives an event that indicates that a connection was made,
-    /// it will send this intra message to the host async task. `Connection` contains the channel
-    /// ends for that can be used to create a new connection async task. This intra message is sent
-    /// before the event that indicated the connection.
-    ///
-    /// The events connection complete, synchronous connection complete, LE connection complete, and
-    /// LE enhanced connection complete all trigger the sending of this intra message.
-    Connection(C),
-    /// This is sent by a connection async task or the interface async task to indicate that a
-    /// connection is disconnected.
-    ///
-    /// When sent by a connection async task it means that the connection is to be disconnected on
-    /// the host end and the disconnection should be made by the Controller. The task must provide
-    /// a reason for the disconnection.
-    ///
-    /// When send by the interface async task to a connection async task then it means that the
-    /// Controller has been disconnected from the peer device. The disconnect reason is the same
-    /// as reason as provided by the Controller in the disconnection event.
+    /// A disconnection indication
     Disconnect(bo_tie_util::errors::Error),
 }
 
-impl<T, C> IntraMessageType<T, C> {
-    /// Print the kind of message
-    ///
-    /// This is used for debugging purposes
-    #[doc(hidden)]
-    pub const fn kind(&self) -> &'static str {
-        match self {
-            IntraMessageType::Command(_, _) => "Command",
-            IntraMessageType::Acl(_) => "Acl",
-            IntraMessageType::Sco(_) => "Sco",
-            IntraMessageType::Event(_) => "Event",
-            IntraMessageType::Iso(_) => "Iso",
-            IntraMessageType::Disconnect(_) => "Disconnect",
-            IntraMessageType::Connection(_) => "(BR/EDR) Connection",
-        }
-    }
+/// An enumeration of different channels from the interface async task
+///
+/// This is used to differentiate the different channels that can be returned by the method
+/// [`get_channel`] of `ChannelReserve` or [`get_sender`] of `ChannelReserveExt`.
+///
+/// [`get_channel`]: ChannelReserve::get_channel
+pub enum FromInterface<Hc, Hg, C> {
+    HostCommand(Hc),
+    HostGeneral(Hg),
+    Connection(C),
+}
+
+/// An enumeration of different channels to the interface async task
+pub enum TaskSource<H, C> {
+    Host(H),
+    Connection(C),
 }
 
 #[cfg(test)]
