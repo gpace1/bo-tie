@@ -45,7 +45,6 @@
 //! assert_eq!(&expected_advertising_data, &sequencer[..24])
 //! ```
 
-#![feature(generic_associated_types)]
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 

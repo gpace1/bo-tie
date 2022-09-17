@@ -2,7 +2,6 @@
 //!
 //! This crate carries the parts of the HCI that are used by multiple HCI crates.
 
-#![feature(generic_associated_types)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(not(feature = "std"), no_std)]
 

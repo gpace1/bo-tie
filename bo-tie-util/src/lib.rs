@@ -3,7 +3,6 @@
 //! These are things that are used throughout the other crates within the `bo-tie` workspace and are
 //! collected here as a common place to put them.
 
-#![feature(generic_associated_types)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
