@@ -8,7 +8,6 @@ use crate::local_channel::local_stack::receiver::LocalChannelReceiver;
 use crate::local_channel::local_stack::{ToHostGenChannel, ToHostGenMsg, UnsafeToHostGenMsg};
 use crate::local_channel::LocalSendFutureError;
 use crate::{Channel, ToHostCommandIntraMessage};
-use core::borrow::Borrow;
 use core::cell::{Cell, RefCell};
 use core::task::Waker;
 
