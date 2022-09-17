@@ -301,7 +301,7 @@ impl<T, const SIZE: usize> DerefMut for DeLinearBuffer<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize, T> crate::TryExtend<T> for DeLinearBuffer<SIZE, T> {
+impl<const SIZE: usize, T> bo_tie_util::buffer::TryExtend<T> for DeLinearBuffer<SIZE, T> {
     type Error = LinearBufferError;
 
     fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
@@ -490,7 +490,7 @@ impl Display for QueueBufferError {
 /// exists (a `StackHotel` is safe to move if no `Reservation` exists.
 ///
 /// # Note
-/// This is purpose built for module `local_stack_channel`, so reservations are taken from a
+/// This is purpose built for module `local_stack`, so reservations are taken from a
 /// `StackHotel` wrapped within a `Ref`.
 ///
 /// # implementation
@@ -1022,9 +1022,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> crate::TryExtend<A> for BufferReservation<'_, T, SIZE>
+impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryExtend<A> for BufferReservation<'_, T, SIZE>
 where
-    T: crate::TryExtend<A>,
+    T: bo_tie_util::buffer::TryExtend<A>,
 {
     type Error = T::Error;
 
@@ -1142,9 +1142,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> crate::TryExtend<A> for UnsafeBufferReservation<T, SIZE>
+impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryExtend<A> for UnsafeBufferReservation<T, SIZE>
 where
-    T: crate::TryExtend<A>,
+    T: bo_tie_util::buffer::TryExtend<A>,
 {
     type Error = T::Error;
 

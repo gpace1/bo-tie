@@ -5,9 +5,9 @@
 //! communication. This channel consists of statically allocated buffer to store the messages that
 //! are sent from the sender to the receiver.
 
-pub mod local_dynamic_channel;
+pub mod local_dynamic;
 #[cfg(feature = "unstable")]
-pub mod local_stack_channel;
+pub mod local_stack;
 
 use core::fmt::{Display, Formatter};
 use core::future::Future;

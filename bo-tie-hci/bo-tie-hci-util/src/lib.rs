@@ -7,6 +7,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+extern crate core;
 
 pub mod events;
 pub mod le;
@@ -116,7 +117,6 @@ pub enum EncryptionLevel {
 pub struct CommandEventMatcher {
     op_code: opcodes::HciCommand,
     event: events::Events,
-    matcher: for<'a> fn(&'a [u8]) -> Option<u16>,
 }
 
 impl CommandEventMatcher {
@@ -124,39 +124,17 @@ impl CommandEventMatcher {
     ///
     /// A event matcher will be made for the event 'Command Complete' for the chosen `source`.
     pub fn new_command_complete(op_code: opcodes::HciCommand) -> Self {
-        fn get_op_code(raw: &[u8]) -> Option<u16> {
-            // bytes 3 and 4 are the opcode within an HCI event
-            // packet containing a Command Complete event.
-
-            let b1 = raw.get(3)?;
-            let b2 = raw.get(4)?;
-
-            Some(<u16>::from_le_bytes([*b1, *b2]))
-        }
-
         Self {
             op_code,
             event: events::Events::CommandComplete,
-            matcher: get_op_code,
         }
     }
 
     /// Create a new `CommandEventMatcher` for the event `CommandStatus`
     pub fn new_command_status(op_code: opcodes::HciCommand) -> Self {
-        fn get_op_code(raw: &[u8]) -> Option<u16> {
-            // bytes 4 and 5 are the opcode within an HCI event
-            // packet containing a Command Status event.
-
-            let b1 = raw.get(4)?;
-            let b2 = raw.get(5)?;
-
-            Some(<u16>::from_le_bytes([*b1, *b2]))
-        }
-
         Self {
             op_code,
             event: events::Events::CommandStatus,
-            matcher: get_op_code,
         }
     }
 
@@ -187,7 +165,7 @@ pub enum TaskId {
 #[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone)]
 pub enum HostChannel {
     Command,
-    GeneralEvent,
+    General,
 }
 
 /// Identification for a flow controller
@@ -1323,7 +1301,9 @@ pub enum HciPacket<T: Deref<Target = [u8]>> {
 
 impl<T: Deref<Target = [u8]>> From<FromHostIntraMessage<T>> for HciPacket<T> {
     fn from(i: FromHostIntraMessage<T>) -> Self {
-        HciPacket::Command(i.command)
+        match i {
+            FromHostIntraMessage::Command(c) => HciPacket::Command(c),
+        }
     }
 }
 
@@ -1346,8 +1326,8 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPack
 ///
 /// The host async task sends HCI commands to the interface async task, and the interface async task
 /// sends these commands on to the controller (after performing command flow control).
-pub struct FromHostIntraMessage<T> {
-    pub command: T,
+pub enum FromHostIntraMessage<T> {
+    Command(T),
 }
 
 impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
@@ -1356,7 +1336,9 @@ impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
     // needs to be removed.
     #[cold]
     fn get_payload_size(&self) -> Option<usize> {
-        Some(self.command[2] as usize)
+        match self {
+            FromHostIntraMessage::Command(command) => Some(command[2] as usize),
+        }
     }
 }
 

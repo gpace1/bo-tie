@@ -1,0 +1,369 @@
+//! Stack local buffered channel
+//!
+//! This is a stack local channel with support of buffered data. Both the channel's message queue
+//! and the reserve for buffers are on the stack.
+//!
+//! A buffered channel allows for buffers to be taken from a 'reserve' of buffers associated with
+//! the channel.
+
+use super::receiver::LocalChannelReceiver;
+use super::sender::LocalChannelSender;
+use crate::local_channel::local_stack::channel::LocalChannel;
+use crate::local_channel::local_stack::stack_buffers::{
+    BufferReservation, DeLinearBuffer, Reservation, StackHotel, UnsafeBufferReservation, UnsafeReservation,
+};
+use crate::local_channel::local_stack::{
+    FromConnMsg, FromConnectionChannel, FromHostChannel, FromHostMsg, ToConnMsg, ToConnectionChannel,
+    UnsafeFromConnMsg, UnsafeFromHostMsg, UnsafeToConnMsg,
+};
+use crate::local_channel::LocalSendFutureError;
+use crate::Channel;
+use bo_tie_util::buffer::{Buffer, BufferReserve, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use core::borrow::Borrow;
+use core::future::Future;
+use std::ops::{Deref, DerefMut};
+use std::task::{Context, Poll};
+
+/// A stack allocated buffered async channel
+///
+/// This is a MPSC channel where the queue is allocated on the stack instead of the heap. Using this
+/// channel requires borrowing the channel, either the standard rust way with `&` or by using a
+/// wrapper structure that carries a lifetime.
+///
+/// The size of the channel's queue must be known at compile time. The channel is always a fixed
+/// sized channel and cannot be reallocated to have a larger or smaller queue. For the fastest
+/// implementation, the size of the queue should be a power of two.
+///
+/// # Buffer
+/// Buffers are taken from a `reserve`. This reserve is a finite amount equivalent to the
+/// `CHANNEL_SIZE` of general purpose buffers that can be filled and used as part of the message.
+/// Buffers can be taken through the implementation of [`BufferReserve`].
+///
+/// [`BufferReserve`]: bo_tie_util::buffer::BufferReserve
+pub struct LocalBufferedChannel<const CHANNEL_SIZE: usize, B, T> {
+    pub(super) channel: LocalChannel<CHANNEL_SIZE, T>,
+    pub(super) buffer_reserve: StackHotel<B, CHANNEL_SIZE>,
+}
+
+impl<const CHANNEL_SIZE: usize, B, T> LocalBufferedChannel<CHANNEL_SIZE, B, T> {
+    pub(super) fn new() -> Self {
+        let channel = LocalChannel::new();
+        let buffer_reserve = StackHotel::new();
+
+        Self {
+            channel,
+            buffer_reserve,
+        }
+    }
+}
+
+impl<const CHANNEL_SIZE: usize, B, T> Borrow<LocalChannel<CHANNEL_SIZE, T>>
+    for &LocalBufferedChannel<CHANNEL_SIZE, B, T>
+{
+    fn borrow(&self) -> &LocalChannel<CHANNEL_SIZE, T> {
+        &self.channel
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> Borrow<LocalChannel<CHANNEL_SIZE, T>>
+    for Reservation<'_, LocalBufferedChannel<CHANNEL_SIZE, B, T>, TASK_COUNT>
+{
+    fn borrow(&self) -> &LocalChannel<CHANNEL_SIZE, T> {
+        &self.channel
+    }
+}
+
+impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Channel
+    for &'a FromHostChannel<CHANNEL_SIZE, BUFFER_SIZE>
+{
+    type SenderError = LocalSendFutureError;
+    type Message = FromHostMsg<'a, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, UnsafeFromHostMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
+    type Receiver = LocalChannelReceiver<CHANNEL_SIZE, Self, UnsafeFromHostMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
+
+    fn get_sender(&self) -> Self::Sender {
+        LocalChannelSender::new(self)
+    }
+
+    fn take_receiver(&self) -> Option<Self::Receiver> {
+        if self.channel.receiver_exists.get() {
+            None
+        } else {
+            Some(LocalChannelReceiver::new(*self))
+        }
+    }
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Channel
+    for Reservation<'a, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>
+{
+    type SenderError = LocalSendFutureError;
+    type Message = ToConnMsg<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>;
+    type Receiver = LocalChannelReceiver<CHANNEL_SIZE, Self, UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>;
+
+    fn get_sender(&self) -> Self::Sender {
+        LocalChannelSender::new(self.clone())
+    }
+
+    fn take_receiver(&self) -> Option<Self::Receiver> {
+        if self.channel.receiver_exists.get() {
+            None
+        } else {
+            Some(LocalChannelReceiver::new(self.clone()))
+        }
+    }
+}
+
+impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Channel
+    for &'a FromConnectionChannel<CHANNEL_SIZE, BUFFER_SIZE>
+{
+    type SenderError = LocalSendFutureError;
+    type Message = FromConnMsg<'a, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, UnsafeFromConnMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
+    type Receiver = LocalChannelReceiver<CHANNEL_SIZE, Self, UnsafeFromConnMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
+
+    fn get_sender(&self) -> Self::Sender {
+        LocalChannelSender::new(self)
+    }
+
+    fn take_receiver(&self) -> Option<Self::Receiver> {
+        if self.channel.receiver_exists.get() {
+            None
+        } else {
+            Some(LocalChannelReceiver::new(&*self))
+        }
+    }
+}
+
+impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize, T> BufferReserve
+    for &'a LocalBufferedChannel<CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, T>
+{
+    type Buffer = BufferReservation<'a, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
+    type TakeBuffer = TakeBuffer<Self>;
+
+    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    where
+        S: Into<Option<usize>>,
+    {
+        TakeBuffer::new(&*self, front_capacity.into().unwrap_or_default())
+    }
+
+    fn reclaim(&mut self, _: Self::Buffer) {}
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize, T> BufferReserve
+    for Reservation<'a, LocalBufferedChannel<CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, T>, TASK_COUNT>
+{
+    type Buffer = ReservedBuffer<'a, TASK_COUNT, CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, T>;
+    type TakeBuffer = TakeBuffer<Self>;
+
+    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    where
+        S: Into<Option<usize>>,
+    {
+        TakeBuffer::new(self.clone(), front_capacity.into().unwrap_or_default())
+    }
+
+    fn reclaim(&mut self, _: Self::Buffer) {}
+}
+
+/// Take buffer for `LocalBufferedChannel`
+///
+/// This the type used as the [`TakeBuffer`] in the implementation of `BufferReserve` for
+/// `LocalStackChannel`.
+///
+/// [`TakeBuffer`]: bo_tie_util::buffer::BufferReserve::TakeBuffer
+pub struct TakeBuffer<C> {
+    channel: C,
+    front_capacity: usize,
+}
+
+impl<C> TakeBuffer<C> {
+    fn new(channel: C, front_capacity: usize) -> Self {
+        Self {
+            channel,
+            front_capacity,
+        }
+    }
+}
+
+impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize, T> Future
+    for TakeBuffer<&'a LocalBufferedChannel<CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, T>>
+{
+    type Output = BufferReservation<'a, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        match this.channel.buffer_reserve.take_buffer(this.front_capacity) {
+            Some(buffer) => Poll::Ready(buffer),
+            None => {
+                this.channel.buffer_reserve.set_waker(cx.waker());
+
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize, T> Future
+    for TakeBuffer<Reservation<'a, LocalBufferedChannel<CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, T>, TASK_COUNT>>
+{
+    type Output = ReservedBuffer<'a, TASK_COUNT, CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, T>;
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        match this.channel.buffer_reserve.take_buffer(this.front_capacity) {
+            Some(buffer) => {
+                let buffer = unsafe { BufferReservation::to_unsafe(buffer) };
+
+                Poll::Ready(ReservedBuffer::new(this.channel.clone(), buffer))
+            }
+            None => {
+                this.channel.buffer_reserve.set_waker(cx.waker());
+
+                Poll::Pending
+            }
+        }
+    }
+}
+
+/// This is a buffer taken from a `Reservation<'_, LocalBufferedChannel<_,_,_>>`
+///
+/// The buffers returned by the implementation of `BufferReserve` need to contain a reservation
+/// to the buffered channel if it is created from a `Reservation`. The implementation of
+/// `TakeBuffer<Reservation<_>>` uses a copy of the `Reservation`, so when a buffer is returned when
+/// it is polled to completion, the compiler requires the reservation to be cloned in order to meed
+/// the lifetime requirements (which is correct as the lifetime of the reservation of the buffered
+/// channel must at least last as long as the buffer created from the channel).
+pub struct ReservedBuffer<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> {
+    source: Reservation<'a, LocalBufferedChannel<CHANNEL_SIZE, B, T>, TASK_COUNT>,
+    buffer: UnsafeBufferReservation<B, CHANNEL_SIZE>,
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> ReservedBuffer<'a, TASK_COUNT, CHANNEL_SIZE, B, T> {
+    fn new<'b>(
+        source: Reservation<'a, LocalBufferedChannel<CHANNEL_SIZE, B, T>, TASK_COUNT>,
+        buffer: UnsafeBufferReservation<B, CHANNEL_SIZE>,
+    ) -> Self {
+        Self { source, buffer }
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> Buffer
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: Buffer,
+{
+    fn with_capacity(_: usize, _: usize) -> Self
+    where
+        Self: Sized,
+    {
+        unimplemented!("with_capacity not implemented for ReservedBuffer")
+    }
+
+    fn clear_with_capacity(&mut self, front: usize, back: usize) {
+        self.buffer.clear_with_capacity(front, back)
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> Deref
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: Deref<Target = [u8]>,
+{
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.buffer.deref()
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> DerefMut
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: DerefMut<Target = [u8]>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buffer.deref_mut()
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> TryExtend<u8>
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: TryExtend<u8>,
+{
+    type Error = B::Error;
+
+    fn try_extend<E>(&mut self, iter: E) -> Result<(), Self::Error>
+    where
+        E: IntoIterator<Item = u8>,
+    {
+        self.buffer.try_extend(iter)
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> TryRemove<u8>
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: TryRemove<u8>,
+{
+    type Error = B::Error;
+    type RemoveIter<'a> = B::RemoveIter<'a> where Self: 'a ;
+
+    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+        self.buffer.try_remove(how_many)
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> TryFrontExtend<u8>
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: TryFrontExtend<u8>,
+{
+    type Error = B::Error;
+
+    fn try_front_extend<E>(&mut self, iter: E) -> Result<(), Self::Error>
+    where
+        E: IntoIterator<Item = u8>,
+    {
+        self.buffer.try_front_extend(iter)
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> TryFrontRemove<u8>
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: TryFrontRemove<u8>,
+{
+    type Error = B::Error;
+    type FrontRemoveIter<'a> = B::FrontRemoveIter<'a> where Self: 'a;
+
+    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+        self.buffer.try_front_remove(how_many)
+    }
+}
+
+pub struct UnsafeReservedBuffer<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> {
+    source: UnsafeReservation<LocalBufferedChannel<CHANNEL_SIZE, B, T>, TASK_COUNT>,
+    buffer: UnsafeBufferReservation<B, CHANNEL_SIZE>,
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> UnsafeReservedBuffer<TASK_COUNT, CHANNEL_SIZE, B, T> {
+    pub(super) unsafe fn from_res(res: ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>) -> Self {
+        let source = Reservation::to_unsafe(res.source);
+        let buffer = res.buffer;
+
+        Self { source, buffer }
+    }
+
+    pub(super) unsafe fn into_res<'a>(self) -> ReservedBuffer<'a, TASK_COUNT, CHANNEL_SIZE, B, T> {
+        let source = UnsafeReservation::rebind(self.source);
+        let buffer = self.buffer;
+
+        ReservedBuffer { source, buffer }
+    }
+}

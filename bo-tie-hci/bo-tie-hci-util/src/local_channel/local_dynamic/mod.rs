@@ -582,7 +582,7 @@ impl ChannelReserve for LocalChannelManager {
             TaskId::Host(HostChannel::Command) => Some(FromInterface::HostCommand(
                 self.dedicated.outgoing.host_command_response.clone(),
             )),
-            TaskId::Host(HostChannel::GeneralEvent) => {
+            TaskId::Host(HostChannel::General) => {
                 Some(FromInterface::HostGeneral(self.dedicated.outgoing.host_general.clone()))
             }
             TaskId::Connection(connection_handle) => {
