@@ -492,7 +492,7 @@ impl Display for QueueBufferError {
 /// exists (a `StackHotel` is safe to move if no `Reservation` exists.
 ///
 /// # Note
-/// This is purpose built for module `local_stack_channel`, so reservations are taken from a
+/// This is purpose built for module `local_stack`, so reservations are taken from a
 /// `StackHotel` wrapped within a `Ref`.
 ///
 /// # implementation
