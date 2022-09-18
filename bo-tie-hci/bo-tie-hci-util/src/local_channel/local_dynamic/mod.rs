@@ -7,12 +7,12 @@
 //!
 //! This is a local channel so it can only be used between async tasks running on the same thread.
 
-mod dyn_buffer;
-
 use super::{
     LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture,
     LocalSendFutureError,
 };
+use crate::de_vec::DeVec;
+use crate::de_vec::{DynBufferReserve, TakeDynReserveFuture};
 use crate::{
     Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
     FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannel, HostChannelEnds, InterfaceReceivers,
@@ -24,8 +24,6 @@ use bo_tie_util::buffer::BufferReserve;
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
 use core::task::{Context, Poll, Waker};
-use dyn_buffer::DeVec;
-use dyn_buffer::{DynBufferReserve, TakeDynReserveFuture};
 
 /// The sender for a local channel
 pub struct LocalChannelSender<T, M>(T)
@@ -557,11 +555,15 @@ impl ChannelReserve for LocalChannelManager {
             receiver: to_new_task_channel.take_receiver().unwrap(),
         };
 
-        let index = self
+        let index = if let Err(index) = self
             .connections
             .borrow()
             .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
-            .expect_err("connection handle already associated to another connection async task");
+        {
+            index
+        } else {
+            return Err(LocalChannelManagerError::ChannelIdAlreadyUsed);
+        };
 
         let channel_data = ConnectionData {
             sender_channel: to_new_task_channel,
@@ -631,6 +633,9 @@ impl Display for LocalChannelManagerError {
         }
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for LocalChannelManagerError {}
 
 struct HostDynChannelEnds {
     command_channel: LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
