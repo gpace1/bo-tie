@@ -1141,7 +1141,7 @@ pub trait Sender {
     where
         Self: 'a;
 
-    fn send(&self, t: Self::Message) -> Self::SendFuture<'_>;
+    fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_>;
 }
 
 /// The Receiver trait
@@ -1232,7 +1232,7 @@ pub trait Receiver {
 
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>>;
 
-    fn recv(&self) -> Self::ReceiveFuture<'_>;
+    fn recv(&mut self) -> Self::ReceiveFuture<'_>;
 }
 
 /// Extension method to trait [`Receiver`]
@@ -1297,12 +1297,21 @@ impl<R: Receiver> Receiver for PeekableReceiver<R> {
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
-        PeekableReceiveFuture(self, None)
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
+        match self.peeked.take() {
+            msg @ Some(_) => PeekableReceiveFuture::Peeked(msg),
+            None => PeekableReceiveFuture::NextRecv(self.receiver.recv()),
+        }
     }
 }
 
-struct PeekableReceiveFuture<'a, R: Receiver>(&'a PeekableReceiver<R>, Option<R::ReceiveFuture<'a>>);
+/// The receive future for [`PeekableReceiver`]
+///
+/// A future for either returning the peeked value or awaiting the next value to be received.
+enum PeekableReceiveFuture<'a, R: Receiver + 'a> {
+    Peeked(Option<R::Message>),
+    NextRecv(R::ReceiveFuture<'a>),
+}
 
 impl<R: Receiver> Future for PeekableReceiveFuture<'_, R> {
     type Output = Option<R::Message>;
@@ -1310,12 +1319,9 @@ impl<R: Receiver> Future for PeekableReceiveFuture<'_, R> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
 
-        loop {
-            match (this.0.peeked.take(), &mut this.1) {
-                (None, None) => this.1 = Some(this.0.receiver.recv()),
-                (Some(message), _) => return Poll::Ready(Some(message)),
-                (None, Some(rx)) => return unsafe { Pin::new_unchecked(rx).poll(cx) },
-            }
+        match this {
+            PeekableReceiveFuture::Peeked(msg) => Poll::Ready(msg.take()),
+            PeekableReceiveFuture::NextRecv(rx) => unsafe { Pin::new_unchecked(rx).poll(cx) },
         }
     }
 }

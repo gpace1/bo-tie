@@ -92,7 +92,7 @@ where
     type Message = M;
     type SendFuture<'a> = LocalSendFuture<'a, Self, M> where Self: 'a;
 
-    fn send<'a>(&'a self, t: Self::Message) -> Self::SendFuture<'a> {
+    fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture::new(self, t)
     }
 }
@@ -179,7 +179,7 @@ where
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }

@@ -291,7 +291,7 @@ where
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }
@@ -320,7 +320,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }
@@ -349,7 +349,7 @@ impl<'z, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Receiver
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }
@@ -378,7 +378,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }
@@ -407,7 +407,7 @@ impl<'z, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Receiver
         }
     }
 
-    fn recv(&self) -> Self::ReceiveFuture<'_> {
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
         LocalReceiverFuture(self)
     }
 }

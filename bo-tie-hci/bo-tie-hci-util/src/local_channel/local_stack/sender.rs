@@ -277,7 +277,7 @@ where
     type Message = ToHostCommandIntraMessage;
     type SendFuture<'a> = LocalSendFuture<'a, Self, Self::Message> where Self: 'a;
 
-    fn send(&self, message: Self::Message) -> Self::SendFuture<'_> {
+    fn send(&mut self, message: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture {
             packet: Some(message),
             local_sender: self,
@@ -296,7 +296,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     type Message = ToHostGenMsg<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
     type SendFuture<'a> = LocalSendFuture<'a, Self, Self::Message> where Self: 'a;
 
-    fn send(&self, message: Self::Message) -> Self::SendFuture<'_> {
+    fn send(&mut self, message: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture {
             packet: Some(message),
             local_sender: self,
@@ -315,7 +315,7 @@ impl<'z, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Sender
     type Message = FromHostMsg<'z, CHANNEL_SIZE, BUFFER_SIZE>;
     type SendFuture<'a> = LocalSendFuture<'a, Self, Self::Message> where Self: 'a;
 
-    fn send(&self, message: Self::Message) -> Self::SendFuture<'_> {
+    fn send(&mut self, message: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture {
             packet: Some(message),
             local_sender: self,
@@ -334,7 +334,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     type Message = ToConnMsg<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
     type SendFuture<'a> = LocalSendFuture<'a, Self, Self::Message> where Self: 'a;
 
-    fn send(&self, message: Self::Message) -> Self::SendFuture<'_> {
+    fn send(&mut self, message: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture {
             packet: Some(message),
             local_sender: self,
@@ -353,7 +353,7 @@ impl<'z, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Sender
     type Message = FromConnMsg<'z, CHANNEL_SIZE, BUFFER_SIZE>;
     type SendFuture<'a> = LocalSendFuture<'a, Self, Self::Message> where Self: 'a;
 
-    fn send(&self, message: Self::Message) -> Self::SendFuture<'_> {
+    fn send(&mut self, message: Self::Message) -> Self::SendFuture<'_> {
         LocalSendFuture {
             packet: Some(message),
             local_sender: self,
