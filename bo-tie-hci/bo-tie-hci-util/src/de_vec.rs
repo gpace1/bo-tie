@@ -1,4 +1,6 @@
-//! Buffers that are dynamically allocated
+//! A dynamically allocated double ended vector
+//!
+//! See the doc for [`DeVec`] for details.
 
 use alloc::vec::Vec;
 use core::future::Future;
@@ -8,24 +10,20 @@ use core::task::{Context, Poll};
 /// A very basic double ended vector
 ///
 /// This is a vector that also able to add and remove items from the front. This is not a circle
-/// buffer like [`VecDeque`](std::collections::VecDeque), so it can be de-referenced to a slice
-/// or a [`Vec`](std::vector::Vec). A `DeVec` has a 'reserve' space in both the front and back, so
-/// items can be pushed to the front and back.
-///
-/// ## Usage
-/// This is not an ideal implementation of a double ended vector. It is intended for usage with this
-/// library and really needs to be improved if it is to be publicised. Its main purposes is to be
-/// used for unwrapping protocol data of protocol data. Protocols usually contain a header followed
-/// by a payload. Removing the header is a problem with a `Vec` as it must shift the payload, while
-/// a `VecDequeu` cannot be dereference to a `&[u8]` (which is required by this library). With a
-/// `DeVec` the header of a protocol can be 'popped' off to leave the payload without having to move
-/// the payload in memory and it also implements dereferencing to a `&[u8]` .
+/// buffer like [`VecDeque`], so it can be de-referenced to a slice or a [`Vec`]. A `DeVec` has a
+/// 'reserve' space in both the front and back, so items can be pushed to the front and back. This
+/// is not an ideal implementation of a double ended vector. It is intended for usage with this
+/// library where the front capacity is known upon creation or erasure of a `DeVec`.
 ///
 /// ## Front push
 /// A `DeVec` may only push if there is front reserve space as a `DeVec` does not reallocate if the
 /// front reserve is empty. This is mainly used for unwrapping protocol packets from protocol
 /// packets within this library so there is not much need for pushing with the exception of
 /// 'restoring' a protocol's header.
+///
+/// [`VecDeque`]: std::collections::VecDeque,
+/// [`Vec`]: std::vector::Vec
+/// [`Deref`]: std::ops::Deref
 pub struct DeVec<T> {
     start: usize,
     vec: Vec<T>,

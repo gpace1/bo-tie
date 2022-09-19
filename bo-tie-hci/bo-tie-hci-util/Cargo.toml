@@ -7,9 +7,12 @@ edition = "2021"
 bo-tie-macros = { path = "../../bo-tie-macros" }
 bo-tie-util = { path = "../../bo-tie-util" }
 bo-tie-gap = { path = "../../bo-tie-host/bo-tie-gap", optional = true }
+tokio = { version = "1.0", features = ["sync"], optional = true }
+futures = { version = "0.3", optional = true }
+async-std = { version = "1", optional = true }
 
 [features]
 default = ["gap"]
-std = []
+std = ["tokio", "futures", "async-std"]
 gap = [ "bo-tie-gap" ]
 unstable = []

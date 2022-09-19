@@ -1,13 +1,74 @@
 //! Common items for the host controller interface
 //!
 //! This crate carries the parts of the HCI that are used by multiple HCI crates.
+//!
+//! # Async Tasks
+//! The Host Controller Interface is broken up into three kinds of async tasks.
+//!
+//! ### Interface Async Task
+//! The interface async task is used for direct interaction between the interface and the host. Its
+//! job is to perform flow control to the Controller and distribute messages from the controller to
+//! the other async tasks. All messages to and from the Controller must go through the interface
+//! task. Whenever another task is said to 'send/receive data from the Controller' in reality it is
+//! sending or receiving data from the interface async task.
+//!
+//! ### Host Async Task
+//! This task is used for sending HCI commands and processing events from the Controller. There
+//! always must be a host async task "alive" for the HCI to continue running. If the host is dropped
+//! then the interface async task will also exit.
+//!
+//! ### Connection Async Task
+//! Unlike the interface and host async tasks, there can be any number of connection async tasks,
+//! limited to the number of connections the Controller can support. Connection tasks are created
+//! from the host async task after the reception of one of the connection complete events.
+//!
+//! # Channels
+//! Channels are used for communication between the async tasks that make up the HCI. When creating
+//! the HCI the user of the library will either use their another library's channels or create a
+//! local HCI that uses local channels.
+//!
+//! ## Implemented Channels
+//! Channels from another library can be used with the implementation of the HCI. If an async
+//! executor is used that requires send safety for async tasks, then custom implemented channels
+//! must be used.
+//!
+//! ## Local Channels
+//! "local" is used to mean that the channels are are not `Send` safe. In fact, when a "local" HCI
+//! is created, (one of) the reason's why it is not `Send` safe is because the channels. "local"
+//! channels are quite lightweight and have no direct interaction with the operating system. They
+//! are implemented by `bo-tie` and so no external channel implementation is required for them to be
+//! used.
+//!
+//! ### Stack Allocated
+//! Note: currently unstable as `bo-tie` full stack only allocation is not implemented
+//!
+//! In environments where dynamically allocated memory cannot be done, [`local_stack`] channels can
+//! be used.
+//!
+//! # Buffering
+//! Double ended vectors are used for buffering bytes transferred over the HCI. If user selected
+//! channel or a local dynamic channel is used then [`DeVec`] is used as the buffering type. When a
+//! stack local channel is chosen then the buffering type is [`DeLinearBuffer`] (but stack local
+//! channels are still experimental).
+//!
+//! The need for a double ended vector comes from the architecture of having protocol layers in a
+//! stack arrangement. Since the protocols of Bluetooth use packets that contain a header followed
+//! by a payload, the final packet that is sent ends up being a nesting doll of different protocols.
+//! Luckily for Bluetooth, the size of all the header can be known from at the top layer protocol.
+//!
+//! When a `DeVec` is used as a buffer at the top layer, it is created with a capacity equal to the
+//! sum of the header sizes of all layers. Headers are then extended to the *front* of the buffer as
+//! it is passed down the protocol layers. When a packet is received from another device it is put
+//! within it's entirety into a `DeVec`. As it is passed up the protocol layers the headers are
+//! popped off the front.  
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
-extern crate core;
 
+pub mod channel;
+mod de_vec;
 pub mod events;
 pub mod le;
 pub mod local_channel;
@@ -852,7 +913,7 @@ pub struct FlowCtrlReceiver<H: Receiver, R: Receiver> {
 
 impl<H: Receiver, R: Receiver> FlowCtrlReceiver<H, R> {
     /// Create a new `FlowCtrlReceiver`
-    pub fn new(receivers: InterfaceReceivers<H, R>) -> Self {
+    fn new(receivers: InterfaceReceivers<H, R>) -> Self {
         let cmd_receiver = receivers.cmd_receiver.peekable();
         let acl_receiver = receivers.acl_receiver.peekable();
         let sco_receiver = receivers.sco_receiver.peekable();
