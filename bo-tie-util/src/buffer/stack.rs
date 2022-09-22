@@ -72,6 +72,17 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
         }
     }
 
+    /// Try to push an item to the buffer
+    pub fn try_push(&mut self, t: T) -> Result<(), LinearBufferError> {
+        if self.count != SIZE {
+            self.buffer[self.count].write(t);
+            self.count += 1;
+            Ok(())
+        } else {
+            Err(LinearBufferError::BufferFull)
+        }
+    }
+
     /// Insert an item
     ///
     /// Inserts an item into the buffer shifting everything past the index right by one
@@ -102,6 +113,11 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
         } else {
             Err(LinearBufferError::IndexOutOfRange)
         }
+    }
+
+    /// Get the length
+    pub fn len(&self) -> usize {
+        self.count
     }
 }
 
