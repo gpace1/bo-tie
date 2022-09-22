@@ -76,8 +76,13 @@ extern crate alloc;
 pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
-use bo_tie_hci_util::{FlowControlId, HciPacket, HciPacketType, IntraMessageType, Sender, TaskId};
-use bo_tie_util::buffer::{BufferReserve, TryExtend};
+use bo_tie_hci_util::{
+    BufferReserve, FlowControlId, FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HciPacket,
+    HciPacketType, HostChannel, Sender, TaskId, TaskSource, ToConnectionIntraMessage, ToHostCommandIntraMessage,
+    ToHostGeneralIntraMessage,
+};
+use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_util::buffer::TryExtend;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
@@ -92,61 +97,17 @@ pub struct Interface<R> {
     channel_reserve: core::cell::RefCell<R>,
 }
 
-impl Interface<local_channel::local_dynamic_channel::LocalChannelManager> {
-    /// Create a new local `Interface`
-    ///
-    /// This host controller interface is local to a single thread. The interface, host, and
-    /// connections async tasks must run on an local executor or other type of executor that does
-    /// not require async tasks to be thread safe.
-    ///
-    /// # Note
-    /// A local interface uses dynamic memory allocation for buffering and messages between async
-    /// tasks. A pure `no_std` implementation can be created with
-    /// [`new_local_static`](Interface::new_local_static).
-    ///
-    /// # Panic
-    /// Input `task_count` must be greater or equal to one.
-    pub fn new_local(task_count: usize) -> Self {
-        let channel_reserve = core::cell::RefCell::new(local_channel::local_dynamic_channel::LocalChannelManager::new(
-            task_count,
-        ));
-
-        Interface { channel_reserve }
-    }
-}
-
-#[cfg(feature = "unstable")]
-impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
-    Interface<local_channel::local_stack_channel::LocalStackChannelReserve<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>
-{
-    /// Create a statically sized local interface
-    ///
-    /// This host controller interface is local to a single thread. The interface, host, and
-    /// connections async tasks must run on an local executor or other type of executor that does
-    /// not require async tasks to be thread safe.
-    ///
-    /// The number of channels is defined by the constant `CHANNEL_COUNT`. The interface task has
-    /// two channels to ever other task, this constant must be equal to two times the number of
-    /// connection async tasks plus two for the channels to the host async task.
-    pub fn new_stack_local(
-        channel_reserve_data: &'a local_channel::local_stack_channel::LocalStackChannelReserveData<
-            TASK_COUNT,
-            CHANNEL_SIZE,
-            BUFFER_SIZE,
-        >,
-    ) -> Self {
-        let channel_reserve = core::cell::RefCell::new(
-            local_channel::local_stack_channel::LocalStackChannelReserve::new(channel_reserve_data),
-        );
-
-        Interface { channel_reserve }
-    }
-}
-
 impl<R> Interface<R>
 where
     R: ChannelReserve,
 {
+    /// Create a new interface
+    pub fn new(channel_reserve: R) -> Self {
+        let channel_reserve = core::cell::RefCell::new(channel_reserve);
+
+        Interface { channel_reserve }
+    }
+
     /// Send a complete HCI packet from the controller to the Host
     ///
     /// After the interface driver converts an interface packet into a *complete* [`HciPacket`], it
@@ -264,11 +225,41 @@ where
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
     pub async fn down_send(&mut self) -> Option<HciPacket<impl Deref<Target = [u8]>>> {
+        enum Slice<A, B> {
+            Cmd(A),
+            Data(B),
+        }
+
+        impl<A, B> Deref for Slice<A, B>
+        where
+            A: Deref<Target = [u8]>,
+            B: Deref<Target = [u8]>,
+        {
+            type Target = [u8];
+
+            fn deref(&self) -> &Self::Target {
+                match self {
+                    Slice::Cmd(a) => a.deref(),
+                    Slice::Data(b) => b.deref(),
+                }
+            }
+        }
+
         self.channel_reserve
             .get_mut()
             .receive_next()
             .await
-            .map(|intra_message| intra_message.into_hci_packet())
+            .map(|intra_message| match intra_message {
+                TaskSource::Host(message) => match message {
+                    FromHostIntraMessage::Command(data) => HciPacket::Command(Slice::Cmd(data)),
+                },
+                TaskSource::Connection(message) => match message {
+                    FromConnectionIntraMessage::Acl(data) => HciPacket::Acl(Slice::Data(data)),
+                    FromConnectionIntraMessage::Sco(data) => HciPacket::Sco(Slice::Data(data)),
+                    FromConnectionIntraMessage::Iso(data) => HciPacket::Iso(Slice::Data(data)),
+                    FromConnectionIntraMessage::Disconnect(_) => unreachable!(),
+                },
+            })
     }
 
     /// Parse a command complete event
@@ -316,13 +307,10 @@ where
         for ncp in ncp_data {
             if 0 != ncp.completed_packets {
                 let how_many: usize = ncp.completed_packets.into();
-
-                let task_id = TaskId::Connection(ncp.connection_handle);
-
                 let fc_id = self
                     .channel_reserve
                     .borrow()
-                    .get_flow_control_id(task_id)
+                    .get_flow_control_id(ncp.connection_handle)
                     .ok_or(SendError::<R>::UnknownConnectionHandle(ncp.connection_handle))?;
 
                 match fc_id {
@@ -398,12 +386,10 @@ where
 
                 let how_many: usize = block_size * <usize>::from(ncdb.completed_blocks);
 
-                let task_id = TaskId::Connection(ncdb.connection_handle);
-
                 let fc_id = self
                     .channel_reserve
                     .borrow()
-                    .get_flow_control_id(task_id)
+                    .get_flow_control_id(ncdb.connection_handle)
                     .ok_or(SendError::<R>::UnknownConnectionHandle(ncdb.connection_handle))?;
 
                 match fc_id {
@@ -423,70 +409,69 @@ where
     ///
     /// This creates the channels ends required for creating a new connection async task and sends
     /// this information within a [`IntraMessageType::Connection`] message to the host async task.
-    pub async fn create_connection(&self, task_id: TaskId, flow_control_id: FlowControlId) -> Result<(), SendError<R>> {
+    pub async fn create_connection(
+        &self,
+        handle: ConnectionHandle,
+        flow_control_id: FlowControlId,
+    ) -> Result<(), SendError<R>> {
         let channel_ends = self
             .channel_reserve
             .borrow()
-            .add_new_task(task_id, flow_control_id)
+            .add_new_connection(handle, flow_control_id)
             .map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
 
-        let message = IntraMessageType::Connection(channel_ends).into();
+        let message = ToHostGeneralIntraMessage::NewConnection(channel_ends);
 
-        self.channel_reserve
+        if let FromInterface::HostGeneral(mut sender) = self
+            .channel_reserve
             .borrow()
-            .get_sender(TaskId::Host)
+            .get_sender(TaskId::Host(HostChannel::General))
             .ok_or(SendError::<R>::HostClosed)?
-            .send(message)
-            .await
-            .map_err(|e| SendError::<R>::ChannelError(e))
+        {
+            sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
+        } else {
+            Err(SendError::<R>::InvalidChannel)
+        }
     }
 
     pub async fn parse_connection_complete_event(
         &self,
         data: &events::parameters::ConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        let task_id = TaskId::Connection(data.connection_handle);
-
         let flow_control_id = match data.link_type {
             events::parameters::LinkType::AclConnection => FlowControlId::Acl,
             events::parameters::LinkType::ScoConnection => FlowControlId::Sco,
             events::parameters::LinkType::EscoConnection => unreachable!(),
         };
 
-        self.create_connection(task_id, flow_control_id).await
+        self.create_connection(data.connection_handle, flow_control_id).await
     }
 
     pub async fn parse_synchronous_connection_complete_event(
         &self,
         data: &events::parameters::SynchronousConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        let task_id = TaskId::Connection(data.connection_handle);
-
         let flow_control_id = FlowControlId::Sco;
 
-        self.create_connection(task_id, flow_control_id).await
+        self.create_connection(data.connection_handle, flow_control_id).await
     }
 
     pub async fn parse_le_connection_complete_event(
         &self,
         data: &events::parameters::LeConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        let task_id = TaskId::Connection(data.connection_handle);
-
         let flow_control_id = FlowControlId::Acl;
 
-        self.create_connection(task_id, flow_control_id).await
+        self.create_connection(data.connection_handle, flow_control_id).await
     }
 
     pub async fn parse_le_enhanced_connection_complete_event(
         &self,
         data: &events::parameters::LeEnhancedConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        let task_id = TaskId::Connection(data.connection_handle);
-
         let flow_control_id = FlowControlId::Acl;
 
-        self.create_connection(task_id, flow_control_id).await
+        self.create_connection(data.connection_handle, flow_control_id).await
     }
 
     pub async fn parse_disconnect(
@@ -497,16 +482,20 @@ where
 
         let error = bo_tie_util::errors::Error::from(disconnect.reason);
 
-        if let Some(sender) = self.channel_reserve.borrow().get_sender(task_id) {
-            sender
-                .send(IntraMessageType::Disconnect(error).into())
-                .await
-                .map_err(|e| SendError::<R>::ChannelError(e))?;
+        if let Some(source) = self.channel_reserve.borrow().get_sender(task_id) {
+            if let FromInterface::Connection(mut sender) = source {
+                sender
+                    .send(ToConnectionIntraMessage::Disconnect(error).into())
+                    .await
+                    .map_err(|e| SendError::<R>::SenderError(e))?;
 
-            self.channel_reserve
-                .borrow_mut()
-                .try_remove(task_id)
-                .map_err(|e| SendError::<R>::ReserveError(e))
+                self.channel_reserve
+                    .borrow_mut()
+                    .try_remove(disconnect.connection_handle)
+                    .map_err(|e| SendError::<R>::ReserveError(e))
+            } else {
+                Err(SendError::<R>::InvalidChannel)
+            }
         } else {
             Ok(())
         }
@@ -565,20 +554,54 @@ where
     /// The events *Number of Completed Packets*, *Number of Completed Data Blocks*, and when either
     /// *Command Complete* and *Command Status* does not contain a command code are not sent to the
     /// host. All the information within those events is only relevant to the interface async task.
-    async fn maybe_send_event(&mut self, packet: &[u8]) -> Result<(), SendError<R>> {
-        if let Some(events_data) = self.parse_event(&packet).await? {
-            let message = IntraMessageType::Event(events_data).into();
+    async fn maybe_send_event(&self, packet: &[u8]) -> Result<(), SendError<R>> {
+        use bo_tie_hci_util::events::EventsData;
 
-            self.channel_reserve
-                .borrow()
-                .get_sender(TaskId::Host)
-                .ok_or(SendError::<R>::HostClosed)?
-                .send(message)
-                .await
-                .map_err(|e| SendError::<R>::ChannelError(e))?
+        match self.parse_event(&packet).await? {
+            Some(EventsData::CommandStatus(status)) => {
+                let message = ToHostCommandIntraMessage::CommandStatus(status);
+
+                if let FromInterface::HostCommand(mut sender) = self
+                    .channel_reserve
+                    .borrow()
+                    .get_sender(TaskId::Host(HostChannel::Command))
+                    .ok_or(SendError::<R>::HostClosed)?
+                {
+                    sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
+                } else {
+                    Err(SendError::<R>::InvalidChannel)
+                }
+            }
+            Some(EventsData::CommandComplete(complete)) => {
+                let message = ToHostCommandIntraMessage::CommandComplete(complete);
+
+                if let FromInterface::HostCommand(mut sender) = self
+                    .channel_reserve
+                    .borrow()
+                    .get_sender(TaskId::Host(HostChannel::Command))
+                    .ok_or(SendError::<R>::HostClosed)?
+                {
+                    sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
+                } else {
+                    Err(SendError::<R>::InvalidChannel)
+                }
+            }
+            Some(event) => {
+                let message = ToHostGeneralIntraMessage::Event(event);
+
+                if let FromInterface::HostGeneral(mut sender) = self
+                    .channel_reserve
+                    .borrow()
+                    .get_sender(TaskId::Host(HostChannel::Command))
+                    .ok_or(SendError::<R>::HostClosed)?
+                {
+                    sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
+                } else {
+                    Err(SendError::<R>::InvalidChannel)
+                }
+            }
+            None => Ok(()),
         }
-
-        Ok(())
     }
 
     async fn send_acl(&mut self, packet: &[u8]) -> Result<(), SendError<R>> {
@@ -596,53 +619,58 @@ where
 
         let reserve_ref = self.channel_reserve.borrow();
 
-        let (mut buffer, sender) = reserve_ref
-            .prepare_buffer_msg(TaskId::Connection(connection_handle), 0)
+        let (mut buffer, mut sender) = reserve_ref
+            .prepare_data_message(connection_handle, 0)
             .ok_or(SendError::<R>::HostClosed)?
             .await;
 
         buffer
             .try_extend(packet.iter().cloned())
-            .map_err(|e| SendError::<R>::BufferExtend(e))?;
+            .map_err(|e| SendError::<R>::BufferExtendOfToConnection(e))?;
 
-        let message = IntraMessageType::Acl(buffer).into();
+        let message = ToConnectionIntraMessage::Acl(buffer).into();
 
-        sender
-            .send(message)
-            .await
-            .map_err(|e| SendError::<R>::ChannelError(e).into())
+        sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
     }
 }
 
 #[derive(Debug)]
-pub enum SendErrorReason<E, C, B> {
+pub enum SendErrorReason<E, C, B1, B2, B3> {
     ReserveError(E),
-    ChannelError(C),
-    BufferExtend(B),
+    SenderError(C),
+    BufferExtendOfHost(B1),
+    BufferExtendOfToConnection(B2),
+    BufferExtendOfFromConnection(B3),
     Command,
     InvalidHciPacket(HciPacketType),
     InvalidHciEventData(events::EventError),
     InvalidConnectionHandle,
+    InvalidChannel,
     UnknownConnectionHandle(ConnectionHandle),
     HostClosed,
     Unimplemented(&'static str),
 }
 
-impl<E, C, B> Display for SendErrorReason<E, C, B>
+impl<E, C, B1, B2, B3> Display for SendErrorReason<E, C, B1, B2, B3>
 where
     E: Display,
     C: Display,
-    B: Display,
+    B1: Display,
+    B2: Display,
+    B3: Display,
 {
     fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
         match self {
             SendErrorReason::ReserveError(e) => Display::fmt(e, f),
-            SendErrorReason::ChannelError(c) => Display::fmt(c, f),
-            SendErrorReason::BufferExtend(b) => Display::fmt(b, f),
+            SendErrorReason::SenderError(c) => Display::fmt(c, f),
+            SendErrorReason::BufferExtendOfHost(b) => Display::fmt(b, f),
+            SendErrorReason::BufferExtendOfToConnection(b) => Display::fmt(b, f),
+            SendErrorReason::BufferExtendOfFromConnection(b) => Display::fmt(b, f),
             SendErrorReason::Command => f.write_str("cannot send command to host"),
             SendErrorReason::InvalidHciPacket(packet) => write!(f, "Invalid packet {packet}"),
             SendErrorReason::InvalidHciEventData(e) => Display::fmt(e, f),
             SendErrorReason::InvalidConnectionHandle => f.write_str("invalid connection handle"),
+            SendErrorReason::InvalidChannel => f.write_str("channel reserve gave an invalid channel"),
             SendErrorReason::UnknownConnectionHandle(h) => write!(f, "no connection for handle: {h}"),
             SendErrorReason::HostClosed => f.write_str("Host task is closed"),
             SendErrorReason::Unimplemented(reason) => f.write_str(reason),
@@ -650,39 +678,17 @@ where
     }
 }
 
-impl<E, C, B> From<MessageError<B>> for SendErrorReason<E, C, B> {
-    fn from(me: MessageError<B>) -> Self {
-        match me {
-            MessageError::BufferExtend(e) => SendErrorReason::BufferExtend(e),
-            MessageError::HostClosed => SendErrorReason::HostClosed,
-            MessageError::InvalidConnectionHandle => SendErrorReason::InvalidConnectionHandle,
-            MessageError::UnknownConnectionHandle(handle) => SendErrorReason::UnknownConnectionHandle(handle),
-        }
-    }
-}
+#[cfg(feature = "std")]
+impl<E, C, B1, B2, B3> std::error::Error for SendErrorReason<E, C, B1, B2, B3> where Self: Debug + Display {}
 
 /// Error returned by operations of [`Interface`] or [`BufferedUpSend`]
 pub type SendError<R> = SendErrorReason<
     <R as ChannelReserve>::Error,
     <R as ChannelReserve>::SenderError,
-    <R as ChannelReserve>::TryExtendError,
+    <<<R as ChannelReserve>::FromHostChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error,
+    <<<R as ChannelReserve>::ToConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error,
+    <<<R as ChannelReserve>::FromConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error,
 >;
-
-enum MessageError<B> {
-    BufferExtend(B),
-    HostClosed,
-    InvalidConnectionHandle,
-    UnknownConnectionHandle(ConnectionHandle),
-}
-
-impl<B> From<TaskId> for MessageError<B> {
-    fn from(task_id: TaskId) -> Self {
-        match task_id {
-            TaskId::Host => MessageError::HostClosed,
-            TaskId::Connection(handle) => MessageError::UnknownConnectionHandle(handle),
-        }
-    }
-}
 
 /// Type for method `maybe_send`
 ///
@@ -697,31 +703,9 @@ pub struct BufferedUpSend<'a, R: ChannelReserve> {
     packet_type: HciPacketType,
     packet_len: core::cell::Cell<Option<usize>>,
     task_id_state: core::cell::RefCell<BufferedTaskId>,
-    buffer: core::cell::RefCell<Option<R::ToBuffer>>,
+    buffer: core::cell::RefCell<Option<BufferedBuffer<R>>>,
 }
 
-/// Get the channel
-///
-/// # Error
-/// An error is returned if the channel no longer exists
-///
-/// # Panic
-/// This will panic if `self.task_id_state` cannot be converted into a `TaskId`.
-macro_rules! get_channel {
-    ($buffered_send:expr, $R:ty) => {{
-        let task_id = $buffered_send.task_id_state.borrow().try_into_task_id().unwrap();
-
-        let channel: Result<<$R>::ToChannel, MessageError<<$R>::TryExtendError>> = $buffered_send
-            .interface
-            .channel_reserve
-            .borrow()
-            .get(task_id)
-            .map(|channel| channel)
-            .ok_or(MessageError::<<$R>::TryExtendError>::from(task_id));
-
-        channel
-    }};
-}
 impl<'a, R> BufferedUpSend<'a, R>
 where
     R: ChannelReserve,
@@ -737,51 +721,35 @@ where
         }
     }
 
-    /// Buffer the bytes before the *parameter length* field in the Command packet or Event packet
+    /// Buffer the initial event byte
     ///
-    /// This method is called when member `packet_len` is still `None`. It will set `packet_len` to
-    /// a value once three bytes of the Command packet or two bytes of the Event packet are
-    /// processed.
+    /// Events go to different channels based on the kind of event. Command Complete/Status events
+    /// go to the channel for command responses, all other events (except for those that never make
+    /// it to the host async task) go to to the general events channel.
     #[inline]
-    async fn add_initial_command_or_event_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
-        let packet_type = self.packet_type;
+    async fn add_initial_event_byte(&self, byte: u8) -> Result<(), SendError<R>> {
+        use events::Events::{CommandComplete, CommandStatus};
 
-        let mut buffer_borrow = Some(self.buffer.borrow_mut());
+        let mut buffer_borrow = self.buffer.borrow_mut();
 
-        let prepare_send;
+        if let Some(buffered) = buffer_borrow.as_mut() {
+            buffered.try_push(byte)?;
 
-        if let Some(ref mut ps) = **buffer_borrow.as_mut().unwrap() {
-            prepare_send = ps;
+            if 2 == buffered.len() {
+                self.packet_len.set(Some(2usize + buffered[1] as usize));
+            }
         } else {
-            buffer_borrow.take();
+            drop(buffer_borrow);
 
-            self.task_id_state.replace(BufferedTaskId::Host);
-
-            let buffer = get_channel!(self, R)?.take(None).await;
-
-            self.buffer.replace(Some(buffer));
-
-            buffer_borrow = Some(self.buffer.borrow_mut());
-
-            prepare_send = buffer_borrow.as_mut().unwrap().as_mut().unwrap();
-        }
-
-        prepare_send
-            .try_extend_one(byte)
-            .map_err(|e| MessageError::BufferExtend(e))?;
-
-        match packet_type {
-            HciPacketType::Command => {
-                if 3 == prepare_send.len() {
-                    self.packet_len.set(Some(3usize + prepare_send[2] as usize));
-                }
+            if CommandComplete.get_event_code() == byte || CommandStatus.get_event_code() == byte {
+                self.task_id_state.replace(BufferedTaskId::Host(HostChannel::Command));
+            } else {
+                self.task_id_state.replace(BufferedTaskId::Host(HostChannel::General));
             }
-            HciPacketType::Event => {
-                if 2 == prepare_send.len() {
-                    self.packet_len.set(Some(2usize + prepare_send[1] as usize));
-                }
-            }
-            HciPacketType::Acl | HciPacketType::Sco | HciPacketType::Iso => unreachable!(),
+
+            self.buffer.replace(Some(BufferedBuffer::Event(LinearBuffer::new())));
+
+            self.buffer.borrow_mut().as_mut().unwrap().try_push(byte)?;
         }
 
         Ok(())
@@ -793,48 +761,55 @@ where
     /// starting at the byte after. This is for adding bytes to the intra message buffer until the
     /// length bytes are added to the buffer. Once the length is known the member field `packet_len`
     /// will be set and this method cannot be called again.
-    async fn add_initial_data_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_data_byte(&self, byte: u8) -> Result<(), SendError<R>> {
         let mut buffer_borrow = self.buffer.borrow_mut();
 
-        match *buffer_borrow {
+        match buffer_borrow.as_mut() {
             None => {
+                drop(buffer_borrow);
+
                 let opt_handle = self
                     .task_id_state
                     .borrow_mut()
                     .add_byte(byte)
-                    .map_err(|_| MessageError::InvalidConnectionHandle)?;
+                    .map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
 
                 if let Some(handle) = opt_handle {
-                    drop(buffer_borrow);
+                    let buffer = if let FromInterface::Connection(channel) = self
+                        .interface
+                        .channel_reserve
+                        .borrow()
+                        .get_channel(TaskId::Connection(handle))
+                        .ok_or(SendError::<R>::UnknownConnectionHandle(handle))?
+                    {
+                        channel.take(None).await
+                    } else {
+                        return Err(SendError::<R>::InvalidChannel);
+                    };
 
-                    let buffer = get_channel!(self, R)?.take(None).await;
-
-                    self.buffer.replace(Some(buffer));
+                    self.buffer.replace(Some(BufferedBuffer::ToConnection(buffer)));
 
                     self.buffer
                         .borrow_mut()
                         .as_mut()
                         .unwrap()
-                        .try_extend(handle.get_raw_handle().to_le_bytes())
-                        .map_err(|e| MessageError::BufferExtend(e))?;
+                        .try_extend(handle.get_raw_handle().to_le_bytes())?;
                 }
             }
-            Some(ref mut prepare_send) => {
-                prepare_send
-                    .try_extend_one(byte)
-                    .map_err(|e| MessageError::BufferExtend(e))?;
+            Some(buffered) => {
+                buffered.try_push(byte)?;
 
                 match self.packet_type {
                     HciPacketType::Acl => {
-                        if 4 == prepare_send.len() {
-                            let len = <u16>::from_le_bytes([prepare_send[2], prepare_send[3]]);
+                        if 4 == buffered.len() {
+                            let len = <u16>::from_le_bytes([buffered[2], buffered[3]]);
 
                             self.packet_len.set(Some(4usize + len as usize));
                         }
                     }
                     HciPacketType::Iso => {
-                        if 4 == prepare_send.len() {
-                            let len_bytes = <u16>::from_le_bytes([prepare_send[2], prepare_send[3]]);
+                        if 4 == buffered.len() {
+                            let len_bytes = <u16>::from_le_bytes([buffered[2], buffered[3]]);
 
                             let len = len_bytes & 0x3FFF;
 
@@ -843,9 +818,10 @@ where
                     }
                     HciPacketType::Sco => {
                         // There is no len check because checking
-                        // if the len is 3 is trivial
+                        // if the len is 3 is trivial for this
+                        // algorithm
 
-                        let len = prepare_send[2];
+                        let len = buffered[2];
 
                         self.packet_len.set(Some(3usize + len as usize));
                     }
@@ -862,12 +838,12 @@ where
     /// These are bytes that are added before the length field has been buffered. Essentially this
     /// is called when `packet_len` is `None`.
     #[inline]
-    async fn add_initial_byte(&self, byte: u8) -> Result<(), MessageError<R::TryExtendError>> {
+    async fn add_initial_byte(&self, byte: u8) -> Result<(), SendError<R>> {
         match self.packet_type {
-            HciPacketType::Command => self.add_initial_command_or_event_byte(byte).await,
+            HciPacketType::Command => Err(SendError::<R>::InvalidHciPacket(HciPacketType::Command)),
             HciPacketType::Acl => self.add_initial_data_byte(byte).await,
             HciPacketType::Sco => self.add_initial_data_byte(byte).await,
-            HciPacketType::Event => self.add_initial_command_or_event_byte(byte).await,
+            HciPacketType::Event => self.add_initial_event_byte(byte).await,
             HciPacketType::Iso => self.add_initial_data_byte(byte).await,
         }
     }
@@ -902,6 +878,8 @@ where
     /// # Error
     /// An error is returned if this `BufferedUpSend` already has a complete HCI Packet.
     pub async fn add(&self, byte: u8) -> Result<bool, SendError<R>> {
+        let buffer_len = self.buffer.borrow().as_ref().unwrap().len();
+
         match self.packet_len.get() {
             None => {
                 self.add_initial_byte(byte).await?;
@@ -909,13 +887,8 @@ where
                 Ok(false)
             }
             // prepared_send should be Some(_) when packet_len is Some(_)
-            Some(len) if len != self.buffer.borrow().as_ref().unwrap().len() => {
-                self.buffer
-                    .borrow_mut()
-                    .as_mut()
-                    .unwrap()
-                    .try_extend_one(byte)
-                    .map_err(|e| SendError::<R>::BufferExtend(e))?;
+            Some(len) if len != buffer_len => {
+                self.buffer.borrow_mut().as_mut().unwrap().try_push(byte)?;
 
                 Ok(len == self.buffer.borrow().as_ref().unwrap().len())
             }
@@ -959,6 +932,55 @@ where
     }
 }
 
+/// The buffer for data from the
+enum BufferedBuffer<R: ChannelReserve> {
+    // The linear buffer is sized to the maximum length of an HCI event
+    Event(bo_tie_util::buffer::stack::LinearBuffer<258, u8>),
+    ToConnection(<R::ToConnectionChannel as BufferReserve>::Buffer),
+}
+
+impl<R: ChannelReserve> BufferedBuffer<R> {
+    fn try_push(&mut self, byte: u8) -> Result<(), SendError<R>> {
+        match self {
+            BufferedBuffer::Event(lb) => lb
+                .try_push(byte)
+                .map_err(|_| SendError::<R>::InvalidHciPacket(HciPacketType::Event)),
+            BufferedBuffer::ToConnection(b) => b
+                .try_extend_one(byte)
+                .map_err(|e| SendError::<R>::BufferExtendOfToConnection(e)),
+        }
+    }
+
+    fn try_extend<I>(&mut self, bytes: I) -> Result<(), SendError<R>>
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        for byte in bytes {
+            self.try_push(byte)?;
+        }
+
+        Ok(())
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            BufferedBuffer::Event(lb) => lb.len(),
+            BufferedBuffer::ToConnection(b) => b.len(),
+        }
+    }
+}
+
+impl<R: ChannelReserve> Deref for BufferedBuffer<R> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            BufferedBuffer::Event(lb) => lb.deref(),
+            BufferedBuffer::ToConnection(b) => b.deref(),
+        }
+    }
+}
+
 /// The state of a connection handle within a buffered
 #[derive(Copy, Clone)]
 enum BufferedTaskId {
@@ -967,7 +989,7 @@ enum BufferedTaskId {
     /// First byte of a connection handle
     ConnectionHandleFirstByte(u8),
     /// Host
-    Host,
+    Host(HostChannel),
     /// Complete connection handle
     ConnectionHandle(ConnectionHandle),
 }
@@ -998,14 +1020,14 @@ impl BufferedTaskId {
 
                 Ok(Some(connection_handle))
             }
-            BufferedTaskId::ConnectionHandle(_) | BufferedTaskId::Host => unreachable!(),
+            BufferedTaskId::ConnectionHandle(_) | BufferedTaskId::Host(_) => unreachable!(),
         }
     }
 
     fn try_into_task_id(&self) -> Option<TaskId> {
         match self {
             BufferedTaskId::None | BufferedTaskId::ConnectionHandleFirstByte(_) => None,
-            BufferedTaskId::Host => Some(TaskId::Host),
+            BufferedTaskId::Host(host_channel) => Some(TaskId::Host(*host_channel)),
             BufferedTaskId::ConnectionHandle(handle) => Some(TaskId::Connection(*handle)),
         }
     }
@@ -1014,7 +1036,6 @@ impl BufferedTaskId {
 /// module for containing methods that do not fit within the `impl` for [`BufferedSendSetup`]
 mod buffered_send {
     use super::*;
-    use bo_tie_hci_util::Channel;
 
     pub async fn send<R>(bs: BufferedUpSend<'_, R>) -> Result<(), SendError<R>>
     where
@@ -1042,19 +1063,7 @@ mod buffered_send {
             None => return Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
         };
 
-        match bs.interface.parse_event(&buffer).await {
-            Err(e) => Err(e.into()),
-            Ok(Some(event)) => {
-                let message = IntraMessageType::Event(event).into();
-
-                get_channel!(bs, R)?
-                    .get_sender()
-                    .send(message)
-                    .await
-                    .map_err(|e| SendError::<R>::ChannelError(e))
-            }
-            Ok(None) => Ok(()),
-        }
+        bs.interface.maybe_send_event(&buffer).await
     }
 
     async fn from_acl<R>(bs: BufferedUpSend<'_, R>) -> Result<(), SendError<R>>
@@ -1062,43 +1071,27 @@ mod buffered_send {
         R: ChannelReserve,
     {
         let buffer = match bs.buffer.take() {
-            Some(buffer) => buffer,
-            None => return Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
+            Some(BufferedBuffer::ToConnection(buffer)) => buffer,
+            _ => return Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
         };
 
-        let message = IntraMessageType::Acl(buffer).into();
+        let message = ToConnectionIntraMessage::Acl(buffer).into();
 
-        get_channel!(bs, R)?
-            .get_sender()
-            .send(message)
-            .await
-            .map_err(|e| SendError::<R>::ChannelError(e))
-    }
-}
-
-/// Get channel ends for the host async task
-pub trait InitHostTaskEnds {
-    type TaskChannelEnds;
-    type Error;
-
-    /// Get the channel ends for the host async task
-    ///
-    /// Gets the channel ends for the host async task. These channel ends can only be acquired once,
-    /// so calling this method multiple times for the same identifier will return an error.
-    ///
-    /// # Error
-    /// Either `id` was already has channel ends created for it or an implementation specific error
-    /// occurred while trying to create them.
-    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds, Self::Error>;
-}
-
-impl<R: ChannelReserve> InitHostTaskEnds for Interface<R> {
-    type TaskChannelEnds = R::TaskChannelEnds;
-    type Error = R::Error;
-
-    fn init_host_task_ends(&mut self) -> Result<Self::TaskChannelEnds, Self::Error> {
-        self.channel_reserve
-            .borrow_mut()
-            .add_new_task(TaskId::Host, FlowControlId::Cmd)
+        if let FromInterface::Connection(mut sender) = bs
+            .interface
+            .channel_reserve
+            .borrow()
+            .get_sender(
+                bs.task_id_state
+                    .borrow_mut()
+                    .try_into_task_id()
+                    .ok_or(SendError::<R>::InvalidHciPacket(bs.packet_type))?,
+            )
+            .ok_or(SendError::<R>::InvalidConnectionHandle)?
+        {
+            sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
+        } else {
+            Err(SendError::<R>::InvalidChannel)
+        }
     }
 }

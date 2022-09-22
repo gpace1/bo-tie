@@ -8,7 +8,8 @@
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
 use crate::{BufferedUpSend, Interface, SendError};
-use bo_tie_hci_util::{ChannelReserve, HciPacketType};
+use bo_tie_hci_util::{BufferReserve, ChannelReserve, HciPacketType};
+use bo_tie_util::buffer::TryExtend;
 use core::fmt::{Debug, Display, Formatter};
 
 /// UART wrapper around an [`Interface`](Interface)
@@ -160,7 +161,6 @@ where
     }
 }
 
-#[derive(Debug)]
 pub enum UartBufferedSendError<R: ChannelReserve> {
     NothingBuffered,
     UartInterface(UartInterfaceError),
@@ -176,11 +176,28 @@ where
     }
 }
 
+impl<R: ChannelReserve> Debug for UartBufferedSendError<R>
+where
+    <<<R as ChannelReserve>::FromHostChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Debug,
+    <<<R as ChannelReserve>::ToConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Debug,
+    <<<R as ChannelReserve>::FromConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            UartBufferedSendError::NothingBuffered => f.write_str("UartBufferedSendError"),
+            UartBufferedSendError::UartInterface(e) => write!(f, "UartInterface({:?})", e),
+            UartBufferedSendError::BufferedSendError(e) => write!(f, "BufferedSendError({:?})", e),
+        }
+    }
+}
+
 impl<R: ChannelReserve> Display for UartBufferedSendError<R>
 where
     R::Error: Display,
     R::SenderError: Display,
-    R::TryExtendError: Display,
+    <<<R as ChannelReserve>::FromHostChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Display,
+    <<<R as ChannelReserve>::ToConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Display,
+    <<<R as ChannelReserve>::FromConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
