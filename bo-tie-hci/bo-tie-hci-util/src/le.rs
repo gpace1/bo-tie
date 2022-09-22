@@ -326,6 +326,10 @@ impl ExtendedAdvertisingAndScanResponseData {
         Self { data: data.into() }
     }
 
+    pub fn into_inner(self) -> alloc::vec::Vec<u8> {
+        self.data
+    }
+
     /// Iterate over the advertising data structures
     ///
     /// This iterates over the AD structures that were present within the scanned advertising data.

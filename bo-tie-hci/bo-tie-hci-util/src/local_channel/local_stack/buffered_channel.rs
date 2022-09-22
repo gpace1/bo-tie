@@ -21,8 +21,8 @@ use crate::Channel;
 use bo_tie_util::buffer::{Buffer, BufferReserve, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::borrow::Borrow;
 use core::future::Future;
-use std::ops::{Deref, DerefMut};
-use std::task::{Context, Poll};
+use core::ops::{Deref, DerefMut};
+use core::task::{Context, Poll};
 
 /// A stack allocated buffered async channel
 ///

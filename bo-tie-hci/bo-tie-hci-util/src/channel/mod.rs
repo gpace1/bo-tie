@@ -129,8 +129,8 @@ use crate::{
 };
 use alloc::rc::Rc;
 use bo_tie_util::buffer::BufferReserve as BufferReserveTrait;
+use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
-use std::cell::RefCell;
 
 type BufferReserve = de_vec::DynBufferReserve<de_vec::DeVec<u8>>;
 
@@ -332,7 +332,7 @@ where
     incoming_senders: Incoming<S3>,
     flow_ctrl_recv: FlowCtrlReceiver<R1, R2>,
     channel_creator: F,
-    connections: RefCell<Vec<ConnectionData<S4>>>,
+    connections: RefCell<alloc::vec::Vec<ConnectionData<S4>>>,
     _p: core::marker::PhantomData<(P1, P2, P3, P4)>,
 }
 
@@ -412,7 +412,7 @@ where
 
         let (le_iso_sender, le_iso_receiver) = channel4();
 
-        let connections = RefCell::new(Vec::default());
+        let connections = RefCell::new(alloc::vec::Vec::default());
 
         let buffer_reserve = Rc::new(RefCell::new(BufferReserve::new(Self::DEFAULT_BUFFER_CAPACITY)));
 
