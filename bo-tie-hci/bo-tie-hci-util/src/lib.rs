@@ -66,6 +66,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+extern crate core;
 
 pub mod channel;
 mod de_vec;
@@ -1392,6 +1393,7 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPack
 ///
 /// The host async task sends HCI commands to the interface async task, and the interface async task
 /// sends these commands on to the controller (after performing command flow control).
+#[derive(Debug)]
 pub enum FromHostIntraMessage<T> {
     Command(T),
 }
@@ -1416,6 +1418,7 @@ impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
 ///
 /// [`CommandComplete`]: events::EventsData::CommandComplete
 /// [`CommandStatus`]: events::EventsData::CommandStatus
+#[derive(Debug)]
 pub enum ToHostCommandIntraMessage {
     CommandComplete(events::parameters::CommandCompleteData),
     CommandStatus(events::parameters::CommandStatusData),
@@ -1433,6 +1436,7 @@ pub enum ToHostCommandIntraMessage {
 /// ### Connection Channel Ends
 /// A new connection's channel ends used for communicating with the interface are sent to the host
 /// through the general channel.
+#[derive(Debug)]
 pub enum ToHostGeneralIntraMessage<T> {
     Event(events::EventsData),
     NewConnection(T),
@@ -1441,6 +1445,7 @@ pub enum ToHostGeneralIntraMessage<T> {
 /// A messages from a connection async task
 ///
 /// This is a message sent from a connection async task to the interface async task.
+#[derive(Debug)]
 pub enum FromConnectionIntraMessage<T> {
     /// HCI asynchronous Connection-Oriented Data Packet
     Acl(T),
@@ -1466,6 +1471,7 @@ impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromConnectionIntraMessage<
 /// A messages to a connection async task
 ///
 /// This is a message sent to a connection async task from the interface async task.
+#[derive(Debug)]
 pub enum ToConnectionIntraMessage<T> {
     /// HCI asynchronous Connection-Oriented Data Packet
     Acl(T),

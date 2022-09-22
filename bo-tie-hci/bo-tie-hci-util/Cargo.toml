@@ -13,6 +13,9 @@ async-std = { version = "1", optional = true }
 
 [features]
 default = ["gap"]
-std = ["tokio", "futures", "async-std"]
+std = []
+tokio = ["std", "dep:tokio"]
+futures-rs = ["std", "dep:futures"]
+async-std = ["std", "dep:async-std"]
 gap = [ "bo-tie-gap" ]
 unstable = []

@@ -4,6 +4,123 @@
 //! between the host, interface and connection async tasks. There are no send safe channels within
 //! this library so they must be used come from another rust library.
 
+#[cfg(any(feature = "tokio", feature = "async-std"))]
+macro_rules! make_error {
+    ($name:ident, $($error_name:ident)::*, $sender:ident, $receiver:ident) => {
+        /// The send error
+        pub enum $name {
+            ToHostCmd($($error_name)::*<$crate::ToHostCommandIntraMessage>),
+            ToHostGen(
+                $($error_name)::*<
+                    $crate::ToHostGeneralIntraMessage<
+                        super::ConnectionEnds<
+                            $sender<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                        >,
+                    >,
+                >,
+            ),
+            FromHost($($error_name)::*<$crate::FromHostIntraMessage<$crate::de_vec::DeVec<u8>>>),
+            ToConnection($($error_name)::*<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>),
+            FromConnection($($error_name)::*<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>),
+        }
+
+        impl std::fmt::Debug for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::ToHostCmd(e) => std::fmt::Debug::fmt(e, f),
+                    Error::ToHostGen(e) => std::fmt::Debug::fmt(e, f),
+                    Error::FromHost(e) => std::fmt::Debug::fmt(e, f),
+                    Error::ToConnection(e) => std::fmt::Debug::fmt(e, f),
+                    Error::FromConnection(e) => std::fmt::Debug::fmt(e, f),
+                }
+            }
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::ToHostCmd(e) => std::fmt::Display::fmt(e, f),
+                    Error::ToHostGen(e) => std::fmt::Display::fmt(e, f),
+                    Error::FromHost(e) => std::fmt::Display::fmt(e, f),
+                    Error::ToConnection(e) => std::fmt::Display::fmt(e, f),
+                    Error::FromConnection(e) => std::fmt::Display::fmt(e, f),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {}
+
+        impl From<$($error_name)::*<$crate::ToHostCommandIntraMessage>> for Error {
+            fn from(t: $($error_name)::*<$crate::ToHostCommandIntraMessage>) -> Error {
+                Error::ToHostCmd(t)
+            }
+        }
+
+        impl
+            From<
+                $($error_name)::*<
+                    $crate::ToHostGeneralIntraMessage<
+                        super::ConnectionEnds<
+                            $sender<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                        >,
+                    >,
+                >,
+            > for Error
+        {
+            fn from(
+                t: $($error_name)::*<
+                    $crate::ToHostGeneralIntraMessage<
+                        super::ConnectionEnds<
+                            $sender<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                        >,
+                    >,
+                >,
+            ) -> Error {
+                Error::ToHostGen(t)
+            }
+        }
+
+        impl From<$($error_name)::*<$crate::FromHostIntraMessage<$crate::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::FromHostIntraMessage<$crate::de_vec::DeVec<u8>>>) -> Error {
+                Error::FromHost(t)
+            }
+        }
+
+        impl From<$($error_name)::*<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>) -> Error {
+                Error::ToConnection(t)
+            }
+        }
+
+        impl From<$($error_name)::*<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>) -> Error {
+                Error::FromConnection(t)
+            }
+        }
+    };
+}
+
+#[cfg(feature = "tokio")]
+mod tokio;
+
+#[cfg(feature = "async-std")]
+mod async_std;
+
+#[cfg(feature = "futures-rs")]
+mod futures_rs;
+
+#[cfg(feature = "tokio")]
+pub use self::tokio::tokio_unbounded;
+
+#[cfg(feature = "async-std")]
+pub use self::async_std::async_std_unbounded;
+
+#[cfg(feature = "futures-rs")]
+pub use self::futures_rs::futures_unbounded;
+
 use crate::{de_vec, ConnectionHandle, FlowControlId, FromInterface, HostChannel, InterfaceReceivers, TaskId};
 use crate::{
     Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannelEnds, FlowCtrlReceiver,
@@ -21,6 +138,7 @@ type BufferReserve = de_vec::DynBufferReserve<de_vec::DeVec<u8>>;
 ///
 /// This is the ends of the channels used by a connection async task for sending messages to and
 /// from an interface async task.
+#[derive(Debug)]
 pub struct ConnectionEnds<S, R> {
     buffer_reserve: RefCell<BufferReserve>,
     from_connection: S,

@@ -24,6 +24,7 @@ use core::task::{Context, Poll};
 /// [`VecDeque`]: std::collections::VecDeque,
 /// [`Vec`]: std::vector::Vec
 /// [`Deref`]: std::ops::Deref
+#[derive(Debug)]
 pub struct DeVec<T> {
     start: usize,
     vec: Vec<T>,
@@ -180,6 +181,7 @@ where
 /// This reserve uses dynamic allocation for creating the buffers. The buffers are part of a vector
 /// of other reclaimed buffers. This reserve acts like a stack so buffers that are reclaimed are
 /// pushed to the inner vector and buffers take are popped from it.
+#[derive(Debug)]
 pub struct DynBufferReserve<T>(Vec<T>);
 
 impl<T> DynBufferReserve<T> {
