@@ -66,16 +66,14 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
-extern crate core;
 
 pub mod channel;
-mod de_vec;
 pub mod events;
 pub mod le;
 pub mod local_channel;
 pub mod opcodes;
 
-use bo_tie_util::buffer::{Buffer, BufferReserve};
+use bo_tie_util::buffer::Buffer;
 use core::fmt;
 use core::future::Future;
 use core::ops::Deref;
@@ -444,6 +442,37 @@ impl FlowControl {
             *halted = true
         }
     }
+}
+
+/// A reserve of buffers
+///
+/// A reserve is for storing previously used buffers for reuse later. The main purpose is to reduce
+/// the number of dynamic allocations of buffers during the lifetime of a program using `bo-tie`.
+///
+/// Typically buffers in `bo-tie` end up having roughly the same capacity. The controller's data
+/// transfer limit generally becomes the limiting factor for how large of an allocation a buffer
+/// ends up being, so taking buffers from a reserve generally means the buffer can be reused
+/// without having to re-allocate.
+#[doc(hidden)]
+pub trait BufferReserve {
+    type Buffer: Buffer + Unpin;
+
+    type TakeBuffer: Future<Output = Self::Buffer>;
+
+    /// Take a buffer from the reserve
+    ///
+    /// If there is no more buffers within the reserve the returned future will await. However, it
+    /// is intended that there be enough buffers in the reserve so that most of the time this does
+    /// not await.
+    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    where
+        S: Into<Option<usize>>;
+
+    /// Reclaim an unused buffer
+    ///
+    /// Buffers can be reclaimed for reuse later. However, if the reserve is full then the buffer to
+    /// be reclaimed is dropped.
+    fn reclaim(&mut self, buffer: Self::Buffer);
 }
 
 /// A message channel

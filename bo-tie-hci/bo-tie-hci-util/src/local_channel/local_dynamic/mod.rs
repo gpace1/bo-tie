@@ -11,16 +11,14 @@ use super::{
     LocalQueueBuffer, LocalQueueBufferReceive, LocalQueueBufferSend, LocalReceiverFuture, LocalSendFuture,
     LocalSendFutureError,
 };
-use crate::de_vec::DeVec;
-use crate::de_vec::{DynBufferReserve, TakeDynReserveFuture};
 use crate::{
-    Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
+    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
     FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannel, HostChannelEnds, InterfaceReceivers,
     Receiver, Sender, TaskId, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
-use bo_tie_util::buffer::BufferReserve;
+use bo_tie_util::buffer::de_vec::{DeVec, DynBufferReserve, TakeDynReserveFuture};
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
 use core::task::{Context, Poll, Waker};

@@ -4,13 +4,13 @@
 
 use crate::local_channel::local_stack::buffered_channel::UnsafeReservedBuffer;
 use crate::local_channel::local_stack::channel::LocalChannel;
-use crate::local_channel::local_stack::stack_buffers::{Reservation, UnsafeBufferReservation};
 use crate::local_channel::local_stack::{
     FromConnMsg, FromConnectionChannel, FromHostChannel, FromHostMsg, ToConnMsg, ToConnectionChannel, ToHostGenChannel,
     ToHostGenMsg, UnsafeFromConnMsg, UnsafeFromHostMsg, UnsafeToConnMsg, UnsafeToHostGenMsg,
 };
 use crate::local_channel::{LocalQueueBuffer, LocalQueueBufferReceive, LocalReceiverFuture};
 use crate::{Receiver, ToConnectionIntraMessage, ToHostCommandIntraMessage};
+use bo_tie_util::buffer::stack::{Reservation, UnsafeBufferReservation};
 use core::borrow::Borrow;
 use core::task::Waker;
 use core::task::{Context, Poll};

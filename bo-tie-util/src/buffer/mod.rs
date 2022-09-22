@@ -4,9 +4,12 @@
 //! environments where allocations are supported and environments where allocations are not
 //! supported. `buffer` contains traits for supporting the 'filling' and 'emptying' of a type of
 //! buffer.
-
-use core::future::Future;
+//!
 use core::ops::DerefMut;
+
+#[cfg(feature = "alloc")]
+pub mod de_vec;
+pub mod stack;
 
 /// A buffer
 ///
@@ -79,37 +82,6 @@ pub trait BufferExt: Buffer {
 }
 
 impl<T> BufferExt for T where T: Buffer {}
-
-/// A reserve of buffers
-///
-/// A reserve is for storing previously used buffers for reuse later. The main purpose is to reduce
-/// the number of dynamic allocations of buffers during the lifetime of a program using `bo-tie`.
-///
-/// Typically buffers in `bo-tie` end up having roughly the same capacity. The controller's data
-/// transfer limit generally becomes the limiting factor for how large of an allocation a buffer
-/// ends up being, so taking buffers from a reserve generally means the buffer can be reused
-/// without having to re-allocate.
-#[doc(hidden)]
-pub trait BufferReserve {
-    type Buffer: Buffer + Unpin;
-
-    type TakeBuffer: Future<Output = Self::Buffer>;
-
-    /// Take a buffer from the reserve
-    ///
-    /// If there is no more buffers within the reserve the returned future will await. However, it
-    /// is intended that there be enough buffers in the reserve so that most of the time this does
-    /// not await.
-    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
-    where
-        S: Into<Option<usize>>;
-
-    /// Reclaim an unused buffer
-    ///
-    /// Buffers can be reclaimed for reuse later. However, if the reserve is full then the buffer to
-    /// be reclaimed is dropped.
-    fn reclaim(&mut self, buffer: Self::Buffer);
-}
 
 /// Try to extend a collection with an iterator
 ///

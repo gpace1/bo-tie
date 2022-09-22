@@ -3,11 +3,11 @@
 //! This is the implementation of a channel whose queue is allocated on the stack.
 
 use super::sender::LocalChannelSender;
-use super::stack_buffers::QueueBuffer;
 use crate::local_channel::local_stack::receiver::LocalChannelReceiver;
 use crate::local_channel::local_stack::{ToHostGenChannel, ToHostGenMsg, UnsafeToHostGenMsg};
 use crate::local_channel::LocalSendFutureError;
 use crate::{Channel, ToHostCommandIntraMessage};
+use bo_tie_util::buffer::stack::QueueBuffer;
 use core::cell::{Cell, RefCell};
 use core::task::Waker;
 

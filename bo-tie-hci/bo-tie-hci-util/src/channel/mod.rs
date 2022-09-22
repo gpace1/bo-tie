@@ -14,15 +14,15 @@ macro_rules! make_error {
                 $($error_name)::*<
                     $crate::ToHostGeneralIntraMessage<
                         super::ConnectionEnds<
-                            $sender<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
-                            $receiver<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                            $sender<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
                         >,
                     >,
                 >,
             ),
-            FromHost($($error_name)::*<$crate::FromHostIntraMessage<$crate::de_vec::DeVec<u8>>>),
-            ToConnection($($error_name)::*<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>),
-            FromConnection($($error_name)::*<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>),
+            FromHost($($error_name)::*<$crate::FromHostIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
+            ToConnection($($error_name)::*<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
+            FromConnection($($error_name)::*<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
         }
 
         impl std::fmt::Debug for Error {
@@ -62,8 +62,8 @@ macro_rules! make_error {
                 $($error_name)::*<
                     $crate::ToHostGeneralIntraMessage<
                         super::ConnectionEnds<
-                            $sender<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
-                            $receiver<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                            $sender<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
                         >,
                     >,
                 >,
@@ -73,8 +73,8 @@ macro_rules! make_error {
                 t: $($error_name)::*<
                     $crate::ToHostGeneralIntraMessage<
                         super::ConnectionEnds<
-                            $sender<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
-                            $receiver<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>,
+                            $sender<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
                         >,
                     >,
                 >,
@@ -83,20 +83,20 @@ macro_rules! make_error {
             }
         }
 
-        impl From<$($error_name)::*<$crate::FromHostIntraMessage<$crate::de_vec::DeVec<u8>>>> for Error {
-            fn from(t: $($error_name)::*<$crate::FromHostIntraMessage<$crate::de_vec::DeVec<u8>>>) -> Error {
+        impl From<$($error_name)::*<$crate::FromHostIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::FromHostIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>) -> Error {
                 Error::FromHost(t)
             }
         }
 
-        impl From<$($error_name)::*<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>> for Error {
-            fn from(t: $($error_name)::*<$crate::ToConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>) -> Error {
+        impl From<$($error_name)::*<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>) -> Error {
                 Error::ToConnection(t)
             }
         }
 
-        impl From<$($error_name)::*<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>> for Error {
-            fn from(t: $($error_name)::*<$crate::FromConnectionIntraMessage<$crate::de_vec::DeVec<u8>>>) -> Error {
+        impl From<$($error_name)::*<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>) -> Error {
                 Error::FromConnection(t)
             }
         }
@@ -121,14 +121,15 @@ pub use self::async_std::async_std_unbounded;
 #[cfg(feature = "futures-rs")]
 pub use self::futures_rs::futures_unbounded;
 
-use crate::{de_vec, ConnectionHandle, FlowControlId, FromInterface, HostChannel, InterfaceReceivers, TaskId};
 use crate::{
-    Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannelEnds, FlowCtrlReceiver,
-    FromConnectionIntraMessage, FromHostIntraMessage, HostChannelEnds as HostChannelEndsTrait, Receiver, Sender,
-    ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    BufferReserve as BufferReserveTrait, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait,
+    ConnectionChannelEnds, FlowCtrlReceiver, FromConnectionIntraMessage, FromHostIntraMessage,
+    HostChannelEnds as HostChannelEndsTrait, Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage,
+    ToHostGeneralIntraMessage,
 };
+use crate::{ConnectionHandle, FlowControlId, FromInterface, HostChannel, InterfaceReceivers, TaskId};
 use alloc::rc::Rc;
-use bo_tie_util::buffer::BufferReserve as BufferReserveTrait;
+use bo_tie_util::buffer::de_vec;
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
 

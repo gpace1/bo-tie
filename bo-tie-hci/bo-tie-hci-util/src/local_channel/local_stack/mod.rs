@@ -17,23 +17,23 @@ use crate::local_channel::local_stack::buffered_channel::{
 use crate::local_channel::local_stack::channel::LocalChannel;
 use crate::local_channel::local_stack::receiver::LocalChannelReceiver;
 use crate::local_channel::local_stack::sender::LocalChannelSender;
-use crate::local_channel::local_stack::stack_buffers::{Reservation, UnsafeBufferReservation, UnsafeReservation};
 use crate::{
-    Channel, ChannelReserve, ConnectionChannelEnds as ChannelEndsTrait, ConnectionHandle, FlowControlId,
+    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds as ChannelEndsTrait, ConnectionHandle, FlowControlId,
     FlowCtrlReceiver, FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannel,
     HostChannelEnds as HostChannelEndsTrait, InterfaceReceivers, TaskId, ToConnectionIntraMessage,
     ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
-use bo_tie_util::buffer::BufferReserve;
+use bo_tie_util::buffer::stack::{
+    BufferReservation, DeLinearBuffer, LinearBuffer, Reservation, StackHotel, UnsafeBufferReservation,
+    UnsafeReservation,
+};
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
-use stack_buffers::{BufferReservation, DeLinearBuffer, LinearBuffer, StackHotel};
 
 mod buffered_channel;
 mod channel;
 mod receiver;
 mod sender;
-mod stack_buffers;
 
 // *******************
 // Shortcut types

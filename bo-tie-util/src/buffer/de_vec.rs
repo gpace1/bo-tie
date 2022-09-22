@@ -54,7 +54,7 @@ impl<T> DeVec<T> {
     }
 }
 
-impl bo_tie_util::buffer::Buffer for DeVec<u8> {
+impl crate::buffer::Buffer for DeVec<u8> {
     fn with_capacity(front: usize, back: usize) -> Self
     where
         Self: Sized,
@@ -85,7 +85,7 @@ impl<T> core::ops::DerefMut for DeVec<T> {
     }
 }
 
-impl<A> bo_tie_util::buffer::TryExtend<A> for DeVec<A> {
+impl<A> crate::buffer::TryExtend<A> for DeVec<A> {
     type Error = core::convert::Infallible;
 
     fn try_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
@@ -98,8 +98,8 @@ impl<A> bo_tie_util::buffer::TryExtend<A> for DeVec<A> {
     }
 }
 
-impl<A> bo_tie_util::buffer::TryRemove<A> for DeVec<A> {
-    type Error = bo_tie_util::buffer::BufferError;
+impl<A> crate::buffer::TryRemove<A> for DeVec<A> {
+    type Error = crate::buffer::BufferError;
     type RemoveIter<'a> = alloc::vec::Drain<'a, A> where A: 'a;
 
     fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
@@ -108,13 +108,13 @@ impl<A> bo_tie_util::buffer::TryRemove<A> for DeVec<A> {
 
             Ok(self.vec.drain(start..))
         } else {
-            Err(bo_tie_util::buffer::BufferError::LengthOfBuffer)
+            Err(crate::buffer::BufferError::LengthOfBuffer)
         }
     }
 }
 
-impl<A> bo_tie_util::buffer::TryFrontExtend<A> for DeVec<A> {
-    type Error = bo_tie_util::buffer::BufferError;
+impl<A> crate::buffer::TryFrontExtend<A> for DeVec<A> {
+    type Error = crate::buffer::BufferError;
 
     fn try_front_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
     where
@@ -128,18 +128,18 @@ impl<A> bo_tie_util::buffer::TryFrontExtend<A> for DeVec<A> {
 
                     self.vec[self.start] = item;
                 })
-                .ok_or(bo_tie_util::buffer::BufferError::FrontReserveSize)?;
+                .ok_or(crate::buffer::BufferError::FrontReserveSize)?;
         }
 
         Ok(())
     }
 }
 
-impl<A> bo_tie_util::buffer::TryFrontRemove<A> for DeVec<A>
+impl<A> crate::buffer::TryFrontRemove<A> for DeVec<A>
 where
     A: Copy,
 {
-    type Error = bo_tie_util::buffer::BufferError;
+    type Error = crate::buffer::BufferError;
     type FrontRemoveIter<'a> = DeVecDrain<'a, A> where A: 'a;
 
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
@@ -150,7 +150,7 @@ where
 
             Ok(DeVecDrain { removed, cnt: 0 })
         } else {
-            Err(bo_tie_util::buffer::BufferError::LengthOfBuffer)
+            Err(crate::buffer::BufferError::LengthOfBuffer)
         }
     }
 }
@@ -191,9 +191,9 @@ impl<T> DynBufferReserve<T> {
 
     pub fn take(&mut self, front_capacity: usize) -> TakeDynReserveFuture<T>
     where
-        T: bo_tie_util::buffer::Buffer,
+        T: crate::buffer::Buffer,
     {
-        use bo_tie_util::buffer::BufferExt;
+        use crate::buffer::BufferExt;
 
         if let Some(buffer) = self.0.pop() {
             TakeDynReserveFuture(Some(buffer))

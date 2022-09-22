@@ -257,7 +257,7 @@ impl<T, const SIZE: usize> DeLinearBuffer<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize> bo_tie_util::buffer::Buffer for DeLinearBuffer<SIZE, u8> {
+impl<const SIZE: usize> crate::buffer::Buffer for DeLinearBuffer<SIZE, u8> {
     fn with_capacity(front: usize, _back: usize) -> Self
     where
         Self: Sized,
@@ -301,7 +301,7 @@ impl<T, const SIZE: usize> DerefMut for DeLinearBuffer<SIZE, T> {
     }
 }
 
-impl<const SIZE: usize, T> bo_tie_util::buffer::TryExtend<T> for DeLinearBuffer<SIZE, T> {
+impl<const SIZE: usize, T> crate::buffer::TryExtend<T> for DeLinearBuffer<SIZE, T> {
     type Error = LinearBufferError;
 
     fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
@@ -323,7 +323,7 @@ impl<const SIZE: usize, T> bo_tie_util::buffer::TryExtend<T> for DeLinearBuffer<
     }
 }
 
-impl<const SIZE: usize, T> bo_tie_util::buffer::TryRemove<T> for DeLinearBuffer<SIZE, T> {
+impl<const SIZE: usize, T> crate::buffer::TryRemove<T> for DeLinearBuffer<SIZE, T> {
     type Error = LinearBufferError;
     type RemoveIter<'a> = DeLinearBufferRemoveIter<'a, T> where Self: 'a,;
 
@@ -334,7 +334,7 @@ impl<const SIZE: usize, T> bo_tie_util::buffer::TryRemove<T> for DeLinearBuffer<
     }
 }
 
-impl<const SIZE: usize, T> bo_tie_util::buffer::TryFrontExtend<T> for DeLinearBuffer<SIZE, T> {
+impl<const SIZE: usize, T> crate::buffer::TryFrontExtend<T> for DeLinearBuffer<SIZE, T> {
     type Error = LinearBufferError;
 
     fn try_front_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
@@ -357,7 +357,7 @@ impl<const SIZE: usize, T> bo_tie_util::buffer::TryFrontExtend<T> for DeLinearBu
     }
 }
 
-impl<const SIZE: usize, T> bo_tie_util::buffer::TryFrontRemove<T> for DeLinearBuffer<SIZE, T> {
+impl<const SIZE: usize, T> crate::buffer::TryFrontRemove<T> for DeLinearBuffer<SIZE, T> {
     type Error = LinearBufferError;
     type FrontRemoveIter<'a> = DeLinearBufferRemoveIter<'a, T> where Self: 'a,;
 
@@ -639,9 +639,9 @@ impl<T, const SIZE: usize> StackHotel<T, SIZE> {
     /// This returns a reservation unless there is no more allocations available
     pub fn take_buffer(&self, front_capacity: usize) -> Option<BufferReservation<T, SIZE>>
     where
-        T: bo_tie_util::buffer::Buffer,
+        T: crate::buffer::Buffer,
     {
-        use bo_tie_util::buffer::BufferExt;
+        use crate::buffer::BufferExt;
 
         self.take_inner(T::with_front_capacity(front_capacity))
             .map(|ur| unsafe { BufferReservation::new(ur, self, front_capacity) })
@@ -913,6 +913,7 @@ impl<T, const SIZE: usize> Clone for Reservation<'_, T, SIZE> {
         Self { ur, _pd }
     }
 }
+
 impl<T, const SIZE: usize> Deref for Reservation<'_, T, SIZE> {
     type Target = T;
 
@@ -955,9 +956,9 @@ impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
     #[allow(unused_variables)]
     unsafe fn new(ur: UnsafeReservation<T, SIZE>, hotel: &'a StackHotel<T, SIZE>, front_capacity: usize) -> Self
     where
-        T: bo_tie_util::buffer::Buffer,
+        T: crate::buffer::Buffer,
     {
-        use bo_tie_util::buffer::BufferExt;
+        use crate::buffer::BufferExt;
 
         let ubr = UnsafeBufferReservation(ur);
 
@@ -986,9 +987,9 @@ impl<T, const SIZE: usize> Clone for BufferReservation<'_, T, SIZE> {
     }
 }
 
-impl<T, const SIZE: usize> bo_tie_util::buffer::Buffer for BufferReservation<'_, T, SIZE>
+impl<T, const SIZE: usize> crate::buffer::Buffer for BufferReservation<'_, T, SIZE>
 where
-    T: bo_tie_util::buffer::Buffer,
+    T: crate::buffer::Buffer,
 {
     fn with_capacity(_front: usize, _back: usize) -> Self
     where
@@ -1022,9 +1023,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryExtend<A> for BufferReservation<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryExtend<A> for BufferReservation<'_, T, SIZE>
 where
-    T: bo_tie_util::buffer::TryExtend<A>,
+    T: crate::buffer::TryExtend<A>,
 {
     type Error = T::Error;
 
@@ -1036,9 +1037,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryRemove<A> for BufferReservation<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryRemove<A> for BufferReservation<'_, T, SIZE>
 where
-    T: bo_tie_util::buffer::TryRemove<A>,
+    T: crate::buffer::TryRemove<A>,
 {
     type Error = T::Error;
     type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
@@ -1048,9 +1049,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryFrontExtend<A> for BufferReservation<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryFrontExtend<A> for BufferReservation<'_, T, SIZE>
 where
-    T: bo_tie_util::buffer::TryFrontExtend<A>,
+    T: crate::buffer::TryFrontExtend<A>,
 {
     type Error = T::Error;
 
@@ -1062,9 +1063,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryFrontRemove<A> for BufferReservation<'_, T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryFrontRemove<A> for BufferReservation<'_, T, SIZE>
 where
-    T: bo_tie_util::buffer::TryFrontRemove<A>,
+    T: crate::buffer::TryFrontRemove<A>,
 {
     type Error = T::Error;
     type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
@@ -1100,9 +1101,9 @@ impl<T, const SIZE: usize> Clone for UnsafeBufferReservation<T, SIZE> {
     }
 }
 
-impl<T, const SIZE: usize> bo_tie_util::buffer::Buffer for UnsafeBufferReservation<T, SIZE>
+impl<T, const SIZE: usize> crate::buffer::Buffer for UnsafeBufferReservation<T, SIZE>
 where
-    T: bo_tie_util::buffer::Buffer,
+    T: crate::buffer::Buffer,
 {
     fn with_capacity(_front: usize, _back: usize) -> Self
     where
@@ -1142,9 +1143,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryExtend<A> for UnsafeBufferReservation<T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryExtend<A> for UnsafeBufferReservation<T, SIZE>
 where
-    T: bo_tie_util::buffer::TryExtend<A>,
+    T: crate::buffer::TryExtend<A>,
 {
     type Error = T::Error;
 
@@ -1156,9 +1157,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryRemove<A> for UnsafeBufferReservation<T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryRemove<A> for UnsafeBufferReservation<T, SIZE>
 where
-    T: bo_tie_util::buffer::TryRemove<A>,
+    T: crate::buffer::TryRemove<A>,
 {
     type Error = T::Error;
     type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
@@ -1168,9 +1169,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryFrontExtend<A> for UnsafeBufferReservation<T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryFrontExtend<A> for UnsafeBufferReservation<T, SIZE>
 where
-    T: bo_tie_util::buffer::TryFrontExtend<A>,
+    T: crate::buffer::TryFrontExtend<A>,
 {
     type Error = T::Error;
 
@@ -1182,9 +1183,9 @@ where
     }
 }
 
-impl<T, A, const SIZE: usize> bo_tie_util::buffer::TryFrontRemove<A> for UnsafeBufferReservation<T, SIZE>
+impl<T, A, const SIZE: usize> crate::buffer::TryFrontRemove<A> for UnsafeBufferReservation<T, SIZE>
 where
-    T: bo_tie_util::buffer::TryFrontRemove<A>,
+    T: crate::buffer::TryFrontRemove<A>,
 {
     type Error = T::Error;
     type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;

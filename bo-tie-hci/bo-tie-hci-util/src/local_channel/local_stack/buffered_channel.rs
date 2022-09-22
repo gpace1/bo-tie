@@ -9,16 +9,16 @@
 use super::receiver::LocalChannelReceiver;
 use super::sender::LocalChannelSender;
 use crate::local_channel::local_stack::channel::LocalChannel;
-use crate::local_channel::local_stack::stack_buffers::{
-    BufferReservation, DeLinearBuffer, Reservation, StackHotel, UnsafeBufferReservation, UnsafeReservation,
-};
 use crate::local_channel::local_stack::{
-    FromConnMsg, FromConnectionChannel, FromHostChannel, FromHostMsg, ToConnMsg, ToConnectionChannel,
+    BufferReserve, FromConnMsg, FromConnectionChannel, FromHostChannel, FromHostMsg, ToConnMsg, ToConnectionChannel,
     UnsafeFromConnMsg, UnsafeFromHostMsg, UnsafeToConnMsg,
 };
 use crate::local_channel::LocalSendFutureError;
 use crate::Channel;
-use bo_tie_util::buffer::{Buffer, BufferReserve, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use bo_tie_util::buffer::stack::{
+    BufferReservation, DeLinearBuffer, Reservation, StackHotel, UnsafeBufferReservation, UnsafeReservation,
+};
+use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::borrow::Borrow;
 use core::future::Future;
 use core::ops::{Deref, DerefMut};
