@@ -605,7 +605,7 @@ pub trait ConnectionChannel {
     /// of this `ConnectionChannel` must be able to queue up and re-order fragments received from
     /// the controller. The future returned by `receive` will then output the first fragment from
     /// the reorder queue.
-    fn receive(&self) -> Self::RecvFut<'_>;
+    fn receive(&mut self) -> Self::RecvFut<'_>;
 }
 
 /// Extension method for a [`ConnectionChannel`]
@@ -616,7 +616,7 @@ pub trait ConnectionChannelExt: ConnectionChannel {
     ///
     /// This returns a [`ConChanFutureRx`] that will return a `BasicInfoFrame` once it has polled to
     /// completion.
-    fn receive_b_frame(&self) -> ConChanFutureRx<'_, Self> {
+    fn receive_b_frame(&mut self) -> ConChanFutureRx<'_, Self> {
         ConChanFutureRx::new(self)
     }
 }
@@ -636,7 +636,9 @@ pub struct ConChanFutureRx<'a, C>
 where
     C: ?Sized + ConnectionChannel,
 {
-    connection_channel: &'a C,
+    // todo: raw pointers (and associated unsafety) is probably when rust issue #100135 is closed
+    connection_channel: *mut C,
+    _p: core::marker::PhantomData<&'a C>,
     receive_future: Option<C::RecvFut<'a>>,
     full_acl_data: Vec<BasicInfoFrame<Vec<u8>>>,
     carryover_fragments: Vec<u8>,
@@ -650,11 +652,11 @@ where
     // The size of the L2CAP data header
     const HEADER_SIZE: usize = 4;
 
-    /// Create a new ConChanFutureRx<'a, C>
-    ///
-    pub(crate) fn new(connection_channel: &'a C) -> Self {
+    /// Create a new `ConChanFutureRx`
+    pub(crate) fn new(connection_channel: &'a mut C) -> Self {
         Self {
-            connection_channel,
+            connection_channel: connection_channel as *mut _,
+            _p: core::marker::PhantomData,
             receive_future: None,
             full_acl_data: Vec::new(),
             carryover_fragments: Vec::new(),
@@ -799,7 +801,7 @@ where
 
         loop {
             match this.receive_future {
-                None => this.receive_future = Some(this.connection_channel.receive()),
+                None => this.receive_future = Some(unsafe { &mut *this.connection_channel }.receive()),
                 Some(ref mut receive_future) => {
                     // receive_future is not moved until it is dropped after
                     // polling is complete, so using `Pin::new_unchecked` is
