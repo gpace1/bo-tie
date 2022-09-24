@@ -636,7 +636,7 @@ pub struct ConChanFutureRx<'a, C>
 where
     C: ?Sized + ConnectionChannel,
 {
-    // todo: raw pointers (and associated unsafety) is probably when rust issue #100135 is closed
+    // todo: raw pointers (and associated unsafety) can probably be converted to references when rust issue #100135 is closed
     connection_channel: *mut C,
     _p: core::marker::PhantomData<&'a C>,
     receive_future: Option<C::RecvFut<'a>>,
