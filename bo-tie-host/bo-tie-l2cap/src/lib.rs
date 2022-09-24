@@ -554,7 +554,7 @@ pub trait ConnectionChannel {
     /// with a call to `max_mut`). An ACL-U logical link has a minimum MTU of 48 and a LE-U logical
     /// link has a minimum MTU of 23. If `mtu` is invalid it will not change the current MTU for the
     /// connection channel.
-    fn set_mtu(&self, mtu: u16);
+    fn set_mtu(&mut self, mtu: u16);
 
     /// Get the current MTU
     fn get_mtu(&self) -> usize;
