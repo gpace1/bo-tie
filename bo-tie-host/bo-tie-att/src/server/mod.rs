@@ -75,6 +75,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
+use bo_tie_l2cap::ConnectionChannel;
 use core::{
     future::Future,
     pin::Pin,
@@ -99,7 +100,7 @@ pub enum ServerPduName {
     HandleValueIndication,
 }
 
-impl core::convert::TryFrom<super::pdu::PduOpcode> for ServerPduName {
+impl TryFrom<pdu::PduOpcode> for ServerPduName {
     type Error = ();
 
     fn try_from(opcode: super::pdu::PduOpcode) -> Result<Self, Self::Error> {
@@ -134,7 +135,7 @@ impl From<ServerPduName> for u8 {
     }
 }
 
-impl core::convert::TryFrom<u8> for ServerPduName {
+impl TryFrom<u8> for ServerPduName {
     type Error = ();
 
     fn try_from(val: u8) -> Result<Self, Self::Error> {
@@ -262,9 +263,7 @@ struct MultiReqData {
 /// [`ServerAttributeValue`](crate::server::ServerAttributeValue)
 /// can be implemented on the container to perform concurrency safe reading or writing on the
 /// contained value.
-pub struct Server<'c, C, Q> {
-    /// The connection channel for sending and receiving data from the Bluetooth controller
-    connection_channel: &'c C,
+pub struct Server<Q> {
     /// The attributes of the server
     attributes: ServerAttributes,
     /// The permissions the client currently has
@@ -287,9 +286,8 @@ pub struct Server<'c, C, Q> {
     queued_writer: Q,
 }
 
-impl<'c, C, Q> Server<'c, C, Q>
+impl<Q> Server<Q>
 where
-    C: l2cap::ConnectionChannel,
     Q: QueuedWriter,
 {
     /// Create a new Server
@@ -298,14 +296,13 @@ where
     /// attributes of the server are optionally initialized with input `server_attributes`, and the
     /// `queued_writer` is the manager for queued writes. If `server_attributes` is set to `None`
     /// then a server with no attributes is created.
-    pub fn new<A>(connection: &'c C, server_attributes: A, queued_writer: Q) -> Self
+    pub fn new<A>(server_attributes: A, queued_writer: Q) -> Self
     where
         A: Into<Option<ServerAttributes>>,
     {
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
         Self {
-            connection_channel: connection,
             attributes,
             given_permissions: Vec::new(),
             blob_data: None,
@@ -316,13 +313,6 @@ where
     /// Get the Attributes of the server
     pub fn get_attributes(&self) -> &ServerAttributes {
         &self.attributes
-    }
-
-    /// Get the maximum transfer unit of the connection
-    ///
-    /// The is the current mtu as agreed upon by the client and server
-    pub fn get_mtu(&self) -> usize {
-        self.connection_channel.get_mtu()
     }
 
     /// Push an attribute onto the handle stack
@@ -540,13 +530,18 @@ where
     /// [`process_parsed_acl_data`](crate::server::Server::process_parsed_acl_data). It is
     /// recommended to use this function over those two functions when this `Server` is at the top
     /// of your server stack (you're not using GATT or some other custom higher layer protocol).
-    pub async fn process_acl_data(
+    pub async fn process_acl_data<C>(
         &mut self,
-        acl_packet: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
-    ) -> Result<(), super::Error> {
+        connection_channel: &mut C,
+        acl_packet: &l2cap::BasicInfoFrame<Vec<u8>>,
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         let (pdu_type, payload) = self.parse_acl_packet(acl_packet)?;
 
-        self.process_parsed_acl_data(pdu_type, payload).await
+        self.process_parsed_acl_data(connection_channel, pdu_type, payload)
+            .await
     }
 
     /// Parse an ACL Packet
@@ -597,56 +592,64 @@ where
     /// the attribute protocol. Use
     /// [`process_acl_data`](crate::server::Server::process_acl_data) when directly using this
     /// server for communication with a client device.
-    pub async fn process_parsed_acl_data(
+    pub async fn process_parsed_acl_data<C>(
         &mut self,
-        pdu_type: super::client::ClientPduName,
+        connection_channel: &mut C,
+        pdu_type: ClientPduName,
         payload: &[u8],
-    ) -> Result<(), super::Error> {
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         match pdu_type {
-            super::client::ClientPduName::ExchangeMtuRequest => {
-                self.process_exchange_mtu_request(TransferFormatTryFrom::try_from(&payload)?)
+            ClientPduName::ExchangeMtuRequest => {
+                self.process_exchange_mtu_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await
             }
 
-            super::client::ClientPduName::WriteRequest => self.process_write_request(&payload).await,
+            ClientPduName::WriteRequest => self.process_write_request(connection_channel, &payload).await,
 
-            super::client::ClientPduName::ReadRequest => {
-                self.process_read_request(TransferFormatTryFrom::try_from(&payload)?)
+            ClientPduName::ReadRequest => {
+                self.process_read_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await
             }
 
-            super::client::ClientPduName::FindInformationRequest => {
-                self.process_find_information_request(TransferFormatTryFrom::try_from(&payload)?)
+            ClientPduName::FindInformationRequest => {
+                self.process_find_information_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await
             }
 
-            super::client::ClientPduName::FindByTypeValueRequest => {
-                self.process_find_by_type_value_request(&payload).await
-            }
-
-            super::client::ClientPduName::ReadByTypeRequest => {
-                self.process_read_by_type_request(TransferFormatTryFrom::try_from(&payload)?)
+            ClientPduName::FindByTypeValueRequest => {
+                self.process_find_by_type_value_request(connection_channel, &payload)
                     .await
             }
 
-            super::client::ClientPduName::ReadBlobRequest => {
-                self.process_read_blob_request(TransferFormatTryFrom::try_from(&payload)?)
+            ClientPduName::ReadByTypeRequest => {
+                self.process_read_by_type_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await
             }
 
-            super::client::ClientPduName::PrepareWriteRequest => self.process_prepare_write_request(&payload).await,
-
-            super::client::ClientPduName::ExecuteWriteRequest => {
-                self.process_execute_write_request(TransferFormatTryFrom::try_from(&payload)?)
+            ClientPduName::ReadBlobRequest => {
+                self.process_read_blob_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await
             }
 
-            pdu @ super::client::ClientPduName::ReadMultipleRequest
-            | pdu @ super::client::ClientPduName::WriteCommand
-            | pdu @ super::client::ClientPduName::HandleValueConfirmation
-            | pdu @ super::client::ClientPduName::SignedWriteCommand
-            | pdu @ super::client::ClientPduName::ReadByGroupTypeRequest => {
-                self.send_error(0, pdu.into(), pdu::Error::RequestNotSupported).await
+            ClientPduName::PrepareWriteRequest => {
+                self.process_prepare_write_request(connection_channel, &payload).await
+            }
+
+            ClientPduName::ExecuteWriteRequest => {
+                self.process_execute_write_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                    .await
+            }
+
+            pdu @ ClientPduName::ReadMultipleRequest
+            | pdu @ ClientPduName::WriteCommand
+            | pdu @ ClientPduName::HandleValueConfirmation
+            | pdu @ ClientPduName::SignedWriteCommand
+            | pdu @ ClientPduName::ReadByGroupTypeRequest => {
+                self.send_error(connection_channel, 0, pdu.into(), pdu::Error::RequestNotSupported)
+                    .await
             }
         }
     }
@@ -674,39 +677,49 @@ where
     ///
     /// This takes a complete Attribute PDU in its transfer byte form. This will package it into
     /// a L2CAP PDU and send it using the `ConnectionChannel`.
-    async fn send_raw_tf(&self, intf_data: Vec<u8>) -> Result<(), super::Error> {
+    async fn send_raw_tf<C>(&self, connection_channel: &C, intf_data: Vec<u8>) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         let acl_data = l2cap::BasicInfoFrame::new(intf_data, super::L2CAP_CHANNEL_ID);
 
-        self.connection_channel
+        connection_channel
             .send(acl_data)
             .await
             .map_err(|e| super::Error::send_error::<C>(e))
     }
 
-    async fn send<D>(&self, data: D) -> Result<(), super::Error>
+    async fn send<C, D>(&self, connection_channel: &C, data: D) -> Result<(), super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatInto,
     {
-        self.send_raw_tf(TransferFormatInto::into(&data)).await
+        self.send_raw_tf(connection_channel, TransferFormatInto::into(&data))
+            .await
     }
 
     /// Send an attribute PDU to the client
-    pub async fn send_pdu<D>(&self, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
+    pub async fn send_pdu<C, D>(&self, connection_channel: &C, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatInto,
     {
         log::trace!("Sending {}", pdu.get_opcode());
 
-        self.send(pdu).await
+        self.send(connection_channel, pdu).await
     }
 
     /// Send an error the the client
-    pub async fn send_error(
+    pub async fn send_error<C>(
         &self,
+        connection_channel: &C,
         handle: u16,
         received_opcode: ClientPduName,
         pdu_error: pdu::Error,
-    ) -> Result<(), super::Error> {
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         log::info!(
             "Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
             Into::<u8>::into(received_opcode),
@@ -714,8 +727,11 @@ where
             pdu_error
         );
 
-        self.send_pdu(pdu::error_response(received_opcode.into(), handle, pdu_error))
-            .await
+        self.send_pdu(
+            connection_channel,
+            pdu::error_response(received_opcode.into(), handle, pdu_error),
+        )
+        .await
     }
 
     /// Get an arc clone to an attribute value
@@ -788,51 +804,80 @@ where
     }
 
     /// Process a exchange MTU request from the client
-    async fn process_exchange_mtu_request(&mut self, client_mtu: u16) -> Result<(), super::Error> {
+    async fn process_exchange_mtu_request<C>(
+        &mut self,
+        connection_channel: &mut C,
+        client_mtu: u16,
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         log::info!("Processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
 
-        self.connection_channel.set_mtu(client_mtu);
+        connection_channel.set_mtu(client_mtu);
 
-        self.send_pdu(pdu::exchange_mtu_response(self.connection_channel.get_mtu() as u16))
-            .await
+        self.send_pdu(
+            connection_channel,
+            pdu::exchange_mtu_response(connection_channel.get_mtu() as u16),
+        )
+        .await
     }
 
     /// Process a Read Request from the client
-    async fn process_read_request(&mut self, handle: u16) -> Result<(), super::Error> {
+    async fn process_read_request<C>(&mut self, connection_channel: &C, handle: u16) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         log::info!("Processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
 
         match self.read_att_and(handle, |att_tf| att_tf.read_response()).await {
             Ok(mut tf) => {
                 // Amount of data that can be sent is the MTU minus the read response header size
-                if tf.get_parameters().0.len() > (self.get_mtu() - 1) {
+                if tf.get_parameters().0.len() > (connection_channel.get_mtu() - 1) {
                     use core::mem::replace;
 
-                    let sent = tf.get_parameters().0[..(self.get_mtu() - 1)].to_vec();
+                    let sent = tf.get_parameters().0[..(connection_channel.get_mtu() - 1)].to_vec();
 
                     self.set_blob_data(replace(&mut tf.get_mut_parameters().0, sent), handle);
                 }
 
-                self.send_pdu(tf).await
+                self.send_pdu(connection_channel, tf).await
             }
-            Err(e) => self.send_error(handle, ClientPduName::ReadRequest, e).await,
+            Err(e) => {
+                self.send_error(connection_channel, handle, ClientPduName::ReadRequest, e)
+                    .await
+            }
         }
     }
 
     /// Process a Write Request from the client
-    async fn process_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
+    async fn process_write_request<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
 
         log::info!("Processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
 
         match self.write_att(handle, &payload[2..]).await {
-            Ok(_) => self.send_pdu(pdu::write_response()).await,
-            Err(e) => self.send_error(handle, ClientPduName::WriteRequest, e).await,
+            Ok(_) => self.send_pdu(connection_channel, pdu::write_response()).await,
+            Err(e) => {
+                self.send_error(connection_channel, handle, ClientPduName::WriteRequest, e)
+                    .await
+            }
         }
     }
 
     /// Process a Find Information Request form the client
-    async fn process_find_information_request(&mut self, handle_range: pdu::HandleRange) -> Result<(), super::Error> {
+    async fn process_find_information_request<C>(
+        &mut self,
+        connection_channel: &C,
+        handle_range: pdu::HandleRange,
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         log::info!(
             "Processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {}, end handle: {} }}",
             handle_range.starting_handle,
@@ -882,7 +927,7 @@ where
             let start = min(handle_range.starting_handle as usize, self.attributes.count());
             let stop = min(handle_range.ending_handle as usize, self.attributes.count());
 
-            let payload_max = self.get_mtu() - 2;
+            let payload_max = connection_channel.get_mtu() - 2;
 
             // Size of each handle + 16-bit-uuid responded pair
             let item_size_16 = 4;
@@ -926,6 +971,7 @@ where
                     // or none had the required read permissions for this operation.
 
                     self.send_error(
+                        connection_channel,
                         start as u16,
                         ClientPduName::FindInformationRequest,
                         pdu::Error::AttributeNotFound,
@@ -934,17 +980,18 @@ where
                 } else {
                     let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_128_bit_itr);
 
-                    self.send_pdu(pdu).await
+                    self.send_pdu(connection_channel, pdu).await
                 }
             } else {
                 // Send the 16 bit UUIDs
 
                 let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_16_bit_itr);
 
-                self.send_pdu(pdu).await
+                self.send_pdu(connection_channel, pdu).await
             }
         } else {
             self.send_error(
+                connection_channel,
                 handle_range.starting_handle,
                 ClientPduName::FindInformationRequest,
                 pdu::Error::InvalidHandle,
@@ -959,7 +1006,14 @@ where
     ///
     /// Because the Attribute Protocol doesn't define what a 'group' is this returns the group
     /// end handle with the same found attribute handle.
-    async fn process_find_by_type_value_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
+    async fn process_find_by_type_value_request<C>(
+        &mut self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         if payload.len() >= 6 {
             let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4]).unwrap();
 
@@ -981,7 +1035,7 @@ where
                 let start = min(handle_range.starting_handle as usize, self.attributes.count());
                 let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
-                let payload_max = self.get_mtu() - 1;
+                let payload_max = connection_channel.get_mtu() - 1;
 
                 let mut cnt = 0;
 
@@ -1008,17 +1062,22 @@ where
 
                 if transfer.is_empty() {
                     self.send_error(
+                        connection_channel,
                         handle_range.starting_handle,
                         ClientPduName::FindByTypeValueRequest,
                         pdu::Error::AttributeNotFound,
                     )
                     .await
                 } else {
-                    self.send_pdu(pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer))
-                        .await
+                    self.send_pdu(
+                        connection_channel,
+                        pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer),
+                    )
+                    .await
                 }
             } else {
                 self.send_error(
+                    connection_channel,
                     handle_range.starting_handle,
                     ClientPduName::FindByTypeValueRequest,
                     pdu::Error::AttributeNotFound,
@@ -1026,13 +1085,25 @@ where
                 .await
             }
         } else {
-            self.send_error(0, ClientPduName::FindInformationRequest, pdu::Error::InvalidPDU)
-                .await
+            self.send_error(
+                connection_channel,
+                0,
+                ClientPduName::FindInformationRequest,
+                pdu::Error::InvalidPDU,
+            )
+            .await
         }
     }
 
     /// Process Read By Type Request
-    async fn process_read_by_type_request(&mut self, type_request: pdu::TypeRequest) -> Result<(), super::Error> {
+    async fn process_read_by_type_request<C>(
+        &mut self,
+        connection_channel: &C,
+        type_request: pdu::TypeRequest,
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         log::info!(
             "Processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
             type: {:?} }}",
@@ -1051,7 +1122,7 @@ where
             let start = min(handle_range.starting_handle as usize, self.attributes.count());
             let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
-            let payload_max = self.get_mtu() - 2;
+            let payload_max = connection_channel.get_mtu() - 2;
 
             let single_payload_size = |cnt, size| (cnt + 1) * (size + 2) < payload_max;
 
@@ -1062,6 +1133,7 @@ where
             match init_iter.by_ref().next() {
                 None => {
                     self.send_error(
+                        connection_channel,
                         handle_range.starting_handle,
                         ClientPduName::ReadByTypeRequest,
                         pdu::Error::AttributeNotFound,
@@ -1071,8 +1143,13 @@ where
 
                 Some(first_match) => {
                     if let Some(e) = self.client_can_read_attribute(first_match) {
-                        self.send_error(handle_range.starting_handle, ClientPduName::ReadByTypeRequest, e)
-                            .await
+                        self.send_error(
+                            connection_channel,
+                            handle_range.starting_handle,
+                            ClientPduName::ReadByTypeRequest,
+                            e,
+                        )
+                        .await
                     } else {
                         let first_val = first_match.get_value();
 
@@ -1128,12 +1205,14 @@ where
                             }
                         }
 
-                        self.send_pdu(pdu::read_by_type_response(responses)).await
+                        self.send_pdu(connection_channel, pdu::read_by_type_response(responses))
+                            .await
                     }
                 }
             }
         } else {
             self.send_error(
+                connection_channel,
                 handle_range.starting_handle,
                 ClientPduName::ReadByTypeRequest,
                 pdu::Error::InvalidHandle,
@@ -1143,7 +1222,14 @@ where
     }
 
     /// Process read blob request
-    async fn process_read_blob_request(&mut self, blob_request: pdu::ReadBlobRequest) -> Result<(), super::Error> {
+    async fn process_read_blob_request<C>(
+        &mut self,
+        connection_channel: &C,
+        blob_request: pdu::ReadBlobRequest,
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         log::info!(
             "Processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
             blob_request.handle,
@@ -1163,10 +1249,10 @@ where
 
                 match (use_old_blob, blob_request.offset) {
                     // No prior blob or start of new blob
-                    (false, _) | (_, 0) => self.create_blob_send_response(&blob_request).await,
+                    (false, _) | (_, 0) => self.create_blob_send_response(connection_channel, &blob_request).await,
 
                     // Continuing reading prior blob
-                    (true, offset) => self.use_blob_send_response(offset).await,
+                    (true, offset) => self.use_blob_send_response(connection_channel, offset).await,
                 }
             }
 
@@ -1174,8 +1260,13 @@ where
         } {
             Err(e) => match e {
                 super::Error::PduError(e) => {
-                    self.send_error(blob_request.handle, ClientPduName::ReadBlobRequest, e)
-                        .await
+                    self.send_error(
+                        connection_channel,
+                        blob_request.handle,
+                        ClientPduName::ReadBlobRequest,
+                        e,
+                    )
+                    .await
                 }
 
                 _ => Err(e),
@@ -1196,10 +1287,17 @@ where
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// the handle requested is valid
     #[inline]
-    async fn create_blob_send_response(&mut self, br: &pdu::ReadBlobRequest) -> Result<(), super::Error> {
+    async fn create_blob_send_response<C>(
+        &mut self,
+        connection_channel: &C,
+        br: &pdu::ReadBlobRequest,
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         let data = self.attributes.get(br.handle).unwrap().get_value().read().await;
 
-        let rsp = match self.new_read_blob_response(&data, br.offset)? {
+        let rsp = match self.new_read_blob_response(connection_channel, &data, br.offset)? {
             // when true is returned the data is blobbed
             (rsp, true) => {
                 self.blob_data = MultiReqData {
@@ -1214,7 +1312,7 @@ where
             (rsp, false) => rsp,
         };
 
-        self.send_pdu(rsp).await
+        self.send_pdu(connection_channel, rsp).await
     }
 
     /// Use the current blob and send the blob response
@@ -1228,12 +1326,15 @@ where
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// that `blob_data` is `Some(_)`
     #[inline]
-    async fn use_blob_send_response(&mut self, offset: u16) -> Result<(), super::Error> {
+    async fn use_blob_send_response<C>(&mut self, connection_channel: &C, offset: u16) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         let data = self.blob_data.as_ref().unwrap();
 
-        match self.new_read_blob_response(&data.tf_data, offset)? {
+        match self.new_read_blob_response(connection_channel, &data.tf_data, offset)? {
             (rsp, false) => {
-                self.send_pdu(rsp).await?;
+                self.send_pdu(connection_channel, rsp).await?;
 
                 // This is the final piece of the blob
                 self.blob_data = None;
@@ -1241,7 +1342,7 @@ where
                 Ok(())
             }
 
-            (rsp, true) => self.send_pdu(rsp).await,
+            (rsp, true) => self.send_pdu(connection_channel, rsp).await,
         }
     }
 
@@ -1250,12 +1351,16 @@ where
     /// This return is the Read Blob Response with a boolean to indicate if the response payload was
     /// completely filled with data bytes.
     #[inline]
-    fn new_read_blob_response<'a>(
+    fn new_read_blob_response<'a, C>(
         &self,
+        connection_channel: &C,
         data: &'a [u8],
         offset: u16,
-    ) -> Result<(pdu::Pdu<pdu::LocalReadBlobResponse<'a>>, bool), pdu::Error> {
-        let max_payload = self.get_mtu() - 1;
+    ) -> Result<(pdu::Pdu<pdu::LocalReadBlobResponse<'a>>, bool), pdu::Error>
+    where
+        C: ConnectionChannel,
+    {
+        let max_payload = connection_channel.get_mtu() - 1;
 
         match offset as usize {
             o if o > data.len() => Err(pdu::Error::InvalidOffset),
@@ -1269,7 +1374,14 @@ where
         }
     }
 
-    async fn process_prepare_write_request(&mut self, payload: &[u8]) -> Result<(), super::Error> {
+    async fn process_prepare_write_request<C>(
+        &mut self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         if let Err((h, e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => {
                 log::info!(
@@ -1285,7 +1397,7 @@ where
                         Ok(_) => {
                             let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
 
-                            self.send_pdu(response).await?;
+                            self.send_pdu(connection_channel, response).await?;
 
                             Ok(())
                         }
@@ -1297,13 +1409,21 @@ where
 
             Err(e) => Err((0, e.pdu_err)),
         } {
-            self.send_error(h, ClientPduName::PrepareWriteRequest, e).await
+            self.send_error(connection_channel, h, ClientPduName::PrepareWriteRequest, e)
+                .await
         } else {
             Ok(())
         }
     }
 
-    async fn process_execute_write_request(&mut self, request_flag: pdu::ExecuteWriteFlag) -> Result<(), super::Error> {
+    async fn process_execute_write_request<C>(
+        &mut self,
+        connection_channel: &C,
+        request_flag: pdu::ExecuteWriteFlag,
+    ) -> Result<(), super::Error>
+    where
+        C: ConnectionChannel,
+    {
         log::info!("Processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
 
         match match self.queued_writer.process_execute(request_flag) {
@@ -1321,9 +1441,12 @@ where
 
             Err(e) => Err(e),
         } {
-            Err(e) => self.send_error(0, ClientPduName::ExecuteWriteRequest, e).await,
+            Err(e) => {
+                self.send_error(connection_channel, 0, ClientPduName::ExecuteWriteRequest, e)
+                    .await
+            }
 
-            Ok(_) => self.send_pdu(pdu::execute_write_response()).await,
+            Ok(_) => self.send_pdu(connection_channel, pdu::execute_write_response()).await,
         }
     }
 
@@ -1332,15 +1455,6 @@ where
     /// This will return an iterator to get the type, permissions, and handle for each attribute
     pub fn iter_attr_info(&self) -> impl Iterator<Item = AttributeInfo<'_>> {
         self.attributes.iter_info()
-    }
-}
-
-impl<C, Q> AsRef<C> for Server<'_, C, Q>
-where
-    C: l2cap::ConnectionChannel,
-{
-    fn as_ref(&self) -> &C {
-        &self.connection_channel
     }
 }
 

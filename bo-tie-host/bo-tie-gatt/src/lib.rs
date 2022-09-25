@@ -21,6 +21,7 @@ use alloc::vec::Vec;
 pub use bo_tie_att as att;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
+use bo_tie_l2cap::ConnectionChannel;
 
 struct ServiceDefinition;
 
@@ -598,12 +599,11 @@ impl ServerBuilder {
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C, Q>(self, connection_channel: &'_ C, queue_writer: Q) -> Server<C, Q>
+    pub fn make_server<C, Q>(self, queue_writer: Q) -> Server<Q>
     where
-        C: l2cap::ConnectionChannel,
-        Q: crate::att::server::QueuedWriter,
+        Q: att::server::QueuedWriter,
     {
-        let server = att::server::Server::new(connection_channel, Some(self.attributes), queue_writer);
+        let server = att::server::Server::new(Some(self.attributes), queue_writer);
 
         Server {
             primary_services: self.primary_services,
@@ -618,14 +618,13 @@ impl From<GapServiceBuilder<'_>> for ServerBuilder {
     }
 }
 
-pub struct Server<'c, C, Q> {
+pub struct Server<Q> {
     primary_services: Vec<ServiceGroupData>,
-    server: att::server::Server<'c, C, Q>,
+    server: att::server::Server<Q>,
 }
 
-impl<'c, C, Q> Server<'c, C, Q>
+impl<Q> Server<Q>
 where
-    C: l2cap::ConnectionChannel,
     Q: att::server::QueuedWriter,
 {
     /// Get information on the services within this GATT server
@@ -637,7 +636,14 @@ where
     }
 
     /// Process some ACL data as a ATT client message
-    pub async fn process_acl_data(&mut self, acl_data: &l2cap::BasicInfoFrame<Vec<u8>>) -> Result<(), att::Error> {
+    pub async fn process_acl_data<C>(
+        &mut self,
+        connection_channel: &mut C,
+        acl_data: &l2cap::BasicInfoFrame<Vec<u8>>,
+    ) -> Result<(), att::Error>
+    where
+        C: ConnectionChannel,
+    {
         let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
 
         match pdu_type {
@@ -647,9 +653,14 @@ where
                     att::client::ClientPduName::ReadByGroupTypeRequest
                 );
 
-                self.process_read_by_group_type_request(payload).await
+                self.process_read_by_group_type_request(connection_channel, payload)
+                    .await
             }
-            _ => self.server.process_parsed_acl_data(pdu_type, payload).await,
+            _ => {
+                self.server
+                    .process_parsed_acl_data(connection_channel, pdu_type, payload)
+                    .await
+            }
         }
     }
 
@@ -659,7 +670,14 @@ where
             .check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
     }
 
-    async fn process_read_by_group_type_request(&self, payload: &[u8]) -> Result<(), crate::att::Error> {
+    async fn process_read_by_group_type_request<C>(
+        &self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<(), att::Error>
+    where
+        C: ConnectionChannel,
+    {
         match att::TransferFormatTryFrom::try_from(payload) {
             Ok(att::pdu::TypeRequest {
                 handle_range,
@@ -687,7 +705,7 @@ where
                 match service_iter.peek() {
                     Some(Ok(first_service)) => {
                         // pdu header size is 2 bytes
-                        let payload_size = self.server.get_mtu() - 2;
+                        let payload_size = connection_channel.get_mtu() - 2;
                         let can_be_16_bit = first_service.service_uuid.can_be_16_bit();
 
                         let build_response_iter =
@@ -721,13 +739,14 @@ where
 
                         let pdu = att::pdu::read_by_group_type_response(ReadByGroupTypeResponse::new(response));
 
-                        self.server.send_pdu(pdu).await
+                        self.server.send_pdu(connection_channel, pdu).await
                     }
 
                     // Client didn't have adequate permissions to access the first service
                     Some(Err(e)) => {
                         self.server
                             .send_error(
+                                connection_channel,
                                 handle_range.starting_handle,
                                 att::client::ClientPduName::ReadByGroupTypeRequest,
                                 (*e).into(),
@@ -741,6 +760,7 @@ where
                     None => {
                         self.server
                             .send_error(
+                                connection_channel,
                                 handle_range.starting_handle,
                                 att::client::ClientPduName::ReadByGroupTypeRequest,
                                 att::pdu::Error::AttributeNotFound,
@@ -752,6 +772,7 @@ where
             Ok(att::pdu::TypeRequest { handle_range, .. }) => {
                 self.server
                     .send_error(
+                        connection_channel,
                         handle_range.starting_handle,
                         att::client::ClientPduName::ReadByGroupTypeRequest,
                         att::pdu::Error::UnsupportedGroupType,
@@ -763,6 +784,7 @@ where
             _ => {
                 self.server
                     .send_error(
+                        connection_channel,
                         0,
                         att::client::ClientPduName::ReadByGroupTypeRequest,
                         att::pdu::Error::UnlikelyError,
@@ -775,27 +797,27 @@ where
     }
 }
 
-impl<'c, C, Q> AsRef<att::server::Server<'c, C, Q>> for Server<'c, C, Q> {
-    fn as_ref(&self) -> &att::server::Server<'c, C, Q> {
+impl<Q> AsRef<att::server::Server<Q>> for Server<Q> {
+    fn as_ref(&self) -> &att::server::Server<Q> {
         &self.server
     }
 }
 
-impl<'c, C, Q> AsMut<att::server::Server<'c, C, Q>> for Server<'c, C, Q> {
-    fn as_mut(&mut self) -> &mut att::server::Server<'c, C, Q> {
+impl<Q> AsMut<att::server::Server<Q>> for Server<Q> {
+    fn as_mut(&mut self) -> &mut att::server::Server<Q> {
         &mut self.server
     }
 }
 
-impl<'c, C, Q> core::ops::Deref for Server<'c, C, Q> {
-    type Target = att::server::Server<'c, C, Q>;
+impl<Q> core::ops::Deref for Server<Q> {
+    type Target = att::server::Server<Q>;
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-impl<'c, C, Q> core::ops::DerefMut for Server<'c, C, Q> {
+impl<Q> core::ops::DerefMut for Server<Q> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
     }

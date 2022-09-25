@@ -1,6 +1,7 @@
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
 use bo_tie_l2cap as l2cap;
+use bo_tie_l2cap::ConnectionChannel;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ClientPduName {
@@ -127,16 +128,12 @@ where
 /// `LeConnectClient` is used for initiating and connecting to an attribute server. It performs a
 /// MTU exchange as part of the connection process. Once the exchange is complete and there were no
 /// errors preventing a connection, a `Client` will be created.
-pub struct LeConnectClient<'c, C> {
+pub struct LeConnectClient {
     requested_mtu: usize,
-    connection_channel: &'c C,
     skipped_mtu_request: bool,
 }
 
-impl<'c, C> LeConnectClient<'c, C>
-where
-    C: l2cap::ConnectionChannel,
-{
+impl LeConnectClient {
     /// Create a new `LeConnectClient` and initiate the connection process
     ///
     /// This takes a connection channel between this device and a slave device with an optional
@@ -145,8 +142,9 @@ where
     /// (less than or equal to `mtu`) is assigned to the connection. If `max_mtu` is `None`, then
     /// the smallest MTU for the channel is used as the maximum MTU. This MTU size will depend on if
     /// the channel is for LE or BR/EDR.
-    pub async fn initiate<M>(mtu: M, connection_channel: &'c C) -> Result<LeConnectClient<'c, C>, super::Error>
+    pub async fn initiate<C, M>(mtu: M, connection_channel: &C) -> Result<LeConnectClient, super::Error>
     where
+        C: ConnectionChannel,
         M: Into<Option<u16>>,
     {
         let requested_mtu = mtu.into().map(|mtu| mtu.into()).unwrap_or(connection_channel.min_mtu());
@@ -156,7 +154,6 @@ where
         } else if requested_mtu == connection_channel.min_mtu() {
             Ok(LeConnectClient {
                 requested_mtu,
-                connection_channel,
                 skipped_mtu_request: true,
             })
         } else {
@@ -171,7 +168,6 @@ where
 
             Ok(LeConnectClient {
                 requested_mtu,
-                connection_channel,
                 skipped_mtu_request: false,
             })
         }
@@ -183,13 +179,20 @@ where
     /// occur if the response doesn't contain the correct channel identifier or an unexpected ATT
     /// PDU was received. The server is expected to respond with either a mtu response PDU or an
     /// error PDU with request not supported.
-    pub async fn create_client(self, response: &l2cap::BasicInfoFrame<Vec<u8>>) -> Result<Client<'c, C>, super::Error> {
+    pub async fn create_client<C>(
+        self,
+        connection_channel: &C,
+        response: &l2cap::BasicInfoFrame<Vec<u8>>,
+    ) -> Result<Client, super::Error>
+    where
+        C: ConnectionChannel,
+    {
         if self.skipped_mtu_request {
-            Ok(Client::new(self.requested_mtu, self.connection_channel))
+            Ok(Client::new())
         } else if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
             Err(super::Error::IncorrectChannelId)
         } else if ServerPduName::ExchangeMTUResponse.is_convertible_from(response.get_payload()) {
-            self.process_mtu_response(response.get_payload())
+            self.process_mtu_response(connection_channel, response.get_payload())
         } else if ServerPduName::ErrorResponse.is_convertible_from(response.get_payload()) {
             self.process_err_response(response.get_payload())
         } else {
@@ -197,31 +200,34 @@ where
         }
     }
 
-    fn process_mtu_response(self, payload: &[u8]) -> Result<Client<'c, C>, super::Error> {
+    fn process_mtu_response<C>(self, connection_channel: &C, payload: &[u8]) -> Result<Client, super::Error>
+    where
+        C: ConnectionChannel,
+    {
         let pdu: Result<pdu::Pdu<pdu::MtuResponse>, _> = TransferFormatTryFrom::try_from(payload);
 
         match pdu {
             Ok(received_mtu) => {
                 let mtu: usize = self.requested_mtu.min(received_mtu.get_parameters().0.into());
 
-                if self.connection_channel.min_mtu() > mtu {
+                if connection_channel.min_mtu() > mtu {
                     log::info!(
                         "Received a bad MTU (MTU is less than the minimum) \
                         from the server, default to using the minimum MTU"
                     );
 
-                    Ok(Client::new(self.connection_channel.min_mtu(), self.connection_channel))
-                } else if self.connection_channel.max_mtu() < mtu {
-                    Ok(Client::new(self.connection_channel.max_mtu(), self.connection_channel))
+                    Ok(Client::new())
+                } else if connection_channel.max_mtu() < mtu {
+                    Ok(Client::new())
                 } else {
-                    Ok(Client::new(mtu, self.connection_channel))
+                    Ok(Client::new())
                 }
             }
             Err(e) => Err(TransferFormatError::from(format!("Bad exchange MTU response: {}", e)).into()),
         }
     }
 
-    fn process_err_response(self, payload: &[u8]) -> Result<Client<'c, C>, super::Error> {
+    fn process_err_response(self, payload: &[u8]) -> Result<Client, super::Error> {
         match pdu::Error::from_raw(payload[4]) {
             // Per the Spec (Core v5.0, Vol 3, part F, 3.4.9), this should be the only
             // error type received
@@ -229,12 +235,9 @@ where
                 // Log that exchange MTU is not supported by the server, and return a
                 // client with the default MTU
 
-                log::info!(
-                    "Server doesn't support 'MTU exchange'; default MTU of {} bytes is used",
-                    self.connection_channel.min_mtu()
-                );
+                log::info!("Server doesn't support 'MTU exchange'; default MTU is used",);
 
-                Ok(Client::new(self.connection_channel.min_mtu(), self.connection_channel))
+                Ok(Client::new())
             }
 
             e @ _ => Err(super::Error::from(TransferFormatError {
@@ -244,7 +247,7 @@ where
         }
     }
 
-    fn process_incorrect_response(self, opcode: Option<u8>) -> Result<Client<'c, C>, super::Error> {
+    fn process_incorrect_response(self, opcode: Option<u8>) -> Result<Client, super::Error> {
         // Convert the first byte into the
         match opcode.and_then(|b| Some(ServerPduName::try_from(b))) {
             Some(Ok(pdu)) => Err(TransferFormatError::from(format!(
@@ -277,22 +280,16 @@ where
 ///
 /// The MTU between the Client and Server is already established when a 'Client' is created, however
 /// a new MTU can be requested at any time.
-pub struct Client<'c, C> {
-    mtu: usize,
-    channel: &'c C,
-}
+pub struct Client;
 
-impl<'c, C> Client<'c, C> {
-    fn new(mtu: usize, channel: &'c C) -> Self {
-        Client { mtu, channel }
+impl Client {
+    fn new() -> Self {
+        Self
     }
 }
 
-impl<'c, C> Client<'c, C>
-where
-    C: l2cap::ConnectionChannel,
-{
-    fn process_raw_data<P>(expected_response: super::server::ServerPduName, bytes: &[u8]) -> Result<P, super::Error>
+impl Client {
+    fn process_raw_data<P>(expected_response: ServerPduName, bytes: &[u8]) -> Result<P, super::Error>
     where
         P: TransferFormatTryFrom + pdu::ExpectedOpcode,
     {
@@ -329,18 +326,19 @@ where
         }
     }
 
-    async fn send<P>(&self, pdu: &pdu::Pdu<P>) -> Result<(), super::Error>
+    async fn send<C, P>(&self, connection_channel: &C, pdu: &pdu::Pdu<P>) -> Result<(), super::Error>
     where
+        C: ConnectionChannel,
         P: TransferFormatInto,
     {
         let payload = TransferFormatInto::into(pdu);
 
-        if payload.len() > self.mtu {
+        if payload.len() > connection_channel.get_mtu() {
             Err(super::Error::MtuExceeded)
         } else {
             let data = l2cap::BasicInfoFrame::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
 
-            self.channel
+            connection_channel
                 .send(data)
                 .await
                 .map_err(|e| super::Error::send_error::<C>(e))
@@ -353,19 +351,27 @@ where
     /// to try to change the mtu, then this will resend the exchange mtu request PDU to the server.
     ///
     /// The new MTU is returned by the future
-    pub async fn exchange_mtu_request(
-        &'c mut self,
+    pub async fn exchange_mtu_request<C>(
+        self,
+        connection_channel: &mut C,
         mtu: u16,
-    ) -> Result<impl ResponseProcessor<Response = ()> + 'c, super::Error> {
-        if self.channel.min_mtu() > mtu.into() {
+    ) -> Result<impl ResponseProcessor<Response = ()> + '_, super::Error>
+    where
+        C: ConnectionChannel,
+    {
+        if connection_channel.min_mtu() > mtu.into() {
             Err(super::Error::TooSmallMtu)
+        } else if connection_channel.max_mtu() < mtu.into() {
+            Err(super::Error::MtuExceeded)
         } else {
-            self.send(&pdu::exchange_mtu_request(mtu)).await.unwrap();
+            self.send(connection_channel, &pdu::exchange_mtu_request(mtu))
+                .await
+                .unwrap();
 
             Ok(ResponseProcessorCheck(move |data| {
                 let response: pdu::MtuResponse = Self::process_raw_data(ServerPduName::ExchangeMTUResponse, data)?;
 
-                self.mtu = core::cmp::min(mtu, response.0).into();
+                connection_channel.set_mtu(core::cmp::min(mtu, response.0).into());
 
                 Ok(())
             }))
@@ -377,18 +383,21 @@ where
     /// # Panic
     /// A range cannot be the reserved handle 0x0000 and the ending handle must be larger than or
     /// equal to the starting handle
-    pub async fn find_information_request<R>(
+    pub async fn find_information_request<C, R>(
         &self,
+        connection_channel: &C,
         handle_range: R,
     ) -> Result<impl ResponseProcessor<Response = pdu::FormattedHandlesWithType>, super::Error>
     where
+        C: ConnectionChannel,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
     {
         if !pdu::is_valid_handle_range(&handle_range) {
             panic!("Invalid handle range")
         }
 
-        self.send(&pdu::find_information_request(handle_range)).await?;
+        self.send(connection_channel, &pdu::find_information_request(handle_range))
+            .await?;
 
         Ok(ResponseProcessorCheck(|data| {
             Self::process_raw_data(ServerPduName::FindInformationResponse, data)
@@ -404,13 +413,15 @@ where
     /// # Panic
     /// A range cannot be the reserved handle 0x0000 and the start handle must be larger then the
     /// ending handle
-    pub async fn find_by_type_value_request<R, D>(
-        &'c self,
+    pub async fn find_by_type_value_request<C, R, D>(
+        &self,
+        connection_channel: &C,
         handle_range: R,
         uuid: crate::Uuid,
         value: D,
-    ) -> Result<impl ResponseProcessor<Response = pdu::TypeValueResponse> + 'c, super::Error>
+    ) -> Result<impl ResponseProcessor<Response = pdu::TypeValueResponse>, super::Error>
     where
+        C: ConnectionChannel,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -422,7 +433,7 @@ where
 
         match pdu_rslt {
             Ok(pdu) => {
-                self.send(&pdu).await?;
+                self.send(connection_channel, &pdu).await?;
 
                 Ok(ResponseProcessorCheck(|d| {
                     Self::process_raw_data(ServerPduName::FindByTypeValueResponse, d)
@@ -437,12 +448,14 @@ where
     /// # Panic
     /// A range cannot contain be the reserved handle 0x0000 and the start handle must be larger
     /// then the ending handle
-    pub async fn read_by_type_request<R, D>(
+    pub async fn read_by_type_request<C, R, D>(
         &self,
+        connection_channel: &C,
         handle_range: R,
         attr_type: crate::Uuid,
     ) -> Result<impl ResponseProcessor<Response = Vec<pdu::ReadTypeResponse<D>>>, super::Error>
     where
+        C: ConnectionChannel,
         R: Into<pdu::HandleRange>,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -452,7 +465,8 @@ where
             panic!("Invalid handle range")
         }
 
-        self.send(&pdu::read_by_type_request(handle_range, attr_type)).await?;
+        self.send(connection_channel, &pdu::read_by_type_request(handle_range, attr_type))
+            .await?;
 
         Ok(ResponseProcessorCheck(|d| {
             Self::process_raw_data(ServerPduName::ReadByTypeResponse, d).map(|rsp: pdu::ReadByTypeResponse<D>| rsp.0)
@@ -463,15 +477,20 @@ where
     ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
-    pub async fn read_request<D>(&self, handle: u16) -> Result<impl ResponseProcessor<Response = D>, super::Error>
+    pub async fn read_request<C, D>(
+        &self,
+        connection_channel: &C,
+        handle: u16,
+    ) -> Result<impl ResponseProcessor<Response = D>, super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatTryFrom,
     {
         if !pdu::is_valid_handle(handle) {
             panic!("Handle 0 is reserved for future use by the spec.")
         }
 
-        self.send(&pdu::read_request(handle)).await?;
+        self.send(connection_channel, &pdu::read_request(handle)).await?;
 
         Ok(ResponseProcessorCheck(|d| {
             Self::process_raw_data(ServerPduName::ReadResponse, d).map(|rsp: pdu::ReadResponse<D>| rsp.0)
@@ -484,19 +503,22 @@ where
     ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
-    pub async fn read_blob_request<D>(
+    pub async fn read_blob_request<C, D>(
         &self,
+        connection_channel: &C,
         handle: u16,
         offset: u16,
     ) -> Result<impl ResponseProcessor<Response = ReadBlob>, super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatTryFrom,
     {
         if !pdu::is_valid_handle(handle) {
             panic!("Handle 0 is reserved for future use by the spec.")
         }
 
-        self.send(&pdu::read_blob_request(handle, offset)).await?;
+        self.send(connection_channel, &pdu::read_blob_request(handle, offset))
+            .await?;
 
         Ok(ResponseProcessorCheck(move |d| {
             let rsp: pdu::ReadBlobResponse = Self::process_raw_data(ServerPduName::ReadBlobResponse, d)?;
@@ -515,20 +537,27 @@ where
     ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
-    pub async fn read_multiple_request<'a, D, I>(
+    pub async fn read_multiple_request<C, D, I>(
         &self,
-        handles: alloc::vec::Vec<u16>,
+        connection_channel: &C,
+        handles: I,
     ) -> Result<impl ResponseProcessor<Response = Vec<D>>, super::Error>
     where
+        C: ConnectionChannel,
+        I: IntoIterator<Item = u16> + Clone,
         Vec<D>: TransferFormatTryFrom + TransferFormatInto,
     {
-        handles.iter().for_each(|h| {
-            if !pdu::is_valid_handle(*h) {
+        handles.clone().into_iter().for_each(|h| {
+            if !pdu::is_valid_handle(h) {
                 panic!("Handle 0 is reserved for future use by the spec.")
             }
         });
 
-        self.send(&pdu::read_multiple_request(handles)?).await?;
+        self.send(
+            connection_channel,
+            &pdu::read_multiple_request(handles.into_iter().collect())?,
+        )
+        .await?;
 
         Ok(ResponseProcessorCheck(|d| {
             Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)
@@ -540,12 +569,14 @@ where
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn read_by_group_type_request<R, D>(
+    pub async fn read_by_group_type_request<C, R, D>(
         &self,
+        connection_channel: &C,
         handle_range: R,
         group_type: crate::Uuid,
     ) -> Result<impl ResponseProcessor<Response = pdu::ReadByGroupTypeResponse<D>>, super::Error>
     where
+        C: ConnectionChannel,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
         D: TransferFormatTryFrom,
     {
@@ -553,8 +584,11 @@ where
             panic!("Invalid handle range")
         }
 
-        self.send(&pdu::read_by_group_type_request(handle_range, group_type))
-            .await?;
+        self.send(
+            connection_channel,
+            &pdu::read_by_group_type_request(handle_range, group_type),
+        )
+        .await?;
 
         Ok(ResponseProcessorCheck(|d| {
             Self::process_raw_data(ServerPduName::ReadByGroupTypeResponse, d)
@@ -568,19 +602,21 @@ where
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn write_request<D>(
+    pub async fn write_request<C, D>(
         &self,
+        connection_channel: &C,
         handle: u16,
         data: D,
     ) -> Result<impl ResponseProcessor<Response = ()>, super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
         if !pdu::is_valid_handle(handle) {
             panic!("Handle 0 is reserved for future use by the spec.")
         }
 
-        self.send(&pdu::write_request(handle, data)).await?;
+        self.send(connection_channel, &pdu::write_request(handle, data)).await?;
 
         Ok(ResponseProcessorCheck(|d| {
             Self::process_raw_data(ServerPduName::WriteResponse, d).map(|_: pdu::WriteResponse| ())
@@ -594,15 +630,16 @@ where
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn write_command<D>(&self, handle: u16, data: D) -> Result<(), super::Error>
+    pub async fn write_command<C, D>(&self, connection_channel: &C, handle: u16, data: D) -> Result<(), super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatInto,
     {
         if !pdu::is_valid_handle(handle) {
             panic!("Handle 0 is reserved for future use by the spec.")
         }
 
-        self.send(&pdu::write_command(handle, data)).await
+        self.send(connection_channel, &pdu::write_command(handle, data)).await
     }
 
     /// Prepare Write Request
@@ -612,25 +649,32 @@ where
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn prepare_write_request<D>(
+    pub async fn prepare_write_request<C, D>(
         &self,
+        connection_channel: &C,
         pwr: pdu::Pdu<pdu::PreparedWriteRequest<'_>>,
     ) -> Result<impl ResponseProcessor<Response = pdu::PreparedWriteResponse>, super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
-        self.send(&pwr).await?;
+        self.send(connection_channel, &pwr).await?;
 
         Ok(ResponseProcessorCheck(|d| {
             Self::process_raw_data(ServerPduName::PrepareWriteResponse, d)
         }))
     }
 
-    pub async fn execute_write_request(
+    pub async fn execute_write_request<C>(
         &self,
+        connection_channel: &C,
         execute: pdu::ExecuteWriteFlag,
-    ) -> Result<impl ResponseProcessor<Response = ()>, super::Error> {
-        self.send(&pdu::execute_write_request(execute)).await?;
+    ) -> Result<impl ResponseProcessor<Response = ()>, super::Error>
+    where
+        C: ConnectionChannel,
+    {
+        self.send(connection_channel, &pdu::execute_write_request(execute))
+            .await?;
 
         Ok(ResponseProcessorCheck(|d| {
             Self::process_raw_data(ServerPduName::ExecuteWriteResponse, d).map(|_: pdu::ExecuteWriteResponse| ())
@@ -642,15 +686,16 @@ where
     /// This can be used by higher layer protocols to send a command to the server that is not
     /// implemented at the ATT protocol level. However, if the provided pdu contains an opcode
     /// already used by the ATT protocol, then an error is returned.
-    pub async fn custom_command<D>(&self, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
+    pub async fn custom_command<C, D>(&self, connection_channel: &C, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
     where
+        C: ConnectionChannel,
         D: TransferFormatInto,
     {
         let op: u8 = pdu.get_opcode().as_raw();
 
         if ClientPduName::try_from(op).is_err() && ServerPduName::try_from(op).is_err() {
-            if self.mtu > pdu.len_of_into() {
-                self.send(&pdu).await?;
+            if connection_channel.get_mtu() >= pdu.len_of_into() {
+                self.send(connection_channel, &pdu).await?;
 
                 Ok(())
             } else {
