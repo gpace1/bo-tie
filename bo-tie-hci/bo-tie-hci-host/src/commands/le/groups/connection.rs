@@ -28,8 +28,7 @@ pub mod connection_update {
     use super::ConnectionIntervalBounds;
     use crate::commands::le::{ConnectionEventLength, SupervisionTimeout};
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -83,8 +82,7 @@ pub mod connection_update {
 /// Send the LE Create Connection Cancel command
 pub mod create_connection_cancel {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -113,8 +111,7 @@ pub mod create_connection {
         AddressType, ConnectionEventLength, ConnectionLatency, OwnAddressType, SupervisionTimeout,
     };
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_util::BluetoothDeviceAddress;
 
@@ -254,8 +251,7 @@ pub mod create_connection {
 /// LE Set Host Channel Classification command
 pub mod set_host_channel_classification {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -307,8 +303,7 @@ pub mod read_channel_map {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -409,8 +404,7 @@ pub mod read_channel_map {
 pub mod read_remote_features {
 
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 

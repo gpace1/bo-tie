@@ -11,8 +11,7 @@ pub mod encrypt {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::Encrypt);
@@ -91,8 +90,7 @@ pub mod encrypt {
 pub mod rand {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::Rand);
@@ -152,8 +150,7 @@ pub mod rand {
 /// LE Enable Encryption command
 pub mod enable_encryption {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -243,8 +240,7 @@ pub mod enable_encryption {
 pub mod long_term_key_request_reply {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -320,8 +316,7 @@ pub mod long_term_key_request_reply {
 pub mod long_term_key_request_negative_reply {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 

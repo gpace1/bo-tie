@@ -3,7 +3,7 @@
 //! This is the implementation of the host of the Host Controller Interface. It's purpose is to
 //! function and control the Bluetooth controller. The host is broken into to three parts  
 
-#![feature(generic_associated_types)]
+#![cfg_attr(feature = "unstable-type-alias-impl-trait", feature(type_alias_impl_trait))]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
@@ -20,17 +20,20 @@ macro_rules! check_status {
 }
 
 pub mod commands;
+#[cfg(feature = "l2cap")]
+pub mod l2cap;
 
-use bo_tie_hci_util::events;
-use bo_tie_hci_util::opcodes;
-use bo_tie_util::errors;
 use alloc::vec::Vec;
-use bo_tie_hci_util::{Channel, ChannelEnds, ChannelReserve, FlowControlId};
+use bo_tie_hci_util::{events, ToHostCommandIntraMessage};
+use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
+use bo_tie_hci_util::{Channel, ChannelReserve, ConnectionChannelEnds, FlowControlId};
+use bo_tie_hci_util::{HostChannelEnds as HostInterface, ToConnectionIntraMessage};
+use bo_tie_util::errors;
+use core::fmt::Write;
 use core::future::Future;
+use core::ops::Deref;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::ops::Deref;
-use std::sync::mpsc::{Receiver, Sender};
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -421,236 +424,12 @@ impl<'a> HciAclData<&'a [u8]> {
     }
 }
 
-// The trait for a [`Host`] to communicate with the interface
-///
-/// This trait is used for communication by a host async task with an interface async task. It
-/// provides access to the sender and receiver used by a `Host` and the buffer reserve for creating
-/// an [`IntraMessage`](interface::IntraMessage) to send to an interface.
-///
-/// There are three types `HostInterface`s. These types are modeled to be flexible for various
-/// kinds of platforms that would use the `bo-tie`. The *preferred*  implementation.
-pub trait HostInterface {
-    /// Buffer type for messages to the interface async task
-    type ToBuffer: bo_tie_util::buffer::Buffer;
-
-    /// Buffer type for messages from the interface async task
-    type FromBuffer: bo_tie_util::buffer::Buffer;
-
-    /// The type containing the channels ends used for communicating with the interface async task
-    type ChannelEnds: ChannelEnds;
-
-    /// Sender for messages to the interface
-    type Sender: bo_tie_hci_util::Sender<Message = bo_tie_hci_util::ToIntraMessage<Self::ToBuffer>>;
-
-    /// The receiver of messages from the interface
-    type Receiver: bo_tie_hci_util::Receiver<
-        Message = bo_tie_hci_util::FromIntraMessage<Self::FromBuffer, Self::ChannelEnds>,
-    >;
-
-    /// The future used for taking a buffer
-    type TakeBuffer: Future<Output = Self::ToBuffer>;
-
-    /// Get the sender of messages to the interface async task
-    fn get_sender(&self) -> Self::Sender;
-
-    /// Get the receiver for messages from the interface async task
-    fn get_receiver(&self) -> &Self::Receiver;
-
-    /// Take a buffer
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
-    where
-        C: Into<Option<usize>>;
-}
-
-/// An interface for a singled threaded HCI
-///
-/// When an async task executor does not require the async tasks to be [`Send`] safe, a
-/// `LocalHostInterface` can be used
-struct DynLocalHostInterface {
-    ends: interface::local_channel::local_dynamic_channel::DynChannelEnds,
-}
-
-impl HostInterface for DynLocalHostInterface {
-    type ToBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::ToBuffer;
-
-    type FromBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::FromBuffer;
-
-    type ChannelEnds = interface::local_channel::local_dynamic_channel::DynChannelEnds;
-
-    type Sender = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::Sender;
-
-    type Receiver = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::Receiver;
-
-    type TakeBuffer = <interface::local_channel::local_dynamic_channel::DynChannelEnds as ChannelEnds>::TakeBuffer;
-
-    fn get_sender(&self) -> Self::Sender {
-        self.ends.get_sender()
-    }
-
-    fn get_receiver(&self) -> &Self::Receiver {
-        self.ends.get_receiver()
-    }
-
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
-    where
-        C: Into<Option<usize>>,
-    {
-        self.ends.take_buffer(front_capacity)
-    }
-}
-
-/// Create a locally used Host Controller Interface
-pub async fn new_local_hci(
-    max_connections: usize,
-) -> Result<(Host<impl HostInterface>, interface::Interface<impl ChannelReserve>), CommandError<impl HostInterface>> {
-    use interface::InitHostTaskEnds;
-
-    let mut interface = interface::Interface::new_local(max_connections + 1);
-
-    let ends = interface.init_host_task_ends().unwrap();
-
-    let host_interface = DynLocalHostInterface { ends };
-
-    let host = Host::init(host_interface).await?;
-
-    Ok((host, interface))
-}
-
-#[cfg(feature = "unstable")]
-struct StackLocalHostInterface<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    ends: interface::local_channel::local_stack_channel::ChannelEndsType<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
-}
-
-#[cfg(feature = "unstable")]
-impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> HostInterface
-    for StackLocalHostInterface<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
-{
-    type ToBuffer = <interface::local_channel::local_stack_channel::ChannelEndsType<
-        'z,
-        TASK_COUNT,
-        CHANNEL_SIZE,
-        BUFFER_SIZE,
-    > as ChannelEnds>::ToBuffer;
-
-    type FromBuffer = <interface::local_channel::local_stack_channel::ChannelEndsType<
-        'z,
-        TASK_COUNT,
-        CHANNEL_SIZE,
-        BUFFER_SIZE,
-    > as ChannelEnds>::FromBuffer;
-
-    type ChannelEnds =
-        interface::local_channel::local_stack_channel::ChannelEndsType<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
-
-    type Sender = <interface::local_channel::local_stack_channel::ChannelEndsType<
-        'z,
-        TASK_COUNT,
-        CHANNEL_SIZE,
-        BUFFER_SIZE,
-    > as ChannelEnds>::Sender;
-
-    type Receiver = <interface::local_channel::local_stack_channel::ChannelEndsType<
-        'z,
-        TASK_COUNT,
-        CHANNEL_SIZE,
-        BUFFER_SIZE,
-    > as ChannelEnds>::Receiver;
-
-    type TakeBuffer = <interface::local_channel::local_stack_channel::ChannelEndsType<
-        'z,
-        TASK_COUNT,
-        CHANNEL_SIZE,
-        BUFFER_SIZE,
-    > as ChannelEnds>::TakeBuffer;
-
-    fn get_sender(&self) -> Self::Sender {
-        self.ends.get_sender()
-    }
-
-    fn get_receiver(&self) -> &Self::Receiver {
-        self.ends.get_receiver()
-    }
-
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
-    where
-        C: Into<Option<usize>>,
-    {
-        self.ends.take_buffer(front_capacity)
-    }
-}
-
-/// The primer for a stack local HCI
-///
-/// This is the "allocation area" for the stack local HCI implementation. The stack local host,
-/// connection, and interface async tasks utilize rust by borrowing from this primer to ensure that
-/// they can safely allocate on the stack. For more information see the method
-/// [`new_stack_local_hci`].
-#[cfg(feature = "unstable")]
-pub struct StackLocalHciPrimer<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    data: interface::local_channel::local_stack_channel::LocalStackChannelReserveData<
-        TASK_COUNT,
-        CHANNEL_SIZE,
-        BUFFER_SIZE,
-    >,
-}
-
-#[cfg(feature = "unstable")]
-impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
-    StackLocalHciPrimer<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
-{
-    /// Create a new host and interface
-    // There should not be multiple interfaces created at the same time per `StackLocalHciPrimer`.
-    // Here we're abusing rust's borrow checker a bit as this returns an interface that depends on
-    // the lifetime of a mutable reference to a `StackLocalHciPrimer`.
-    pub async fn init<'a>(
-        &'a self,
-    ) -> Result<
-        (
-            Host<impl HostInterface + 'a>,
-            interface::Interface<impl ChannelReserve + 'a>,
-        ),
-        CommandError<impl HostInterface + 'a>,
-    > {
-        use interface::InitHostTaskEnds;
-
-        let mut interface = interface::Interface::new_stack_local(&self.data);
-
-        let ends = interface.init_host_task_ends().unwrap();
-
-        let host_interface = StackLocalHostInterface { ends };
-
-        let host = Host::init(host_interface).await?;
-
-        Ok((host, interface))
-    }
-}
-
-/// Create a local, stack buffered HCI
-///
-/// This is used to create a host controller interface whereby async tasks must run on a local
-/// executor. The host, connection, and interface async tasks are *not* [`Send`] safe and cannot be
-/// run on an executor that requires send safe async tasks. Using a locally restricted HCI can be
-/// advantageous where there is a light usage of Bluetooth by the application or where environments
-/// cannot support
-#[cfg(feature = "unstable")]
-pub fn new_stack_local_hci<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
-) -> StackLocalHciPrimer<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> {
-    let data = interface::local_channel::local_stack_channel::LocalStackChannelReserveData::<
-        TASK_COUNT,
-        CHANNEL_SIZE,
-        BUFFER_SIZE,
-    >::new();
-
-    StackLocalHciPrimer { data }
-}
-
 /// The host interface
 ///
 /// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
 /// host controller interface.
 pub struct Host<H: HostInterface> {
     host_interface: H,
-    next_connection: Option<NextConnection<H::ChannelEnds>>,
     acl_max_mtu: usize,
     sco_max_mtu: usize,
     le_acl_max_mtu: usize,
@@ -663,79 +442,93 @@ where
 {
     /// Initialize the host
     ///
+    /// This resets the controller and then
     /// The host needs to be aware of the flow control information for the Controller in order to
     /// properly function. This will query the Controller for information about its buffers before
     /// returning a `Host`.
     ///
     /// # Error
     /// If this returns an error then the information about the buffers cannot be acquired.
-    async fn init(host_interface: H) -> Result<Self, CommandError<H>> {
+    async fn init(ends: H) -> Result<Self, CommandError<H>> {
         use errors::Error;
 
         let mut host = Host {
-            host_interface,
-            next_connection: Default::default(),
+            host_interface: ends,
             acl_max_mtu: Default::default(),
             sco_max_mtu: Default::default(),
             le_acl_max_mtu: Default::default(),
             le_iso_max_mtu: Default::default(),
         };
 
-        let buffer_info = commands::info_params::read_buffer_size::send(&mut host).await?;
+        // reset the controller
+        commands::cb::reset::send(&mut host).await?;
 
-        host.acl_max_mtu = buffer_info.hc_acl_data_packet_len;
+        host.read_buffers().await?;
 
-        host.sco_max_mtu = buffer_info.hc_synchronous_data_packet_len;
+        Ok(host)
+    }
 
+    /// Read the buffers of the Controller
+    ///
+    /// This is an exhaustive approach to reading all the different possible buffers that can be on
+    /// the controller.
+    async fn read_buffers(&mut self) -> Result<(), CommandError<H>> {
+        use errors::Error;
+
+        // get the main buffer info
+        let buffer_info = commands::info_params::read_buffer_size::send(self).await?;
+
+        self.acl_max_mtu = buffer_info.hc_acl_data_packet_len;
+
+        self.sco_max_mtu = buffer_info.hc_synchronous_data_packet_len;
+
+        // if LE is supported, get the LE info from the controller
         let (le_acl_max_mtu, le_iso_max_mtu) = if cfg!(feature = "le") {
-            match commands::le::read_buffer_size::send_v2(&mut host).await {
-                Err(CCParameterError::CommandError(Error::UnknownHciCommand)) => {
-                    if let Some(buffer_size_info_v1) = commands::le::read_buffer_size::send_v1(&mut host).await? {
+            match commands::le::read_buffer_size::send_v2(self).await {
+                Err(CommandError::CommandError(Error::UnknownHciCommand)) => {
+                    if let Some(buffer_size_info_v1) = commands::le::read_buffer_size::send_v1(self).await? {
                         let le_acl_max_mtu = buffer_size_info_v1.acl.len.into();
 
                         (le_acl_max_mtu, 0)
+                    } else {
+                        (0, 0)
                     }
                 }
-                e @ Err(_) => e?,
                 Ok(buffer_size_info_v2) => {
                     let le_acl_max_mtu = match buffer_size_info_v2.acl {
                         Some(bs) => bs.len.into(),
-                        None => host.acl_max_mtu,
+                        None => self.acl_max_mtu,
                     };
 
                     let le_iso_max_mtu = buffer_size_info_v2.iso.map(|bs| bs.len.into()).unwrap_or_default();
 
                     (le_acl_max_mtu, le_iso_max_mtu)
                 }
+                e => return e.map(|_| ()),
             }
         } else {
             (0, 0)
         };
 
-        host.le_acl_max_mtu = le_acl_max_mtu;
+        self.le_acl_max_mtu = le_acl_max_mtu;
 
-        host.le_iso_max_mtu = le_iso_max_mtu;
+        self.le_iso_max_mtu = le_iso_max_mtu;
 
-        Ok(host)
+        Ok(())
     }
 
     /// Send a command with the provided matcher to the interface async task
     ///
-    /// Returns the event received from the interface async task (hopefully) contains the event sent
-    /// in response to the command.
-    ///
-    /// # Note
-    /// This method is intended to only be used internally
-    #[doc(hidden)]
+    /// Returns the event received from the interface async task containing the event sent in
+    /// response to the command.
     async fn send_command<P, const CP_SIZE: usize>(
-        &self,
+        &mut self,
         parameter: P,
-        event_matcher: bo_tie_hci_util::CommandEventMatcher,
-    ) -> Result<events::EventsData, CommandError<H>>
+    ) -> Result<ToHostCommandIntraMessage, CommandError<H>>
     where
         P: CommandParameter<CP_SIZE>,
     {
-        use bo_tie_hci_util::{IntraMessageType, Receiver, Sender};
+        use bo_tie_hci_util::{FromHostIntraMessage, Receiver, Sender};
 
         let mut buffer = self.host_interface.take_buffer(None).await;
 
@@ -745,17 +538,15 @@ where
 
         self.host_interface
             .get_sender()
-            .send(IntraMessageType::Command(event_matcher, buffer).into())
+            .send(FromHostIntraMessage::Command(buffer).into())
             .await
             .map_err(|e| CommandError::SendError(e))?;
 
-        self.get_next_event([events::Events::CommandComplete, events::Events::CommandStatus])
-
-        match received {
-            IntraMessageType::Event(e @ events::EventsData::CommandComplete(_))
-            | IntraMessageType::Event(e @ events::EventsData::CommandStatus(_)) => Ok(e),
-            _ => todo!("need to queue intra messages that are not the correct events"),
-        }
+        self.host_interface
+            .get_mut_cmd_recv()
+            .recv()
+            .await
+            .ok_or(CommandError::ReceiverClosed)
     }
 
     /// Send a command to the controller expecting a returned parameter
@@ -781,14 +572,8 @@ where
         CP: CommandParameter<CP_SIZE>,
         T: TryFromCommandComplete,
     {
-        use events::EventsData;
-
-        let event_matcher = bo_tie_hci_util::CommandEventMatcher::new_command_complete(CP::COMMAND);
-
-        let command_return = self.send_command(parameter, event_matcher).await?;
-
-        match command_return {
-            EventsData::CommandComplete(data) => Ok(T::try_from(&data)?),
+        match self.send_command(parameter).await? {
+            ToHostCommandIntraMessage::CommandComplete(data) => Ok(T::try_from(&data)?),
             e => unreachable!("invalid event matched for command: {:?}", e),
         }
     }
@@ -812,20 +597,14 @@ where
     async fn send_command_expect_status<CP, const CP_SIZE: usize>(
         &mut self,
         parameter: CP,
-    ) -> Result<usize, CommandError<H>>
+    ) -> Result<(), CommandError<H>>
     where
         CP: CommandParameter<CP_SIZE> + 'static,
     {
-        use events::EventsData;
-
-        let event_matcher = bo_tie_hci_util::CommandEventMatcher::new_command_status(CP::COMMAND);
-
-        let command_return = self.send_command(parameter, event_matcher).await?;
-
-        match command_return {
-            EventsData::CommandStatus(data) => {
+        match self.send_command(parameter).await? {
+            ToHostCommandIntraMessage::CommandStatus(data) => {
                 if errors::Error::NoError == data.status {
-                    Ok(data.number_of_hci_command_packets.into())
+                    Ok(())
                 } else {
                     Err(data.status.into())
                 }
@@ -834,78 +613,101 @@ where
         }
     }
 
-    /// Get the next event from the Controller
+    /// Get the next thing from the interface async task
     ///
-    /// This awaits for the next event to be sent from the Controller
+    /// Events and channel ends for a new connection async task are "received" from the controller
+    /// through the `next` method.
     ///
-    /// # Event Lists
-    ///
-    /// ## `None`
-    ///
+    /// # Excluded Events
+    /// The events [`CommandComplete`], [`CommandStatus`], [`NumberOfCompletedPackets`], and
+    /// [`NumberOfCompletedDataPackets`] are not be returned as they are handled internally
+    /// by the host and interface async tasks.   
     ///
     /// [`CommandComplete`]: bo_tie_hci_util::events::Events::CommandComplete
     /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
     /// [`NumberOfCompletedPackets`]: bo_tie_hci_util::events::Events::NumberOfCompletedPackets
-    pub async fn get_next_event(&mut self) -> Result<events::EventsData, NextEventError>
-    {
-        use bo_tie_hci_util::{IntraMessageType, Receiver};
-        use bo_tie_hci_util::events::{EventsData, LeMetaData};
+    pub async fn next(&mut self) -> Result<Next<H::ConnectionChannelEnds>, NextEventError> {
         use bo_tie_hci_util::events::parameters::LinkType;
+        use bo_tie_hci_util::events::{EventsData, LeMetaData};
+        use bo_tie_hci_util::Receiver;
 
-        let mut connection_ends: Option<H::ChannelEnds> = None;
+        let mut connection_ends: Option<H::ConnectionChannelEnds> = None;
 
         loop {
             let intra_message = self
                 .host_interface
-                .get_receiver()
+                .get_mut_gen_recv()
                 .recv()
                 .await
                 .ok_or(NextEventError::ReceiverClosed)?;
 
             match intra_message {
-                IntraMessageType::Event(EventsData::ConnectionComplete(cc)) => {
-                    let connection_kind = match cc.link_type {
-                        LinkType::AclConnection => ConnectionKind::BrEdrAcl,
-                        _ => ConnectionKind::BrEdrSco,
-                    };
+                ToHostGeneralIntraMessage::Event(EventsData::ConnectionComplete(cc)) => {
+                    let connection = Connection::new(
+                        self.acl_max_mtu,
+                        ConnectionKind::BrEdr(cc),
+                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                    );
 
-                    self.set_next_connection(connection_ends.take().unwrap(), connection_kind, cc.connection_handle)
+                    break Ok(Next::NewConnection(connection));
                 }
-                IntraMessageType::Event(EventsData::SynchronousConnectionComplete(scc)) => {
-                    self.set_next_connection(connection_ends.take().unwrap(), ConnectionKind::BrEdrSco, scc.connection_handle)
+                ToHostGeneralIntraMessage::Event(EventsData::SynchronousConnectionComplete(scc)) => {
+                    let connection = Connection::new(
+                        self.sco_max_mtu,
+                        ConnectionKind::BrEdrSco(scc),
+                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                    );
+
+                    break Ok(Next::NewConnection(connection));
                 }
-                IntraMessageType::Event(EventsData::LeMeta(LeMetaData::ConnectionComplete(lcc))) => {
-                    self.set_next_connection(connection_ends.take().unwrap(), ConnectionKind::LeAcl, lcc.connection_handle)
+                ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::ConnectionComplete(lcc))) => {
+                    let connection = Connection::new(
+                        self.le_acl_max_mtu,
+                        ConnectionKind::Le(lcc),
+                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                    );
+
+                    break Ok(Next::NewConnection(connection));
                 }
-                IntraMessageType::Event(EventsData::LeMeta(LeMetaData::EnhancedConnectionComplete(lecc))) => {
-                    self.set_next_connection(connection_ends.take().unwrap(), ConnectionKind::LeAcl, lecc.connection_handle)
+                ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::EnhancedConnectionComplete(lecc))) => {
+                    let connection = Connection::new(
+                        self.le_acl_max_mtu,
+                        ConnectionKind::LeEnh(lecc),
+                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                    );
+
+                    break Ok(Next::NewConnection(connection));
                 }
-                IntraMessageType::Event(event_data) => {
-                    if list.iter().find(|event_name| event_name == event_data.get_event_name()) {
-                        break Ok(event_data)
-                    }
-                    // otherwise continue looping
-                },
-                IntraMessageType::Connection(connection) => connection_ends.replace(connection),
-                _ => break Err(NextEventError::UnexpectedIntraMessage(intra_message.ty.kind()))
+                ToHostGeneralIntraMessage::Event(event_data) => break Ok(Next::Event(event_data)),
+                ToHostGeneralIntraMessage::NewConnection(ends) => {
+                    connection_ends.replace(ends);
+                }
             }
         }
     }
 
-    /// Filter the events sent from the controller
+    /// Mask the events sent from the Controller
     ///
-    /// This is a shortcut for filtering the events sent from the controller to just the events
-    /// within `list`. The Controller will subsequently only send these events to the Host which can
-    /// then be caught by method [`get_next_event`](Host::get_next_event).
+    /// Events masked on the Controller are sent from the Controller to the Host. When this method
+    /// is called it sets the masks for the events within `list`.
+    ///
+    /// This method is a shortcut for calling the `send` functions within [`set_event_mask`],
+    /// [`set_event_mask_page_2`], and [`le::set_event_mask`].
     ///
     /// # Note
-    /// This cannot filter out events that are [not maskable], but they are handled internally by
-    /// `bo-tie`'s implementation of the HCI.
+    /// This cannot filter out events that are [not maskable]. However they are handled internally
+    /// by `bo-tie`'s implementation of the HCI, so they should never be seen when awaiting with
+    /// awaiting with [`next_event`].
     ///
-    /// [not maskable]: (crate::commands::cb::set_event_mask).
-    pub async fn filter_events<L>(&mut self, list: L) -> Result<(), CommandError<H>>
+    /// [`set_event_mask`]: crate::commands::cb::set_event_mask
+    /// [`set_event_mask_page_2`]: crate::commands::cb::set_event_mask_page_2
+    /// [`le::set_event_mask`]: crate::commands::le::set_event_mask
+    /// [not maskable]: crate::commands::cb::set_event_mask
+    /// [`next_event`0.]: Host::next_event
+    pub async fn mask_events<I, T>(&mut self, list: I) -> Result<(), CommandError<H>>
     where
-        L: EventsList,
+        I: IntoIterator<Item = T> + Clone,
+        T: core::borrow::Borrow<events::Events>,
     {
         use commands::cb::{set_event_mask, set_event_mask_page_2};
         use commands::le::set_event_mask as le_set_event_mask;
@@ -913,38 +715,160 @@ where
         // Set the masks
         //
         // note:
-        // these mask functions short-circuit when the `list`
-        // contain none of the events they mask.
+        // these mask functions will not send the any commands if none of the events within `list`
+        // are masked by the command.
 
-        set_event_mask::send(self, list.iter()).await?;
+        set_event_mask::send(self, list.clone()).await?;
 
-        set_event_mask_page_2::send(self, list.iter()).await?;
+        set_event_mask_page_2::send(self, list.clone()).await?;
 
-        le_set_event_mask::send(self, list.iter()).await
+        le_set_event_mask::send(
+            self,
+            list.into_iter().filter_map(|e| match e.borrow() {
+                events::Events::LeMeta(meta) => Some(*meta),
+                _ => None,
+            }),
+        )
+        .await
+    }
+}
+
+/// The next item
+///
+/// The next item from the interface async task is either an event or a new connection.
+#[derive(Debug)]
+pub enum Next<C: ConnectionChannelEnds> {
+    Event(events::EventsData),
+    NewConnection(Connection<C>),
+}
+
+/// A representation of a connection
+///
+/// On the HCI level, a `Connection` is nothing more than a container of the channel ends for the
+/// connection async task along with some identifying information on what *kind* of connection was
+/// made. To be useful to the higher layers of Bluetooth implemented by `bo-tie`, a `Connection`
+/// needs to be converted into a structure that supports L2CAP.
+///
+/// # L2CAP Interface
+/// A `Connection` is the bridge between the HCI and the upper protocol layers of Bluetooth. If this
+/// library is compiled with the feature `l2cap` (which is part of the *default-features*) this type
+/// can be converted into a type that implements [`ConnectionChannel`] of bo-tie-l2cap.
+///
+/// ### Flow Control
+/// This provides the bridge between the HCI layer and the L2CAP layer. Data sent to the HCI
+/// from the higher layers is flow controlled to fit the maximum HCI packet size supported by
+/// the controller. This size depends on the data type used (ACL, SCO, or ISO), the connection
+/// type (BR/EDR or LE), and the capabilities of the controller, but this information is already
+/// discovered and implemented by the flow control.
+///
+/// ### Maximum Transmission Unit
+/// The default maximum transmission unit is always initialized to the smallest it can be for the
+/// given connection type (BR/EDR or LE). The MTU can then be adjusted by the higher layers to be
+/// within the maximum and minimum bounds set by the implementation. The minimum bound is always
+/// specification defined minimum value for the data/connection type. By default the maximum value
+/// is set to `<u16>::MAX` as flow control is already implemented for data sent to the Controller.
+/// However the method [`hci_maxed_mtu`] can be called before creating an `L2CAP` connection to set
+/// the maximum MTU value to the maximum size of the HCI data packet.
+///
+/// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
+/// [`hci_maxed_mtu`]: Connection::bound_mtu
+#[derive(Debug)]
+pub struct Connection<C> {
+    hci_mtu: usize,
+    bounded: bool,
+    kind: ConnectionKind,
+    ends: C,
+}
+
+impl<C: ConnectionChannelEnds> Connection<C> {
+    fn new(hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
+        let bounded = false;
+
+        Self {
+            hci_mtu,
+            bounded,
+            kind,
+            ends,
+        }
     }
 
-    /// Set the field `next_connection`
-    fn set_next_connection(&mut self, ends: H::ChannelEnds, kind: ConnectionKind, handle: bo_tie_hci_util::ConnectionHandle) {
-        self.next_connection = NextConnection {
-            ends,
-            kind,
-            handle,
-        }.into();
+    /// Get the kind of connection that was made
+    ///
+    /// There are multiple kinds of connections that can be made between two different controllers,
+    /// but there are less types of connections then within `ConnectionKind`. ConnectionKind`
+    /// contains the returned the event parameters that accompanied the connection event from the
+    /// Controller.
+    ///
+    /// A `LeL2cap` can be constructed from a `Connection` when `ConnectionKind` is either [`Le`] or
+    /// [`LeEnh`].
+    ///
+    /// [`Le`]: ConnectionKind::Le
+    /// [`LeEnh`]: ConnectionKind::LeEnh
+    pub fn get_kind(&self) -> ConnectionKind {
+        self.kind.clone()
+    }
+
+    /// Bound the maximum MTU to the maximum size of the HCI data packet
+    ///
+    /// See [**Maximum Transmission Unit**].
+    ///
+    /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
+    #[cfg(feature = "l2cap")]
+    fn hci_maxed_mtu(&mut self) {
+        self.bounded = true
+    }
+
+    /// Bound the maximum MTU to the maximum size of an L2CAP data packet
+    ///
+    /// See [**Maximum Transmission Unit**].
+    ///
+    /// # Note
+    /// This is the default maximum MTU.
+    ///
+    /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
+    #[cfg(feature = "l2cap")]
+    fn l2cap_maxed_mtu(&mut self) {
+        self.bounded = false
+    }
+
+    /// Try to create an `LeConnection`
+    ///
+    /// An `LeConnection` implements [`ConnectionChannel`] for a Bluetooth LE connection.
+    ///
+    /// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
+    #[cfg(feature = "l2cap")]
+    pub fn try_into_le(self) -> Result<l2cap::LeL2cap<C>, Self> {
+        match self.get_kind() {
+            ConnectionKind::Le(_) | ConnectionKind::LeEnh(_) => {
+                let max_mtu = if self.bounded { self.hci_mtu } else { <u16>::MAX.into() };
+                let initial_mtu = <bo_tie_l2cap::LeU as bo_tie_l2cap::MinimumMtu>::MIN_MTU;
+
+                let le = l2cap::LeL2cap::new(max_mtu, initial_mtu, self.ends);
+
+                Ok(le)
+            }
+            _ => Err(self),
+        }
+    }
+
+    /// Convert this into its inner channel ends
+    ///
+    /// This should be used whenever the upper Bluetooth protocols layers are implemented by another
+    /// library. The method [`get_kind`] must still be used to get the 'kind' of connection that was
+    /// created.
+    pub fn into_inner(self) -> C {
+        self.ends
     }
 }
 
 /// Enum for kind of connection
-enum ConnectionKind {
-    BrEdrAcl,
-    BrEdrSco,
-    LeAcl,
-}
-
-/// Next Connection Information
-struct NextConnection<T> {
-    ends: T,
-    kind: ConnectionKind,
-    handle: bo_tie_hci_util::ConnectionHandle
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ConnectionKind {
+    BrEdr(events::parameters::ConnectionCompleteData),
+    BrEdrSco(events::parameters::SynchronousConnectionCompleteData),
+    Le(events::parameters::LeConnectionCompleteData),
+    LeEnh(events::parameters::LeEnhancedConnectionCompleteData),
 }
 
 /// An error when trying to send a command
@@ -1028,7 +952,7 @@ impl TryFromCommandComplete for () {
     fn try_from(cc: &events::parameters::CommandCompleteData) -> Result<Self, CCParameterError> {
         check_status!(cc.return_parameter);
 
-        Ok(Self)
+        Ok(())
     }
 }
 
@@ -1044,6 +968,7 @@ pub enum NextEventError {
     ReceiverClosed,
     EventConversionError(events::EventError),
     UnexpectedIntraMessage(&'static str),
+    MissingConnectionEnds,
 }
 
 impl core::fmt::Display for NextEventError {
@@ -1057,6 +982,7 @@ impl core::fmt::Display for NextEventError {
                 message '{}' (this is a library bug)",
                 kind
             ),
+            NextEventError::MissingConnectionEnds => f.write_str("interface did not send connection ends"),
         }
     }
 }
@@ -1064,510 +990,5 @@ impl core::fmt::Display for NextEventError {
 impl From<events::EventError> for NextEventError {
     fn from(e: events::EventError) -> Self {
         NextEventError::EventConversionError(e)
-    }
-}
-
-/// A list of events
-///
-/// This is used by the method [`get_next_event_in`] for matching against a list of events.
-pub trait EventsList {
-    fn iter(&self) -> EventsIterator<'_, Self>
-    where
-        EventsIterator<'_, Self>: Iterator<Item = events::Events>;
-}
-
-struct EventsIterator<'a, E> {
-    cnt: usize,
-    events_list: &'a E,
-}
-
-macro_rules! impl_events_iterator_for_list {
-    () => {
-        type Item = events::Events;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            let ret = self.events_list.get(self.cnt);
-
-            self.cnt += 1;
-
-            ret.copied()
-        }
-    };
-}
-
-macro_rules! impl_events_iterator_for_non_generic_ty {
-    ($ty:ty) => {
-        impl Iterator for EventsIterator<'_, $ty> {
-            impl_events_iterator_for_list!()
-        }
-    }
-}
-
-macro_rules! impl_event_list_for_non_generic_type {
-    ($ty:ty) => {
-        impl EventsList for $ty {
-            fn iter(&self) -> EventsIterator<'_, Self> {
-                EventsIterator {
-                    cnt: 0,
-                    events_list: self,
-                }
-            }
-        }
-
-        impl_events_iterator_for_non_generic_ty!()
-    };
-}
-
-impl_event_list_for_non_generic_type!(&[events::Events]);
-impl_event_list_for_non_generic_type!(alloc::vec::Vec<events::Events>);
-impl_event_list_for_non_generic_type!(alloc::boxed::Box<events::Events>);
-impl_event_list_for_non_generic_type!(alloc::rc::Rc<events::Events>);
-impl_event_list_for_non_generic_type!(alloc::collections::VecDeque);
-impl_event_list_for_non_generic_type!(alloc::collections::BTreeSet);
-
-impl Iterator for EventsIterator<'_, events::Events> {
-    type Item = events::Events;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.cnt == 0 {
-            self.cnt += 1;
-            Some(*self.events_list)
-        } else {
-            None
-        }
-    }
-}
-
-impl EventsList for events::Events {
-    fn iter(&self) -> EventsIterator<'_, Self> where EventsIterator<'_, Self>: Iterator<Item=events::Events> {
-        EventsIterator {
-            cnt: 0,
-            events_list: self,
-        }
-    }
-}
-
-impl<const SIZE: usize> Iterator for EventsIterator<'_, [events::Events; SIZE]> {
-    impl_events_iterator_for_list!();
-}
-
-impl<const SIZE: usize> EventsList for [events::Events; SIZE] {
-    fn iter(&self) -> EventsIterator<'_, Self>
-    where
-        EventsIterator<'_, Self>: Iterator<Item = events::Events>,
-    {
-        EventsIterator {
-            cnt: 0,
-            events_list: self,
-        }
-    }
-}
-
-impl<const SIZE: usize> Iterator for EventsIterator<'_, &[events::Events; SIZE]> {
-    impl_events_iterator_for_list!();
-}
-
-impl<const SIZE: usize> EventsList for &[events::Events; SIZE] {
-    fn iter(&self) -> EventsIterator<'_, Self>
-        where
-            EventsIterator<'_, Self>: Iterator<Item = events::Events>,
-    {
-        EventsIterator {
-            cnt: 0,
-            events_list: self,
-        }
-    }
-}
-
-/// An connection with ACL data
-struct LeConnection<C: ChannelEnds> {
-    max_mtu: usize,
-    mtu: core::cell::Cell<usize>,
-    channel_ends: C,
-    sender: C::Sender,
-}
-
-impl<C: ChannelEnds> LeConnection<C> {
-    /// Get the receiver
-    pub fn get_receiver(&self) -> &C::Receiver {
-        self.channel_ends.get_receiver()
-    }
-
-    /// Get the sender
-    pub fn get_sender(&self) -> &C::Sender {
-        &self.sender
-    }
-
-    /// Get the maximum size of an ACl payload
-    ///
-    /// This returns the maximum size the payload of a HCI ACL data packet can be. Higher layer
-    /// protocols must fragment messages to this size.
-    ///
-    /// # Note
-    /// This is the same as the maximum size for a payload of a HCI ACl data packet.
-    pub fn get_max_mtu(&self) -> usize {
-        self.max_mtu
-    }
-
-    /// Get the current maximum transmission size
-    ///
-    /// Get the currently set maximum transmission unit.
-    pub fn get_mtu(&self) -> usize {
-        self.mtu.get()
-    }
-
-    /// Set the current maximum transmission size
-    ///
-    /// Set the current maximum transmission unit.
-    pub fn set_mtu(&mut self, to: usize) {
-        self.mtu.set(to)
-    }
-}
-
-#[cfg(feature = "l2cap")]
-impl<C> bo_tie_l2cap::ConnectionChannel for LeConnection<C>
-where
-    C: ChannelEnds,
-{
-    type SendBuffer = C::ToBuffer;
-    type SendFut<'a> = ConnectionChannelSender<'a, C> where Self: 'a;
-    type SendFutErr = <C::Sender as bo_tie_hci_util::Sender>::Error;
-    type RecvBuffer = C::FromBuffer;
-    type RecvFut<'a> = AclReceiverMap<'a, C> where Self: 'a;
-
-    fn send(&self, data: bo_tie_l2cap::BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
-        // todo: not sure if this will be necessary when the type of input data is `BasicInfoFrame<Self::Buffer<'_>>`
-        let front_capacity = HciAclData::<()>::HEADER_SIZE;
-
-        let channel_ends = &self.channel_ends;
-
-        let sender = &self.sender;
-
-        let iter = SelfSendBufferIter {
-            front_capacity,
-            channel_ends,
-            sender,
-        };
-
-        ConnectionChannelSender {
-            sliced_future: data.into_fragments(self.get_mtu(), iter),
-        }
-    }
-
-    fn set_mtu(&self, mtu: u16) {
-        self.mtu.set(mtu.into())
-    }
-
-    fn get_mtu(&self) -> usize {
-        self.mtu.get()
-    }
-
-    fn max_mtu(&self) -> usize {
-        self.max_mtu
-    }
-
-    fn min_mtu(&self) -> usize {
-        use bo_tie_l2cap::MinimumMtu;
-
-        bo_tie_l2cap::LeU::MIN_MTU
-    }
-
-    fn receive(&self) -> Self::RecvFut<'_> {
-        AclReceiverMap {
-            receiver: self.channel_ends.get_receiver(),
-            receive_future: None,
-        }
-    }
-}
-
-/// A self sending buffer
-///
-/// This is a wrapper around a buffer and a sender. When it is created it is in buffer mode and can
-/// be de-referenced as a slice or extended to fill the buffer. It then can be converted into a
-/// future to send the message to the interface async task.
-#[cfg(feature = "l2cap")]
-struct AclBufferBuilder<'a, C: ChannelEnds> {
-    sender: &'a C::Sender,
-    buffer: C::ToBuffer,
-}
-
-#[cfg(feature = "l2cap")]
-impl<'a, C> bo_tie_util::buffer::TryExtend<u8> for AclBufferBuilder<'a, C>
-where
-    C: ChannelEnds,
-{
-    type Error = AclBufferError<C::ToBuffer>;
-
-    fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = u8>,
-    {
-        self.buffer.try_extend(iter).map_err(|e| AclBufferError::Buffer(e))
-    }
-}
-
-#[cfg(feature = "l2cap")]
-impl<'a, C> core::future::IntoFuture for AclBufferBuilder<'a, C>
-where
-    C: ChannelEnds,
-{
-    type Output = <<C::Sender as bo_tie_hci_util::Sender>::SendFuture<'a> as Future>::Output;
-    type IntoFuture = <C::Sender as bo_tie_hci_util::Sender>::SendFuture<'a>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        use bo_tie_hci_util::Sender;
-
-        let message = bo_tie_hci_util::IntraMessageType::Acl(self.buffer).into();
-
-        self.sender.send(message)
-    }
-}
-
-/// Error for `TryExtend` implementation of `SelfSendBuffer`
-#[cfg(feature = "l2cap")]
-enum AclBufferError<T: bo_tie_util::buffer::TryExtend<u8>> {
-    Buffer(T::Error),
-    IncorrectIntraMessageType,
-}
-
-#[cfg(feature = "l2cap")]
-impl<T: bo_tie_util::buffer::TryExtend<u8>> core::fmt::Debug for AclBufferError<T>
-where
-    T::Error: core::fmt::Debug,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            AclBufferError::Buffer(e) => e.fmt(f),
-            AclBufferError::IncorrectIntraMessageType => f.write_str("Incorrect message type for SelfSendBuffer"),
-        }
-    }
-}
-
-#[cfg(feature = "l2cap")]
-impl<T: bo_tie_util::buffer::TryExtend<u8>> core::fmt::Display for AclBufferError<T>
-where
-    T::Error: core::fmt::Display,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            AclBufferError::Buffer(e) => e.fmt(f),
-            AclBufferError::IncorrectIntraMessageType => f.write_str("Incorrect message type for SelfSendBuffer"),
-        }
-    }
-}
-
-#[cfg(feature = "l2cap")]
-struct SelfSendBufferIter<'a, C: ChannelEnds> {
-    front_capacity: usize,
-    channel_ends: &'a C,
-    sender: &'a C::Sender,
-}
-
-#[cfg(feature = "l2cap")]
-impl<'a, C> Iterator for SelfSendBufferIter<'a, C>
-where
-    C: ChannelEnds,
-{
-    type Item = SelfSendBufferFutureMap<'a, C>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let take_buffer = self.channel_ends.take_buffer(self.front_capacity);
-
-        let sender = self.sender;
-
-        Some(SelfSendBufferFutureMap { sender, take_buffer })
-    }
-}
-
-#[cfg(feature = "l2cap")]
-struct SelfSendBufferFutureMap<'a, C: ChannelEnds> {
-    sender: &'a C::Sender,
-    take_buffer: C::TakeBuffer,
-}
-
-#[cfg(feature = "l2cap")]
-impl<'a, C> Future for SelfSendBufferFutureMap<'a, C>
-where
-    C: ChannelEnds,
-{
-    type Output = AclBufferBuilder<'a, C>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-
-        unsafe { Pin::new_unchecked(&mut this.take_buffer) }
-            .poll(cx)
-            .map(|buffer| {
-                let ends = this.sender;
-
-                AclBufferBuilder { sender: ends, buffer }
-            })
-    }
-}
-
-#[cfg(feature = "l2cap")]
-struct ConnectionChannelSender<'a, C: ChannelEnds> {
-    sliced_future: bo_tie_l2cap::send_future::AsSlicedPacketFuture<
-        SelfSendBufferIter<'a, C>,
-        Vec<u8>,
-        SelfSendBufferFutureMap<'a, C>,
-        AclBufferBuilder<'a, C>,
-        <C::Sender as bo_tie_hci_util::Sender>::SendFuture<'a>,
-    >,
-}
-
-#[cfg(feature = "l2cap")]
-impl<'a, C> Future for ConnectionChannelSender<'a, C>
-where
-    C: ChannelEnds,
-{
-    type Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        unsafe { self.map_unchecked_mut(|this| &mut this.sliced_future) }.poll(cx)
-    }
-}
-
-#[cfg(feature = "l2cap")]
-pub struct AclReceiverMap<'a, C: ChannelEnds> {
-    receiver: &'a C::Receiver,
-    receive_future: Option<<C::Receiver as bo_tie_hci_util::Receiver>::ReceiveFuture<'a>>,
-}
-
-#[cfg(feature = "l2cap")]
-impl<'a, C> Future for AclReceiverMap<'a, C>
-where
-    C: ChannelEnds,
-{
-    type Output = Option<
-        Result<
-            bo_tie_l2cap::L2capFragment<C::FromBuffer>,
-            bo_tie_l2cap::BasicFrameError<<C::FromBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>,
-        >,
-    >;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        use bo_tie_hci_util::Receiver;
-        use bo_tie_l2cap::BasicFrameError;
-
-        let this = unsafe { self.get_unchecked_mut() };
-
-        loop {
-            match this.receive_future {
-                None => this.receive_future = Some(this.receiver.recv()),
-                Some(ref mut receiver) => match unsafe { Pin::new_unchecked(receiver) }.poll(cx) {
-                    Poll::Pending => break Poll::Pending,
-                    Poll::Ready(None) => break Poll::Ready(None),
-                    Poll::Ready(Some(intra_message)) => match intra_message.ty {
-                        bo_tie_hci_util::IntraMessageType::Acl(data) => match HciAclData::try_from_buffer(data) {
-                            Ok(data) => {
-                                let fragment = bo_tie_l2cap::L2capFragment::from(data);
-
-                                break Poll::Ready(Some(Ok(fragment)));
-                            }
-                            Err(_) => {
-                                break Poll::Ready(Some(Err(BasicFrameError::Other(
-                                    "Received invalid HCI ACL Data packet",
-                                ))))
-                            }
-                        },
-                        bo_tie_hci_util::IntraMessageType::Sco(_) => {
-                            break Poll::Ready(Some(Err(BasicFrameError::Other(
-                                "synchronous connection data is not implemented",
-                            ))))
-                        }
-                        bo_tie_hci_util::IntraMessageType::Iso(_) => {
-                            break Poll::Ready(Some(Err(BasicFrameError::Other(
-                                "isochronous connection data is not implemented",
-                            ))))
-                        }
-                        _ => unreachable!(),
-                    },
-                },
-            }
-        }
-    }
-}
-
-/// The size of the array within [`EnabledEvents`]
-const ENABLED_EVENT_BIT_MASK_SIZE: usize = (events::Events::full_depth() / <usize>::BITS as usize) + 1;
-
-/// A list of enabled events
-///
-/// This contains a *record* of the events enabled to be sent from the Controller to the Host. An
-/// `EnabledEvents` does not have the functionality to dynamically update itself whenever an event
-/// is masked on the Controller. It can be converted into an iterator to retrieve the events that
-/// were marked as enabled within this.
-pub struct EnabledEvents([usize; ENABLED_EVENT_BIT_MASK_SIZE]);
-
-impl EnabledEvents {
-    fn new() -> Self {
-        EnabledEvents(Default::default())
-    }
-
-    fn from_iter<I>(i: I) -> Self where I: IntoIterator<Item = events::Events> {
-        let mut this = Self::new();
-
-        i.into_iter().for_each(|e| this.set_mask(e));
-
-        this
-    }
-
-    fn set_mask(&mut self, e: events::Events) {
-        let depth = e.get_depth();
-
-        let index = depth / <usize>::BITS as usize;
-
-        let shr = depth % <usize>::BITS as usize;
-
-        self.0[index] |= 1 << shr;
-    }
-}
-
-impl IntoIterator for EnabledEvents {
-    type Item = events::Events;
-    type IntoIter = EnabledEventsIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        let position = 0;
-
-        let mut array_iter = self.0.into_iter();
-
-        let last = array_iter.next();
-
-        EnabledEventsIter { position, last, array_iter }
-    }
-}
-
-/// Iterator for [`EnabledEvents`]
-pub struct EnabledEventsIter {
-    position: usize,
-    last: Option<usize>,
-    array_iter: core::array::IntoIter<Self::Item, ENABLED_EVENT_BIT_MASK_SIZE>,
-}
-
-impl Iterator for EnabledEventsIter {
-    type Item = events::Events;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(val) = self.last {
-            if self.position < <usize>::BITS as usize {
-                let shr = self.position % <usize>::BITS as usize;
-
-                let opt_event = (val & (1 << shr) != 0).then(|| events::Events::from_depth(self.position));
-
-                self.position += 1;
-
-                if let event @ Some(_) = opt_event {
-                    return event
-                }
-
-            } else {
-                self.last = self.array_iter.next();
-                self.position - <usize>::BITS as usize;
-            }
-        }
-
-        None
     }
 }

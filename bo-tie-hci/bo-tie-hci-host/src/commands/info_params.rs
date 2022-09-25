@@ -9,8 +9,7 @@
 pub mod read_local_version_information {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::InformationParameters(
@@ -104,8 +103,7 @@ pub mod read_local_version_information {
 pub mod read_local_supported_commands {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -1109,8 +1107,7 @@ pub mod read_local_supported_features {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_util::{DeviceFeatures, Features, FeaturesIter};
 
@@ -1183,8 +1180,7 @@ pub mod read_bd_addr {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_util::BluetoothDeviceAddress;
 
@@ -1247,8 +1243,7 @@ pub mod read_buffer_size {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =

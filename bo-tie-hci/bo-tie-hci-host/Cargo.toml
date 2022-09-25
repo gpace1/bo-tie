@@ -16,7 +16,10 @@ default = ["gap", "l2cap", "le-default-features"]
 gap = ["bo-tie-gap"]
 l2cap = ["bo-tie-l2cap"]
 std = ["bo-tie-hci-interface/std", "bo-tie-hci-util/std", "bo-tie-util/std"]
+
+# unstable bo-tie features (note: unstable features are not additive) (https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
 unstable = ["bo-tie-hci-util/unstable", "bo-tie-hci-interface/unstable"]
+unstable-type-alias-impl-trait = []
 
 # This is the blocker for LE commands. It must be enabled to enable LE commands
 le = []

@@ -78,9 +78,9 @@
 /// [*Truncated Page Complete*]: bo_tie_hci_util::events::Events::TruncatedPageComplete
 pub mod set_event_mask {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
+    use bo_tie_hci_util::events;
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 
@@ -239,6 +239,33 @@ pub mod set_event_mask {
     /// This is normally used with the implementation of `Default` for [`EventMask`]
     pub struct DefaultMask;
 
+    impl DefaultMask {
+        const DEFAULT_MASK: u64 = 0x1FFF_FFFF_FFFFu64;
+
+        /// Iterate over the events that make up the default mask
+        pub const fn iter() -> impl Iterator<Item = Events> {
+            struct DefaultMaskIter(usize, u64);
+
+            impl Iterator for DefaultMaskIter {
+                type Item = Events;
+
+                fn next(&mut self) -> Option<Self::Item> {
+                    let bit = 1 << self.0;
+
+                    if self.1 & bit != 0 {
+                        self.0 += 1;
+
+                        Some(Events::from_depth(self.0))
+                    } else {
+                        None
+                    }
+                }
+            }
+
+            DefaultMaskIter(0, Self::DEFAULT_MASK)
+        }
+    }
+
     /// A marker for disabling all events
     ///
     /// This is the type used whenever an `EventMask` is created with [`disable_all`].
@@ -252,23 +279,26 @@ pub mod set_event_mask {
 
     impl<I, T> TryFrom<EventMask<I>> for Parameter
     where
-        I: Iterator<Item = T>,
+        I: IntoIterator<Item = T>,
         T: Borrow<Events>,
     {
         type Error = ();
 
         fn try_from(em: EventMask<I>) -> Result<Self, Self::Error> {
-            let mut filtered = em.mask.filter(|e| event_to_mask_bit(e.borrow()) != 0).peekable();
+            let mut filtered = em
+                .mask
+                .into_iter()
+                .filter(|e| event_to_mask_bit(e.borrow()) != 0)
+                .peekable();
 
             match filtered.peek() {
                 None => Err(()),
                 Some(_) => {
-                    let mask = em
-                        .mask
+                    let mask = filtered
                         .fold(0u64, |mask, e| mask | event_to_mask_bit(e.borrow()))
                         .to_le_bytes();
 
-                    Ok(CmdParameter { mask })
+                    Ok(Parameter { mask })
                 }
             }
         }
@@ -278,7 +308,7 @@ pub mod set_event_mask {
         type Error = core::convert::Infallible;
 
         fn try_from(_: EventMask<DefaultMask>) -> Result<Self, Self::Error> {
-            let mask = 0x1FFF_FFFF_FFFFu64.to_le_bytes();
+            let mask = DefaultMask::DEFAULT_MASK.to_le_bytes();
 
             Ok(Parameter { mask })
         }
@@ -319,12 +349,20 @@ pub mod set_event_mask {
     ///     set_event_mask_page_2::send(host, [Events::DisconnectionComplete, Events::ConnectionComplete]).await
     /// # }
     /// ```
-    pub async fn send<H: HostInterface, E, I>(host: &mut Host<H>, events: E) -> Result<(), CommandError<H>>
+    ///
+    /// # Note
+    /// If `events` only contains events that are not masked by this command, then the set event
+    /// mask command is not sent to the Controller.
+    pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
-        E: Into<EventMask<I>>,
-        E: Iterator<Item = Events>,
+        M: Into<EventMask<I>>,
+        I: Iterator<Item = E>,
+        E: Borrow<Events>,
     {
-        let parameter = Parameter::from(events.into());
+        let parameter = match Parameter::try_from(events.into()) {
+            Err(()) => return Ok(()),
+            Ok(parameter) => parameter,
+        };
 
         host.send_command_expect_complete(parameter).await
     }
@@ -337,8 +375,7 @@ pub mod set_event_mask {
 pub mod reset {
 
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -367,8 +404,7 @@ pub mod reset {
 pub mod read_transmit_power_level {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -458,8 +494,7 @@ pub mod read_transmit_power_level {
 /// When used with this command, this [`Event`] will enable the second version of the event.
 pub mod set_event_mask_page_2 {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
@@ -621,6 +656,25 @@ pub mod set_event_mask_page_2 {
     /// This is normally used with the implementation of `Default` for [`EventMask`]
     pub struct DefaultMask;
 
+    impl DefaultMask {
+        const DEFAULT_MASK: u64 = 0;
+
+        /// Iterate over the events that make up the default mask
+        pub const fn iter() -> impl Iterator<Item = Events> {
+            struct DefaultMaskIter(usize, u64);
+
+            impl Iterator for DefaultMaskIter {
+                type Item = Events;
+
+                fn next(&mut self) -> Option<Self::Item> {
+                    None
+                }
+            }
+
+            DefaultMaskIter(0, Self::DEFAULT_MASK)
+        }
+    }
+
     /// A marker for disabling all events
     ///
     /// This is the type used whenever an `EventMask` is created with [`disable_all`].
@@ -640,13 +694,16 @@ pub mod set_event_mask_page_2 {
         type Error = ();
 
         fn try_from(em: EventMask<I>) -> Result<Self, Self::Error> {
-            let mut filtered = em.mask.filter(|e| event_to_mask_bit(e.borrow()) != 0).peekable();
+            let mut filtered = em
+                .mask
+                .into_iter()
+                .filter(|e| event_to_mask_bit(e.borrow()) != 0)
+                .peekable();
 
             match filtered.peek() {
                 None => Err(()),
                 Some(_) => {
-                    let mask = em
-                        .mask
+                    let mask = filtered
                         .fold(0u64, |mask, e| mask | event_to_mask_bit(e.borrow()))
                         .to_le_bytes();
 
@@ -660,7 +717,7 @@ pub mod set_event_mask_page_2 {
         type Error = core::convert::Infallible;
 
         fn try_from(_: EventMask<DefaultMask>) -> Result<Self, Self::Error> {
-            let mask = 0.to_le_bytes();
+            let mask = [0; 8];
 
             Ok(Parameter { mask })
         }
@@ -708,12 +765,16 @@ pub mod set_event_mask_page_2 {
     /// # Note
     /// This method will short-circuit if all the events within input `events` are **not** masked by
     /// this command. Short-circuiting means `send` will not
-    pub async fn send<H: HostInterface, E, I>(host: &mut Host<H>, events: E) -> Result<(), CommandError<H>>
+    pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
-        E: Into<EventMask<I>>,
-        I: Iterator<Item = Events>,
+        M: Into<EventMask<I>>,
+        I: Iterator<Item = E>,
+        E: Borrow<Events>,
     {
-        let parameter = Parameter::try_from(events.into())?;
+        let parameter = match Parameter::try_from(events.into()) {
+            Err(()) => return Ok(()),
+            Ok(parameter) => parameter,
+        };
 
         host.send_command_expect_complete(parameter).await
     }

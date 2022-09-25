@@ -40,35 +40,34 @@
 pub mod set_event_mask {
     use crate::events::LeMeta;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use core::borrow::Borrow;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetEventMask);
 
-    fn bit_offset(le_meta: &LeMeta) -> usize {
+    fn event_to_mask_bit(le_meta: &LeMeta) -> u64 {
         match *le_meta {
-            LeMeta::ConnectionComplete => 0,
-            LeMeta::AdvertisingReport => 1,
-            LeMeta::ConnectionUpdateComplete => 2,
-            LeMeta::ReadRemoteFeaturesComplete => 3,
-            LeMeta::LongTermKeyRequest => 4,
-            LeMeta::RemoteConnectionParameterRequest => 5,
-            LeMeta::DataLengthChange => 6,
-            LeMeta::ReadLocalP256PublicKeyComplete => 7,
-            LeMeta::GenerateDhKeyComplete => 8,
-            LeMeta::EnhancedConnectionComplete => 9,
-            LeMeta::DirectedAdvertisingReport => 10,
-            LeMeta::PhyUpdateComplete => 11,
-            LeMeta::ExtendedAdvertisingReport => 12,
-            LeMeta::PeriodicAdvertisingSyncEstablished => 13,
-            LeMeta::PeriodicAdvertisingReport => 14,
-            LeMeta::PeriodicAdvertisingSyncLost => 15,
-            LeMeta::ScanTimeout => 16,
-            LeMeta::AdvertisingSetTerminated => 17,
-            LeMeta::ScanRequestReceived => 18,
-            LeMeta::ChannelSelectionAlgorithm => 19,
+            LeMeta::ConnectionComplete => 1 << 0,
+            LeMeta::AdvertisingReport => 1 << 1,
+            LeMeta::ConnectionUpdateComplete => 1 << 2,
+            LeMeta::ReadRemoteFeaturesComplete => 1 << 3,
+            LeMeta::LongTermKeyRequest => 1 << 4,
+            LeMeta::RemoteConnectionParameterRequest => 1 << 5,
+            LeMeta::DataLengthChange => 1 << 6,
+            LeMeta::ReadLocalP256PublicKeyComplete => 1 << 7,
+            LeMeta::GenerateDhKeyComplete => 1 << 8,
+            LeMeta::EnhancedConnectionComplete => 1 << 9,
+            LeMeta::DirectedAdvertisingReport => 1 << 10,
+            LeMeta::PhyUpdateComplete => 1 << 11,
+            LeMeta::ExtendedAdvertisingReport => 1 << 12,
+            LeMeta::PeriodicAdvertisingSyncEstablished => 1 << 13,
+            LeMeta::PeriodicAdvertisingReport => 1 << 14,
+            LeMeta::PeriodicAdvertisingSyncLost => 1 << 15,
+            LeMeta::ScanTimeout => 1 << 16,
+            LeMeta::AdvertisingSetTerminated => 1 << 17,
+            LeMeta::ScanRequestReceived => 1 << 18,
+            LeMeta::ChannelSelectionAlgorithm => 1 << 19,
         }
     }
 
@@ -150,6 +149,33 @@ pub mod set_event_mask {
     /// This is normally used with the implementation of `Default` for [`EventMask`]
     pub struct DefaultMask;
 
+    impl DefaultMask {
+        const DEFAULT_MASK: u64 = 0x1F;
+
+        /// Iterate over the events that make up the default mask
+        pub const fn iter() -> impl Iterator<Item = LeMeta> {
+            struct DefaultMaskIter(usize, u64);
+
+            impl Iterator for DefaultMaskIter {
+                type Item = LeMeta;
+
+                fn next(&mut self) -> Option<Self::Item> {
+                    let bit = 1 << self.0;
+
+                    if self.1 & bit != 0 {
+                        self.0 += 1;
+
+                        Some(LeMeta::from_depth(self.0))
+                    } else {
+                        None
+                    }
+                }
+            }
+
+            DefaultMaskIter(0, Self::DEFAULT_MASK)
+        }
+    }
+
     /// A marker for disabling all events
     ///
     /// This is the type used whenever an `EventMask` is created with [`disable_all`].
@@ -157,11 +183,11 @@ pub mod set_event_mask {
     /// [`disable_all`]: EventMask::disable_all
     pub struct AllUnmasked;
 
-    struct CmdParameter {
+    struct Parameter {
         mask: [u8; 8],
     }
 
-    impl<I, T> TryFrom<EventMask<I>> for CmdParameter
+    impl<I, T> TryFrom<EventMask<I>> for Parameter
     where
         I: Iterator<Item = T>,
         T: Borrow<LeMeta>,
@@ -169,43 +195,46 @@ pub mod set_event_mask {
         type Error = ();
 
         fn try_from(em: EventMask<I>) -> Result<Self, Self::Error> {
-            let mut filtered = em.mask.filter(|e| event_to_mask_bit(e.borrow()) != 0).peekable();
+            let mut filtered = em
+                .mask
+                .into_iter()
+                .filter(|e| event_to_mask_bit(e.borrow()) != 0)
+                .peekable();
 
             match filtered.peek() {
                 None => Err(()),
                 Some(_) => {
-                    let mask = em
-                        .mask
+                    let mask = filtered
                         .fold(0u64, |mask, e| mask | event_to_mask_bit(e.borrow()))
                         .to_le_bytes();
 
-                    Ok(CmdParameter { mask })
+                    Ok(Parameter { mask })
                 }
             }
         }
     }
 
-    impl TryFrom<EventMask<DefaultMask>> for CmdParameter {
+    impl TryFrom<EventMask<DefaultMask>> for Parameter {
         type Error = core::convert::Infallible;
 
         fn try_from(_: EventMask<DefaultMask>) -> Result<Self, Self::Error> {
-            let mask = 0.to_le_bytes();
+            let mask = DefaultMask::DEFAULT_MASK.to_le_bytes();
 
-            Ok(CmdParameter { mask })
+            Ok(Parameter { mask })
         }
     }
 
-    impl TryFrom<EventMask<AllUnmasked>> for CmdParameter {
+    impl TryFrom<EventMask<AllUnmasked>> for Parameter {
         type Error = core::convert::Infallible;
 
         fn try_from(_: EventMask<AllUnmasked>) -> Result<Self, Self::Error> {
             let mask = [0; 8];
 
-            Ok(CmdParameter { mask })
+            Ok(Parameter { mask })
         }
     }
 
-    impl CommandParameter<8> for CmdParameter {
+    impl CommandParameter<8> for Parameter {
         const COMMAND: opcodes::HciCommand = COMMAND;
         fn get_parameter(&self) -> [u8; 8] {
             self.mask
@@ -232,12 +261,16 @@ pub mod set_event_mask {
     ///     le::set_event_mask::send(host, [LeMeta::ConnectionComplete, LeMeta::LongTermKeyRequest]).await
     /// # }
     /// ```
-    pub async fn send<H: HostInterface, E, I>(host: &mut Host<H>, events: E) -> Result<(), CommandError<H>>
+    pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
-        E: Into<EventMask<I>>,
-        E: Iterator<Item = LeMeta>,
+        M: Into<EventMask<I>>,
+        I: Iterator<Item = E>,
+        E: Borrow<LeMeta>,
     {
-        let parameter = CommandParameter::from(events.into());
+        let parameter = match Parameter::try_from(events.into()) {
+            Err(()) => return Ok(()),
+            Ok(parameter) => parameter,
+        };
 
         host.send_command_expect_complete(parameter).await
     }
@@ -248,8 +281,7 @@ pub mod read_buffer_size {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND_V1: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadBufferSizeV1);
@@ -461,8 +493,7 @@ pub mod read_local_supported_features {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_util::{LeDeviceFeatures, LeFeaturesItr};
 
@@ -519,8 +550,7 @@ pub mod read_white_list_size {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadWhiteListSize);
@@ -576,8 +606,7 @@ pub mod read_white_list_size {
 pub mod clear_white_list {
 
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ClearWhiteList);
@@ -601,8 +630,7 @@ macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
         use crate::commands::le::WhiteListedAddressType;
         use crate::{
-            opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-            OnlyStatus, TryFromCommandComplete,
+            opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
         };
         use bo_tie_util::BluetoothDeviceAddress;
 
@@ -657,8 +685,7 @@ pub mod read_supported_states {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadSupportedStates);
@@ -862,8 +889,7 @@ pub mod test_end {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::TestEnd);

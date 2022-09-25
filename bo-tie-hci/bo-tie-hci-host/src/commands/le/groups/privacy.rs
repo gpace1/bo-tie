@@ -20,8 +20,7 @@ impl PeerIdentityAddressType {
 /// LE Set Address Resolution Enable command
 pub mod set_address_resolution_enable {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -53,8 +52,7 @@ pub mod set_address_resolution_enable {
 /// LE Set Resolvable Private Address Timeout command
 pub mod set_resolvable_private_address_timeout {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use core::time::Duration;
 
@@ -152,8 +150,7 @@ pub mod set_resolvable_private_address_timeout {
 pub mod add_device_to_resolving_list {
     use super::PeerIdentityAddressType;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -194,8 +191,7 @@ pub mod add_device_to_resolving_list {
 pub mod remove_device_from_resolving_list {
     use super::PeerIdentityAddressType;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -228,8 +224,7 @@ pub mod remove_device_from_resolving_list {
 /// LE Clear Resolving List command
 pub mod clear_resolving_list {
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ClearResolvingList);
@@ -253,8 +248,7 @@ pub mod clear_resolving_list {
 pub mod set_privacy_mode {
     use super::PeerIdentityAddressType;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface, OnlyStatus,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetPrivacyMode);

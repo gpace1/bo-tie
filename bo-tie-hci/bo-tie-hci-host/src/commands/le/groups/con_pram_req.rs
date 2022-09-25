@@ -8,8 +8,7 @@ pub mod remote_connection_parameter_request_reply {
     use crate::commands::le::{ConnectionEventLength, ConnectionInterval, ConnectionLatency, SupervisionTimeout};
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -124,8 +123,7 @@ pub mod remote_connection_parameter_request_negative_reply {
     use crate::errors::Error;
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, FlowControlInfo, Host, HostInterface,
-        TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
