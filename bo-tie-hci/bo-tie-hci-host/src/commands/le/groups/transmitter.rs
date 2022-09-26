@@ -37,6 +37,7 @@ pub mod read_advertising_channel_tx_power {
     }
 
     impl TxPower {
+        #[cfg(feature = "std")]
         pub fn as_milli_watts(&self) -> f32 {
             use core::f32;
             10f32.powf(self.power as f32 / 10f32)

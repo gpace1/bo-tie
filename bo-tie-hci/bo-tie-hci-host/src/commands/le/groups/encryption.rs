@@ -149,9 +149,7 @@ pub mod rand {
 
 /// LE Enable Encryption command
 pub mod enable_encryption {
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::StartEncryption);

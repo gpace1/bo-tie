@@ -183,8 +183,6 @@ pub mod remote_connection_parameter_request_negative_reply {
         handle: ConnectionHandle,
         reason: Error,
     ) -> Result<Return, CommandError<H>> {
-        use core::mem::discriminant;
-
         let reason = match reason {
             Error::NoError | Error::MissingErrorCode => Error::UnspecifiedError,
             _ => reason,

@@ -77,10 +77,7 @@
 /// [*Triggered Clock Capture*]: bo_tie_hci_util::events::Events::TriggeredClockCapture
 /// [*Truncated Page Complete*]: bo_tie_hci_util::events::Events::TruncatedPageComplete
 pub mod set_event_mask {
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
-    use bo_tie_hci_util::events;
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete};
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 
@@ -374,9 +371,7 @@ pub mod set_event_mask {
 /// Manager is reset, for LE the Link Layer is reset, and for AMP the PAL is reset.
 pub mod reset {
 
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
@@ -493,9 +488,7 @@ pub mod read_transmit_power_level {
 /// # Encryption Change
 /// When used with this command, this [`Event`] will enable the second version of the event.
 pub mod set_event_mask_page_2 {
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete};
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 

@@ -27,9 +27,7 @@ impl ConnectionIntervalBounds {
 pub mod connection_update {
     use super::ConnectionIntervalBounds;
     use crate::commands::le::{ConnectionEventLength, SupervisionTimeout};
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ConnectionUpdate);
@@ -110,9 +108,7 @@ pub mod create_connection {
     use crate::commands::le::{
         AddressType, ConnectionEventLength, ConnectionLatency, OwnAddressType, SupervisionTimeout,
     };
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_util::BluetoothDeviceAddress;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::CreateConnection);
@@ -250,9 +246,7 @@ pub mod create_connection {
 
 /// LE Set Host Channel Classification command
 pub mod set_host_channel_classification {
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::SetHostChannelClassification);
@@ -403,9 +397,7 @@ pub mod read_channel_map {
 
 pub mod read_remote_features {
 
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadRemoteFeatures);

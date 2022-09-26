@@ -86,7 +86,7 @@ where
     type RecvBuffer = C::FromBuffer;
     type RecvFut<'a> = AclReceiverMap<'a, C> where Self: 'a;
 
-    fn send(&self, data: bo_tie_l2cap::BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+    fn send(&self, data: bo_tie_l2cap::BasicInfoFrame<alloc::vec::Vec<u8>>) -> Self::SendFut<'_> {
         // todo: not sure if this will be necessary when the type of input data is `BasicInfoFrame<Self::Buffer<'_>>`
         let front_capacity = HciAclData::<()>::HEADER_SIZE;
 
@@ -176,12 +176,12 @@ where
 }
 
 #[cfg(not(feature = "unstable-type-alias-impl-trait"))]
-impl<'a, C> core::future::IntoFuture for AclBufferBuilder<C>
+impl<C> core::future::IntoFuture for AclBufferBuilder<C>
 where
     C: ConnectionChannelEnds,
 {
-    type Output = <<C::Sender as bo_tie_hci_util::Sender>::SendFuture<'a> as Future>::Output;
-    type IntoFuture = AclBufferFuture<'a, C>;
+    type Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>;
+    type IntoFuture = AclBufferFuture<C>;
 
     fn into_future(mut self) -> Self::IntoFuture {
         let message = bo_tie_hci_util::FromConnectionIntraMessage::Acl(self.buffer.take().unwrap()).into();
@@ -190,43 +190,53 @@ where
             message: Some(message),
             sender_future: None,
             sender: self.sender,
-            _p: core::marker::PhantomData,
+            _p: core::marker::PhantomPinned,
         }
     }
 }
 
-/// This is a temporary until 'impl trait` feature is completed
-
+/// This is a temporary type until 'type_alias_impl_trait` feature is stable
 #[cfg(not(feature = "unstable-type-alias-impl-trait"))]
-struct AclBufferFuture<'a, C: ConnectionChannelEnds> {
+struct AclBufferFuture<C: ConnectionChannelEnds> {
     message: Option<<C::Sender as bo_tie_hci_util::Sender>::Message>,
-    sender_future: Option<<C::Sender as bo_tie_hci_util::Sender>::SendFuture<'a>>,
+    sender_future: Option<
+        core::pin::Pin<
+            alloc::boxed::Box<dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>>,
+        >,
+    >,
     sender: C::Sender,
-    _p: core::marker::PhantomData<&'a C>,
+    _p: core::marker::PhantomPinned,
 }
 
 #[cfg(not(feature = "unstable-type-alias-impl-trait"))]
 impl<C: ConnectionChannelEnds> Future for AclBufferFuture<C> {
-    type Output = <<C::Sender as bo_tie_hci_util::Sender>::SendFuture<'static> as Future>::Output;
+    type Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        use alloc::boxed::Box;
         use bo_tie_hci_util::Sender;
         use core::mem::transmute;
 
         let this = unsafe { self.get_unchecked_mut() };
 
         loop {
-            match self.sender_future.as_mut() {
+            match this.sender_future.as_mut() {
                 Some(future) => break Pin::new(future).poll(cx),
                 None => {
-                    let message = self.message.take();
+                    let message = this.message.take().unwrap();
+
+                    let future = Box::pin(this.sender.send(message))
+                        as Pin<Box<dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>>>;
 
                     // This is 'ok' only because `this` is pinned
                     let sender_future = unsafe {
-                        transmute::<_, <C::Sender as Sender>::SendFuture<'static>>(self.sender.send(message));
+                        transmute::<
+                            _,
+                            Pin<Box<dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>>>,
+                        >(future)
                     };
 
-                    self.sender_future = Some(sender_future);
+                    this.sender_future = Some(sender_future);
                 }
             }
         }
@@ -312,7 +322,7 @@ where
 pub struct ConnectionChannelSender<'a, C: ConnectionChannelEnds> {
     sliced_future: bo_tie_l2cap::send_future::AsSlicedPacketFuture<
         SelfSendBufferIter<'a, C>,
-        Vec<u8>,
+        alloc::vec::Vec<u8>,
         SelfSendBufferFutureMap<C>,
         AclBufferBuilder<C>,
         <AclBufferBuilder<C> as core::future::IntoFuture>::IntoFuture,
