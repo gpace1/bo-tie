@@ -91,8 +91,15 @@ pub mod uart;
 
 /// The interface
 ///
-/// An `Interface` is the component of the host that must run with the interface driver. Its the
-/// part of the host that must perpetually await upon the
+/// An `Interface` is the component of the host that must run with the interface driver. Its primary
+/// purposes is to distribute packets sent from the controller to the other async tasks and to flow
+/// control packets from the other async tasks to the controller.
+///
+/// # Up/Down Sending
+/// The interface driver sends HCI packets *upward* to the other async tasks of the Host and sends
+/// HCI packets *downward* to the Controller. Methods that contain *up* are used for sending packets
+/// received from the interface up to the higher layered protocols. Methods that contain *down* are
+/// for sending packets to the interface and onto the Controller.
 pub struct Interface<R> {
     channel_reserve: core::cell::RefCell<R>,
 }
@@ -108,16 +115,21 @@ where
         Interface { channel_reserve }
     }
 
-    /// Send a complete HCI packet from the controller to the Host
+    /// Send a complete HCI packet upward
     ///
-    /// After the interface driver converts an interface packet into a *complete* [`HciPacket`], it
-    /// must call this method to send the `HciPacket` to it's destination async task. If the
-    /// interface driver cannot receive a complete HCI packet, it may buffer the data with a
-    /// [`BufferedUpSend`] which can be acquired by the method `buffered_up_send`.
+    /// This is used for sending a complete `HciPacket` upward. If the packet is an event it is sent
+    /// to the host async task, or if the packet is a data packet it is sent to appropriate
+    /// connection async task.
     ///
     /// # Error
-    /// The data within the `HciPacket` is expected to be a properly formatted HCI packet. If it is
-    /// not formatted correctly, or there are no other async tasks, `up_send` will return an error.
+    /// An error can occur for a few reasons.
+    /// * The data with the `HciPacket` is expected to be a properly formatted HCI packet. It
+    ///   must be formatted to the HCI packet type as indicated by the enumeration. If the length
+    ///   field of the packet is incorrect an error will be returned
+    /// * If the destination (host or connection async task) does not exist then an error will be
+    ///   returned. If this error is because the host async task no longer exists then the interface
+    ///   async task should also exit.
+    /// * An error is returned for SCO and ISO HCI data packets as they are not implemented yet.
     pub async fn up_send<T>(&mut self, packet: &HciPacket<T>) -> Result<(), SendError<R>>
     where
         T: Deref<Target = [u8]>,
@@ -408,7 +420,9 @@ where
     /// Initiate a connection async task
     ///
     /// This creates the channels ends required for creating a new connection async task and sends
-    /// this information within a [`IntraMessageType::Connection`] message to the host async task.
+    /// this information within a [`ToConnectionIntraMessage`] message to the host async task.
+    ///
+    /// [`ToConnectionIntraMessage`]: bo_tie_hci_util::ToConnectionIntraMessage
     pub async fn create_connection(
         &self,
         handle: ConnectionHandle,
@@ -697,7 +711,9 @@ pub type SendError<R> = SendErrorReason<
 /// is that bytes are fed to a `BufferedUpSend` in correct order. Trying to "overfeed" with more bytes
 /// than necessary will result in the `BufferedUpSend` ignoring them.
 ///
-/// For information on how to use this see the method [`buffer_send`](Interface::buffered_send)
+/// For information on how to use this see the method [`buffer_up_send`]
+///
+/// [`buffer_up_send`]: Interface::buffered_up_send
 pub struct BufferedUpSend<'a, R: ChannelReserve> {
     interface: &'a Interface<R>,
     packet_type: HciPacketType,
@@ -1033,7 +1049,7 @@ impl BufferedTaskId {
     }
 }
 
-/// module for containing methods that do not fit within the `impl` for [`BufferedSendSetup`]
+/// module for containing methods that do not fit within the `impl` for [`BufferedUpSend`]
 mod buffered_send {
     use super::*;
 

@@ -35,11 +35,13 @@ where
 
     /// Process a received byte
     ///
-    /// This the `UartInterface` equivalent of the method [`buffered_send`] within `Interface` with
-    /// the exception that it does not need to be initialized with the HCI packet type. Instead it
-    /// is able to determine the packet type by assuming the first byte put into the buffer is the
-    /// packet indicator. Otherwise the returned `UartBufferedUpSend` acts the same as the return of
-    /// method `buffered_send` within `Interface`.
+    /// This the `UartInterface` equivalent of the method [`buffered_up_send`] within `Interface`
+    /// with the exception that it does not need to be initialized with the HCI packet type. Instead
+    /// it is able to determine the packet type by assuming the first byte put into the buffer is
+    /// the packet indicator. Otherwise the returned `UartBufferedUpSend` acts the same as the
+    /// return of method `buffered_send` within `Interface`.
+    ///
+    /// [`buffered_up_send`]: Interface::buffered_up_send
     pub async fn buffered_send(&mut self) -> UartBufferedUpSend<'_, R> {
         UartBufferedUpSend::new(&mut self.interface)
     }
