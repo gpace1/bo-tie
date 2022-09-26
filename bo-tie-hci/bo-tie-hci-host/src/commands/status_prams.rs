@@ -21,8 +21,6 @@ pub mod read_rssi {
     pub struct RSSIInfo {
         pub handle: ConnectionHandle,
         pub rssi: i8,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for RSSIInfo {
@@ -45,13 +43,7 @@ pub mod read_rssi {
                 .get(3)
                 .ok_or(CCParameterError::InvalidEventParameter)? as i8;
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                handle,
-                rssi,
-                completed_packets_cnt,
-            })
+            Ok(Self { handle, rssi })
         }
     }
 

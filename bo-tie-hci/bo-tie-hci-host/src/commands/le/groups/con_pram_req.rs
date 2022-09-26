@@ -55,8 +55,6 @@ pub mod remote_connection_parameter_request_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Return {
@@ -73,12 +71,7 @@ pub mod remote_connection_parameter_request_reply {
             ]))
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                connection_handle,
-                completed_packets_cnt,
-            })
+            Ok(Self { connection_handle })
         }
     }
 
@@ -132,8 +125,6 @@ pub mod remote_connection_parameter_request_negative_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Return {
@@ -150,12 +141,7 @@ pub mod remote_connection_parameter_request_negative_reply {
             ]))
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                connection_handle,
-                completed_packets_cnt,
-            })
+            Ok(Self { connection_handle })
         }
     }
 

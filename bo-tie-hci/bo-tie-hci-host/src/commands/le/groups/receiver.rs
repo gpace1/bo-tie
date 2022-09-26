@@ -3,7 +3,7 @@ pub mod set_scan_parameters {
 
     use crate::commands::le::OwnAddressType;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CommandError, CommandParameter, Host, HostInterface,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetScanParameters);
@@ -121,7 +121,7 @@ pub mod set_scan_parameters {
 pub mod set_scan_enable {
 
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CommandError, CommandParameter, Host, HostInterface,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetScanEnable);
@@ -161,7 +161,7 @@ pub mod receiver_test {
 
     use crate::commands::le::Frequency;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CommandError, CommandParameter, Host, HostInterface,
     };
 
     const COMMAND_V1: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReceiverTest);

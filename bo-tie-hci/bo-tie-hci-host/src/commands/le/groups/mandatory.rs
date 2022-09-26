@@ -39,9 +39,7 @@
 /// [`send`]: self::send
 pub mod set_event_mask {
     use crate::events::LeMeta;
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use core::borrow::Borrow;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetEventMask);
@@ -328,8 +326,6 @@ pub mod read_buffer_size {
     pub struct BufferSizeV1 {
         /// Information on the LE ACL buffer
         pub acl: BufferSize,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Option<BufferSizeV1> {
@@ -370,12 +366,7 @@ pub mod read_buffer_size {
 
             let acl = BufferSize { len, cnt };
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Some(BufferSizeV1 {
-                acl,
-                completed_packets_cnt,
-            }))
+            Ok(Some(BufferSizeV1 { acl }))
         }
     }
 
@@ -385,8 +376,6 @@ pub mod read_buffer_size {
         pub acl: Option<BufferSize>,
         /// Information on the LE ISO buffer
         pub iso: Option<BufferSize>,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for BufferSizeV2 {
@@ -455,13 +444,7 @@ pub mod read_buffer_size {
                 })
                 .map(|(len, cnt)| BufferSize { len, cnt });
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                acl,
-                iso,
-                completed_packets_cnt,
-            })
+            Ok(Self { acl, iso })
         }
     }
 
@@ -502,8 +485,6 @@ pub mod read_local_supported_features {
 
     pub struct EnabledLeFeatures {
         features: LeDeviceFeatures,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl EnabledLeFeatures {
@@ -517,15 +498,10 @@ pub mod read_local_supported_features {
             check_status!(cc.return_parameter);
 
             if cc.return_parameter[1..].len() == 8 {
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
                 let features = LeDeviceFeatures::new(&cc.return_parameter[1..])
                     .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
-                Ok(Self {
-                    features,
-                    completed_packets_cnt,
-                })
+                Ok(Self { features })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
             }
@@ -557,8 +533,6 @@ pub mod read_white_list_size {
 
     pub struct WhiteListSize {
         pub list_size: usize,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for WhiteListSize {
@@ -572,12 +546,7 @@ pub mod read_white_list_size {
                 .ok_or(CCParameterError::InvalidEventParameter)?
                 .into();
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                list_size,
-                completed_packets_cnt,
-            })
+            Ok(Self { list_size })
         }
     }
 
@@ -605,9 +574,7 @@ pub mod read_white_list_size {
 
 pub mod clear_white_list {
 
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ClearWhiteList);
 
@@ -629,9 +596,7 @@ pub mod clear_white_list {
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
         use crate::commands::le::WhiteListedAddressType;
-        use crate::{
-            opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-        };
+        use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
         use bo_tie_util::BluetoothDeviceAddress;
 
         struct CommandPrameter {
@@ -762,8 +727,6 @@ pub mod read_supported_states {
 
     pub struct CurrentStatesAndRoles {
         states_and_roles_mask: [u8; 8],
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl CurrentStatesAndRoles {
@@ -782,16 +745,11 @@ pub mod read_supported_states {
             check_status!(cc.return_parameter);
 
             if cc.return_parameter[1..].len() == 8 {
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
                 let mut states_and_roles_mask = [0u8; 8];
 
                 states_and_roles_mask.copy_from_slice(&cc.return_parameter[1..]);
 
-                Ok(Self {
-                    states_and_roles_mask,
-                    completed_packets_cnt,
-                })
+                Ok(Self { states_and_roles_mask })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
             }
@@ -896,8 +854,6 @@ pub mod test_end {
 
     pub struct Return {
         pub number_of_packets: u16,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Return {
@@ -913,12 +869,7 @@ pub mod test_end {
                     .ok_or(CCParameterError::InvalidEventParameter)?,
             ]);
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                number_of_packets,
-                completed_packets_cnt,
-            })
+            Ok(Self { number_of_packets })
         }
     }
 

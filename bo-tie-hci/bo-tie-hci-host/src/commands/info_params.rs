@@ -23,8 +23,6 @@ pub mod read_local_version_information {
         pub lmp_pal_version: u8,
         pub manufacturer_name: u16,
         pub lmp_pal_subversion: u16,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for VersionInformation {
@@ -68,15 +66,12 @@ pub mod read_local_version_information {
                     .ok_or(CCParameterError::InvalidEventParameter)?,
             ]);
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
             Ok(Self {
                 hci_version,
                 hci_revision,
                 lmp_pal_version,
                 manufacturer_name,
                 lmp_pal_subversion,
-                completed_packets_cnt,
             })
         }
     }
@@ -1028,8 +1023,6 @@ pub mod read_local_supported_commands {
     /// The supported commands of the controller
     pub struct Return {
         supported_commands: [u8; 64],
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl Return {
@@ -1069,16 +1062,11 @@ pub mod read_local_supported_commands {
             check_status!(cc.return_parameter);
 
             if cc.return_parameter[1..].len() == 64 {
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
                 let mut supported_commands = [0u8; 64];
 
                 supported_commands.copy_from_slice(&cc.return_parameter[1..]);
 
-                Ok(Self {
-                    supported_commands,
-                    completed_packets_cnt,
-                })
+                Ok(Self { supported_commands })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
             }
@@ -1116,13 +1104,11 @@ pub mod read_local_supported_features {
 
     pub struct EnabledFeatures {
         device_features: DeviceFeatures,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl EnabledFeatures {
         /// Iterator over the enabled features
-        fn iter(&self) -> FeaturesIter<'_> {
+        pub fn iter(&self) -> FeaturesIter<'_> {
             self.device_features.iter()
         }
     }
@@ -1132,15 +1118,10 @@ pub mod read_local_supported_features {
             check_status!(cc.return_parameter);
 
             if cc.return_parameter[1..].len() == 8 {
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
                 let device_features = DeviceFeatures::new(0, &cc.return_parameter[1..])
                     .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
-                Ok(Self {
-                    device_features,
-                    completed_packets_cnt,
-                })
+                Ok(Self { device_features })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
             }
@@ -1189,8 +1170,6 @@ pub mod read_bd_addr {
 
     pub struct Return {
         address: BluetoothDeviceAddress,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Return {
@@ -1198,16 +1177,11 @@ pub mod read_bd_addr {
             check_status!(cc.return_parameter);
 
             if cc.return_parameter[1..].len() == 6 {
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
                 let mut address = BluetoothDeviceAddress::zeroed();
 
                 address.copy_from_slice(&cc.return_parameter[1..]);
 
-                Ok(Return {
-                    address,
-                    completed_packets_cnt,
-                })
+                Ok(Return { address })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
             }
@@ -1254,8 +1228,6 @@ pub mod read_buffer_size {
         pub hc_synchronous_data_packet_len: usize,
         pub hc_total_num_acl_data_packets: usize,
         pub hc_total_num_synchronous_data_packets: usize,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Return {
@@ -1302,14 +1274,11 @@ pub mod read_buffer_size {
             ])
             .into();
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
             Ok(Self {
                 hc_acl_data_packet_len,
                 hc_synchronous_data_packet_len,
                 hc_total_num_acl_data_packets,
                 hc_total_num_synchronous_data_packets,
-                completed_packets_cnt,
             })
         }
     }

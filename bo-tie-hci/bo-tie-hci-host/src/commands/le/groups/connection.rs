@@ -79,9 +79,7 @@ pub mod connection_update {
 
 /// Send the LE Create Connection Cancel command
 pub mod create_connection_cancel {
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::CreateConnectionCancel);
@@ -307,8 +305,6 @@ pub mod read_channel_map {
         pub handle: ConnectionHandle,
         /// This is the list of channels (from 0 through 36)
         pub channel_map_bit_mask: [u8; 5],
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for ChannelMapInfo {
@@ -326,16 +322,11 @@ pub mod read_channel_map {
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
             if cc.return_parameter[3..].len() == 5 {
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-                let mut channel_map_bit_mask = [0u8; 5];
-
-                channel_map_bit_mask.copy_from_slice(&cc.return_parameter[3..]);
+                let channel_map_bit_mask = [0u8; 5];
 
                 Ok(Self {
                     handle,
                     channel_map_bit_mask,
-                    completed_packets_cnt,
                 })
             } else {
                 Err(CCParameterError::InvalidEventParameter)

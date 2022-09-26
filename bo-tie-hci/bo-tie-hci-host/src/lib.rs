@@ -24,16 +24,13 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
+use bo_tie_hci_util::ConnectionChannelEnds;
+use bo_tie_hci_util::HostChannelEnds as HostInterface;
 use bo_tie_hci_util::{events, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
-use bo_tie_hci_util::{Channel, ChannelReserve, ConnectionChannelEnds, FlowControlId};
-use bo_tie_hci_util::{HostChannelEnds as HostInterface, ToConnectionIntraMessage};
 use bo_tie_util::errors;
-use core::fmt::Write;
-use core::future::Future;
+
 use core::ops::Deref;
-use core::pin::Pin;
-use core::task::{Context, Poll};
 
 /// Used to get the information required for sending a command from the host to the controller
 ///
@@ -433,7 +430,7 @@ pub struct Host<H: HostInterface> {
     acl_max_mtu: usize,
     sco_max_mtu: usize,
     le_acl_max_mtu: usize,
-    le_iso_max_mtu: usize,
+    _le_iso_max_mtu: usize,
 }
 
 impl<H> Host<H>
@@ -449,15 +446,13 @@ where
     ///
     /// # Error
     /// If this returns an error then the information about the buffers cannot be acquired.
-    async fn init(ends: H) -> Result<Self, CommandError<H>> {
-        use errors::Error;
-
+    pub async fn init(ends: H) -> Result<Self, CommandError<H>> {
         let mut host = Host {
             host_interface: ends,
             acl_max_mtu: Default::default(),
             sco_max_mtu: Default::default(),
             le_acl_max_mtu: Default::default(),
-            le_iso_max_mtu: Default::default(),
+            _le_iso_max_mtu: Default::default(),
         };
 
         // reset the controller
@@ -512,7 +507,7 @@ where
 
         self.le_acl_max_mtu = le_acl_max_mtu;
 
-        self.le_iso_max_mtu = le_iso_max_mtu;
+        self._le_iso_max_mtu = le_iso_max_mtu;
 
         Ok(())
     }
@@ -627,7 +622,6 @@ where
     /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
     /// [`NumberOfCompletedPackets`]: bo_tie_hci_util::events::Events::NumberOfCompletedPackets
     pub async fn next(&mut self) -> Result<Next<H::ConnectionChannelEnds>, NextEventError> {
-        use bo_tie_hci_util::events::parameters::LinkType;
         use bo_tie_hci_util::events::{EventsData, LeMetaData};
         use bo_tie_hci_util::Receiver;
 
@@ -814,7 +808,7 @@ impl<C: ConnectionChannelEnds> Connection<C> {
     ///
     /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
     #[cfg(feature = "l2cap")]
-    fn hci_maxed_mtu(&mut self) {
+    pub fn hci_maxed_mtu(&mut self) {
         self.bounded = true
     }
 
@@ -827,7 +821,7 @@ impl<C: ConnectionChannelEnds> Connection<C> {
     ///
     /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
     #[cfg(feature = "l2cap")]
-    fn l2cap_maxed_mtu(&mut self) {
+    pub fn l2cap_maxed_mtu(&mut self) {
         self.bounded = false
     }
 

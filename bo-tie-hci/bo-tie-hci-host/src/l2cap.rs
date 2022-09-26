@@ -247,7 +247,6 @@ impl<C: ConnectionChannelEnds> Future for AclBufferFuture<C> {
 
 enum AclBufferError<T: bo_tie_util::buffer::TryExtend<u8>> {
     Buffer(T::Error),
-    IncorrectIntraMessageType,
 }
 
 impl<T: bo_tie_util::buffer::TryExtend<u8>> core::fmt::Debug for AclBufferError<T>
@@ -257,7 +256,6 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             AclBufferError::Buffer(e) => e.fmt(f),
-            AclBufferError::IncorrectIntraMessageType => f.write_str("Incorrect message type for SelfSendBuffer"),
         }
     }
 }
@@ -269,7 +267,6 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             AclBufferError::Buffer(e) => e.fmt(f),
-            AclBufferError::IncorrectIntraMessageType => f.write_str("Incorrect message type for SelfSendBuffer"),
         }
     }
 }
@@ -392,7 +389,7 @@ where
                             "isochronous connection data is not implemented",
                         ))))
                     }
-                    Poll::Ready(Some(ToConnectionIntraMessage::Disconnect(reason))) => break Poll::Ready(None),
+                    Poll::Ready(Some(ToConnectionIntraMessage::Disconnect(_reason))) => break Poll::Ready(None),
                 },
             }
         }

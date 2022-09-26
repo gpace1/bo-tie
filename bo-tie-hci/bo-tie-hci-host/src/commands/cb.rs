@@ -77,7 +77,7 @@
 /// [*Triggered Clock Capture*]: bo_tie_hci_util::events::Events::TriggeredClockCapture
 /// [*Truncated Page Complete*]: bo_tie_hci_util::events::Events::TruncatedPageComplete
 pub mod set_event_mask {
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 
@@ -410,8 +410,6 @@ pub mod read_transmit_power_level {
     pub struct TransmitPowerLevel {
         pub connection_handle: ConnectionHandle,
         pub power_level: i8,
-        /// The number of HCI commands that can be sent to the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for TransmitPowerLevel {
@@ -435,12 +433,9 @@ pub mod read_transmit_power_level {
                 .get(3)
                 .ok_or(CCParameterError::InvalidEventParameter)? as i8;
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
             Ok(Self {
                 connection_handle,
                 power_level,
-                completed_packets_cnt,
             })
         }
     }
@@ -488,7 +483,7 @@ pub mod read_transmit_power_level {
 /// # Encryption Change
 /// When used with this command, this [`Event`] will enable the second version of the event.
 pub mod set_event_mask_page_2 {
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 

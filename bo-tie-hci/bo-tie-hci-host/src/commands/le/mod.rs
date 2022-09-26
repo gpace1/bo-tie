@@ -291,20 +291,6 @@ pub enum AddressType {
 }
 
 impl AddressType {
-    /// Try to create a `SupervisionTimeout` from a raw u8 value
-    ///
-    /// # Error
-    /// Input `raw` is not a valid identifier for an address type
-    pub(crate) fn try_from_raw(raw: u8) -> Result<Self, alloc::string::String> {
-        match raw {
-            0x00 => Ok(AddressType::PublicDeviceAddress),
-            0x01 => Ok(AddressType::RandomDeviceAddress),
-            0x02 => Ok(AddressType::PublicIdentityAddress),
-            0x03 => Ok(AddressType::RandomIdentityAddress),
-            _ => Err(alloc::format!("Unknown {}", raw)),
-        }
-    }
-
     pub(crate) fn into_raw(&self) -> u8 {
         match *self {
             AddressType::PublicDeviceAddress => 0x0,
@@ -321,13 +307,6 @@ pub struct ExtendedAdvertisingAndScanResponseData {
 }
 
 impl ExtendedAdvertisingAndScanResponseData {
-    pub(crate) fn from<T>(data: T) -> Self
-    where
-        T: Into<alloc::vec::Vec<u8>>,
-    {
-        Self { data: data.into() }
-    }
-
     /// Iterate over the advertising data structures
     #[cfg(feature = "gap")]
     pub fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator {

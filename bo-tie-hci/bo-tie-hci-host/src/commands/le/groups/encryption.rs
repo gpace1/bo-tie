@@ -46,8 +46,6 @@ pub mod encrypt {
 
     pub struct Cypher {
         pub cypher_text: [u8; 16],
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Cypher {
@@ -55,16 +53,11 @@ pub mod encrypt {
             check_status!(cc.return_parameter);
 
             if cc.return_parameter[1..].len() == 16 {
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
                 let mut cypher_text = [0u8; 16];
 
                 cypher_text.copy_from_slice(&cc.return_parameter[1..]);
 
-                Ok(Self {
-                    cypher_text,
-                    completed_packets_cnt,
-                })
+                Ok(Self { cypher_text })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
             }
@@ -106,14 +99,6 @@ pub mod rand {
 
     pub struct Random {
         pub random_number: u64,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
-    }
-
-    impl From<Random> for u64 {
-        fn from(ret: Random) -> Self {
-            ret.random_number
-        }
     }
 
     impl TryFromCommandComplete for Random {
@@ -129,12 +114,7 @@ pub mod rand {
 
                 let random_number = <u64>::from_le_bytes(rand_bytes);
 
-                let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-                Ok(Self {
-                    random_number,
-                    completed_packets_cnt,
-                })
+                Ok(Self { random_number })
             } else {
                 Err(CCParameterError::InvalidEventParameter)
             }
@@ -265,8 +245,6 @@ pub mod long_term_key_request_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Return {
@@ -283,12 +261,7 @@ pub mod long_term_key_request_reply {
             ]))
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                connection_handle,
-                completed_packets_cnt,
-            })
+            Ok(Self { connection_handle })
         }
     }
 
@@ -334,8 +307,6 @@ pub mod long_term_key_request_negative_reply {
 
     pub struct Return {
         pub connection_handle: ConnectionHandle,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for Return {
@@ -352,12 +323,7 @@ pub mod long_term_key_request_negative_reply {
             ]))
             .map_err(|_| CCParameterError::InvalidEventParameter)?;
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                connection_handle,
-                completed_packets_cnt,
-            })
+            Ok(Self { connection_handle })
         }
     }
 

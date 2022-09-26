@@ -4,7 +4,7 @@
 pub mod read_remote_version_information {
 
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CommandError, CommandParameter, Host, HostInterface,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -38,7 +38,7 @@ pub mod read_remote_version_information {
 pub mod disconnect {
     use crate::errors::Error;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CommandError, CommandParameter, Host, HostInterface,
     };
     use bo_tie_hci_util::ConnectionHandle;
 

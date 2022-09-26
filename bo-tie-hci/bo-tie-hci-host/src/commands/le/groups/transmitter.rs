@@ -14,8 +14,6 @@ pub mod read_advertising_channel_tx_power {
     #[derive(Debug)]
     pub struct TxPower {
         pub power: i8,
-        /// The number of HCI command packets completed by the controller
-        completed_packets_cnt: usize,
     }
 
     impl TryFromCommandComplete for TxPower {
@@ -27,12 +25,7 @@ pub mod read_advertising_channel_tx_power {
                 .get(1)
                 .ok_or(CCParameterError::InvalidEventParameter)? as i8;
 
-            let completed_packets_cnt = cc.number_of_hci_command_packets.into();
-
-            Ok(Self {
-                power,
-                completed_packets_cnt,
-            })
+            Ok(Self { power })
         }
     }
 
@@ -62,9 +55,7 @@ pub mod read_advertising_channel_tx_power {
 /// LE Set Advertising Enable command
 pub mod set_advertising_parameters {
     use crate::commands::le::OwnAddressType;
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_util::BluetoothDeviceAddress;
 
     const COMMAND: opcodes::HciCommand =
@@ -270,9 +261,7 @@ pub mod set_advertising_parameters {
 /// LE Set Advertising Data command
 pub mod set_advertising_data {
 
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     #[cfg(feature = "gap")]
     use bo_tie_gap::assigned::{ConvertError, IntoStruct};
 
@@ -354,9 +343,7 @@ pub mod set_advertising_data {
 /// LE Set Advertising Enable command
 pub mod set_advertising_enable {
 
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetAdvertisingEnable);
 
@@ -381,9 +368,7 @@ pub mod set_advertising_enable {
 
 pub mod set_random_address {
 
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetRandomAddress);
 
@@ -413,9 +398,7 @@ pub mod set_random_address {
 pub mod transmitter_test {
 
     use crate::commands::le::Frequency;
-    use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::TransmitterTest);
 
