@@ -3,9 +3,7 @@
 /// Query a connected device for its Controller's version information
 pub mod read_remote_version_information {
 
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand =
@@ -23,9 +21,11 @@ pub mod read_remote_version_information {
     /// Read the version information of the connected device by its connection handle.
     ///
     /// The returned future awaits until the controller responds with a
-    /// [`CommandStatus`](events::Events::CommandStatus) event. The event
-    /// [`ReadRemoteVersionInformationComplete`](events::Events::ReadRemoteVersionInformationComplete)
+    /// [`CommandStatus`] event. The event [`ReadRemoteVersionInformationComplete`]
     /// must be awaited upon by the `host` to get the version information of the remote controller.
+    ///
+    /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
+    /// [`ReadRemoteVersionInformationComplete`]: bo_tie_hci_util::events::Events::ReadRemoteVersionInformationComplete
     pub async fn send<H: HostInterface>(
         host: &mut Host<H>,
         connection_handle: ConnectionHandle,
@@ -37,9 +37,7 @@ pub mod read_remote_version_information {
 /// Disconnect a remote device
 pub mod disconnect {
     use crate::errors::Error;
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LinkControl(opcodes::LinkControl::Disconnect);
@@ -97,7 +95,9 @@ pub mod disconnect {
         }
     }
 
-    /// Error for when an [`Error`](error::Error) cannot be converted into a [`DisconnectReason`]
+    /// Error for when an [`Error`] cannot be converted into a [`DisconnectReason`]
+    ///
+    /// [`Error`]: crate::errors::Error
     pub struct ConversionError;
 
     impl core::fmt::Debug for DisconnectReason {
@@ -131,9 +131,9 @@ pub mod disconnect {
     /// Disconnect the device
     ///
     /// The returned future awaits until the controller responds with a
-    /// [`CommandStatus`](events::Events::CommandStatus) event. This does not mean the remote device
-    /// is disconnected. The event
-    /// [`DisconnectionComplete`](events::Events::DisconnectionComplete)
+    /// [`CommandStatus`](bo_tie_hci_util::events::Events::CommandStatus) event. This does not mean
+    /// the remote device is disconnected. The event
+    /// [`DisconnectionComplete`](bo_tie_hci_util::events::Events::DisconnectionComplete)
     /// must be awaited upon by the `host` to know the device has disconnected.
     pub async fn send<H: HostInterface>(
         host: &mut Host<H>,

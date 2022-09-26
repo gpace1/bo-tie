@@ -67,8 +67,10 @@ pub mod connection_update {
     ///
     /// This sends the LE Connection Update command and awaits for the controller to send back the
     /// Command Status event. If the LE
-    /// [`ConnectionUpdateComplete`](events::LeMeta::ConnectionUpdateComplete) event is enabled, the
-    /// controller will send this event to the host when the connection is updated.
+    /// [`ConnectionUpdateComplete`] event is enabled, the controller will send this event to the
+    /// host when the connection is updated.
+    ///
+    /// [`ConnectionUpdateComplete`]: bo_tie_hci_util::events::LeMeta::ConnectionUpdateComplete
     pub async fn send<H: HostInterface>(
         host: &mut Host<H>,
         parameter: ConnectionUpdate,
@@ -229,11 +231,14 @@ pub mod create_connection {
     /// Send the LE Create Connection command
     ///
     /// This sends the LE Create Connection command to the controller and awaits for the controller
-    /// to send back the [`CommandStatus`](events::Events::CommandStatus) event. If the LE event
-    /// [`ConnectionComplete`](events::LeMeta::ConnectionComplete) or
-    /// [`EnhancedConnectionComplete`](events::LeMeta::EnhancedConnectionComplete) is unmasked, the
-    /// controller will send the event (with `EnhancedConnectionComplete` having precedence over
-    /// `ConnectionComplete` if they are both unmasked) to the host after a connection is made.
+    /// to send back the [`CommandStatus`] event. If the LE event [`ConnectionComplete`] or
+    /// [`EnhancedConnectionComplete`] is unmasked, the controller will send the event (with
+    /// `EnhancedConnectionComplete` having precedence over `ConnectionComplete` if they are both
+    /// unmasked) to the host after a connection is made.
+    ///
+    /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
+    /// [`ConnectionComplete`]: bo_tie_hci_util::events::LeMeta::ConnectionComplete
+    /// [`EnhancedConnectionComplete`]: bo_tie_hci_util::events::LeMeta::EnhancedConnectionComplete
     pub async fn send<H: HostInterface>(
         host: &mut Host<H>,
         parameters: ConnectionParameters,
@@ -407,10 +412,12 @@ pub mod read_remote_features {
     /// Send the LE Read Remote Features command
     ///
     /// This sends the LE Read Remote Features command to the controller and awaits for the
-    /// controller to send back the [`CommandStatus`](events::Events::CommandStatus) event. If the
-    /// LE event [`ReadRemoteFeaturesComplete`](events::LeMeta::ReadRemoteFeaturesComplete) is
-    /// unmasked, the controller will send the event to the host containing the LE features of the
-    /// connected device.
+    /// controller to send back the [`CommandStatus`] event. If the LE event
+    /// [`ReadRemoteFeaturesComplete`] is unmasked, the controller will send the event to the host
+    /// containing the LE features of the connected device.
+    ///
+    /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
+    /// [`ReadRemoteFeaturesComplete`]: bo_tie_hci_util::events::LeMeta::ReadRemoteFeaturesComplete
     pub async fn send<H: HostInterface>(
         host: &mut Host<H>,
         connection_handle: ConnectionHandle,

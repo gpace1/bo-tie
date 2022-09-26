@@ -21,8 +21,8 @@
 /// * [*Triggered Clock Capture*]
 /// * [*Synchronization Train Complete*]
 /// * [*Synchronization Train Received*]
-/// * [*Connectionless Slave Broadcast Receive*]
-/// * [*Connectionless Slave Broadcast Timeout*]
+/// * [*Connectionless Peripheral Broadcast Receive*]
+/// * [*Connectionless Peripheral Broadcast Timeout*]
 /// * [*Truncated Page Complete*]
 /// * [*Peripheral Page Response Timeout*]
 /// * [*Connectionless Slave Broadcast Channel Map Change*]
@@ -61,9 +61,8 @@
 /// [*Authenticated Payload Timeout Expired*]: bo_tie_hci_util::events::Events::AuthenticatedPayloadTimeoutExpired
 /// [*Command Complete*]: bo_tie_hci_util::events::Events::CommandComplete
 /// [*Command Status*]: bo_tie_hci_util::events::Events::CommandStatus   
-/// [*Connectionless Slave Broadcast Channel Map Change*]: bo_tie_hci_util::events::Events::ConnectionlessSlaveBroadcastChannelMapChange
-/// [*Connectionless Slave Broadcast Receive*]: bo_tie_hci_util::events::Events::ConnectionlessSlaveBroadcastReceive
-/// [*Connectionless Slave Broadcast Timeout*]: bo_tie_hci_util::events::Events::ConnectionlessSlaveBroadcastTimeout
+/// [*Connectionless Peripheral Broadcast Receive*]: bo_tie_hci_util::events::Events::ConnectionlessPeripheralBroadcastReceive
+/// [*Connectionless Peripheral Broadcast Timeout*]: bo_tie_hci_util::events::Events::ConnectionlessPeripheralBroadcastTimeout
 /// [*Encryption Change \[v2\]*]: bo_tie_hci_util::events::Events::EncryptionChangeV2
 /// [*Inquiry Response Notification*]: bo_tie_hci_util::events::Events::InquiryResponseNotification
 /// [`LeMeta`]: bo_tie_hci_util::events::Events::LeMeta
@@ -71,7 +70,7 @@
 /// [*Number of Completed Packets*]: bo_tie_hci_util::events::Events::NumberOfCompletedPackets        
 /// [*Peripheral Page Response Timeout*]: bo_tie_hci_util::events::Events::PeripheralPageResponseTimeout
 /// [*Sam Status Change*]: bo_tie_hci_util::events::Events::SamStatusChange
-/// [*Set Event Mask Page 2*]: bo_tie_hci_host::commands::cb::set_event_mask_page_2
+/// [*Set Event Mask Page 2*]: crate::commands::cb::set_event_mask_page_2
 /// [*Synchronization Train Complete*]: bo_tie_hci_util::events::Events::SynchronizationTrainComplete
 /// [*Synchronization Train Received*]: bo_tie_hci_util::events::Events::SynchronizationTrainReceived
 /// [*Triggered Clock Capture*]: bo_tie_hci_util::events::Events::TriggeredClockCapture
@@ -162,7 +161,7 @@ pub mod set_event_mask {
     /// The event mask
     ///
     /// This is the type used for creating an event mask to send to the Controller. Anything that
-    /// implements [`IntoIterator`] where the `Item` type can be '[borrowed]' as an [`Event`] is
+    /// implements [`IntoIterator`] where the `Item` type can be '[borrowed]' as an [`Events`] is
     /// able to be converted into an `EventMask`.
     ///
     /// ```
@@ -178,6 +177,7 @@ pub mod set_event_mask {
     /// This mask is equivalent to the event mask set upon reset of the Controller.
     ///
     /// [borrowed]: core::borrow::Borrow
+    /// [`Events`]: bo_tie_hci_util::events::Events
     pub struct EventMask<T> {
         mask: T,
     }
@@ -395,7 +395,7 @@ pub mod reset {
 /// Read the transmit power level
 ///
 /// This reads the transmit power level for a connection specified by its
-/// [`ConnectionHandle`](crate::hci::common::ConnectionHandle).
+/// [`ConnectionHandle`](bo_tie_hci_util::ConnectionHandle).
 pub mod read_transmit_power_level {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
@@ -481,7 +481,9 @@ pub mod read_transmit_power_level {
 /// use this command is the same as [`set_event_mask`].
 ///
 /// # Encryption Change
-/// When used with this command, this [`Event`] will enable the second version of the event.
+/// When used with this command, this [`Events`] will enable the second version of the event.
+///
+/// [`Events`]: bo_tie_hci_util::events::Events
 pub mod set_event_mask_page_2 {
     use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
     use bo_tie_hci_util::events::Events;

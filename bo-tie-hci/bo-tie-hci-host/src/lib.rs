@@ -185,15 +185,16 @@ impl std::error::Error for HciAclPacketError {}
 /// For a LE-U logical link, a HCI ACL Data Packet header is limited to a subset of the possible
 /// header configuration flags. A LE-U Logical link does not support automatic flushing of packets
 /// in a controller, nor does it support connectionless L2CAP channels. The packet boundary flag can
-/// be either
-/// ['FirstNonFlushable`](crate::AclPacketBoundary::FirstNonFlushable) or
-/// [`ContinuingFragment`](crate::AclPacketBoundary::ContinuingFragment), but it cannot be
-/// [`FirstAutoFlushable`](crate::AclPacketBoundary::FirstAutoFlushable) or
-/// [`CompleteL2capPdu`](crate::AclPacketBoundary::CompleteL2capPdu). The broadcast flag must
-/// always be
-/// [`NoBroadcast`](crate::hci::AclBroadcastFlag::NoBroadcast). Lastly the connection handle can
-/// only be a primary controller handle (which is generated with a *LE Connection Complete* or
-/// *LE Enhanced Connection Complete* event for LE-U).
+/// be either ['FirstNonFlushable`] or [`ContinuingFragment`], but it cannot be
+/// [`FirstAutoFlushable`] or [`CompleteL2capPdu`]. The broadcast flag must always be
+/// [`NoBroadcast`]. Lastly the connection handle can only be a primary controller handle (which is
+/// generated with a *LE Connection Complete* or *LE Enhanced Connection Complete* event for LE-U).
+///
+/// ['FirstNonFlushable`]: crate::AclPacketBoundary::FirstNonFlushable
+/// [`ContinuingFragment`]: crate::AclPacketBoundary::ContinuingFragment
+/// [`FirstAutoFlushable`]: crate::AclPacketBoundary::FirstAutoFlushable
+/// [`CompleteL2capPdu`]: crate::AclPacketBoundary::CompleteL2capPdu
+/// [`NoBroadcast`]: crate::AclBroadcastFlag::NoBroadcast
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct HciAclData<T> {
     connection_handle: bo_tie_hci_util::ConnectionHandle,
@@ -254,7 +255,7 @@ impl<T> HciAclData<T> {
     ///
     /// # Note
     /// Collecting the returned iterator into a `Vec` produces the same result as the return of
-    /// method [`to_packet`](HciACLData::to_packet)
+    /// method [`to_packet`](HciAclData::to_packet).
     pub fn to_packet_iter(&self) -> impl Iterator<Item = u8> + ExactSizeIterator + '_
     where
         T: Deref<Target = [u8]>,
@@ -615,13 +616,14 @@ where
     ///
     /// # Excluded Events
     /// The events [`CommandComplete`], [`CommandStatus`], [`NumberOfCompletedPackets`], and
-    /// [`NumberOfCompletedDataPackets`] are not be returned as they are handled internally
+    /// [`NumberOfCompletedDataBlocks`] are not be returned as they are handled internally
     /// by the host and interface async tasks.   
     ///
     /// [`CommandComplete`]: bo_tie_hci_util::events::Events::CommandComplete
     /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
     /// [`NumberOfCompletedPackets`]: bo_tie_hci_util::events::Events::NumberOfCompletedPackets
-    pub async fn next(&mut self) -> Result<Next<H::ConnectionChannelEnds>, NextEventError> {
+    /// [`NumberOfCompletedDataBlocks`]: bo_tie_hci_util::events::Events::NumberOfCompletedDataBlocks
+    pub async fn next(&mut self) -> Result<Next<H::ConnectionChannelEnds>, NextError> {
         use bo_tie_hci_util::events::{EventsData, LeMetaData};
         use bo_tie_hci_util::Receiver;
 
@@ -633,14 +635,14 @@ where
                 .get_mut_gen_recv()
                 .recv()
                 .await
-                .ok_or(NextEventError::ReceiverClosed)?;
+                .ok_or(NextError::ReceiverClosed)?;
 
             match intra_message {
                 ToHostGeneralIntraMessage::Event(EventsData::ConnectionComplete(cc)) => {
                     let connection = Connection::new(
                         self.acl_max_mtu,
                         ConnectionKind::BrEdr(cc),
-                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
                     );
 
                     break Ok(Next::NewConnection(connection));
@@ -649,7 +651,7 @@ where
                     let connection = Connection::new(
                         self.sco_max_mtu,
                         ConnectionKind::BrEdrSco(scc),
-                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
                     );
 
                     break Ok(Next::NewConnection(connection));
@@ -658,7 +660,7 @@ where
                     let connection = Connection::new(
                         self.le_acl_max_mtu,
                         ConnectionKind::Le(lcc),
-                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
                     );
 
                     break Ok(Next::NewConnection(connection));
@@ -667,7 +669,7 @@ where
                     let connection = Connection::new(
                         self.le_acl_max_mtu,
                         ConnectionKind::LeEnh(lecc),
-                        connection_ends.ok_or(NextEventError::MissingConnectionEnds)?,
+                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
                     );
 
                     break Ok(Next::NewConnection(connection));
@@ -697,7 +699,7 @@ where
     /// [`set_event_mask_page_2`]: crate::commands::cb::set_event_mask_page_2
     /// [`le::set_event_mask`]: crate::commands::le::set_event_mask
     /// [not maskable]: crate::commands::cb::set_event_mask
-    /// [`next_event`0.]: Host::next_event
+    /// [`next_event`]: Host::next
     pub async fn mask_events<I, T>(&mut self, list: I) -> Result<(), CommandError<H>>
     where
         I: IntoIterator<Item = T> + Clone,
@@ -761,11 +763,11 @@ pub enum Next<C: ConnectionChannelEnds> {
 /// within the maximum and minimum bounds set by the implementation. The minimum bound is always
 /// specification defined minimum value for the data/connection type. By default the maximum value
 /// is set to `<u16>::MAX` as flow control is already implemented for data sent to the Controller.
-/// However the method [`hci_maxed_mtu`] can be called before creating an `L2CAP` connection to set
-/// the maximum MTU value to the maximum size of the HCI data packet.
+/// However the method [`set_mtu_max_to_hci`] can be called before creating an `L2CAP` connection to
+/// set the maximum MTU value to the maximum size of the HCI data packet.
 ///
 /// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
-/// [`hci_maxed_mtu`]: Connection::bound_mtu
+/// [`set_mtu_max_to_hci`]: Connection::set_mtu_max_to_hci
 #[derive(Debug)]
 pub struct Connection<C> {
     hci_mtu: usize,
@@ -808,7 +810,7 @@ impl<C: ConnectionChannelEnds> Connection<C> {
     ///
     /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
     #[cfg(feature = "l2cap")]
-    pub fn hci_maxed_mtu(&mut self) {
+    pub fn set_mtu_max_to_hci(&mut self) {
         self.bounded = true
     }
 
@@ -821,7 +823,7 @@ impl<C: ConnectionChannelEnds> Connection<C> {
     ///
     /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
     #[cfg(feature = "l2cap")]
-    pub fn l2cap_maxed_mtu(&mut self) {
+    pub fn set_mtu_max_to_l2cap(&mut self) {
         self.bounded = false
     }
 
@@ -850,6 +852,8 @@ impl<C: ConnectionChannelEnds> Connection<C> {
     /// This should be used whenever the upper Bluetooth protocols layers are implemented by another
     /// library. The method [`get_kind`] must still be used to get the 'kind' of connection that was
     /// created.
+    ///
+    /// [`get_kind`]: Connection::get_kind
     pub fn into_inner(self) -> C {
         self.ends
     }
@@ -956,33 +960,33 @@ enum CCParameterError {
     InvalidEventParameter,
 }
 
-/// Error for method [`get_next_event`](Host::get_next_event)
+/// Error for method [`get_next_event`](Host::next)
 #[derive(Debug)]
-pub enum NextEventError {
+pub enum NextError {
     ReceiverClosed,
     EventConversionError(events::EventError),
     UnexpectedIntraMessage(&'static str),
     MissingConnectionEnds,
 }
 
-impl core::fmt::Display for NextEventError {
+impl core::fmt::Display for NextError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            NextEventError::ReceiverClosed => f.write_str("interface task is dropped"),
-            NextEventError::EventConversionError(e) => core::fmt::Display::fmt(e, f),
-            NextEventError::UnexpectedIntraMessage(kind) => write!(
+            NextError::ReceiverClosed => f.write_str("interface task is dropped"),
+            NextError::EventConversionError(e) => core::fmt::Display::fmt(e, f),
+            NextError::UnexpectedIntraMessage(kind) => write!(
                 f,
                 "Unexpected intra \
                 message '{}' (this is a library bug)",
                 kind
             ),
-            NextEventError::MissingConnectionEnds => f.write_str("interface did not send connection ends"),
+            NextError::MissingConnectionEnds => f.write_str("interface did not send connection ends"),
         }
     }
 }
 
-impl From<events::EventError> for NextEventError {
+impl From<events::EventError> for NextError {
     fn from(e: events::EventError) -> Self {
-        NextEventError::EventConversionError(e)
+        NextError::EventConversionError(e)
     }
 }

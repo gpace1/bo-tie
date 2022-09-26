@@ -5,8 +5,9 @@
 /// Encrypt 16 bytes of plain text with the provided key
 ///
 /// The controller uses AES-128 to encrypt the data. Once the controller is done encrypting
-/// the plain text, the [`Command Complete`](crate::hci::events::Events::CommandComplete) event will
-/// return with the cypher text generated.
+/// the plain text, the [`CommandComplete`] event will return with the cypher text generated.
+///
+/// [`CommandComplete`]: bo_tie_hci_util::events::Events::CommandComplete
 pub mod encrypt {
 
     use crate::events::parameters::CommandCompleteData;
@@ -201,14 +202,17 @@ pub mod enable_encryption {
     /// Connections pairing method was used to create the long term key. Otherwise `parameter` must
     /// be created with method [`Parameter::new_legacy`] when a legacy pairing method was used.
     ///
-    /// The returned future awaits until the controller responds with a
-    /// [`CommandStatus`](events::Events::CommandStatus) event. When encryption is established to
-    /// the connected device, the event
-    /// [EncryptionChange](crate::hci::events::Events::EncryptionChange) will be sent from the
-    /// controller to indicate that data will now be encrypted. If the connection was already
-    /// encrypted, sending this command will instead cause the controller to issue the
-    /// [EncryptionKeyRefreshComplete](crate::hci::events::Events::EncryptionKeyRefreshComplete)
-    /// event once the encryption is updated.
+    /// The returned future awaits until the controller responds with a [`CommandStatus`] event.
+    /// When encryption is established to the connected device, the event [`EncryptionChangeV1`] (or
+    /// [`EncryptionChangeV2`]) will be sent from the controller to indicate that data will now be
+    /// encrypted. If the connection was already encrypted, sending this command will instead cause
+    /// the controller to issue the [`EncryptionKeyRefreshComplete`] event once the encryption is
+    /// updated.
+    ///
+    /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
+    /// [`EncryptionChangeV1`]: bo_tie_hci_util::events::Events::EncryptionChangeV1
+    /// [`EncryptionChangeV2`]: bo_tie_hci_util::events::Events::EncryptionChangeV2
+    /// [`EncryptionKeyRefreshComplete`]: bo_tie_hci_util::events::Events::EncryptionKeyRefreshComplete
     pub async fn send<H: HostInterface>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
         host.send_command_expect_status(parameter).await
     }

@@ -5,7 +5,7 @@
 //!
 //! Vol2 Part E 3.1 of the Bluetooth spec
 
-/// Set the [`LeMeta`](crate::hci::events::LeMeta) event mask
+/// Set the [`LeMeta`](bo_tie_hci_util::events::LeMeta) event mask
 ///
 /// LE events are unmasked by passing a list of LE events to the controller via the LE set event
 /// mask command. The method [`send`] takes the list of LE events and converts them into the command
@@ -36,7 +36,7 @@
 /// Controller, the bit for the global mask must be set and the specific mask bit for the event must
 /// be set.
 ///
-/// [`send`]: self::send
+/// [`send`]: set_event_mask::send
 pub mod set_event_mask {
     use crate::events::LeMeta;
     use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
@@ -87,7 +87,7 @@ pub mod set_event_mask {
     /// The default mask for the page 2 is equivalent to disabling all events for page 2, but it can
     /// still be creating by using a default `EventMask` (`EventMask::default()`).
     ///
-    /// [`Event`]:bo_tie_hci_util::events::Events
+    /// [`Events`]: bo_tie_hci_util::events::Events
     /// [borrowed]: core::borrow::Borrow
     pub struct EventMask<I> {
         mask: I,
@@ -453,8 +453,10 @@ pub mod read_buffer_size {
     /// This only returns the buffer information for LE ACL data packets.
     ///
     /// `send_v1` will return `Ok(None)` when there is no dedicated LE buffer. The information
-    /// parameters command *read buffer size* ([`bo_tie::hci::info_params::read_buffer_size`]) should
-    /// be used instead to get the buffer information for LE.
+    /// parameters command [*read buffer size*] should be used instead to get the buffer information
+    /// for LE.
+    ///
+    /// [*read buffer size*]: crate::commands::info_params::read_buffer_size
     pub async fn send_v1<H: HostInterface>(host: &mut Host<H>) -> Result<Option<BufferSizeV1>, CommandError<H>> {
         host.send_command_expect_complete(ParameterV1).await
     }
@@ -464,8 +466,10 @@ pub mod read_buffer_size {
     /// This returns the buffer information for the LE ACL and LE ISO data packets.
     ///
     /// `send_v1` will return `Ok(None)` when there is no dedicated LE buffer. The information
-    /// parameters command *read buffer size* ([`bo_tie::hci::info_params::read_buffer_size`]) should
-    /// be used instead to get the buffer information for LE.
+    /// parameters command [*read buffer size*] should be used instead to get the buffer information
+    /// for LE.
+    ///
+    /// [*read buffer size*]: crate::commands::info_params::read_buffer_size
     pub async fn send_v2<H: HostInterface>(host: &mut Host<H>) -> Result<BufferSizeV2, CommandError<H>> {
         host.send_command_expect_complete(ParameterV2).await
     }
