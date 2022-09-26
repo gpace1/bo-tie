@@ -138,6 +138,7 @@ fn impl_get_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
         .collect::<TokenStream>();
 
     let method = quote::quote! {
+        #[doc(hidden)]
         pub const fn get_depth(&self) -> usize {
             match self {
                 #match_arm_iter
@@ -219,6 +220,7 @@ fn impl_full_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
     calculation.push(parse_quote!(0));
 
     let ts = quote::quote! {
+        #[doc(hidden)]
         pub const fn full_depth() -> usize {
             #calculation
         }
@@ -234,6 +236,7 @@ fn impl_from_depth(enum_kinds: &[EnumKind]) -> Result<TokenStream, syn::Error> {
     let matches = impl_match_arms_for_from_depth(enum_kinds, matched.clone())?;
 
     let ts = quote::quote! {
+        #[doc(hidden)]
         pub const fn from_depth(#matched: usize) -> Self {
             #constants
 
