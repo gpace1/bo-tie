@@ -8,30 +8,32 @@ license = "MIT"
 edition = "2021"
 
 [dependencies]
-bo-tie-util = {path = "../bo-tie-util", default-feature = false }
-bo-tie-hci-host = { path = "../hci/bo-tie-hci-host", default-feature = false, features = ["le-default-features"], optional = true }
+bo-tie-util = {path = "../bo-tie-util", default-features = false }
+bo-tie-hci-host = { path = "../hci/bo-tie-hci-host", default-features = false, optional = true }
 bo-tie-hci-interface = { path = "../hci/bo-tie-hci-interface", default-features = false, optional = true }
 bo-tie-hci-util = { path = "../hci/bo-tie-hci-util", default-features = false, optional = true }
 bo-tie-host-util = { path = "../host/bo-tie-host-util", optional = true }
-bo-tie-l2cap = { path = "../host/bo-tie-l2cap", default-feature = false, optional = true }
+bo-tie-l2cap = { path = "../host/bo-tie-l2cap", default-features = false, optional = true }
 bo-tie-gap = { path = "../host/bo-tie-gap", default-features = false, optional = true }
 bo-tie-att = { path = "../host/bo-tie-att", default-features = false, optional = true }
 bo-tie-gatt = { path = "../host/bo-tie-gatt", default-features = false, optional = true }
 bo-tie-sm = { path = "../host/bo-tie-sm", default-features = false, optional = true }
 
 [features]
-default = ["std", "hci", "l2cap", "gap", "att", "gatt", "sm"]
+default = ["std", "hci", "l2cap", "gap", "att", "gatt", "sm", "cryptography", "sys-rand" ]
 std = ["bo-tie-util/std", "bo-tie-hci-host/std", "bo-tie-hci-interface/std", "bo-tie-hci-util/std"]
 hci = ["bo-tie-hci-util", "bo-tie-hci-host", "bo-tie-hci-interface"]
 l2cap = ["bo-tie-l2cap", "bo-tie-hci-host/l2cap"]
 gap = ["bo-tie-gap", "bo-tie-hci-host/gap", "bo-tie-hci-util/gap"]
 att = ["l2cap", "bo-tie-att"]
 gatt = ["att", "bo-tie-gatt"]
-sm = ["l2cap", "bo-tie-sm", "bo-tie-util/sys-rand", "bo-tie-util/cryptography"]
+sm = ["l2cap", "bo-tie-sm", "cryptography"]
 tokio = ["bo-tie-hci-util/tokio"]
 futures-rs = ["bo-tie-hci-util/futures-rs"]
 async-std = ["bo-tie-hci-util/async-std"]
 uuid-crate = ["bo-tie-att/uuid-crate", "bo-tie-gatt/uuid-crate", "bo-tie-host-util/uuid-crate"]
+cryptography = ["bo-tie-util/cryptography"]
+sys-rand = ["bo-tie-util/sys-rand"]
 serde = ["bo-tie-util/serde", "bo-tie-sm/serde"]
 
 # Unstable features

@@ -11,3 +11,9 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(not(test), no_std)]
+
+pub mod hci;
+pub mod host;
+
+pub use bo_tie_util::errors::Error;
+pub use bo_tie_util::{BluetoothDeviceAddress, DeviceFeatures, Features, LeDeviceFeatures, LeFeatures};
