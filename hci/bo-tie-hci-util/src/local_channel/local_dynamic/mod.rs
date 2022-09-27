@@ -431,7 +431,7 @@ struct DedicatedChannels {
 /// sender and receiver. These channel buffers are allocated with an initial capacity that is also
 /// the maximum capacity of the channel. If a channel's buffer reaches maximum capacity, then any
 /// further sends will pend.
-pub struct LocalChannelManager {
+pub struct LocalChannelReserve {
     new_channels_size: usize,
     connections: RefCell<alloc::vec::Vec<ConnectionData>>,
     dedicated: DedicatedChannels,
@@ -447,8 +447,8 @@ pub struct LocalChannelManager {
     >,
 }
 
-impl LocalChannelManager {
-    fn new(builder: LocalChannelBuilder) -> (Self, impl HostChannelEnds) {
+impl LocalChannelReserve {
+    fn new(builder: LocalChannelReserveBuilder) -> (Self, impl HostChannelEnds) {
         let connections = RefCell::new(alloc::vec::Vec::new());
 
         let host_command_response = LocalChannel::new(builder.get_command_return_channel_size());
@@ -502,7 +502,7 @@ impl LocalChannelManager {
     }
 }
 
-impl ChannelReserve for LocalChannelManager {
+impl ChannelReserve for LocalChannelReserve {
     type Error = LocalChannelManagerError;
 
     type SenderError = LocalSendFutureError;
@@ -723,7 +723,7 @@ impl HostChannelEnds for HostDynChannelEnds {
 ///
 /// ### LE ISO Data Channel
 /// LE ISO data must be sent to the Controller through the LE ISO data channel.
-pub struct LocalChannelBuilder {
+pub struct LocalChannelReserveBuilder {
     command_channel_size: Option<usize>,
     command_return_channel_size: Option<usize>,
     general_events_channel_size: Option<usize>,
@@ -734,7 +734,7 @@ pub struct LocalChannelBuilder {
     connection_receive_channel_size: Option<usize>,
 }
 
-impl LocalChannelBuilder {
+impl LocalChannelReserveBuilder {
     const DEFAULT_CHANNEL_SIZE: usize = 32; // arbitrary default
 
     /// Create a new `LocalChannelBuilder`
@@ -836,8 +836,8 @@ impl LocalChannelBuilder {
     /// Build the `LocalChannelManager`
     ///
     /// The return is the local channel manager along with the host channel ends for it.
-    pub fn build(self) -> (LocalChannelManager, impl HostChannelEnds) {
-        LocalChannelManager::new(self)
+    pub fn build(self) -> (LocalChannelReserve, impl HostChannelEnds) {
+        LocalChannelReserve::new(self)
     }
 }
 
