@@ -5,6 +5,13 @@ authors = ["gpace1 <33923139+gpace1@users.noreply.github.com>"]
 edition = "2018"
 
 [dependencies]
-bo-tie-hci-interface = { path = "../../hci/bo-tie-hci-interface"}
+bo-tie-hci-interface = { path = "../../hci/bo-tie-hci-interface", features = ["std"] }
+bo-tie-hci-util = { path = "../../hci/bo-tie-hci-util", features = ["std"] }
 nix = "0.25.0"
 log = "0.4.6"
+
+[features]
+default-features = ["tokio"]
+tokio = ["bo-tie-hci-util/tokio"]
+async-std = ["bo-tie-hci-util/async-std"]
+futures-rs = ["bo-tie-hci-util/futures-rs"]
