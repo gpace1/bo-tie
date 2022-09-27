@@ -141,7 +141,7 @@ pub fn ecc_gen() -> (PriKey, PubKey) {
     ecc_gen_with(rand_core::OsRng)
 }
 
-/// Generate the (private, public) key pair for an elliptic curve
+/// Generate the (private, public) key pair for an elliptic curve using a provided random number generator.
 ///
 /// This takes a random to generate the private key with. This random should either be a true random
 /// number or a number generated from a cryptographically secure pseudorandom number generator for
