@@ -530,6 +530,8 @@ pub type StaticDeviceError = AddressError;
 /// [BluetoothDeviceAddress::try_from_non_resolvable](crate::BluetoothDeviceAddress::try_from_non_resolvable)
 pub type NonResolvableError = AddressError;
 
+/// Error type for
+/// [BluetoothDeviceAddress::try_from_resolvable](crate::BluetoothDeviceAddress::try_from_resolvable)
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ResolvableError {
     PRandIsZero,
