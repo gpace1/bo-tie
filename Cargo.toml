@@ -1,16 +1,16 @@
 [workspace]
 default-members = [
     "bo-tie",
-    "bo-tie-host/*",
-    "bo-tie-hci/*",
+    "host/*",
+    "hci/*",
     "bo-tie-macros",
     "bo-tie-util",
 ]
 
 members = [
     "bo-tie",
-    "bo-tie-hci/*",
-    "bo-tie-host/*",
+    "hci/*",
+    "host/*",
     "bo-tie-macros",
     "bo-tie-serde",
     "bo-tie-util",

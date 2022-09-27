@@ -1,7 +1,7 @@
 //! Host items common between the host protocols
 //!
-//! Things that do not fit for a single protocol are put here. `bo-tie-host-util` is a base crate
-//! for the other host protocol crates within `bo-tie-host`. Generally things within this lib are
+//! Things that do not fit for a single protocol are put here. `host-util` is a base crate
+//! for the other host protocol crates within `host`. Generally things within this lib are
 //! re-exported by the crate using them.
 
 #![no_std]

@@ -25,7 +25,7 @@ pub fn display_hci_event(enumeration: TokenStream) -> TokenStream {
 
 /// Procedural macro to count (in depth) the enumerations of an enum
 ///
-/// This macro is intended to be used internally for library `bo-tie-hci-util`.
+/// This macro is intended to be used internally for library `hci-util`.
 ///
 /// ## Method `get_depth`
 /// This method retuns the depth of the enumeration. An enumeration's depth is the accumulated count
