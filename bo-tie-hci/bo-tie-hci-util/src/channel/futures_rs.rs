@@ -43,6 +43,8 @@ where
 /// communication between the async tasks of the HCI implementation.
 ///
 /// [tokio's]: tokio::sync::mpsc
+/// [`ChannelReserve`]: crate::ChannelReserve
+/// [`HostChannelEnds`]: crate::HostChannelEnds
 pub fn futures_unbounded() -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
     use futures::channel::mpsc::unbounded;
 

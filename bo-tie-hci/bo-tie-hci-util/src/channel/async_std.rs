@@ -78,6 +78,8 @@ impl<T> Future for ReceiverFuture<'_, T> {
 /// communication between the async tasks of the HCI implementation.
 ///
 /// [async-std's]: async_std::channel
+/// [`ChannelReserve`]: crate::ChannelReserve
+/// [`HostChannelEnds`]: crate::HostChannelEnds
 pub fn async_std_unbounded() -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
     use async_std::channel::unbounded;
 

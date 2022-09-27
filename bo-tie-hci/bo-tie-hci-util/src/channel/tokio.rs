@@ -80,6 +80,8 @@ where
 /// communication between the async tasks of the HCI implementation.
 ///
 /// [tokio's]: tokio::sync::mpsc
+/// [`ChannelReserve`]: crate::ChannelReserve
+/// [`HostChannelEnds`]: crate::HostChannelEnds
 pub fn tokio_unbounded() -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
     use tokio::sync::mpsc::unbounded_channel;
 

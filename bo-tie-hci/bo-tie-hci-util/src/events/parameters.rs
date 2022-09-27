@@ -1719,7 +1719,7 @@ pub struct CompletedDataPacketsAndBlocks {
 /// `completed_packets_and_blocks`.
 ///
 /// When `total_data_blocks` is `None` then the Host must resend the
-/// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command to acquire the
+/// [`read_data_block_size`](../bo_tie_hci_host/commands/info_params/read_buffer_size/index.htm) command to acquire the
 /// new total number of data blocks. `total_data_blocks` is `None` only when the new total number
 /// of data blocks is less than the sum of `completed_blocks` within `completed_packets_and_blocks`.
 /// No new HCI ACL data packets shall be sent to the controller until after the

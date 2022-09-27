@@ -286,7 +286,7 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     /// This creates a new `LocalStackChannelReserve` from the provided `rx_channel` and
     /// `tx_channel`. While these objects may be put on the heap, the references are expected to be
     /// of stack allocated types. Otherwise using a
-    /// [`LocalChannelManager`](super::LocalChannelManager) is preferred.
+    /// [`LocalChannelManager`](crate::local_channel::local_dynamic::LocalChannelManager) is preferred.
     pub fn new(
         data: &'a LocalStackChannelReserveData<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     ) -> (Self, impl HostChannelEndsTrait + 'a) {

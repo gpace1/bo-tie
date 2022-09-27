@@ -627,8 +627,8 @@ where
 /// [`set_c1`]: ChannelReserveBuilder::set_c1
 /// [`set_c2`]: ChannelReserveBuilder::set_c2
 /// [`set_c5`]: ChannelReserveBuilder::set_c5
-/// [`Sender<Message = T>`]: bo_tie_hci_util::Sender
-/// [`Receiver<Message = T>`]: bo_tie_hci_util::Receiver
+/// [`Sender<Message = T>`]: crate::Sender
+/// [`Receiver<Message = T>`]: crate::Receiver
 pub struct ChannelReserveBuilder<C1, C2, C3, C4, C5> {
     c1: Option<C1>,
     c2: Option<C2>,

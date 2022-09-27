@@ -150,14 +150,3 @@ impl Display for LocalReceiverFutureError {
         f.write_str("local receiver future error")
     }
 }
-
-/// A wrapper for implementing the type [`GetChannelEnds`](ChannelReserve::GetChannelEnds)
-pub struct GetChannelEndsWrapper<C>(C);
-
-impl<C> core::ops::Deref for GetChannelEndsWrapper<C> {
-    type Target = C;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}

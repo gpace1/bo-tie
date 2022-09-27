@@ -62,7 +62,7 @@ pub trait CommandParameter<const PARAMETER_SIZE: usize> {
         let parameter = self.get_parameter();
 
         // Add opcode to packet
-        buffer.try_extend(Self::COMMAND.as_opcode_pair().as_opcode().to_le_bytes())?;
+        buffer.try_extend(Self::COMMAND.into_opcode().as_opcode().to_le_bytes())?;
 
         // Add the length of the parameter
         buffer.try_extend(core::iter::once(parameter.len() as u8))?;

@@ -40,9 +40,9 @@
 //! used.
 //!
 //! ### Stack Allocated
-//! Note: currently unstable as `bo-tie` full stack only allocation is not implemented
+//! Note: currently unstable
 //!
-//! In environments where dynamically allocated memory cannot be done, [`local_stack`] channels can
+//! In environments where dynamically allocated memory cannot be done, [local stack channels] can
 //! be used.
 //!
 //! # Buffering
@@ -60,7 +60,11 @@
 //! sum of the header sizes of all layers. Headers are then extended to the *front* of the buffer as
 //! it is passed down the protocol layers. When a packet is received from another device it is put
 //! within it's entirety into a `DeVec`. As it is passed up the protocol layers the headers are
-//! popped off the front.  
+//! popped off the front.
+//!
+//! [local stack channels]: local_channel::local_stack
+//! [`DeVec`]: bo_tie_util::buffer::de_vec::DeVec
+//! [`DeLinearBuffer`]: bo_tie_util::buffer::stack::DeLinearBuffer
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -238,6 +242,8 @@ pub enum HostChannel {
 /// `Sco` -> SCO data buffer
 /// `LeAcl` -> LE ACL data buffer
 /// `LeIso` -> LE ISO data buffer
+///
+/// [`Interface`]: (../bo_tie_hci_interface/Interface/index.html)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowControlId {
     Cmd,
@@ -790,18 +796,18 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// In packet based flow control, input `how_many` is the number of ACL data packets completed
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
-    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
     ///
     /// ## Data-Block-Based
     /// In data block based flow control, input `how_many` is the number of bytes that the
     /// controller can currently accept since the last time this method was called. This value must
     /// be calculated from the number of data blocks that were completed as stated in the event
-    /// [`NumberOfCompletedDataBlocks`](crate::hci::events::EventsData::NumberOfCompletedDataBlocks).
+    /// [`NumberOfCompletedDataBlocks`](crate::events::EventsData::NumberOfCompletedDataBlocks).
     ///
     /// This method shall not be called if the event `NumberOfCompletedDataBlocks` contained `None`
     /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
     /// information through the
-    /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
+    /// [`read_data_block_size`](../bo_tie_hci_host/commands/info_params/read_data_block_size) command.
     fn inc_acl_flow_ctrl(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), acl_flow_control, how_many);
     }
@@ -816,7 +822,7 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// In packet based flow control, input `how_many` is the number of SCO data packets completed
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
-    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
     fn inc_sco_flow_control(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), sco_flow_control, how_many);
     }
@@ -831,18 +837,18 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// In packet based flow control, input `how_many` is the number of ACL data packets completed
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
-    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
     ///
     /// ## Data-Block-Based
     /// In data block based flow control, input `how_many` is the number of bytes that the
     /// controller can currently accept since the last time this method was called. This value must
     /// be calculated from the number of data blocks that were completed as stated in the event
-    /// [`NumberOfCompletedDataBlocks`](crate::hci::events::EventsData::NumberOfCompletedDataBlocks).
+    /// [`NumberOfCompletedDataBlocks`](crate::events::EventsData::NumberOfCompletedDataBlocks).
     ///
     /// This method shall not be called if the event `NumberOfCompletedDataBlocks` contained `None`
     /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
     /// information through the
-    /// [`read_data_block_size`](crate::hci::info_params::read_data_block_size) command.
+    /// [`read_data_block_size`](../bo_tie_hci_host/commands/info_params/read_data_block_size) command.
     fn inc_le_acl_flow_control(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_acl_flow_control, how_many);
     }
@@ -857,7 +863,7 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// In packet based flow control, input `how_many` is the number of ISO data packets completed
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
-    /// [`NumberOfCompletedPackets`](crate::hci::events::EventsData::NumberOfCompletedPackets)
+    /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
     fn inc_le_iso_flow_control(&mut self, how_many: usize) {
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_iso_flow_control, how_many);
     }
@@ -1090,14 +1096,8 @@ where
 /// This prevents the usage of most async executors with the exception of local ones (executors that
 /// run on the same thread the tasks were spawned from).
 ///
-/// If the interface task cannot be made `Send` safe for other reasons it is recommended to use
-/// either a [`LocalChannel`](local_channel::LocalChannel) or a
-/// [`LocalStaticChannel`](local_channel::LocalChannel) instead of directly implementing this trait.
-/// Both of these types already implement the trait [`Channel`](Channel).
-///
 /// Implementing `Sender` is fairly easy if type for the `SendFuture` is known.
 /// ```
-/// #![feature(generic_associated_types)]
 /// # use std::cell::RefCell;
 /// # use std::future::Future;
 /// # use std::pin::Pin;
@@ -1145,7 +1145,6 @@ where
 /// If the type is unknown then the feature `type_alias_impl_trait` can be enabled for ease of
 /// implementation.
 /// ```
-/// #![feature(generic_associated_types)]
 /// #![feature(type_alias_impl_trait)]
 /// # use std::future::Future;
 /// use tokio::sync::mpsc;
@@ -1187,73 +1186,6 @@ pub trait Sender {
 /// part of every task. Thus if the `Receiver` is `!Send` then the async tasks will also be `!Send`.
 /// This prevents the usage of most async executors with the exception of local ones (executors that
 /// run on the same thread the tasks were spawned from).
-///
-/// If the interface task cannot be made `Send` safe for other reasons it is recommended to use
-/// either a [`LocalChannel`](local_channel::LocalChannel) or a
-/// [`LocalStaticChannel`](local_channel::LocalChannel) instead of directly implementing this trait.
-/// Both of these types already implement the trait [`Channel`](Channel.
-///
-/// Implementing `Receiver` is fairly easy if type for the `ReceiveFuture` is known. Here is an
-/// example where `Receiver` is implemented for a mpsc `Receiver` of the
-/// [futures](https://github.com/rust-lang/futures-rs) crate.
-/// ```
-/// #![feature(generic_associated_types)]
-/// # use std::cell::RefCell;
-/// # use std::future::Future;
-/// # use std::pin::Pin;
-/// # use std::task::{Context, Poll};
-/// use futures::channel::mpsc;
-/// use futures::stream::Stream;
-/// use bo_tie::hci::interface::Receiver;
-///
-/// struct FuturesReceiver<T>(RefCell<mpsc::Receiver<T>>);
-///
-/// struct RefReceiver<'a, T>(&'a RefCell<mpsc::Receiver<T>>);
-///
-/// impl<T> Future for RefReceiver<'_, T> {
-///     type Output = Option<T>;
-///
-///     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-///         let mut receiver = self.get_mut().0.borrow_mut();
-///
-///         Stream::poll_next(Pin::new(&mut *receiver), cx)
-///     }
-/// }
-///
-/// impl<T> Receiver for FuturesReceiver<T>
-/// where
-///     T: Unpin
-/// {
-///     type Message = T;
-///     type ReceiveFuture<'a> = RefReceiver<'a, T> where T: 'a;
-///
-///     fn recv<'a>(&'a self) -> Self::ReceiveFuture<'a> {
-///         RefReceiver(& self.0)
-///     }
-/// }
-/// ```
-///
-/// If the type is unknown then the feature `type_alias_impl_trait` can be enabled for ease of
-/// implementation.
-/// ```
-/// #![feature(generic_associated_types)]
-/// #![feature(type_alias_impl_trait)]
-/// # use std::future::Future;
-/// # use bo_tie_hci_util::Receiver;
-/// use tokio::sync::mpsc;
-///
-/// struct TokioReceiver<T>(mpsc::Receiver<T>);
-///
-/// impl<T> Receiver for TokioReceiver<T> {
-///     type Message = T;
-///     type ReceiveFuture<'a> = impl Future<Output = Option<T>> + 'a where T: 'a;
-///
-///     fn recv<'a>(&'a self) -> Self::ReceiveFuture<'a> {
-///         // Since `send` is an async method, its return type is hidden.
-///         self.0.recv()
-///    }
-/// }
-/// ```
 pub trait Receiver {
     type Message: Unpin;
     type ReceiveFuture<'a>: Future<Output = Option<Self::Message>>
@@ -1459,12 +1391,15 @@ pub enum ToHostCommandIntraMessage {
 ///
 /// ### Events
 /// All events except for command response and the flow control events
-/// [`NumberOfCompletedPacketsData`], and [`NumberOfCompletedDataBlocks`] are sent via the general
+/// [`NumberOfCompletedPackets`], and [`NumberOfCompletedDataBlocks`] are sent via the general
 /// channel.
 ///
 /// ### Connection Channel Ends
 /// A new connection's channel ends used for communicating with the interface are sent to the host
 /// through the general channel.
+///
+/// [`NumberOfCompletedPackets`]: crate::events::Events::NumberOfCompletedPackets
+/// [`NumberOfCompletedDataBlocks`]: crate::events::Events::NumberOfCompletedDataBlocks
 #[derive(Debug)]
 pub enum ToHostGeneralIntraMessage<T> {
     Event(events::EventsData),
@@ -1518,6 +1453,7 @@ pub enum ToConnectionIntraMessage<T> {
 /// [`get_channel`] of `ChannelReserve` or [`get_sender`] of `ChannelReserveExt`.
 ///
 /// [`get_channel`]: ChannelReserve::get_channel
+/// [`get_sender`]: ChannelReserveExt::get_sender
 pub enum FromInterface<Hc, Hg, C> {
     HostCommand(Hc),
     HostGeneral(Hg),

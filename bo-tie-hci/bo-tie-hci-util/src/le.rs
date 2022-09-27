@@ -337,7 +337,7 @@ impl ExtendedAdvertisingAndScanResponseData {
     /// data type (see the Supplement to the Bluetooth Core Specification) or a custom extended
     /// inquiry response data type.
     ///
-    /// [`EirOrAdStruct`]: bo_tie_gap::EirOrAdStruct
+    /// [`EirOrAdStruct`]: ../../bo_tie_gap::EirOrAdStruct
     #[cfg(feature = "gap")]
     pub fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator {
         bo_tie_gap::assigned::EirOrAdIterator::from(self.data.as_ref())

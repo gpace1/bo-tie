@@ -1,36 +1,24 @@
-//! Command opcodes for the Bluetooth HCI
+//! HCI Command Opcodes
 //!
-//! All commands are represented as an enumeration in the `HCICommand` enum. The purpose of the
-//! `HCICommand` is for retrieving the opcode value from the commands parameter. Commands parameters
-//! are required to implement [`CommandParameter`](crate::hci::CommandParameter) which contains the
-//! constant `COMMAND` that is assigned to one of the enums of `HCICommand`.
+//! Opcodes are composed of a group identifier and an individual command identifier specific to the
+//! group. The group identifier and individual identifier are put together to form the raw opcode
+//! value.
 //!
-//! ```
-//! # use bo_tie::hci::opcodes::{HCICommand, LinkControl};
-//!
-//! let command = HCICommand::LinkControl(LinkControl::Disconnect);
-//!
-//! let opcode_pair = command.as_opcode_pair();
-//!
-//! assert_eq!( 0x1, opcode_pair.get_ogf() );
-//!
-//! assert_eq!( 0x6, opcode_pair.get_ocf() );
+//! Instead of using group and command codes to create an opcode, the enum `HciCommand` should be
+//! used to create an opcode. `HciCommand` is an enumeration of all the HCI commands, an opcode can
+//! be acquired by the method `into_opcode`.
 //!
 //! ```
+//! # use bo_tie_hci_util::opcodes::{HciCommand, ControllerAndBaseband};
 //!
-//! # Note
-//! Unfortunately not all opcodes are supported, as this is a work in progress. For the most part,
-//! only the opcodes for HCI commands that are implemented by this library are represented here.
-//! As a result of this, trying to convert from an `OpCodePair` to a `HCICommand` may produce an
-//! error even when the `OpCodePair` is valid. It may be the case that the command has not been
-//! implemented as part of `HCICommand` yet.
+//! assert_eq!(0xC03, HciCommand::ControllerAndBaseband(ControllerAndBaseband::Reset).into_opcode());
+//! ```
 
 use core::convert::TryFrom;
 
 /// Enumerations of the various HCI command opcodes.
 ///
-/// All opcodes are based from this enum, which is broken up into the opcode groups. Each opcode
-/// group is further broken up into
+/// HciCommands consists of the HCI command groups containing the HCI commands within the group.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HciCommand {
     LinkControl(LinkControl),
@@ -41,13 +29,19 @@ pub enum HciCommand {
 }
 
 impl HciCommand {
-    pub fn as_opcode_pair(&self) -> OpCodePair {
-        match *self {
-            HciCommand::LinkControl(ref ocf) => ocf.as_opcode_pair(),
-            HciCommand::ControllerAndBaseband(ref ocf) => ocf.as_opcode_pair(),
-            HciCommand::InformationParameters(ref ocf) => ocf.as_opcode_pair(),
-            HciCommand::StatusParameters(ref ocf) => ocf.as_opcode_pair(),
-            HciCommand::LEController(ref ocf) => ocf.as_opcode_pair(),
+    /// Get the opcode for this command
+    pub const fn into_opcode(self) -> u16 {
+        self.into_opcode_pair().into_opcode()
+    }
+
+    /// Get the `OpCodePair` for this command
+    pub const fn into_opcode_pair(self) -> OpCodePair {
+        match self {
+            HciCommand::LinkControl(ocf) => ocf.into_opcode_pair(),
+            HciCommand::ControllerAndBaseband(ocf) => ocf.into_opcode_pair(),
+            HciCommand::InformationParameters(ocf) => ocf.into_opcode_pair(),
+            HciCommand::StatusParameters(ocf) => ocf.into_opcode_pair(),
+            HciCommand::LEController(ocf) => ocf.into_opcode_pair(),
         }
     }
 }
@@ -56,9 +50,10 @@ impl HciCommand {
 ///
 /// The main use for this is for converting from the `HCICommand` enumeration into the numerical
 /// values to be passed over the interface to the controller.
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct OpCodePair {
-    pub(crate) ogf: u16,
-    pub(crate) ocf: u16,
+    pub ogf: u16,
+    pub ocf: u16,
 }
 
 impl OpCodePair {
@@ -75,13 +70,13 @@ impl OpCodePair {
     /// Convert the OpCodePair into the opcode
     ///
     /// The returned value is the OpCode used with building a HCI command Packet.
-    pub fn as_opcode(&self) -> u16 {
+    pub const fn into_opcode(self) -> u16 {
         // The first 10 bits of the OpCode is the OCF field and the last 6 bits is the OGF field.
         ((self.ocf & 0x3FFu16) | (self.ogf << 10)).to_le()
     }
 
     /// Convert a HCI command packet formatted Op Code into an OpCodePair
-    pub fn from_opcode(val: u16) -> Self {
+    pub const fn from_opcode(val: u16) -> Self {
         let value = <u16>::from_le(val);
         OpCodePair {
             ogf: value >> 10,
@@ -92,7 +87,7 @@ impl OpCodePair {
 
 impl From<HciCommand> for OpCodePair {
     fn from(cmd: HciCommand) -> OpCodePair {
-        cmd.as_opcode_pair()
+        cmd.into_opcode_pair()
     }
 }
 
@@ -123,6 +118,7 @@ macro_rules! ocf_error {
 
 /// Link control commands
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum LinkControl {
     Disconnect,
     ReadRemoteVersionInformation,
@@ -131,13 +127,12 @@ pub enum LinkControl {
 impl LinkControl {
     const OGF: u16 = 0x1;
 
-    #[inline]
-    fn as_opcode_pair(&self) -> OpCodePair {
+    const fn into_opcode_pair(self) -> OpCodePair {
         use self::LinkControl::*;
 
         OpCodePair {
             ogf: LinkControl::OGF,
-            ocf: match *self {
+            ocf: match self {
                 Disconnect => 0x6,
                 ReadRemoteVersionInformation => 0x1d,
             },
@@ -155,6 +150,7 @@ impl LinkControl {
 
 /// Controller and baseband commands
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum ControllerAndBaseband {
     SetEventMask,
     Reset,
@@ -164,13 +160,12 @@ pub enum ControllerAndBaseband {
 impl ControllerAndBaseband {
     const OGF: u16 = 0x3;
 
-    #[inline]
-    fn as_opcode_pair(&self) -> OpCodePair {
+    const fn into_opcode_pair(self) -> OpCodePair {
         use self::ControllerAndBaseband::*;
 
         OpCodePair {
             ogf: ControllerAndBaseband::OGF,
-            ocf: match *self {
+            ocf: match self {
                 SetEventMask => 0x1,
                 Reset => 0x3,
                 ReadTransmitPowerLevel => 0x2d,
@@ -190,6 +185,7 @@ impl ControllerAndBaseband {
 
 /// Information parameter commands
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum InformationParameters {
     ReadLocalSupportedVersionInformation,
     ReadLocalSupportedCommands,
@@ -202,13 +198,12 @@ pub enum InformationParameters {
 impl InformationParameters {
     const OGF: u16 = 0x4;
 
-    #[inline]
-    fn as_opcode_pair(&self) -> OpCodePair {
+    const fn into_opcode_pair(self) -> OpCodePair {
         use self::InformationParameters::*;
 
         OpCodePair {
             ogf: InformationParameters::OGF,
-            ocf: match *self {
+            ocf: match self {
                 ReadLocalSupportedVersionInformation => 0x1,
                 ReadLocalSupportedCommands => 0x2,
                 ReadLocalSupportedFeatures => 0x3,
@@ -232,6 +227,7 @@ impl InformationParameters {
 
 /// Status parameter commands
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum StatusParameters {
     ReadRSSI,
 }
@@ -239,13 +235,12 @@ pub enum StatusParameters {
 impl StatusParameters {
     const OGF: u16 = 0x5;
 
-    #[inline]
-    fn as_opcode_pair(&self) -> OpCodePair {
+    const fn into_opcode_pair(self) -> OpCodePair {
         use self::StatusParameters::*;
 
         OpCodePair {
             ogf: StatusParameters::OGF,
-            ocf: match *self {
+            ocf: match self {
                 ReadRSSI => 0x5,
             },
         }
@@ -261,6 +256,7 @@ impl StatusParameters {
 
 /// Bluetooth LE commands
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum LEController {
     SetEventMask,
     ReadBufferSizeV1,
@@ -306,13 +302,12 @@ pub enum LEController {
 impl LEController {
     const OGF: u16 = 0x8;
 
-    #[inline]
-    fn as_opcode_pair(&self) -> OpCodePair {
+    const fn into_opcode_pair(self) -> OpCodePair {
         use self::LEController::*;
 
         OpCodePair {
             ogf: LEController::OGF,
-            ocf: match *self {
+            ocf: match self {
                 SetEventMask => 0x1,
                 ReadBufferSizeV1 => 0x2,
                 ReadBufferSizeV2 => 0x60,

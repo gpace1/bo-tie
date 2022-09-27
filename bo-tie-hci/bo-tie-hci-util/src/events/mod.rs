@@ -615,14 +615,16 @@ impl Events {
     /// Check if an event can be masked
     ///
     /// This function checks that an event is maskable by the
-    /// [set event mask](crate::hci::cb::set_event_mask),
-    /// [set event mask page 2](crate::hci::cb::set_event_mask_page_2), or
-    /// [LE set event mask](crate::hci::le::mandatory::set_event_mask) HCI commands. This method
-    /// will return true for every event
-    /// except for
-    /// [`CommandComplete`](Events::CommandComplete),
-    /// [`CommandStatus`](Events::CommandStatus), and
-    /// [`NumberOfCompletedPackets`](Events::NumberOfCompletedPackets).
+    /// [set event mask], [set event mask page 2], or [LE set event mask] HCI commands. This method
+    /// will return true for every event except for [`CommandComplete`], [`CommandStatus`], and
+    /// [`NumberOfCompletedPackets`].
+    ///
+    /// [set event mask]: ../bo_tie_hci_host/commands/cb/set_event_mask/index.html
+    /// [set event mask page 2]: ../bo_tie_hci_host/commands/cb/set_event_mask_page_2/index.html
+    /// [LE set event mask]: ../bo_tie_hci_host/commands/le/groups/mandatory/set_event_mask/index.html
+    /// [`CommandComplete`]: Events::CommandComplete
+    /// [`CommandStatus`]: Events::CommandStatus
+    /// [`NumberOfCompletedPackets`]: Events::NumberOfCompletedPackets
     pub fn is_maskable(&self) -> bool {
         match self {
             Events::CommandComplete => false,
