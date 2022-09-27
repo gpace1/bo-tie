@@ -1,4 +1,4 @@
-//! The Host
+//! The host protocols
 
 pub use bo_tie_att as att;
 pub use bo_tie_gap as gap;
