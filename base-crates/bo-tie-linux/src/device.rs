@@ -1,8 +1,8 @@
 //! Linux Bluetooth device functionality controller methods
 //!
 //! These are functions that are used to control the interface to the bluetooth devices on the
-//! system. This isn't a complete implemenation of control commands/operations, it is just the
-//! functionality used by this libary. These are linux specific and have no relation to the
+//! system. This isn't a complete implementation of control commands/operations, it is just the
+//! functionality used by this library. These are linux specific and have no relation to the
 //! bluetooth specification.
 
 pub const BTPROTO_HCI: i32 = 1;
