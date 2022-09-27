@@ -6,15 +6,10 @@
 //!
 //! [parent]: super
 
-#[cfg(feature = "le")]
 pub mod cb;
-#[cfg(feature = "le")]
 pub mod info_params;
-#[cfg(feature = "le")]
 pub mod le;
-#[cfg(feature = "le")]
 pub mod link_control;
 pub mod link_policy;
-#[cfg(feature = "le")]
 pub mod status_prams;
 pub mod testing;

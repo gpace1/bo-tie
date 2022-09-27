@@ -400,16 +400,10 @@ impl ConnectionLatency {
 }
 
 pub mod groups;
-#[cfg(feature = "le-connection-parameters")]
 pub use groups::con_pram_req::*;
-#[cfg(feature = "le-connection")]
 pub use groups::connection::*;
-#[cfg(feature = "le-encryption")]
 pub use groups::encryption::*;
 pub use groups::mandatory::*;
-#[cfg(feature = "le-privacy")]
 pub use groups::privacy::*;
-#[cfg(feature = "le-receiver")]
 pub use groups::receiver::*;
-#[cfg(feature = "le-transmitter")]
 pub use groups::transmitter::*;
