@@ -281,7 +281,6 @@ impl TryFrom<Uuid> for u16 {
 /// Universally Unique Identifier Version
 ///
 /// There are 4 UUID versions.
-/// *
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UuidVersion {
     Time,
