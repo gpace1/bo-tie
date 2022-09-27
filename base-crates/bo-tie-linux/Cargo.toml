@@ -5,6 +5,6 @@ authors = ["gpace1 <33923139+gpace1@users.noreply.github.com>"]
 edition = "2018"
 
 [dependencies]
-bo-tie = { path = "../../bo-tie"}
-nix = "0.17"
+bo-tie-hci-interface = { path = "../../hci/bo-tie-hci-interface"}
+nix = "0.25.0"
 log = "0.4.6"
