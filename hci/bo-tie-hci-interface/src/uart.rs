@@ -8,9 +8,10 @@
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
 use crate::{BufferedUpSend, Interface, SendError};
-use bo_tie_hci_util::{BufferReserve, ChannelReserve, HciPacketType};
+use bo_tie_hci_util::{BufferReserve, ChannelReserve, HciPacket, HciPacketType};
 use bo_tie_util::buffer::TryExtend;
 use core::fmt::{Debug, Display, Formatter};
+use core::ops::Deref;
 
 /// UART wrapper around an [`Interface`](Interface)
 ///
@@ -33,7 +34,7 @@ where
         Self { interface }
     }
 
-    /// Process a received byte
+    /// Create a buffer for bytes received from the interface
     ///
     /// This the `UartInterface` equivalent of the method [`buffered_up_send`] within `Interface`
     /// with the exception that it does not need to be initialized with the HCI packet type. Instead
@@ -45,22 +46,21 @@ where
     pub async fn buffered_send(&mut self) -> UartBufferedUpSend<'_, R> {
         UartBufferedUpSend::new(&mut self.interface)
     }
+
+    /// Get the next HCI packet to send to the controller
+    ///
+    /// This is equivalent to [`Interface::down_send`].
+    ///
+    /// [`Interface::down_send`]: crate::Interface::down_send
+    #[inline]
+    pub async fn down_send(&mut self) -> Option<HciPacket<impl Deref<Target = [u8]>>> {
+        self.interface.down_send().await
+    }
 }
 
 impl<R> From<Interface<R>> for UartInterface<R> {
     fn from(interface: Interface<R>) -> Self {
         UartInterface { interface }
-    }
-}
-
-fn match_uart_packet(byte: u8) -> Result<HciPacketType, UartInterfaceError> {
-    match byte {
-        1 => Ok(HciPacketType::Command),
-        2 => Ok(HciPacketType::Acl),
-        3 => Ok(HciPacketType::Sco),
-        4 => Ok(HciPacketType::Event),
-        5 => Ok(HciPacketType::Iso),
-        _ => Err(UartInterfaceError(byte)),
     }
 }
 
@@ -130,7 +130,7 @@ where
         match self.state {
             UartSendState::Swap => unreachable!(),
             UartSendState::Interface(_) => {
-                let packet_type = match_uart_packet(byte)?;
+                let packet_type = PacketIndicator::translate(byte)?;
 
                 let buffered_sender = replace(&mut self.state, UartSendState::Swap)
                     .unwrap_interface()
@@ -206,6 +206,80 @@ where
             UartBufferedSendError::NothingBuffered => f.write_str("uart buffer contains no bytes"),
             UartBufferedSendError::UartInterface(e) => Display::fmt(e, f),
             UartBufferedSendError::BufferedSendError(e) => Display::fmt(e, f),
+        }
+    }
+}
+
+/// UART packet indicator
+///
+/// UART packets are marked by a byte prepended to the HCI packet. This byte is an indicator for
+/// what kind of HCI packet the rest of the data is.
+pub struct PacketIndicator;
+
+impl PacketIndicator {
+    /// Get the packet type for the packet indicator
+    pub fn translate(byte: u8) -> Result<HciPacketType, UartInterfaceError> {
+        match byte {
+            1 => Ok(HciPacketType::Command),
+            2 => Ok(HciPacketType::Acl),
+            3 => Ok(HciPacketType::Sco),
+            4 => Ok(HciPacketType::Event),
+            5 => Ok(HciPacketType::Iso),
+            _ => Err(UartInterfaceError(byte)),
+        }
+    }
+
+    /// Get the packet indicator for a packet type
+    pub fn indicate(packet_type: HciPacketType) -> u8 {
+        match packet_type {
+            HciPacketType::Command => 1,
+            HciPacketType::Acl => 2,
+            HciPacketType::Sco => 3,
+            HciPacketType::Event => 4,
+            HciPacketType::Iso => 5,
+        }
+    }
+
+    /// Prepend a `HciPacket` with the packet indicator
+    ///
+    /// The UART packet indicator associated to the enumeration value of the input `HciPacket` is
+    /// prepended to the buffer contained within the enumeration.
+    ///
+    /// ```
+    /// # use bo_tie_hci_interface::uart::PacketIndicator;
+    /// # use bo_tie_util::buffer::BufferExt;
+    /// # use bo_tie_util::buffer::de_vec::DeVec;
+    /// # let buffer = DeVec::with_front_capacity(1);
+    /// # use bo_tie_hci_util::HciPacket;
+    ///
+    /// let mut packet = HciPacket::Event(buffer);
+    ///
+    /// let raw_data = PacketIndicator::prepend(&mut packet);
+    ///
+    /// // 4 is the packet indicator for an event
+    /// assert_eq!(4, raw_data[0])
+    /// ```
+    ///
+    /// # Error
+    /// An error will occur if the buffer `T` cannot be prepend to.
+    pub fn prepend<T>(packet: &mut HciPacket<T>) -> Result<&mut T, T::Error>
+    where
+        T: bo_tie_util::buffer::TryFrontExtend<u8>,
+    {
+        macro_rules! prepend {
+            ($buffer:expr, $enumeration:ident) => {{
+                $buffer.try_front_extend_one(PacketIndicator::indicate(HciPacketType::$enumeration))?;
+
+                Ok($buffer)
+            }};
+        }
+
+        match packet {
+            HciPacket::Command(t) => prepend!(t, Command),
+            HciPacket::Acl(t) => prepend!(t, Acl),
+            HciPacket::Sco(t) => prepend!(t, Sco),
+            HciPacket::Event(t) => prepend!(t, Event),
+            HciPacket::Iso(t) => prepend!(t, Iso),
         }
     }
 }

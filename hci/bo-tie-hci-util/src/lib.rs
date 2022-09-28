@@ -1319,7 +1319,7 @@ impl fmt::Display for HciPacketType {
 ///
 /// This is a wrapper around a buffer containing a HCI packet. `HciPacket` is used to describe what
 /// kind of HCI packet is contained within the buffer.
-pub enum HciPacket<T: Deref<Target = [u8]>> {
+pub enum HciPacket<T> {
     Command(T),
     Acl(T),
     Sco(T),
