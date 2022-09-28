@@ -1,7 +1,15 @@
-use bo_tie::hci::{common::ConnectionHandle, events, HciACLData};
+//! An implementation of an interface for Linux
+//!
+//! Linux has a driver for the interface to the controller to provide a standard means of
+//! communication. This interface interacts with that driver for communication with a Bluetooth
+//! controller on the system.
+//!
+
+use bo_tie_hci_util::{ChannelReserve, HciPacket, HciPacketType, HostChannelEnds};
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
+use std::future::Future;
 use std::ops::Drop;
 use std::option::Option;
 use std::os::unix::io::RawFd;
@@ -9,6 +17,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task;
 use std::thread;
+use tokio::sync::mpsc::{error::SendError, UnboundedReceiver, UnboundedSender};
 
 macro_rules! log_error_and_panic {
     ($($arg:tt)+) => {{ log::error!( $($arg)+ ); panic!( $($arg)+ ); }}
@@ -41,8 +50,6 @@ impl ArcFileDesc {
         (*self.0).0
     }
 }
-
-mod event;
 
 /// For Epoll, a value is assigned to signify what file descriptor had an event occur.
 /// * 0 -> BluetoothController,
@@ -131,6 +138,7 @@ enum CtrlMsgType {
     Event,
     ACLData,
     SyncData,
+    IsoData,
 }
 
 impl core::convert::TryFrom<u8> for CtrlMsgType {
@@ -142,6 +150,7 @@ impl core::convert::TryFrom<u8> for CtrlMsgType {
             0x02 => Ok(CtrlMsgType::ACLData),
             0x03 => Ok(CtrlMsgType::SyncData),
             0x04 => Ok(CtrlMsgType::Event),
+            0x05 => Ok(CtrlMsgType::IsoData),
             _ => Err(()),
         }
     }
@@ -154,19 +163,19 @@ impl From<CtrlMsgType> for u8 {
             CtrlMsgType::ACLData => 0x02,
             CtrlMsgType::SyncData => 0x03,
             CtrlMsgType::Event => 0x04,
+            CtrlMsgType::IsoData => 0x05,
         }
     }
 }
 
-struct AdapterThread {
+struct AdapterThread<C> {
+    sender: UnboundedSender<HciPacket<Vec<u8>>>,
     adapter_fd: ArcFileDesc,
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
-    event_processor: event::EventProcessor,
-    hci_data_recv: RcvHciACLData,
 }
 
-impl AdapterThread {
+impl<C: ChannelReserve> AdapterThread<C> {
     /// Spawn self
     fn spawn(self) -> thread::JoinHandle<()> {
         thread::spawn(move || {
@@ -204,7 +213,7 @@ impl AdapterThread {
     /// have processors since they are the only messages from the controller. This task forever
     /// polls the device id of the adapter to wait for
     ///
-    /// This task can only exit by closing the device or timeout file descriptors.
+    /// This task can only exit by closing the device.
     fn task(mut self) {
         use nix::sys::epoll;
         use nix::unistd::read;
@@ -236,39 +245,9 @@ impl AdapterThread {
                             ),
                         };
 
-                        // The first byte is the indicator of the mssage type, next byte is the length of the
-                        // message, the rest is the hci message
-                        //
-                        // Any other values are logged (debug level) and then ignored (including
-                        // the sometimes manufacture specific 0xFF value)
-                        if let Ok(msg) = core::convert::TryInto::try_into(buffer[0]) {
-                            match msg {
-                                CtrlMsgType::Command => {
-                                    panic!(
-                                        "Received a command message, the HCI adapter task \
-                                        should only receive ACL, Synchronous, or Event Data from a \
-                                        controller"
-                                    )
-                                }
-                                CtrlMsgType::Event => {
-                                    log::trace!("Processing received HCI data, type:'Event'");
-                                    self.event_processor.process(&buffer[1..len])
-                                }
-                                CtrlMsgType::ACLData => {
-                                    log::trace!("Processing received HCI data, type:'ACL DATA'");
-                                    match HciAclData::try_from_packet(&buffer[1..len]) {
-                                        Ok(hci_acl_data) => self.hci_data_recv.add_received(hci_acl_data),
-                                        Err(e) => log::error!("Failed to process hci acl packet: {}", e),
-                                    }
-                                }
-                                CtrlMsgType::SyncData => {
-                                    log::error!("SCO data unimplemented")
-                                }
-                            }
-
-                            std::thread::yield_now();
-                        } else {
-                            log::warn!("Received unknown packet indicator type '{:#x}", buffer[0])
+                        if let Err(e) = self.process_received_message(&buffer[..len]) {
+                            log::error!("failed to send message from linux driver {}", e);
+                            break 'task;
                         }
                     }
 
@@ -281,26 +260,106 @@ impl AdapterThread {
             }
         }
     }
+
+    fn process_received_message(&mut self, msg: &[u8]) -> Result<(), SendError<HciPacket<Vec<u8>>>> {
+        use std::convert::TryFrom;
+
+        // The first byte is the indicator of the message type, next byte is the
+        // length of the message, the rest is the hci message
+        //
+        // Any other values are logged (debug level) and then ignored (including
+        // the manufacture specific 0xFF value)
+        if let Some(Ok(msg)) = msg.get(0).map(CtrlMsgType::try_from) {
+            let packet = match msg {
+                CtrlMsgType::Command => HciPacket::Command(msg[1..].to_vec()),
+                CtrlMsgType::Event => HciPacket::Event(msg[1..].to_vec()),
+                CtrlMsgType::ACLData => HciPacket::Acl(msg[1..].to_vec()),
+                CtrlMsgType::SyncData => HciPacket::Sco(msg[1..].to_vec()),
+                CtrlMsgType::IsoData => HciPacket::Iso(msg[1..].to_vec()),
+            };
+
+            self.sender.send(packet)
+        } else {
+            log::debug!("Received unknown packet indicator type '{:#x}", buffer[0]);
+
+            Ok(())
+        }
+    }
 }
 
-/// Bluetooth Host Controller Interface Adapter
+/// Interface to the Linux Bluetooth drivers
 ///
-/// Interfacing with the Bluetooth radio is done through an interface labeled as an adapter. This
-/// is the structure used to handle the Host Controller Interface (HCI) as specified in the
-/// Bluetooth specification.
+/// Interfacing with the Bluetooth Controller is done through an interface labeled as an 'adapter'.
+/// This adapter is labeled by an identifier number unique to your machine. This number is required
+/// for creating a `LinuxInterface`. Once a `LinuxInterface` is created it must then be [`run`] by
+/// an executor to begin communication with the adapter.
 ///
-/// Each Bluetooth adapter (if there is any) is assigned an identifier (just a number) by your
-/// system.
+/// Most of the time there is not multiple Bluetooth controllers connected as adapters to a single
+/// machine. The implementation of `Default` for `LinuxInterface` will randomly select the first
+/// adapter it finds on the machine, which is fine if there is only one Adapter. The same thing is
+/// true if `None` is input for method `new`.
+///
+/// ```
+/// # use tokio::spawn;
+/// use bo_tie_linux::LinuxInterface;
+///
+/// // There is only one Bluetooth Controller
+/// let interface = LinuxInterface::default();
+/// ```
+/// [`run`]: LinuxInterface::run
 #[derive(Clone, Debug)]
-pub struct HCIAdapter {
+pub struct LinuxInterface {
     adapter_fd: ArcFileDesc,
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
-    event_expecter: Arc<Mutex<event::EventExpecter>>,
-    hci_data_recv: RcvHciACLData,
+    receiver: UnboundedReceiver<HciPacket<Vec<u8>>>,
 }
 
-impl From<usize> for HCIAdapter {
+impl LinuxInterface {
+    /// Create a `LinuxInterface`
+    ///
+    /// The input `adapter_id` is the identifier of the adapter for the Bluetooth Controller. If
+    /// there is only one Bluetooth Controller or any adapter will work `None` can be used to
+    /// automatically select an adapter.
+    pub fn new<T>(adapter_id: T) -> Self
+    where
+        T: Into<Option<usize>>,
+    {
+        match adapter_id.into() {
+            Some(id) => Self::from(id),
+            None => Self::default(),
+        }
+    }
+
+    /// Run the interface
+    ///
+    /// This begins the
+    pub fn run(mut self) -> (impl Future + Send, impl HostChannelEnds) {
+        let (reserve, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
+
+        let mut interface = bo_tie_hci_interface::Interface::new(reserve);
+
+        let task = async move {
+            loop {
+                tokio::select! {
+                    packet = self.receiver.recv() => match &packet {
+                        Some(packet) => interface.up_send(packet).await,
+                        None => break,
+                    }
+                    packet = interface.down_send() => {
+                        device::hci::send_command(&self.adapter_fd.0, cmd_data)
+                            .map(|_| true)
+                            .map_err(|e| Error::from(e))
+                    }
+                }
+            }
+        };
+
+        (task, host_ends)
+    }
+}
+
+impl From<usize> for LinuxInterface {
     /// Create a HCIAdapter with the given bluetooth adapter id if an adapter exists
     ///
     /// Call "default" if the device id is unknown or any adapter is acceptable
@@ -374,25 +433,21 @@ impl From<usize> for HCIAdapter {
         let arc_exit_fd = ArcFileDesc::from(exit_evt_fd);
         let arc_epoll_fd = ArcFileDesc::from(epoll_fd);
 
-        let (event_expecter, event_processor) = event::EventSetup::setup();
-
-        let data_receiver = RcvHciACLData::new();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
         AdapterThread {
+            sender,
             adapter_fd: arc_adapter_fd.clone(),
             exit_fd: arc_exit_fd.clone(),
             epoll_fd: arc_epoll_fd.clone(),
-            event_processor,
-            hci_data_recv: data_receiver.clone(),
         }
         .spawn();
 
-        HCIAdapter {
+        LinuxInterface {
             adapter_fd: arc_adapter_fd,
             exit_fd: arc_exit_fd,
             epoll_fd: arc_epoll_fd,
-            event_expecter,
-            hci_data_recv: data_receiver,
+            receiver,
         }
     }
 }
@@ -402,428 +457,18 @@ impl From<usize> for HCIAdapter {
 /// # Panics
 /// * No bluetooth adapter exists on the system
 /// * The system couldn't allocate another file descriptor for the device
-impl Default for HCIAdapter {
+impl Default for LinuxInterface {
     fn default() -> Self {
         let adapter_id = device::hci::get_dev_id(None).expect("No Bluetooth adapter found on this system");
 
-        HCIAdapter::from(adapter_id)
+        LinuxInterface::from(adapter_id)
     }
 }
 
-impl Drop for HCIAdapter {
+impl Drop for LinuxInterface {
     fn drop(&mut self) {
         // Send the exit signal.
         // The value sent doesn't really matter (just that it is 8 bytes, not 0, and not !0 )
         nix::unistd::write(self.exit_fd.raw_fd(), &[1u8; 8]).unwrap();
-    }
-}
-
-impl bo_tie::hci::PlatformInterface for HCIAdapter {
-    type SendCommandError = Error;
-    type ReceiveEventError = Error;
-
-    /// Send a command to the controller
-    ///
-    /// If there is no error, this function always returns true, which is why the waker parameter
-    /// isn't used. Overflowing the Bluetooth Controller buffer is sort of an accomplishment on linux...
-    fn send_command<D, W>(&self, cmd_data: &D, _: W) -> Result<bool, Self::SendCommandError>
-    where
-        D: bo_tie::hci::CommandParameter,
-        W: Into<Option<std::task::Waker>>,
-    {
-        use std::mem::size_of;
-
-        log::debug!("Sending command {:?}", D::COMMAND);
-
-        let oc_pair = D::COMMAND.as_opcode_pair();
-
-        log::trace!("ogf: {:x}", oc_pair.get_ogf());
-        log::trace!("ocf: {:x}", oc_pair.get_ocf());
-        log::trace!("parameter size: {}", size_of::<D::Parameter>());
-        log::trace!("parameter: {:x?}", unsafe {
-            std::slice::from_raw_parts(
-                &cmd_data.get_parameter() as *const D::Parameter as *mut u8,
-                size_of::<D::Parameter>(),
-            )
-        });
-
-        // send the command
-        device::hci::send_command(&self.adapter_fd.0, cmd_data)
-            .map(|_| true)
-            .map_err(|e| Error::from(e))
-    }
-
-    fn receive_event<P>(
-        &self,
-        event: Option<events::Events>,
-        waker: &task::Waker,
-        matcher: Pin<Arc<P>>,
-    ) -> Option<Result<events::EventsData, Self::ReceiveEventError>>
-    where
-        P: bo_tie::hci::EventMatcher + Send + Sync + 'static,
-    {
-        event::EventExpecter::expect_event(self.event_expecter.clone(), event, waker, matcher)
-    }
-}
-
-impl bo_tie::hci::HciACLDataInterface for HCIAdapter {
-    type SendACLDataError = nix::Error;
-    type ReceiveACLDataError = String;
-
-    fn send(&self, data: HciACLData) -> Result<usize, Self::SendACLDataError> {
-        use nix::sys::socket;
-        use nix::sys::uio;
-
-        let packet_indicator = &[CtrlMsgType::ACLData.into()];
-
-        let packet_data = &data.to_packet();
-
-        let io_vec = &[
-            uio::IoVec::from_slice(packet_indicator),
-            uio::IoVec::from_slice(packet_data),
-        ];
-
-        let flags = socket::MsgFlags::MSG_DONTWAIT;
-
-        socket::sendmsg(self.adapter_fd.raw_fd(), io_vec, &[], flags, None)
-    }
-
-    fn start_receiver(&self, handle: ConnectionHandle) {
-        self.hci_data_recv.add_connection_handle(handle, StayAround::Unlimited);
-    }
-
-    fn stop_receiver(&self, handle: &ConnectionHandle) {
-        self.hci_data_recv.remove_connection_handle(handle);
-    }
-
-    fn receive(
-        &self,
-        handle: &ConnectionHandle,
-        waker: &task::Waker,
-    ) -> Option<Result<Vec<HciACLData>, Self::ReceiveACLDataError>> {
-        self.hci_data_recv.get_received(handle, waker)
-    }
-}
-
-/// Stay around flag for received data
-///
-/// This is used to determine the state of the received ACL data. There are 3 states
-/// - `Unlimited`: Their is an 'unlimited' number of *saved* packets
-/// - `Limited`: A limited number of received packets are saved, after the limit is reached, a
-///              new packet causes the oldest packet to be dropped. This is a ring buffer, but
-///              `Limited` only stores a few number of packets at a time.
-///
-///              `Limited` can be upgraded to `Unlimited` without packet loss.
-///
-///              The associated value with `Limited` is the index of the start of the circle buffer
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum StayAround {
-    Unlimited,
-    Limited,
-}
-
-#[derive(Debug)]
-enum PacketBuffer {
-    /// A circle buffer for limited storage of packets
-    ///
-    /// The associated `usize` is the index of the start of the ring.
-    Limited(Vec<HciACLData>, usize),
-    /// Unlimited storage
-    Unlimited(Vec<HciACLData>),
-}
-
-impl PacketBuffer {
-    fn make_unlimited(&mut self) {
-        match self {
-            Self::Limited(r_buff, start) => {
-                *self = if *start == 0 {
-                    Self::Unlimited(std::mem::replace(r_buff, Vec::new()))
-                } else {
-                    let mut v = r_buff.split_off(*start);
-
-                    v.append(r_buff);
-
-                    Self::Unlimited(v)
-                }
-            }
-            _ => (),
-        }
-    }
-
-    fn into_unlimited(mut self) -> Self {
-        self.make_unlimited();
-        self
-    }
-
-    fn add(&mut self, data: HciACLData) {
-        match self {
-            Self::Unlimited(ref mut v) => v.push(data),
-            Self::Limited(ref mut v, ref mut size) => {
-                if v.capacity() == v.len() {
-                    v[*size] = data;
-                    *size = (*size + 1) % v.len()
-                } else {
-                    v.push(data);
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ConnectionRecvInfo {
-    received_packets: PacketBuffer,
-    waker: Option<task::Waker>,
-}
-
-impl ConnectionRecvInfo {
-    const LIMITED_CAPACITY: usize = 100;
-
-    /// Create a new ConnectionRecvInfo
-    ///
-    /// The `stay` input is used to indicate if this should continue to exist after data is taken
-    /// from it. The `stay` flag is used by
-    /// [`RcvHciACLData`](RcvHciACLData).
-    fn new(stay_around: StayAround) -> Self {
-        ConnectionRecvInfo {
-            received_packets: match stay_around {
-                StayAround::Unlimited => PacketBuffer::Unlimited(Vec::new()),
-                StayAround::Limited => PacketBuffer::Limited(Vec::with_capacity(Self::LIMITED_CAPACITY), 0),
-            },
-            waker: None,
-        }
-    }
-
-    /// Set the waker
-    ///
-    /// This will set the waker and upgrade the packet buffer to `Unlimited`
-    fn set_waker(&mut self, waker: &task::Waker) {
-        self.waker = Some(waker.clone());
-        self.received_packets.make_unlimited();
-    }
-
-    /// Get the next packet or set the waker
-    ///
-    /// This either returns all received packets or sets the waker and returns None.
-    ///
-    /// Regardless of the operation, the packet buffer is upgraded to `Unlimited`
-    fn get_data_or_set_waker(&mut self, waker: &task::Waker) -> Option<Vec<HciACLData>> {
-        let recv_packs = match core::mem::replace(&mut self.received_packets, PacketBuffer::Unlimited(Vec::new()))
-            .into_unlimited()
-        {
-            PacketBuffer::Unlimited(v) => v,
-            _ => panic!("Received unexpected Limited"),
-        };
-
-        match recv_packs.len() {
-            0 => {
-                self.waker = Some(waker.clone());
-                None
-            }
-            _ => Some(recv_packs),
-        }
-    }
-
-    /// Add data
-    fn add(&mut self, data: HciACLData) {
-        self.received_packets.add(data);
-
-        if let Some(w) = self.waker.take() {
-            w.wake();
-        }
-    }
-
-    fn using_limited_buffer(&self) -> bool {
-        match self.received_packets {
-            PacketBuffer::Limited(_, _) => true,
-            _ => false,
-        }
-    }
-}
-
-type ACLDataChannels = HashMap<ConnectionHandle, ConnectionRecvInfo>;
-
-/// A structure for managing the reception of hci acl data packets for use with futures
-#[derive(Debug, Clone)]
-struct RcvHciACLData {
-    receive_channels: Arc<Mutex<ACLDataChannels>>,
-}
-
-impl RcvHciACLData {
-    fn new() -> Self {
-        RcvHciACLData {
-            receive_channels: Arc::new(Mutex::new(ACLDataChannels::new())),
-        }
-    }
-
-    /// Add a buffer to associated with `handle` for receiving ACL data
-    ///
-    /// This will create a buffer that will stay around to collect ACL data packets even when there
-    /// is no waker to wake a pending task to receive the received data.
-    ///
-    /// Only one buffer is set per handle. Calling this multiple of times doesn't drop the buffer,
-    /// however it may upgrade the buffer from `Limited` to `Unlimited` (but not the reverse).
-    ///
-    /// Any previously set waker is dropped.
-    ///
-    /// If an unlimited buffer already exists for the privided handle it cannot be downgraded
-    /// into a limited buffer. The buffer must be removed (with `remove_connection_handle`)
-    /// and then a *new* limited buffer can be made with this funciton.
-    fn add_connection_handle(&self, handle: ConnectionHandle, flag: StayAround) {
-        self.receive_channels
-            .lock()
-            .as_mut()
-            .map(|rc| {
-                if let Some(rcv_info) = rc.get_mut(&handle) {
-                    if flag == StayAround::Unlimited {
-                        rcv_info.received_packets.make_unlimited()
-                    }
-                } else {
-                    rc.insert(handle, ConnectionRecvInfo::new(flag));
-                }
-            })
-            .or_else(|e| -> Result<_, ()> { log_error_and_panic!("Failed to acquire lock: {}", e) })
-            .ok();
-    }
-
-    /// Remove the buffer associated with `handle`
-    ///
-    /// This needs to be called to delete the buffer created by `add_connection_handle`
-    ///
-    /// This should also be called for any buffer that was created by `get_received`, but in not
-    /// deleted by another call to `get_received`.
-    fn remove_connection_handle(&self, handle: &ConnectionHandle) {
-        self.receive_channels
-            .lock()
-            .as_mut()
-            .and_then(|rc| Ok(rc.remove(&handle)))
-            .or_else(|e| -> Result<_, ()> { log_error_and_panic!("Failed to acquire lock: {}", e) })
-            .ok();
-    }
-
-    /// Try to get a received packet
-    ///
-    /// If there is a packet to be received for the provided connection handle, then an HciACLData
-    /// packet will be returned. If there are no packets to be received, then no packet is returned
-    /// but the provided waker will be used when a packet is ready to be received. Whoever is woken
-    /// will need to call this function again to get the received data. If data is returned, the
-    /// provided waker is ignored.
-    fn get_received(&self, handle: &ConnectionHandle, waker: &task::Waker) -> Option<Result<Vec<HciACLData>, String>> {
-        let mut rc_gaurd = match self.receive_channels.lock() {
-            Ok(gaurd) => gaurd,
-            Err(e) => log_error_and_panic!("Failed to acquire 'receive_channels' lock: {}", e),
-        };
-
-        let opt_data = rc_gaurd.get_mut(handle);
-
-        let mut remove_cri = false;
-
-        let ret = if opt_data.is_some() {
-            // If the buffer exists then check if there is any data
-            opt_data.and_then(|ri| {
-                ri.get_data_or_set_waker(waker)
-                    .and_then(|d| Some(Ok(d)))
-                    .and_then(|ret| {
-                        remove_cri = ri.using_limited_buffer();
-                        Some(ret)
-                    })
-            })
-        } else {
-            // The buffer doesn't exist, so create an Limited buffer
-            let mut cri = ConnectionRecvInfo::new(StayAround::Limited);
-            cri.set_waker(waker);
-            rc_gaurd.insert(*handle, cri);
-            None
-        };
-
-        // The handle is associated with a temporary buffer so it should be deleted
-        if remove_cri {
-            rc_gaurd.remove(handle);
-        }
-
-        ret
-    }
-
-    /// Add a received packet
-    ///
-    /// This is used by the
-    /// [`AdapterThread`](AdapterThread)
-    /// to add ACL Data packets that were received from the controller.
-    fn add_received(&self, packet: HciACLData) {
-        match self.receive_channels.lock().as_mut() {
-            Ok(rc) => {
-                let handle = *packet.get_handle();
-
-                if let Some(recv_info) = rc.get_mut(&handle) {
-                    recv_info.add(packet)
-                } else {
-                    let mut recv_info = ConnectionRecvInfo::new(StayAround::Limited);
-
-                    recv_info.add(packet);
-
-                    rc.insert(handle, recv_info);
-                }
-            }
-            Err(lock_e) => log_error_and_panic!("Failed to acquire lock: {}", lock_e),
-        }
-    }
-}
-
-/// A token to keep track of what waker (from futres), if any, should be triggered when an event
-/// is received from the bluetooth controller
-///
-/// An instance must be wrapped in Arc-Mutex/RwLock to be multi-thread safe (per the usual)
-#[derive(Clone, Debug)]
-struct WakerToken {
-    waker: Option<task::Waker>,
-    waker_triggered: bool,
-}
-
-impl WakerToken {
-    /// Trigger the waker if there is a waker.
-    ///
-    /// A trigger flag is set by this method to indicate to the method set_waker that it needs
-    /// to immediately call the wake method of its waker parameter.
-    fn trigger(&mut self) {
-        self.waker_triggered = true;
-
-        if let Some(waker) = self.waker.take() {
-            log::debug!("Invoking Context waker");
-            waker.wake()
-        }
-    }
-
-    /// Determine if the trigger method was called or an error occurred
-    fn triggered(&self) -> bool {
-        self.waker_triggered
-    }
-
-    /// Attempt to change the waker
-    ///
-    /// This will change the waker if the current waker exists but it would not wake the same
-    /// context as input `wake`. There is no purpose in updating the waker if the current waker is
-    /// None as the prior waker was already triggered. Returns true if the waker was updated.
-    fn change_waker(&mut self, waker: &task::Waker) -> bool {
-        if let Some(ref mut self_waker) = self.waker {
-            if !waker.will_wake(self_waker) {
-                *self_waker = waker.clone();
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    }
-}
-
-impl From<task::Waker> for WakerToken {
-    /// Create a default waker token. No Waker object is supplied so instead the function
-    /// triggered must be checked to see if trigger was called.
-    fn from(waker: task::Waker) -> Self {
-        WakerToken {
-            waker: Some(waker),
-            waker_triggered: false,
-        }
     }
 }
