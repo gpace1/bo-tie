@@ -346,35 +346,14 @@ where
 
     /// Create a new `ChannelReserve`
     ///
-    /// Don't bother with trying to figure out the generics. Assuming that the channel type consists
-    /// of a generic message type, all that needs to be done here is to spam the same channel
-    /// creation method four times.
-    ///
-    /// The only requirement is that the channel creation types (C1, .. C4, F) type should implement
-    /// `Fn() -> (impl bo_tie_hci_util::Sender + Clone, impl bo_tie_hci_util::Receiver)`
-    ///
-    /// ```
-    /// # struct ChannelReserve;
-    /// # impl ChannelReserve { fn new<F1, F2, F3, F4>(_: F1, _: F2, _:F3, _:F4) -> Self { unimplemented!() } }
-    ///
-    /// use tokio::sync::mpsc::unbounded_channel;
-    ///
-    /// # let _r =
-    /// ChannelReserve::new(
-    ///     unbounded_channel,
-    ///     unbounded_channel,
-    ///     unbounded_channel,
-    ///     unbounded_channel,
-    ///     unbounded_channel
-    /// )
-    /// # ;
-    /// ```
-    // channel1: channel for command response events from the interface async task to the host async
-    //           task
-    // channel2: channel for general messages from the interface async task to the host async task
-    // channel3: channel for commands from the host async task to the interface async task
-    // channel4: channel for messages from the interface async task to a connection async task
-    // channel5: channel for messages from a connection async task to the interface async task
+    /// # Inputs
+    /// `channel1`: channel for command response events from the interface async task to the host
+    ///             async task
+    /// `channel2`: channel for general messages from the interface async task to the host async
+    ///             task
+    /// `channel3`: channel for commands from the host async task to the interface async task
+    /// `channel4`: channel for messages from the interface async task to a connection async task
+    /// `channel5`: channel for messages from a connection async task to the interface async task
     fn new<C1, C2, C3, C4, E>(
         channel1: C1,
         channel2: C2,
@@ -624,6 +603,71 @@ where
 /// * `Sender` implements [`Sender<Message = T>`] where `T` is an unbounded generic
 /// * `Receiver` implements [`Receiver<Message = T>`] where `T` is an unbounded generic
 ///
+/// ```
+/// # use std::future::Future;
+/// # use std::pin::Pin;
+/// # use std::task::{Context, Poll};
+/// # #[derive(Debug)] struct MySenderError;
+/// # struct MySenderFuture<'a, T>(core::marker::PhantomData<&'a T>);
+/// # impl<T> Future for MySenderFuture<'_, T> {
+/// #     type Output = Result<(), MySenderError>;
+/// #     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> { unimplemented!() }
+/// # }
+/// # struct MySender<T>(core::marker::PhantomData<T>);
+/// # impl<T> Clone for MySender<T> { fn clone(&self) -> Self { unimplemented!() } }
+/// # struct MyReceiveFuture<'a, T>(core::marker::PhantomData<&'a T>);
+/// # impl<T> Future for MyReceiveFuture<'_, T> {
+/// #     type Output = Option<T>;
+/// #     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> { unimplemented!() }
+/// # }
+/// # struct MyReceiver<T>(core::marker::PhantomData<T>);
+/// use bo_tie_hci_util::{Sender, Receiver};
+/// use bo_tie_hci_util::channel::ChannelReserveBuilder;
+///
+/// impl<T: Unpin> Sender for MySender<T> {
+///    type Error = MySenderError;
+///     type Message = T;
+///     type SendFuture<'a> = MySenderFuture<'a, T> where Self: 'a;
+///
+///     fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
+///         // implement send
+/// #       MySenderFuture(core::marker::PhantomData)  
+///     }
+/// }
+///
+/// impl<T: Unpin> Receiver for MyReceiver<T> {
+///     type Message = T;
+///     type ReceiveFuture<'a> = MyReceiveFuture<'a, T> where Self: 'a;
+///
+///     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+///         // implement poll_recv
+/// #       Poll::Ready(None)
+///     }
+///
+///     fn recv(&mut self) -> Self::ReceiveFuture<'_> {
+///         // implement recv
+/// #       MyReceiveFuture(core::marker::PhantomData)
+///     }
+/// }
+///
+/// fn my_channel<T>() -> (MySender<T>, MyReceiver<T>) {
+///     // Your channel implementation
+/// #   (MySender(core::marker::PhantomData), MyReceiver(core::marker::PhantomData))
+/// }
+///
+/// // `my_channel` needs to be spammed five times to define
+/// // the five different channel types used by a channel
+/// // reserve.
+/// let my_channel_reserve = ChannelReserveBuilder::new()
+///     .set_c1(my_channel)
+///     .set_c2(my_channel)
+///     .set_c3(my_channel)
+///     .set_c4(my_channel)
+///     .set_c5(my_channel)
+///     .build();
+///
+/// # let _r = my_channel_reserve;
+/// ```
 /// [`set_c1`]: ChannelReserveBuilder::set_c1
 /// [`set_c2`]: ChannelReserveBuilder::set_c2
 /// [`set_c5`]: ChannelReserveBuilder::set_c5

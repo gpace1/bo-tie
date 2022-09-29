@@ -1102,62 +1102,47 @@ where
 /// # use std::future::Future;
 /// # use std::pin::Pin;
 /// # use std::task::{Context, Poll};
+/// # use bo_tie_hci_util::Sender;
 /// use futures::channel::mpsc;
-/// use bo_tie_hci_util::Sender;
 ///
-/// /// The mpsc `Sender` is wrapped in a `RefCell` as it requires
-/// /// mutable access to itself in order to send a message. The
-/// /// value is only mutably borrowed when the future is polled in
-/// /// attempting to send a message.
-/// struct FuturesSender<T>(RefCell<mpsc::Sender<T>>);
+/// struct FuturesSender<T>(mpsc::Sender<T>);
 ///
-/// struct RefSend<'a, T>(&'a RefCell<mpsc::Sender<T>>, Option<T>);
-///
-/// impl<T: Unpin> Future for RefSend<'_, T> {
-///     type Output = Result<(), mpsc::SendError>;
-///
-///     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-///         let this = self.get_mut();
-///
-///         let mut sender = this.0.borrow_mut();
-///
-///         sender.poll_ready(cx)?;
-///
-///         let val = this.1.take().unwrap();
-///
-///         Poll::Ready(sender.start_send(val))
-///     }
-/// }
 /// impl<T> Sender for FuturesSender<T>
 /// where
 ///     T: Unpin
 /// {
 ///     type Error = mpsc::SendError;
 ///     type Message = T;
-///     type SendFuture<'a> = RefSend<'a, T> where T: 'a;
+///     type SendFuture<'a> = futures::sink::Send<'a, mpsc::Sender<T>, T> where Self: 'a;
 ///
-///     fn send<'a>(&'a self, t: Self::Message) -> Self::SendFuture<'a> {
-///         RefSend(self, Some(t))
+///     fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
+///         use futures::SinkExt;
+///
+///         self.0.send(t)
 ///     }
 /// }
 /// ```
 ///
-/// If the type is unknown then the feature `type_alias_impl_trait` can be enabled for ease of
+/// If the type is unknown then the nightly feature `type_alias_impl_trait` can be enabled for ease of
 /// implementation.
 /// ```
 /// #![feature(type_alias_impl_trait)]
+/// # use std::fmt::Debug;
 /// # use std::future::Future;
+/// # use bo_tie_hci_util::Sender;
 /// use tokio::sync::mpsc;
-/// use bo_tie_hci_util::{Sender, HciPacket};
 ///
-/// struct TokioSender<T>(mpsc::Sender<HciPacket<T>>);
+/// struct TokioSender<T>(mpsc::Sender<T>);
 ///
-/// impl<T> Sender for TokioSender<T> {
-///     type Error = mpsc::error::SendError<HciPacket<T>>;
+/// impl<T> Sender for TokioSender<T>
+/// where
+///     T: Unpin + Debug
+/// {
+///     type Error = mpsc::error::SendError<T>;
 ///     type Message = T;
-///     type SendFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where T: 'a;
+///     type SendFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
 ///
-///     fn send<'a>(&'a self, t: Self::Message) -> Self::SendFuture<'a> {
+///     fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
 ///         // Since `send` is an async method, its return type is hidden.
 ///         self.0.send(t)
 ///    }
@@ -1186,6 +1171,66 @@ pub trait Sender {
 /// part of every task. Thus if the `Receiver` is `!Send` then the async tasks will also be `!Send`.
 /// This prevents the usage of most async executors with the exception of local ones (executors that
 /// run on the same thread the tasks were spawned from).
+///
+/// Implementing `Receiver` is fairly easy if type for the `ReceiveFuture` is known.
+/// ```
+/// # use std::cell::RefCell;
+/// # use std::future::Future;
+/// # use std::pin::Pin;
+/// # use std::task::{Context, Poll};
+/// # use bo_tie_hci_util::Receiver;
+/// use futures::channel::mpsc;
+///
+/// struct FuturesReceiver<T>(mpsc::Receiver<T>);
+///
+/// impl<T> Receiver for FuturesReceiver<T>
+/// where
+///     T: Unpin
+/// {
+///     type Message = T;
+///     type ReceiveFuture<'a> = futures::stream::Next<'a, mpsc::Receiver<T>> where Self: 'a;
+///
+///     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+///         futures::Stream::poll_next(Pin::new(&mut self.0), cx)
+///     }
+///
+///     fn recv(&mut self) -> Self::ReceiveFuture<'_> {
+///         use futures::StreamExt;
+///
+///         self.0.next()
+///     }
+/// }
+/// ```
+///
+/// If the type is unknown then the nightly feature `type_alias_impl_trait` can be enabled for ease
+/// of implementation.
+/// ```
+/// #![feature(type_alias_impl_trait)]
+/// # use std::fmt::Debug;
+/// # use std::future::Future;
+/// # use std::task::{Context, Poll};
+/// # use bo_tie_hci_util::Receiver;
+/// use tokio::sync::mpsc;
+///
+/// struct TokioReceiver<T>(mpsc::Receiver<T>);
+///
+/// impl<T> Receiver for TokioReceiver<T>
+/// where
+///     T: Unpin + Debug
+/// {
+///     type Message = T;
+///     type ReceiveFuture<'a> = impl Future<Output = Option<Self::Message>> + 'a where Self: 'a;
+///
+///     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+///         self.0.poll_recv(cx)
+///     }
+///
+///     fn recv(&mut self) -> Self::ReceiveFuture<'_> {
+///         // Since `recv` is an async method, its return type is hidden.
+///         self.0.recv()
+///    }
+/// }
+/// ```
 pub trait Receiver {
     type Message: Unpin;
     type ReceiveFuture<'a>: Future<Output = Option<Self::Message>>
