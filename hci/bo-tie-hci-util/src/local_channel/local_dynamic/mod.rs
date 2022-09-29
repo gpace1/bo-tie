@@ -709,7 +709,7 @@ impl HostChannelEnds for HostDynChannelEnds {
 /// A builder for a local channel
 ///
 /// This is used to configure the build of the local channels before creating the interface using
-/// a [`LocalChannelManager`].
+/// a [`LocalChannelReserve`].
 ///
 /// ## Data Channels
 /// All connection async tasks use the same channel to the interface for sending the same type of
