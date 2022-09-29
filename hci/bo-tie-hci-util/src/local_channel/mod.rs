@@ -87,7 +87,7 @@ where
         let this = unsafe { self.get_unchecked_mut() };
 
         match (this.local_sender.is_full(), this.local_sender.receiver_exists()) {
-            (_, true) => Poll::Ready(Err(LocalSendFutureError)),
+            (_, false) => Poll::Ready(Err(LocalSendFutureError)),
             (false, _) => {
                 this.local_sender.push(this.packet.take().unwrap());
 

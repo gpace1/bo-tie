@@ -171,7 +171,6 @@ macro_rules! make_interval {
         $micro_sec_conv:expr) =>
     {
         $(#[ $expl ])*
-        #[cfg_attr(test,derive(Debug))]
         pub struct $name {
             interval: u16,
         }

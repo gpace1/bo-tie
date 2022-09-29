@@ -8,6 +8,7 @@
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
+extern crate core;
 
 pub mod buffer;
 #[cfg(feature = "cryptography")]

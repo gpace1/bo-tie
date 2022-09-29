@@ -4,8 +4,41 @@
 //! communication. This interface interacts with that driver for communication with a Bluetooth
 //! controller on the system.
 //!
+//! Communication with the Bluetooth Controller is done through an interface driver called an
+//! 'adapter'. This adapter is labeled by an identifier number unique to your machine. This number
+//! is required for creating a `LinuxInterface`. Once a `LinuxInterface` is created it must then be [`run`] by
+//! an executor to begin communication with the adapter.
+//!
+//! Most of the time there is not multiple Bluetooth controllers connected as adapters to a single
+//! machine. The implementation of `Default` for `LinuxInterface` will randomly select the first
+//! adapter it finds on the machine, which is fine if there is only one Adapter. The same thing is
+//! true if `None` is input for method `new`.
+//!
+//! # Super User
+//! One of the more annoying things is that this library requires *capabilities* in order to work.
+//! If you try to call `new_user` without having the correct *capabilities* it will panic with the
+//! the error `EPERM`. The easiest way around this is to build your application and then run it with
+//! `sudo`, but the other way is to give the build the capability `cap_net_admin`.
+//!
+//! ```
+//! // Create a new interface to a Bluetooth Adapter
+//! let (interface_task, host_ends) = bo_tie_linux::new_user(None);
+//!
+//! let host_task = async move {
+//!     bo_tie::hci::Host::init(host_ends);
+//!
+//!     //.. your task
+//! };
+//!
+//! // This example uses tokio as an executor,
+//! // but any executor will work
+//! tokio::spawn(interface_task.run());
+//! tokio::spawn(host_task);
+//! ```
+//! [`run`]: LinuxInterface::run
+//!
 
-use bo_tie_hci_util::{ChannelReserve, HciPacket, HciPacketType, HostChannelEnds};
+use bo_tie_hci_util::{Channel, ChannelReserve, HciPacket, HciPacketType, HostChannelEnds};
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
@@ -121,12 +154,6 @@ impl error::Error for Error {
 impl From<nix::Error> for Error {
     fn from(e: nix::Error) -> Self {
         Error::IOError(e)
-    }
-}
-
-impl From<nix::errno::Errno> for Error {
-    fn from(e: nix::errno::Errno) -> Self {
-        Error::IOError(nix::Error::Sys(e))
     }
 }
 
@@ -300,73 +327,33 @@ impl<C: ChannelReserve> AdapterThread<C> {
 /// true if `None` is input for method `new`.
 ///
 /// ```
-/// # use tokio::spawn;
-/// use bo_tie_linux::LinuxInterface;
+/// // Create a new interface to a Bluetooth Adapter
+/// let (interface_task, host_ends) = bo_tie_linux::new_user(None);
 ///
-/// // There is only one Bluetooth Controller
-/// let interface = LinuxInterface::default();
+/// let host_task = async move {
+///     bo_tie::hci::Host::init(host_ends);
+///
+///     //.. your task
+/// };
+///
+/// // This example uses tokio as an executor,
+/// // but any executor will work
+/// tokio::spawn(interface_task.run());
+/// tokio::spawn(host_task);
 /// ```
 /// [`run`]: LinuxInterface::run
 #[derive(Clone, Debug)]
-pub struct LinuxInterface {
+pub struct LinuxInterface<C> {
     adapter_fd: ArcFileDesc,
     exit_fd: ArcFileDesc,
     epoll_fd: ArcFileDesc,
     receiver: UnboundedReceiver<HciPacket<Vec<u8>>>,
+    interface: C,
 }
 
-impl LinuxInterface {
-    /// Create a `LinuxInterface`
-    ///
-    /// The input `adapter_id` is the identifier of the adapter for the Bluetooth Controller. If
-    /// there is only one Bluetooth Controller or any adapter will work `None` can be used to
-    /// automatically select an adapter.
-    pub fn new<T>(adapter_id: T) -> Self
-    where
-        T: Into<Option<usize>>,
-    {
-        match adapter_id.into() {
-            Some(id) => Self::from(id),
-            None => Self::default(),
-        }
-    }
-
-    /// Run the interface
-    ///
-    /// This begins the
-    pub fn run(mut self) -> (impl Future + Send, impl HostChannelEnds) {
-        let (reserve, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
-
-        let mut interface = bo_tie_hci_interface::Interface::new(reserve);
-
-        let task = async move {
-            loop {
-                tokio::select! {
-                    packet = self.receiver.recv() => match &packet {
-                        Some(packet) => interface.up_send(packet).await,
-                        None => break,
-                    }
-                    packet = interface.down_send() => {
-                        device::hci::send_command(&self.adapter_fd.0, cmd_data)
-                            .map(|_| true)
-                            .map_err(|e| Error::from(e))
-                    }
-                }
-            }
-        };
-
-        (task, host_ends)
-    }
-}
-
-impl From<usize> for LinuxInterface {
-    /// Create a HCIAdapter with the given bluetooth adapter id if an adapter exists
-    ///
-    /// Call "default" if the device id is unknown or any adapter is acceptable
-    ///
-    /// # Panics
-    /// There is no Bluetooth Adapter with the given device id
-    fn from(adapter_id: usize) -> Self {
+impl<C: ChannelReserve> LinuxInterface<C> {
+    /// Create a `LinuxInterface` from an ID for the adapter
+    fn from_adapter_id(adapter_id: usize) -> (Self, impl HostChannelEnds) {
         use nix::libc;
         use nix::sys::epoll::{epoll_create1, epoll_ctl, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
         use nix::sys::eventfd::{eventfd, EfdFlags};
@@ -435,6 +422,10 @@ impl From<usize> for LinuxInterface {
 
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
 
+        let (reserve, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
+
+        let interface = bo_tie_hci_interface::Interface::new(reserve);
+
         AdapterThread {
             sender,
             adapter_fd: arc_adapter_fd.clone(),
@@ -443,32 +434,67 @@ impl From<usize> for LinuxInterface {
         }
         .spawn();
 
-        LinuxInterface {
+        let this = LinuxInterface {
             adapter_fd: arc_adapter_fd,
             exit_fd: arc_exit_fd,
             epoll_fd: arc_epoll_fd,
             receiver,
+            interface,
+        };
+
+        (this, host_ends)
+    }
+
+    /// Run the interface
+    ///
+    /// This launches the interface to begin processing HCI packets sent to and received from the
+    /// Bluetooth Controller.
+    pub async fn run(mut self) {
+        loop {
+            tokio::select! {
+                received = self.receiver.recv() => {
+                    match &received {
+                        Some(packet) => interface.up_send(packet).await,
+                        None => break,
+                    }
+                }
+                packet = interface.down_send() => {
+                    device::hci::send_command(&self.adapter_fd.0, cmd_data)
+                        .map(|_| true)
+                        .map_err(|e| Error::from(e))
+                }
+            }
         }
     }
 }
 
-/// Create a HCIAdapter object with the first bluetooth adapter returned by the system
-///
-/// # Panics
-/// * No bluetooth adapter exists on the system
-/// * The system couldn't allocate another file descriptor for the device
-impl Default for LinuxInterface {
-    fn default() -> Self {
-        let adapter_id = device::hci::get_dev_id(None).expect("No Bluetooth adapter found on this system");
-
-        LinuxInterface::from(adapter_id)
-    }
-}
-
-impl Drop for LinuxInterface {
+impl<C> Drop for LinuxInterface<C> {
     fn drop(&mut self) {
         // Send the exit signal.
         // The value sent doesn't really matter (just that it is 8 bytes, not 0, and not !0 )
         nix::unistd::write(self.exit_fd.raw_fd(), &[1u8; 8]).unwrap();
+    }
+}
+
+/// Create a `LinuxInterface`
+///
+/// The input `adapter_id` is the identifier of the adapter for the Bluetooth Controller. If
+/// there is only one Bluetooth Controller or any adapter will work `None` can be used to
+/// automatically select an adapter.
+///
+/// # Panic
+/// This will panic if there is no Bluetooth adapter or if the `adapter_id` does not exist for
+/// this machine.
+pub fn new_user<T>(adapter_id: T) -> (LinuxInterface<impl ChannelReserve>, impl HostChannelEnds)
+where
+    T: Into<Option<usize>>,
+{
+    match adapter_id.into() {
+        Some(id) => Self::from_adapter_id(id),
+        None => {
+            let adapter_id = device::hci::get_dev_id(None).expect("No Bluetooth adapter found on this system");
+
+            Self::from_adapter_id(adapter_id)
+        }
     }
 }

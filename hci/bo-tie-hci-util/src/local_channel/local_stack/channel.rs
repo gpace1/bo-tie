@@ -82,3 +82,71 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::events::parameters::{AuthenticationCompleteData, CommandStatusData, DisconnectionCompleteData};
+    use crate::events::EventsData;
+    use crate::local_channel::local_stack::ToHostCmdChannel;
+    use crate::test::*;
+    use crate::{ConnectionHandle, ToHostGeneralIntraMessage};
+    use bo_tie_util::errors::Error;
+
+    macro_rules! dup {
+        ($to_dup:tt) => {
+            ($to_dup, $to_dup)
+        };
+    }
+
+    #[tokio::test]
+    async fn add_remove_to_host_cmd() {
+        let lc: ToHostCmdChannel<5> = LocalChannel::new();
+
+        let (tx_vals, rx_vals) = dup!([ToHostCommandIntraMessage::CommandStatus(CommandStatusData {
+            status: Error::NoError,
+            number_of_hci_command_packets: 0,
+            command_opcode: Some(0xFF)
+        })]);
+
+        channel_send_and_receive(&lc, tx_vals, rx_vals, |l, r| match (l, r) {
+            (ToHostCommandIntraMessage::CommandStatus(l), ToHostCommandIntraMessage::CommandStatus(r)) => {
+                l.status == r.status
+                    && l.number_of_hci_command_packets == r.number_of_hci_command_packets
+                    && l.command_opcode == r.command_opcode
+            }
+            _ => false,
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_remove_to_host_gen() {
+        let lc: ToHostGenChannel<1, 5, 10> = LocalChannel::new();
+
+        let (tx_vals, rx_vals) = dup!([
+            ToHostGeneralIntraMessage::Event(EventsData::AuthenticationComplete(AuthenticationCompleteData {
+                status: Error::NoError,
+                connection_handle: ConnectionHandle::try_from(1).unwrap()
+            })),
+            ToHostGeneralIntraMessage::Event(EventsData::DisconnectionComplete(DisconnectionCompleteData {
+                status: Error::NoError,
+                connection_handle: ConnectionHandle::try_from(2).unwrap(),
+                reason: 3
+            }))
+        ]);
+
+        channel_send_and_receive(&lc, tx_vals, rx_vals, |l, r| match (l, r) {
+            (
+                ToHostGeneralIntraMessage::Event(EventsData::AuthenticationComplete(l)),
+                ToHostGeneralIntraMessage::Event(EventsData::AuthenticationComplete(r)),
+            ) => l.status == r.status && l.connection_handle == r.connection_handle,
+            (
+                ToHostGeneralIntraMessage::Event(EventsData::DisconnectionComplete(l)),
+                ToHostGeneralIntraMessage::Event(EventsData::DisconnectionComplete(r)),
+            ) => l.status == r.status && l.connection_handle == r.connection_handle && l.reason == r.reason,
+            _ => false,
+        })
+        .await
+    }
+}

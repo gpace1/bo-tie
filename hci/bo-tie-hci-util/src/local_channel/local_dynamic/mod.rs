@@ -115,15 +115,16 @@ pub struct LocalChannelReceiver<T, M>(T)
 where
     T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>;
 
-impl<T, M> Clone for LocalChannelReceiver<T, M>
+impl<T, M> LocalChannelReceiver<T, M>
 where
-    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>> + Clone,
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
 {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
+    fn new(inner: T) -> Self {
+        inner.borrow_mut().receiver_exists = true;
+
+        LocalChannelReceiver(inner)
     }
 }
-
 impl<T, M> LocalQueueBuffer for LocalChannelReceiver<T, M>
 where
     T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
@@ -182,6 +183,15 @@ where
     }
 }
 
+impl<T, M> Drop for LocalChannelReceiver<T, M>
+where
+    T: core::ops::Deref<Target = RefCell<LocalChannelInner<M>>>,
+{
+    fn drop(&mut self) {
+        self.0.borrow_mut().receiver_exists = false;
+    }
+}
+
 /// A local channel for sending a message type
 ///
 /// ## Local Type
@@ -224,7 +234,11 @@ impl<T: Unpin> Channel for LocalChannel<T> {
     }
 
     fn take_receiver(&self) -> Option<Self::Receiver> {
-        Some(LocalChannelReceiver(self.clone()))
+        if self.borrow().receiver_exists {
+            None
+        } else {
+            Some(LocalChannelReceiver::new(self.clone()))
+        }
     }
 }
 
@@ -343,7 +357,6 @@ impl<B, T> LocalBufferedChannelInner<B, T> {
 }
 
 /// Channel ends for a connection
-#[derive(Clone)]
 pub struct ConnectionDynChannelEnds {
     send_channel: LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
     receiver: LocalChannelReceiver<
@@ -844,41 +857,41 @@ impl LocalChannelReserveBuilder {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bo_tie_hci_interface::test::*;
+    use crate::test::*;
 
     #[test]
     fn local_init_usize() {
-        let _: LocalBufferedChannel<usize, usize> = LocalBufferedChannel::new(20);
+        let _: LocalChannel<usize> = LocalChannel::new(20);
     }
 
     #[test]
     fn local_init_ref_mut_usize() {
-        let _: LocalBufferedChannel<&mut usize, &mut usize> = LocalBufferedChannel::new(20);
+        let _: LocalChannel<&mut usize> = LocalChannel::new(20);
     }
 
     #[tokio::test]
     async fn local_add_remove_usize() {
-        let l: LocalBufferedChannel<HciPacket<usize>> = LocalBufferedChannel::new(5);
+        let l: LocalChannel<usize> = LocalChannel::new(5);
 
         let test_vals = [21, 32, 44, 26, 84, 321, 123, 4321, 24, 2142, 485961, 1, 55];
 
-        generic_send_and_receive(&l, &test_vals).await
+        channel_send_and_receive(l, test_vals, test_vals, PartialEq::eq).await
     }
 
     #[tokio::test]
     async fn local_add_remove_usize_single_capacity() {
-        let l: LocalBufferedChannel<HciPacket<usize>> = LocalBufferedChannel::new(1);
+        let l: LocalChannel<usize> = LocalChannel::new(1);
 
         let test_vals = [21, 32, 44, 26, 84, 321, 123, 4321, 24, 2142, 485961, 1, 55];
 
-        generic_send_and_receive(&l, &test_vals).await
+        channel_send_and_receive(l, test_vals, test_vals, PartialEq::eq).await
     }
 
     #[tokio::test]
     async fn local_add_remove_byte_slice() {
-        let l: LocalBufferedChannel<HciPacket<&[u8]>> = LocalBufferedChannel::new(4);
+        let l: LocalChannel<&[u8]> = LocalChannel::new(4);
 
-        let test_vals: &[&[u8]] = &[
+        let test_vals: [&[u8]; 8] = [
             "Hello world".as_bytes(),
             "Where were we last night".as_bytes(),
             "3y2j`kl4hjlhbavucoxy78gy3u2k14hg5 431".as_bytes(),
@@ -889,20 +902,20 @@ mod test {
             "who asked for your opinion on my test data?".as_bytes(),
         ];
 
-        generic_send_and_receive(&l, test_vals).await
+        channel_send_and_receive(l, test_vals, test_vals, PartialEq::eq).await
     }
 
     #[tokio::test]
     async fn local_add_remove_array() {
         const SIZE: usize = 20;
 
-        let l: LocalBufferedChannel<HciPacket<[usize; SIZE]>> = LocalBufferedChannel::new(4);
+        let l: LocalChannel<[usize; SIZE]> = LocalChannel::new(4);
 
-        let test_vals: &[[usize; SIZE]] = &[
+        let test_vals: [[usize; SIZE]; 10] = [
             [0; SIZE], [1; SIZE], [2; SIZE], [3; SIZE], [4; SIZE], [5; SIZE], [6; SIZE], [7; SIZE], [8; SIZE],
             [9; SIZE],
         ];
 
-        generic_send_and_receive(&l, test_vals).await
+        channel_send_and_receive(l, test_vals, test_vals, PartialEq::eq).await
     }
 }

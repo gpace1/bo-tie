@@ -23,7 +23,9 @@ impl<const CHANNEL_SIZE: usize, C, T> LocalChannelSender<CHANNEL_SIZE, C, T>
 where
     C: Borrow<LocalChannel<CHANNEL_SIZE, T>>,
 {
-    pub(in crate::local_channel::local_stack) fn new(c: C) -> Self {
+    pub(super) fn new(c: C) -> Self {
+        c.borrow().sender_count.set(c.borrow().sender_count.get() + 1);
+
         Self(c, core::marker::PhantomData)
     }
 }

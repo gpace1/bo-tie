@@ -67,7 +67,7 @@
 //! [`DeLinearBuffer`]: bo_tie_util::buffer::stack::DeLinearBuffer
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 
 extern crate alloc;
 
@@ -1470,16 +1470,6 @@ pub enum TaskSource<H, C> {
 pub(crate) mod test {
     use super::*;
 
-    /// Creates a HciPacket where the packet_type is always `Command`
-    ///
-    /// This is used wherever the packet_type has no purpose in the test.
-    pub fn quick_packet<T>(data: T) -> HciPacket<T> {
-        HciPacket {
-            packet_type: HciPacketType::Command,
-            data,
-        }
-    }
-
     /// Test sending and receiving a set of values for a specific channel
     ///
     /// This test that
@@ -1491,25 +1481,24 @@ pub(crate) mod test {
     /// # Note
     /// If the internal channel buffer is limited in size, `test_vals` should be larger than that
     /// size.
-    pub async fn generic_send_and_receive<'a, P, C, S, R>(channel: &'a C, test_vals: &[P])
+    pub async fn channel_send_and_receive<P, C, I, S, R, F>(channel: C, tx_vals: I, expected_rx_vals: I, cmp: F)
     where
-        C: Channel<Sender<'a> = S, Receiver<'a> = R> + 'a,
-        S: Sender<Payload = P> + 'a,
-        R: Receiver<Payload = P> + 'a,
-        <<C as Channel>::Sender<'a> as Sender>::Error: Debug,
-        P: PartialEq + Debug + Clone,
+        C: Channel<Sender = S, Receiver = R>,
+        I: IntoIterator<Item = P>,
+        S: Sender<Message = P>,
+        R: Receiver<Message = P>,
+        <<C as Channel>::Sender as Sender>::Error: fmt::Debug,
+        F: Fn(&P, &P) -> bool,
     {
         use futures::FutureExt;
 
-        let mut sender = channel.get_to_sender();
-        let mut receiver = channel.get_to_receiver();
+        let mut sender = channel.get_sender();
+        let mut receiver = channel.take_receiver().unwrap();
 
         let mut send_task = Box::pin(
             async {
-                for val in test_vals.iter() {
-                    let to_send = quick_packet(val.clone());
-
-                    sender.send(to_send).await.unwrap();
+                for val in tx_vals {
+                    sender.send(val).await.unwrap();
                 }
             }
             .fuse(),
@@ -1517,10 +1506,10 @@ pub(crate) mod test {
 
         let mut recv_task = Box::pin(
             async {
-                for val in test_vals.iter() {
-                    let rx = receiver.recv().await.map(|packet| packet.data);
+                for val in expected_rx_vals {
+                    let rx = receiver.recv().await.map(|packet| packet).unwrap();
 
-                    assert_eq!(Some(val), rx.as_ref());
+                    assert!(cmp(&val, &rx), "channel input did not match channel output");
                 }
             }
             .fuse(),

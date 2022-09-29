@@ -3,7 +3,7 @@
 //! Buffers in this module are statically allocated. The size of the buffer must be known at
 //! compile time.
 
-use core::fmt::{Display, Formatter};
+use core::fmt::{Debug, Display, Formatter};
 use core::mem::{replace, transmute, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::ptr;
@@ -270,6 +270,15 @@ impl<T, const SIZE: usize> DeLinearBuffer<SIZE, T> {
             .for_each(|elem| unsafe { elem.assume_init_drop() });
 
         Ok(())
+    }
+}
+
+impl<const SIZE: usize, T> Debug for DeLinearBuffer<SIZE, T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        Debug::fmt(self.deref(), f)
     }
 }
 
@@ -921,6 +930,15 @@ impl<'a, T, const SIZE: usize> Reservation<'a, T, SIZE> {
     }
 }
 
+impl<T, const SIZE: usize> Debug for Reservation<'_, T, SIZE>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        Debug::fmt(self.deref(), f)
+    }
+}
+
 impl<T, const SIZE: usize> Clone for Reservation<'_, T, SIZE> {
     fn clone(&self) -> Self {
         let ur = self.ur.clone();
@@ -958,17 +976,17 @@ pub struct BufferReservation<'a, T, const SIZE: usize> {
 }
 
 impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
-    /// Create a new `ReservedBuffer`
+    /// Create a new `BufferReservation`
     ///
-    /// This creates a new `ReservedBuffer` from the provided `link` and `reserve`.
+    /// This creates a new `BufferReservation` from the provided `link` and `reserve`.
     ///
     /// `link` must be a reference to an element of `reserve.buffers`. Undefined behaviour will
     /// occur if this is not the case and this method is called.
     ///
     /// # Safety
     /// This method assumes that input `link` points to a location that is unique to this
-    /// `ReservedBuffer`. It is undefined behaviour if multiple `ReservedBuffer`s exist at the same
-    /// time containing the same `link`.
+    /// `BufferReservation`. It is undefined behaviour if multiple `BufferReservation`s exist at the
+    /// same time containing the same `link`.
     #[allow(unused_variables)]
     unsafe fn new(ur: UnsafeReservation<T, SIZE>, hotel: &'a StackHotel<T, SIZE>, front_capacity: usize) -> Self
     where
@@ -990,6 +1008,15 @@ impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
     /// Convert a `BufferReservation` into an `UnsafeBufferReservation`
     pub unsafe fn to_unsafe(this: Self) -> UnsafeBufferReservation<T, SIZE> {
         this.ubr
+    }
+}
+
+impl<T, const SIZE: usize> Debug for BufferReservation<'_, T, SIZE>
+where
+    T: Debug + Deref<Target = [u8]>,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        Debug::fmt(self.deref(), f)
     }
 }
 

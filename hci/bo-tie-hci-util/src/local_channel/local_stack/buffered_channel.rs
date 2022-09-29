@@ -367,3 +367,102 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> UnsafeReservedBuf
         ReservedBuffer { source, buffer }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test::*;
+    use crate::{FromConnectionIntraMessage, FromHostIntraMessage, ToConnectionIntraMessage};
+    use bo_tie_util::errors::Error;
+
+    macro_rules! dup {
+        ($to_dup:tt) => {
+            ($to_dup, $to_dup)
+        };
+    }
+
+    macro_rules! create_buffer {
+        ($channel:expr, $($vals:expr),* $(,)?) => {
+            {
+                let mut buffer = (&$channel).take(None).await;
+
+                buffer.try_extend([$($vals),*]).unwrap();
+
+                buffer
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn add_remove_from_connection() {
+        const CHANNEL_SIZE: usize = 20;
+        const BUFFER_SIZE: usize = 10;
+
+        let lbc: FromConnectionChannel<CHANNEL_SIZE, BUFFER_SIZE> = LocalBufferedChannel::new();
+
+        let (tx_vals, rx_vals) = dup!([
+            FromConnectionIntraMessage::Acl(create_buffer!(lbc, 108, 129, 23, 130, 32, 8, 221, 164, 255, 8)),
+            FromConnectionIntraMessage::Sco(create_buffer!(lbc, 52, 107, 46, 72, 130, 116, 93, 79, 87, 156)),
+            FromConnectionIntraMessage::Iso(create_buffer!(lbc, 79, 241, 161, 246, 47, 255, 66, 56, 163, 138)),
+            FromConnectionIntraMessage::Acl(create_buffer!(lbc, 230, 72, 41, 47, 198, 119, 19, 227, 69, 169)),
+            FromConnectionIntraMessage::Acl(create_buffer!(lbc, 208, 180, 111, 74, 54, 49, 157, 23, 18, 227)),
+            FromConnectionIntraMessage::Acl(create_buffer!(lbc, 181, 246, 210, 113, 97, 63, 218, 50, 134, 74)),
+            FromConnectionIntraMessage::Acl(create_buffer!(lbc, 246, 58, 74, 211, 73, 195, 130, 138, 213, 247)),
+            FromConnectionIntraMessage::Disconnect(Error::RemoteUserTerminatedConnection),
+        ]);
+
+        channel_send_and_receive(&lbc, tx_vals, rx_vals, |l, r| match (l, r) {
+            (FromConnectionIntraMessage::Acl(l), FromConnectionIntraMessage::Acl(r)) => l.deref() == r.deref(),
+            (FromConnectionIntraMessage::Sco(l), FromConnectionIntraMessage::Sco(r)) => l.deref() == r.deref(),
+            (FromConnectionIntraMessage::Iso(l), FromConnectionIntraMessage::Iso(r)) => l.deref() == r.deref(),
+            (FromConnectionIntraMessage::Disconnect(l), FromConnectionIntraMessage::Disconnect(r)) => l == r,
+            _ => false,
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_remove_from_host_host() {
+        const CHANNEL_SIZE: usize = 20;
+        const BUFFER_SIZE: usize = 10;
+
+        let lbc: FromHostChannel<CHANNEL_SIZE, BUFFER_SIZE> = LocalBufferedChannel::new();
+
+        let (tx_vals, rx_vals) = dup!([
+            FromHostIntraMessage::Command(create_buffer!(lbc, 105, 220, 84, 248, 217, 99, 255, 92, 142, 27)),
+            FromHostIntraMessage::Command(create_buffer!(lbc, 173, 60, 111, 10, 114, 186, 117, 247, 198, 81)),
+            FromHostIntraMessage::Command(create_buffer!(lbc, 185, 26, 10, 192, 70, 236, 61, 248, 198, 36)),
+        ]);
+
+        channel_send_and_receive(&lbc, tx_vals, rx_vals, |l, r| match (l, r) {
+            (FromHostIntraMessage::Command(l), FromHostIntraMessage::Command(r)) => l.deref() == r.deref(),
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn add_remove_to_connection() {
+        const CHANNEL_SIZE: usize = 20;
+        const BUFFER_SIZE: usize = 10;
+
+        let hotel = StackHotel::<_, 1>::new();
+
+        let lbc: Reservation<ToConnectionChannel<1, CHANNEL_SIZE, BUFFER_SIZE>, 1> =
+            hotel.take(LocalBufferedChannel::new()).unwrap();
+
+        let (tx_vals, rx_vals) = dup!([
+            ToConnectionIntraMessage::Acl(create_buffer!(lbc, 85, 21, 81, 12, 9, 117, 132, 156, 202, 4)),
+            ToConnectionIntraMessage::Sco(create_buffer!(lbc, 197, 26, 164, 139, 220, 176, 33, 30, 1, 75)),
+            ToConnectionIntraMessage::Iso(create_buffer!(lbc, 33, 207, 153, 191, 26, 18, 21, 63, 190, 211)),
+        ]);
+
+        channel_send_and_receive(lbc, tx_vals, rx_vals, |l, r| match (l, r) {
+            (ToConnectionIntraMessage::Acl(l), ToConnectionIntraMessage::Acl(r)) => l.deref() == r.deref(),
+            (ToConnectionIntraMessage::Sco(l), ToConnectionIntraMessage::Sco(r)) => l.deref() == r.deref(),
+            (ToConnectionIntraMessage::Iso(l), ToConnectionIntraMessage::Iso(r)) => l.deref() == r.deref(),
+            (ToConnectionIntraMessage::Disconnect(l), ToConnectionIntraMessage::Disconnect(r)) => l == r,
+            _ => false,
+        })
+        .await
+    }
+}

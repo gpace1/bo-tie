@@ -14,6 +14,7 @@ const BLU_DEV_LIST_DEFAULT_CNT: usize = 16;
 pub const HCI_CHANNEL_USER: i32 = 1; // User channel gives total control, but requires hci
 
 pub mod hci {
+    use bo_tie_util::BluetoothDeviceAddress;
 
     const HCI_RAW: usize = 6;
 
@@ -38,7 +39,7 @@ pub mod hci {
     /// function should be implemented to accept a const generic for the device count.
     pub fn get_dev_id<A>(device_address: A) -> Result<usize, nix::Error>
     where
-        A: Into<Option<bo_tie::BluetoothDeviceAddress>>,
+        A: Into<Option<BluetoothDeviceAddress>>,
     {
         use nix::libc;
         use std::os::raw::c_int;
@@ -80,7 +81,7 @@ pub mod hci {
 
                 match device_address_opt {
                     None => Some(<usize>::from(id)),
-                    Some(addr) if addr == dev_info.bdaddr => Some(<usize>::from(id)),
+                    Some(addr) if addr.0 == dev_info.bdaddr => Some(<usize>::from(id)),
                     _ => None,
                 }
             })
@@ -88,9 +89,9 @@ pub mod hci {
     }
 
     /// Send a command to the bluetooth controller
-    pub fn send_command<P>(dev: &crate::FileDescriptor, parameter: &P) -> nix::Result<usize>
+    pub fn send_command<P, const P_SIZE: usize>(dev: &crate::FileDescriptor, parameter: &P) -> nix::Result<usize>
     where
-        P: bo_tie::hci::CommandParameter,
+        P: bo_tie_hci_host::CommandParameter<P_SIZE>,
     {
         use nix::errno::Errno;
         use nix::Error;
@@ -99,7 +100,7 @@ pub mod hci {
 
         // Insert the packet indicator for linux (maybe for alerting the kernel to the hci packet
         // type or used for just UART communication).
-        let packet_indicator = bo_tie::hci_transport::uart::HciPacketIndicator::Command.val();
+        let packet_indicator = bo_tie_hci_interface::uart::HciPacketIndicator::Command.val();
 
         command_packet.insert(0, packet_indicator);
 
@@ -155,7 +156,7 @@ impl Default for hci_dev_list_req {
 pub struct hci_dev_info {
     dev_id: u16,
     name: [std::os::raw::c_char; 8],
-    bdaddr: bo_tie::BluetoothDeviceAddress,
+    bdaddr: [u8; 6],
     flags: u32,
     r#type: u8,
     features: [u8; 8],
