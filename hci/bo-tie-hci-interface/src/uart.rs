@@ -254,7 +254,7 @@ impl PacketIndicator {
     ///
     /// let mut packet = HciPacket::Event(buffer);
     ///
-    /// let raw_data = PacketIndicator::prepend(&mut packet);
+    /// let raw_data = PacketIndicator::prepend(&mut packet).expect("buffer cannot be extended at the front");
     ///
     /// // 4 is the packet indicator for an event
     /// assert_eq!(4, raw_data[0])
