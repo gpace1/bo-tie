@@ -900,13 +900,11 @@ where
     /// be sent.
     ///
     /// ```
-    /// use bo_tie_hci_interface::Interface;
-    /// use bo_tie_hci_util::HciPacketType;
-    /// # use bo_tie_hci_interface::InitHostTaskEnds;
+    /// # use bo_tie_hci_interface::Interface;
+    /// # use bo_tie_hci_util::HciPacketType;
+    /// # let (channel_reserve, _host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
+    /// # let mut interface = Interface::new(channel_reserve);
     /// # let doc_test = async {
-    /// # let mut interface = Interface::new_local(1);
-    /// # let _host_ends = interface.init_host_task_ends();
-    ///
     /// let mut buffered_send = interface.buffered_up_send(HciPacketType::Event);
     ///
     /// // Adding the bytes of an HCI Event packet
