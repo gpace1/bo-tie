@@ -312,7 +312,11 @@ impl<B: Unpin, T: Unpin> Channel for LocalBufferedChannel<B, T> {
     }
 
     fn take_receiver(&self) -> Option<Self::Receiver> {
-        Some(LocalChannelReceiver(self.clone()))
+        if self.borrow().receiver_exists {
+            None
+        } else {
+            Some(LocalChannelReceiver::new(self.clone()))
+        }
     }
 }
 
