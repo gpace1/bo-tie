@@ -526,7 +526,10 @@ macro_rules! events_markup {
                 let mut packet = data;
 
                 // packet[2] is the LeMeta specific sub event code if the event is LeMeta
-                let event_code = crate::events::$EnumName::try_from_event_codes(chew!(packet), packet[2])?;
+                let event_code = crate::events::$EnumName::try_from_event_codes(
+                    chew!(packet),
+                    packet.get(2).cloned().unwrap_or_default()
+                )?;
 
                 // Get the length of the packet and convert it into a usize
                 let event_len = chew!(packet).into();
