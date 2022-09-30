@@ -446,7 +446,8 @@ where
     /// returning a `Host`.
     ///
     /// # Error
-    /// If this returns an error then the information about the buffers cannot be acquired.
+    /// An error is returned if the channel ends that were created with input host `ends` were
+    /// dropped.
     pub async fn init(ends: H) -> Result<Self, CommandError<H>> {
         let mut host = Host {
             host_interface: ends,

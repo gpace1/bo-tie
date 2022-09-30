@@ -330,26 +330,26 @@ pub mod set_event_mask {
 
     /// Send the command
     ///
+    /// This will send the *Set Event Mask* command to the controller and await for the command
+    /// complete event from the controller. See the [module] level documentation for how events are
+    /// masked.
     /// ```
     /// # use bo_tie_hci_util::events::Events;
-    /// # mod set_event_mask_page_2 {
-    /// #     use bo_tie_hci_host::commands::cb::set_event_mask_page_2;
-    /// #     use bo_tie_hci_util::events::Events;
-    /// #     pub async fn send<H, E, I>(_h: H, _e: E)
-    /// #        where
-    /// #             E: Into<set_event_mask_page_2::EventMask<I>>,
-    /// #             I: Iterator<Item = Events>
-    /// #     {}
-    /// # }
-    /// # let host = ();
+    /// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
     /// # async {
-    ///     set_event_mask_page_2::send(host, [Events::DisconnectionComplete, Events::ConnectionComplete]).await
-    /// # }
+    /// # let mut host = bo_tie_hci_host::Host::init(host_ends).await?;
+    /// # use bo_tie_hci_host::commands;
+    /// use commands::cb::set_event_mask;
+    ///
+    /// set_event_mask::send(&mut host, [Events::ConnectionComplete, Events::DisconnectionComplete]).await
+    /// # };
     /// ```
     ///
     /// # Note
     /// If `events` only contains events that are not masked by this command, then the set event
     /// mask command is not sent to the Controller.
+    ///
+    /// [module]: self
     pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
         M: Into<EventMask<I>>,
@@ -732,29 +732,26 @@ pub mod set_event_mask_page_2 {
 
     /// Send the command
     ///
-    /// Function to send the *Set Event Mask Page 2* command to the Controller and await the command
-    /// response.
-    ///
+    /// This will send the *Set Event Mask* command to the controller and await for the command
+    /// complete event from the controller. See the [module] level documentation for how events are
+    /// masked.
     /// ```
     /// # use bo_tie_hci_util::events::Events;
-    /// # mod set_event_mask_page_2 {
-    /// #     use bo_tie_hci_host::commands::cb::set_event_mask_page_2;
-    /// #     use bo_tie_hci_util::events::Events;
-    /// #     pub async fn send<H, E, I>(_h: H, _e: E)
-    /// #        where
-    /// #             E: Into<set_event_mask_page_2::EventMask<I>>,
-    /// #             I: Iterator<Item = Events>
-    /// #     {}
-    /// # }
-    /// # let host = ();
+    /// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
     /// # async {
-    ///     set_event_mask_page_2::send(host, [Events::EncryptionChangeV2, Events::TriggeredClockCapture]).await
-    /// # }
+    /// # let mut host = bo_tie_hci_host::Host::init(host_ends).await?;
+    /// # use bo_tie_hci_host::commands;
+    /// use commands::cb::set_event_mask_page_2;
+    ///
+    /// set_event_mask_page_2::send(&mut host, [Events::EncryptionChangeV2]).await
+    /// # };
     /// ```
     ///
     /// # Note
-    /// This method will short-circuit if all the events within input `events` are **not** masked by
-    /// this command. Short-circuiting means `send` will not
+    /// If `events` only contains events that are not masked by this command, then the set event
+    /// mask command is not sent to the Controller.
+    ///
+    /// [module]: self
     pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
         M: Into<EventMask<I>>,

@@ -89,18 +89,18 @@ pub mod remote_connection_parameter_request_reply {
 ///
 /// ```
 /// # use bo_tie_util::errors::Error;
-/// # mod remote_connection_parameter_request_negative_reply {
-/// #     use bo_tie_hci_util::ConnectionHandle;
-/// #     use bo_tie_util::errors::Error;
-/// #     pub async fn send<H>(_h: H, _ch: ConnectionHandle, _r: Error) {}
-/// # }
-/// # let connection_handle = bo_tie_hci_util::ConnectionHandle::try_from(1).unwrap();
-/// # let host = ();
+/// # use bo_tie_hci_util::events::LeMeta;
+/// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
 /// # async {
+/// # let mut host = bo_tie_hci_host::Host::init(host_ends).await?;
+/// # let connection_handle = bo_tie_hci_util::ConnectionHandle::try_from(1).unwrap();
+/// # use bo_tie_hci_host::commands;
+/// use commands::le::remote_connection_parameter_request_negative_reply;
+///
 /// let reason = Error::UnacceptableConnectionParameters;
 ///
-/// remote_connection_parameter_request_negative_reply::send(host, connection_handle, reason).await?;
-/// # }
+/// remote_connection_parameter_request_negative_reply::send(&mut host, connection_handle, reason).await
+/// # };
 /// ```
 /// # Note
 /// If the value of input `reason` of method [`send`] is either [`NoError`] or [`MissingErrorCode`],

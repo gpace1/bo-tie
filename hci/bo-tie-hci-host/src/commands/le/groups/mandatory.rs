@@ -5,30 +5,11 @@
 //!
 //! Vol2 Part E 3.1 of the Bluetooth spec
 
-/// Set the [`LeMeta`](bo_tie_hci_util::events::LeMeta) event mask
+/// Set the event mask for LE events
 ///
-/// LE events are unmasked by passing a list of LE events to the controller via the LE set event
-/// mask command. The method [`send`] takes the list of LE events and converts them into the command
+/// LE events are unmasked by passing a list of LE events to the controller via the LE Set Event
+/// Mask command. The method [`send`] takes the list of LE events and converts them into the command
 /// that is sent to the controller.
-///
-/// ```
-/// # mod le {
-/// # pub mod set_event_mask {
-/// #     use bo_tie_hci_host::commands::cb::set_event_mask_page_2;
-/// #     use bo_tie_hci_util::events::Events;
-/// #     pub async fn send<H, E, I>(_h: H, _e: E)
-/// #        where
-/// #             E: Into<set_event_mask_page_2::EventMask<I>>,
-/// #             I: Iterator<Item = Events>
-/// #     {}
-/// # }
-/// # }
-/// # use bo_tie_hci_util::events::LeMeta;
-/// # let host = ();
-/// # async {
-///     le::set_event_mask::send(host, [LeMeta::ConnectionComplete, LeMeta::LongTermKeyRequest]).await
-/// # }
-/// ```
 ///
 /// # Note
 /// There is a global mask for LE events unmasked by the set event mask command within the
@@ -241,24 +222,21 @@ pub mod set_event_mask {
 
     /// Send the command
     ///
+    /// This will send the *LE Set Event Mask* command to the controller and await the command
+    /// response. See the [module] level documentation for how events are masked.
     /// ```
-    /// # mod le {
-    /// # pub mod set_event_mask {
-    /// #     use bo_tie_hci_host::commands::cb::set_event_mask_page_2;
-    /// #     use bo_tie_hci_util::events::Events;
-    /// #     pub async fn send<H, E, I>(_h: H, _e: E)
-    /// #        where
-    /// #             E: Into<set_event_mask_page_2::EventMask<I>>,
-    /// #             I: Iterator<Item = Events>
-    /// #     {}
-    /// # }
-    /// # }
     /// # use bo_tie_hci_util::events::LeMeta;
-    /// # let host = ();
+    /// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
     /// # async {
-    ///     le::set_event_mask::send(host, [LeMeta::ConnectionComplete, LeMeta::LongTermKeyRequest]).await
-    /// # }
+    /// # let mut host = bo_tie_hci_host::Host::init(host_ends).await?;
+    /// # use bo_tie_hci_host::commands;
+    /// use commands::le::set_event_mask;
+    ///
+    /// set_event_mask::send(&mut host, [LeMeta::ConnectionComplete, LeMeta::LongTermKeyRequest]).await
+    /// # };
     /// ```
+    ///
+    /// [module]: self
     pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
         M: Into<EventMask<I>>,
