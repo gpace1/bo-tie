@@ -5,13 +5,14 @@
 //! supported. `buffer` contains traits for supporting the 'filling' and 'emptying' of a type of
 //! buffer.
 //!
+use core::fmt::{Debug, Display};
 use core::ops::DerefMut;
 
 #[cfg(feature = "alloc")]
 pub mod de_vec;
 pub mod stack;
 
-/// A buffer
+/// The Buffer type
 ///
 /// Buffers within the HCI are used for passing between the various protocols on the Bluetooth
 /// stack. A type that implements `Buffer` must act like a double ended vector, although with finite
@@ -91,7 +92,7 @@ impl<T> BufferExt for T where T: Buffer {}
 /// `TryExtend` is auto-implemented for anything that already implements
 /// [`Extend`](core::iter::Extend)
 pub trait TryExtend<A> {
-    type Error;
+    type Error: Debug + Display;
 
     fn try_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
     where
@@ -122,7 +123,7 @@ where
 ///
 /// This trait is used to remove items from the end of the collection and return them.
 pub trait TryRemove<A> {
-    type Error;
+    type Error: Debug + Display;
     type RemoveIter<'a>: Iterator<Item = A>
     where
         Self: 'a;
@@ -136,7 +137,7 @@ pub trait TryRemove<A> {
 
 /// Try to extend the front of a collection with an iterator
 pub trait TryFrontExtend<A> {
-    type Error;
+    type Error: Debug + Display;
 
     /// Try to extend the collection by the iterator `iter`
     ///
@@ -175,7 +176,7 @@ pub trait TryFrontExtend<A> {
 /// collection to implement this trait it must have a capacity at the front. Removing items from the
 /// front must also increase this capacity.
 pub trait TryFrontRemove<A> {
-    type Error;
+    type Error: Debug + Display;
     type FrontRemoveIter<'a>: Iterator<Item = A>
     where
         Self: 'a;
@@ -241,7 +242,7 @@ pub enum BufferError {
     FrontReserveSize,
 }
 
-impl core::fmt::Display for BufferError {
+impl Display for BufferError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             BufferError::LengthOfBuffer => f.write_str("buffer is too small"),
