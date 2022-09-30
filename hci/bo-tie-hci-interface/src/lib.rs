@@ -175,47 +175,76 @@ where
     /// use bo_tie_hci_util::{HciPacketType};
     /// use bo_tie_hci_interface::{Interface, SendError};
     ///
-    /// # use bo_tie_hci_interface::InitHostTaskEnds;
     /// # let doc_test = async {
-    /// # let mut interface = Interface::new_local(1);
-    /// # let _host_ends = interface.init_host_task_ends();
+    /// # use bo_tie_hci_util::local_channel::local_dynamic::*;
+    /// # let (channel_reserve, _host_ends) = LocalChannelReserveBuilder::new().build();
+    /// let mut interface = Interface::new(channel_reserve);
     ///
-    /// // This is two HCI ACL data packets with
-    /// // a part of a third ACL data packet.
+    /// // A connection event followed by two
+    /// // HCI ACL data packets and part of a
+    /// // third ACL data packet.
     /// let data: &[u8] = &[
-    ///     0x1, 0x0, 0x3, 0x0, 0xa, 0xb, 0xc, // first packet
-    ///     0x1, 0x0, 0x2, 0x0, 0x10, 0x11,    // second packet
-    ///     0x1, 0x0, 0x2,                     // part of the third packet
+    ///     // connection event
+    ///     0x3, 0xB, 0x0, 0x1, 0x0, 0x31, 0xF2, 0xac, 0x4a, 0x19, 0xb3, 0x1, 0x0,
+    ///
+    ///     // first data packet
+    ///     0x1, 0x0, 0x3, 0x0, 0xa, 0xb, 0xc,
+    ///
+    ///     // second data packet
+    ///     0x1, 0x0, 0x2, 0x0, 0x10, 0x11,    
+    ///
+    ///     // part of the third data packet
+    ///     0x1, 0x0, 0x2,                     
     /// ];
     ///
-    /// let mut buffer_send_1 = interface.buffered_up_send(HciPacketType::Acl);
+    /// let mut buffer_send_1 = interface.buffered_up_send(HciPacketType::Event);
     ///
-    /// assert!(!buffer_send_1.add(data[0]).await.unwrap());
-    /// assert!(!buffer_send_1.add(data[1]).await.unwrap());
-    /// assert!(!buffer_send_1.add(data[2]).await.unwrap());
-    /// assert!(!buffer_send_1.add(data[3]).await.unwrap());
-    /// assert!(!buffer_send_1.add(data[4]).await.unwrap());
-    /// assert!(!buffer_send_1.add(data[5]).await.unwrap());
-    /// assert!( buffer_send_1.add(data[6]).await.unwrap());
+    /// let first_packet_size = buffer_send_1.add_bytes(data.iter().copied()).await.unwrap().unwrap();
+    ///
+    /// assert_eq!(first_packet_size, 13);
     ///
     /// buffer_send_1.up_send().await.unwrap();
     ///
-    /// let mut buffer_send_2 = interface.buffered_up_send(HciPacketType::Acl);
+    /// let buffer_send_2 = interface.buffered_up_send(HciPacketType::Acl);
     ///
-    /// assert!(buffer_send_2.add_bytes(data[7..].iter().copied()).await.unwrap());
+    /// assert!(!buffer_send_2.add(data[first_packet_size + 0]).await.unwrap());
+    /// assert!(!buffer_send_2.add(data[first_packet_size + 1]).await.unwrap());
+    /// assert!(!buffer_send_2.add(data[first_packet_size + 2]).await.unwrap());
+    /// assert!(!buffer_send_2.add(data[first_packet_size + 3]).await.unwrap());
+    /// assert!(!buffer_send_2.add(data[first_packet_size + 4]).await.unwrap());
+    /// assert!(!buffer_send_2.add(data[first_packet_size + 5]).await.unwrap());
+    /// assert!(buffer_send_2.add(data[first_packet_size + 6]).await.unwrap());
     ///
     /// buffer_send_2.up_send().await.unwrap();
     ///
     /// let mut buffer_send_3 = interface.buffered_up_send(HciPacketType::Acl);
     ///
-    /// // `add_bytes` returns false because the third packet is incomplete
-    /// assert!(!buffer_send_3.add_bytes(data[13..].iter().copied()).await.unwrap());
+    /// let second_data_start = first_packet_size + 7;
     ///
-    /// assert!(!buffer_send_3.is_ready());
+    /// assert!(buffer_send_3
+    ///     .add_bytes(data[second_data_start..].iter().copied())
+    ///     .await
+    ///     .unwrap()
+    ///     .is_some());
+    ///
+    /// buffer_send_3.up_send().await.unwrap();
+    ///
+    /// let mut buffer_send_4 = interface.buffered_up_send(HciPacketType::Acl);
+    ///
+    /// let third_data_start = second_data_start + 6;
+    ///
+    /// // `add_bytes` returns false because the third packet is incomplete
+    /// assert!(buffer_send_4
+    ///     .add_bytes(data[third_data_start..].iter().copied())
+    ///     .await
+    ///     .unwrap()
+    ///     .is_none());
+    ///
+    /// assert!(!buffer_send_4.is_ready());
     ///
     /// // This produces an error as method up_send can only be called
     /// // when a `BufferedUpSend` contains a complete HCI packet.
-    /// assert!(buffer_send_3.up_send().await.is_err())
+    /// assert!(buffer_send_4.up_send().await.is_err())
     /// # };
     /// # tokio_test::block_on(doc_test);
     /// ```
@@ -606,7 +635,7 @@ where
                 if let FromInterface::HostGeneral(mut sender) = self
                     .channel_reserve
                     .borrow()
-                    .get_sender(TaskId::Host(HostChannel::Command))
+                    .get_sender(TaskId::Host(HostChannel::General))
                     .ok_or(SendError::<R>::HostClosed)?
                 {
                     sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
@@ -894,7 +923,12 @@ where
     /// # Error
     /// An error is returned if this `BufferedUpSend` already has a complete HCI Packet.
     pub async fn add(&self, byte: u8) -> Result<bool, SendError<R>> {
-        let buffer_len = self.buffer.borrow().as_ref().unwrap().len();
+        let buffer_len = self
+            .buffer
+            .borrow()
+            .as_ref()
+            .map(|buffer| buffer.len())
+            .unwrap_or_default();
 
         match self.packet_len.get() {
             None => {
@@ -918,15 +952,21 @@ where
     /// complete HCI Packet is formed within this `BufferedUpSend`.
     ///
     /// # Return
-    /// `true` is returned if the this `BufferedUpSend` contains a complete HCI Packet.
-    pub async fn add_bytes<I: IntoIterator<Item = u8>>(&mut self, iter: I) -> Result<bool, SendError<R>> {
-        for i in iter {
+    /// If the buffered packet is complete, the return is the number of items taken from the
+    /// iterator. If the return is `None` then `iter` was fully iterated over, but this
+    /// `BufferedUpSender` contains an incomplete HCI packet.
+    ///
+    /// # Error
+    /// An error is returned if this method was called and a this already contains a complete HCI
+    /// packet.
+    pub async fn add_bytes<I: IntoIterator<Item = u8>>(&mut self, iter: I) -> Result<Option<usize>, SendError<R>> {
+        for (cnt, i) in iter.into_iter().enumerate() {
             if self.add(i).await? {
-                return Ok(true);
+                return Ok(Some(cnt + 1));
             }
         }
 
-        Ok(false)
+        Ok(None)
     }
 
     /// Check if a complete HCI packet is stored and ready to be sent
@@ -1109,5 +1149,110 @@ mod buffered_send {
         } else {
             Err(SendError::<R>::InvalidChannel)
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    macro_rules! interface_test {
+        ($interface:ident) => {
+            async {
+                use bo_tie_hci_util::HciPacketType;
+
+                // connection event, followed by 2 complete acl
+                // data packets and one incomplete acl data packet
+                let data: &[u8] = &[
+                    0x3, 0xB, 0x0, 0x1, 0x0, 0x31, 0xF2, 0xac, 0x4a, 0x19, 0xb3, 0x1, 0x0, 0x1, 0x0, 0x3, 0x0, 0xa,
+                    0xb, 0xc, 0x1, 0x0, 0x2, 0x0, 0x10, 0x11, 0x1, 0x0, 0x2,
+                ];
+
+                let mut buffer_send_1 = $interface.buffered_up_send(HciPacketType::Event);
+
+                let first_packet_size = buffer_send_1
+                    .add_bytes(data.iter().copied())
+                    .await
+                    .unwrap()
+                    .unwrap();
+
+                assert_eq!(first_packet_size, 13);
+
+                buffer_send_1.up_send().await.unwrap();
+
+                let buffer_send_2 = $interface.buffered_up_send(HciPacketType::Acl);
+
+                assert!(!buffer_send_2.add(data[first_packet_size + 0]).await.unwrap());
+                assert!(!buffer_send_2.add(data[first_packet_size + 1]).await.unwrap());
+                assert!(!buffer_send_2.add(data[first_packet_size + 2]).await.unwrap());
+                assert!(!buffer_send_2.add(data[first_packet_size + 3]).await.unwrap());
+                assert!(!buffer_send_2.add(data[first_packet_size + 4]).await.unwrap());
+                assert!(!buffer_send_2.add(data[first_packet_size + 5]).await.unwrap());
+                assert!(buffer_send_2.add(data[first_packet_size + 6]).await.unwrap());
+
+                buffer_send_2.up_send().await.unwrap();
+
+                let mut buffer_send_3 = $interface.buffered_up_send(HciPacketType::Acl);
+
+                let second_data_start = first_packet_size + 7;
+
+                assert!(buffer_send_3
+                    .add_bytes(data[second_data_start..].iter().copied())
+                    .await
+                    .unwrap()
+                    .is_some());
+
+                buffer_send_3.up_send().await.unwrap();
+
+                let mut buffer_send_4 = $interface.buffered_up_send(HciPacketType::Acl);
+
+                let third_data_start = second_data_start + 6;
+
+                // `add_bytes` returns false because the third packet is incomplete
+                assert!(buffer_send_4
+                    .add_bytes(data[third_data_start..].iter().copied())
+                    .await
+                    .unwrap()
+                    .is_none());
+
+                assert!(!buffer_send_4.is_ready());
+
+                // This produces an error as method up_send can only be called
+                // when a `BufferedUpSend` contains a complete HCI packet.
+                assert!(buffer_send_4.up_send().await.is_err())
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn local_dynamic_interface_test() {
+        use bo_tie_hci_util::local_channel::local_dynamic::*;
+
+        let (channel_reserve, _host_ends) = LocalChannelReserveBuilder::new().build();
+        let mut interface = Interface::new(channel_reserve);
+
+        interface_test!(interface).await
+    }
+
+    #[tokio::test]
+    async fn channel_interface_test() {
+        use bo_tie_hci_util::channel::tokio_unbounded;
+
+        let (channel_reserve, _host_ends) = tokio_unbounded();
+        let mut interface = Interface::new(channel_reserve);
+
+        interface_test!(interface).await
+    }
+
+    #[cfg(feature = "unstable")]
+    #[tokio::test]
+    async fn local_stack_interface_test() {
+        use bo_tie_hci_util::local_channel::local_stack::*;
+
+        let channel_reserve_data = LocalStackChannelReserveData::<3, 10, 50>::new();
+        let (channel_reserve, _host_ends) = LocalStackChannelReserve::new(&channel_reserve_data);
+        let mut interface = Interface::new(channel_reserve);
+
+        interface_test!(interface).await
     }
 }

@@ -7,6 +7,11 @@ edition = "2021"
 bo-tie-hci-util = { path = "../bo-tie-hci-util" }
 bo-tie-util = { path = "../../bo-tie-util"}
 
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "sync"]}
+tokio-test = "0.4"
+bo-tie-hci-util = { path = "../bo-tie-hci-util", features = ["tokio"]}
+
 [features]
-std = []
+std = ["bo-tie-hci-util/std", "bo-tie-util/std"]
 unstable = ["bo-tie-hci-util/unstable"]
