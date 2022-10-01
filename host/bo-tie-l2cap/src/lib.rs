@@ -372,7 +372,7 @@ impl<T> BasicInfoFrame<T> {
     /// * The channel id field must be valid
     pub fn try_from_slice(data: &[u8]) -> Result<Self, BasicFrameError<<T as TryExtend<u8>>::Error>>
     where
-        T: core::ops::Deref<Target = [u8]> + Extend<u8> + Default,
+        T: core::ops::Deref<Target = [u8]> + TryExtend<u8> + Default,
     {
         Self::try_from_slice_with_buffer(data, Default::default())
     }
