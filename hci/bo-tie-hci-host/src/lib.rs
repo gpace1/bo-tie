@@ -730,9 +730,11 @@ where
     }
 }
 
-/// The next item
+/// The type returned by method [`next`] of `Host`
 ///
 /// The next item from the interface async task is either an event or a new connection.
+///
+/// [`next`]: Host::next
 #[derive(Debug)]
 pub enum Next<C: ConnectionChannelEnds> {
     Event(events::EventsData),

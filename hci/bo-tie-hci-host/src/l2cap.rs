@@ -330,7 +330,7 @@ impl<'a, C> Future for ConnectionChannelSender<'a, C>
 where
     C: ConnectionChannelEnds,
 {
-    type Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>;
+    type Output = Result<(), bo_tie_l2cap::send_future::Error<<C::Sender as bo_tie_hci_util::Sender>::Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         unsafe { self.map_unchecked_mut(|this| &mut this.sliced_future) }.poll(cx)

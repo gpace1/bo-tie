@@ -580,7 +580,7 @@ pub trait ConnectionChannel {
     /// Sending future
     ///
     /// This is the future returned by [`send`](ConnectionChannel::send).
-    type SendFut<'a>: Future<Output = Result<(), Self::SendFutErr>>
+    type SendFut<'a>: Future<Output = Result<(), send_future::Error<Self::SendFutErr>>>
     where
         Self: 'a;
 
