@@ -716,6 +716,8 @@ where
     length: Option<usize>,
 }
 
+unsafe impl<C> Send for ConChanFutureRx<'_, C> where C: ?Sized + ConnectionChannel {}
+
 impl<'a, C> ConChanFutureRx<'a, C>
 where
     C: ?Sized + ConnectionChannel,
