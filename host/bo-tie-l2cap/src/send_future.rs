@@ -26,9 +26,9 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
     {
         let byte_count = 0;
 
-        let len: u16 = frame.payload.len().try_into().expect("Couldn't convert into u16");
+        let len: Result<u16, _> = frame.payload.len().try_into();
 
-        let len = len.to_le_bytes();
+        let len = len.map(|val| val.to_le_bytes());
 
         let channel_id = frame.channel_id.to_val().to_le_bytes();
 
@@ -38,8 +38,17 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
 
         let first = iter.next().unwrap();
 
-        // The first state is to acquire the first buffer from the buffer iter.
-        let state = State::AcquireBuffer(first, 0, State::length);
+        let (len, state) = match len {
+            Ok(val) => {
+                // The first state is to acquire the first buffer from the buffer iter.
+
+                (val, State::AcquireBuffer(first, 0, State::length))
+            }
+            Err(_) => {
+                // length is larger than the maximum of a u16
+                ([0; 2], State::DataTooLarge)
+            }
+        };
 
         Self {
             mtu,
@@ -75,7 +84,7 @@ where
     F: Future<Output = C>,
     C: crate::TryExtend<u8> + core::future::IntoFuture<Output = Result<(), E>>,
 {
-    type Output = Result<(), E>;
+    type Output = Result<(), Error<E>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // No generics except for F and C are moved. Using `get_unchecked_mut`
@@ -86,6 +95,7 @@ where
 
         loop {
             match &mut this.state {
+                State::DataTooLarge => return Poll::Ready(Err(Error::DataTooLarge)),
                 State::AcquireBuffer(future, index, to_next) => match unsafe { Pin::new_unchecked(future) }.poll(cx) {
                     Poll::Ready(current) => this.state = to_next(current, *index),
                     Poll::Pending => break Poll::Pending,
@@ -164,6 +174,7 @@ where
 }
 
 enum State<C, F, S> {
+    DataTooLarge,
     AcquireBuffer(F, usize, fn(C, usize) -> Self),
     FinishCurrent(S, usize, fn(C, usize) -> Self),
     Length(C, usize),
@@ -203,3 +214,42 @@ impl<C, F, S> State<C, F, S> {
         Self::Data(current, index)
     }
 }
+
+/// Send future error
+pub enum Error<E> {
+    DataTooLarge,
+    User(E),
+}
+
+impl<E> From<E> for Error<E> {
+    fn from(e: E) -> Self {
+        Error::User(e)
+    }
+}
+
+impl<E: core::fmt::Debug> core::fmt::Debug for Error<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Error::DataTooLarge => f.write_str(
+                "data cannot fit within a L2CAP basic info \
+                frame, it must be fragmented by a higher protocol",
+            ),
+            Error::User(e) => core::fmt::Debug::fmt(e, f),
+        }
+    }
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for Error<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Error::DataTooLarge => f.write_str(
+                "data cannot fit within a L2CAP basic info \
+                frame, it must be fragmented by a higher protocol",
+            ),
+            Error::User(e) => core::fmt::Display::fmt(e, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E: std::error::Error> std::error::Error for Error<E> {}

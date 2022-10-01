@@ -7,6 +7,7 @@ edition = "2021"
 bo-tie-util = { path = "../../bo-tie-util" }
 
 [features]
+std = []
 unstable = []
 
 [package.metadata.docs.rs]

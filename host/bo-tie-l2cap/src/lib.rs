@@ -6,7 +6,7 @@
 //! layer), and connected devices.
 //!    
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 extern crate alloc;
@@ -337,6 +337,27 @@ impl<T> BasicInfoFrame<T> {
         &self.payload
     }
 
+    /// Try to create a complete L2CAP Basic Info Frame
+    ///
+    /// The return is a complete L2CAP basic info frame packet contained within the type `P`.
+    pub fn try_into_packet<P>(self) -> Result<P, IntoPacketError<P::Error>>
+    where
+        T: core::ops::Deref<Target = [u8]>,
+        P: TryExtend<u8> + Default,
+    {
+        let mut p = P::default();
+
+        let len = <u16>::try_from(self.payload.len()).map_err(|_| IntoPacketError::TryFromU16Error)?;
+
+        p.try_extend(len.to_le_bytes())?;
+
+        p.try_extend(self.channel_id.to_val().to_le_bytes())?;
+
+        p.try_extend(self.payload.iter().copied())?;
+
+        Ok(p)
+    }
+
     /// Fragment a `BasicInfoFrame` data packet using multiple buffers
     ///
     /// This fragments a `BasicInfoFrame` packet into multiple buffers output by `fut_buffers_iter`.
@@ -420,6 +441,17 @@ impl<T> BasicInfoFrame<T> {
     }
 }
 
+impl<'a, T> TryFrom<&'a [u8]> for BasicInfoFrame<T>
+where
+    T: core::ops::Deref<Target = [u8]> + TryExtend<u8> + Default,
+{
+    type Error = BasicFrameError<<T as TryExtend<u8>>::Error>;
+
+    fn try_from(slice: &'a [u8]) -> Result<Self, Self::Error> {
+        Self::try_from_slice(slice)
+    }
+}
+
 impl<T> From<BasicInfoFrame<T>> for Vec<u8>
 where
     T: core::ops::Deref<Target = [u8]>,
@@ -434,6 +466,45 @@ where
         v.extend_from_slice(&frame.payload);
 
         v
+    }
+}
+
+/// Error for method [`try_into_packet`] of BasicInfoFrame
+pub enum IntoPacketError<E> {
+    TryFromU16Error,
+    TryExtendError(E),
+}
+
+impl<E: core::fmt::Debug> core::fmt::Debug for IntoPacketError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            IntoPacketError::TryFromU16Error => f.write_str(
+                "data cannot fit within a L2CAP basic info \
+                frame, it must be fragmented by a higher protocol",
+            ),
+            IntoPacketError::TryExtendError(e) => core::fmt::Debug::fmt(e, f),
+        }
+    }
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for IntoPacketError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            IntoPacketError::TryFromU16Error => f.write_str(
+                "data cannot fit within a L2CAP basic info \
+                frame, it must be fragmented by a higher protocol",
+            ),
+            IntoPacketError::TryExtendError(e) => core::fmt::Display::fmt(e, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E: std::error::Error> std::error::Error for IntoPacketError<E> {}
+
+impl<E> From<E> for IntoPacketError<E> {
+    fn from(e: E) -> Self {
+        IntoPacketError::TryExtendError(e)
     }
 }
 
