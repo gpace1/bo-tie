@@ -142,7 +142,7 @@ impl LeConnectClient {
     /// (less than or equal to `mtu`) is assigned to the connection. If `max_mtu` is `None`, then
     /// the smallest MTU for the channel is used as the maximum MTU. This MTU size will depend on if
     /// the channel is for LE or BR/EDR.
-    pub async fn initiate<C, M>(mtu: M, connection_channel: &C) -> Result<LeConnectClient, super::Error>
+    pub async fn initiate<C, M>(connection_channel: &C, mtu: M) -> Result<LeConnectClient, super::Error>
     where
         C: ConnectionChannel,
         M: Into<Option<u16>>,

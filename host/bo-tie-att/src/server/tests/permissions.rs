@@ -1,7 +1,6 @@
 //! Tests of permissions checks of the attribute server
 
-use super::DummyConnection;
-use crate::{server::*, UUID, *};
+use crate::{server::*, Uuid, *};
 use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
@@ -94,7 +93,7 @@ fn add_permission_set(rng: Arc<Mutex<tinymt::TinyMT64>>, chance_max: usize) -> b
     use rand::Rng;
 
     if chance_max != 0 {
-        0 == rng.lock().unwrap().gen_range(0, chance_max)
+        0 == rng.lock().unwrap().gen_range(0..chance_max)
     } else {
         true
     }
@@ -131,11 +130,11 @@ fn do_recursion_branch(
         // boost numbers by 100_000 for resolution in the random number generation
         let max = (v * 100_000f64) as usize;
 
-        100_000 < rng.lock().unwrap().gen_range(0, max)
+        100_000 < rng.lock().unwrap().gen_range(0..max)
     } else if v >= (u64::MAX as f64) {
         true
     } else {
-        0 != rng.lock().unwrap().gen_range(0, v as u64)
+        0 != rng.lock().unwrap().gen_range(0..v as u64)
     }
 }
 
@@ -316,12 +315,12 @@ fn check_permissions_entropy_test() {
         let mut server_attributes = ServerAttributes::default();
 
         all_tested_permission_permutations.iter().for_each(|permissions| {
-            let attribute = Attribute::new(UUID::from(1u16), permissions.to_vec(), ());
+            let attribute = Attribute::new(Uuid::from(1u16), permissions.to_vec(), ());
 
             server_attributes.push(attribute);
         });
 
-        let mut server = Server::new(&DummyConnection, server_attributes, NoQueuedWrites);
+        let mut server = Server::new(server_attributes, NoQueuedWrites);
 
         server.revoke_permissions_of_client(all_permissions.as_ref());
 

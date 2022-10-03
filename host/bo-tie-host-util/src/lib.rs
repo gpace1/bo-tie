@@ -4,7 +4,7 @@
 //! for the other host protocol crates within `host`. Generally things within this lib are
 //! re-exported by the crate using them.
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 /// Universally Unique Identifier

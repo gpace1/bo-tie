@@ -6,12 +6,16 @@ mod permissions;
 
 use crate::server::PinnedFuture;
 use crate::{pdu, TransferFormatInto};
+use alloc::vec::Vec;
+use bo_tie_l2cap::send_future::Error;
+use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ConnectionChannel, L2capFragment, MinimumMtu};
+use bo_tie_util::buffer::de_vec::DeVec;
+use bo_tie_util::buffer::TryExtend;
 use core::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
-use l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment, MinimumMtu};
 
 /// A false connection.
 ///
@@ -22,65 +26,80 @@ struct DummyConnection;
 struct DummySendFut;
 
 impl Future for DummySendFut {
-    type Output = Result<(), ()>;
+    type Output = Result<(), Error<()>>;
 
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(Ok(()))
     }
 }
 
-impl ConnectionChannel for DummyConnection {
-    type SendFut = DummySendFut;
-    type SendFutErr = ();
+struct DummyRecvFut;
 
-    fn send(&self, _: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
+impl Future for DummyRecvFut {
+    type Output = Option<Result<L2capFragment<DeVec<u8>>, BasicFrameError<<DeVec<u8> as TryExtend<u8>>::Error>>>;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        panic!("DummyRecvFut cannot receive")
+    }
+}
+
+impl ConnectionChannel for DummyConnection {
+    type SendBuffer = DeVec<u8>;
+    type SendFut<'a> = DummySendFut;
+    type SendFutErr = ();
+    type RecvBuffer = DeVec<u8>;
+    type RecvFut<'a> = DummyRecvFut;
+
+    fn send(&self, _: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
         DummySendFut
     }
 
-    fn set_mtu(&self, _: u16) {
+    fn set_mtu(&mut self, _: u16) {
         unimplemented!()
     }
 
     fn get_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
     fn max_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
     fn min_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<L2capFragment>> {
-        Some(Vec::new())
+    fn receive(&mut self) -> Self::RecvFut<'_> {
+        DummyRecvFut
     }
 }
 
 #[derive(Clone)]
-struct AMutex<D>(std::sync::Arc<futures::lock::Mutex<D>>);
+struct AMutex<D>(std::sync::Arc<tokio::sync::Mutex<D>>);
 
 impl<D> From<D> for AMutex<D> {
     fn from(data: D) -> Self {
-        AMutex(std::sync::Arc::new(futures::lock::Mutex::new(data)))
+        AMutex(std::sync::Arc::new(tokio::sync::Mutex::new(data)))
     }
 }
 
 impl<D> super::ServerAttributeValue for AMutex<D>
 where
-    D: std::cmp::PartialEq,
+    D: std::cmp::PartialEq + Send + Sync,
 {
     type Value = D;
 
     fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
     where
-        F: FnOnce(&Self::Value) -> T + Unpin + 'a,
+        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync + 'a,
     {
-        Box::pin(async move { f(&*self.0.lock().await) })
+        let mutex = self.0.clone();
+
+        Box::pin(async move { f(&*mutex.lock().await) })
     }
 
-    fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_, ()> {
+    fn write_val(self: &mut Self, val: Self::Value) -> PinnedFuture<'_, ()> {
         Box::pin(async move { *self.0.lock().await = val })
     }
 
@@ -96,16 +115,19 @@ struct PayloadConnection {
 }
 
 impl ConnectionChannel for PayloadConnection {
-    type SendFut = DummySendFut;
+    type SendBuffer = DeVec<u8>;
+    type SendFut<'a> = DummySendFut;
     type SendFutErr = ();
+    type RecvBuffer = DeVec<u8>;
+    type RecvFut<'a> = DummyRecvFut;
 
-    fn send(&self, data: BasicInfoFrame) -> Self::SendFut {
+    fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
         self.sent.set(data.get_payload().to_vec());
 
         DummySendFut
     }
 
-    fn set_mtu(&self, _: u16) {
+    fn set_mtu(&mut self, _: u16) {
         unimplemented!()
     }
 
@@ -121,11 +143,11 @@ impl ConnectionChannel for PayloadConnection {
         crate::l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<L2capFragment>> {
-        unimplemented!("Pdu Connection does not permit receiving")
+    fn receive(&mut self) -> Self::RecvFut<'_> {
+        DummyRecvFut
     }
 }
 
-fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D>) -> BasicInfoFrame {
+fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D>) -> BasicInfoFrame<Vec<u8>> {
     BasicInfoFrame::new(TransferFormatInto::into(&pdu), crate::L2CAP_CHANNEL_ID)
 }

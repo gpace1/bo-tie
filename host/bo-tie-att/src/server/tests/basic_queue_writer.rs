@@ -6,22 +6,21 @@ use crate::{
     server::{BasicQueuedWriter, Server, ServerAttributes},
     TransferFormatTryFrom,
 };
-use l2cap::{BasicInfoFrame, ConnectionChannel};
+use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel};
 
-#[test]
-fn prepare_write_with_exec_test() {
+#[tokio::test]
+async fn prepare_write_with_exec_test() {
     use pdu::ExecuteWriteFlag::WriteAllPreparedWrites;
 
     use crate::{Attribute, FULL_WRITE_PERMISSIONS};
-    use futures::executor::block_on;
 
-    let cc = PayloadConnection::default();
+    let mut cc = PayloadConnection::default();
 
     let sa = ServerAttributes::default();
 
     let queued_writer = BasicQueuedWriter::new(2048);
 
-    let mut server = Server::new(&cc, sa, queued_writer);
+    let mut server = Server::new(sa, queued_writer);
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
@@ -42,7 +41,7 @@ fn prepare_write_with_exec_test() {
 
     let prepared_write_requests = pdu::PreparedWriteRequests::new(att_handle, &test_data, cc.get_mtu());
 
-    prepared_write_requests.iter().for_each(|request| {
+    for request in prepared_write_requests.iter() {
         let request_handle = request.get_parameters().get_handle();
 
         let request_offset = request.get_parameters().get_prepared_offset() as usize;
@@ -51,7 +50,7 @@ fn prepare_write_with_exec_test() {
 
         let acl_data = pdu_into_acl_data(request);
 
-        block_on(server.process_acl_data(&acl_data)).unwrap();
+        server.process_acl_data(&mut cc, &acl_data).await.unwrap();
 
         let server_sent_response: pdu::Pdu<pdu::PreparedWriteResponse> =
             TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
@@ -59,31 +58,33 @@ fn prepare_write_with_exec_test() {
         assert_eq!(request_handle, server_sent_response.get_parameters().handle);
         assert_eq!(request_offset, server_sent_response.get_parameters().offset);
         assert_eq!(request_data, server_sent_response.get_parameters().data);
-    });
+    }
 
     let exec_write_request = pdu::execute_write_request(WriteAllPreparedWrites);
 
-    block_on(server.process_acl_data(&pdu_into_acl_data(exec_write_request))).unwrap();
+    server
+        .process_acl_data(&mut cc, &pdu_into_acl_data(exec_write_request))
+        .await
+        .unwrap();
 
     <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
-    assert_eq!(&*block_on(att_val.0.lock()), test_data);
+    assert_eq!(&*att_val.0.lock().await, test_data);
 }
 
-#[test]
-fn prepare_write_with_cancel_test() {
+#[tokio::test]
+async fn prepare_write_with_cancel_test() {
     use pdu::ExecuteWriteFlag::CancelAllPreparedWrites;
 
     use crate::{Attribute, FULL_WRITE_PERMISSIONS};
-    use futures::executor::block_on;
 
-    let cc = PayloadConnection::default();
+    let mut cc = PayloadConnection::default();
 
     let sa = ServerAttributes::default();
 
     let queued_writer = BasicQueuedWriter::new(2048);
 
-    let mut server = Server::new(&cc, sa, queued_writer);
+    let mut server = Server::new(sa, queued_writer);
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
@@ -104,25 +105,30 @@ fn prepare_write_with_cancel_test() {
 
     let prepared_write_requests = pdu::PreparedWriteRequests::new(att_handle, &test_data, cc.get_mtu());
 
-    prepared_write_requests
-        .iter()
-        .for_each(|request| block_on(server.process_acl_data(&pdu_into_acl_data(request))).unwrap());
+    for request in prepared_write_requests.iter() {
+        server
+            .process_acl_data(&mut cc, &pdu_into_acl_data(request))
+            .await
+            .unwrap()
+    }
 
     let cancel_write_request = pdu::execute_write_request(CancelAllPreparedWrites);
 
-    block_on(server.process_acl_data(&pdu_into_acl_data(cancel_write_request))).unwrap();
+    server
+        .process_acl_data(&mut cc, &pdu_into_acl_data(cancel_write_request))
+        .await
+        .unwrap();
 
     <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
-    assert_ne!(&*block_on(att_val.0.lock()), test_data);
+    assert_ne!(&*att_val.0.lock().await, test_data);
 }
 
-#[test]
-fn prepare_write_over_flow() {
+#[tokio::test]
+async fn prepare_write_over_flow() {
     use crate::{Attribute, FULL_WRITE_PERMISSIONS};
-    use futures::executor::block_on;
 
-    let cc = PayloadConnection::default();
+    let mut cc = PayloadConnection::default();
 
     let sa = ServerAttributes::default();
 
@@ -133,7 +139,7 @@ fn prepare_write_over_flow() {
 
     let queued_writer = BasicQueuedWriter::new(queue_size);
 
-    let mut server = Server::new(&cc, sa, queued_writer);
+    let mut server = Server::new(sa, queued_writer);
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
@@ -154,33 +160,30 @@ fn prepare_write_over_flow() {
 
     let prepared_write_requests = pdu::PreparedWriteRequests::new(att_handle, &test_data, cc.get_mtu());
 
-    let rslt = prepared_write_requests
-        .iter()
-        .enumerate()
-        .try_for_each(|(cnt, request)| {
-            block_on(server.process_acl_data(&pdu_into_acl_data(request))).unwrap();
+    for (cnt, request) in prepared_write_requests.iter().enumerate() {
+        server
+            .process_acl_data(&mut cc, &pdu_into_acl_data(request))
+            .await
+            .unwrap();
 
-            if (cnt + 1) * prepared_request_max_payload_size > queue_size {
-                let pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
+        if (cnt + 1) * prepared_request_max_payload_size > queue_size {
+            let pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
 
-                assert_eq!(att_handle, pdu.get_parameters().requested_handle);
-                assert_eq!(pdu::Error::PrepareQueueFull, pdu.get_parameters().error);
+            assert_eq!(att_handle, pdu.get_parameters().requested_handle);
+            assert_eq!(pdu::Error::PrepareQueueFull, pdu.get_parameters().error);
 
-                None
-            } else {
-                Some(())
-            }
-        });
+            return;
+        }
+    }
 
-    assert!(rslt.is_none())
+    panic!("write request did not complete")
 }
 
-#[test]
-fn prepare_write_bad_offset() {
+#[tokio::test]
+async fn prepare_write_bad_offset() {
     use crate::{Attribute, FULL_WRITE_PERMISSIONS};
-    use futures::executor::block_on;
 
-    let cc = PayloadConnection::default();
+    let mut cc = PayloadConnection::default();
 
     let sa = ServerAttributes::default();
 
@@ -188,7 +191,7 @@ fn prepare_write_bad_offset() {
 
     let queued_writer = BasicQueuedWriter::new(queue_size);
 
-    let mut server = Server::new(&cc, sa, queued_writer);
+    let mut server = Server::new(sa, queued_writer);
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
@@ -203,13 +206,16 @@ fn prepare_write_bad_offset() {
 
     let acl_data = BasicInfoFrame::new(raw_request, crate::L2CAP_CHANNEL_ID);
 
-    block_on(server.process_acl_data(&acl_data)).unwrap();
+    server.process_acl_data(&mut cc, &acl_data).await.unwrap();
 
     let exec_req = pdu::execute_write_request(pdu::ExecuteWriteFlag::WriteAllPreparedWrites);
 
     <pdu::Pdu<pdu::PreparedWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
-    block_on(server.process_acl_data(&pdu_into_acl_data(exec_req))).unwrap();
+    server
+        .process_acl_data(&mut cc, &pdu_into_acl_data(exec_req))
+        .await
+        .unwrap();
 
     let rsp: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
 

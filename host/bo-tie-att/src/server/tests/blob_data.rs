@@ -1,29 +1,15 @@
 //! Tests around reading blobbed data from a server
 
 use super::{pdu_into_acl_data, DummyConnection};
+use crate::server::tests::{DummyRecvFut, DummySendFut};
 use crate::{
     pdu,
     server::{NoQueuedWrites, PinnedFuture, Server, ServerAttributeValue, ServerAttributes, ServerPduName},
     Attribute, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
-    TransferFormatTryFrom, UUID,
+    TransferFormatTryFrom, Uuid,
 };
-use core::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
-use futures::executor::block_on;
-use l2cap::{ConnectionChannel, L2capFragment, MinimumMtu};
-
-struct DummySendFut;
-
-impl Future for DummySendFut {
-    type Output = Result<(), ()>;
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(()))
-    }
-}
+use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel, MinimumMtu};
+use bo_tie_util::buffer::de_vec::DeVec;
 
 /// A connection channel that counts the number of payload bytes sent
 ///
@@ -44,13 +30,14 @@ impl SendWatchConnection {
     }
 }
 
-impl crate::l2cap::ConnectionChannel for SendWatchConnection {
-    type SendFut = DummySendFut;
+impl ConnectionChannel for SendWatchConnection {
+    type SendBuffer = DeVec<u8>;
+    type SendFut<'a> = DummySendFut;
     type SendFutErr = ();
+    type RecvBuffer = DeVec<u8>;
+    type RecvFut<'a> = DummyRecvFut;
 
-    fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
-        use std::convert::TryFrom;
-
+    fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
         let pdu_name = ServerPduName::try_from(data.get_payload()[0]);
 
         // add the attribute value bytes and skip the header
@@ -86,22 +73,22 @@ impl crate::l2cap::ConnectionChannel for SendWatchConnection {
         DummySendFut
     }
 
-    fn set_mtu(&self, _: u16) {}
+    fn set_mtu(&mut self, _: u16) {}
 
     fn get_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
     fn max_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
     fn min_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&self, _: &core::task::Waker) -> Option<Vec<L2capFragment>> {
-        Some(Vec::new())
+    fn receive(&mut self) -> Self::RecvFut<'_> {
+        DummyRecvFut
     }
 }
 
@@ -142,12 +129,12 @@ impl ServerAttributeValue for DynSizedAttribute {
 
     fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
     where
-        F: FnOnce(&Self::Value) -> T + Unpin + 'a,
+        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync + 'a,
     {
         Box::pin(async move { f(&*self.data.borrow()) })
     }
 
-    fn write_val(&mut self, _: Self::Value) -> PinnedFuture<'_, ()> {
+    fn write_val(self: &mut Self, _: Self::Value) -> PinnedFuture<'_, ()> {
         unimplemented!()
     }
 
@@ -156,15 +143,15 @@ impl ServerAttributeValue for DynSizedAttribute {
     }
 }
 
-struct BlobTestInfo<'c, C, Q> {
-    att_uuid: UUID,
+struct BlobTestInfo<Q> {
+    att_uuid: Uuid,
     att_val: DynSizedAttribute,
     att_handle: u16,
-    server: crate::server::Server<'c, C, Q>,
+    server: Server<Q>,
 }
 
-impl<'a, C: ConnectionChannel> BlobTestInfo<'a, C, NoQueuedWrites> {
-    fn new(dc: &'a C) -> Self {
+impl BlobTestInfo<NoQueuedWrites> {
+    fn new() -> Self {
         let mut server_attribute = ServerAttributes::new();
 
         let att_uuid = 0x1u16.into();
@@ -179,7 +166,7 @@ impl<'a, C: ConnectionChannel> BlobTestInfo<'a, C, NoQueuedWrites> {
 
         let att_handle = server_attribute.push(att);
 
-        let mut server = Server::new(dc, server_attribute, NoQueuedWrites);
+        let mut server = Server::new(server_attribute, NoQueuedWrites);
 
         server.give_permissions_to_client(crate::FULL_READ_PERMISSIONS);
 
@@ -200,15 +187,15 @@ fn rand_usize_vec(size: usize) -> Vec<usize> {
     v
 }
 
-#[test]
-fn blobbing_from_blob_request() {
-    let connection = SendWatchConnection::default();
+#[tokio::test]
+async fn blobbing_from_blob_request() {
+    let mut connection_channel = SendWatchConnection::default();
 
-    let mut bti = BlobTestInfo::new(&connection);
+    let mut bti = BlobTestInfo::new();
 
     // amount of bytes sent from the attribute value in a pdu to the imaginary client. The minus
     // one is because each read blob response has a 1 byte header
-    let sent_bytes = connection.max_mtu() - 1;
+    let sent_bytes = connection_channel.max_mtu() - 1;
 
     let item_size = std::mem::size_of::<usize>();
 
@@ -218,11 +205,14 @@ fn blobbing_from_blob_request() {
 
     let request_1 = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, 0));
 
-    block_on(bti.server.process_acl_data(&request_1)).unwrap();
+    bti.server
+        .process_acl_data(&mut connection_channel, &request_1)
+        .await
+        .unwrap();
 
     assert!(bti.server.blob_data.is_none());
 
-    connection.reset_data();
+    connection_channel.reset_data();
 
     // Test data that should cause blobbing when read
 
@@ -230,7 +220,10 @@ fn blobbing_from_blob_request() {
 
     let request_2 = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, 0));
 
-    block_on(bti.server.process_acl_data(&request_2)).unwrap();
+    bti.server
+        .process_acl_data(&mut connection_channel, &request_2)
+        .await
+        .unwrap();
 
     assert!(bti.server.blob_data.is_some());
 
@@ -242,14 +235,17 @@ fn blobbing_from_blob_request() {
     assert_eq!(bti.server.blob_data.as_ref().unwrap().handle, bti.att_handle);
 
     // Amount sent should be the maximum amount
-    assert_eq!(connection.len_of_data(), sent_bytes);
+    assert_eq!(connection_channel.len_of_data(), sent_bytes);
 
     // Get rest of data. This should be an exact amount sent, meaning every message sent should
     // contain the MTU amount of data.
     for offset in (sent_bytes..(item_cnt * item_size)).step_by(sent_bytes) {
         let request = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, offset as u16));
 
-        block_on(bti.server.process_acl_data(&request)).unwrap();
+        bti.server
+            .process_acl_data(&mut connection_channel, &request)
+            .await
+            .unwrap();
 
         let expected_sent = if (offset + sent_bytes) < (item_cnt * item_size) {
             offset + sent_bytes
@@ -257,7 +253,7 @@ fn blobbing_from_blob_request() {
             item_cnt * item_size
         };
 
-        assert_eq!(connection.len_of_data(), expected_sent);
+        assert_eq!(connection_channel.len_of_data(), expected_sent);
     }
 
     // The algorithm needs to keep alive the data as the client doesn't know that the data is
@@ -267,18 +263,24 @@ fn blobbing_from_blob_request() {
 
     let request_last = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, (item_cnt * item_size) as u16));
 
-    block_on(bti.server.process_acl_data(&request_last)).unwrap();
+    bti.server
+        .process_acl_data(&mut connection_channel, &request_last)
+        .await
+        .unwrap();
 
     assert!(bti.server.blob_data.is_none());
 
-    connection.reset_data();
+    connection_channel.reset_data();
 
     // Testing a quirk of the blob read. In the doc it mentions that blobs do not drop if reads
     // do not cause blobbing
 
     let blob_request_tangent = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, 0));
 
-    block_on(bti.server.process_acl_data(&blob_request_tangent)).unwrap();
+    bti.server
+        .process_acl_data(&mut connection_channel, &blob_request_tangent)
+        .await
+        .unwrap();
 
     // Put the max amount of bytes within a read that will not cause blobbing
     let other_data = (0..sent_bytes - 1).map(|v| v as u8).collect::<Vec<_>>();
@@ -291,7 +293,10 @@ fn blobbing_from_blob_request() {
 
     let read_request_tangent = pdu_into_acl_data(pdu::read_request(other_handle));
 
-    block_on(bti.server.process_acl_data(&read_request_tangent)).unwrap();
+    bti.server
+        .process_acl_data(&mut connection_channel, &read_request_tangent)
+        .await
+        .unwrap();
 
     assert_eq!(
         bti.server.blob_data.as_ref().unwrap().tf_data,
@@ -299,13 +304,17 @@ fn blobbing_from_blob_request() {
     );
 }
 
-#[test]
-fn blobbing_from_read_request_test() {
-    let mut blob_info = BlobTestInfo::new(&DummyConnection);
+#[tokio::test]
+async fn blobbing_from_read_request_test() {
+    let mut blob_info = BlobTestInfo::new();
 
     let request_1 = pdu_into_acl_data(pdu::read_request(blob_info.att_handle));
 
-    block_on(blob_info.server.process_acl_data(&request_1)).unwrap();
+    blob_info
+        .server
+        .process_acl_data(&mut DummyConnection, &request_1)
+        .await
+        .unwrap();
 
     assert!(blob_info.server.blob_data.is_none());
 
@@ -313,18 +322,26 @@ fn blobbing_from_read_request_test() {
 
     let request_2 = pdu_into_acl_data(pdu::read_request(blob_info.att_handle));
 
-    block_on(blob_info.server.process_acl_data(&request_2)).unwrap();
+    blob_info
+        .server
+        .process_acl_data(&mut DummyConnection, &request_2)
+        .await
+        .unwrap();
 
     assert!(blob_info.server.blob_data.is_some());
 }
 
-#[test]
-fn blobbing_from_read_by_type() {
-    let mut blob_info = BlobTestInfo::new(&DummyConnection);
+#[tokio::test]
+async fn blobbing_from_read_by_type() {
+    let mut blob_info = BlobTestInfo::new();
 
     let request_1 = pdu_into_acl_data(pdu::read_by_type_request(.., blob_info.att_uuid));
 
-    block_on(blob_info.server.process_acl_data(&request_1)).unwrap();
+    blob_info
+        .server
+        .process_acl_data(&mut DummyConnection, &request_1)
+        .await
+        .unwrap();
 
     assert!(blob_info.server.blob_data.is_none());
 
@@ -332,7 +349,11 @@ fn blobbing_from_read_by_type() {
 
     let request_2 = pdu_into_acl_data(pdu::read_by_type_request(.., blob_info.att_uuid));
 
-    block_on(blob_info.server.process_acl_data(&request_2)).unwrap();
+    blob_info
+        .server
+        .process_acl_data(&mut DummyConnection, &request_2)
+        .await
+        .unwrap();
 
     assert!(blob_info.server.blob_data.is_some());
 }

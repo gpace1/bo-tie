@@ -324,8 +324,8 @@ where
     /// cause this function to panic.
     pub fn push<X, V>(&mut self, attribute: super::Attribute<X>) -> u16
     where
-        X: ServerAttributeValue<Value = V> + Send + Sized + 'static,
-        V: TransferFormatTryFrom + TransferFormatInto + 'static,
+        X: ServerAttributeValue<Value = V> + Send + Sync + Sized + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
     {
         let ret = self
             .attributes
@@ -735,7 +735,7 @@ where
     }
 
     /// Get an arc clone to an attribute value
-    fn get_att(&self, handle: u16) -> Result<&super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error> {
+    fn get_att(&self, handle: u16) -> Result<&super::Attribute<Box<dyn ServerAttribute + Send + Sync>>, pdu::Error> {
         if pdu::is_valid_handle(handle) {
             self.attributes.get(handle).ok_or(pdu::Error::InvalidHandle)
         } else {
@@ -747,7 +747,7 @@ where
     fn get_att_mut(
         &mut self,
         handle: u16,
-    ) -> Result<&mut super::Attribute<Box<dyn ServerAttribute + Send>>, pdu::Error> {
+    ) -> Result<&mut super::Attribute<Box<dyn ServerAttribute + Send + Sync>>, pdu::Error> {
         if pdu::is_valid_handle(handle) {
             self.attributes.get_mut(handle).ok_or(pdu::Error::InvalidHandle)
         } else {
@@ -773,7 +773,7 @@ where
     /// invalid.
     async fn read_att_and<'s, F, A, O>(&'s self, handle: u16, job: F) -> Result<O, pdu::Error>
     where
-        F: FnOnce(&'s (dyn ServerAttribute + Send)) -> A + 's,
+        F: FnOnce(&'s (dyn ServerAttribute + Send + Sync)) -> A + 's,
         A: Future<Output = O> + 's,
     {
         let attribute = self.get_att(handle)?;
@@ -1459,7 +1459,7 @@ where
 }
 
 pub struct ServerAttributes {
-    attributes: Vec<super::Attribute<Box<dyn ServerAttribute + Send>>>,
+    attributes: Vec<super::Attribute<Box<dyn ServerAttribute + Send + Sync>>>,
 }
 
 impl ServerAttributes {
@@ -1479,8 +1479,8 @@ impl ServerAttributes {
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
     pub fn push<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
     where
-        C: ServerAttributeValue<Value = V> + Send + Sized + 'static,
-        V: TransferFormatTryFrom + TransferFormatInto + 'static,
+        C: ServerAttributeValue<Value = V> + Send + Sync + Sized + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
     {
         let handle = self
             .attributes
@@ -1492,7 +1492,7 @@ impl ServerAttributes {
             ty: attribute.ty,
             handle: Some(handle),
             permissions: attribute.permissions,
-            value: Box::from(attribute.value) as Box<dyn ServerAttribute + Send + 'static>,
+            value: Box::from(attribute.value) as Box<dyn ServerAttribute + Send + Sync + 'static>,
         };
 
         self.attributes.push(pushed_att);
@@ -1503,8 +1503,8 @@ impl ServerAttributes {
     /// Get the handle assigned to the attribute to be added next.
     ///
     /// ```
-    /// # use bo_tie::att::server::ServerAttributes;
-    /// # let attribute = bo_tie::att::Attribute::new( bo_tie::UUID::default(), Vec::new(), () );
+    /// # use bo_tie_att::server::ServerAttributes;
+    /// # let attribute = bo_tie_att::Attribute::new( bo_tie_att::Uuid::default(), Vec::new(), () );
     ///
     /// let mut server_attributes = ServerAttributes::new();
     ///
@@ -1579,7 +1579,7 @@ impl ServerAttributes {
     /// Get attribute with the given handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
-    fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttribute + Send>>> {
+    fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttribute + Send + Sync>>> {
         match handle {
             0 => None,
             h => self.attributes.get(<usize>::from(h)),
@@ -1589,7 +1589,7 @@ impl ServerAttributes {
     /// Get a mutable reference to the attribute with the given handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
-    fn get_mut(&mut self, handle: u16) -> Option<&mut super::Attribute<Box<dyn ServerAttribute + Send>>> {
+    fn get_mut(&mut self, handle: u16) -> Option<&mut super::Attribute<Box<dyn ServerAttribute + Send + Sync>>> {
         match handle {
             0 => None,
             h => self.attributes.get_mut(<usize>::from(h)),
@@ -1603,7 +1603,7 @@ impl Default for ServerAttributes {
     }
 }
 
-pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + 'a>>;
+pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + Sync + 'a>>;
 
 /// Server Attributes
 ///
@@ -1619,35 +1619,42 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + 'a>>;
 /// is implemented for any type that also implements
 /// [`TransferFormatTryFrom`](crate::TransferFormatTryFrom) and
 /// ['TransferFormatInto`](crate:TransferFormatInto). However if you want to implement
-/// locking or reference counting of the value, you will need to implmenent `ServerAttributeValue`.
+/// locking or reference counting of the value, you will need to implement `ServerAttributeValue`.
 /// ```
-/// use std::sync::{Arc};
-/// use std::borrow::Borrow;
-/// use bo_tie::att::{Attribute, server::ServerAttributeValue};
-/// use bo_tie::att::server::{ServerAttributes, PinnedFuture};
-/// use futures::lock::Mutex;
+/// # use std::sync::Arc;
+/// # use std::borrow::Borrow;
+/// # use bo_tie_att as bo_tie;
+/// use bo_tie::{Uuid, Attribute, server::ServerAttributeValue};
+/// use bo_tie::server::{ServerAttributes, PinnedFuture};
+/// use tokio::sync::Mutex;
 ///
 /// #[derive(Default)]
 /// struct SyncAttVal<V> {
 ///     value: Arc<Mutex<V>>
 /// };
 ///
-/// impl<V: PartialEq> ServerAttributeValue for SyncAttVal<V> {
+/// impl<V: Send + Sync + PartialEq> ServerAttributeValue for SyncAttVal<V> {
 ///
 ///     type Value = V;
 ///
 ///     fn read_and<'a,F,T>(&'a self, f: F ) -> PinnedFuture<'a,T>
-///     where F: FnOnce(&Self::Value) -> T + Unpin + 'a
+///     where F: FnOnce(&Self::Value) -> T + Send + Sync + Unpin + 'a
 ///     {
-///         Box::pin( async move { f( &*self.value.lock().await ) } )
+///         let mutex = self.value.clone();
+///
+///         Box::pin( async move { f( &*mutex.lock().await ) } )
 ///     }
 ///
 ///     fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_,()> {
-///         Box::pin( async move { *self.value.lock().await = val } )
+///         let mutex = self.value.clone();
+///
+///         Box::pin( async move { *mutex.lock().await = val } )
 ///     }
 ///
 ///     fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a,bool> {
-///         Box::pin( async move { &*self.value.lock().await == other } )
+///         let mutex = self.value.clone();
+///
+///         Box::pin( async move { &*mutex.lock().await == other } )
 ///     }
 /// }
 ///
@@ -1655,8 +1662,8 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + 'a>>;
 /// let val_usize = SyncAttVal::<usize>::default();
 /// let val_msg   = SyncAttVal { value: Arc::new(Mutex::new(String::from("Hello World"))) };
 ///
-/// # let uuid_usize = bo_tie::UUID::from_u128(0);
-/// # let uuid_msg   = bo_tie::UUID::from_u128(0);
+/// # let uuid_usize = Uuid::from_u128(0);
+/// # let uuid_msg   = Uuid::from_u128(0);
 ///
 /// # let permissions_usize = Vec::new();
 /// # let permissions_msg   = Vec::new();
@@ -1676,7 +1683,7 @@ pub trait ServerAttributeValue {
     /// Read the value and call `f` with a reference to it.
     fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
     where
-        F: FnOnce(&Self::Value) -> T + Unpin + 'a;
+        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync + 'a;
 
     /// Write to the value
     fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_, ()>;
@@ -1744,13 +1751,13 @@ where
 /// The trivial implementation for ServerAttributeValue
 impl<V> ServerAttributeValue for V
 where
-    V: PartialEq + Unpin,
+    V: PartialEq + Unpin + Send + Sync,
 {
     type Value = V;
 
     fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
     where
-        F: FnOnce(&V) -> T + Unpin + 'a,
+        F: FnOnce(&V) -> T + Unpin + Send + Sync + 'a,
     {
         Box::pin(NoPend::new(move || f(self)))
     }
@@ -1818,8 +1825,8 @@ trait ServerAttribute {
 
 impl<C, V> ServerAttribute for C
 where
-    C: ServerAttributeValue<Value = V>,
-    V: TransferFormatTryFrom + TransferFormatInto,
+    C: ServerAttributeValue<Value = V> + Send + Sync,
+    V: TransferFormatTryFrom + TransferFormatInto + Send + Sync,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
         self.read_and(|v| TransferFormatInto::into(v))
@@ -1872,7 +1879,7 @@ where
 /// handle when creating a new Attribute Bearer
 struct ReservedHandle;
 
-impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send>> {
+impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send + Sync>> {
     fn from(_: ReservedHandle) -> Self {
         super::Attribute::new(crate::Uuid::from_u128(0u128), Vec::new(), Box::new(ReservedHandle))
     }

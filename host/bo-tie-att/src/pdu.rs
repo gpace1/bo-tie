@@ -2053,7 +2053,7 @@ impl TransferFormatInto for PreparedWriteRequest<'_> {
 /// one request.
 ///
 /// ```
-/// # use bo_tie::att::pdu::PreparedWriteRequests;
+/// # use bo_tie_att::pdu::PreparedWriteRequests;
 ///
 /// # let handle = 0x1;
 /// # let mtu = 30;

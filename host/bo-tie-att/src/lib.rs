@@ -390,7 +390,7 @@ impl From<TransferFormatError> for Error {
 
 impl Error {
     /// An error generated when trying to send with a connection channel
-    fn send_error<C: crate::l2cap::ConnectionChannel>(error: C::SendFutErr) -> Self {
+    fn send_error<C: bo_tie_l2cap::ConnectionChannel>(error: bo_tie_l2cap::send_future::Error<C::SendFutErr>) -> Self {
         Self::SendError(format!("{:?}", error))
     }
 }
@@ -897,11 +897,11 @@ impl TransferFormatTryFrom for bo_tie_util::BluetoothDeviceAddress {
 
 #[cfg(test)]
 mod test {
-
     use super::*;
-    use crate::l2cap::MinimumMtu;
+    use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ConnectionChannelExt, L2capFragment, MinimumMtu};
+    use bo_tie_util::buffer::de_vec::DeVec;
+    use bo_tie_util::buffer::TryExtend;
     use std::sync::{Arc, Mutex};
-    use std::thread::JoinHandle;
 
     use std::{
         future::Future,
@@ -909,22 +909,75 @@ mod test {
         task::{Context, Poll, Waker},
     };
 
-    struct DummySendFut;
-
-    impl Future for DummySendFut {
-        type Output = Result<(), ()>;
-
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
     struct TwoWayChannel {
         b1: Option<Vec<u8>>,
         w1: Option<Waker>,
 
         b2: Option<Vec<u8>>,
         w2: Option<Waker>,
+    }
+
+    struct DummySendFut<const DIRECTION: usize>(Arc<Mutex<TwoWayChannel>>, Vec<u8>);
+
+    impl<const DIRECTION: usize> Future for DummySendFut<DIRECTION> {
+        type Output = Result<(), bo_tie_l2cap::send_future::Error<()>>;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            let this = self.get_mut();
+
+            let mut gaurd = this.0.lock().expect("Failed to acquire lock");
+
+            macro_rules! poll {
+                ($b_field:ident, $w_field:ident) => {{
+                    gaurd.$b_field = Some(core::mem::take(&mut this.1));
+
+                    if let Some(waker) = gaurd.$w_field.take() {
+                        waker.wake();
+                    }
+
+                    Poll::Ready(Ok(()))
+                }};
+            }
+
+            match DIRECTION {
+                1 => poll!(b1, w1),
+                2 => poll!(b2, w2),
+                _ => panic!("unknown channel direction"),
+            }
+        }
+    }
+
+    struct DummyRecvFut<const DIRECTION: usize>(Arc<Mutex<TwoWayChannel>>);
+
+    impl<const DIRECTION: usize> Future for DummyRecvFut<DIRECTION> {
+        type Output = Option<Result<L2capFragment<DeVec<u8>>, BasicFrameError<<DeVec<u8> as TryExtend<u8>>::Error>>>;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let this = self.get_mut();
+
+            let mut gaurd = this.0.lock().expect("Failed to acquire lock");
+
+            macro_rules! poll {
+                ($b_field:ident, $w_field:ident) => {
+                    if let Some(data) = gaurd.$b_field.take() {
+                        let mut buffer = DeVec::<u8>::new();
+
+                        buffer.try_extend(data).unwrap();
+
+                        Poll::Ready(Some(Ok(L2capFragment::new(true, buffer))))
+                    } else {
+                        gaurd.$w_field = Some(cx.waker().clone());
+                        Poll::Pending
+                    }
+                };
+            }
+
+            match DIRECTION {
+                1 => poll!(b1, w1),
+                2 => poll!(b2, w2),
+                _ => panic!("unknown channel direction"),
+            }
+        }
     }
 
     /// Channel 1 sends to b1 and receives from b2
@@ -956,106 +1009,74 @@ mod test {
     }
 
     impl l2cap::ConnectionChannel for Channel1 {
-        type SendFut = DummySendFut;
+        type SendBuffer = DeVec<u8>;
+        type SendFut<'a> = DummySendFut<1>;
         type SendFutErr = ();
+        type RecvBuffer = DeVec<u8>;
+        type RecvFut<'a> = DummyRecvFut<2>;
 
-        fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
-            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
-
-            gaurd.b1 = Some(data.into_packet());
-
-            if let Some(waker) = gaurd.w1.take() {
-                waker.wake();
-            }
-
-            DummySendFut
+        fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+            DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
         }
 
-        fn set_mtu(&self, _: u16) {}
+        fn set_mtu(&mut self, _: u16) {}
 
         fn get_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
         fn max_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
         fn min_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::L2capFragment>> {
-            use crate::l2cap::L2capFragment;
-
-            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
-
-            if let Some(data) = gaurd.b2.take() {
-                Some(vec![L2capFragment::new(true, data)])
-            } else {
-                gaurd.w2 = Some(waker.clone());
-                None
-            }
+        fn receive(&mut self) -> Self::RecvFut<'_> {
+            DummyRecvFut(self.two_way.clone())
         }
     }
 
     impl l2cap::ConnectionChannel for Channel2 {
-        type SendFut = DummySendFut;
+        type SendBuffer = DeVec<u8>;
+        type SendFut<'a> = DummySendFut<2>;
         type SendFutErr = ();
+        type RecvBuffer = DeVec<u8>;
+        type RecvFut<'a> = DummyRecvFut<1>;
 
-        fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
-            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
-
-            gaurd.b2 = Some(data.into_packet());
-
-            if let Some(waker) = gaurd.w2.take() {
-                waker.wake();
-            }
-
-            DummySendFut
+        fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+            DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
         }
 
-        fn set_mtu(&self, _: u16) {}
+        fn set_mtu(&mut self, _: u16) {}
 
         fn get_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
         fn max_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
         fn min_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, waker: &Waker) -> Option<Vec<crate::l2cap::L2capFragment>> {
-            use crate::l2cap::L2capFragment;
-
-            let mut gaurd = self.two_way.lock().expect("Failed to acquire lock");
-
-            if let Some(data) = gaurd.b1.take() {
-                Some(vec![L2capFragment::new(true, data)])
-            } else {
-                gaurd.w1 = Some(waker.clone());
-                None
-            }
+        fn receive(&mut self) -> Self::RecvFut<'_> {
+            DummyRecvFut(self.two_way.clone())
         }
     }
 
-    #[test]
-    fn test_att_connection() {
+    #[tokio::test]
+    async fn test_att_connection() {
         use super::client::ResponseProcessor;
-        use crate::{l2cap::ConnectionChannel, UUID};
-        use futures::executor::block_on;
-        use std::{
-            sync::{atomic, Arc},
-            thread,
-        };
+        use bo_tie_host_util::Uuid;
+        use std::sync::{atomic, Arc};
 
-        const UUID_1: UUID = UUID::from_u16(1);
-        const UUID_2: UUID = UUID::from_u16(2);
-        const UUID_3: UUID = UUID::from_u16(3);
+        const UUID_1: Uuid = Uuid::from_u16(1);
+        const UUID_2: Uuid = Uuid::from_u16(2);
+        const UUID_3: Uuid = Uuid::from_u16(3);
 
         let test_val_1 = 33usize;
         let test_val_2 = 64u64;
@@ -1063,16 +1084,31 @@ mod test {
 
         let kill_opcode = 0xFFu8;
 
-        let (c1, c2) = TwoWayChannel::new();
+        let (mut c1, mut c2) = TwoWayChannel::new();
 
         let thread_panicked = Arc::new(atomic::AtomicBool::new(false));
 
         let thread_panicked_clone = thread_panicked.clone();
 
-        let t: &mut Option<JoinHandle<_>> = &mut thread::spawn(move || {
+        // temporary util a better error is produced by the compiler. See
+        // rust issue https://github.com/rust-lang/rust/issues/102211 for
+        // what I think is the issue of this.
+        struct ForceSafeSend<T>(T);
+
+        unsafe impl<T> Send for ForceSafeSend<T> {}
+
+        impl<T: std::future::Future> std::future::Future for ForceSafeSend<T> {
+            type Output = T::Output;
+
+            fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+                unsafe { self.map_unchecked_mut(|this| &mut this.0).poll(cx) }
+            }
+        }
+
+        let task = async move {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new(&c2, None, server::NoQueuedWrites);
+            let mut server = server::Server::new(None, server::NoQueuedWrites);
 
             let attribute_0 = Attribute::new(
                 UUID_1,
@@ -1104,10 +1140,10 @@ mod test {
             if let Err(e) = 'server_loop: loop {
                 use std::convert::TryFrom;
 
-                match block_on(c2.receive_b_frame()) {
+                match c2.receive_b_frame().await {
                     Ok(l2cap_data_vec) => {
                         for l2cap_pdu in l2cap_data_vec {
-                            match block_on(server.process_acl_data(&l2cap_pdu)) {
+                            match server.process_acl_data(&mut c2, &l2cap_pdu).await {
                                 Err(super::Error::UnknownOpcode(op)) if op == kill_opcode => break 'server_loop Ok(()),
                                 Err(e) => {
                                     break 'server_loop Err(format!(
@@ -1126,133 +1162,203 @@ mod test {
                 thread_panicked_clone.store(true, atomic::Ordering::Relaxed);
                 panic!("{}", e);
             }
-        })
-        .into();
+        };
+
+        let mut join_handle = tokio::spawn(ForceSafeSend(task));
 
         /// Creates a block-on implementation
         ///
         /// # Panics In Returned Closure
         /// Input `t` of 'make_block_on' cannot refer to a `None` *for the lifetime of the returned
         /// closure*.
-        fn make_block_on<'t, F, T>(
+        async fn task_timeout<'t, F, T>(
             tp: Arc<atomic::AtomicBool>,
-            t: &'t mut Option<thread::JoinHandle<T>>,
-        ) -> impl FnMut(F, &str) -> F::Output + 't
+            t: &mut tokio::task::JoinHandle<T>,
+            f: F,
+            err: &str,
+        ) -> Result<F::Output, String>
         where
-            F: std::future::Future + std::marker::Unpin,
+            F: std::future::Future,
         {
-            move |f, timeout_err| {
-                let tf = async_timer::Timed::platform_new(f, std::time::Duration::from_secs(1));
+            let tf = tokio::time::timeout(std::time::Duration::from_secs(1), f);
 
-                futures::executor::block_on(tf)
-                    .map_err(|_| {
-                        if tp.load(atomic::Ordering::Relaxed) {
-                            format!(
-                                "{}, server_error: {:?}",
-                                timeout_err,
-                                t.take()
-                                    .expect("Input 't' is none")
-                                    .join()
-                                    .map(|_| "")
-                                    .map_err(|any| any.downcast::<String>().unwrap())
-                                    .unwrap_err()
-                            )
-                        } else {
-                            timeout_err.to_string()
-                        }
-                    })
-                    .unwrap()
+            match tf.await {
+                Err(timeout_err) => {
+                    if tp.load(atomic::Ordering::Relaxed) {
+                        Err(format!(
+                            "{}, server_error: {:?}",
+                            timeout_err,
+                            t.await
+                                .map(|_| "unexpected early exit")
+                                .map_err(|join_error| if join_error.is_panic() {
+                                    *join_error.into_panic().downcast::<String>().unwrap()
+                                } else {
+                                    "task canceled".to_string()
+                                })
+                                .unwrap_err()
+                        ))
+                    } else {
+                        Err(err.to_string())
+                    }
+                }
+                Ok(output) => Ok(output),
             }
         }
 
-        let le_client_setup = block_on(client::LeConnectClient::initiate(512, &c1)).unwrap();
+        let le_client_setup = client::LeConnectClient::initiate(&c1, 512).await.unwrap();
 
-        let client = block_on(
-            le_client_setup.create_client(
-                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "Connect timed out")
-                    .expect("connect receiver")
-                    .first()
-                    .unwrap(),
-            ),
+        let mtu_rsp = task_timeout(
+            thread_panicked.clone(),
+            &mut join_handle,
+            c1.receive_b_frame(),
+            "Connect timed out",
         )
-        .unwrap();
+        .await
+        .unwrap()
+        .expect("connect receiver");
+
+        let client = le_client_setup
+            .create_client(&mut c1, mtu_rsp.first().unwrap())
+            .await
+            .unwrap();
 
         // writing to handle 1
-        block_on(client.write_request(1, test_val_1))
+        client
+            .write_request(&mut c1, 1, test_val_1)
+            .await
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "write handle 1 timed out")
-                    .expect("w1 receiver")
-                    .first()
-                    .unwrap(),
+                task_timeout(
+                    thread_panicked.clone(),
+                    &mut join_handle,
+                    c1.receive_b_frame(),
+                    "write handle 1 timed out",
+                )
+                .await
+                .unwrap()
+                .expect("w1 receiver")
+                .first()
+                .unwrap(),
             )
             .expect("w1 response");
 
         // writing to handle 2
-        block_on(client.write_request(2, test_val_2))
+        client
+            .write_request(&mut c1, 2, test_val_2)
+            .await
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "write handle 2 timed out")
-                    .expect("w2 receiver")
-                    .first()
-                    .unwrap(),
+                task_timeout(
+                    thread_panicked.clone(),
+                    &mut join_handle,
+                    c1.receive_b_frame(),
+                    "write handle 2 timed out",
+                )
+                .await
+                .unwrap()
+                .expect("w2 receiver")
+                .first()
+                .unwrap(),
             )
             .expect("w2 response");
 
         // writing to handle 3
-        block_on(client.write_request(3, test_val_3))
+        client
+            .write_request(&mut c1, 3, test_val_3)
+            .await
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "write handle 3 timed out")
-                    .expect("w3 receiver")
-                    .first()
-                    .unwrap(),
+                task_timeout(
+                    thread_panicked.clone(),
+                    &mut join_handle,
+                    c1.receive_b_frame(),
+                    "write handle 3 timed out",
+                )
+                .await
+                .unwrap()
+                .expect("w3 receiver")
+                .first()
+                .unwrap(),
             )
             .expect("w3 response");
 
         // reading handle 1
-        let read_val_1 = block_on(client.read_request(1))
+        let read_val_1 = client
+            .read_request(&mut c1, 1)
+            .await
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "read handle 1 timed out")
-                    .expect("r1 receiver")
-                    .first()
-                    .unwrap(),
+                task_timeout(
+                    thread_panicked.clone(),
+                    &mut join_handle,
+                    c1.receive_b_frame(),
+                    "read handle 1 timed out",
+                )
+                .await
+                .unwrap()
+                .expect("r1 receiver")
+                .first()
+                .unwrap(),
             )
             .expect("r1 response");
 
-        let read_val_2 = block_on(client.read_request(2))
+        let read_val_2 = client
+            .read_request(&mut c1, 2)
+            .await
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "read handle 2 timed out")
-                    .expect("r2 receiver")
-                    .first()
-                    .unwrap(),
+                task_timeout(
+                    thread_panicked.clone(),
+                    &mut join_handle,
+                    c1.receive_b_frame(),
+                    "read handle 2 timed out",
+                )
+                .await
+                .unwrap()
+                .expect("r2 receiver")
+                .first()
+                .unwrap(),
             )
             .expect("r2 response");
 
-        let read_val_3 = block_on(client.read_request(3))
+        let read_val_3 = client
+            .read_request(&mut c1, 3)
+            .await
             .unwrap()
             .process_response(
-                make_block_on(thread_panicked.clone(), t)(c1.receive_b_frame(), "read handle 3 timed out")
-                    .expect("r3 receiver")
-                    .first()
-                    .unwrap(),
+                task_timeout(
+                    thread_panicked.clone(),
+                    &mut join_handle,
+                    c1.receive_b_frame(),
+                    "read handle 3 timed out",
+                )
+                .await
+                .unwrap()
+                .expect("r3 receiver")
+                .first()
+                .unwrap(),
             )
             .expect("r3 response");
 
-        block_on(client.custom_command(pdu::Pdu::new(kill_opcode.into(), 0u8))).expect("Failed to send kill opcode");
+        client
+            .custom_command(&mut c1, pdu::Pdu::new(kill_opcode.into(), 0u8))
+            .await
+            .expect("Failed to send kill opcode");
 
         // Check that the send values equal the read values
         assert_eq!(test_val_1, read_val_1);
         assert_eq!(test_val_2, read_val_2);
         assert_eq!(test_val_3, read_val_3);
 
-        t.take().map(|handle| {
-            handle
-                .join()
-                .map_err(|e| format!("Thread Failed to join: {}", e.downcast_ref::<String>().unwrap()))
-                .unwrap()
-        });
+        join_handle
+            .await
+            .map_err(|e| {
+                if e.is_panic() {
+                    format!("Thread panicked: {}", e.into_panic().downcast_ref::<String>().unwrap())
+                } else {
+                    "thread was cancelled".to_string()
+                }
+            })
+            .unwrap()
     }
 }
