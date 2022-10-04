@@ -62,7 +62,7 @@
 //! # let connection_channel = StubConnectionChannel;
 //! // An example of setting up a receiver that support oob
 //!
-//! use bo_tie_sm::responder::SlaveSecurityManagerBuilder;
+//! use bo_tie_sm::responder::SecurityManagerBuilder;
 //! use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment};
 //! use std::task::Waker;
 //! use std::future::Future;
@@ -76,7 +76,7 @@
 //! # Vec::new()
 //! }
 //!
-//! let security_manager = SlaveSecurityManagerBuilder::new(
+//! let security_manager = SecurityManagerBuilder::new(
 //!         this_address,
 //!         peer_address,
 //!         false,

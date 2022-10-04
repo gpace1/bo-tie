@@ -1,7 +1,99 @@
 //! Responder side of the Security Manager
 //!
-//! A responder is used by a device to to 'respond' to the security manager requests of an
-//! initiating device.
+//! A responder is used by the peripheral device to to 'respond' to the security manager requests of
+//! an initiating device.
+//!
+//! # Builder
+//! A responding [`SecurityManger`] must be created from the builder [`SecurityManagerBuilder`]. The
+//! builder is used to configure the type of pairing performed and the bonding keys that allowed for
+//! distribution by the security manager.  The default configuration is to distribute the identity
+//! resolving key during bonding and use *just works* man in the middle (MITM) protection.
+//! Unfortunately other forms of MITM protection require access to things outside the scope of the
+//! implementation of this library.
+//!
+//! ```
+#![cfg_attr(
+    botiedocs,
+    doc = r##"
+# mod bo_tie::sm {
+#    pub use bo_tie_sm::*;
+# }
+use bo_tie::responder::SecurityManagerBuilder;
+"##
+)]
+#![cfg_attr(
+    not(botiedocs),
+    doc = r##"
+use bo_tie_sm::responder::SecurityManagerBuilder;
+"##
+)]
+//! # use bo_tie_util::BluetoothDeviceAddress;
+//! # let this_address = BluetoothDeviceAddress::zeroed();
+//! # let peer_address = BluetoothDeviceAddress::zeroed();
+//!
+//! let security_manager = SecurityManagerBuilder::new(this_address, peer_address, true, true)
+//!     .build();
+//! ```
+//!
+//! ### Bonding Keys
+//! The responder can distribute and accept an identity resolving key (IRK) and a
+//! Connection Signature Resolving Key (CSRK) during bonding. However, the default is to only
+//! distribute an IRK and accept no keys from the initiator.
+//!
+//! The IRK is used for generating a resolvable private address and the CSRK is for signing data
+//! that is part of an unencrypted advertising packet, so the only need to accept keys from the
+//! initiator is if the roles of the devices could switch.
+//!
+//! ```
+//! # use bo_tie_sm::responder::SecurityManagerBuilder;
+//! # use bo_tie_util::BluetoothDeviceAddress;
+//! let security_manager_builder = SecurityManagerBuilder::new(BluetoothDeviceAddress::zeroed(), BluetoothDeviceAddress::zeroed(), false, false);
+//!
+//! // create a security manager that will send an
+//! // IRK and CSRK during bonding but only accept
+//! // an IRK from the initiator.
+//! security_manager_builder.sent_bonding_keys(|keys| {
+//!     keys.enable_irk();
+//!     keys.enable_csrk();
+//! })
+//! .accepted_bonding_keys(|keys| {
+//!     keys.enable_irk();
+//! })
+//! .build()
+//! # ;
+//! ```
+//!
+//! ### Man in the Middle Protection
+//! The builder is used for selecting what MITM protection is supported by the responder. All forms
+//! except for just works (which is the same as having no MITM protection) require some form of user
+//! or external system input.
+//!
+//! # Out of Band
+//! The out of band MITM protection is the same process as just works, but it uses a secure tunnel
+//! outside the Bluetooth connection between the two devices to transfer some of the pairing
+//! information. In order for out of band to work it requires the method to also be MITM protected.
+//! Using another communication protocol, such as [near field communication], is a common way to
+//! perform out of band.
+//!
+//! In order to use out of band with this security manager, the methods of transferring data must
+//! be set as part of the builder pattern of `SecurityManagerBuilder`. The methods
+//! [`set_oob_sender`] and [`set_oob_receiver`] are used to register the means to send and receive
+//! out of band data by the security manager.
+//!
+//! ```
+//! # use bo_tie_util::BluetoothDeviceAddress;
+//! # let this_addr = BluetoothDeviceAddress::zeroed();
+//! # let remote_addr = BluetoothDeviceAddress::zeroed();
+//! # let security_manager_builder = bo_tie_sm::responder::SecurityManagerBuilder::new(this_addr, remote_addr, false, false);
+//! # async fn send_over_nfc(_: &[u8]) {}
+//! # async fn receive_from_nfc() -> Vec<u8> { Vec::new() }
+//!
+//! let security_manager = security_manager_builder
+//!     .set_oob_sender(|data: &[u8]| async { send_over_nfc(data).await })
+//!     .set_oob_receiver(|| async { receive_from_nfc().await })
+//!     .build()
+//! # ;
+//! ```
 
 use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
@@ -20,7 +112,7 @@ use alloc::vec::Vec;
 /// # Out of Band Support
 /// A `SlaveSecurityManager` will only support OOB if method `use_oob` of this build is called. It
 ///
-pub struct SlaveSecurityManagerBuilder<S, R> {
+pub struct SecurityManagerBuilder<S, R> {
     io_capabilities: pairing::IOCapability,
     encryption_key_min: usize,
     encryption_key_max: usize,
@@ -37,7 +129,7 @@ pub struct SlaveSecurityManagerBuilder<S, R> {
     oob_receiver: R,
 }
 
-impl SlaveSecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupported> {
+impl SecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupported> {
     /// Create a new `SlaveSecurityManagerBuilder`
     pub fn new(
         connected_device_address: crate::BluetoothDeviceAddress,
@@ -64,7 +156,7 @@ impl SlaveSecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupporte
     }
 }
 
-impl<S, R> SlaveSecurityManagerBuilder<S, R> {
+impl<S, R> SecurityManagerBuilder<S, R> {
     /// Set the keys to the peer device if it is already paired
     ///
     /// This assigns the keys that were previously generated after a successful pair and bonding.
@@ -141,19 +233,19 @@ impl<S, R> SlaveSecurityManagerBuilder<S, R> {
     /// # use bo_tie_util::BluetoothDeviceAddress;
     /// # let this_addr = BluetoothDeviceAddress::zeroed();
     /// # let remote_addr = BluetoothDeviceAddress::zeroed();
-    /// # let security_manager_builder = bo_tie_sm::responder::SlaveSecurityManagerBuilder::new(this_addr, remote_addr, false, false);
+    /// # let security_manager_builder = bo_tie_sm::responder::SecurityManagerBuilder::new(this_addr, remote_addr, false, false);
     /// # async fn send_over_oob(_: &[u8]) {}
     ///
     /// let security_manager = security_manager_builder.set_oob_sender(|pairing_data: &[u8]| async {
     ///     send_over_oob(pairing_data).await
     /// });
     /// ```
-    pub fn set_oob_sender<'a, S2, F>(self, sender: S2) -> SlaveSecurityManagerBuilder<S2, R>
+    pub fn set_oob_sender<'a, S2, F>(self, sender: S2) -> SecurityManagerBuilder<S2, R>
     where
         S2: FnMut(&'a [u8]) -> F,
         F: core::future::Future + 'a,
     {
-        SlaveSecurityManagerBuilder {
+        SecurityManagerBuilder {
             io_capabilities: self.io_capabilities,
             encryption_key_min: self.encryption_key_min,
             encryption_key_max: self.encryption_key_max,
@@ -185,7 +277,7 @@ impl<S, R> SlaveSecurityManagerBuilder<S, R> {
     /// # use bo_tie_util::BluetoothDeviceAddress;
     /// # let this_addr = BluetoothDeviceAddress::zeroed();
     /// # let remote_addr = BluetoothDeviceAddress::zeroed();
-    /// # let security_manager_builder = bo_tie_sm::responder::SlaveSecurityManagerBuilder::new(this_addr, remote_addr, false, false);
+    /// # let security_manager_builder = bo_tie_sm::responder::SecurityManagerBuilder::new(this_addr, remote_addr, false, false);
     /// # async fn receive_from_oob() -> Vec<u8> { Vec::new()}
     ///
     /// # let sm =
@@ -194,11 +286,11 @@ impl<S, R> SlaveSecurityManagerBuilder<S, R> {
     /// })
     /// # .build();
     /// ```
-    pub fn set_oob_receiver<T>(self, receiver: T) -> SlaveSecurityManagerBuilder<S, T>
+    pub fn set_oob_receiver<T>(self, receiver: T) -> SecurityManagerBuilder<S, T>
     where
         T: OobReceiverType,
     {
-        SlaveSecurityManagerBuilder {
+        SecurityManagerBuilder {
             io_capabilities: self.io_capabilities,
             encryption_key_min: self.encryption_key_min,
             encryption_key_max: self.encryption_key_max,
@@ -221,7 +313,7 @@ impl<S, R> SlaveSecurityManagerBuilder<S, R> {
     /// # Note
     /// This will create a `SlaveSecurityManager` that does not support the out of band pairing
     /// method.
-    pub fn build<'a>(self) -> SlaveSecurityManager<S, R>
+    pub fn build<'a>(self) -> SecurityManager<S, R>
     where
         S: OutOfBandSend<'a>,
         R: OobReceiverType,
@@ -236,7 +328,7 @@ impl<S, R> SlaveSecurityManagerBuilder<S, R> {
 
         let responder_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
 
-        SlaveSecurityManager {
+        SecurityManager {
             io_capability: self.io_capabilities,
             oob_send: self.oob_sender,
             oob_receive: self.oob_receiver,
@@ -256,7 +348,7 @@ impl<S, R> SlaveSecurityManagerBuilder<S, R> {
     }
 }
 
-pub struct SlaveSecurityManager<S, R> {
+pub struct SecurityManager<S, R> {
     io_capability: pairing::IOCapability,
     oob_send: S,
     oob_receive: R,
@@ -274,7 +366,7 @@ pub struct SlaveSecurityManager<S, R> {
     link_encrypted: bool,
 }
 
-impl<S, R> SlaveSecurityManager<S, R> {
+impl<S, R> SecurityManager<S, R> {
     /// Indicate if the connection is encrypted
     ///
     /// This is used to indicate to the `SlaveSecurityManager` that it is safe to send a Key to the
@@ -293,7 +385,7 @@ impl<S, R> SlaveSecurityManager<S, R> {
     }
 }
 
-impl<S, R> SlaveSecurityManager<S, R> {
+impl<S, R> SecurityManager<S, R> {
     /// Send the Identity Resolving Key
     ///
     /// This will add the IRK to the cypher keys and send it to the other device if the internal
@@ -455,7 +547,7 @@ impl<S, R> SlaveSecurityManager<S, R> {
     }
 }
 
-impl<S, R> SlaveSecurityManager<S, R>
+impl<S, R> SecurityManager<S, R>
 where
     S: for<'i> OutOfBandSend<'i>,
     R: OobReceiverType,
@@ -1216,7 +1308,7 @@ where
     }
 }
 
-impl<S> SlaveSecurityManager<S, ExternalOobReceiver>
+impl<S> SecurityManager<S, ExternalOobReceiver>
 where
     S: for<'i> OutOfBandSend<'i>,
 {
@@ -1245,9 +1337,9 @@ where
     /// # use bo_tie_sm::oob::ExternalOobReceiver;
     /// # use std::future::Future;
     /// # use bo_tie_l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannel, ConnectionChannelExt, L2capFragment, LEUserChannelIdentifier};
-    /// # use bo_tie_sm::responder::SlaveSecurityManagerBuilder;
+    /// # use bo_tie_sm::responder::SecurityManagerBuilder;
     /// # use bo_tie_util::BluetoothDeviceAddress;
-    /// # let mut security_manager_builder = SlaveSecurityManagerBuilder::new(BluetoothDeviceAddress::zeroed(), BluetoothDeviceAddress::zeroed(), false, false);
+    /// # let mut security_manager_builder = SecurityManagerBuilder::new(BluetoothDeviceAddress::zeroed(), BluetoothDeviceAddress::zeroed(), false, false);
     /// # struct StubConnectionChannel;
     /// # impl ConnectionChannel for StubConnectionChannel {
     /// #     type SendBuffer = Vec<u8>;
