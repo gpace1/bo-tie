@@ -4,7 +4,6 @@
 //! implementations in this library.
 
 use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
-use alloc::vec::Vec;
 use core::future::Future;
 
 /// Supported direction of OOB
@@ -49,55 +48,6 @@ impl core::fmt::Display for OobBuildError {
     }
 }
 
-/// Out of Band pairing method setup
-///
-/// Security Managers that implement this trait can be used as the out-of-band (OOB) process for
-/// pairing. Any communication process that is outside of the direct Bluetooth communication between
-/// the two pairing devices can be considered a valid OOB transport if it has acceptable protection
-/// against a man in the middle attack.
-pub trait BuildOutOfBand: core::ops::DerefMut<Target = Self::Builder> {
-    type Builder;
-    type SecurityManager;
-
-    fn build(self) -> Self::SecurityManager;
-}
-
-/// Out of Band pairing method setup
-///
-/// Security Managers that implement this trait can be used as the out-of-band (OOB) process for
-/// pairing. Any communication process that is outside of the direct Bluetooth communication between
-/// the two pairing devices can be considered a valid OOB. However the OOB link must have
-/// man in the middle protection in order for the OOB method to be secure form of pairing.
-pub struct OutOfBandMethodBuilder<B, S, R> {
-    pub(super) builder: B,
-    pub(super) send_method: S,
-    pub(super) receive_method: R,
-}
-
-impl<B, S, R> OutOfBandMethodBuilder<B, S, R> {
-    pub(super) fn new(builder: B, send_method: S, receive_method: R) -> Self {
-        OutOfBandMethodBuilder {
-            builder,
-            send_method,
-            receive_method,
-        }
-    }
-}
-
-impl<B, S, R> core::ops::Deref for OutOfBandMethodBuilder<B, S, R> {
-    type Target = B;
-
-    fn deref(&self) -> &Self::Target {
-        &self.builder
-    }
-}
-
-impl<B, S, R> core::ops::DerefMut for OutOfBandMethodBuilder<B, S, R> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.builder
-    }
-}
-
 /// The trait to used by a Security Manager send data over an out of band (OOB) interface
 ///
 /// This is auto implemented for anything that implements `Fn(&[u8]) -> impl Future`.
@@ -125,32 +75,23 @@ where
     }
 }
 
-impl OutOfBandSend<'_> for () {
-    type Future = UnusedOobInterface<()>;
-
-    fn can_send() -> bool {
-        false
-    }
-
-    fn send(&mut self, _: &[u8]) -> Self::Future {
-        panic!("Tried to send OOB data on a nonexistent interface")
-    }
-}
-
 /// The trait to used by a Security Manager send data over an out of band (OOB) interface
 ///
 /// This is auto implemented for anything that implements `Fn() -> impl Future<Output = Vec<u8>>`.
 pub trait OutOfBandReceive {
-    type Future: Future<Output = Vec<u8>>;
+    type Output: core::borrow::Borrow<[u8]>;
+    type Future: Future<Output = Self::Output>;
 
     fn receive(&mut self) -> Self::Future;
 }
 
-impl<R, F> OutOfBandReceive for R
+impl<R, F, V> OutOfBandReceive for R
 where
     R: FnMut() -> F,
-    F: Future<Output = Vec<u8>>,
+    F: Future<Output = V>,
+    V: core::borrow::Borrow<[u8]>,
 {
+    type Output = V;
     type Future = F;
 
     fn receive(&mut self) -> Self::Future {
@@ -194,49 +135,39 @@ pub(super) mod sealed_receiver_type {
         }
 
         #[doc(hidden)]
-        type RxType: core::future::Future<Output = alloc::vec::Vec<u8>>;
+        type Output: core::borrow::Borrow<[u8]>;
 
         #[doc(hidden)]
-        fn receive(&mut self) -> Self::RxType;
+        type Future: core::future::Future<Output = Self::Output>;
+
+        #[doc(hidden)]
+        fn receive(&mut self) -> Self::Future;
     }
 }
 
 /// The trait for receiving out of band data
 ///
-/// Because out of band data is received outside of the Bluetooth connection , it must be done by
-/// the user of this library, but still be done during the process of pairing. So there
-/// is two different ways for a security manager to get the out of band data from the other device.
-/// The easiest and preferred way is for the Security Manager to directly await the reception of OOB
-/// data as it goes about pairing. Essentially set how OOB data is received and forget about it. The
-/// other way is to directly set the OOB data with a method in the Security Manager. This is more
-/// difficult as it can only be called at the proper time during pairing or else the method will
-/// error.
+/// Out of band data is received outside of the Bluetooth connection. The method for receiving
+/// the data is implemented outside of this library, somehow acquired by a security manager during
+/// the process of pairing.
 ///
-/// This is a sealed trait as there are specific types to facilitate the three kinds of OOB data
-/// reception. Anything that implements [`OutOfBandReceive`] will work as the preferred method. This
-/// method is where the reception occurs within the security manager. The security manager will
-/// perform the await the reception of the OOB data at the correct part of the pairing process.
-///
-/// The type [`ExternalOobReceiver`] should only be used when an `OutOfBandReceive` cannot be used.
-/// In this case the Security Managers (initiator and responder) have a separate method that is
-/// must be called at the correct time in the pairing process to provide the received OOB data.
-/// These methods will error if they are not called at the proper time.
-///
-/// The last type to implement this trait is not a receiver at all, instead the `()` type is used to
-/// indicate that OOB data cannot be received by the Security Manager.
+/// This trait is sealed, but anything that implements `OutOfBandReceive` will also implement
+/// `OobReceiverType`
 pub trait OobReceiverType: sealed_receiver_type::SealedTrait {}
 
 impl<F> sealed_receiver_type::SealedTrait for F
 where
     F: OutOfBandReceive,
 {
-    fn receiver_type() -> sealed_receiver_type::OobReceiverTypeVariant {
-        sealed_receiver_type::OobReceiverTypeVariant::Internal
+    fn receiver_type() -> OobReceiverTypeVariant {
+        OobReceiverTypeVariant::Internal
     }
 
-    type RxType = F::Future;
+    type Output = F::Output;
 
-    fn receive(&mut self) -> Self::RxType {
+    type Future = F::Future;
+
+    fn receive(&mut self) -> Self::Future {
         OutOfBandReceive::receive(self)
     }
 }
@@ -256,25 +187,44 @@ impl sealed_receiver_type::SealedTrait for ExternalOobReceiver {
         sealed_receiver_type::OobReceiverTypeVariant::External
     }
 
-    type RxType = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = alloc::vec::Vec<u8>>>>;
+    type Output = [u8; 0];
 
-    fn receive(&mut self) -> Self::RxType {
+    type Future = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = Self::Output>>>;
+
+    fn receive(&mut self) -> Self::Future {
         unreachable!("Called receive on external receiver")
     }
 }
 
 impl OobReceiverType for ExternalOobReceiver {}
 
-impl sealed_receiver_type::SealedTrait for () {
-    fn receiver_type() -> OobReceiverTypeVariant {
-        sealed_receiver_type::OobReceiverTypeVariant::DoesNotExist
+/// A marker type for not supporting out of band data
+pub struct Unsupported;
+
+impl<'a> OutOfBandSend<'a> for Unsupported {
+    type Future = UnusedOobInterface<()>;
+
+    fn can_send() -> bool {
+        false
     }
 
-    type RxType = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = alloc::vec::Vec<u8>>>>;
+    fn send(&mut self, _: &'a [u8]) -> Self::Future {
+        panic!("Tried to send OOB data on a nonexistent interface")
+    }
+}
 
-    fn receive(&mut self) -> Self::RxType {
+impl sealed_receiver_type::SealedTrait for Unsupported {
+    fn receiver_type() -> OobReceiverTypeVariant {
+        OobReceiverTypeVariant::DoesNotExist
+    }
+
+    type Output = [u8; 0];
+
+    type Future = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = Self::Output>>>;
+
+    fn receive(&mut self) -> Self::Future {
         unreachable!("Called receive on external receiver")
     }
 }
 
-impl OobReceiverType for () {}
+impl OobReceiverType for Unsupported {}

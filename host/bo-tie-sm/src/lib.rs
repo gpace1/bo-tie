@@ -43,44 +43,47 @@
 //!
 //! ```
 //! # // example initialization boilerplate
-//! # let this_address = bo_tie::BluetoothDeviceAddress::default();
-//! # let peer_address = bo_tie::BluetoothDeviceAddress::default();
+//! # let this_address = bo_tie_util::BluetoothDeviceAddress::zeroed();
+//! # let peer_address = bo_tie_util::BluetoothDeviceAddress::zeroed();
 //! # struct StubConnectionChannel;
-//! # impl bo_tie::l2cap::ConnectionChannel for StubConnectionChannel {
-//! #     type SendFut = futures::future::Ready<Result<(), Self::SendFutErr>>;
+//! # impl ConnectionChannel for StubConnectionChannel {
+//! #     type SendBuffer = Vec<u8>;
+//! #     type SendFut<'a> = std::pin::Pin<Box<dyn Future<Output=Result<(), bo_tie_l2cap::send_future::Error<Self::SendFutErr>>>>>;
 //! #     type SendFutErr = usize;
-//! #     fn send(&self,data: BasicInfoFrame) -> Self::SendFut { unimplemented!() }
-//! #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
+//! #     type RecvBuffer = Vec<u8>;
+//! #     type RecvFut<'a> = std::pin::Pin<Box<dyn Future<Output=Option<Result<L2capFragment<Self::RecvBuffer>, bo_tie_l2cap::BasicFrameError<<Self::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>>>>>>;
+//! #     fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
+//! #     fn set_mtu(&mut self,mtu: u16) { unimplemented!() }
 //! #     fn get_mtu(&self) -> usize { unimplemented!() }
 //! #     fn max_mtu(&self) -> usize { unimplemented!() }
 //! #     fn min_mtu(&self) -> usize { unimplemented!() }
-//! #     fn receive(&self,waker: &Waker) -> Option<Vec<L2capFragment>> { unimplemented!() }
+//! #     fn receive(&mut self) -> Self::RecvFut<'_> { unimplemented!() }
 //! # }
 //! # let connection_channel = StubConnectionChannel;
 //! // An example of setting up a receiver that support oob
 //!
-//! use bo_tie::sm::responder::SlaveSecurityManagerBuilder;
-//! use bo_tie::sm::BuildOutOfBand;
-//! use bo_tie::l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment};
+//! use bo_tie_sm::responder::SlaveSecurityManagerBuilder;
+//! use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment};
 //! use std::task::Waker;
 //! use std::future::Future;
 //!
-//! async fn send(data: &[u8]) {
-//!     todo!("your method for sending")
+//! async fn oob_send(data: &[u8]) {
+//!     // send out of band data
 //! }
 //!
-//! async fn receive() -> Vec<u8> {
-//!     todo!("your method for receiving")
+//! async fn oob_receive() -> Vec<u8> {
+//!     // receive out of band data
+//! # Vec::new()
 //! }
 //!
 //! let security_manager = SlaveSecurityManagerBuilder::new(
-//!         &connection_channel,
-//!         &this_address,
-//!         &peer_address,
+//!         this_address,
+//!         peer_address,
 //!         false,
 //!         false
 //!     )
-//!     .use_oob(send, receive)
+//!     .set_oob_sender(oob_send)
+//!     .set_oob_receiver(oob_receive)
 //!     .build();
 //! ```
 //!
@@ -104,7 +107,8 @@
 //! * ['aes'](https://lib.rs/crates/aes)
 //! * ['p256'](https://lib.rs/crates/p256)
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 extern crate alloc;
 
@@ -172,6 +176,30 @@ pub enum Error {
     OperationRequiresPairing,
 }
 
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Error::Size => f.write_str("size"),
+            Error::Format => f.write_str("format"),
+            Error::Value => f.write_str("value"),
+            Error::IncorrectCommand(c) => write!(f, "incorrect command: {}", c),
+            Error::UnsupportedFeature => f.write_str("unsupported feature"),
+            Error::PairingFailed(reason) => write!(f, "pairing failed: {}", reason),
+            Error::UnknownIfLinkIsEncrypted => f.write_str("unknown if connection is encrypted"),
+            Error::IncorrectL2capChannelId => {
+                f.write_str("incorrect channel identifier for the security manager protocol")
+            }
+            Error::DataSend(e) => write!(f, "failed to send data: {}", e),
+            Error::ACLData(e) => write!(f, "invalid ACL basic frame: {}", e),
+            Error::ExternalOobNotProvided => f.write_str("external out of band data not provided"),
+            Error::OperationRequiresPairing => f.write_str("operation requires pairing"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CommandType {
     PairingRequest,
@@ -227,6 +255,27 @@ impl CommandType {
             0xd => Ok(CommandType::PairingDHKeyCheck),
             0xe => Ok(CommandType::PairingKeyPressNotification),
             _ => Err(Error::Value),
+        }
+    }
+}
+
+impl core::fmt::Display for CommandType {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            CommandType::PairingRequest => f.write_str("pairing request"),
+            CommandType::PairingResponse => f.write_str("pairing response"),
+            CommandType::PairingConfirm => f.write_str("pairing confirm"),
+            CommandType::PairingRandom => f.write_str("pairing random"),
+            CommandType::PairingFailed => f.write_str("pairing failed"),
+            CommandType::EncryptionInformation => f.write_str("encryption information"),
+            CommandType::MasterIdentification => f.write_str("master identification"),
+            CommandType::IdentityInformation => f.write_str("identity information"),
+            CommandType::IdentityAddressInformation => f.write_str("identity address information"),
+            CommandType::SigningInformation => f.write_str("signing information"),
+            CommandType::SecurityRequest => f.write_str("security request"),
+            CommandType::PairingPublicKey => f.write_str("pairing public key"),
+            CommandType::PairingDHKeyCheck => f.write_str("pairing Diffie Hellman key check"),
+            CommandType::PairingKeyPressNotification => f.write_str("pairing key press notification"),
         }
     }
 }
@@ -464,7 +513,7 @@ struct PairingData {
 /// # Equality, Ordering, and Hashing
 /// Comparisons and hashing are implemented for `Keys`, but these operations only use the
 /// identity address within a `Keys` for the calculations.
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Keys {
     /// The Long Term Key (private key)
@@ -780,8 +829,8 @@ impl SecurityManagerKeys {
     /// the [`find_map`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find_map)
     /// iterator method.
     /// ```
-    /// # let security_manager = bo_tie::sm::SecurityManagerKeys::default();
-    /// # let resolvable_private_address = [0u8;6];
+    /// # let security_manager = bo_tie_sm::SecurityManagerKeys::default();
+    /// # let resolvable_private_address = bo_tie_util::BluetoothDeviceAddress::zeroed();
     ///
     /// security_manager.resolve_rpa_itr(resolvable_private_address).find_map(|keys_opt| keys_opt);
     /// ```
@@ -869,36 +918,31 @@ impl GetXOfP256Key for [u8; 64] {
     }
 }
 
-/// Set which keys are distributed during bonding
-///
-/// This is used by the security manager builders to specify what keys are distributed during
-/// the bonding process.
-///
-/// # Note
-/// Legacy only keys are not distributable.
-pub trait EnabledBondingKeys<'a, B>
-where
-    Self: Sized,
-{
-    /// Enable the distribution of the identity resolving key (IRK)
-    ///
-    /// The identity resolving key is used to generate a resolvable private address. The device(s)
-    /// that contains this key can resolve that address and perform a connection to the device.
-    fn distribute_ltk(&mut self) -> &mut Self;
+/// Bonding keys enabled by a Security Manager
+pub struct EnabledBondingKeysBuilder {
+    irk: bool,
+    csrk: bool,
+}
 
-    /// Enable the distribute of the Connection Signature Resolving Key (CSRK)
-    ///
-    /// A CSRK is used where data is sent, but verification of the sender needs to be performed
-    /// before the data can be accepted. A typical example of this is writing a value to a device.
-    fn distribute_csrk(&mut self) -> &mut Self;
+impl EnabledBondingKeysBuilder {
+    fn new() -> Self {
+        EnabledBondingKeysBuilder {
+            irk: false,
+            csrk: false,
+        }
+    }
 
-    /// Finish setting the keys and return to the builder
-    fn finish_keys(self) -> &'a mut B;
+    /// Enable the distribution of the identity resolving key during bonding
+    pub fn enable_irk(&mut self) -> &mut Self {
+        self.irk = true;
+        self
+    }
 
-    /// Set to the default specification
-    ///
-    /// This sets the keys to the default (which is specified by the bonding key methods)
-    fn default(self) -> &'a mut B;
+    /// Enable the distribution of the connection signature resolving key during bonding
+    pub fn enable_csrk(&mut self) -> &mut Self {
+        self.csrk = true;
+        self
+    }
 }
 
 fn get_keys(ltk: bool, csrk: bool) -> &'static [pairing::KeyDistributions] {

@@ -8,9 +8,9 @@ use super::{
 };
 use crate::l2cap::ConnectionChannel;
 use crate::oob::{
-    sealed_receiver_type::OobReceiverTypeVariant, BuildOutOfBand, ExternalOobReceiver, OobDirection, OobReceiverType,
-    OutOfBandMethodBuilder, OutOfBandSend,
+    sealed_receiver_type::OobReceiverTypeVariant, ExternalOobReceiver, OobDirection, OobReceiverType, OutOfBandSend,
 };
+use crate::EnabledBondingKeysBuilder;
 use alloc::vec::Vec;
 
 /// A builder for a [`SlaveSecurityManager`]
@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 /// # Out of Band Support
 /// A `SlaveSecurityManager` will only support OOB if method `use_oob` of this build is called. It
 ///
-pub struct SlaveSecurityManagerBuilder {
+pub struct SlaveSecurityManagerBuilder<S, R> {
     io_capabilities: pairing::IOCapability,
     encryption_key_min: usize,
     encryption_key_max: usize,
@@ -28,15 +28,17 @@ pub struct SlaveSecurityManagerBuilder {
     this_address: crate::BluetoothDeviceAddress,
     remote_address_is_random: bool,
     this_address_is_random: bool,
-    distribute_ltk: bool,
+    distribute_irk: bool,
     distribute_csrk: bool,
-    accept_ltk: bool,
+    accept_irk: bool,
     accept_csrk: bool,
     prior_keys: Option<super::Keys>,
+    oob_sender: S,
+    oob_receiver: R,
 }
 
-impl SlaveSecurityManagerBuilder {
-    /// Create a new SlaveSecurityManagerBuilder
+impl SlaveSecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupported> {
+    /// Create a new `SlaveSecurityManagerBuilder`
     pub fn new(
         connected_device_address: crate::BluetoothDeviceAddress,
         this_device_address: crate::BluetoothDeviceAddress,
@@ -51,126 +53,167 @@ impl SlaveSecurityManagerBuilder {
             this_address: this_device_address,
             remote_address_is_random: is_connected_devices_address_random,
             this_address_is_random: is_this_device_address_random,
-            distribute_ltk: true,
+            distribute_irk: true,
             distribute_csrk: false,
-            accept_ltk: false,
+            accept_irk: false,
             accept_csrk: false,
             prior_keys: None,
+            oob_sender: crate::oob::Unsupported,
+            oob_receiver: crate::oob::Unsupported,
         }
     }
+}
 
-    /// Set the keys if the devices are already paired
+impl<S, R> SlaveSecurityManagerBuilder<S, R> {
+    /// Set the keys to the peer device if it is already paired
     ///
-    /// Assigns the keys that were previously generated after a successful pair. The long term key
-    /// must be present within `keys` (unless `keys` is `None`). *This method allows for bonding
-    /// keys to be distributed without having to go through pairing.
-    pub fn set_already_paired<K: Into<Option<super::Keys>>>(&mut self, keys: K) -> Result<(), &'static str> {
-        self.prior_keys = keys
-            .into()
-            .map(|keys| {
-                if keys.get_ltk().is_some() {
-                    Ok(keys)
-                } else {
-                    Err("Missing LTK")
-                }
-            })
-            .transpose()?;
+    /// This assigns the keys that were previously generated after a successful pair and bonding.
+    /// This method should only be called after the identity of the peer and associated long term
+    /// key (LTK) is known. Usually this is through successful resolving the resolvable private
+    /// address *of the* peer device.
+    pub fn set_already_paired(mut self, keys: super::Keys) -> Result<Self, &'static str> {
+        if keys.get_ltk().is_some() {
+            self.prior_keys = Some(keys);
 
-        Ok(())
+            Ok(self)
+        } else {
+            Err("missing long term key")
+        }
     }
 
     /// Set the bonding keys to be distributed by the responder
     ///
-    /// This is used to specify within the pairing request packet what bonding keys are going to be
-    /// distributed by the responder security manager.
+    /// When this method is called, the default configuration for key distribution is overwritten to
+    /// disable the distribution of all bonding keys. The return must then be used to selectively
+    /// enable what keys are sent by the security manager when bonding.
     ///
     /// # Note
     /// By default only the Identity Resolving Key (IRK) is distributed by the initiator. This
     /// method does not need to be called if the default key configuration is desired.
-    pub fn sent_bonding_keys(&mut self) -> impl super::EnabledBondingKeys<'_, SlaveSecurityManagerBuilder> {
-        self.distribute_ltk = false;
-        self.distribute_csrk = false;
+    pub fn sent_bonding_keys<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut EnabledBondingKeysBuilder),
+    {
+        let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
-        struct SentKeys<'z>(&'z mut SlaveSecurityManagerBuilder);
+        f(&mut enabled_bonding_keys);
 
-        impl<'z> super::EnabledBondingKeys<'z, SlaveSecurityManagerBuilder> for SentKeys<'z> {
-            fn distribute_ltk(&mut self) -> &mut Self {
-                self.0.distribute_ltk = true;
-                self
-            }
+        self.distribute_irk = enabled_bonding_keys.irk;
+        self.distribute_csrk = enabled_bonding_keys.csrk;
 
-            fn distribute_csrk(&mut self) -> &mut Self {
-                self.0.distribute_csrk = true;
-                self
-            }
-
-            fn finish_keys(self) -> &'z mut SlaveSecurityManagerBuilder {
-                self.0
-            }
-
-            fn default(self) -> &'z mut SlaveSecurityManagerBuilder {
-                self.0.distribute_ltk = true;
-                self.0.distribute_csrk = false;
-                self.0
-            }
-        }
-
-        SentKeys(self)
+        self
     }
 
     /// Set the bonding keys to be accepted by this initiator
     ///
-    /// This is used to specify within the pairing request packet what bonding keys can be received
-    /// by the initiator security manager.
+    /// When this method is called, the default configuration for key distribution is overwritten to
+    /// not accept all bonding all keys. The return must then be used to selectively enable
+    /// what keys are sent by the security manager when bonding.
     ///
     /// # Note
     /// By default no bonding keys are accepted by this initiator. This method does not need to
     /// be called if the default key configuration is desired.
-    pub fn accepted_bonding_keys(&mut self) -> impl super::EnabledBondingKeys<'_, SlaveSecurityManagerBuilder> {
-        self.accept_ltk = false;
-        self.accept_csrk = false;
+    pub fn accepted_bonding_keys<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut EnabledBondingKeysBuilder),
+    {
+        let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
-        struct ReceivedKeys<'z>(&'z mut SlaveSecurityManagerBuilder);
+        f(&mut enabled_bonding_keys);
 
-        impl<'z> super::EnabledBondingKeys<'z, SlaveSecurityManagerBuilder> for ReceivedKeys<'z> {
-            fn distribute_ltk(&mut self) -> &mut Self {
-                self.0.accept_ltk = true;
-                self
-            }
+        self.accept_irk = enabled_bonding_keys.irk;
+        self.accept_csrk = enabled_bonding_keys.csrk;
 
-            fn distribute_csrk(&mut self) -> &mut Self {
-                self.0.accept_csrk = true;
-                self
-            }
-
-            fn finish_keys(self) -> &'z mut SlaveSecurityManagerBuilder {
-                self.0
-            }
-
-            fn default(self) -> &'z mut SlaveSecurityManagerBuilder {
-                self.0.accept_ltk = false;
-                self.0.accept_csrk = false;
-                self.0
-            }
-        }
-
-        ReceivedKeys(self)
+        self
     }
 
-    /// Use or support an out-of-band (OOB) method for pairing
+    /// Set the out of band sender
     ///
-    /// This creates an implementor of `BuildOutOfBand` for creating a `SlaveSecurityManager` that
-    /// will support OOB data transfer. This method requires the ways to send and receive
-    pub fn use_oob<S, R>(
-        self,
-        send: S,
-        receive: R,
-    ) -> impl BuildOutOfBand<Builder = SlaveSecurityManagerBuilder, SecurityManager = SlaveSecurityManager<S, R>>
+    /// This method should only be called if this security manager is to support the sending of
+    /// pairing data through an out of band method. `out of band` means any method outside of the
+    /// Bluetooth connection for pairing done by a security manager. It is up to the user or the two
+    /// pairing devices to decide what that entails.
+    ///
+    /// The out of band `sender` is a function that returns a future. The implementation of that
+    /// function and future are left to the user of this security manager.
+    ///
+    /// ```
+    /// # use bo_tie_util::BluetoothDeviceAddress;
+    /// # let this_addr = BluetoothDeviceAddress::zeroed();
+    /// # let remote_addr = BluetoothDeviceAddress::zeroed();
+    /// # let security_manager_builder = bo_tie_sm::responder::SlaveSecurityManagerBuilder::new(this_addr, remote_addr, false, false);
+    /// # async fn send_over_oob(_: &[u8]) {}
+    ///
+    /// let security_manager = security_manager_builder.set_oob_sender(|pairing_data: &[u8]| async {
+    ///     send_over_oob(pairing_data).await
+    /// });
+    /// ```
+    pub fn set_oob_sender<'a, S2, F>(self, sender: S2) -> SlaveSecurityManagerBuilder<S2, R>
     where
-        S: for<'i> OutOfBandSend<'i>,
-        R: OobReceiverType,
+        S2: FnMut(&'a [u8]) -> F,
+        F: core::future::Future + 'a,
     {
-        OutOfBandMethodBuilder::new(self, send, receive)
+        SlaveSecurityManagerBuilder {
+            io_capabilities: self.io_capabilities,
+            encryption_key_min: self.encryption_key_min,
+            encryption_key_max: self.encryption_key_max,
+            remote_address: self.remote_address,
+            this_address: self.this_address,
+            remote_address_is_random: self.remote_address_is_random,
+            this_address_is_random: self.this_address_is_random,
+            distribute_irk: self.distribute_irk,
+            distribute_csrk: self.distribute_csrk,
+            accept_irk: self.accept_irk,
+            accept_csrk: self.accept_csrk,
+            prior_keys: self.prior_keys,
+            oob_sender: sender,
+            oob_receiver: self.oob_receiver,
+        }
+    }
+
+    /// Set the out of band receiver
+    ///
+    /// This method should only be called if this security manager is to support the reception of
+    /// pairing data through an out of band method.`out of band` means any method outside of the
+    /// Bluetooth connection for pairing done by a security manager. It is up to the user or the two
+    /// pairing devices to decide what that entails.
+    ///
+    /// The out of band `receiver` is a function that returns a future. The implementation of that
+    /// function and future are left to the user of this security manager.
+    ///
+    /// ```
+    /// # use bo_tie_util::BluetoothDeviceAddress;
+    /// # let this_addr = BluetoothDeviceAddress::zeroed();
+    /// # let remote_addr = BluetoothDeviceAddress::zeroed();
+    /// # let security_manager_builder = bo_tie_sm::responder::SlaveSecurityManagerBuilder::new(this_addr, remote_addr, false, false);
+    /// # async fn receive_from_oob() -> Vec<u8> { Vec::new()}
+    ///
+    /// # let sm =
+    /// security_manager_builder.set_oob_receiver(|| async {
+    ///     receive_from_oob().await
+    /// })
+    /// # .build();
+    /// ```
+    pub fn set_oob_receiver<T>(self, receiver: T) -> SlaveSecurityManagerBuilder<S, T>
+    where
+        T: OobReceiverType,
+    {
+        SlaveSecurityManagerBuilder {
+            io_capabilities: self.io_capabilities,
+            encryption_key_min: self.encryption_key_min,
+            encryption_key_max: self.encryption_key_max,
+            remote_address: self.remote_address,
+            this_address: self.this_address,
+            remote_address_is_random: self.remote_address_is_random,
+            this_address_is_random: self.this_address_is_random,
+            distribute_irk: self.distribute_irk,
+            distribute_csrk: self.distribute_csrk,
+            accept_irk: self.accept_irk,
+            accept_csrk: self.accept_csrk,
+            prior_keys: self.prior_keys,
+            oob_sender: self.oob_sender,
+            oob_receiver: receiver,
+        }
     }
 
     /// Create the `SlaveSecurityManager`
@@ -178,16 +221,9 @@ impl SlaveSecurityManagerBuilder {
     /// # Note
     /// This will create a `SlaveSecurityManager` that does not support the out of band pairing
     /// method.
-    pub fn build(self) -> SlaveSecurityManager<(), ()> {
-        self.make((), ())
-    }
-
-    /// Method for making a `SlaveSecurityManager`
-    ///
-    /// This is here to facilitate the tricks done around OOB type implementations.
-    fn make<S, R>(self, oob_send: S, oob_receive: R) -> SlaveSecurityManager<S, R>
+    pub fn build<'a>(self) -> SlaveSecurityManager<S, R>
     where
-        S: for<'a> OutOfBandSend<'a>,
+        S: OutOfBandSend<'a>,
         R: OobReceiverType,
     {
         let auth_req = alloc::vec![
@@ -196,14 +232,14 @@ impl SlaveSecurityManagerBuilder {
             encrypt_info::AuthRequirements::Sc,
         ];
 
-        let initiator_key_distribution = super::get_keys(self.accept_ltk, self.accept_csrk);
+        let initiator_key_distribution = super::get_keys(self.accept_irk, self.accept_csrk);
 
-        let responder_key_distribution = super::get_keys(self.distribute_ltk, self.distribute_csrk);
+        let responder_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
 
         SlaveSecurityManager {
             io_capability: self.io_capabilities,
-            oob_send,
-            oob_receive,
+            oob_send: self.oob_sender,
+            oob_receive: self.oob_receiver,
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
             auth_req,
@@ -217,21 +253,6 @@ impl SlaveSecurityManagerBuilder {
             keys: self.prior_keys,
             link_encrypted: false,
         }
-    }
-}
-
-impl<S, R> BuildOutOfBand for OutOfBandMethodBuilder<SlaveSecurityManagerBuilder, S, R>
-where
-    S: for<'i> OutOfBandSend<'i>,
-    R: OobReceiverType,
-{
-    type Builder = SlaveSecurityManagerBuilder;
-    type SecurityManager = SlaveSecurityManager<S, R>;
-
-    fn build(self) -> Self::SecurityManager {
-        let oob_send = self.send_method;
-        let oob_receive = self.receive_method;
-        self.builder.make(oob_send, oob_receive)
     }
 }
 
@@ -608,22 +629,24 @@ where
     /// This method will panic if the pairing information and public keys were not already generated
     /// in the pairing process.
     async fn receive_oob(&mut self) -> bool {
+        use core::borrow::Borrow;
+
         let data = self.oob_receive.receive().await;
 
-        self.process_received_oob(data)
+        self.process_received_oob(data.borrow())
     }
 
     /// Process the received OOB
     ///
     /// This will check the OOB to determine the validity of the raw data and the confirm within the
     /// raw data. True is returned if everything within `raw` is validated.
-    fn process_received_oob(&self, raw: Vec<u8>) -> bool {
+    fn process_received_oob(&self, raw: &[u8]) -> bool {
         use bo_tie_gap::assigned::{sc_confirm_value, sc_random_value, AssignedTypes, EirOrAdIterator, TryFromStruct};
 
         let mut ra = None;
         let mut ca = None;
 
-        for ad in EirOrAdIterator::new(&raw).silent() {
+        for ad in EirOrAdIterator::new(raw).silent() {
             const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
             const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
 
@@ -1204,7 +1227,7 @@ where
     /// because you cannot call this method.
     ///
     /// This method is tricky as it may only be called at the correct time during the pairing
-    /// process with OOB, but he method
+    /// process with OOB, but the method
     /// [`expecting_oob_data`](SlaveSecurityManager::expecting_oob_data) can be used to get the
     /// correct time to call this method. If any other pairing process is being used, or this is
     /// called at the incorrect time, pairing is canceled and must be restarted by the initiator.
@@ -1215,14 +1238,71 @@ where
     /// device to receive the pairing random message, but do not call the method
     /// [`process_command`](SlaveSecurityManager::process_command) with the message until after this
     /// method is called. The easiest way to know when this occurs is to call the method
-    /// `expecting_oob_data` after processing every security manager message, although this
-    /// procedure can be stopped after this method is called.
+    /// `expecting_oob_data` after processing every security manager message.
     ///
+    /// ```
+    /// # use std::error::Error;
+    /// # use bo_tie_sm::oob::ExternalOobReceiver;
+    /// # use std::future::Future;
+    /// # use bo_tie_l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannel, ConnectionChannelExt, L2capFragment, LEUserChannelIdentifier};
+    /// # use bo_tie_sm::responder::SlaveSecurityManagerBuilder;
+    /// # use bo_tie_util::BluetoothDeviceAddress;
+    /// # let mut security_manager_builder = SlaveSecurityManagerBuilder::new(BluetoothDeviceAddress::zeroed(), BluetoothDeviceAddress::zeroed(), false, false);
+    /// # struct StubConnectionChannel;
+    /// # impl ConnectionChannel for StubConnectionChannel {
+    /// #     type SendBuffer = Vec<u8>;
+    /// #     type SendFut<'a> = std::pin::Pin<Box<dyn Future<Output=Result<(), bo_tie_l2cap::send_future::Error<Self::SendFutErr>>>>>;
+    /// #     type SendFutErr = usize;
+    /// #     type RecvBuffer = Vec<u8>;
+    /// #     type RecvFut<'a> = std::pin::Pin<Box<dyn Future<Output=Option<Result<L2capFragment<Self::RecvBuffer>, bo_tie_l2cap::BasicFrameError<<Self::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>>>>>>;
+    /// #     fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
+    /// #     fn set_mtu(&mut self,mtu: u16) { unimplemented!() }
+    /// #     fn get_mtu(&self) -> usize { unimplemented!() }
+    /// #     fn max_mtu(&self) -> usize { unimplemented!() }
+    /// #     fn min_mtu(&self) -> usize { unimplemented!() }
+    /// #     fn receive(&mut self) -> Self::RecvFut<'_> { unimplemented!() }
+    /// # }
+    /// # let mut connection_channel = StubConnectionChannel;
+    /// # let oob_data = &[];
+    /// # async {
+    /// # let _r: Result<(), Box<dyn Error>> = async {
+    /// const SM_CHANNEL_ID: ChannelIdentifier = ChannelIdentifier::LE(
+    ///     LEUserChannelIdentifier::SecurityManagerProtocol
+    /// );
+    ///    
+    /// let mut security_manager = security_manager_builder
+    ///     .set_oob_receiver(ExternalOobReceiver)
+    ///     .build();
+    ///
+    /// loop {
+    ///     for b_frame in connection_channel.receive_b_frame().await? {
+    ///         match b_frame.get_channel_id() {
+    ///             SM_CHANNEL_ID => {
+    ///                 security_manager.process_command(
+    ///                     &connection_channel,
+    ///                     &b_frame
+    ///                 ).await?;
+    ///
+    ///                 if security_manager.expecting_oob_data() {
+    ///                     security_manager.received_oob_data(
+    ///                         &connection_channel,
+    ///                         oob_data
+    ///                     ).await?;
+    ///                 }  
+    ///             }
+    ///             _ => { /* process other protocols */ }   
+    ///         }
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }.await;
+    /// # };
+    /// ```
     /// # Note
     /// The error `ConfirmValueFailed` can also be returned, but that means that the method was
     /// called at the correct time, just that pairing was going to fail because of the confirm value
     /// check failing.
-    pub async fn received_oob_data<C>(&mut self, connection_channel: &C, data: Vec<u8>) -> Result<(), Error>
+    pub async fn received_oob_data<C>(&mut self, connection_channel: &C, data: &[u8]) -> Result<(), Error>
     where
         C: ConnectionChannel,
     {

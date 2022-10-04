@@ -12,7 +12,11 @@ log = "0.4"
 p256 = "0.11"
 serde = { version = "1", features = ["derive"], optional = true }
 
+[dev-dependencies]
+bo-tie-l2cap = { path = "../bo-tie-l2cap", features = ["std"] }
+
 [features]
+std = []
 serde = ["dep:serde", "bo-tie-util/serde"]
 
 [package.metadata.docs.rs]

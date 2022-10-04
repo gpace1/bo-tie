@@ -625,7 +625,7 @@ mod tests {
     fn try_from_icd_ec_dh_test() {
         use super::super::CommandData;
 
-        let (pri_key, _) = ecc_gen().expect("Failed to generate pri-pub key");
+        let (pri_key, _) = ecc_gen();
 
         // This is the x and y of the public key specified in the Bluetooth Specification v5.0 | Vol
         // 3, Part H, Section 2.3.5.6.1
@@ -643,6 +643,6 @@ mod tests {
 
         let peer_key = PubKey::try_from_icd(&raw_peer_key).expect("Failed to make PeerKey");
 
-        let _secret = ecdh(pri_key, &peer_key).expect("Failed to generate secret");
+        let _secret = ecdh(pri_key, &peer_key);
     }
 }

@@ -564,6 +564,29 @@ impl PairingFailedReason {
     }
 }
 
+impl core::fmt::Display for PairingFailedReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            PairingFailedReason::PasskeyEntryFailed => f.write_str("passkey entry failed"),
+            PairingFailedReason::OOBNotAvailable => f.write_str("out of band data not available"),
+            PairingFailedReason::AuthenticationRequirements => f.write_str("authentication requirements not met"),
+            PairingFailedReason::ConfirmValueFailed => f.write_str("confirm value check failed"),
+            PairingFailedReason::PairingNotSupported => f.write_str("pairing not supported"),
+            PairingFailedReason::EncryptionKeySize => f.write_str("invalid encryption key size"),
+            PairingFailedReason::CommandNotSupported => f.write_str("security manager command not supported"),
+            PairingFailedReason::UnspecifiedReason => f.write_str("unspecified reason"),
+            PairingFailedReason::RepeatedAttempts => f.write_str("too many attempts at pairing"),
+            PairingFailedReason::InvalidParameters => f.write_str("invalid parameters"),
+            PairingFailedReason::DHKeyCheckFailed => f.write_str("Diffie Hellman key check failed"),
+            PairingFailedReason::NumericComparisonFailed => f.write_str("numeric comparison failed"),
+            PairingFailedReason::BrEdrPairingInProgress => f.write_str("BR/EDR pairing in progress"),
+            PairingFailedReason::CrossTransportKeyDerivationGenerationNotAllowed => {
+                f.write_str("cross transport key derivation generation not allowed")
+            }
+        }
+    }
+}
+
 pub struct PairingFailed {
     reason: PairingFailedReason,
 }

@@ -1,14 +1,15 @@
 /// The initiator implementation of a Security Manager
-use super::oob::{BuildOutOfBand, OutOfBandMethodBuilder, OutOfBandSend};
+use super::oob::OutOfBandSend;
 use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
 };
 use crate::l2cap::ConnectionChannel;
 use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
 use crate::oob::{ExternalOobReceiver, OobDirection, OobReceiverType};
+use crate::EnabledBondingKeysBuilder;
 use alloc::vec::Vec;
 
-pub struct MasterSecurityManagerBuilder {
+pub struct MasterSecurityManagerBuilder<S, R> {
     io_capabilities: pairing::IOCapability,
     encryption_key_min: usize,
     encryption_key_max: usize,
@@ -16,14 +17,16 @@ pub struct MasterSecurityManagerBuilder {
     this_address: crate::BluetoothDeviceAddress,
     remote_address_is_random: bool,
     this_address_is_random: bool,
-    distribute_ltk: bool,
+    distribute_irk: bool,
     distribute_csrk: bool,
-    accept_ltk: bool,
+    accept_irk: bool,
     accept_csrk: bool,
     prior_keys: Option<super::Keys>,
+    oob_sender: S,
+    oob_receiver: R,
 }
 
-impl MasterSecurityManagerBuilder {
+impl MasterSecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupported> {
     /// Create a new `MasterSecurityManagerBuilder`
     pub fn new(
         connected_device_address: crate::BluetoothDeviceAddress,
@@ -39,32 +42,32 @@ impl MasterSecurityManagerBuilder {
             this_address: this_device_address,
             remote_address_is_random: is_connected_devices_address_random,
             this_address_is_random: is_this_device_address_random,
-            distribute_ltk: false,
+            distribute_irk: false,
             distribute_csrk: false,
-            accept_ltk: true,
+            accept_irk: true,
             accept_csrk: true,
             prior_keys: None,
+            oob_sender: crate::oob::Unsupported,
+            oob_receiver: crate::oob::Unsupported,
         }
     }
+}
 
-    /// Set the keys if the devices are already paired
+impl<S, R> MasterSecurityManagerBuilder<S, R> {
+    /// Set the keys to the peer device if it is already paired
     ///
-    /// Assigns the keys that were previously generated after a successful pair. The long term key
-    /// must be present within `keys` (unless `keys` is `None`). *This method allows for bonding
-    /// keys to be distributed without having to go through pairing.
-    pub fn set_already_paired<K: Into<Option<super::Keys>>>(&mut self, keys: K) -> Result<(), &'static str> {
-        self.prior_keys = keys
-            .into()
-            .map(|keys| {
-                if keys.get_ltk().is_some() {
-                    Ok(keys)
-                } else {
-                    Err("Missing LTK")
-                }
-            })
-            .transpose()?;
+    /// This assigns the keys that were previously generated after a successful pair and bonding.
+    /// This method should only be called after the identity of the peer and associated long term
+    /// key (LTK) is known. Usually this is through successful resolving the resolvable private
+    /// address *by the* peer device.
+    pub fn set_already_paired(mut self, keys: super::Keys) -> Result<Self, &'static str> {
+        if keys.get_ltk().is_some() {
+            self.prior_keys = Some(keys);
 
-        Ok(())
+            Ok(self)
+        } else {
+            Err("missing long term key")
+        }
     }
 
     /// Set the bonding keys to be distributed by the initiator
@@ -75,37 +78,18 @@ impl MasterSecurityManagerBuilder {
     /// # Note
     /// By default no bonding keys are distributed by this initiator. This method does not need to
     /// be called if the default key configuration is desired.
-    pub fn sent_bonding_keys<'a>(
-        &'a mut self,
-    ) -> impl super::EnabledBondingKeys<'a, MasterSecurityManagerBuilder> + 'a {
-        self.distribute_ltk = false;
-        self.distribute_csrk = false;
+    pub fn sent_bonding_keys<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut EnabledBondingKeysBuilder),
+    {
+        let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
-        struct SentKeys<'z>(&'z mut MasterSecurityManagerBuilder);
+        f(&mut enabled_bonding_keys);
 
-        impl<'z> super::EnabledBondingKeys<'z, MasterSecurityManagerBuilder> for SentKeys<'z> {
-            fn distribute_ltk(&mut self) -> &mut Self {
-                self.0.distribute_ltk = true;
-                self
-            }
+        self.distribute_irk = enabled_bonding_keys.irk;
+        self.distribute_csrk = enabled_bonding_keys.csrk;
 
-            fn distribute_csrk(&mut self) -> &mut Self {
-                self.0.distribute_csrk = true;
-                self
-            }
-
-            fn finish_keys(self) -> &'z mut MasterSecurityManagerBuilder {
-                self.0
-            }
-
-            fn default(self) -> &'z mut MasterSecurityManagerBuilder {
-                self.0.distribute_ltk = false;
-                self.0.distribute_csrk = false;
-                self.0
-            }
-        }
-
-        SentKeys(self)
+        self
     }
 
     /// Set the bonding keys to be accepted by this initiator
@@ -116,53 +100,120 @@ impl MasterSecurityManagerBuilder {
     /// # Note
     /// By default all bonding keys are accepted by this initiator. This method does not need to
     /// be called if the default key configuration is desired.
-    pub fn accepted_bonding_keys<'a>(
-        &'a mut self,
-    ) -> impl super::EnabledBondingKeys<'a, MasterSecurityManagerBuilder> + 'a {
-        self.accept_ltk = false;
-        self.accept_csrk = false;
+    pub fn accepted_bonding_keys<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut EnabledBondingKeysBuilder),
+    {
+        let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
-        struct ReceivedKeys<'z>(&'z mut MasterSecurityManagerBuilder);
+        f(&mut enabled_bonding_keys);
 
-        impl<'z> super::EnabledBondingKeys<'z, MasterSecurityManagerBuilder> for ReceivedKeys<'z> {
-            fn distribute_ltk(&mut self) -> &mut Self {
-                self.0.accept_ltk = true;
-                self
-            }
+        self.accept_irk = enabled_bonding_keys.irk;
+        self.accept_csrk = enabled_bonding_keys.csrk;
 
-            fn distribute_csrk(&mut self) -> &mut Self {
-                self.0.accept_csrk = true;
-                self
-            }
-
-            fn finish_keys(self) -> &'z mut MasterSecurityManagerBuilder {
-                self.0
-            }
-
-            fn default(self) -> &'z mut MasterSecurityManagerBuilder {
-                self.0.accept_ltk = true;
-                self.0.accept_csrk = true;
-                self.0
-            }
-        }
-
-        ReceivedKeys(self)
+        self
     }
 
-    /// Enable the usage of out-of-band (OOB) pairing
+    /// Set the out of band sender
     ///
-    /// This creates an implementor of `BuildOutOfBand` for creating a `MasterSecurityManager` that
-    /// will support OOB data transfer.
-    pub fn use_oob<S, R>(
-        self,
-        send: S,
-        receive: R,
-    ) -> impl BuildOutOfBand<Builder = MasterSecurityManagerBuilder, SecurityManager = MasterSecurityManager<S, R>>
+    /// This method should only be called if this security manager is to support the sending of
+    /// pairing data through an out of band method. `out of band` means any method outside of the
+    /// Bluetooth connection for pairing done by a security manager. It is up to the user or the two
+    /// pairing devices to decide what that entails.
+    ///
+    /// The out of band `sender` is a function that returns a future. The implementation of that
+    /// function and future are left to the user of this security manager.
+    ///
+    /// ```
+    /// # use bo_tie_util::BluetoothDeviceAddress;
+    /// # let this_addr = BluetoothDeviceAddress::zeroed();
+    /// # let remote_addr = BluetoothDeviceAddress::zeroed();
+    /// # let security_manager_builder = bo_tie_sm::initiator::MasterSecurityManagerBuilder::new(this_addr, remote_addr, false, false);
+    /// # async fn send_over_oob(a: &[u8]) { panic!("{:?}", a)}
+    ///
+    /// security_manager_builder.set_oob_sender(|pairing_data: &[u8]| async move {
+    ///     let _p = pairing_data;
+    /// })
+    /// # .build();
+    /// ```
+    pub fn set_oob_sender<'a, S2, F>(self, sender: S2) -> MasterSecurityManagerBuilder<S2, R>
     where
-        S: for<'i> OutOfBandSend<'i>,
-        R: OobReceiverType,
+        S2: FnMut(&'a [u8]) -> F,
+        F: core::future::Future + 'a,
     {
-        OutOfBandMethodBuilder::new(self, send, receive)
+        MasterSecurityManagerBuilder {
+            io_capabilities: self.io_capabilities,
+            encryption_key_min: self.encryption_key_min,
+            encryption_key_max: self.encryption_key_max,
+            remote_address: self.remote_address,
+            this_address: self.this_address,
+            remote_address_is_random: self.remote_address_is_random,
+            this_address_is_random: self.this_address_is_random,
+            distribute_irk: self.distribute_irk,
+            distribute_csrk: self.distribute_csrk,
+            accept_irk: self.accept_irk,
+            accept_csrk: self.accept_csrk,
+            prior_keys: self.prior_keys,
+            oob_sender: sender,
+            oob_receiver: self.oob_receiver,
+        }
+    }
+
+    /// Set the out of band receiver
+    ///
+    /// This method should only be called if this security manager is to support the reception of
+    /// pairing data through an out of band method.`out of band` means any method outside of the
+    /// Bluetooth connection for pairing done by a security manager. It is up to the user or the two
+    /// pairing devices to decide what that entails.
+    ///
+    /// The out of band `receiver` is a function that returns a future. The implementation of that
+    /// function and future are left to the user of this security manager.
+    ///
+    /// ```
+    /// # use bo_tie_util::BluetoothDeviceAddress;
+    /// # let this_addr = BluetoothDeviceAddress::zeroed();
+    /// # let remote_addr = BluetoothDeviceAddress::zeroed();
+    /// # let security_manager_builder = bo_tie_sm::initiator::MasterSecurityManagerBuilder::new(this_addr, remote_addr, false, false);
+    /// # async fn receive_from_oob() -> Vec<u8> { Vec::new()}
+    ///
+    /// security_manager_builder.set_oob_receiver(|| async {
+    ///     receive_from_oob().await
+    /// })
+    /// # .build();
+    /// ```
+    ///
+    /// # External to the Security Manager Out of Band Data.
+    /// Sometimes the infrastructure for receiving out of band data is not available when a security
+    /// manager is created. The marker type [`ExternalOobReceiver`] may be used as the `receiver` to
+    /// indicate that the out of band data must be set by the method [`received_oob_data`]. This is
+    /// not the ideal method of integrating OOB into the security manager as there is a number of
+    /// strict requirements for using that method.
+    ///
+    /// The main reason why using `ExternalOobReceiver` is not recommended as the approach shown in
+    /// the example is a set it and forget it approach.
+    ///
+    /// [`ExternalOobReceiver`]: crate::oob::ExternalOobReceiver
+    /// [`received_oob_data`]: MasterSecurityManager::received_oob_data
+    pub fn set_oob_receiver<R2>(self, receiver: R2) -> MasterSecurityManagerBuilder<S, R2>
+    where
+        R2: OobReceiverType,
+    {
+        MasterSecurityManagerBuilder {
+            io_capabilities: self.io_capabilities,
+            encryption_key_min: self.encryption_key_min,
+            encryption_key_max: self.encryption_key_max,
+            remote_address: self.remote_address,
+            this_address: self.this_address,
+            remote_address_is_random: self.remote_address_is_random,
+            this_address_is_random: self.this_address_is_random,
+            distribute_irk: self.distribute_irk,
+            distribute_csrk: self.distribute_csrk,
+            accept_irk: self.accept_irk,
+            accept_csrk: self.accept_csrk,
+            prior_keys: self.prior_keys,
+            oob_sender: self.oob_sender,
+            oob_receiver: receiver,
+        }
     }
 
     /// Create the `MasterSecurityManager`
@@ -170,16 +221,9 @@ impl MasterSecurityManagerBuilder {
     /// # Note
     /// This will create a `MasterSecurityManager` that does not support the out of band pairing
     /// method.
-    pub fn build(self) -> MasterSecurityManager<(), ()> {
-        self.make((), ())
-    }
-
-    /// Method for making a `MasterSecurityManager`
-    ///
-    /// This is here to facilitate the tricks done around OOB type implementations.
-    fn make<S, R>(self, oob_send: S, oob_receive: R) -> MasterSecurityManager<S, R>
+    pub fn build<'a>(self) -> MasterSecurityManager<S, R>
     where
-        S: for<'i> OutOfBandSend<'i>,
+        S: OutOfBandSend<'a>,
         R: OobReceiverType,
     {
         let auth_req = alloc::vec![
@@ -188,9 +232,9 @@ impl MasterSecurityManagerBuilder {
             encrypt_info::AuthRequirements::Sc,
         ];
 
-        let initiator_key_distribution = super::get_keys(self.distribute_ltk, self.distribute_csrk);
+        let initiator_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
 
-        let responder_key_distribution = super::get_keys(self.accept_ltk, self.accept_csrk);
+        let responder_key_distribution = super::get_keys(self.accept_irk, self.accept_csrk);
 
         let pairing_request = pairing::PairingRequest::new(
             self.io_capabilities,
@@ -208,8 +252,8 @@ impl MasterSecurityManagerBuilder {
         MasterSecurityManager {
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
-            oob_send,
-            oob_receive,
+            oob_send: self.oob_sender,
+            oob_receive: self.oob_receiver,
             pairing_request,
             initiator_address: self.this_address,
             responder_address: self.remote_address,
@@ -220,21 +264,6 @@ impl MasterSecurityManagerBuilder {
             link_encrypted: false,
             pairing_expected_cmd: None,
         }
-    }
-}
-
-impl<S, R> BuildOutOfBand for OutOfBandMethodBuilder<MasterSecurityManagerBuilder, S, R>
-where
-    S: for<'i> OutOfBandSend<'i>,
-    R: OobReceiverType,
-{
-    type Builder = MasterSecurityManagerBuilder;
-    type SecurityManager = MasterSecurityManager<S, R>;
-
-    fn build(self) -> Self::SecurityManager {
-        let oob_send = self.send_method;
-        let oob_receive = self.receive_method;
-        self.builder.make(oob_send, oob_receive)
     }
 }
 
@@ -884,22 +913,24 @@ where
     /// This method will panic if the pairing information and public keys were not already generated
     /// in the pairing process.
     async fn receive_oob(&mut self) -> bool {
+        use core::borrow::Borrow;
+
         let data = self.oob_receive.receive().await;
 
-        self.process_received_oob(data)
+        self.process_received_oob(data.borrow())
     }
 
     /// Process the received OOB
     ///
     /// This will check the OOB to determine the validity of the raw data and the confirm within the
     /// raw data. True is returned if everything within `raw` is validated.
-    fn process_received_oob(&self, raw: Vec<u8>) -> bool {
+    fn process_received_oob(&self, raw: &[u8]) -> bool {
         use bo_tie_gap::assigned::{sc_confirm_value, sc_random_value, AssignedTypes, EirOrAdIterator, TryFromStruct};
 
         let mut rb = None;
         let mut cb = None;
 
-        for ad in EirOrAdIterator::new(&raw).silent() {
+        for ad in EirOrAdIterator::new(raw).silent() {
             const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
             const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
 
@@ -1372,7 +1403,7 @@ where
             ) => {
                 *expected_command = super::CommandType::PairingRandom.into();
 
-                self.oob_confirm_result(connection_channel, self.process_received_oob(data))
+                self.oob_confirm_result(connection_channel, self.process_received_oob(&data))
                     .await
             }
             _ => {
