@@ -288,6 +288,9 @@ impl<E: core::fmt::Display> core::fmt::Display for BasicFrameError<E> {
     }
 }
 
+#[cfg(feature = "std")]
+impl<E: std::error::Error> std::error::Error for BasicFrameError<E> {}
+
 impl<E> BasicFrameError<E> {
     // A temporary method until buffering
     fn to_infallible(self) -> BasicFrameError<core::convert::Infallible> {
@@ -685,8 +688,8 @@ pub trait ConnectionChannel {
 pub trait ConnectionChannelExt: ConnectionChannel {
     /// A receiver for complete [`BasicInfoFrame`] L2CAP PDU.
     ///
-    /// This returns a [`ConChanFutureRx`] that will return a `BasicInfoFrame` once it has polled to
-    /// completion.
+    /// This returns a [`ConChanFutureRx`] that will output a vector of `BasicInfoFrame` once it has
+    /// polled to completion.
     fn receive_b_frame(&mut self) -> ConChanFutureRx<'_, Self> {
         ConChanFutureRx::new(self)
     }
