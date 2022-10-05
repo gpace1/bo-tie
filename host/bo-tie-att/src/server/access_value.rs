@@ -5,9 +5,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-/// The trivial implementation
+/// The trivial implementation of [`AccessValue`]
 ///
-/// Any value that does not have an *accessor* type is wrapped within
+/// When adding attributes to a [`ServerAttributes`] or a [`Server`] via the method `push` the
+/// value attribute value is wrapped within a `Trivial` before being added to the list of
+/// attributes.
+///
+/// [`ServerAttributes`]: super::ServerAttributes
+/// [`Server`]: super::Server
 pub struct Trivial<V>(pub V);
 
 /// The trivial implementation for ServerAttributeValue

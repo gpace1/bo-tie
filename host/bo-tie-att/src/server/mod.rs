@@ -63,7 +63,7 @@
 //! [`ServerAttributes`]: crate::server::ServerAttributes
 //! [`Attribute`]: crate::server::ServerAttributeValue
 
-mod access_value;
+pub mod access_value;
 #[cfg(test)]
 mod tests;
 
