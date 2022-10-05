@@ -438,8 +438,8 @@ impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V> {
 impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V>
 where
     U: Into<Uuid>,
-    C: att::server::ServerAttributeValue<Value = V> + Sized + Send + 'static,
-    V: att::TransferFormatTryFrom + att::TransferFormatInto + 'static,
+    C: att::server::ServerAttributeValue<Value = V> + Sized + Send + Sync + 'static,
+    V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
 {
     /// Set the value (Required)
     ///
