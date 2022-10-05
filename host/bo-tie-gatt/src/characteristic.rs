@@ -1,5 +1,6 @@
 use crate::{att, Uuid};
 use alloc::{format, string::String, vec::Vec};
+use bo_tie_att::server::access_value::Trivial;
 
 /// Characteristic Properties
 ///
@@ -399,11 +400,11 @@ impl ServerConfiguration {
     const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
 }
 
-pub struct CharacteristicBuilder<'a, 'c, U, C, V> {
+pub struct CharacteristicBuilder<'a, 'c, U, V> {
     characteristic_adder: super::CharacteristicAdder<'a>,
     properties: VecWrap<Properties>,
     uuid: Option<U>,
-    value: Option<C>,
+    value: Option<V>,
     value_permissions: &'c [att::AttributePermissions],
     ext_prop: Option<VecWrap<ExtendedProperties>>,
     ext_prop_permissions: Option<&'c [att::AttributePermissions]>,
@@ -412,10 +413,9 @@ pub struct CharacteristicBuilder<'a, 'c, U, C, V> {
     client_cfg_permissions: Option<&'c [att::AttributePermissions]>,
     server_cfg: Option<VecWrap<ServerConfiguration>>,
     server_cfg_permissions: Option<&'c [att::AttributePermissions]>,
-    pd: core::marker::PhantomData<V>,
 }
 
-impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V> {
+impl<'a, 'c, U, V> CharacteristicBuilder<'a, 'c, U, V> {
     pub(super) fn new(characteristic_adder: super::CharacteristicAdder<'a>) -> Self {
         CharacteristicBuilder {
             characteristic_adder,
@@ -430,25 +430,45 @@ impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V> {
             client_cfg_permissions: None,
             server_cfg: None,
             server_cfg_permissions: None,
-            pd: core::marker::PhantomData,
         }
     }
 }
 
-impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C, V>
+impl<'a, 'c, U, V> CharacteristicBuilder<'a, 'c, U, Trivial<V>>
 where
-    U: Into<Uuid>,
-    C: att::server::ServerAttributeValue<Value = V> + Sized + Send + Sync + 'static,
-    V: att::TransferFormatTryFrom + att::TransferFormatInto + Send + Sync + 'static,
+    V: att::TransferFormatTryFrom + att::TransferFormatInto + PartialEq + Send + Sync + 'static,
 {
     /// Set the value (Required)
     ///
     /// This is the value that is placed within the value descriptor.
     ///
     /// # Note
-    /// This function must be called before `build_characteristic`
-    pub fn set_value(mut self, value: C) -> Self {
-        self.value = Some(value);
+    /// This function or `set_value_accessible` must be called before `build_characteristic`
+    pub fn set_value(mut self, value: V) -> Self {
+        self.value = Some(Trivial(value));
+
+        self
+    }
+}
+
+impl<'a, 'c, U, C, V> CharacteristicBuilder<'a, 'c, U, C>
+where
+    C: att::server::AccessValue<Value = V> + Sized + Send + Sync + 'static,
+    V: att::TransferFormatTryFrom + att::TransferFormatInto + PartialEq + Send + Sync + 'static,
+{
+    /// Set an accessible value (alternative for `set_value`)
+    ///
+    /// An accessor is a wrapper around the value. Its intended but not required that the accessor
+    /// to be used for providing synchronization safe access to the value. The value will be
+    /// accessed by the attribute protocol through awaiting the `Read` and `Write` futures.
+    ///
+    /// # Note
+    /// This function or `set_value` must be called before `build_characteristic`
+    ///
+    /// [`Read`]: att::server::AccessValue::Read
+    /// [`Write`]: att::server::AccessValue::Write
+    pub fn set_value_accessible(mut self, accessor: C) -> Self {
+        self.value = Some(accessor);
 
         self
     }
@@ -457,7 +477,10 @@ where
     ///
     /// # Note
     /// This function must be called before `build_characteristic`
-    pub fn set_uuid(mut self, uuid: U) -> Self {
+    pub fn set_uuid(mut self, uuid: U) -> Self
+    where
+        U: Into<Uuid>,
+    {
         self.uuid = Some(uuid);
 
         self
@@ -532,10 +555,16 @@ where
     /// Build constructing the Characteristic
     ///
     /// This will return the CharacteristicAdder that was used to make this CharacteristicBuilder.
-    pub fn complete_characteristic(mut self) -> super::CharacteristicAdder<'a> {
+    ///
+    /// # Panic
+    /// If any of the required builder methods were not called this will panic
+    pub fn complete_characteristic(mut self) -> super::CharacteristicAdder<'a>
+    where
+        U: Into<Uuid>,
+    {
         use att::Attribute;
 
-        let uuid = self.uuid.unwrap().into();
+        let uuid = self.uuid.expect("UUID not set").into();
 
         let attributes = &mut self.characteristic_adder.service_builder.server_builder.attributes;
 
@@ -547,7 +576,7 @@ where
 
         let value_decl = ValueDeclaration {
             att_type: uuid,
-            value: self.value.unwrap(),
+            value: self.value.expect("value not set"),
             permissions: self.value_permissions.into(),
         };
 
@@ -574,7 +603,7 @@ where
         );
 
         // last_attr is handle value of the added attribute
-        attributes.push(value);
+        attributes.push_accessor(value);
 
         if let Some(ext) = self.ext_prop.take() {
             attributes.push(Attribute::new(

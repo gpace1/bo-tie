@@ -335,7 +335,7 @@ impl<'a> CharacteristicAdder<'a> {
     /// Create a new characteristic builder
     ///
     /// The created builder will be used for setting up and creating a new characteristic.
-    pub fn new_characteristic<'c, U, C, V>(self) -> characteristic::CharacteristicBuilder<'a, 'c, U, C, V> {
+    pub fn new_characteristic<'c, U, V>(self) -> characteristic::CharacteristicBuilder<'a, 'c, U, V> {
         characteristic::CharacteristicBuilder::new(self)
     }
 
