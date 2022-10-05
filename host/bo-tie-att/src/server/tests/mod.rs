@@ -4,7 +4,6 @@ mod basic_queue_writer;
 mod blob_data;
 mod permissions;
 
-use crate::server::PinnedFuture;
 use crate::{pdu, TransferFormatInto};
 use alloc::vec::Vec;
 use bo_tie_l2cap::send_future::Error;
@@ -72,39 +71,6 @@ impl ConnectionChannel for DummyConnection {
 
     fn receive(&mut self) -> Self::RecvFut<'_> {
         DummyRecvFut
-    }
-}
-
-#[derive(Clone)]
-struct AMutex<D>(std::sync::Arc<tokio::sync::Mutex<D>>);
-
-impl<D> From<D> for AMutex<D> {
-    fn from(data: D) -> Self {
-        AMutex(std::sync::Arc::new(tokio::sync::Mutex::new(data)))
-    }
-}
-
-impl<D> super::ServerAttributeValue for AMutex<D>
-where
-    D: std::cmp::PartialEq + Send + Sync,
-{
-    type Value = D;
-
-    fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
-    where
-        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync + 'a,
-    {
-        let mutex = self.0.clone();
-
-        Box::pin(async move { f(&*mutex.lock().await) })
-    }
-
-    fn write_val(self: &mut Self, val: Self::Value) -> PinnedFuture<'_, ()> {
-        Box::pin(async move { *self.0.lock().await = val })
-    }
-
-    fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a, bool> {
-        Box::pin(async move { &*self.0.lock().await == other })
     }
 }
 

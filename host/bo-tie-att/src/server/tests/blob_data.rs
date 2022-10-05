@@ -4,12 +4,14 @@ use super::{pdu_into_acl_data, DummyConnection};
 use crate::server::tests::{DummyRecvFut, DummySendFut};
 use crate::{
     pdu,
-    server::{NoQueuedWrites, PinnedFuture, Server, ServerAttributeValue, ServerAttributes, ServerPduName},
+    server::{NoQueuedWrites, Server, ServerAttributes, ServerPduName},
     Attribute, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
     TransferFormatTryFrom, Uuid,
 };
 use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel, MinimumMtu};
 use bo_tie_util::buffer::de_vec::DeVec;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// A connection channel that counts the number of payload bytes sent
 ///
@@ -97,21 +99,18 @@ impl ConnectionChannel for SendWatchConnection {
 /// # Note
 /// This is not actually Send or Sync, but it is given these traits to get around generic
 /// requirements when adding this to a `ServerAttributes`.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 struct DynSizedAttribute {
-    data: std::rc::Rc<std::cell::RefCell<Vec<usize>>>,
+    data: Vec<usize>,
 }
-
-unsafe impl Send for DynSizedAttribute {}
-unsafe impl Sync for DynSizedAttribute {}
 
 impl TransferFormatInto for DynSizedAttribute {
     fn len_of_into(&self) -> usize {
-        self.data.borrow().len() * core::mem::size_of::<usize>()
+        self.data.len() * core::mem::size_of::<usize>()
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        (*self.data.borrow()).build_into_ret(into_ret)
+        self.data.build_into_ret(into_ret)
     }
 }
 
@@ -124,28 +123,9 @@ impl TransferFormatTryFrom for DynSizedAttribute {
     }
 }
 
-impl ServerAttributeValue for DynSizedAttribute {
-    type Value = Vec<usize>;
-
-    fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
-    where
-        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync + 'a,
-    {
-        Box::pin(async move { f(&*self.data.borrow()) })
-    }
-
-    fn write_val(self: &mut Self, _: Self::Value) -> PinnedFuture<'_, ()> {
-        unimplemented!()
-    }
-
-    fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a, bool> {
-        Box::pin(async move { &*self.data.borrow() == other })
-    }
-}
-
 struct BlobTestInfo<Q> {
     att_uuid: Uuid,
-    att_val: DynSizedAttribute,
+    att_val: Arc<Mutex<DynSizedAttribute>>,
     att_handle: u16,
     server: Server<Q>,
 }
@@ -154,17 +134,17 @@ impl BlobTestInfo<NoQueuedWrites> {
     fn new() -> Self {
         let mut server_attribute = ServerAttributes::new();
 
-        let att_uuid = 0x1u16.into();
+        let att_uuid = Uuid::from_u16(0x1u16);
 
-        let att_val = DynSizedAttribute::default();
+        let att_val: Arc<Mutex<DynSizedAttribute>> = Arc::default();
 
         let att = Attribute::new(
             att_uuid,
-            [AttributePermissions::Read(AttributeRestriction::None)].into(),
+            [AttributePermissions::Read(AttributeRestriction::None)].to_vec(),
             att_val.clone(),
         );
 
-        let att_handle = server_attribute.push(att);
+        let att_handle = server_attribute.push_accessor(att);
 
         let mut server = Server::new(server_attribute, NoQueuedWrites);
 
@@ -188,6 +168,7 @@ fn rand_usize_vec(size: usize) -> Vec<usize> {
 }
 
 #[tokio::test]
+#[cfg(feature = "tokio")]
 async fn blobbing_from_blob_request() {
     let mut connection_channel = SendWatchConnection::default();
 
@@ -216,7 +197,7 @@ async fn blobbing_from_blob_request() {
 
     // Test data that should cause blobbing when read
 
-    *bti.att_val.data.borrow_mut() = rand_usize_vec(item_cnt);
+    bti.att_val.lock().await.data = rand_usize_vec(item_cnt);
 
     let request_2 = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, 0));
 
@@ -229,7 +210,7 @@ async fn blobbing_from_blob_request() {
 
     assert_eq!(
         bti.server.blob_data.as_ref().unwrap().tf_data,
-        TransferFormatInto::into(&*bti.att_val.data.borrow())
+        TransferFormatInto::into(&bti.att_val.lock().await.data)
     );
 
     assert_eq!(bti.server.blob_data.as_ref().unwrap().handle, bti.att_handle);
@@ -300,11 +281,12 @@ async fn blobbing_from_blob_request() {
 
     assert_eq!(
         bti.server.blob_data.as_ref().unwrap().tf_data,
-        TransferFormatInto::into(&*bti.att_val.data.borrow())
+        TransferFormatInto::into(&bti.att_val.lock().await.data)
     );
 }
 
 #[tokio::test]
+#[cfg(feature = "tokio")]
 async fn blobbing_from_read_request_test() {
     let mut blob_info = BlobTestInfo::new();
 
@@ -318,7 +300,7 @@ async fn blobbing_from_read_request_test() {
 
     assert!(blob_info.server.blob_data.is_none());
 
-    *blob_info.att_val.data.borrow_mut() = rand_usize_vec(32);
+    blob_info.att_val.lock().await.data = rand_usize_vec(32);
 
     let request_2 = pdu_into_acl_data(pdu::read_request(blob_info.att_handle));
 
@@ -332,6 +314,7 @@ async fn blobbing_from_read_request_test() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tokio")]
 async fn blobbing_from_read_by_type() {
     let mut blob_info = BlobTestInfo::new();
 
@@ -345,7 +328,7 @@ async fn blobbing_from_read_by_type() {
 
     assert!(blob_info.server.blob_data.is_none());
 
-    *blob_info.att_val.data.borrow_mut() = rand_usize_vec(32);
+    blob_info.att_val.lock().await.data = rand_usize_vec(32);
 
     let request_2 = pdu_into_acl_data(pdu::read_by_type_request(.., blob_info.att_uuid));
 

@@ -1,12 +1,14 @@
 //! Tests for the [`BasicQueuedWriter`](crate::server::BasicQueuedWriter)
 
-use super::{pdu_into_acl_data, AMutex, PayloadConnection};
+use super::{pdu_into_acl_data, PayloadConnection};
 use crate::{
     pdu,
     server::{BasicQueuedWriter, Server, ServerAttributes},
     TransferFormatTryFrom,
 };
 use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[tokio::test]
 async fn prepare_write_with_exec_test() {
@@ -24,11 +26,11 @@ async fn prepare_write_with_exec_test() {
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
-    let att_val = AMutex::from(String::new());
+    let att_val: Arc<Mutex<String>> = Arc::default();
 
     let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
 
-    let att_handle = server.push(att);
+    let att_handle = server.push_accessor(att);
 
     let test_data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Fusce a nisi in t\
             urpis interdum pharetra. Vestibulum lorem turpis, sodales sit amet facilisis sed, hendr\
@@ -69,7 +71,7 @@ async fn prepare_write_with_exec_test() {
 
     <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
-    assert_eq!(&*att_val.0.lock().await, test_data);
+    assert_eq!(&*att_val.lock().await, test_data);
 }
 
 #[tokio::test]
@@ -88,11 +90,11 @@ async fn prepare_write_with_cancel_test() {
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
-    let att_val = AMutex::from(String::new());
+    let att_val: Arc<Mutex<String>> = Arc::default();
 
     let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
 
-    let att_handle = server.push(att);
+    let att_handle = server.push_accessor(att);
 
     let test_data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Fusce a nisi in t\
             urpis interdum pharetra. Vestibulum lorem turpis, sodales sit amet facilisis sed, hendr\
@@ -121,7 +123,7 @@ async fn prepare_write_with_cancel_test() {
 
     <pdu::Pdu<pdu::ExecuteWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
-    assert_ne!(&*att_val.0.lock().await, test_data);
+    assert_ne!(&*att_val.lock().await, test_data);
 }
 
 #[tokio::test]
@@ -143,11 +145,11 @@ async fn prepare_write_over_flow() {
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
-    let att_val = AMutex::from(String::new());
+    let att_val: Arc<Mutex<String>> = Arc::default();
 
     let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
 
-    let att_handle = server.push(att);
+    let att_handle = server.push_accessor(att);
 
     let test_data = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Fusce a nisi in t\
             urpis interdum pharetra. Vestibulum lorem turpis, sodales sit amet facilisis sed, hendr\
@@ -195,11 +197,11 @@ async fn prepare_write_bad_offset() {
 
     server.give_permissions_to_client(FULL_WRITE_PERMISSIONS);
 
-    let att_val = AMutex::from(String::new());
+    let att_val: Arc<Mutex<String>> = Arc::default();
 
     let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
 
-    let att_handle = server.push(att);
+    let att_handle = server.push_accessor(att);
 
     // A request with a bad offset (last 2 bytes should indicate an offset of 0)
     let raw_request = [0x16, att_handle as u8, 0, 33, 33].to_vec();

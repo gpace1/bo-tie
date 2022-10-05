@@ -1,32 +1,23 @@
 //! Attribute Server
 //!
 //! The attribute server for this library is dynamic. It utilizes trait objects for the attribute
-//! data with the only requirements that the data implement
-//! [`TransferFormatInto`](crate::TransferFormatInto), and
-//! [`TransferFormatTryFrom`](crate::TransferFormatTryFrom). The server organizes the data as
-//! a vectored list, all attributes are forced into a consecutive order. The client can query the
-//! server using the requests specified within the specification vol 3 part F section 3.4)
-//! except for 'Read By Group Type Request' as groups are not specified by the attribute server.
+//! data with the only requirements that the data implement [`TransferFormatInto`], and
+//! [`TransferFormatTryFrom`]. The server organizes the data as a vectored list, all attributes are
+//! forced into a consecutive order. The client can query the server using the requests specified
+//! within the specification except for 'Read By Group Type Request' as groups are not specified by
+//! the attribute protocol.
 //!
-//! Creating a `Server` requires two things, a L2CAP
-//! [`ConnectionChannel`](crate::l2cap::ConnectionChannel) and a
-//! [`ServerAttributes`](crate::server::ServerAttributes). A `ConnectionChannel` comes from
-//! something that implements a data link layer, in this library you can create them in the Host
-//! Controller Interface from a
-//! [`HostInterface`](crate::hci::HostInterface). `ServerAttributes` is the actual list of
-//! attributes in the server. Its implemented so that any type of data is accepted so long as the
-//! data type implements `TransferFormatInto` and `TransferFormatTryFrom` and is wrapped within the
-//! type
-//! [`ServerAttributeValue`](crate::server::ServerAttributeValue).
+//! Creating a `Server` requires two things, a L2CAP [`ConnectionChannel`] and a
+//! [`ServerAttributes`]. A `ConnectionChannel` comes from something that implements a data link
+//! layer. `ServerAttributes` is the list of attributes that will be used within the server. Any
+//! type that implements `TransferFormatInto` and `TransferFormatTryFrom` and is wrapped within an
+//! [`Attribute`] can be pushed to a `ServerAttributes`.
 //!
-//! A `Server` does not implement the marker trait `Sync`, meaning it cannot be shared between
-//! threads. There is too many states within a server for a `Server` to be designed to be `Sync`.
-//! Instead of one `Server` being used for all connections, there is instead a `Server` for each
-//! connection (although there is nothing stopping you from using multiple servers for a connection,
-//! its undefined behaviour if you do it). Data can be shared between multiple `Servers` but it
-//! needs to be `Send` + `Sync`, which generally requires some synchronization primitives. The
-//! point of `ServerAttributeValue` is to provide a synchronization container around a data so that
-//! it can be used between multiple servers.
+//! # Concurrency
+//! Reading and writing to the attributes of a server are atomic. The same attribute cannot be
+//! cannot be written to at the same time by two different connections. The easiest way to do this
+//! is to use a `Mutex`. The recommended way of ensuring this is to isolate each attribute
+//! individually.
 //!
 //! # Data Blobbing
 //! Data becomes 'blobbed' when a response to a read request meets or exceeds the maximum payload
@@ -65,7 +56,14 @@
 //!
 //! The client does not need to send 'Read Blob Requests' until the entire blob is received by the
 //! client.
+//!
+//! [`TransferFormatInto`]: crate::TransferFormatInto
+//! [`TransferFormatTryFrom`]: crate::TransferFormatTryFrom
+//! [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
+//! [`ServerAttributes`]: crate::server::ServerAttributes
+//! [`Attribute`]: crate::server::ServerAttributeValue
 
+mod access_value;
 #[cfg(test)]
 mod tests;
 
@@ -315,27 +313,29 @@ where
         &self.attributes
     }
 
-    /// Push an attribute onto the handle stack
+    /// Push an attribute
     ///
-    /// This function will return the handle to the attribute.
+    /// The attribute is added to the end of the list of attributes on the server.
     ///
-    /// # Panic
-    /// If you manage to push 65535 attributes onto this server, the next pushed attribute will
-    /// cause this function to panic.
-    pub fn push<X, V>(&mut self, attribute: super::Attribute<X>) -> u16
+    /// This is equivalent to the method [`ServerAttributes::push`]
+    pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
     where
-        X: ServerAttributeValue<Value = V> + Send + Sync + Sized + 'static,
-        V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Unpin + Send + Sync + 'static,
     {
-        let ret = self
-            .attributes
-            .count()
-            .try_into()
-            .expect("Exceeded attribute handle limit");
+        self.attributes.push(attribute)
+    }
 
-        self.attributes.push(attribute);
-
-        ret
+    /// Push an attribute whose value is wrapped by an accessor
+    ///
+    /// The attribute is added to the end of the list of attributes on the server.
+    ///
+    /// This is equivalent to the method [`ServerAttributes::push_accessor`]
+    pub fn push_accessor<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
+    where
+        C: AccessValue<Value = V> + Send + Sync + Sized + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync + 'static,
+    {
+        self.attributes.push_accessor(attribute)
     }
 
     /// Return the next unused handle
@@ -1470,17 +1470,77 @@ impl ServerAttributes {
         }
     }
 
-    /// Push an attribute to `ServiceAttributes`
+    /// Push an attribute
     ///
     /// This will push the attribute onto the list of server attributes and return the handle of
     /// the pushed attribute.
     ///
+    /// ```
+    /// use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
+    /// use bo_tie_att::server::ServerAttributes;
+    /// use bo_tie_host_util::Uuid;
+    ///
+    /// let mut attributes = ServerAttributes::new();
+    ///
+    /// let device_name = Attribute::new(
+    ///     Uuid::from_u16(0x2A00),
+    ///     vec![AttributePermissions::Read(AttributeRestriction::None)],
+    ///     String::from("My Device"),
+    /// );
+    ///
+    /// attributes.push(device_name);
+    /// ```
     /// # Panic
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
-    pub fn push<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
+    pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
     where
-        C: ServerAttributeValue<Value = V> + Send + Sync + Sized + 'static,
-        V: TransferFormatTryFrom + TransferFormatInto + Send + Sync + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Unpin + Send + Sync + 'static,
+    {
+        let trivial = super::Attribute {
+            ty: attribute.ty,
+            handle: attribute.handle,
+            permissions: attribute.permissions,
+            value: access_value::Trivial(attribute.value),
+        };
+
+        self.push_accessor(trivial)
+    }
+
+    /// Push an attribute whose value is wrapped by an accessor
+    ///
+    /// An accessor is a type that wraps the value to guard access to it. The most common case is
+    /// to wrap the value in a mutex to allow for multiple connections to write to the same
+    /// attribute. It is recommended that whatever process is used to access the value be `async`.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
+    /// use bo_tie_att::server::ServerAttributes;
+    /// use bo_tie_host_util::Uuid;
+    /// use tokio::sync::Mutex;
+    ///
+    /// let mut attributes = ServerAttributes::new();
+    ///
+    /// // tokio's mutex's implementation of AccessValue
+    /// // is gated by the feature `tokio`.
+    /// let device_name = Attribute::new(
+    ///     Uuid::from_u16(0x2A00),
+    ///     vec![
+    ///         AttributePermissions::Read(AttributeRestriction::None),
+    ///         AttributePermissions::Write(AttributeRestriction::Authorization)
+    ///     ],
+    ///     Arc::new(Mutex::new(String::from("My Device")))
+    /// );
+    ///
+    /// attributes.push_accessor(device_name);
+    /// ```
+    ///
+    /// # Panic
+    /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
+    pub fn push_accessor<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
+    where
+        C: AccessValue<Value = V> + Send + Sync + Sized + 'static,
+        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync + 'static,
     {
         let handle = self
             .attributes
@@ -1605,91 +1665,115 @@ impl Default for ServerAttributes {
 
 pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + Sync + 'a>>;
 
-/// Server Attributes
+/// A value accessor
 ///
-/// Attributes on the server must be implemented with `ServerAttribute` so that the server can
-/// facilitate both concurrent and non-concurrent access of an attribute.
+/// In order to share a value between connections, the value must be behind an accessor. An accessor
+/// ensures that reads and writes are atomic to all clients that have access to the value.
 ///
-/// All operations to an attribute by the server revolve around either reading or writing to the
-/// value. `read_and` will be called for a read operation, and `write_val` will be used for a write.
-/// It is recommended that reading and writing only modify the value of the attribute, but you're
-/// the boss of your own implementations.
+/// The intention of this trait is to be implemented for async mutex-like synchronization
+/// primitives. Although the implementations must be enabled by features, `AccessValue` is
+/// implemented for the mutex types of the crates [async-std], [futures], and [tokio].
 ///
-/// Trait [`ServerAttributeValue`](ServerAttributeValue)
-/// is implemented for any type that also implements
-/// [`TransferFormatTryFrom`](crate::TransferFormatTryFrom) and
-/// ['TransferFormatInto`](crate:TransferFormatInto). However if you want to implement
-/// locking or reference counting of the value, you will need to implement `ServerAttributeValue`.
-/// ```
-/// # use std::sync::Arc;
-/// # use std::borrow::Borrow;
-/// # use bo_tie_att as bo_tie;
-/// use bo_tie::{Uuid, Attribute, server::ServerAttributeValue};
-/// use bo_tie::server::{ServerAttributes, PinnedFuture};
-/// use tokio::sync::Mutex;
-///
-/// #[derive(Default)]
-/// struct SyncAttVal<V> {
-///     value: Arc<Mutex<V>>
-/// };
-///
-/// impl<V: Send + Sync + PartialEq> ServerAttributeValue for SyncAttVal<V> {
-///
-///     type Value = V;
-///
-///     fn read_and<'a,F,T>(&'a self, f: F ) -> PinnedFuture<'a,T>
-///     where F: FnOnce(&Self::Value) -> T + Send + Sync + Unpin + 'a
-///     {
-///         let mutex = self.value.clone();
-///
-///         Box::pin( async move { f( &*mutex.lock().await ) } )
-///     }
-///
-///     fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_,()> {
-///         let mutex = self.value.clone();
-///
-///         Box::pin( async move { *mutex.lock().await = val } )
-///     }
-///
-///     fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a,bool> {
-///         let mutex = self.value.clone();
-///
-///         Box::pin( async move { &*mutex.lock().await == other } )
-///     }
-/// }
-///
-/// // Create a couple of SyncAttVal
-/// let val_usize = SyncAttVal::<usize>::default();
-/// let val_msg   = SyncAttVal { value: Arc::new(Mutex::new(String::from("Hello World"))) };
-///
-/// # let uuid_usize = Uuid::from_u128(0);
-/// # let uuid_msg   = Uuid::from_u128(0);
-///
-/// # let permissions_usize = Vec::new();
-/// # let permissions_msg   = Vec::new();
-///
-/// // Create attributes from them
-/// let att_usize = Attribute::new( uuid_usize, permissions_usize, val_usize);
-/// let att_msg   = Attribute::new( uuid_msg  , permissions_msg  , val_msg  );
-///
-/// // Add them to a server attributes to generate a server from
-/// let mut server_attributes = ServerAttributes::new();
-/// server_attributes.push(att_usize);
-/// server_attributes.push(att_msg);
-/// ```
-pub trait ServerAttributeValue {
-    type Value;
+/// [async-std]: https://docs.rs/async-std/latest/async_std/index.html
+/// [futures]: https://docs.rs/futures/latest/futures/index.html
+/// [tokio]: https://docs.rs/tokio/latest/tokio/index.html
+pub trait AccessValue: Send + Sync {
+    type Value: Send + Sync;
 
-    /// Read the value and call `f` with a reference to it.
-    fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
+    type ReadGuard<'a>: core::ops::Deref<Target = Self::Value>
     where
-        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync + 'a;
+        Self: 'a;
 
-    /// Write to the value
-    fn write_val(&mut self, val: Self::Value) -> PinnedFuture<'_, ()>;
+    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send + Sync
+    where
+        Self: 'a;
+
+    type Write<'a>: Future + Send + Sync
+    where
+        Self: 'a;
+
+    fn read(&self) -> Self::Read<'_>;
+
+    fn write(&mut self, v: Self::Value) -> Self::Write<'_>;
+}
+
+/// Extension method for `ServerAttributeValue`
+trait ServerAttributeValueExt: AccessValue {
+    /// Read the value and call `f` with a reference to it.
+    fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
+    where
+        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync,
+    {
+        let read = self.read();
+
+        ReadAnd {
+            reader: read,
+            job: Some(f),
+        }
+    }
 
     /// Compare the value to 'other'
-    fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a, bool>;
+    fn eq<'a>(&'a self, other: &'a Self::Value) -> Compare<'a, Self::Read<'a>, Self::Value>
+    where
+        Self::Value: PartialEq,
+    {
+        Compare {
+            reader: self.read(),
+            value: other,
+        }
+    }
+}
+
+impl<S: AccessValue> ServerAttributeValueExt for S {}
+
+/// Future for reading the value and performing an operation
+struct ReadAnd<R, F> {
+    reader: R,
+    job: Option<F>,
+}
+
+impl<R, G, V, F, T> Future for ReadAnd<R, F>
+where
+    R: Future<Output = G>,
+    G: core::ops::Deref<Target = V>,
+    F: FnOnce(&V) -> T + Unpin,
+{
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        unsafe {
+            let this = self.get_unchecked_mut();
+
+            Pin::new_unchecked(&mut this.reader)
+                .poll(cx)
+                .map(|val| (this.job.take().unwrap())(&*val))
+        }
+    }
+}
+
+/// Future for comparing an attribute to its value
+struct Compare<'a, R, V> {
+    reader: R,
+    value: &'a V,
+}
+
+impl<R, G, V> Future for Compare<'_, R, V>
+where
+    R: Future<Output = G>,
+    G: core::ops::Deref<Target = V>,
+    V: PartialEq,
+{
+    type Output = bool;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        unsafe {
+            let this = self.get_unchecked_mut();
+
+            Pin::new_unchecked(&mut this.reader)
+                .poll(cx)
+                .map(|val| &*val == this.value)
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -1721,55 +1805,6 @@ impl<'a> AttributeInfo<'a> {
 
     pub fn get_permissions(&self) -> &[super::AttributePermissions] {
         self.permissions
-    }
-}
-
-/// A future that never pends
-///
-/// This future will never pend and always returns ready with the result of `FnOnce` used to create
-/// it. However, since this future is implemented for a `FnOnce` it will panic if it is polled
-/// multiple times.
-struct NoPend<T>(Option<T>);
-
-impl<T> NoPend<T> {
-    fn new(f: T) -> Self {
-        NoPend(Some(f))
-    }
-}
-
-impl<T, O> Future for NoPend<T>
-where
-    T: FnOnce() -> O + Unpin,
-{
-    type Output = O;
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(self.get_mut().0.take().expect("NoPend polled multiple times")())
-    }
-}
-
-/// The trivial implementation for ServerAttributeValue
-impl<V> ServerAttributeValue for V
-where
-    V: PartialEq + Unpin + Send + Sync,
-{
-    type Value = V;
-
-    fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
-    where
-        F: FnOnce(&V) -> T + Unpin + Send + Sync + 'a,
-    {
-        Box::pin(NoPend::new(move || f(self)))
-    }
-
-    fn write_val(&mut self, val: V) -> PinnedFuture<'_, ()> {
-        Box::pin(NoPend::new(move || *self = val))
-    }
-
-    fn eq<'a>(&'a self, other: &'a V) -> PinnedFuture<'a, bool> {
-        let cmp = <Self as PartialEq>::eq(self, other);
-
-        Box::pin(NoPend::new(move || cmp))
     }
 }
 
@@ -1825,41 +1860,41 @@ trait ServerAttribute {
 
 impl<C, V> ServerAttribute for C
 where
-    C: ServerAttributeValue<Value = V> + Send + Sync,
-    V: TransferFormatTryFrom + TransferFormatInto + Send + Sync,
+    C: AccessValue<Value = V> + 'static,
+    V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
-        self.read_and(|v| TransferFormatInto::into(v))
+        Box::pin(self.read_and(|v| TransferFormatInto::into(v)))
     }
 
-    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
-        self.read_and(|v| pdu::read_response(TransferFormatInto::into(v)))
+    fn read_response(&self) -> PinnedFuture<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
+        Box::pin(self.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
     }
 
-    fn notification(&self, handle: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
-        self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v)))
+    fn notification(&self, handle: u16) -> PinnedFuture<pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
+        Box::pin(self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v))))
     }
 
-    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>> {
-        self.read_and(move |v| {
+    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
+        Box::pin(self.read_and(move |v| {
             let tf = TransferFormatInto::into(v);
 
             pdu::ReadTypeResponse::new(handle, tf)
-        })
+        }))
     }
 
     fn try_set_value_from_transfer_format<'a>(
         &'a mut self,
         raw: &'a [u8],
-    ) -> PinnedFuture<'a, Result<(), super::TransferFormatError>> {
+    ) -> PinnedFuture<'a, Result<(), TransferFormatError>> {
         Box::pin(async move {
-            self.write_val(TransferFormatTryFrom::try_from(raw)?).await;
+            self.write(TransferFormatTryFrom::try_from(raw)?).await;
 
             Ok(())
         })
     }
 
-    fn value_transfer_format_size(&self) -> PinnedFuture<'_, usize> {
+    fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
         Box::pin(async move { self.read_and(|v: &V| v.len_of_into()).await })
     }
 

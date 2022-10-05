@@ -8,6 +8,9 @@ log = "0.4"
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-host-util = { path = "../bo-tie-host-util" }
 bo-tie-util = { path = "../../bo-tie-util" }
+tokio = { version = "1", features = ["sync"], optional = true }
+futures = { version = "0.3", optional = true }
+async-std = { version = "1", optional = true }
 
 [dev-dependencies]
 tinymt = "1"
@@ -16,7 +19,12 @@ rand = "0.8"
 rayon = "1"
 
 [features]
+default = ["std"]
+std = []
 uuid-crate = ["bo-tie-host-util/uuid-crate"]
+tokio = ["dep:tokio", "std"]
+futures-rs = ["futures", "std"]
+async-std = ["dep:async-std", "std"]
 
 [package.metadata.docs.rs]
 all-features = true
