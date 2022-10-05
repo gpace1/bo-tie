@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[tokio::test]
+#[cfg(feature = "tokio")]
 async fn prepare_write_with_exec_test() {
     use pdu::ExecuteWriteFlag::WriteAllPreparedWrites;
 
@@ -75,6 +76,7 @@ async fn prepare_write_with_exec_test() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tokio")]
 async fn prepare_write_with_cancel_test() {
     use pdu::ExecuteWriteFlag::CancelAllPreparedWrites;
 
@@ -127,6 +129,7 @@ async fn prepare_write_with_cancel_test() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tokio")]
 async fn prepare_write_over_flow() {
     use crate::{Attribute, FULL_WRITE_PERMISSIONS};
 
@@ -182,6 +185,7 @@ async fn prepare_write_over_flow() {
 }
 
 #[tokio::test]
+#[cfg(feature = "tokio")]
 async fn prepare_write_bad_offset() {
     use crate::{Attribute, FULL_WRITE_PERMISSIONS};
 

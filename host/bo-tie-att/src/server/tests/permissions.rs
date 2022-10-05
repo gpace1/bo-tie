@@ -287,7 +287,6 @@ fn expected_permissions_result(
 /// different results.
 #[test]
 #[cfg(target_pointer_width = "64")]
-#[ignore]
 fn check_permissions_entropy_test() {
     use rayon::prelude::*;
     use AttributePermissions::*;

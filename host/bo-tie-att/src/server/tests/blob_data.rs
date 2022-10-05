@@ -131,6 +131,7 @@ struct BlobTestInfo<Q> {
 }
 
 impl BlobTestInfo<NoQueuedWrites> {
+    #[cfg(feature = "tokio")]
     fn new() -> Self {
         let mut server_attribute = ServerAttributes::new();
 
