@@ -103,7 +103,7 @@ impl ServiceInclude {
 /// characteristics defined in a higher layer protocol.
 ///
 /// A `ServiceBuilder` is created with the function `new_service_constructor` of
-/// [`ServerBuilder`](crate::gatt::ServerBuilder). `ServiceBuilder` is tied to the `ServerBuilder`
+/// [`ServerBuilder`]. `ServiceBuilder` is tied to the `ServerBuilder`
 /// that created it, the service build by this will be part of the server.
 ///
 /// By creating a `ServiceBuilder`, a service definition characteristic is added to the server.
@@ -314,11 +314,8 @@ impl<'a> IncludesAdder<'a> {
 /// The service that will contain the characteristic(s) is the same service that was initially
 /// constructing with ServiceBuilder.
 ///
-/// This is created by the
-/// [`ServiceBuilder::add_characteristics`](crate::gatt::ServiceBuilder::add_characteristics)
-/// or
-/// [`IncludesAdder::add_characteristics`](crate::gatt::IncludesAdder::add_characteristics)
-/// functions.
+/// This is created by the [`ServiceBuilder::add_characteristics`] or
+/// [`IncludesAdder::add_characteristics`] functions.
 pub struct CharacteristicAdder<'a> {
     service_builder: ServiceBuilder<'a>,
     end_group_handle: u16,
