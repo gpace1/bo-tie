@@ -504,7 +504,7 @@ impl From<Error> for Option<u8> {
 
 /// The error for an invalid Bluetooth addresses
 ///
-/// This is returned whenever trying to create a [`BlueoothDeviceAddress`] fails.
+/// This is returned whenever trying to create a [`BluetoothDeviceAddress`] fails.
 ///
 /// [`BluetoothDeviceAddress`]: super::BluetoothDeviceAddress
 #[derive(Copy, Clone, Debug, PartialEq)]

@@ -156,24 +156,23 @@ impl Display for LinearBufferError {
 /// This is a [`LinearBuffer`] where both the front and end of the list can be pushed to. A
 /// `DeLinearBuffer` contains a finite reserve on both ends.
 ///
-/// ## Adding/Removing
-/// Adding and removing elements from a `DeLinearBuffer` is done by the traits
-/// [`TryExtend`](crate::TryExtend), [`TryRemove`](crate::TryRemove),
-/// [`TryFrontExtend`](crate::TryFrontExtend), and [`TryFrontRemove`](crate::TryFrontRemove).
-/// `TryExtend` and `TryRemove` can add/take from the back reserve and `TryFrontExtend` and
-/// `TryFrontRemove` can take from the front reserve. However, `TryExtend` and `TryRemove` cannot
-/// modify the front reserve and `TryFrontExtend` and `TryFrontRemove` cannot modify the back
-/// reserve.
-///
-/// ### Reserves
+/// # Reserves
 /// There is a front reserve and a back reserve in a `DeLinearBuffer`. When a `DeLinearBuffer` is
 /// created these reserve sizes are fixed. Values cannot be added nor removed passed these reserve
 /// limits. Elements can only be added to and from there respective reserves. Pushing to the back
 /// is limited to the size of the back buffer, and consequently removing from the back can only be
 /// done for elements *within the end reserve*. The same is true for the front reserve.
 ///
-/// #### Note
-/// It is possible to have only a front or back reserve and the other reserve having a size of 0.
+/// ## Adding/Removing
+/// Adding and removing elements from a `DeLinearBuffer` is done by the traits [`TryExtend`],
+/// [`TryRemove`], [`TryFrontExtend`], and [`TryFrontRemove`]. `TryExtend` and `TryRemove` can
+/// add/take from the back reserve and `TryFrontExtend` and `TryFrontRemove` can take from the front
+/// reserve.
+///
+/// [`TryExtend`]: crate::buffer::TryExtend
+/// [`TryRemove`]: crate::buffer::TryRemove
+/// [`TryFrontExtend`]: crate::buffer::TryFrontExtend
+/// [`TryFrontRemove`]: crate::buffer::TryFrontRemove
 pub struct DeLinearBuffer<const SIZE: usize, T> {
     buffer: [MaybeUninit<T>; SIZE],
     /// The size of the front reserve

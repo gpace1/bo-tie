@@ -21,8 +21,8 @@ use core::task::{Context, Poll};
 /// packets within this library so there is not much need for pushing with the exception of
 /// 'restoring' a protocol's header.
 ///
-/// [`VecDeque`]: std::collections::VecDeque,
-/// [`Vec`]: std::vector::Vec
+/// [`VecDeque`]: std::collections::VecDeque
+/// [`Vec`]: std::vec::Vec
 /// [`Deref`]: std::ops::Deref
 #[derive(Debug)]
 pub struct DeVec<T> {

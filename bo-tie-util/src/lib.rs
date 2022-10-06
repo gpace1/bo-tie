@@ -474,6 +474,8 @@ impl Features {
     ///   - `features` should be 8 bytes long if `page` is 0.
     ///   - `features` should be 1 byte long if `page` is 1.
     ///   - `features` should be 3 bytes long if `page` is 2.
+    ///
+    /// [`check_within`]: Features::check_within
     pub fn check_by_pos(page: usize, byte: usize, bit: usize, features: &[u8]) -> Option<Self> {
         match (page, byte, bit) {
             (0, 0, 0) => is_bit_set!(features, (0, 0), Features::ThreeSlotPackets),
@@ -1012,6 +1014,8 @@ impl LeFeatures {
     ///
     /// # Note
     /// `None` is returned if `position` is larger than the bit count of features.
+    ///
+    /// [`check_within`]: LeFeatures::check_within
     pub fn check_by_pos(position: usize, features: &[u8]) -> Option<Self> {
         Self::check_by_pos_raw(position >> 3, position & 0xF, features)
     }
@@ -1160,7 +1164,7 @@ impl Display for LeDeviceFeatures {
 
 /// Iterator over enabled LE features
 ///
-/// This is returned by the method [`iter`] of [`LeDeviceFeatures`].
+/// This is returned by the method [`LeDeviceFeatures::iter`].
 #[derive(Debug)]
 pub struct LeFeaturesItr<'a> {
     position: PositionIter,
