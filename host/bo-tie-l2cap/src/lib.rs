@@ -472,7 +472,7 @@ where
     }
 }
 
-/// Error for method [`try_into_packet`] of BasicInfoFrame
+/// Error for method [`BasicInfoFrame::try_into_packet`]
 pub enum IntoPacketError<E> {
     TryFromU16Error,
     TryExtendError(E),
