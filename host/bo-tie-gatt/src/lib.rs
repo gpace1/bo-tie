@@ -10,7 +10,7 @@
 //! associated with it. However all this GATT information provides a standard way for the
 //! Bluetooth SIG to assign services to provide common data formats.
 
-#![no_std]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
 
@@ -265,13 +265,13 @@ impl<'a> IncludesAdder<'a> {
     /// service.
     pub fn include_service<P: Into<Option<&'a [att::AttributePermissions]>>>(
         mut self,
-        service: &Service<'_>,
+        service_record: ServiceRecord,
         permissions: P,
     ) -> Self {
         let include = ServiceInclude {
-            service_handle: service.get_handle(),
-            end_group_handle: service.get_end_group_handle(),
-            short_service_type: service.get_uuid().try_into().ok(),
+            service_handle: service_record.record.service_handle,
+            end_group_handle: service_record.record.end_group_handle,
+            short_service_type: service_record.record.service_uuid.try_into().ok(),
         };
 
         let attribute = att::Attribute::new(
@@ -394,6 +394,16 @@ impl<'a> Service<'a> {
         self.group_data.end_group_handle
     }
 
+    /// Get a record to the data
+    ///
+    /// A record is the same thing as a [`Service`], but it does not have the lifetime back to
+    /// the location of the service.
+    pub fn as_record(&self) -> ServiceRecord {
+        ServiceRecord {
+            record: self.group_data,
+        }
+    }
+
     /// Iterate over the Characteristics within this Service
     pub fn iter_characteristics(&self) -> impl Iterator<Item = characteristic::Characteristic<'a>> + 'a {
         characteristic::CharacteristicsIter::new(
@@ -401,6 +411,20 @@ impl<'a> Service<'a> {
             self.group_data.service_handle,
             self.group_data.end_group_handle,
         )
+    }
+}
+
+/// A service record
+///
+/// This contains the information of a [`Service`] without the reference to its location.
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
+pub struct ServiceRecord {
+    record: ServiceGroupData,
+}
+
+impl From<Service<'_>> for ServiceRecord {
+    fn from(s: Service<'_>) -> Self {
+        ServiceRecord { record: s.group_data }
     }
 }
 
@@ -529,28 +553,29 @@ impl Default for GapServiceBuilder<'_> {
 /// architecture of the server before the server is created.
 ///
 /// ```
-/// # #![feature(generic_associated_types)]
-/// use bo_tie::gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
-/// use bo_tie::att::{FULL_PERMISSIONS, server::NoQueuedWrites};
+/// use bo_tie_gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
+/// use bo_tie_att::{FULL_PERMISSIONS, server::NoQueuedWrites};
 ///
-/// # use bo_tie::l2cap::{BasicFrameError,BasicInfoFrame, L2capFragment};
-/// # use std::convert::Infallible;
-/// # use std::task::Waker;
+/// # use bo_tie_l2cap::{BasicFrameError,BasicInfoFrame, L2capFragment, send_future};
 /// # use std::future::Future;
-/// # const MY_SERVICE_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0);
-/// # const MY_CHARACTERISTIC_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0);
+/// # use std::pin::Pin;
+/// # use bo_tie_util::buffer::de_vec::DeVec;
+/// # use bo_tie_util::buffer::TryExtend;
+/// # const MY_SERVICE_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
+/// # const MY_CHARACTERISTIC_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
 /// # struct CC;
-/// # impl bo_tie::l2cap::ConnectionChannel for CC {
-/// #     type Buffer = Vec<u8>;
-/// #     type SendFut<'a> = futures::future::Ready<Result<(), Self::SendFutErr>>;
-/// #     type SendFutErr = usize;
-/// #     type RecvFut<'a> = futures::future::Ready<Option<Result<L2capFragment<Self::Buffer>, BasicFrameError<Infallible>>>>;
+/// # impl bo_tie_l2cap::ConnectionChannel for CC {
+/// #     type SendBuffer = DeVec<u8>;
+/// #     type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), send_future::Error<()>>>>>;
+/// #     type SendFutErr = ();
+/// #     type RecvBuffer = DeVec<u8>;
+/// #     type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>>>>;
 /// #     fn send(&self,data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
-/// #     fn set_mtu(&self,mtu: u16) { unimplemented!() }
+/// #     fn set_mtu(&mut self,_: u16) { unimplemented!() }
 /// #     fn get_mtu(&self) -> usize { unimplemented!() }
 /// #     fn max_mtu(&self) -> usize { unimplemented!() }
 /// #     fn min_mtu(&self) -> usize { unimplemented!() }
-/// #     fn receive(&self) -> Self::RecvFut<'_> { unimplemented!()}
+/// #     fn receive(&mut self) -> Self::RecvFut<'_> { unimplemented!()}
 /// # }
 /// # let connection_channel = CC;
 ///
@@ -568,7 +593,7 @@ impl Default for GapServiceBuilder<'_> {
 ///             .complete_characteristic()
 ///         .finish_service();
 ///
-/// let server = server_builder.make_server(&connection_channel, NoQueuedWrites);
+/// let server = server_builder.make_server(NoQueuedWrites);
 /// ```
 pub struct ServerBuilder {
     primary_services: Vec<ServiceGroupData>,
@@ -599,7 +624,7 @@ impl ServerBuilder {
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<C, Q>(self, queue_writer: Q) -> Server<Q>
+    pub fn make_server<Q>(self, queue_writer: Q) -> Server<Q>
     where
         Q: att::server::QueuedWriter,
     {
@@ -830,50 +855,34 @@ mod tests {
     use crate::att::server::NoQueuedWrites;
     use crate::l2cap::{ConnectionChannel, L2capFragment, MinimumMtu};
     use crate::Uuid;
-    use alloc::boxed::Box;
     use att::TransferFormatInto;
+    use bo_tie_att::{AttributePermissions, AttributeRestriction};
+    use bo_tie_l2cap::{send_future, BasicFrameError};
+    use bo_tie_util::buffer::de_vec::DeVec;
+    use bo_tie_util::buffer::TryExtend;
     use std::{
         future::Future,
         pin::Pin,
-        task::{Context, Poll, Waker},
+        task::{Context, Poll},
     };
 
     struct DummySendFut;
 
     impl Future for DummySendFut {
-        type Output = Result<(), ()>;
+        type Output = Result<(), send_future::Error<()>>;
 
         fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
             Poll::Ready(Ok(()))
         }
     }
 
-    struct DummyConnection;
+    struct DummyRecvFut;
 
-    impl ConnectionChannel for DummyConnection {
-        type SendFut = DummySendFut;
-        type SendFutErr = ();
+    impl Future for DummyRecvFut {
+        type Output = Option<Result<L2capFragment<DeVec<u8>>, BasicFrameError<<DeVec<u8> as TryExtend<u8>>::Error>>>;
 
-        fn send(&self, _: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
-            DummySendFut
-        }
-
-        fn set_mtu(&self, _: u16) {}
-
-        fn get_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
-        }
-
-        fn max_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
-        }
-
-        fn min_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
-        }
-
-        fn receive(&self, _: &core::task::Waker) -> Option<Vec<crate::l2cap::L2capFragment>> {
-            None
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            unimplemented!()
         }
     }
 
@@ -888,33 +897,34 @@ mod tests {
 
         gap_service.set_permissions(test_att_permissions);
 
-        let mut server_builder = ServerBuilder::new_with_gap(gap_service);
+        let mut server_builder = ServerBuilder::from(gap_service);
 
         let test_service_1 = server_builder
-            .new_service_constructor(Uuid::from_u16(0x1234), false)
+            .new_service(Uuid::from_u16(0x1234), false)
             .set_att_permissions(test_att_permissions)
             .add_characteristics()
-            .build_characteristic(
-                vec![characteristic::Properties::Read],
-                Uuid::from(0x1234u16),
-                Box::new(0usize),
-                None,
-            )
+            .new_characteristic()
+            .set_value(0usize)
+            .set_properties(vec![characteristic::Properties::Read])
+            .set_permissions(test_att_permissions)
+            .set_uuid(0x1234u16)
             .set_extended_properties(vec![characteristic::ExtendedProperties::ReliableWrite], None)
             .set_user_description(characteristic::UserDescription::new("Test 1", None))
             .set_client_configuration(vec![characteristic::ClientConfiguration::Notification], None)
             .set_server_configuration(vec![characteristic::ServerConfiguration::Broadcast], None)
-            .finish_characteristic()
+            .complete_characteristic()
             .finish_service();
+
+        let service_1_record = test_service_1.as_record();
 
         let _test_service_2 = server_builder
-            .new_service_constructor(Uuid::from_u16(0x3456), true)
+            .new_service(Uuid::from_u16(0x3456), true)
             .set_att_permissions(test_att_permissions)
             .into_includes_adder()
-            .include_service(&test_service_1, None)
+            .include_service(service_1_record, None)
             .finish_service();
 
-        let server = server_builder.make_server(&DummyConnection, NoQueuedWrites);
+        let server = server_builder.make_server(NoQueuedWrites);
 
         server.iter_attr_info().for_each(|info| {
             assert_eq!(
@@ -931,73 +941,74 @@ mod tests {
         last_sent_pdu: std::cell::Cell<Option<Vec<u8>>>,
     }
 
-    impl l2cap::ConnectionChannel for TestChannel {
-        type SendFut = DummySendFut;
+    impl ConnectionChannel for TestChannel {
+        type SendBuffer = DeVec<u8>;
+        type SendFut<'a> = DummySendFut;
         type SendFutErr = ();
+        type RecvBuffer = DeVec<u8>;
+        type RecvFut<'a> = DummyRecvFut where Self: 'a,;
 
-        fn send(&self, data: crate::l2cap::BasicInfoFrame) -> Self::SendFut {
-            self.last_sent_pdu.set(Some(data.into_packet()));
+        fn send(&self, data: crate::l2cap::BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+            self.last_sent_pdu.set(Some(data.try_into_packet().unwrap()));
 
             DummySendFut
         }
 
-        fn set_mtu(&self, _: u16) {}
+        fn set_mtu(&mut self, _: u16) {}
 
         fn get_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
         fn max_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
         fn min_mtu(&self) -> usize {
-            crate::l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&self, _: &Waker) -> Option<Vec<L2capFragment>> {
+        fn receive(&mut self) -> Self::RecvFut<'_> {
             unimplemented!()
         }
     }
 
-    #[test]
-    fn gatt_services_read_by_group_type() {
-        use futures::executor::block_on;
+    #[tokio::test]
+    async fn gatt_services_read_by_group_type() {
+        let gap_service = GapServiceBuilder::new(None, None);
 
-        let mut server_builder = ServerBuilder::new();
+        let mut server_builder = ServerBuilder::from(gap_service);
 
         let first_test_uuid = Uuid::from(0x1000u16);
         let second_test_uuid = Uuid::from(0x1001u128);
 
         server_builder
-            .new_service_constructor(first_test_uuid, true)
+            .new_service(first_test_uuid, true)
             .add_characteristics()
-            .build_characteristic(
-                vec![characteristic::Properties::Read],
-                Uuid::from(0x2000u16),
-                Box::new(0usize),
-                None,
-            )
-            .finish_characteristic()
+            .new_characteristic()
+            .set_value(0usize)
+            .set_properties(vec![characteristic::Properties::Read])
+            .set_permissions(&[AttributePermissions::Read(AttributeRestriction::None)])
+            .set_uuid(0x2000u16)
+            .complete_characteristic()
             .finish_service();
 
         server_builder
-            .new_service_constructor(second_test_uuid, true)
+            .new_service(second_test_uuid, true)
             .add_characteristics()
-            .build_characteristic(
-                vec![characteristic::Properties::Read],
-                Uuid::from(0x2001u16),
-                Box::new(0usize),
-                None,
-            )
-            .finish_characteristic()
+            .new_characteristic()
+            .set_value(0usize)
+            .set_properties(vec![characteristic::Properties::Read])
+            .set_permissions(&[AttributePermissions::Read(AttributeRestriction::None)])
+            .set_uuid(0x2001u16)
+            .complete_characteristic()
             .finish_service();
 
-        let test_channel = TestChannel {
+        let mut test_channel = TestChannel {
             last_sent_pdu: None.into(),
         };
 
-        let mut server = server_builder.make_server(&test_channel, NoQueuedWrites);
+        let mut server = server_builder.make_server(NoQueuedWrites);
 
         server.give_permissions_to_client([att::AttributePermissions::Read(att::AttributeRestriction::None)]);
 
@@ -1005,7 +1016,10 @@ mod tests {
 
         let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
-        assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)),);
+        assert_eq!(
+            Ok(()),
+            server.process_acl_data(&mut test_channel, &acl_client_pdu).await
+        );
 
         let expected_response = att::pdu::ReadByGroupTypeResponse::new(vec![
             // Gap Service
@@ -1016,7 +1030,7 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicInfoFrame::try_into_from_slice(&data).unwrap();
+                let acl_data = l2cap::BasicInfoFrame::<Vec<_>>::try_from_slice(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );
@@ -1025,7 +1039,10 @@ mod tests {
 
         let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
-        assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)),);
+        assert_eq!(
+            Ok(()),
+            server.process_acl_data(&mut test_channel, &acl_client_pdu).await
+        );
 
         let expected_response =
             att::pdu::ReadByGroupTypeResponse::new(vec![att::pdu::ReadGroupTypeData::new(9, 11, second_test_uuid)]);
@@ -1033,7 +1050,7 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicInfoFrame::try_into_from_slice(&data).unwrap();
+                let acl_data = l2cap::BasicInfoFrame::<Vec<_>>::try_from_slice(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );
@@ -1043,6 +1060,9 @@ mod tests {
         let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         // Request was made for for a attribute that was out of range
-        assert_eq!(Ok(()), block_on(server.process_acl_data(&acl_client_pdu)));
+        assert_eq!(
+            Ok(()),
+            server.process_acl_data(&mut test_channel, &acl_client_pdu).await
+        );
     }
 }

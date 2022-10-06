@@ -10,8 +10,15 @@ bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-util = { path = "../../bo-tie-util" }
 log = "0.4"
 
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+
 [features]
+std = ["bo-tie-att/std", "bo-tie-l2cap/std"]
 uuid-crate = ["bo-tie-att/uuid-crate"]
+tokio = ["bo-tie-att/tokio"]
+futures-rs = ["bo-tie-att/futures-rs"]
+async-std = ["bo-tie-att/async-std"]
 
 [package.metadata.docs.rs]
 all-features = true
