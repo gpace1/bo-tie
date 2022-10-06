@@ -21,7 +21,7 @@
 //! ## Alternative Names
 //! When creating a `LocalName` a list of strings can be used to provide alternative names. A slice
 //! or array of strings (any type that implements [`Borrow<str>`](core::borrow::Borrow)) will be
-//! converted into the name shortener [`sizes::Substitutions`]. `Substitutions` will iterate
+//! converted into the name shortener [`shorts::Alternatives`]. `Alternatives` will iterate
 //! through the alternative names and pick the first one that will fit.
 //!
 //! ```
@@ -181,12 +181,12 @@ where
 
     /// Change the name shortener
     ///
-    /// Chane the name shortener to a different shortener. This is useful when a `LocalName` is
-    /// created from a structure as [`TryFromStruct`] is only implemented for a `LocalName` with the
-    /// shortener [`BaseNameOnly`].
+    /// Change the name shortener to a different shortener. This is useful when a `LocalName` is
+    /// created from a raw structure as [`TryFromStruct`] is only implemented for a `LocalName` with
+    /// the shortener [`NeverShorten`].
     ///
     /// [`TryFromStruct`]: super::TryFromStruct
-    /// [`BaseNameOnly`]: shorts::BaseNameOnly
+    /// [`NeverShorten`]: shorts::NeverShorten
     pub fn change_shortener<T, R>(self, new_shortener: T) -> LocalName<N, R>
     where
         T: IntoNameShortener<IntoShorter = R>,

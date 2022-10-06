@@ -19,8 +19,10 @@ impl ScConfirmValue {
 
     /// Create a ScConfirmValue
     ///
-    /// The input is the confirmation value as returned by the [`f4`](crate::sm::toolbox::f4)
-    /// confirm value generation function.
+    /// The input is the confirmation value as returned by the [`f4`] confirm value generation
+    /// function of the security manager.
+    ///
+    /// [`f4`]: ../../../bo_tie_sm/toolbox/fn.f4.html
     pub fn new(c: u128) -> Self {
         ScConfirmValue(c)
     }

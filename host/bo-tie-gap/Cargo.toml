@@ -7,3 +7,6 @@ edition = "2021"
 bo-tie-att = { path = "../bo-tie-att" }
 bo-tie-util = { path = "../../bo-tie-util" }
 bo-tie-host-util = { path = "../bo-tie-host-util" }
+
+[dev-dependencies]
+bo-tie-sm = { path = "../bo-tie-sm" }
