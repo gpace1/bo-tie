@@ -1,15 +1,4 @@
-//! Generic Attribute Protocol
-//!
-//! GATT is a thin wrapper protocol above the attribute (ATT) protocol.
-//!
-//! The GATT is mainly an data organization protocol used to help clients to identify what is on
-//! the other device's attribute server. GATT organizes data into groups under a 'service'. Data
-//! within a service is organized into 'characteristic' which contain 'characteristic descriptors'
-//! that further provide meta explanation of the data. Each of these require attributes, so
-//! individual data will use multiple attribute handles in order to contain all the GATT information
-//! associated with it. However all this GATT information provides a standard way for the
-//! Bluetooth SIG to assign services to provide common data formats.
-
+#![doc = include_str!("../README.md")]
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
@@ -609,8 +598,11 @@ impl ServerBuilder {
     }
 
     /// Construct a new service
-    pub fn new_service(&mut self, service_uuid: Uuid, is_primary: bool) -> ServiceBuilder<'_> {
-        ServiceBuilder::new(self, service_uuid, is_primary)
+    pub fn new_service<U>(&mut self, service_uuid: U, is_primary: bool) -> ServiceBuilder<'_>
+    where
+        U: Into<Uuid>,
+    {
+        ServiceBuilder::new(self, service_uuid.into(), is_primary)
     }
 
     /// Get all the attributes of the server

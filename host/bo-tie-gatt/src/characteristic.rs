@@ -1,3 +1,10 @@
+//! GATT characteristic information
+//!
+//! Most of this module is integrated into the process of creating the services. See
+//! [`ServerBuilder`].
+//!
+//! [`ServerBuilder`]: crate::ServerBuilder
+
 use crate::{att, Uuid};
 use alloc::{format, string::String, vec::Vec};
 use bo_tie_att::server::access_value::Trivial;
@@ -248,7 +255,7 @@ impl<'a> UserDescription<'a> {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum ClientConfiguration {
     Notification,
     Indication,
