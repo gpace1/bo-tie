@@ -61,7 +61,7 @@
 //! [`TransferFormatTryFrom`]: crate::TransferFormatTryFrom
 //! [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
 //! [`ServerAttributes`]: crate::server::ServerAttributes
-//! [`Attribute`]: crate::server::ServerAttributeValue
+//! [`Attribute`]: crate::Attribute
 
 pub mod access_value;
 #[cfg(test)]
@@ -258,7 +258,7 @@ struct MultiReqData {
 /// Having a unique server per connection does not mean that the attribute values will need to be
 /// wrapped within synchronization containers if they're shared between servers. This is where the
 /// somewhat awkward
-/// [`ServerAttributeValue`](crate::server::ServerAttributeValue)
+/// [`AccessValue`](crate::server::AccessValue)
 /// can be implemented on the container to perform concurrency safe reading or writing on the
 /// contained value.
 pub struct Server<Q> {
