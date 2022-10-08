@@ -17,20 +17,6 @@ pub struct LinearBuffer<const SIZE: usize, T> {
     count: usize,
 }
 
-impl<T, const SIZE: usize> Deref for LinearBuffer<SIZE, T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { transmute::<&[MaybeUninit<T>], &[T]>(&self.buffer[..self.count]) }
-    }
-}
-
-impl<T, const SIZE: usize> DerefMut for LinearBuffer<SIZE, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { transmute::<&mut [MaybeUninit<T>], &mut [T]>(&mut self.buffer[..self.count]) }
-    }
-}
-
 impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
     pub fn new() -> Self {
         let buffer = unsafe { MaybeUninit::uninit().assume_init() };
@@ -118,6 +104,42 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
     /// Get the length
     pub fn len(&self) -> usize {
         self.count
+    }
+}
+
+impl<T: Clone, const SIZE: usize> Clone for LinearBuffer<SIZE, T> {
+    fn clone(&self) -> Self {
+        let mut buffer: [MaybeUninit<T>; SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+
+        for (index, v) in self.deref().iter().enumerate() {
+            buffer[index] = MaybeUninit::new(v.clone())
+        }
+
+        Self {
+            buffer,
+            count: self.count,
+        }
+    }
+}
+
+impl<T, const SIZE: usize> Deref for LinearBuffer<SIZE, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { transmute::<&[MaybeUninit<T>], &[T]>(&self.buffer[..self.count]) }
+    }
+}
+
+impl<T, const SIZE: usize> DerefMut for LinearBuffer<SIZE, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { transmute::<&mut [MaybeUninit<T>], &mut [T]>(&mut self.buffer[..self.count]) }
+    }
+}
+
+impl<T: Debug, const SIZE: usize> Debug for LinearBuffer<SIZE, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("LinearBuffer")?;
+        Debug::fmt(self.deref(), f)
     }
 }
 
