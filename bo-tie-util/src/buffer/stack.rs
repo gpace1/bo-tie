@@ -151,6 +151,34 @@ impl<T, const SIZE: usize> Drop for LinearBuffer<SIZE, T> {
     }
 }
 
+impl<T, const SIZE: usize> From<[T; SIZE]> for LinearBuffer<SIZE, T> {
+    fn from(buffer: [T; SIZE]) -> Self {
+        let buffer = buffer.map(|t| MaybeUninit::new(t));
+
+        Self { buffer, count: SIZE }
+    }
+}
+
+impl<T: Clone, const SIZE: usize> TryFrom<&[T]> for LinearBuffer<SIZE, T> {
+    type Error = LinearBufferError;
+
+    fn try_from(values: &[T]) -> Result<Self, Self::Error> {
+        if values.len() > SIZE {
+            Err(LinearBufferError::SizeTooSmall)
+        } else {
+            let mut buffer = unsafe { MaybeUninit::<[MaybeUninit<T>; SIZE]>::uninit().assume_init() };
+            let mut count = 0;
+
+            for val in values {
+                buffer[count] = MaybeUninit::new(val.clone());
+                count += 1;
+            }
+
+            Ok(Self { buffer, count })
+        }
+    }
+}
+
 /// Error from a `LinearBuffer`
 #[derive(Debug)]
 pub enum LinearBufferError {
