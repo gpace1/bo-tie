@@ -3,6 +3,7 @@
 //! Buffers in this module are statically allocated. The size of the buffer must be known at
 //! compile time.
 
+use core::borrow::{Borrow, BorrowMut};
 use core::fmt::{Debug, Display, Formatter};
 use core::mem::{replace, transmute, MaybeUninit};
 use core::ops::{Deref, DerefMut};
@@ -105,6 +106,13 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
     pub fn len(&self) -> usize {
         self.count
     }
+
+    /// Clear the linear buffer
+    pub fn clear(&mut self) {
+        for is_init in self.buffer[..self.count].iter_mut() {
+            unsafe { is_init.assume_init_drop() }
+        }
+    }
 }
 
 impl<T: Clone, const SIZE: usize> Clone for LinearBuffer<SIZE, T> {
@@ -133,6 +141,18 @@ impl<T, const SIZE: usize> Deref for LinearBuffer<SIZE, T> {
 impl<T, const SIZE: usize> DerefMut for LinearBuffer<SIZE, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { transmute::<&mut [MaybeUninit<T>], &mut [T]>(&mut self.buffer[..self.count]) }
+    }
+}
+
+impl<T, const SIZE: usize> Borrow<[T]> for LinearBuffer<SIZE, T> {
+    fn borrow(&self) -> &[T] {
+        self.deref()
+    }
+}
+
+impl<T, const SIZE: usize> BorrowMut<[T]> for LinearBuffer<SIZE, T> {
+    fn borrow_mut(&mut self) -> &mut [T] {
+        self.deref_mut()
     }
 }
 
@@ -189,9 +209,7 @@ impl<T: Clone, const SIZE: usize> TryFrom<&[T]> for LinearBuffer<SIZE, T> {
 
 impl<T, const SIZE: usize> Drop for LinearBuffer<SIZE, T> {
     fn drop(&mut self) {
-        for is_init in self.buffer[..self.count].iter_mut() {
-            unsafe { is_init.assume_init_drop() }
-        }
+        self.clear()
     }
 }
 
