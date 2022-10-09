@@ -143,6 +143,14 @@ impl<T: Debug, const SIZE: usize> Debug for LinearBuffer<SIZE, T> {
     }
 }
 
+impl<T: PartialEq, const SIZE: usize> PartialEq for LinearBuffer<SIZE, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.count == other.count && self.iter().eq(other.iter())
+    }
+}
+
+impl<T: Eq, const SIZE: usize> Eq for LinearBuffer<SIZE, T> {}
+
 impl<T, const ARRAY_SIZE: usize, const BUFFER_SIZE: usize> From<[T; ARRAY_SIZE]> for LinearBuffer<BUFFER_SIZE, T> {
     fn from(arr: [T; ARRAY_SIZE]) -> Self {
         assert!(ARRAY_SIZE <= BUFFER_SIZE);
