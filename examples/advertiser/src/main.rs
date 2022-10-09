@@ -17,7 +17,7 @@ use std::sync::{
 };
 
 async fn advertise_setup(
-    hi: &hci::Host<bo_tie_linux::HCIAdapter>,
+    hi: &hci::Host<bo_tie_linux::LinuxInterface>,
     data: set_advertising_data::AdvertisingData,
     flag: Arc<AtomicBool>,
 ) {
@@ -46,7 +46,7 @@ async fn advertise_setup(
     println!("{:5>}", "Advertising Enabled");
 }
 
-async fn advertise_teardown(hi: &hci::Host<bo_tie_linux::HCIAdapter>) {
+async fn advertise_teardown(hi: &hci::Host<bo_tie_linux::LinuxInterface>) {
     set_advertising_enable::send(&hi, false).await.unwrap();
 }
 
@@ -103,7 +103,7 @@ fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
         let services_128 = matches.opt_strs("s").into_iter().fold(
             bo_tie::gap::assigned::service_uuids::new_128(true),
             |mut services, str_uuid| {
-                let uuid = bo_tie::UUID::try_from(str_uuid.as_str()).expect("Invalid UUID");
+                let uuid = bo_tie::Uuid::try_from(str_uuid.as_str()).expect("Invalid Uuid");
 
                 services.add(uuid.into());
 
