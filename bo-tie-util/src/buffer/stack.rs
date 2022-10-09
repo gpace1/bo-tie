@@ -143,19 +143,19 @@ impl<T: Debug, const SIZE: usize> Debug for LinearBuffer<SIZE, T> {
     }
 }
 
-impl<T, const SIZE: usize> Drop for LinearBuffer<SIZE, T> {
-    fn drop(&mut self) {
-        for is_init in self.buffer[..self.count].iter_mut() {
-            unsafe { is_init.assume_init_drop() }
+impl<T, const ARRAY_SIZE: usize, const BUFFER_SIZE: usize> From<[T; ARRAY_SIZE]> for LinearBuffer<BUFFER_SIZE, T> {
+    fn from(arr: [T; ARRAY_SIZE]) -> Self {
+        assert!(ARRAY_SIZE <= BUFFER_SIZE);
+
+        let mut buffer = unsafe { MaybeUninit::<[MaybeUninit<T>; BUFFER_SIZE]>::uninit().assume_init() };
+        let mut count = 0;
+
+        for t in arr {
+            buffer[count] = MaybeUninit::new(t);
+            count += 1;
         }
-    }
-}
 
-impl<T, const SIZE: usize> From<[T; SIZE]> for LinearBuffer<SIZE, T> {
-    fn from(buffer: [T; SIZE]) -> Self {
-        let buffer = buffer.map(|t| MaybeUninit::new(t));
-
-        Self { buffer, count: SIZE }
+        Self { buffer, count }
     }
 }
 
@@ -175,6 +175,14 @@ impl<T: Clone, const SIZE: usize> TryFrom<&[T]> for LinearBuffer<SIZE, T> {
             }
 
             Ok(Self { buffer, count })
+        }
+    }
+}
+
+impl<T, const SIZE: usize> Drop for LinearBuffer<SIZE, T> {
+    fn drop(&mut self) {
+        for is_init in self.buffer[..self.count].iter_mut() {
+            unsafe { is_init.assume_init_drop() }
         }
     }
 }
