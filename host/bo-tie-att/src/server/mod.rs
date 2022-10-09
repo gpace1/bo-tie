@@ -509,14 +509,14 @@ where
     ///
     /// Returns the error as to why the client couldn't read the attribute
     fn client_can_read_attribute<V>(&self, att: &super::Attribute<V>) -> Option<pdu::Error> {
-        self.validate_permissions(att.get_permissions(), super::FULL_READ_PERMISSIONS)
+        self.validate_permissions(att.get_permissions(), &super::FULL_READ_PERMISSIONS)
     }
 
     /// Check if a client can write the given attribute
     ///
     /// Returns the error as to why the client couldn't read the attribute
     fn client_can_write_attribute<V>(&self, att: &super::Attribute<V>) -> Option<pdu::Error> {
-        self.validate_permissions(att.get_permissions(), super::FULL_WRITE_PERMISSIONS)
+        self.validate_permissions(att.get_permissions(), &super::FULL_WRITE_PERMISSIONS)
     }
 
     /// Process a received ACL Data packet form the Bluetooth Controller
@@ -1237,7 +1237,7 @@ where
         );
 
         // Check the permissions (`check_permission` also validates the handle)
-        match match self.check_permissions(blob_request.handle, super::FULL_READ_PERMISSIONS) {
+        match match self.check_permissions(blob_request.handle, &super::FULL_READ_PERMISSIONS) {
             Ok(_) => {
                 // Make a new blob if blob data doesn't exist or the blob handle does not match the
                 // requested for handle
@@ -1390,7 +1390,7 @@ where
                     request.get_prepared_offset()
                 );
 
-                match self.check_permissions(request.get_handle(), super::FULL_WRITE_PERMISSIONS) {
+                match self.check_permissions(request.get_handle(), &super::FULL_WRITE_PERMISSIONS) {
                     Ok(_) => match self.queued_writer.process_prepared(&request) {
                         Err(e) => Err((request.get_handle(), e)),
 
@@ -1429,7 +1429,7 @@ where
         match match self.queued_writer.process_execute(request_flag) {
             Ok(Some(iter)) => {
                 for queued_data in iter.into_iter() {
-                    self.check_permissions(queued_data.0, super::FULL_WRITE_PERMISSIONS)?;
+                    self.check_permissions(queued_data.0, &super::FULL_WRITE_PERMISSIONS)?;
 
                     self.write_att(queued_data.0, &queued_data.1).await?;
                 }
