@@ -7,6 +7,7 @@ edition = "2021"
 log = "0.4"
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-host-util = { path = "../bo-tie-host-util" }
+bo-tie-macros = { path = "../../bo-tie-macros" }
 bo-tie-util = { path = "../../bo-tie-util" }
 tokio = { version = "1", features = ["sync"], optional = true }
 futures = { version = "0.3", optional = true }

@@ -3,8 +3,10 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
+extern crate core;
 
 use alloc::{boxed::Box, format, string::String, vec::Vec};
+use core::borrow::Borrow;
 
 pub mod client;
 pub mod server;
@@ -12,6 +14,7 @@ pub mod server;
 use bo_tie_l2cap as l2cap;
 
 pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
+use bo_tie_util::buffer::stack::LinearBuffer;
 pub use client::Client;
 pub use server::Server;
 
@@ -71,7 +74,7 @@ pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::LE(l2cap::LEUserChannelIdentifier::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, bo_tie_macros::DepthCount)]
 pub enum EncryptionKeySize {
     Bits128,
     Bits192,
@@ -109,7 +112,7 @@ impl Ord for EncryptionKeySize {
 ///
 /// There are three type of restrictions, `Encryption` (with the size of the encryption key),
 /// `Authentication`, and `Authorization`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, bo_tie_macros::DepthCount)]
 pub enum AttributeRestriction {
     None,
     Encryption(EncryptionKeySize),
@@ -117,7 +120,7 @@ pub enum AttributeRestriction {
     Authorization,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, bo_tie_macros::DepthCount)]
 pub enum AttributePermissions {
     /// Readable Access
     Read(AttributeRestriction),
@@ -125,13 +128,13 @@ pub enum AttributePermissions {
     Write(AttributeRestriction),
 }
 
-impl core::borrow::Borrow<[AttributePermissions]> for AttributePermissions {
+impl Borrow<[AttributePermissions]> for AttributePermissions {
     fn borrow(&self) -> &[AttributePermissions] {
         core::slice::from_ref(self)
     }
 }
 
-impl core::borrow::Borrow<[AttributePermissions]> for &AttributePermissions {
+impl Borrow<[AttributePermissions]> for &AttributePermissions {
     fn borrow(&self) -> &[AttributePermissions] {
         core::slice::from_ref(*self)
     }
@@ -198,7 +201,7 @@ pub const FULL_PERMISSIONS: [AttributePermissions; 12] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attribute<V> {
     /// The Attribute type
-    ty: crate::Uuid,
+    ty: Uuid,
 
     /// The attribute handle
     ///
@@ -207,7 +210,7 @@ pub struct Attribute<V> {
     handle: Option<u16>,
 
     /// Access Permissions
-    permissions: Vec<AttributePermissions>,
+    permissions: LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions>,
 
     /// Attribute value
     value: V,
@@ -222,9 +225,17 @@ impl<V> Attribute<V> {
     /// pushed on to the server.
     ///
     /// Ihe input 'permissions' will have all duplicates removed.
-    pub fn new(attribute_type: crate::Uuid, mut permissions: Vec<AttributePermissions>, value: V) -> Self {
-        permissions.sort();
-        permissions.dedup();
+    pub fn new<P>(attribute_type: Uuid, attribute_permissions: P, value: V) -> Self
+    where
+        P: Borrow<[AttributePermissions]>,
+    {
+        let mut permissions = LinearBuffer::new();
+
+        for permission in attribute_permissions.borrow().iter() {
+            if !permissions.contains(permission) {
+                permissions.try_push(*permission).unwrap();
+            }
+        }
 
         Attribute {
             ty: attribute_type,
@@ -234,18 +245,22 @@ impl<V> Attribute<V> {
         }
     }
 
+    /// Get the UUID of the attribute
     pub fn get_uuid(&self) -> &crate::Uuid {
         &self.ty
     }
 
+    /// Get the attribute permissions
     pub fn get_permissions(&self) -> &[AttributePermissions] {
-        &self.permissions
+        &*self.permissions
     }
 
+    /// Get a reference to the value
     pub fn get_value(&self) -> &V {
         &self.value
     }
 
+    /// Get a mutable reference to the value
     pub fn get_mut_value(&mut self) -> &mut V {
         &mut self.value
     }
