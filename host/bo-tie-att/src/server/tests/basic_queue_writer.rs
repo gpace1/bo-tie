@@ -29,7 +29,7 @@ async fn prepare_write_with_exec_test() {
 
     let att_val: Arc<Mutex<String>> = Arc::default();
 
-    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
+    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS, att_val.clone());
 
     let att_handle = server.push_accessor(att);
 
@@ -94,7 +94,7 @@ async fn prepare_write_with_cancel_test() {
 
     let att_val: Arc<Mutex<String>> = Arc::default();
 
-    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
+    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS, att_val.clone());
 
     let att_handle = server.push_accessor(att);
 
@@ -150,7 +150,7 @@ async fn prepare_write_over_flow() {
 
     let att_val: Arc<Mutex<String>> = Arc::default();
 
-    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
+    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS, att_val.clone());
 
     let att_handle = server.push_accessor(att);
 
@@ -203,7 +203,7 @@ async fn prepare_write_bad_offset() {
 
     let att_val: Arc<Mutex<String>> = Arc::default();
 
-    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS.into(), att_val.clone());
+    let att = Attribute::new(1u16.into(), FULL_WRITE_PERMISSIONS, att_val.clone());
 
     let att_handle = server.push_accessor(att);
 

@@ -1512,28 +1512,33 @@ impl ServerAttributes {
     /// to wrap the value in a mutex to allow for multiple connections to write to the same
     /// attribute. It is recommended that whatever process is used to access the value be `async`.
     ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
-    /// use bo_tie_att::server::ServerAttributes;
-    /// use bo_tie_host_util::Uuid;
-    /// use tokio::sync::Mutex;
-    ///
-    /// let mut attributes = ServerAttributes::new();
-    ///
-    /// // tokio's mutex's implementation of AccessValue
-    /// // is gated by the feature `tokio`.
-    /// let device_name = Attribute::new(
-    ///     Uuid::from_u16(0x2A00),
-    ///     vec![
-    ///         AttributePermissions::Read(AttributeRestriction::None),
-    ///         AttributePermissions::Write(AttributeRestriction::Authorization)
-    ///     ],
-    ///     Arc::new(Mutex::new(String::from("My Device")))
-    /// );
-    ///
-    /// attributes.push_accessor(device_name);
-    /// ```
+    #[cfg_attr(
+        feature = "tokio",
+        doc = r##"
+```
+use std::sync::Arc;
+use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
+use bo_tie_att::server::ServerAttributes;
+use bo_tie_host_util::Uuid;
+use tokio::sync::Mutex;
+
+let mut attributes = ServerAttributes::new();
+
+// tokio's mutex's implementation of AccessValue
+// is gated by the feature `tokio`.
+let device_name = Attribute::new(
+    Uuid::from_u16(0x2A00),
+    vec![
+        AttributePermissions::Read(AttributeRestriction::None),
+        AttributePermissions::Write(AttributeRestriction::Authorization)
+    ],
+    Arc::new(Mutex::new(String::from("My Device")))
+);
+
+attributes.push_accessor(device_name);
+```
+    "##
+    )]
     ///
     /// # Panic
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
@@ -1552,7 +1557,81 @@ impl ServerAttributes {
             ty: attribute.ty,
             handle: Some(handle),
             permissions: attribute.permissions,
-            value: Box::from(attribute.value) as Box<dyn ServerAttribute + Send + Sync + 'static>,
+            value: Box::from(AccessibleValue(attribute.value)) as Box<dyn ServerAttribute + Send + Sync + 'static>,
+        };
+
+        self.attributes.push(pushed_att);
+
+        handle
+    }
+
+    /// Push a read only attribute
+    ///
+    /// This will push the attribute onto the list of server attributes and return the handle of
+    /// the pushed attribute. This attribute is read only, the client cannot write to the value of
+    /// this attribute. Since the client cannot write the value type only needs to implement
+    /// [`TransferFormatInto`] and not [`TransferFormatTryFrom`]. However, the consequence of this
+    /// is that a Client also cannot search by value for this attribute.
+    ///
+    /// The main usage of a read only attribute is to allow for dynamically sized types to be the
+    /// `Value` of the accessor.
+    ///
+    #[cfg_attr(
+        feature = "tokio",
+        doc = r##"
+```
+use std::sync::Arc;
+use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
+use bo_tie_att::server::ServerAttributes;
+use bo_tie_host_util::Uuid;
+use tokio::sync::Mutex;
+
+let mut attributes = ServerAttributes::new();
+
+// tokio's mutex's implementation of AccessValue
+// is gated by the feature `tokio`.
+let device_name = Attribute::new(
+    Uuid::from_u16(0x2A00),
+    [ AttributePermissions::Read(AttributeRestriction::None) ],
+    Arc::new(Mutex::new("My Device"))
+);
+
+attributes.push_read_only(device_name);
+```
+        "##
+    )]
+    /// # Note
+    /// Any write attribute permissions are stripped from the attribute.
+    ///
+    /// # Panic
+    /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
+    pub fn push_read_only<C, V>(&mut self, mut attribute: super::Attribute<C>) -> u16
+    where
+        C: AccessReadOnly<Value = V> + Send + Sync + 'static,
+        V: TransferFormatInto + PartialEq + ?Sized + Send + Sync + 'static,
+    {
+        let handle = self
+            .attributes
+            .len()
+            .try_into()
+            .expect("Exceeded attribute handle limit");
+
+        let mut cnt = 0;
+
+        // Removing all write permissions
+        while cnt != attribute.permissions.len() {
+            if let AttributePermissions::Write(_) = attribute.permissions[cnt] {
+                attribute.permissions.try_remove(cnt).unwrap();
+            }
+
+            cnt += 1;
+        }
+
+        let pushed_att = super::Attribute {
+            ty: attribute.ty,
+            handle: Some(handle),
+            permissions: attribute.permissions,
+            value: Box::from(ReadOnly(attribute.value)) as Box<dyn ServerAttribute + Send + Sync + 'static>,
         };
 
         self.attributes.push(pushed_att);
@@ -1737,6 +1816,7 @@ where
     R: Future<Output = G>,
     G: core::ops::Deref<Target = V>,
     F: FnOnce(&V) -> T + Unpin,
+    V: ?Sized,
 {
     type Output = T;
 
@@ -1752,7 +1832,7 @@ where
 }
 
 /// Future for comparing an attribute to its value
-struct Compare<'a, R, V> {
+struct Compare<'a, R, V: ?Sized> {
     reader: R,
     value: &'a V,
 }
@@ -1761,7 +1841,7 @@ impl<R, G, V> Future for Compare<'_, R, V>
 where
     R: Future<Output = G>,
     G: core::ops::Deref<Target = V>,
-    V: PartialEq,
+    V: ?Sized + PartialEq,
 {
     type Output = bool;
 
@@ -1775,6 +1855,57 @@ where
         }
     }
 }
+
+/// Read only access
+///
+/// This is the same as [`AccessValue`] except this cannot be written to and the associated type
+/// `Value` may be a dynamically sized type. The value types only need to implement
+/// [`TransferFormatInto`] and not [`TransferFormatTryFrom`]. However, not only can the client not
+/// be able to write to this value, it also *cannot search by value for the attribute containing
+/// this*. This is because in order to compare
+///
+/// [`TransferFormatTryFrom`]: bo_tie_att::TransferFormatTryFrom
+pub trait AccessReadOnly: Send + Sync {
+    type Value: ?Sized + Send + Sync;
+
+    type ReadGuard<'a>: core::ops::Deref<Target = Self::Value>
+    where
+        Self: 'a;
+
+    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send + Sync
+    where
+        Self: 'a;
+
+    fn read(&self) -> Self::Read<'_>;
+}
+
+trait AccessReadOnlyExt: AccessReadOnly {
+    /// Read the value and call `f` with a reference to it.
+    fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
+    where
+        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync,
+    {
+        let read = self.read();
+
+        ReadAnd {
+            reader: read,
+            job: Some(f),
+        }
+    }
+
+    /// Compare the value to 'other'
+    fn eq<'a>(&'a self, other: &'a Self::Value) -> Compare<'a, Self::Read<'a>, Self::Value>
+    where
+        Self::Value: PartialEq,
+    {
+        Compare {
+            reader: self.read(),
+            value: other,
+        }
+    }
+}
+
+impl<T: AccessReadOnly> AccessReadOnlyExt for T {}
 
 /// A server attribute
 ///
@@ -1826,25 +1957,31 @@ trait ServerAttribute {
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool>;
 }
 
-impl<C, V> ServerAttribute for C
+/// Wrapper type for an type that implements [`AccessValue`]
+struct AccessibleValue<A: AccessValue>(A);
+
+impl<A, V> ServerAttribute for AccessibleValue<A>
 where
-    C: AccessValue<Value = V> + 'static,
+    A: AccessValue<Value = V> + 'static,
     V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
-        Box::pin(self.read_and(|v| TransferFormatInto::into(v)))
+        Box::pin(self.0.read_and(|v| TransferFormatInto::into(v)))
     }
 
     fn read_response(&self) -> PinnedFuture<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
-        Box::pin(self.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
+        Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
     }
 
     fn notification(&self, handle: u16) -> PinnedFuture<pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
-        Box::pin(self.read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v))))
+        Box::pin(
+            self.0
+                .read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v))),
+        )
     }
 
     fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
-        Box::pin(self.read_and(move |v| {
+        Box::pin(self.0.read_and(move |v| {
             let tf = TransferFormatInto::into(v);
 
             pdu::ReadTypeResponse::new(handle, tf)
@@ -1856,23 +1993,73 @@ where
         raw: &'a [u8],
     ) -> PinnedFuture<'a, Result<(), TransferFormatError>> {
         Box::pin(async move {
-            self.write(TransferFormatTryFrom::try_from(raw)?).await;
+            self.0.write(TransferFormatTryFrom::try_from(raw)?).await;
 
             Ok(())
         })
     }
 
     fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
-        Box::pin(async move { self.read_and(|v: &V| v.len_of_into()).await })
+        Box::pin(async move { self.0.read_and(|v: &V| v.len_of_into()).await })
     }
 
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
         Box::pin(async move {
             match <V as TransferFormatTryFrom>::try_from(raw) {
                 Err(_) => false,
-                Ok(cmp_val) => self.eq(&cmp_val).await,
+                Ok(cmp_val) => self.0.eq(&cmp_val).await,
             }
         })
+    }
+}
+
+/// Wrapper around a type that implements `AccessReadOnly`
+///
+/// # Note
+/// This type must only be used with read only attribute permissions.
+struct ReadOnly<R: AccessReadOnly>(R);
+
+impl<R, V> ServerAttribute for ReadOnly<R>
+where
+    R: AccessReadOnly<Value = V> + 'static,
+    V: TransferFormatInto + ?Sized + PartialEq + Send + Sync,
+{
+    fn read(&self) -> PinnedFuture<Vec<u8>> {
+        Box::pin(self.0.read_and(|v| TransferFormatInto::into(v)))
+    }
+
+    fn read_response(&self) -> PinnedFuture<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
+        Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
+    }
+
+    fn notification(&self, handle: u16) -> PinnedFuture<pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
+        Box::pin(
+            self.0
+                .read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v))),
+        )
+    }
+
+    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
+        Box::pin(self.0.read_and(move |v| {
+            let tf = TransferFormatInto::into(v);
+
+            pdu::ReadTypeResponse::new(handle, tf)
+        }))
+    }
+
+    fn try_set_value_from_transfer_format<'a>(
+        &'a mut self,
+        _: &'a [u8],
+    ) -> PinnedFuture<'a, Result<(), TransferFormatError>> {
+        unreachable!()
+    }
+
+    fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
+        Box::pin(async move { self.0.read_and(|v: &V| v.len_of_into()).await })
+    }
+
+    fn cmp_value_to_raw_transfer_format<'a>(&'a self, _: &'a [u8]) -> PinnedFuture<'_, bool> {
+        Box::pin(async move { false })
     }
 }
 
