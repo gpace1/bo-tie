@@ -1776,38 +1776,6 @@ where
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct AttributeInfo<'a> {
-    ty: &'a crate::Uuid,
-    handle: u16,
-    permissions: &'a [super::AttributePermissions],
-}
-
-impl<'a> AttributeInfo<'a> {
-    fn from_att<T>(att: &'a super::Attribute<T>) -> Self {
-        AttributeInfo {
-            ty: att.get_uuid(),
-            handle: att.get_handle().expect("Failed to get the attribute handle"),
-            permissions: att.get_permissions(),
-        }
-    }
-
-    /// Get the attribute's UUID
-    ///
-    /// This is the UUID that is assigned for this
-    pub fn get_uuid(&self) -> &crate::Uuid {
-        self.ty
-    }
-
-    pub fn get_handle(&self) -> u16 {
-        self.handle
-    }
-
-    pub fn get_permissions(&self) -> &[super::AttributePermissions] {
-        self.permissions
-    }
-}
-
 /// A server attribute
 ///
 /// A `ServerAttribute` is an attribute that has been added to the `ServerAttributes`. These
@@ -1968,6 +1936,38 @@ impl ServerAttribute for ReservedHandle {
 
     fn cmp_value_to_raw_transfer_format(&self, _: &[u8]) -> PinnedFuture<'_, bool> {
         Box::pin(async { false })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct AttributeInfo<'a> {
+    ty: &'a crate::Uuid,
+    handle: u16,
+    permissions: &'a [super::AttributePermissions],
+}
+
+impl<'a> AttributeInfo<'a> {
+    fn from_att<T>(att: &'a super::Attribute<T>) -> Self {
+        AttributeInfo {
+            ty: att.get_uuid(),
+            handle: att.get_handle().expect("Failed to get the attribute handle"),
+            permissions: att.get_permissions(),
+        }
+    }
+
+    /// Get the attribute's UUID
+    ///
+    /// This is the UUID that is assigned for this
+    pub fn get_uuid(&self) -> &crate::Uuid {
+        self.ty
+    }
+
+    pub fn get_handle(&self) -> u16 {
+        self.handle
+    }
+
+    pub fn get_permissions(&self) -> &[super::AttributePermissions] {
+        self.permissions
     }
 }
 
