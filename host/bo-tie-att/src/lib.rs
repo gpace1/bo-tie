@@ -4,7 +4,6 @@
 
 extern crate alloc;
 
-use alloc::borrow::Cow;
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::borrow::Borrow;
 
@@ -662,7 +661,7 @@ where
 
 impl<T> TransferFormatInto for alloc::borrow::Cow<'_, T>
 where
-    T: TransferFormatInto + Clone,
+    T: TransferFormatInto + ToOwned + ?Sized,
 {
     fn len_of_into(&self) -> usize {
         Borrow::<T>::borrow(self).len_of_into()
@@ -675,35 +674,14 @@ where
 
 impl<T> TransferFormatTryFrom for alloc::borrow::Cow<'_, T>
 where
-    T: TransferFormatTryFrom + Clone,
+    T: ToOwned + ?Sized,
+    T::Owned: TransferFormatTryFrom,
 {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
     where
         Self: Sized,
     {
-        Ok(Cow::Owned(T::try_from(raw)?))
-    }
-}
-
-impl TransferFormatTryFrom for alloc::borrow::Cow<'_, str> {
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
-    where
-        Self: Sized,
-    {
-        Ok(Cow::Owned(<String as TransferFormatTryFrom>::try_from(raw)?))
-    }
-}
-
-impl<T> TransferFormatTryFrom for alloc::borrow::Cow<'_, [T]>
-where
-    T: TransferFormatTryFrom + Clone,
-    Vec<T>: TransferFormatTryFrom,
-{
-    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
-    where
-        Self: Sized,
-    {
-        Ok(Cow::Owned(<Vec<T> as TransferFormatTryFrom>::try_from(raw)?))
+        Ok(alloc::borrow::Cow::Owned(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
