@@ -332,7 +332,7 @@ where
     /// This is equivalent to the method [`ServerAttributes::push_accessor`]
     pub fn push_accessor<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
     where
-        C: AccessValue<Value = V> + Send + Sync + Sized + 'static,
+        C: for<'a> AccessValue<Value<'a> = V> + Send + Sync + Sized + 'static,
         V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync + 'static,
     {
         self.attributes.push_accessor(attribute)
@@ -1544,7 +1544,7 @@ attributes.push_accessor(device_name);
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
     pub fn push_accessor<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
     where
-        C: AccessValue<Value = V> + Send + Sync + Sized + 'static,
+        C: for<'a> AccessValue<Value<'a> = V> + Send + Sync + Sized + 'static,
         V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync + 'static,
     {
         let handle = self
@@ -1757,9 +1757,9 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + Sync + 'a
 /// [futures]: https://docs.rs/futures/latest/futures/index.html
 /// [tokio]: https://docs.rs/tokio/latest/tokio/index.html
 pub trait AccessValue: Send + Sync {
-    type Value: Send + Sync;
+    type Value<'a>: Send + Sync;
 
-    type ReadGuard<'a>: core::ops::Deref<Target = Self::Value>
+    type ReadGuard<'a>: core::ops::Deref<Target = Self::Value<'a>>
     where
         Self: 'a;
 
@@ -1773,7 +1773,7 @@ pub trait AccessValue: Send + Sync {
 
     fn read(&self) -> Self::Read<'_>;
 
-    fn write(&mut self, v: Self::Value) -> Self::Write<'_>;
+    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_>;
 }
 
 /// Extension method for `ServerAttributeValue`
@@ -1781,7 +1781,7 @@ trait ServerAttributeValueExt: AccessValue {
     /// Read the value and call `f` with a reference to it.
     fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
     where
-        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync,
+        F: for<'a> FnOnce(&Self::Value<'a>) -> T + Unpin + Send + Sync,
     {
         let read = self.read();
 
@@ -1792,9 +1792,9 @@ trait ServerAttributeValueExt: AccessValue {
     }
 
     /// Compare the value to 'other'
-    fn eq<'a>(&'a self, other: &'a Self::Value) -> Compare<'a, Self::Read<'a>, Self::Value>
+    fn eq<'a>(&'a self, other: &'a Self::Value<'a>) -> Compare<'a, Self::Read<'a>, Self::Value<'a>>
     where
-        Self::Value: PartialEq,
+        Self::Value<'a>: PartialEq,
     {
         Compare {
             reader: self.read(),
@@ -1962,7 +1962,7 @@ struct AccessibleValue<A: AccessValue>(A);
 
 impl<A, V> ServerAttribute for AccessibleValue<A>
 where
-    A: AccessValue<Value = V> + 'static,
+    A: for<'a> AccessValue<Value<'a> = V> + 'static,
     V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {

@@ -17,7 +17,7 @@ pub struct Trivial<V: ?Sized>(pub V);
 
 /// The trivial implementation for ServerAttributeValue
 impl<V: Unpin + Send + Sync> AccessValue for Trivial<V> {
-    type Value = V;
+    type Value<'a> = V;
     type ReadGuard<'a> = &'a V where V: 'a;
     type Read<'a> = ReadReady<&'a V> where Self: 'a;
     type Write<'a> = WriteReady<'a, V> where Self: 'a;
@@ -83,7 +83,7 @@ impl<T: Unpin> Future for WriteReady<'_, T> {
 
 #[cfg(feature = "tokio")]
 impl<V: Send + Sync> AccessValue for std::sync::Arc<tokio::sync::Mutex<V>> {
-    type Value = V;
+    type Value<'a> = V;
     type ReadGuard<'a> = tokio::sync::MutexGuard<'a, V> where V: 'a;
     type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
     type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
@@ -92,7 +92,7 @@ impl<V: Send + Sync> AccessValue for std::sync::Arc<tokio::sync::Mutex<V>> {
         Box::pin(self.lock())
     }
 
-    fn write(&mut self, v: Self::Value) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
         Box::pin(async move {
             *self.lock().await = v;
         })
@@ -112,7 +112,7 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::Mut
 
 #[cfg(feature = "tokio")]
 impl<V: Send + Sync> AccessValue for std::sync::Arc<tokio::sync::RwLock<V>> {
-    type Value = V;
+    type Value<'a> = V;
     type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V> where V: 'a;
     type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
     type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
@@ -121,7 +121,7 @@ impl<V: Send + Sync> AccessValue for std::sync::Arc<tokio::sync::RwLock<V>> {
         Box::pin(tokio::sync::RwLock::read(self))
     }
 
-    fn write(&mut self, v: Self::Value) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
         Box::pin(async move {
             *tokio::sync::RwLock::write(self).await = v;
         })
@@ -141,7 +141,7 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwL
 
 #[cfg(feature = "futures-rs")]
 impl<V: Send + Sync> AccessValue for std::sync::Arc<futures::lock::Mutex<V>> {
-    type Value = V;
+    type Value<'a> = V;
     type ReadGuard<'a> = futures::lock::MutexGuard<'a, V> where Self: 'a;
     type Read<'a> = futures::lock::MutexLockFuture<'a, V> where Self: 'a;
     type Write<'a> = Write<futures::lock::MutexLockFuture<'a, V>, V> where Self: 'a;
@@ -150,7 +150,7 @@ impl<V: Send + Sync> AccessValue for std::sync::Arc<futures::lock::Mutex<V>> {
         self.lock()
     }
 
-    fn write(&mut self, v: Self::Value) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
         Write(self.lock(), Some(v))
     }
 }
@@ -186,7 +186,7 @@ impl<V> Future for Write<futures::lock::MutexLockFuture<'_, V>, V> {
 
 #[cfg(feature = "async-std")]
 impl<V: Send + Sync> AccessValue for std::sync::Arc<async_std::sync::Mutex<V>> {
-    type Value = V;
+    type Value<'a> = V;
     type ReadGuard<'a> = async_std::sync::MutexGuard<'a, V> where Self: 'a;
     type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
     type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
@@ -195,7 +195,7 @@ impl<V: Send + Sync> AccessValue for std::sync::Arc<async_std::sync::Mutex<V>> {
         Box::pin(self.lock())
     }
 
-    fn write(&mut self, v: Self::Value) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
         Box::pin(async move { *self.lock().await = v })
     }
 }
@@ -213,7 +213,7 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<async_std::sync:
 
 #[cfg(feature = "async-std")]
 impl<V: Send + Sync> AccessValue for std::sync::Arc<async_std::sync::RwLock<V>> {
-    type Value = V;
+    type Value<'a> = V;
     type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V> where Self: 'a;
     type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
     type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
@@ -222,7 +222,7 @@ impl<V: Send + Sync> AccessValue for std::sync::Arc<async_std::sync::RwLock<V>> 
         Box::pin(async_std::sync::RwLock::read(self))
     }
 
-    fn write(&mut self, v: Self::Value) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
         Box::pin(async move { *async_std::sync::RwLock::write(self).await = v })
     }
 }
