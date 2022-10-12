@@ -44,6 +44,12 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for Trivial<V> {
 /// Future that always returns `Poll::Ready(T)`
 pub struct ReadReady<T>(T);
 
+impl<T> ReadReady<T> {
+    pub fn new(t: T) -> Self {
+        ReadReady(t)
+    }
+}
+
 impl<T: Copy + Unpin> Future for ReadReady<T> {
     type Output = T;
 
@@ -54,6 +60,12 @@ impl<T: Copy + Unpin> Future for ReadReady<T> {
 
 /// Future that immediately writes to the value upon being polled
 pub struct WriteReady<'a, T>(&'a mut T, Option<T>);
+
+impl<'a, T> WriteReady<'a, T> {
+    pub fn new(dest: &'a mut T, src: T) -> Self {
+        WriteReady(dest, Some(src))
+    }
+}
 
 impl<T: Unpin> Future for WriteReady<'_, T> {
     type Output = ();

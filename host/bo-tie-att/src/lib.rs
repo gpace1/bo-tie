@@ -3,8 +3,8 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
-extern crate core;
 
+use alloc::borrow::Cow;
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::borrow::Borrow;
 
@@ -446,7 +446,7 @@ impl From<&'_ str> for TransferFormatError {
     fn from(msg: &'_ str) -> Self {
         TransferFormatError {
             pdu_err: pdu::Error::InvalidPDU,
-            message: msg.into(),
+            message: msg.to_string(),
         }
     }
 }
@@ -458,7 +458,7 @@ impl From<pdu::Error> for TransferFormatError {
     fn from(err: pdu::Error) -> Self {
         TransferFormatError {
             pdu_err: err,
-            message: "unspecified".into(),
+            message: "unspecified".to_string(),
         }
     }
 }
@@ -621,9 +621,9 @@ impl TransferFormatTryFrom for String {
     }
 }
 
-impl TransferFormatInto for &str {
+impl TransferFormatInto for str {
     fn len_of_into(&self) -> usize {
-        self.len()
+        self.bytes().len()
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
@@ -633,11 +633,11 @@ impl TransferFormatInto for &str {
 
 impl TransferFormatInto for String {
     fn len_of_into(&self) -> usize {
-        (self as &str).len_of_into()
+        self.as_str().len_of_into()
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        (self as &str).build_into_ret(into_ret)
+        self.as_str().build_into_ret(into_ret)
     }
 }
 
@@ -650,13 +650,60 @@ where
     }
 
     fn build_into_ret(&self, into_ret: &mut [u8]) {
-        self.iter().map(|t| (t.len_of_into(), t)).fold(0, |off, (len, t)| {
+        self.iter().map(|t| (t.len_of_into(), t)).fold(0usize, |off, (len, t)| {
             let end = off + len;
 
             t.build_into_ret(&mut into_ret[off..end]);
 
             end
         });
+    }
+}
+
+impl<T> TransferFormatInto for alloc::borrow::Cow<'_, T>
+where
+    T: TransferFormatInto + Clone,
+{
+    fn len_of_into(&self) -> usize {
+        Borrow::<T>::borrow(self).len_of_into()
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        Borrow::<T>::borrow(self).build_into_ret(into_ret)
+    }
+}
+
+impl<T> TransferFormatTryFrom for alloc::borrow::Cow<'_, T>
+where
+    T: TransferFormatTryFrom + Clone,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        Ok(Cow::Owned(T::try_from(raw)?))
+    }
+}
+
+impl TransferFormatTryFrom for alloc::borrow::Cow<'_, str> {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        Ok(Cow::Owned(<String as TransferFormatTryFrom>::try_from(raw)?))
+    }
+}
+
+impl<T> TransferFormatTryFrom for alloc::borrow::Cow<'_, [T]>
+where
+    T: TransferFormatTryFrom + Clone,
+    Vec<T>: TransferFormatTryFrom,
+{
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
+    where
+        Self: Sized,
+    {
+        Ok(Cow::Owned(<Vec<T> as TransferFormatTryFrom>::try_from(raw)?))
     }
 }
 
@@ -730,7 +777,7 @@ where
 impl TransferFormatTryFrom for Box<str> {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         core::str::from_utf8(raw)
-            .and_then(|s| Ok(s.into()))
+            .and_then(|s| Ok(Box::<str>::from(s)))
             .or_else(|e| Err(TransferFormatError::from(format!("{}", e))))
     }
 }

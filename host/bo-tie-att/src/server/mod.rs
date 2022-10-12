@@ -1864,7 +1864,7 @@ where
 /// be able to write to this value, it also *cannot search by value for the attribute containing
 /// this*. This is because in order to compare
 ///
-/// [`TransferFormatTryFrom`]: bo_tie_att::TransferFormatTryFrom
+/// [`TransferFormatTryFrom`]: crate::TransferFormatTryFrom
 pub trait AccessReadOnly: Send + Sync {
     type Value: ?Sized + Send + Sync;
 
