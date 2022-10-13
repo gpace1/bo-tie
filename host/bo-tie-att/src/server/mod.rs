@@ -325,15 +325,30 @@ where
         self.attributes.push(attribute)
     }
 
+    /// Push an attribute with a borrowed value
+    ///
+    /// The attribute is added to the end of the list of attributes on the server.
+    ///
+    /// This is equivalent to the method [`ServerAttributes::push_borrowed`]
+    pub fn push_borrowed<D>(&mut self, attribute: super::Attribute<D>) -> u16
+    where
+        D: core::ops::Deref + From<<D::Target as ToOwned>::Owned> + Unpin + Send + Sync + 'static,
+        D::Target: TransferFormatInto + ToOwned + Comparable + Send + Sync,
+        <D::Target as ToOwned>::Owned: TransferFormatTryFrom + Unpin + Send + Sync,
+    {
+        self.attributes.push_borrowed(attribute)
+    }
+
     /// Push an attribute whose value is wrapped by an accessor
     ///
     /// The attribute is added to the end of the list of attributes on the server.
     ///
     /// This is equivalent to the method [`ServerAttributes::push_accessor`]
-    pub fn push_accessor<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
+    pub fn push_accessor<A>(&mut self, attribute: super::Attribute<A>) -> u16
     where
-        C: for<'a> AccessValue<Value<'a> = V> + Send + Sync + Sized + 'static,
-        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync + 'static,
+        A: AccessValue + 'static,
+        A::ReadValue: TransferFormatInto + Comparable,
+        A::WriteValue: TransferFormatTryFrom,
     {
         self.attributes.push_accessor(attribute)
     }
@@ -1472,8 +1487,8 @@ impl ServerAttributes {
 
     /// Push an attribute
     ///
-    /// This will push the attribute onto the list of server attributes and return the handle of
-    /// the pushed attribute.
+    /// This will push the attribute onto the list of server attributes and return the handle for
+    /// the attribute.
     ///
     /// ```
     /// use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
@@ -1494,7 +1509,7 @@ impl ServerAttributes {
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
     pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
     where
-        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Unpin + Send + Sync + 'static,
+        V: TransferFormatInto + TransferFormatTryFrom + PartialEq + Unpin + Send + Sync + 'static,
     {
         let trivial = super::Attribute {
             ty: attribute.ty,
@@ -1504,6 +1519,50 @@ impl ServerAttributes {
         };
 
         self.push_accessor(trivial)
+    }
+
+    /// Push an attribute with a borrowed value
+    ///
+    /// This will push the attribute onto the list of server attributes and return the handle for
+    /// the attribute.
+    ///
+    /// The main usage of `push_borrowed` is to use a dynamically sized type when the attribute is
+    /// read and use an 'owned' type when the attribute is written. The generic parameter `D` must
+    /// be able to be converted from the owned type.
+    ///
+    /// ```
+    /// use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
+    /// use bo_tie_att::server::ServerAttributes;
+    /// use bo_tie_host_util::Uuid;
+    /// use std::borrow::Cow;
+    ///
+    /// let mut attributes = ServerAttributes::new();
+    ///
+    /// let device_name = Attribute::new(
+    ///     Uuid::from_u16(0x2A00),
+    ///     vec![
+    ///         AttributePermissions::Read(AttributeRestriction::None),
+    ///         AttributePermissions::Write(AttributeRestriction::None)
+    ///     ],
+    ///     Cow::from("My Device"),
+    /// );
+    ///
+    /// attributes.push_borrowed(device_name);
+    /// ```
+    pub fn push_borrowed<D>(&mut self, attribute: super::Attribute<D>) -> u16
+    where
+        D: core::ops::Deref + From<<D::Target as ToOwned>::Owned> + Unpin + Send + Sync + 'static,
+        D::Target: TransferFormatInto + ToOwned + Comparable + Send + Sync,
+        <D::Target as ToOwned>::Owned: TransferFormatTryFrom + Unpin + Send + Sync,
+    {
+        let cow = super::Attribute {
+            ty: attribute.ty,
+            handle: attribute.handle,
+            permissions: attribute.permissions,
+            value: access_value::CowAccess(attribute.value),
+        };
+
+        self.push_accessor(cow)
     }
 
     /// Push an attribute whose value is wrapped by an accessor
@@ -1542,10 +1601,11 @@ attributes.push_accessor(device_name);
     ///
     /// # Panic
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
-    pub fn push_accessor<C, V>(&mut self, attribute: super::Attribute<C>) -> u16
+    pub fn push_accessor<C>(&mut self, attribute: super::Attribute<C>) -> u16
     where
-        C: for<'a> AccessValue<Value<'a> = V> + Send + Sync + Sized + 'static,
-        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync + 'static,
+        C: AccessValue + 'static,
+        C::ReadValue: TransferFormatInto + Comparable,
+        C::WriteValue: TransferFormatTryFrom,
     {
         let handle = self
             .attributes
@@ -1605,10 +1665,10 @@ attributes.push_read_only(device_name);
     ///
     /// # Panic
     /// If you manage to push `core::u16::MAX - 1` attributes, the push will panic.
-    pub fn push_read_only<C, V>(&mut self, mut attribute: super::Attribute<C>) -> u16
+    pub fn push_read_only<C>(&mut self, mut attribute: super::Attribute<C>) -> u16
     where
-        C: AccessReadOnly<Value = V> + Send + Sync + 'static,
-        V: TransferFormatInto + PartialEq + ?Sized + Send + Sync + 'static,
+        C: AccessReadOnly + 'static,
+        C::Value: TransferFormatInto + Comparable,
     {
         let handle = self
             .attributes
@@ -1757,9 +1817,9 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + Sync + 'a
 /// [futures]: https://docs.rs/futures/latest/futures/index.html
 /// [tokio]: https://docs.rs/tokio/latest/tokio/index.html
 pub trait AccessValue: Send + Sync {
-    type Value<'a>: Send + Sync;
+    type ReadValue: ?Sized + Send + Sync;
 
-    type ReadGuard<'a>: core::ops::Deref<Target = Self::Value<'a>>
+    type ReadGuard<'a>: core::ops::Deref<Target = Self::ReadValue>
     where
         Self: 'a;
 
@@ -1767,13 +1827,15 @@ pub trait AccessValue: Send + Sync {
     where
         Self: 'a;
 
+    type WriteValue: Unpin + Send + Sync;
+
     type Write<'a>: Future + Send + Sync
     where
         Self: 'a;
 
     fn read(&self) -> Self::Read<'_>;
 
-    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_>;
+    fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_>;
 }
 
 /// Extension method for `ServerAttributeValue`
@@ -1781,24 +1843,13 @@ trait ServerAttributeValueExt: AccessValue {
     /// Read the value and call `f` with a reference to it.
     fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
     where
-        F: for<'a> FnOnce(&Self::Value<'a>) -> T + Unpin + Send + Sync,
+        F: FnOnce(&Self::ReadValue) -> T + Unpin + Send + Sync,
     {
         let read = self.read();
 
         ReadAnd {
             reader: read,
             job: Some(f),
-        }
-    }
-
-    /// Compare the value to 'other'
-    fn eq<'a>(&'a self, other: &'a Self::Value<'a>) -> Compare<'a, Self::Read<'a>, Self::Value<'a>>
-    where
-        Self::Value<'a>: PartialEq,
-    {
-        Compare {
-            reader: self.read(),
-            value: other,
         }
     }
 }
@@ -1827,31 +1878,6 @@ where
             Pin::new_unchecked(&mut this.reader)
                 .poll(cx)
                 .map(|val| (this.job.take().unwrap())(&*val))
-        }
-    }
-}
-
-/// Future for comparing an attribute to its value
-struct Compare<'a, R, V: ?Sized> {
-    reader: R,
-    value: &'a V,
-}
-
-impl<R, G, V> Future for Compare<'_, R, V>
-where
-    R: Future<Output = G>,
-    G: core::ops::Deref<Target = V>,
-    V: ?Sized + PartialEq,
-{
-    type Output = bool;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        unsafe {
-            let this = self.get_unchecked_mut();
-
-            Pin::new_unchecked(&mut this.reader)
-                .poll(cx)
-                .map(|val| &*val == this.value)
         }
     }
 }
@@ -1890,17 +1916,6 @@ trait AccessReadOnlyExt: AccessReadOnly {
         ReadAnd {
             reader: read,
             job: Some(f),
-        }
-    }
-
-    /// Compare the value to 'other'
-    fn eq<'a>(&'a self, other: &'a Self::Value) -> Compare<'a, Self::Read<'a>, Self::Value>
-    where
-        Self::Value: PartialEq,
-    {
-        Compare {
-            reader: self.read(),
-            value: other,
         }
     }
 }
@@ -1960,10 +1975,11 @@ trait ServerAttribute {
 /// Wrapper type for an type that implements [`AccessValue`]
 struct AccessibleValue<A: AccessValue>(A);
 
-impl<A, V> ServerAttribute for AccessibleValue<A>
+impl<A> ServerAttribute for AccessibleValue<A>
 where
-    A: for<'a> AccessValue<Value<'a> = V> + 'static,
-    V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Send + Sync,
+    A: AccessValue + 'static,
+    A::ReadValue: TransferFormatInto + Comparable,
+    A::WriteValue: TransferFormatTryFrom,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
         Box::pin(self.0.read_and(|v| TransferFormatInto::into(v)))
@@ -2000,16 +2016,11 @@ where
     }
 
     fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
-        Box::pin(async move { self.0.read_and(|v: &V| v.len_of_into()).await })
+        Box::pin(async move { self.0.read_and(|v: &A::ReadValue| v.len_of_into()).await })
     }
 
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
-        Box::pin(async move {
-            match <V as TransferFormatTryFrom>::try_from(raw) {
-                Err(_) => false,
-                Ok(cmp_val) => self.0.eq(&cmp_val).await,
-            }
-        })
+        Box::pin(async move { self.read().await.cmp_tf_data(raw) })
     }
 }
 
@@ -2019,10 +2030,10 @@ where
 /// This type must only be used with read only attribute permissions.
 struct ReadOnly<R: AccessReadOnly>(R);
 
-impl<R, V> ServerAttribute for ReadOnly<R>
+impl<R> ServerAttribute for ReadOnly<R>
 where
-    R: AccessReadOnly<Value = V> + 'static,
-    V: TransferFormatInto + ?Sized + PartialEq + Send + Sync,
+    R: AccessReadOnly + 'static,
+    R::Value: TransferFormatInto + Comparable,
 {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
         Box::pin(self.0.read_and(|v| TransferFormatInto::into(v)))
@@ -2055,13 +2066,61 @@ where
     }
 
     fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
-        Box::pin(async move { self.0.read_and(|v: &V| v.len_of_into()).await })
+        Box::pin(async move { self.0.read_and(|v: &R::Value| v.len_of_into()).await })
     }
 
-    fn cmp_value_to_raw_transfer_format<'a>(&'a self, _: &'a [u8]) -> PinnedFuture<'_, bool> {
-        Box::pin(async move { false })
+    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool> {
+        Box::pin(async move { self.read().await.cmp_tf_data(raw) })
     }
 }
+
+/// A trait for comparing a type to transfer formatted data
+pub trait Comparable {
+    fn cmp_tf_data(&self, tf_data: &[u8]) -> bool;
+}
+
+impl<T: TransferFormatTryFrom + PartialEq> Comparable for T {
+    fn cmp_tf_data(&self, tf_data: &[u8]) -> bool {
+        match <Self as TransferFormatTryFrom>::try_from(tf_data) {
+            Err(_) => false,
+            Ok(cmp_val) => self.eq(&cmp_val),
+        }
+    }
+}
+
+impl Comparable for str {
+    fn cmp_tf_data(&self, tf_data: &[u8]) -> bool {
+        core::str::from_utf8(tf_data)
+            .map(|tf_str| self.eq(tf_str))
+            .unwrap_or_default()
+    }
+}
+
+impl Comparable for &'_ str {
+    fn cmp_tf_data(&self, tf_data: &[u8]) -> bool {
+        core::str::from_utf8(tf_data)
+            .map(|tf_str| (*self).eq(tf_str))
+            .unwrap_or_default()
+    }
+}
+
+macro_rules! impl_ro_cmp_for_int_slices {
+    ($($ints:ty),+ $(,)?) => {
+        $(
+            impl Comparable for [$ints] {
+                fn cmp_tf_data(&self, tf_data: &[u8]) -> bool {
+                    let chunks = tf_data.chunks_exact(core::mem::size_of::<$ints>());
+
+                    chunks.remainder().len() == 0 && chunks
+                        .map(|v| <$ints>::from_le_bytes(TryFrom::try_from(v).unwrap()))
+                        .eq(self.iter().copied())
+                }
+            }
+        )+
+    }
+}
+
+impl_ro_cmp_for_int_slices!(f32, f64, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
 
 /// The Reserved Handle
 ///

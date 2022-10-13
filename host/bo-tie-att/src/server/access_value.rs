@@ -17,17 +17,18 @@ pub struct Trivial<V: ?Sized>(pub V);
 
 /// The trivial implementation for ServerAttributeValue
 impl<V: Unpin + Send + Sync> AccessValue for Trivial<V> {
-    type Value<'a> = V;
+    type ReadValue = V;
     type ReadGuard<'a> = &'a V where V: 'a;
     type Read<'a> = ReadReady<&'a V> where Self: 'a;
-    type Write<'a> = WriteReady<'a, V> where Self: 'a;
+    type WriteValue = V;
+    type Write<'a> = WriteReady<'a, Self::WriteValue> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
         ReadReady(&self.0)
     }
 
-    fn write(&mut self, val: V) -> Self::Write<'_> {
-        WriteReady(&mut self.0, Some(val))
+    fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
+        WriteReady::new(&mut self.0, val)
     }
 }
 
@@ -38,6 +39,30 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for Trivial<V> {
 
     fn read(&self) -> Self::Read<'_> {
         ReadReady(&self.0)
+    }
+}
+
+/// A copy on write accessor
+pub struct CowAccess<D>(pub D);
+
+impl<D> AccessValue for CowAccess<D>
+where
+    D: core::ops::Deref + From<<D::Target as ToOwned>::Owned> + Unpin + Send + Sync + 'static,
+    D::Target: ToOwned + Send + Sync,
+    <D::Target as ToOwned>::Owned: Unpin + Send + Sync,
+{
+    type ReadValue = D::Target;
+    type ReadGuard<'a> = &'a D::Target where Self: 'a;
+    type Read<'a> = ReadReady<&'a D::Target> where Self: 'a;
+    type WriteValue = <D::Target as ToOwned>::Owned;
+    type Write<'a> = OwnedWriteReady<'a, D, Self::WriteValue> where Self: 'a;
+
+    fn read(&self) -> Self::Read<'_> {
+        ReadReady(&*self.0)
+    }
+
+    fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
+        OwnedWriteReady::new(&mut self.0, val)
     }
 }
 
@@ -58,7 +83,7 @@ impl<T: Copy + Unpin> Future for ReadReady<T> {
     }
 }
 
-/// Future that immediately writes to the value upon being polled
+/// Future that immediately writes to the value
 pub struct WriteReady<'a, T>(&'a mut T, Option<T>);
 
 impl<'a, T> WriteReady<'a, T> {
@@ -81,20 +106,69 @@ impl<T: Unpin> Future for WriteReady<'_, T> {
     }
 }
 
+/// Future that immediately writes the owned value
+pub struct OwnedWriteReady<'a, T, O>(&'a mut T, Option<O>);
+
+impl<'a, T, O> OwnedWriteReady<'a, T, O> {
+    pub fn new(dest: &'a mut T, src: O) -> Self {
+        OwnedWriteReady(dest, Some(src))
+    }
+}
+
+impl<T: Unpin + From<O>, O: Unpin> Future for OwnedWriteReady<'_, T, O> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if let Some(val) = this.1.take() {
+            *this.0 = T::from(val);
+        }
+
+        Poll::Ready(())
+    }
+}
+
 #[cfg(feature = "tokio")]
-impl<V: Send + Sync> AccessValue for std::sync::Arc<tokio::sync::Mutex<V>> {
-    type Value<'a> = V;
+impl<V> AccessValue for std::sync::Arc<tokio::sync::Mutex<V>>
+where
+    V: Unpin + Send + Sync,
+{
+    type ReadValue = V;
     type ReadGuard<'a> = tokio::sync::MutexGuard<'a, V> where V: 'a;
     type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
+    type WriteValue = V;
     type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
         Box::pin(self.lock())
     }
 
-    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
         Box::pin(async move {
             *self.lock().await = v;
+        })
+    }
+}
+
+#[cfg(feature = "tokio")]
+impl<V> AccessValue for std::sync::Arc<tokio::sync::RwLock<V>>
+where
+    V: Unpin + Send + Sync,
+{
+    type ReadValue = V;
+    type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V> where V: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
+    type WriteValue = V;
+    type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
+
+    fn read(&self) -> Self::Read<'_> {
+        Box::pin(tokio::sync::RwLock::read(self))
+    }
+
+    fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
+        Box::pin(async move {
+            *tokio::sync::RwLock::write(self).await = v;
         })
     }
 }
@@ -111,24 +185,6 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::Mut
 }
 
 #[cfg(feature = "tokio")]
-impl<V: Send + Sync> AccessValue for std::sync::Arc<tokio::sync::RwLock<V>> {
-    type Value<'a> = V;
-    type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V> where V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
-    type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
-
-    fn read(&self) -> Self::Read<'_> {
-        Box::pin(tokio::sync::RwLock::read(self))
-    }
-
-    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
-        Box::pin(async move {
-            *tokio::sync::RwLock::write(self).await = v;
-        })
-    }
-}
-
-#[cfg(feature = "tokio")]
 impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwLock<V>> {
     type Value = V;
     type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V> where V: 'a;
@@ -140,17 +196,21 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwL
 }
 
 #[cfg(feature = "futures-rs")]
-impl<V: Send + Sync> AccessValue for std::sync::Arc<futures::lock::Mutex<V>> {
-    type Value<'a> = V;
+impl<V> AccessValue for std::sync::Arc<futures::lock::Mutex<V>>
+where
+    V: Unpin + Send + Sync,
+{
+    type ReadValue = V;
     type ReadGuard<'a> = futures::lock::MutexGuard<'a, V> where Self: 'a;
     type Read<'a> = futures::lock::MutexLockFuture<'a, V> where Self: 'a;
-    type Write<'a> = Write<futures::lock::MutexLockFuture<'a, V>, V> where Self: 'a;
+    type WriteValue = V;
+    type Write<'a> = Write<futures::lock::MutexLockFuture<'a, Self::WriteValue>, Self::WriteValue> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
         self.lock()
     }
 
-    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
         Write(self.lock(), Some(v))
     }
 }
@@ -185,18 +245,42 @@ impl<V> Future for Write<futures::lock::MutexLockFuture<'_, V>, V> {
 }
 
 #[cfg(feature = "async-std")]
-impl<V: Send + Sync> AccessValue for std::sync::Arc<async_std::sync::Mutex<V>> {
-    type Value<'a> = V;
+impl<V> AccessValue for std::sync::Arc<async_std::sync::Mutex<V>>
+where
+    V: Unpin + Send + Sync,
+{
+    type ReadValue = V;
     type ReadGuard<'a> = async_std::sync::MutexGuard<'a, V> where Self: 'a;
     type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
+    type WriteValue = V;
     type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
         Box::pin(self.lock())
     }
 
-    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
+    fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
         Box::pin(async move { *self.lock().await = v })
+    }
+}
+
+#[cfg(feature = "async-std")]
+impl<V> AccessValue for std::sync::Arc<async_std::sync::RwLock<V>>
+where
+    V: Unpin + Send + Sync,
+{
+    type ReadValue = V;
+    type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
+    type WriteValue = V;
+    type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
+
+    fn read(&self) -> Self::Read<'_> {
+        Box::pin(async_std::sync::RwLock::read(self))
+    }
+
+    fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
+        Box::pin(async move { *async_std::sync::RwLock::write(self).await = v })
     }
 }
 
@@ -208,22 +292,6 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<async_std::sync:
 
     fn read(&self) -> Self::Read<'_> {
         Box::pin(self.lock())
-    }
-}
-
-#[cfg(feature = "async-std")]
-impl<V: Send + Sync> AccessValue for std::sync::Arc<async_std::sync::RwLock<V>> {
-    type Value<'a> = V;
-    type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V> where Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a;
-    type Write<'a> = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'a>> where Self: 'a;
-
-    fn read(&self) -> Self::Read<'_> {
-        Box::pin(async_std::sync::RwLock::read(self))
-    }
-
-    fn write(&mut self, v: Self::Value<'_>) -> Self::Write<'_> {
-        Box::pin(async move { *async_std::sync::RwLock::write(self).await = v })
     }
 }
 
