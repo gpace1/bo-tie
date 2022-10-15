@@ -12,7 +12,15 @@
 #![cfg_attr(test, feature(test))]
 #![cfg_attr(not(test), no_std)]
 
+#[cfg(feature = "hci")]
 pub mod hci;
+#[cfg(any(
+    feature = "l2cap",
+    feature = "gap",
+    feature = "att",
+    feature = "gatt",
+    feature = "sm",
+))]
 pub mod host;
 
 pub use bo_tie_util::errors::Error;
