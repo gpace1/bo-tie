@@ -6,9 +6,9 @@ use bo_tie_att::server::{AccessValue, ServerAttributes};
 use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
 use bo_tie_util::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// UUID of a client configuration descriptor
 pub(crate) const TYPE: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(2902);
