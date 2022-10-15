@@ -93,7 +93,7 @@ impl bo_tie_att::TransferFormatTryFrom for VecArray<{ ExtendedProperties::full_d
                     lb.try_push(match flag {
                         0x1 => ExtendedProperties::ReliableWrite,
                         0x2 => ExtendedProperties::WritableAuxiliaries,
-                        e => return Err(bo_tie_att::TransferFormatError::from("unknown extended property")),
+                        _ => return Err(bo_tie_att::TransferFormatError::from("unknown extended property")),
                     })
                     .unwrap();
                     Ok(lb)

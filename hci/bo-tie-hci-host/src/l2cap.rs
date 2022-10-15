@@ -213,7 +213,6 @@ impl<C: ConnectionChannelEnds> Future for AclBufferFuture<C> {
     type Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        use alloc::boxed::Box;
         use bo_tie_hci_util::Sender;
         use core::mem::transmute;
 
