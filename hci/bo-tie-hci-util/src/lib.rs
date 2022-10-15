@@ -595,6 +595,9 @@ pub trait HostChannelEnds {
     /// The channel ends type for a connection
     type ConnectionChannelEnds: ConnectionChannelEnds;
 
+    /// The front capacity required by the driver implementation
+    fn driver_front_buffer_capacity(&self) -> usize;
+
     /// Get the sender of messages to the interface async task
     fn get_sender(&self) -> Self::Sender;
 

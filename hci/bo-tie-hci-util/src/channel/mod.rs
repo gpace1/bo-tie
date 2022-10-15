@@ -682,6 +682,7 @@ pub struct ChannelReserveBuilder<C1, C2, C3, C4, C5> {
 }
 
 impl<C1, C2, C3, C4, C5> ChannelReserveBuilder<C1, C2, C3, C4, C5> {
+    /// Create a new `ChannelReserveBuilder`
     pub fn new() -> Self {
         Self {
             c1: None,
