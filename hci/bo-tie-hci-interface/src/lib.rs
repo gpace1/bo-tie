@@ -73,6 +73,10 @@
 
 extern crate alloc;
 
+mod buffer;
+mod flow_control;
+pub mod uart;
+
 pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
@@ -82,12 +86,9 @@ use bo_tie_hci_util::{
     ToHostGeneralIntraMessage,
 };
 use bo_tie_util::buffer::stack::LinearBuffer;
-use bo_tie_util::buffer::TryExtend;
+use bo_tie_util::buffer::{Buffer, TryExtend};
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
-
-mod flow_control;
-pub mod uart;
 
 /// The interface
 ///
@@ -265,26 +266,8 @@ where
     ///
     /// This method returns `None` when there are no more Senders associated with the underlying
     /// receiver. The interface async task should exit after `None` is received.
-    pub async fn down_send(&mut self) -> Option<HciPacket<impl Deref<Target = [u8]>>> {
-        enum Slice<A, B> {
-            Cmd(A),
-            Data(B),
-        }
-
-        impl<A, B> Deref for Slice<A, B>
-        where
-            A: Deref<Target = [u8]>,
-            B: Deref<Target = [u8]>,
-        {
-            type Target = [u8];
-
-            fn deref(&self) -> &Self::Target {
-                match self {
-                    Slice::Cmd(a) => a.deref(),
-                    Slice::Data(b) => b.deref(),
-                }
-            }
-        }
+    pub async fn down_send(&mut self) -> Option<HciPacket<impl Buffer>> {
+        use buffer::DriverBuffer;
 
         self.channel_reserve
             .get_mut()
@@ -292,12 +275,12 @@ where
             .await
             .map(|intra_message| match intra_message {
                 TaskSource::Host(message) => match message {
-                    FromHostIntraMessage::Command(data) => HciPacket::Command(Slice::Cmd(data)),
+                    FromHostIntraMessage::Command(data) => HciPacket::Command(DriverBuffer::Cmd(data)),
                 },
                 TaskSource::Connection(message) => match message {
-                    FromConnectionIntraMessage::Acl(data) => HciPacket::Acl(Slice::Data(data)),
-                    FromConnectionIntraMessage::Sco(data) => HciPacket::Sco(Slice::Data(data)),
-                    FromConnectionIntraMessage::Iso(data) => HciPacket::Iso(Slice::Data(data)),
+                    FromConnectionIntraMessage::Acl(data) => HciPacket::Acl(DriverBuffer::Data(data)),
+                    FromConnectionIntraMessage::Sco(data) => HciPacket::Sco(DriverBuffer::Data(data)),
+                    FromConnectionIntraMessage::Iso(data) => HciPacket::Iso(DriverBuffer::Data(data)),
                     FromConnectionIntraMessage::Disconnect(_) => unreachable!(),
                 },
             })
