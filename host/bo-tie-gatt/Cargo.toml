@@ -8,6 +8,8 @@ bo-tie-att = { path = "../bo-tie-att" }
 bo-tie-host-util = { path = "../bo-tie-host-util" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-util = { path = "../../bo-tie-util" }
+bo-tie-macros = { path = "../../bo-tie-macros" }
+aquamarine = "0.1"
 log = "0.4"
 
 [dev-dependencies]

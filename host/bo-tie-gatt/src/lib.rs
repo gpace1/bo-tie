@@ -3,20 +3,44 @@
 
 extern crate alloc;
 
+/// macro to ensure that `$to` is filled only with unique items of `$from`.
+macro_rules! unique_only {
+    ($to:expr, $from:expr) => {
+        for x in $from {
+            if !$to.contains(x) {
+                $to.try_push(*x).unwrap()
+            }
+        }
+    };
+}
+
+/// same as `unique_only` but $from iterates over owned items
+macro_rules! unique_only_owned {
+    ($to:expr, $from:expr) => {
+        for x in $from {
+            if !$to.contains(&x) {
+                $to.try_push(x).unwrap()
+            }
+        }
+    };
+}
+
 pub mod characteristic;
 
 use alloc::vec::Vec;
 
 pub use bo_tie_att as att;
+use bo_tie_att::AttributePermissions;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::ConnectionChannel;
+use bo_tie_util::buffer::stack::LinearBuffer;
 
 struct ServiceDefinition;
 
 impl ServiceDefinition {
     /// The permissions of the service definitions is just Read Only
-    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const DEFAULT_PERMISSIONS: [att::AttributePermissions; 6] = att::FULL_READ_PERMISSIONS;
 
     /// The primary service UUID
     pub const PRIMARY_SERVICE_TYPE: Uuid = Uuid::from_u16(0x2800);
@@ -82,7 +106,7 @@ impl att::TransferFormatInto for ServiceInclude {
 impl ServiceInclude {
     const TYPE: Uuid = Uuid::from_u16(0x2802);
 
-    const DEFAULT_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const PERMISSIONS: [att::AttributePermissions; 6] = att::FULL_READ_PERMISSIONS;
 }
 
 /// Construct a GATT Service.
@@ -107,7 +131,7 @@ pub struct ServiceBuilder<'a> {
     service_uuid: Uuid,
     is_primary: bool,
     server_builder: &'a mut ServerBuilder,
-    default_permissions: Option<&'a [att::AttributePermissions]>,
+    default_permissions: Option<LinearBuffer<12, att::AttributePermissions>>,
     definition_handle: Option<u16>,
 }
 
@@ -155,9 +179,7 @@ impl<'a> ServiceBuilder<'a> {
                 } else {
                     ServiceDefinition::SECONDARY_SERVICE_TYPE
                 },
-                self.default_permissions
-                    .unwrap_or(ServiceDefinition::DEFAULT_PERMISSIONS)
-                    .into(),
+                ServiceDefinition::DEFAULT_PERMISSIONS,
                 self.service_uuid,
             ))
             .into();
@@ -211,17 +233,26 @@ impl<'a> ServiceBuilder<'a> {
         make_service!(self, self.definition_handle.unwrap())
     }
 
-    /// Set the baseline attribute permissions for the service
+    /// Set the permissions for exposing the service
     ///
-    /// These permissions are used as the attribute permissions of the service definition and as the
-    /// default permissions of every other characteristic of this service. While this is the only
-    /// way to set the permissions of the service definition characteristic, the other
-    /// characteristics can have their permissions set with their respective builders.
-    pub fn set_att_permissions<P>(mut self, permissions: P) -> Self
+    /// In order to prevent services from being discoverable from unwanted Clients, a service may
+    /// have attribute permissions applied to have the GATT server to act as a 'gatekeeper' to it
+    /// (or a bouncer for a more modern day metaphor). If a client has not been granted any of the
+    /// permissions within `permissions` they cannot discover this service or anything inside it.
+    ///
+    /// # Note
+    /// No exposure protection is applied to this service if `permissions` is empty
+    pub fn gatekeeper_permissions<P>(mut self, permissions: P) -> Self
     where
-        P: Into<Option<&'a [att::AttributePermissions]>>,
+        P: core::borrow::Borrow<[AttributePermissions]>,
     {
-        self.default_permissions = permissions.into();
+        let mut default_permissions: LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions> =
+            LinearBuffer::new();
+
+        unique_only!(default_permissions, permissions.borrow().iter());
+
+        self.default_permissions = default_permissions.into();
+
         self
     }
 }
@@ -247,31 +278,19 @@ impl<'a> IncludesAdder<'a> {
         }
     }
 
-    /// Add a service to include
+    /// Include another service
     ///
     /// This takes a reference to the service to include with an optional permissions for the
     /// include definition. If no permissions are given, then it uses the default permissions of the
-    /// service.
-    pub fn include_service<P: Into<Option<&'a [att::AttributePermissions]>>>(
-        mut self,
-        service_record: ServiceRecord,
-        permissions: P,
-    ) -> Self {
+    /// this service (not the service being included) for the include declaration.
+    pub fn include_service(mut self, service_record: ServiceRecord) -> Self {
         let include = ServiceInclude {
             service_handle: service_record.record.service_handle,
             end_group_handle: service_record.record.end_group_handle,
             short_service_type: service_record.record.service_uuid.try_into().ok(),
         };
 
-        let attribute = att::Attribute::new(
-            ServiceInclude::TYPE,
-            permissions
-                .into()
-                .or(self.service_builder.default_permissions)
-                .unwrap_or(ServiceInclude::DEFAULT_PERMISSIONS)
-                .into(),
-            include,
-        );
+        let attribute = att::Attribute::new(ServiceInclude::TYPE, ServiceInclude::PERMISSIONS, include);
 
         self.end_group_handle = self.service_builder.server_builder.attributes.push(attribute);
 
@@ -321,8 +340,35 @@ impl<'a> CharacteristicAdder<'a> {
     /// Create a new characteristic builder
     ///
     /// The created builder will be used for setting up and creating a new characteristic.
-    pub fn new_characteristic<'c, U, V>(self) -> characteristic::CharacteristicBuilder<'a, 'c, U, V> {
-        characteristic::CharacteristicBuilder::new(self)
+    pub fn new_characteristic<'c, F, V, E, U, C, S>(self, f: F) -> Self
+    where
+        F: FnOnce(
+            characteristic::CharacteristicBuilder<
+                'a,
+                characteristic::declaration::SetProperties,
+                characteristic::value::SetValue,
+                characteristic::extended_properties::SetExtendedProperties,
+                characteristic::user_description::SetDescription,
+                characteristic::client_config::ReadOnlyClientConfiguration,
+                characteristic::server_config::SetConfiguration,
+            >,
+        ) -> characteristic::CharacteristicBuilder<
+            'a,
+            characteristic::declaration::Complete,
+            characteristic::value::Complete<V>,
+            E,
+            U,
+            C,
+            S,
+        >,
+        characteristic::value::ValueBuilder<characteristic::value::TrueComplete<V>>:
+            characteristic::AddCharacteristicComponent,
+        characteristic::extended_properties::ExtendedPropertiesBuilder<E>: characteristic::AddCharacteristicComponent,
+        characteristic::user_description::UserDescriptionBuilder<U>: characteristic::AddCharacteristicComponent,
+        characteristic::client_config::ClientConfigurationBuilder<C>: characteristic::AddCharacteristicComponent,
+        characteristic::server_config::ServerConfigurationBuilder<S>: characteristic::AddCharacteristicComponent,
+    {
+        f(characteristic::CharacteristicBuilder::new(self)).complete_characteristic()
     }
 
     /// Finish the service
@@ -447,7 +493,7 @@ impl<'a> GapServiceBuilder<'a> {
     const DEVICE_APPEARANCE_TYPE: Uuid = Uuid::from_u16(0x2a01);
 
     /// Default attribute permissions
-    const DEFAULT_ATTRIBUTE_PERMISSIONS: &'static [att::AttributePermissions] = att::FULL_READ_PERMISSIONS;
+    const DEFAULT_ATTRIBUTE_PERMISSIONS: &'static [att::AttributePermissions] = &att::FULL_READ_PERMISSIONS;
 
     /// Device Name characteristic properties
     const DEVICE_NAME_PROPERTIES: &'static [characteristic::Properties] = &[characteristic::Properties::Read];
@@ -501,20 +547,33 @@ impl<'a> GapServiceBuilder<'a> {
 
         server_builder
             .new_service(Self::GAP_SERVICE_TYPE, true)
-            .set_att_permissions(self.service_permissions)
             .add_characteristics()
-            .new_characteristic()
-            .set_properties(Self::DEVICE_NAME_PROPERTIES.to_vec())
-            .set_uuid(Self::DEVICE_NAME_TYPE)
-            .set_value(alloc::string::String::from(self.device_name))
-            .set_permissions(self.device_name_permissions)
-            .complete_characteristic()
-            .new_characteristic()
-            .set_properties(Self::DEVICE_APPEARANCE_PROPERTIES.to_vec())
-            .set_uuid(Self::DEVICE_APPEARANCE_TYPE)
-            .set_value(self.device_appearance)
-            .set_permissions(self.device_appearance_permissions)
-            .complete_characteristic()
+            .new_characteristic(|characteristic| {
+                characteristic
+                    .set_declaration(|declaration| {
+                        declaration
+                            .set_properties(Self::DEVICE_NAME_PROPERTIES)
+                            .set_uuid(Self::DEVICE_NAME_TYPE)
+                    })
+                    .set_value(|value| {
+                        value
+                            .set_value(alloc::string::String::from(self.device_name))
+                            .set_permissions(self.device_name_permissions)
+                    })
+            })
+            .new_characteristic(|characteristic| {
+                characteristic
+                    .set_declaration(|declaration| {
+                        declaration
+                            .set_properties(Self::DEVICE_APPEARANCE_PROPERTIES)
+                            .set_uuid(Self::DEVICE_APPEARANCE_TYPE)
+                    })
+                    .set_value(|value| {
+                        value
+                            .set_value(self.device_appearance)
+                            .set_permissions(self.device_appearance_permissions)
+                    })
+            })
             .finish_service();
 
         server_builder
@@ -547,8 +606,8 @@ impl Default for GapServiceBuilder<'_> {
 /// # use std::pin::Pin;
 /// # use bo_tie_util::buffer::de_vec::DeVec;
 /// # use bo_tie_util::buffer::TryExtend;
-/// # const MY_SERVICE_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
-/// # const MY_CHARACTERISTIC_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
+/// # const SERVICE_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
+/// # const CHARACTERISTIC_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
 /// # struct CC;
 /// # impl bo_tie_l2cap::ConnectionChannel for CC {
 /// #     type SendBuffer = DeVec<u8>;
@@ -569,15 +628,22 @@ impl Default for GapServiceBuilder<'_> {
 ///
 /// let mut server_builder = ServerBuilder::from(gap_service);
 ///
-/// server_builder.new_service(MY_SERVICE_UUID, true)
+/// server_builder.new_service(SERVICE_UUID, true)
 ///     .add_characteristics()
-///         .new_characteristic()
-///             .set_uuid(MY_CHARACTERISTIC_UUID)
-///             .set_value(0usize)
-///             .set_permissions(FULL_PERMISSIONS)
-///             .set_properties([Properties::Read, Properties::Write].to_vec())
-///             .complete_characteristic()
-///         .finish_service();
+///     .new_characteristic(|characteristic_builder| {
+///         characteristic_builder
+///             .set_declaration(|declaration_builder| {
+///                 declaration_builder
+///                     .set_properties([Properties::Read])
+///                     .set_uuid(CHARACTERISTIC_UUID)
+///             })
+///             .set_value(|value_builder| {
+///                 value_builder
+///                     .set_value(0usize)
+///                     .set_permissions(bo_tie_att::FULL_READ_PERMISSIONS)
+///             })
+///     })
+///     .finish_service();
 ///
 /// let server = server_builder.make_server(NoQueuedWrites);
 /// ```
@@ -681,7 +747,7 @@ where
     /// 'Read by group type' permission check
     fn rbgt_permission_check(&self, service: &ServiceGroupData) -> Result<(), att::pdu::Error> {
         self.server
-            .check_permissions(service.service_handle, att::FULL_READ_PERMISSIONS)
+            .check_permissions(service.service_handle, &att::FULL_READ_PERMISSIONS)
     }
 
     async fn process_read_by_group_type_request<C>(
@@ -845,6 +911,7 @@ mod tests {
     use crate::l2cap::{ConnectionChannel, L2capFragment, MinimumMtu};
     use crate::Uuid;
     use att::TransferFormatInto;
+    use bo_tie_att::server::access_value::Trivial;
     use bo_tie_att::{AttributePermissions, AttributeRestriction};
     use bo_tie_l2cap::{send_future, BasicFrameError};
     use bo_tie_util::buffer::de_vec::DeVec;
@@ -890,32 +957,57 @@ mod tests {
 
         let test_service_1 = server_builder
             .new_service(Uuid::from_u16(0x1234), false)
-            .set_att_permissions(test_att_permissions)
             .add_characteristics()
-            .new_characteristic()
-            .set_value(0usize)
-            .set_properties(vec![characteristic::Properties::Read])
-            .set_permissions(test_att_permissions)
-            .set_uuid(0x1234u16)
-            .set_extended_properties(vec![characteristic::ExtendedProperties::ReliableWrite], None)
-            .set_user_description(characteristic::UserDescription::new("Test 1", None))
-            .set_client_configuration(vec![characteristic::ClientConfiguration::Notification], None)
-            .set_server_configuration(vec![characteristic::ServerConfiguration::Broadcast], None)
-            .complete_characteristic()
+            .new_characteristic(|characteristic_builder| {
+                characteristic_builder
+                    .set_declaration(|declaration_builder| {
+                        declaration_builder
+                            .set_properties([
+                                characteristic::Properties::Read,
+                                characteristic::Properties::ExtendedProperties,
+                            ])
+                            .set_uuid(0x1234u16)
+                    })
+                    .set_value(|value_builder| value_builder.set_value(0usize).set_permissions(test_att_permissions))
+                    .set_user_description(|user_desc_builder| {
+                        user_desc_builder
+                            .read_only()
+                            .set_read_only_description("Test 1")
+                            .set_read_only_restrictions([AttributeRestriction::None])
+                    })
+                    .set_extended_properties(|ext_prop_builder| {
+                        ext_prop_builder.set_extended_properties([characteristic::ExtendedProperties::ReliableWrite])
+                    })
+                    .set_client_configuration(|client_cfg_builder| {
+                        client_cfg_builder.set_config([characteristic::ClientConfiguration::Notification])
+                    })
+                    .set_server_configuration(|| {
+                        characteristic::ServerConfigurationBuilder::new()
+                            .set_config(Trivial(characteristic::ServerConfiguration::new()))
+                            .set_permissions([AttributePermissions::Read(AttributeRestriction::None)])
+                    })
+            })
             .finish_service();
 
         let service_1_record = test_service_1.as_record();
 
         let _test_service_2 = server_builder
             .new_service(Uuid::from_u16(0x3456), true)
-            .set_att_permissions(test_att_permissions)
             .into_includes_adder()
-            .include_service(service_1_record, None)
+            .include_service(service_1_record)
             .finish_service();
 
         let server = server_builder.make_server(NoQueuedWrites);
 
-        server.iter_attr_info().for_each(|info| {
+        for characteristic in server
+            .get_service_info()
+            .map(|service| service.iter_characteristics())
+            .flatten()
+        {
+            let value_handle = characteristic.get_value_handle();
+
+            let info = server.get_attributes().get_info(value_handle).unwrap();
+
             assert_eq!(
                 info.get_permissions(),
                 test_att_permissions,
@@ -923,7 +1015,7 @@ mod tests {
                 info.get_uuid(),
                 info.get_handle()
             )
-        })
+        }
     }
 
     struct TestChannel {
@@ -974,23 +1066,37 @@ mod tests {
         server_builder
             .new_service(first_test_uuid, true)
             .add_characteristics()
-            .new_characteristic()
-            .set_value(0usize)
-            .set_properties(vec![characteristic::Properties::Read])
-            .set_permissions(&[AttributePermissions::Read(AttributeRestriction::None)])
-            .set_uuid(0x2000u16)
-            .complete_characteristic()
+            .new_characteristic(|characteristic_builder| {
+                characteristic_builder
+                    .set_declaration(|declaration_builder| {
+                        declaration_builder
+                            .set_properties([characteristic::Properties::Read])
+                            .set_uuid(0x2000u16)
+                    })
+                    .set_value(|value_builder| {
+                        value_builder
+                            .set_value(0usize)
+                            .set_permissions([AttributePermissions::Read(AttributeRestriction::None)])
+                    })
+            })
             .finish_service();
 
         server_builder
             .new_service(second_test_uuid, true)
             .add_characteristics()
-            .new_characteristic()
-            .set_value(0usize)
-            .set_properties(vec![characteristic::Properties::Read])
-            .set_permissions(&[AttributePermissions::Read(AttributeRestriction::None)])
-            .set_uuid(0x2001u16)
-            .complete_characteristic()
+            .new_characteristic(|characteristic_builder| {
+                characteristic_builder
+                    .set_declaration(|declaration_builder| {
+                        declaration_builder
+                            .set_properties([characteristic::Properties::Read])
+                            .set_uuid(0x2001u16)
+                    })
+                    .set_value(|value_builder| {
+                        value_builder
+                            .set_value(0usize)
+                            .set_permissions([AttributePermissions::Read(AttributeRestriction::None)])
+                    })
+            })
             .finish_service();
 
         let mut test_channel = TestChannel {

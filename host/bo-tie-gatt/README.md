@@ -15,6 +15,7 @@ Building a GATT server is simple as creating the GAP service (mandatory for unle
 server out of specification) and creating a server builder from it.
 
 ```rust
+ use bo_tie_att::FULL_READ_PERMISSIONS;
  use bo_tie_att::server::NoQueuedWrites;
  use bo_tie_gatt::{GapServiceBuilder, ServerBuilder};
  use bo_tie_gatt::characteristic::{ClientConfiguration, Properties};
@@ -26,11 +27,19 @@ server out of specification) and creating a server builder from it.
  // Adding battery service (that always reports 70%)
  server_builder.new_service(0x190Fu16, true)
     .add_characteristics()
-    .new_characteristic()
-        .set_uuid(0x2A19u16)
-        .set_value_accessible(70u8)
-        .set_properties([Properties::Read].to_vec())
-        .complete_characteristic()
+    .new_characteristic(|characteristic_builder| {
+        characteristic_builder
+            .set_declaration(|declaration_builder|{
+                declaration_builder
+                    .set_properties([Properties::Read])
+                    .set_uuid(0x2A19u16)
+            })
+            .set_value(|value_builder| {
+                value_builder
+                    .set_value(70u8)
+                    .set_permissions(FULL_READ_PERMISSIONS)
+            })
+    })
     .finish_service();
 
  let server = server_builder.make_server(NoQueuedWrites);
