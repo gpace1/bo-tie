@@ -77,13 +77,19 @@ impl<T> Future for ReceiverFuture<'_, T> {
 /// The created `ChannelReserve` (and `HostChannelEnds`) use tokio's unbounded channels for
 /// communication between the async tasks of the HCI implementation.
 ///
+/// The inputs are the maximum sizes of the front and tail packet frame information for the
+/// interface. See [`ChannelReserveBuilder::new`].
+///
 /// [async-std's]: async_std::channel
 /// [`ChannelReserve`]: crate::ChannelReserve
 /// [`HostChannelEnds`]: crate::HostChannelEnds
-pub fn async_std_unbounded() -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
+pub fn async_std_unbounded(
+    front_size: usize,
+    tail_size: usize,
+) -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
     use async_std::channel::unbounded;
 
-    super::ChannelReserveBuilder::new()
+    super::ChannelReserveBuilder::new(front_size, tail_size)
         .set_c1(unbounded)
         .set_c2(unbounded)
         .set_c3(unbounded)

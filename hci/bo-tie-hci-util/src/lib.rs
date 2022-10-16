@@ -595,6 +595,12 @@ pub trait HostChannelEnds {
     /// The channel ends type for a connection
     type ConnectionChannelEnds: ConnectionChannelEnds;
 
+    /// The front and back capacities (in that order) of a buffer as required by the driver
+    ///
+    /// Every buffer allocated by a connection must have these values added to the front and back
+    /// capacities to a new or cleared buffer.
+    fn driver_buffer_capacities(&self) -> (usize, usize);
+
     /// Get the sender of messages to the interface async task
     fn get_sender(&self) -> Self::Sender;
 

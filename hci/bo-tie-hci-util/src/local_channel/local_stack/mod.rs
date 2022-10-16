@@ -246,6 +246,9 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
     LocalStackChannelReserveData<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
     /// Create a new `LocalStackChannelReserveData`
+    ///
+    /// The inputs `max_header_size` and `max_tail_size` are the maximum size of the header and the
+    /// maximum size of the tail applied to the HCI packets by the interface driver.
     pub fn new() -> Self {
         let outgoing = Outgoing {
             connections: StackHotel::new(),
@@ -288,12 +291,23 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     /// of stack allocated types. Otherwise using a
     /// [`LocalChannelReserve`](crate::local_channel::local_dynamic::LocalChannelReserve) is
     /// preferred.
+    ///
+    /// The inputs `max_header_size` and `max_tail_size` are the maximum size of the header and tail
+    /// that is applied to HCI packets by the interface driver in order to create the packet that is
+    /// transferred over the interface. These values are implementation specific to the kind of
+    /// interface used. If there is no header or tail applied to HCI packets, then set the value to
+    /// zero. **The value of the constant `BUFFER_SIZE` should factor in the values of
+    /// `max_header_size` and `max_tail_size`.
     pub fn new(
         data: &'a LocalStackChannelReserveData<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        max_header_size: usize,
+        max_tail_size: usize,
     ) -> (Self, impl HostChannelEndsTrait + 'a) {
         let task_data = RefCell::new(LinearBuffer::new());
 
         let host_ends = HostChannelEnds {
+            driver_front_capacity: max_header_size,
+            driver_back_capacity: max_tail_size,
             from_host_channel: &data.incoming.cmd,
             to_host_cmd_recv: (&data.outgoing.host_cmd).take_receiver().unwrap(),
             to_host_gen_recv: (&data.outgoing.host_gen).take_receiver().unwrap(),
@@ -441,6 +455,8 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 }
 
 struct HostChannelEnds<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
+    driver_front_capacity: usize,
+    driver_back_capacity: usize,
     from_host_channel: &'a FromHostChannel<CHANNEL_SIZE, BUFFER_SIZE>,
     to_host_cmd_recv: <&'a ToHostCmdChannel<CHANNEL_SIZE> as Channel>::Receiver,
     to_host_gen_recv: <&'a ToHostGenChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> as Channel>::Receiver,
@@ -462,6 +478,10 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     type GenReceiver = <&'a ToHostGenChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> as Channel>::Receiver;
 
     type ConnectionChannelEnds = ConnectionEnds<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+
+    fn driver_buffer_capacities(&self) -> (usize, usize) {
+        (self.driver_front_capacity, self.driver_back_capacity)
+    }
 
     fn get_sender(&self) -> Self::Sender {
         self.from_host_channel.get_sender()

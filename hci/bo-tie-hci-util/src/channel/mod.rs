@@ -242,6 +242,8 @@ impl<S, R> BufferReserveTrait for Channel<S, R> {
 /// This is the ends of the channels used by a host async task for sending messages to and from an
 /// interface async task.
 struct HostChannelEnds<S1, R1, R2, P1, P2> {
+    front_capacity: usize,
+    back_capacity: usize,
     reserve: RefCell<BufferReserve>,
     cmd_sender: S1,
     cmd_rsp_recv: R1,
@@ -264,6 +266,10 @@ where
     type CmdReceiver = R1;
     type GenReceiver = R2;
     type ConnectionChannelEnds = ConnectionEnds<S2, R3>;
+
+    fn driver_buffer_capacities(&self) -> (usize, usize) {
+        (self.front_capacity, self.back_capacity)
+    }
 
     fn get_sender(&self) -> Self::Sender {
         self.cmd_sender.clone()
@@ -355,6 +361,8 @@ where
     /// `channel4`: channel for messages from the interface async task to a connection async task
     /// `channel5`: channel for messages from a connection async task to the interface async task
     fn new<C1, C2, C3, C4, E>(
+        front_capacity: usize,
+        back_capacity: usize,
         channel1: C1,
         channel2: C2,
         channel3: C3,
@@ -397,6 +405,8 @@ where
         let buffer_reserve = Rc::new(RefCell::new(BufferReserve::new(Self::DEFAULT_BUFFER_CAPACITY)));
 
         let host_channel_ends = HostChannelEnds {
+            front_capacity,
+            back_capacity,
             reserve: RefCell::new(BufferReserve::new(Self::DEFAULT_BUFFER_CAPACITY)),
             cmd_sender: host_cmd_sender,
             cmd_rsp_recv: host_cmd_event_recv,
@@ -674,6 +684,8 @@ where
 /// [`Sender<Message = T>`]: crate::Sender
 /// [`Receiver<Message = T>`]: crate::Receiver
 pub struct ChannelReserveBuilder<C1, C2, C3, C4, C5> {
+    buffer_front_capacity: usize,
+    buffer_back_capacity: usize,
     c1: Option<C1>,
     c2: Option<C2>,
     c3: Option<C3>,
@@ -683,8 +695,15 @@ pub struct ChannelReserveBuilder<C1, C2, C3, C4, C5> {
 
 impl<C1, C2, C3, C4, C5> ChannelReserveBuilder<C1, C2, C3, C4, C5> {
     /// Create a new `ChannelReserveBuilder`
-    pub fn new() -> Self {
+    ///
+    /// The inputs `header_size` and `tail_size` are the maximum sizes of the header and tail the
+    /// frame for the interface. For example, UART would have one as the value for `header_max_size`
+    /// and zero for `tail_max_size` since the packet indicator is only one byte and there is no
+    /// tail for the packet.
+    pub fn new(header_max_size: usize, tail_max_size: usize) -> Self {
         Self {
+            buffer_front_capacity: header_max_size,
+            buffer_back_capacity: tail_max_size,
             c1: None,
             c2: None,
             c3: None,
@@ -750,7 +769,15 @@ where
         let c4 = self.c4.unwrap();
         let c5 = self.c5.unwrap();
 
-        ChannelReserve::new(c1, c2, c3, c4, c5)
+        ChannelReserve::new(
+            self.buffer_front_capacity,
+            self.buffer_back_capacity,
+            c1,
+            c2,
+            c3,
+            c4,
+            c5,
+        )
     }
 }
 

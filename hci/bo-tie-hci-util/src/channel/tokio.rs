@@ -79,13 +79,20 @@ where
 /// The created `ChannelReserve` (and `HostChannelEnds`) use tokio's unbounded channels for
 /// communication between the async tasks of the HCI implementation.
 ///
+/// The inputs are the maximum sizes of the front and tail packet frame information for the
+/// interface. See [`ChannelReserveBuilder::new`].
+///
 /// [tokio's]: tokio::sync::mpsc
 /// [`ChannelReserve`]: crate::ChannelReserve
 /// [`HostChannelEnds`]: crate::HostChannelEnds
-pub fn tokio_unbounded() -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
+/// [`ChannelReserveBuilder::new`]:
+pub fn tokio_unbounded(
+    front_size: usize,
+    tail_size: usize,
+) -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
     use tokio::sync::mpsc::unbounded_channel;
 
-    super::ChannelReserveBuilder::new()
+    super::ChannelReserveBuilder::new(front_size, tail_size)
         .set_c1(unbounded_channel)
         .set_c2(unbounded_channel)
         .set_c3(unbounded_channel)

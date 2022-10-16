@@ -468,6 +468,8 @@ impl LocalChannelReserve {
     fn new(builder: LocalChannelReserveBuilder) -> (Self, impl HostChannelEnds) {
         let connections = RefCell::new(alloc::vec::Vec::new());
 
+        let driver_front_capacity = builder.driver_front_capacity.unwrap_or_default();
+        let driver_back_capacity = builder.driver_back_capacity.unwrap_or_default();
         let host_command_response = LocalChannel::new(builder.get_command_return_channel_size());
         let host_general = LocalChannel::new(builder.get_general_events_channel_size());
         let commands = LocalBufferedChannel::new(builder.get_command_channel_size());
@@ -488,6 +490,8 @@ impl LocalChannelReserve {
         let flow_control_receiver = FlowCtrlReceiver::new(interface_receivers);
 
         let host_ends = HostDynChannelEnds {
+            driver_front_capacity,
+            driver_back_capacity,
             command_channel: commands.clone(),
             command_response: host_command_response.take_receiver().unwrap(),
             general: host_general.take_receiver().unwrap(),
@@ -653,6 +657,8 @@ impl Display for LocalChannelManagerError {
 impl std::error::Error for LocalChannelManagerError {}
 
 struct HostDynChannelEnds {
+    driver_front_capacity: usize,
+    driver_back_capacity: usize,
     command_channel: LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
     command_response: LocalChannelReceiver<LocalChannel<ToHostCommandIntraMessage>, ToHostCommandIntraMessage>,
     general: LocalChannelReceiver<
@@ -681,6 +687,10 @@ impl HostChannelEnds for HostDynChannelEnds {
     >;
 
     type ConnectionChannelEnds = ConnectionDynChannelEnds;
+
+    fn driver_buffer_capacities(&self) -> (usize, usize) {
+        (self.driver_front_capacity, self.driver_back_capacity)
+    }
 
     fn get_sender(&self) -> Self::Sender {
         self.command_channel.get_sender()
@@ -741,6 +751,8 @@ impl HostChannelEnds for HostDynChannelEnds {
 /// ### LE ISO Data Channel
 /// LE ISO data must be sent to the Controller through the LE ISO data channel.
 pub struct LocalChannelReserveBuilder {
+    driver_front_capacity: Option<usize>,
+    driver_back_capacity: Option<usize>,
     command_channel_size: Option<usize>,
     command_return_channel_size: Option<usize>,
     general_events_channel_size: Option<usize>,
@@ -757,6 +769,8 @@ impl LocalChannelReserveBuilder {
     /// Create a new `LocalChannelBuilder`
     pub fn new() -> Self {
         Self {
+            driver_front_capacity: None,
+            driver_back_capacity: None,
             command_channel_size: None,
             command_return_channel_size: None,
             general_events_channel_size: None,
@@ -766,6 +780,32 @@ impl LocalChannelReserveBuilder {
             le_iso_data_channel_size: None,
             connection_receive_channel_size: None,
         }
+    }
+
+    /// Set the maximum size of the header applied by the interface driver
+    ///
+    /// This is the size of the largest header applied as part of wrapping a HCI packet in an
+    /// interface specific packet.
+    ///
+    /// # Note
+    /// This method does not need to be called if no header information is used to transfer a HCI
+    /// packet over the interface
+    pub fn set_driver_max_header_size(&mut self, size: usize) -> &mut Self {
+        self.driver_front_capacity = Some(size);
+        self
+    }
+
+    /// Set the maximum size of the tail applied by the interface driver
+    ///
+    /// This is the size of the largest tail applied as part of wrapping a HCI packet in an
+    /// interface specific packet.
+    ///
+    /// # Note
+    /// This method does not need to be called if no tail information is used to transfer a HCI
+    /// packet of the interface.
+    pub fn set_driver_max_tail_size(&mut self, size: usize) -> &mut Self {
+        self.driver_back_capacity = Some(size);
+        self
     }
 
     /// Set the maximum size of the command channels
