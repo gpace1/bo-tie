@@ -1,7 +1,13 @@
 //! The Host Interface to the Controller
 //!
 //! This is the implementation of the host of the Host Controller Interface. It's purpose is to
-//! function and control the Bluetooth controller. The host is broken into to three parts  
+//! function and control the Bluetooth controller. The host is broken into to three parts
+//!
+//! ## Commands
+//! Commands are located within the module [`commands`]. Commands are organized by modules in the
+//! form of "bo_tie_hci_host::commands::*command_group*::*command*".
+//!
+//! [`commands`]: crate::commands
 
 #![cfg_attr(feature = "unstable-type-alias-impl-trait", feature(type_alias_impl_trait))]
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -424,8 +430,15 @@ impl<'a> HciAclData<&'a [u8]> {
 
 /// The host interface
 ///
-/// This is used by the host to interact with the Bluetooth Controller. It is the host side of the
-/// host controller interface.
+/// This is used by the host to interact with the Bluetooth Controller. Its purpose is to send
+/// commands, receive events, and initialize connections between itself and the interface async
+/// task.
+///
+/// ```
+/// # async {
+/// use bo_tie_hci_host::commands::cb::reset(&mut host).await;
+/// # }
+/// ```
 pub struct Host<H: HostInterface> {
     host_interface: H,
     acl_max_mtu: usize,
@@ -440,7 +453,17 @@ where
 {
     /// Initialize the host
     ///
-    /// This resets the controller and then
+    /// This is generally called as part of the driver implementation.
+    ///
+    /// # Inputs
+    /// `init` takes the channel ends used by the host and the `buffer_front_capacity` required by
+    /// the driver. The channel ends are created from one of the channel implementations within the
+    /// crate [`bo_tie_hci_util`]. The `buffer_front_capacity` is the front capacity of a buffer
+    /// required for prepending driver and/or interface specific header information to a HCI packet
+    /// (for example, UART would use a `buffer_front_capacity` equal to one as the packet indicator
+    /// only requires one byte)
+    ///
+    /// # Operation
     /// The host needs to be aware of the flow control information for the Controller in order to
     /// properly function. This will query the Controller for information about its buffers before
     /// returning a `Host`.
@@ -640,7 +663,11 @@ where
 
             match intra_message {
                 ToHostGeneralIntraMessage::Event(EventsData::ConnectionComplete(cc)) => {
+                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
                     let connection = Connection::new(
+                        head_cap,
+                        tail_cap,
                         self.acl_max_mtu,
                         ConnectionKind::BrEdr(cc),
                         connection_ends.ok_or(NextError::MissingConnectionEnds)?,
@@ -649,7 +676,11 @@ where
                     break Ok(Next::NewConnection(connection));
                 }
                 ToHostGeneralIntraMessage::Event(EventsData::SynchronousConnectionComplete(scc)) => {
+                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
                     let connection = Connection::new(
+                        head_cap,
+                        tail_cap,
                         self.sco_max_mtu,
                         ConnectionKind::BrEdrSco(scc),
                         connection_ends.ok_or(NextError::MissingConnectionEnds)?,
@@ -658,7 +689,11 @@ where
                     break Ok(Next::NewConnection(connection));
                 }
                 ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::ConnectionComplete(lcc))) => {
+                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
                     let connection = Connection::new(
+                        head_cap,
+                        tail_cap,
                         self.le_acl_max_mtu,
                         ConnectionKind::Le(lcc),
                         connection_ends.ok_or(NextError::MissingConnectionEnds)?,
@@ -667,7 +702,11 @@ where
                     break Ok(Next::NewConnection(connection));
                 }
                 ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::EnhancedConnectionComplete(lecc))) => {
+                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
                     let connection = Connection::new(
+                        head_cap,
+                        tail_cap,
                         self.le_acl_max_mtu,
                         ConnectionKind::LeEnh(lecc),
                         connection_ends.ok_or(NextError::MissingConnectionEnds)?,
@@ -773,6 +812,8 @@ pub enum Next<C: ConnectionChannelEnds> {
 /// [`set_mtu_max_to_hci`]: Connection::set_mtu_max_to_hci
 #[derive(Debug)]
 pub struct Connection<C> {
+    buffer_header_size: usize,
+    buffer_tail_size: usize,
     hci_mtu: usize,
     bounded: bool,
     kind: ConnectionKind,
@@ -780,10 +821,12 @@ pub struct Connection<C> {
 }
 
 impl<C: ConnectionChannelEnds> Connection<C> {
-    fn new(hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
+    fn new(buffer_header_size: usize, buffer_tail_size: usize, hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
         let bounded = false;
 
         Self {
+            buffer_header_size,
+            buffer_tail_size,
             hci_mtu,
             bounded,
             kind,
@@ -793,13 +836,11 @@ impl<C: ConnectionChannelEnds> Connection<C> {
 
     /// Get the kind of connection that was made
     ///
-    /// There are multiple kinds of connections that can be made between two different controllers,
-    /// but there are less types of connections then within `ConnectionKind`. ConnectionKind`
-    /// contains the returned the event parameters that accompanied the connection event from the
-    /// Controller.
+    /// A `ConnectionKind` contains the connection information sent by the controller.
     ///
-    /// A `LeL2cap` can be constructed from a `Connection` when `ConnectionKind` is either [`Le`] or
-    /// [`LeEnh`].
+    /// ### LE vs BR/EDR
+    /// A `LeL2cap` can be constructed from a `Connection` by the method [`try_into_le`] when
+    /// `ConnectionKind` is either [`Le`] or [`LeEnh`].
     ///
     /// [`Le`]: ConnectionKind::Le
     /// [`LeEnh`]: ConnectionKind::LeEnh
@@ -842,7 +883,13 @@ impl<C: ConnectionChannelEnds> Connection<C> {
                 let max_mtu = if self.bounded { self.hci_mtu } else { <u16>::MAX.into() };
                 let initial_mtu = <bo_tie_l2cap::LeU as bo_tie_l2cap::MinimumMtu>::MIN_MTU;
 
-                let le = l2cap::LeL2cap::new(max_mtu, initial_mtu, self.ends);
+                let le = l2cap::LeL2cap::new(
+                    self.buffer_header_size,
+                    self.buffer_tail_size,
+                    max_mtu,
+                    initial_mtu,
+                    self.ends,
+                );
 
                 Ok(le)
             }

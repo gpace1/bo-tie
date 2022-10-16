@@ -13,6 +13,8 @@ use core::task::{Context, Poll};
 
 /// A L2CAP connection for LE
 pub struct LeL2cap<C: ConnectionChannelEnds> {
+    front_cap: usize,
+    back_cap: usize,
     max_mtu: usize,
     mtu: Cell<usize>,
     channel_ends: C,
@@ -27,13 +29,15 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
 }
 
 impl<C: ConnectionChannelEnds> LeL2cap<C> {
-    pub(crate) fn new<T>(max_mtu: usize, initial_mtu: T, channel_ends: C) -> Self
+    pub(crate) fn new<T>(front_cap: usize, back_cap: usize, max_mtu: usize, initial_mtu: T, channel_ends: C) -> Self
     where
         T: Into<Cell<usize>>,
     {
         let mtu = initial_mtu.into();
 
         Self {
+            front_cap,
+            back_cap,
             max_mtu,
             mtu,
             channel_ends,
@@ -87,13 +91,15 @@ where
     type RecvFut<'a> = AclReceiverMap<'a, C> where Self: 'a;
 
     fn send(&self, data: bo_tie_l2cap::BasicInfoFrame<alloc::vec::Vec<u8>>) -> Self::SendFut<'_> {
-        // todo: not sure if this will be necessary when the type of input data is `BasicInfoFrame<Self::Buffer<'_>>`
-        let front_capacity = HciAclData::<()>::HEADER_SIZE;
+        let front_capacity = HciAclData::<()>::HEADER_SIZE + self.front_cap;
+
+        let back_capacity = self.back_cap;
 
         let channel_ends = &self.channel_ends;
 
         let iter = SelfSendBufferIter {
             front_capacity,
+            back_capacity,
             channel_ends,
         };
 
@@ -224,14 +230,22 @@ impl<C: ConnectionChannelEnds> Future for AclBufferFuture<C> {
                 None => {
                     let message = this.message.take().unwrap();
 
-                    let future = Box::pin(this.sender.send(message))
-                        as Pin<Box<dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>>>;
+                    let future = alloc::boxed::Box::pin(this.sender.send(message))
+                        as Pin<
+                            alloc::boxed::Box<
+                                dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>,
+                            >,
+                        >;
 
                     // This is 'ok' only because `this` is pinned
                     let sender_future = unsafe {
                         transmute::<
                             _,
-                            Pin<Box<dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>>>,
+                            Pin<
+                                alloc::boxed::Box<
+                                    dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>,
+                                >,
+                            >,
                         >(future)
                     };
 
@@ -272,6 +286,7 @@ where
 
 struct SelfSendBufferIter<'a, C: ConnectionChannelEnds> {
     front_capacity: usize,
+    back_capacity: usize,
     channel_ends: &'a C,
 }
 
@@ -282,7 +297,7 @@ where
     type Item = SelfSendBufferFutureMap<C>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let take_buffer = self.channel_ends.take_buffer(self.front_capacity);
+        let take_buffer = self.channel_ends.take_buffer(self.front_capacity, self.back_capacity);
 
         let sender = self.channel_ends.get_sender().into();
 
