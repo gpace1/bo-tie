@@ -2,7 +2,7 @@
 
 use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::fmt::{Display, Formatter};
-use std::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 
 pub(crate) enum DriverBuffer<A, B> {
     Cmd(A),

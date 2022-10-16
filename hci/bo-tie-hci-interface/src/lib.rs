@@ -81,7 +81,7 @@ pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
 use bo_tie_hci_util::{
-    BufferReserve, FlowControlId, FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HciPacket,
+    BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HciPacket,
     HciPacketType, HostChannel, Sender, TaskId, TaskSource, ToConnectionIntraMessage, ToHostCommandIntraMessage,
     ToHostGeneralIntraMessage,
 };
@@ -645,10 +645,17 @@ where
 
         let reserve_ref = self.channel_reserve.borrow();
 
-        let (mut buffer, mut sender) = reserve_ref
-            .prepare_data_message(connection_handle, 0)
-            .ok_or(SendError::<R>::HostClosed)?
-            .await;
+        let id = TaskId::Connection(connection_handle);
+
+        let channel = reserve_ref
+            .get_channel(id)
+            .and_then(|channel| match channel {
+                FromInterface::Connection(channel) => Some(channel),
+                _ => None, // actually unreachable
+            })
+            .ok_or_else(|| SendError::<R>::UnknownConnectionHandle(connection_handle))?;
+
+        let mut buffer = channel.take(0, 0).await;
 
         buffer
             .try_extend(packet.iter().cloned())
@@ -656,7 +663,11 @@ where
 
         let message = ToConnectionIntraMessage::Acl(buffer).into();
 
-        sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
+        channel
+            .get_sender()
+            .send(message)
+            .await
+            .map_err(|e| SendError::<R>::SenderError(e))
     }
 }
 
@@ -810,7 +821,7 @@ where
                         .get_channel(TaskId::Connection(handle))
                         .ok_or(SendError::<R>::UnknownConnectionHandle(handle))?
                     {
-                        channel.take(None).await
+                        channel.take(None, None).await
                     } else {
                         return Err(SendError::<R>::InvalidChannel);
                     };
