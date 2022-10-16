@@ -327,9 +327,10 @@ where
     type Buffer = B;
     type TakeBuffer = TakeDynReserveFuture<B>;
 
-    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    fn take<F, U>(&self, front_capacity: F, _: U) -> Self::TakeBuffer
     where
-        S: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        U: Into<Option<usize>>,
     {
         self.0
             .reserve
@@ -391,11 +392,12 @@ impl ConnectionChannelEnds for ConnectionDynChannelEnds {
         self.send_channel.get_sender()
     }
 
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take_buffer<F, B>(&self, front_capacity: F, _: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
-        self.send_channel.take(front_capacity)
+        self.send_channel.take(front_capacity, None)
     }
 
     fn get_receiver(&self) -> &Self::Receiver {
@@ -700,7 +702,7 @@ impl HostChannelEnds for HostDynChannelEnds {
     where
         C: Into<Option<usize>>,
     {
-        self.command_channel.take(front_capacity)
+        self.command_channel.take(front_capacity, None)
     }
 
     fn get_cmd_recv(&self) -> &Self::CmdReceiver {

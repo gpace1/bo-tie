@@ -161,9 +161,10 @@ where
         self.from_connection.clone()
     }
 
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take_buffer<F, B>(&self, front_capacity: F, _: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
         self.buffer_reserve
             .borrow_mut()
@@ -223,9 +224,10 @@ impl<S, R> BufferReserveTrait for Channel<S, R> {
     type Buffer = de_vec::DeVec<u8>;
     type TakeBuffer = de_vec::TakeDynReserveFuture<de_vec::DeVec<u8>>;
 
-    fn take<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take<F, B>(&self, front_capacity: F, _: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
         self.reserve
             .borrow_mut()

@@ -142,11 +142,16 @@ impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize, T> BufferReserve
     type Buffer = BufferReservation<'a, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>;
     type TakeBuffer = TakeBuffer<Self>;
 
-    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    fn take<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        S: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
-        TakeBuffer::new(&*self, front_capacity.into().unwrap_or_default())
+        TakeBuffer::new(
+            &*self,
+            front_capacity.into().unwrap_or_default(),
+            back_capacity.into().unwrap_or_default(),
+        )
     }
 
     fn reclaim(&mut self, _: Self::Buffer) {}
@@ -158,11 +163,16 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     type Buffer = ReservedBuffer<'a, TASK_COUNT, CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, T>;
     type TakeBuffer = TakeBuffer<Self>;
 
-    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    fn take<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        S: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
-        TakeBuffer::new(self.clone(), front_capacity.into().unwrap_or_default())
+        TakeBuffer::new(
+            self.clone(),
+            front_capacity.into().unwrap_or_default(),
+            back_capacity.into().unwrap_or_default(),
+        )
     }
 
     fn reclaim(&mut self, _: Self::Buffer) {}
@@ -177,13 +187,15 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 pub struct TakeBuffer<C> {
     channel: C,
     front_capacity: usize,
+    back_capacity: usize,
 }
 
 impl<C> TakeBuffer<C> {
-    fn new(channel: C, front_capacity: usize) -> Self {
+    fn new(channel: C, front_capacity: usize, back_capacity: usize) -> Self {
         Self {
             channel,
             front_capacity,
+            back_capacity,
         }
     }
 }
@@ -196,7 +208,11 @@ impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize, T> Future
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        match this.channel.buffer_reserve.take_buffer(this.front_capacity) {
+        match this
+            .channel
+            .buffer_reserve
+            .take_buffer(this.front_capacity, this.back_capacity)
+        {
             Some(buffer) => Poll::Ready(buffer),
             None => {
                 this.channel.buffer_reserve.set_waker(cx.waker());
@@ -215,7 +231,11 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     fn poll(self: core::pin::Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        match this.channel.buffer_reserve.take_buffer(this.front_capacity) {
+        match this
+            .channel
+            .buffer_reserve
+            .take_buffer(this.front_capacity, this.back_capacity)
+        {
             Some(buffer) => {
                 let buffer = unsafe { BufferReservation::to_unsafe(buffer) };
 

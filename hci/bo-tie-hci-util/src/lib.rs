@@ -470,9 +470,10 @@ pub trait BufferReserve {
     /// If there is no more buffers within the reserve the returned future will await. However, it
     /// is intended that there be enough buffers in the reserve so that most of the time this does
     /// not await.
-    fn take<S>(&self, front_capacity: S) -> Self::TakeBuffer
+    fn take<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        S: Into<Option<usize>>;
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>;
 
     /// Reclaim an unused buffer
     ///
@@ -550,9 +551,10 @@ pub trait ConnectionChannelEnds: Sized {
     fn get_sender(&self) -> Self::Sender;
 
     /// Take a buffer
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>;
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>;
 
     /// Get the receiver of messages from the interface async task
     fn get_receiver(&self) -> &Self::Receiver;
@@ -720,41 +722,6 @@ macro_rules! inc_flow_ctrl {
 }
 
 pub trait ChannelReserveExt: ChannelReserve {
-    /// Prepare HCI data to be sent to a connection async task
-    ///
-    /// HCI data (ACL, SCO, and ISO) must be buffered before it can be transferred to a connection
-    /// task. When the buffer is not already present, this method is used to get a buffer associated
-    /// to the channel for sending to a connection async task.
-    ///
-    /// The returned `PrepareBufferMsg` is a wrapper around both the buffer and channel. Adding
-    /// bytes to the return fills the buffer and consuming the return sends the message containing
-    /// the buffer to the connection.
-    ///
-    /// `prepare_data_message` should not be used if no buffer is required in the `IntraMessage` to
-    /// send to a connection async task. Instead use method the method [`get_sender`] to skip trying
-    /// to acquire a buffer.
-    ///
-    /// [`get_sender`]: ChannelReserveExt::get_sender
-    fn prepare_data_message(
-        &self,
-        handle: ConnectionHandle,
-        front_capacity: usize,
-    ) -> Option<
-        PrepareBufferMsg<
-            <Self::ToConnectionChannel as Channel>::Sender,
-            <Self::ToConnectionChannel as BufferReserve>::TakeBuffer,
-        >,
-    > {
-        let id = TaskId::Connection(handle);
-
-        self.get_channel(id)
-            .and_then(|channel| match channel {
-                FromInterface::Connection(channel) => Some(channel),
-                _ => None, // actually unreachable
-            })
-            .map(|channel| PrepareBufferMsg::from_channel(&channel, front_capacity))
-    }
-
     /// Get a sender to another async task
     ///
     /// The return is the sender used for sending messages to the async task associated by `id`.
@@ -876,49 +843,6 @@ pub trait ChannelReserveExt: ChannelReserve {
 }
 
 impl<T: ChannelReserve> ChannelReserveExt for T {}
-
-/// A future for acquiring a `PrepareSend`
-///
-/// This future awaits until it can acquire a buffer for use as a channel message. Usually this
-/// future returns right away, but it is needed in the case where the reserve is waiting to free up
-/// a buffer for this send process. When the future does poll to completion it returns a
-/// `PrepareSend`.
-pub struct PrepareBufferMsg<S, T> {
-    sender: Option<S>,
-    take_buffer: T,
-}
-
-impl<S, T> PrepareBufferMsg<S, T> {
-    fn from_channel<'a, C>(channel: &'a C, front_capacity: usize) -> Self
-    where
-        C: Channel<Sender = S> + BufferReserve<TakeBuffer = T>,
-        T: 'a,
-    {
-        let take_buffer = channel.take(front_capacity);
-        let sender = Some(channel.get_sender());
-
-        PrepareBufferMsg { sender, take_buffer }
-    }
-}
-
-impl<S, T> Future for PrepareBufferMsg<S, T>
-where
-    T: Future,
-{
-    type Output = (T::Output, S);
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-
-        unsafe { Pin::new_unchecked(&mut this.take_buffer) }
-            .poll(cx)
-            .map(|buffer| {
-                let sender = this.sender.take().expect("GetPrepareSend already polled to completion");
-
-                (buffer, sender)
-            })
-    }
-}
 
 /// Receivers used by an interface async task
 pub struct InterfaceReceivers<H, R> {
