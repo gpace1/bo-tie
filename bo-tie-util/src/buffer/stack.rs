@@ -3,6 +3,7 @@
 //! Buffers in this module are statically allocated. The size of the buffer must be known at
 //! compile time.
 
+use crate::buffer::Buffer;
 use core::borrow::{Borrow, BorrowMut};
 use core::fmt::{Debug, Display, Formatter};
 use core::mem::{replace, transmute, MaybeUninit};
@@ -745,14 +746,14 @@ impl<T, const SIZE: usize> StackHotel<T, SIZE> {
     /// Take an unsafe reservation from a `StackHotel` containing buffers
     ///
     /// This returns a reservation unless there is no more allocations available
-    pub fn take_buffer(&self, front_capacity: usize) -> Option<BufferReservation<T, SIZE>>
+    pub fn take_buffer(&self, front_capacity: usize, back_capacity: usize) -> Option<BufferReservation<T, SIZE>>
     where
         T: crate::buffer::Buffer,
     {
         use crate::buffer::BufferExt;
 
         self.take_inner(T::with_front_capacity(front_capacity))
-            .map(|ur| unsafe { BufferReservation::new(ur, self, front_capacity) })
+            .map(|ur| unsafe { BufferReservation::new(ur, self, front_capacity, back_capacity) })
     }
 }
 
@@ -1071,19 +1072,22 @@ impl<'a, T, const SIZE: usize> BufferReservation<'a, T, SIZE> {
     /// `BufferReservation`. It is undefined behaviour if multiple `BufferReservation`s exist at the
     /// same time containing the same `link`.
     #[allow(unused_variables)]
-    unsafe fn new(ur: UnsafeReservation<T, SIZE>, hotel: &'a StackHotel<T, SIZE>, front_capacity: usize) -> Self
+    unsafe fn new(
+        ur: UnsafeReservation<T, SIZE>,
+        hotel: &'a StackHotel<T, SIZE>,
+        front_capacity: usize,
+        back_capacity: usize,
+    ) -> Self
     where
-        T: crate::buffer::Buffer,
+        T: Buffer,
     {
-        use crate::buffer::BufferExt;
-
         let ubr = UnsafeBufferReservation(ur);
 
         let _pd = core::marker::PhantomData;
 
         let mut ret = Self { ubr, _pd };
 
-        ret.clear_with_front_capacity(front_capacity);
+        ret.clear_with_capacity(front_capacity, back_capacity);
 
         ret
     }
