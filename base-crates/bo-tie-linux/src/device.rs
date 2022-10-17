@@ -14,6 +14,8 @@ const BLU_DEV_LIST_DEFAULT_CNT: usize = 16;
 pub const HCI_CHANNEL_USER: i32 = 1; // User channel gives total control, but requires hci
 
 pub mod hci {
+    use bo_tie_hci_util::HciPacket;
+    use bo_tie_util::buffer::Buffer;
     use bo_tie_util::BluetoothDeviceAddress;
 
     const HCI_RAW: usize = 6;
@@ -85,28 +87,18 @@ pub mod hci {
                     _ => None,
                 }
             })
-            .ok_or(nix::Error::from_errno(nix::errno::Errno::ENODEV))
+            .ok_or(nix::errno::Errno::ENODEV)
     }
 
-    /// Send a command to the bluetooth controller
-    pub fn send_command<P, const P_SIZE: usize>(dev: &crate::FileDescriptor, parameter: &P) -> nix::Result<usize>
-    where
-        P: bo_tie_hci_host::CommandParameter<P_SIZE>,
-    {
-        use nix::errno::Errno;
-        use nix::Error;
-
-        let mut command_packet = parameter.as_command_packet();
-
-        // Insert the packet indicator for linux (maybe for alerting the kernel to the hci packet
-        // type or used for just UART communication).
-        let packet_indicator = bo_tie_hci_interface::uart::HciPacketIndicator::Command.val();
-
-        command_packet.insert(0, packet_indicator);
+    /// Send a HCI packet to the controller
+    pub fn send_to_controller(dev: &crate::FileDescriptor, packet: &mut HciPacket<impl Buffer>) -> nix::Result<usize> {
+        // Uart is used here at it is the same system used by linux for labeling HCI packets.
+        let message =
+            bo_tie_hci_interface::uart::PacketIndicator::prepend(packet).expect("failed to prepend packet indicator");
 
         loop {
-            match nix::unistd::write(dev.0, &command_packet) {
-                Err(Error::Sys(Errno::EAGAIN)) | Err(Error::Sys(Errno::EINTR)) => continue,
+            match nix::unistd::write(dev.0, &message) {
+                Err(nix::Error::EAGAIN) | Err(nix::Error::EINTR) => continue,
                 result => break result,
             }
         }
