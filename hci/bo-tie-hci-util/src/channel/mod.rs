@@ -122,18 +122,14 @@ pub use self::async_std::async_std_unbounded;
 pub use self::futures_rs::futures_unbounded;
 
 use crate::{
-    BufferReserve as BufferReserveTrait, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait,
-    ConnectionChannelEnds, FlowCtrlReceiver, FromConnectionIntraMessage, FromHostIntraMessage,
-    HostChannelEnds as HostChannelEndsTrait, Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage,
-    ToHostGeneralIntraMessage,
+    BufferReserve, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannelEnds,
+    FlowCtrlReceiver, FromConnectionIntraMessage, FromHostIntraMessage, HostChannelEnds as HostChannelEndsTrait,
+    Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
 use crate::{ConnectionHandle, FlowControlId, FromInterface, HostChannel, InterfaceReceivers, TaskId};
-use alloc::rc::Rc;
-use bo_tie_util::buffer::de_vec;
-use core::cell::RefCell;
+use bo_tie_util::buffer::de_vec::{DeVec, TakeFuture};
+use bo_tie_util::buffer::BufferExt;
 use core::fmt::{Display, Formatter};
-
-type BufferReserve = de_vec::DynBufferReserve<de_vec::DeVec<u8>>;
 
 /// Channel ends for a connection async task
 ///
@@ -141,19 +137,18 @@ type BufferReserve = de_vec::DynBufferReserve<de_vec::DeVec<u8>>;
 /// from an interface async task.
 #[derive(Debug)]
 pub struct ConnectionEnds<S, R> {
-    buffer_reserve: RefCell<BufferReserve>,
     from_connection: S,
     to_connection: R,
 }
 
 impl<'a, S, R> ConnectionChannelEnds for ConnectionEnds<S, R>
 where
-    S: Sender<Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>> + Clone,
-    R: Receiver<Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>>,
+    S: Sender<Message = FromConnectionIntraMessage<DeVec<u8>>> + Clone,
+    R: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>>,
 {
-    type ToBuffer = de_vec::DeVec<u8>;
-    type FromBuffer = de_vec::DeVec<u8>;
-    type TakeBuffer = de_vec::TakeDynReserveFuture<de_vec::DeVec<u8>>;
+    type ToBuffer = DeVec<u8>;
+    type FromBuffer = DeVec<u8>;
+    type TakeBuffer = TakeFuture<DeVec<u8>>;
     type Sender = S;
     type Receiver = R;
 
@@ -166,9 +161,7 @@ where
         F: Into<Option<usize>>,
         B: Into<Option<usize>>,
     {
-        self.buffer_reserve
-            .borrow_mut()
-            .take(front_capacity.into().unwrap_or_default())
+        TakeFuture::new(DeVec::with_front_capacity(front_capacity.into().unwrap_or_default()))
     }
 
     fn get_receiver(&self) -> &Self::Receiver {
@@ -182,21 +175,15 @@ where
 
 /// A message channel
 pub struct Channel<S, R> {
-    reserve: Rc<RefCell<BufferReserve>>,
     sender: S,
     _receiver: core::marker::PhantomData<R>,
 }
 
 impl<S, R> Channel<S, R> {
-    fn new(reserve: Rc<RefCell<BufferReserve>>, s: S) -> Self {
-        let sender = s;
+    fn new(sender: S) -> Self {
         let _receiver = core::marker::PhantomData;
 
-        Channel {
-            reserve,
-            sender,
-            _receiver,
-        }
+        Channel { sender, _receiver }
     }
 }
 
@@ -220,23 +207,19 @@ where
     }
 }
 
-impl<S, R> BufferReserveTrait for Channel<S, R> {
-    type Buffer = de_vec::DeVec<u8>;
-    type TakeBuffer = de_vec::TakeDynReserveFuture<de_vec::DeVec<u8>>;
+impl<S, R> BufferReserve for Channel<S, R> {
+    type Buffer = DeVec<u8>;
+    type TakeBuffer = TakeFuture<DeVec<u8>>;
 
     fn take<F, B>(&self, front_capacity: F, _: B) -> Self::TakeBuffer
     where
         F: Into<Option<usize>>,
         B: Into<Option<usize>>,
     {
-        self.reserve
-            .borrow_mut()
-            .take(front_capacity.into().unwrap_or_default())
+        TakeFuture::new(DeVec::with_front_capacity(front_capacity.into().unwrap_or_default()))
     }
 
-    fn reclaim(&mut self, buffer: Self::Buffer) {
-        self.reserve.borrow_mut().reclaim(buffer)
-    }
+    fn reclaim(&mut self, _: Self::Buffer) {}
 }
 
 /// Channel ends for a host async task
@@ -246,7 +229,6 @@ impl<S, R> BufferReserveTrait for Channel<S, R> {
 struct HostChannelEnds<S1, R1, R2, P1, P2> {
     front_capacity: usize,
     back_capacity: usize,
-    reserve: RefCell<BufferReserve>,
     cmd_sender: S1,
     cmd_rsp_recv: R1,
     gen_recv: R2,
@@ -255,15 +237,15 @@ struct HostChannelEnds<S1, R1, R2, P1, P2> {
 
 impl<S1, S2, R1, R2, R3> HostChannelEndsTrait for HostChannelEnds<S1, R1, R2, S2, R3>
 where
-    S1: Sender<Message = FromHostIntraMessage<de_vec::DeVec<u8>>> + Clone,
-    S2: Sender<Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>> + Clone,
+    S1: Sender<Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+    S2: Sender<Message = FromConnectionIntraMessage<DeVec<u8>>> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
     R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S2, R3>>>,
-    R3: Receiver<Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>>,
+    R3: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>>,
 {
-    type ToBuffer = de_vec::DeVec<u8>;
-    type FromBuffer = de_vec::DeVec<u8>;
-    type TakeBuffer = de_vec::TakeDynReserveFuture<de_vec::DeVec<u8>>;
+    type ToBuffer = DeVec<u8>;
+    type FromBuffer = DeVec<u8>;
+    type TakeBuffer = TakeFuture<DeVec<u8>>;
     type Sender = S1;
     type CmdReceiver = R1;
     type GenReceiver = R2;
@@ -281,9 +263,7 @@ where
     where
         C: Into<Option<usize>>,
     {
-        self.reserve
-            .borrow_mut()
-            .take(front_capacity.into().unwrap_or_default())
+        TakeFuture::new(DeVec::with_front_capacity(front_capacity.into().unwrap_or_default()))
     }
 
     fn get_cmd_recv(&self) -> &Self::CmdReceiver {
@@ -336,22 +316,19 @@ where
     R1: Receiver,
     R2: Receiver,
 {
-    buffer_reserve: Rc<RefCell<BufferReserve>>,
     outgoing_senders: Outgoing<S1, S2>,
     incoming_senders: Incoming<S3>,
     flow_ctrl_recv: FlowCtrlReceiver<R1, R2>,
     channel_creator: F,
-    connections: RefCell<alloc::vec::Vec<ConnectionData<S4>>>,
+    connections: core::cell::RefCell<alloc::vec::Vec<ConnectionData<S4>>>,
     _p: core::marker::PhantomData<(P1, P2, P3, P4)>,
 }
 
 impl<S1, S2, S3, S4, S5, R1, R2, R3, R4, R5, F> ChannelReserve<S1, S2, S4, S5, R3, R4, F, S3, R1, R2, R5>
 where
-    R3: Receiver<Message = FromHostIntraMessage<de_vec::DeVec<u8>>>,
-    R4: Receiver<Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>>,
+    R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+    R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
 {
-    const DEFAULT_BUFFER_CAPACITY: usize = 10;
-
     /// Create a new `ChannelReserve`
     ///
     /// # Inputs
@@ -379,14 +356,14 @@ where
         F: Fn() -> (S5, R5),
         S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
         S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
-        S3: Sender<Error = E, Message = FromHostIntraMessage<de_vec::DeVec<u8>>> + Clone,
-        S4: Sender<Error = E, Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>> + Unpin + Clone,
-        S5: Sender<Error = E, Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>> + Clone,
+        S3: Sender<Error = E, Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+        S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
+        S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
         R1: Receiver<Message = ToHostCommandIntraMessage>,
         R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
-        R3: Receiver<Message = FromHostIntraMessage<de_vec::DeVec<u8>>>,
-        R4: Receiver<Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>>,
-        R5: Receiver<Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>> + Unpin,
+        R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+        R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
+        R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
     {
         let (to_host_cmd_sender, host_cmd_event_recv) = channel1();
 
@@ -402,14 +379,11 @@ where
 
         let (le_iso_sender, le_iso_receiver) = channel4();
 
-        let connections = RefCell::new(alloc::vec::Vec::default());
-
-        let buffer_reserve = Rc::new(RefCell::new(BufferReserve::new(Self::DEFAULT_BUFFER_CAPACITY)));
+        let connections = core::cell::RefCell::new(alloc::vec::Vec::default());
 
         let host_channel_ends = HostChannelEnds {
             front_capacity,
             back_capacity,
-            reserve: RefCell::new(BufferReserve::new(Self::DEFAULT_BUFFER_CAPACITY)),
             cmd_sender: host_cmd_sender,
             cmd_rsp_recv: host_cmd_event_recv,
             gen_recv: host_gen_recv,
@@ -441,7 +415,6 @@ where
         let _p = core::marker::PhantomData;
 
         let this = Self {
-            buffer_reserve,
             outgoing_senders,
             incoming_senders,
             flow_ctrl_recv,
@@ -459,14 +432,14 @@ impl<S1, S2, S3, S4, S5, R1, R2, R3, R4, R5, F, E> ChannelReserveTrait
 where
     S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
     S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
-    S3: Sender<Error = E, Message = FromHostIntraMessage<de_vec::DeVec<u8>>> + Clone,
-    S4: Sender<Error = E, Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>> + Unpin + Clone,
-    S5: Sender<Error = E, Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>> + Clone,
+    S3: Sender<Error = E, Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+    S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
+    S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
     R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
-    R3: Receiver<Message = FromHostIntraMessage<de_vec::DeVec<u8>>>,
-    R4: Receiver<Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>>,
-    R5: Receiver<Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>> + Unpin,
+    R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+    R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
+    R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
     F: Fn() -> (S5, R5),
     E: core::fmt::Debug,
 {
@@ -525,7 +498,6 @@ where
         let (from_interface, to_connection) = (self.channel_creator)();
 
         let new_task_ends = ConnectionEnds {
-            buffer_reserve: RefCell::new(BufferReserve::new(Self::DEFAULT_BUFFER_CAPACITY)),
             from_connection,
             to_connection,
         };
@@ -547,18 +519,12 @@ where
     ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
         match id {
             TaskId::Host(HostChannel::Command) => {
-                let channel = Channel::new(
-                    self.buffer_reserve.clone(),
-                    self.outgoing_senders.to_host_cmd_sender.clone(),
-                );
+                let channel = Channel::new(self.outgoing_senders.to_host_cmd_sender.clone());
 
                 Some(FromInterface::HostCommand(channel))
             }
             TaskId::Host(HostChannel::General) => {
-                let channel = Channel::new(
-                    self.buffer_reserve.clone(),
-                    self.outgoing_senders.to_host_gen_sender.clone(),
-                );
+                let channel = Channel::new(self.outgoing_senders.to_host_gen_sender.clone());
 
                 Some(FromInterface::HostGeneral(channel))
             }
@@ -569,9 +535,7 @@ where
                     .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
                     .ok()
                     .and_then(|index| ref_connections.get(index))
-                    .map(|ConnectionData { sender, .. }| {
-                        FromInterface::Connection(Channel::new(self.buffer_reserve.clone(), sender.clone()))
-                    })
+                    .map(|ConnectionData { sender, .. }| FromInterface::Connection(Channel::new(sender.clone())))
             }
         }
     }
@@ -724,14 +688,14 @@ where
     C5: Fn() -> (S5, R5),
     S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
     S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
-    S3: Sender<Error = E, Message = FromHostIntraMessage<de_vec::DeVec<u8>>> + Clone,
-    S4: Sender<Error = E, Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>> + Unpin + Clone,
-    S5: Sender<Error = E, Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>> + Clone,
+    S3: Sender<Error = E, Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+    S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
+    S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
     R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
-    R3: Receiver<Message = FromHostIntraMessage<de_vec::DeVec<u8>>>,
-    R4: Receiver<Message = FromConnectionIntraMessage<de_vec::DeVec<u8>>>,
-    R5: Receiver<Message = ToConnectionIntraMessage<de_vec::DeVec<u8>>> + Unpin,
+    R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+    R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
+    R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
 {
     pub fn set_c1(mut self, c1: C1) -> Self {
         self.c1 = Some(c1);
