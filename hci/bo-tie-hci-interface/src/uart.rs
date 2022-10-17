@@ -282,4 +282,37 @@ impl PacketIndicator {
             HciPacket::Iso(t) => prepend!(t, Iso),
         }
     }
+
+    /// Convert a UART packet into a `HciPacket`
+    pub fn convert<B>(packet: B) -> Result<HciPacket<&[u8]>, PacketIndicatorError>
+    where
+        B: core::borrow::Borrow<str>,
+    {
+        match packet.borrow().get(0).map(|byte| Self::translate(*byte)).transpose() {
+            Ok(None) => Err(PacketIndicatorError::PacketEmpty),
+            Ok(Some(HciPacketType::Command)) => HciPacket::Command(packet.borrow().get(1..).unwrap()),
+            Ok(Some(HciPacketType::Acl)) => HciPacket::Acl(packet.borrow().get(1..).unwrap()),
+            Ok(Some(HciPacketType::Sco)) => HciPacket::Sco(packet.borrow().get(1..).unwrap()),
+            Ok(Some(HciPacketType::Event)) => HciPacket::Event(packet.borrow().get(1..).unwrap()),
+            Ok(Some(HciPacketType::Iso)) => HciPacket::Iso(packet.borrow().get(1..).unwrap()),
+            Err(_) => Err(PacketIndicatorError::UnknownIndicator(
+                packet.borrow().get(0).copied().unwrap(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum PacketIndicatorError {
+    PacketEmpty,
+    UnknownIndicator(u8),
+}
+
+impl Display for PacketIndicatorError {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        match self {
+            PacketIndicatorError::PacketEmpty => f.write_str("packet is empty"),
+            PacketIndicatorError::UnknownIndicator(val) => write!("unknown indicator {:#x}", val),
+        }
+    }
 }
