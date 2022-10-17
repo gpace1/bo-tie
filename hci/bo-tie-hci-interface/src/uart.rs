@@ -284,17 +284,17 @@ impl PacketIndicator {
     }
 
     /// Convert a UART packet into a `HciPacket`
-    pub fn convert<B>(packet: B) -> Result<HciPacket<&[u8]>, PacketIndicatorError>
+    pub fn convert<B>(packet: &B) -> Result<HciPacket<&[u8]>, PacketIndicatorError>
     where
-        B: core::borrow::Borrow<str>,
+        B: ?Sized + core::borrow::Borrow<[u8]>,
     {
         match packet.borrow().get(0).map(|byte| Self::translate(*byte)).transpose() {
             Ok(None) => Err(PacketIndicatorError::PacketEmpty),
-            Ok(Some(HciPacketType::Command)) => HciPacket::Command(packet.borrow().get(1..).unwrap()),
-            Ok(Some(HciPacketType::Acl)) => HciPacket::Acl(packet.borrow().get(1..).unwrap()),
-            Ok(Some(HciPacketType::Sco)) => HciPacket::Sco(packet.borrow().get(1..).unwrap()),
-            Ok(Some(HciPacketType::Event)) => HciPacket::Event(packet.borrow().get(1..).unwrap()),
-            Ok(Some(HciPacketType::Iso)) => HciPacket::Iso(packet.borrow().get(1..).unwrap()),
+            Ok(Some(HciPacketType::Command)) => Ok(HciPacket::Command(packet.borrow().get(1..).unwrap())),
+            Ok(Some(HciPacketType::Acl)) => Ok(HciPacket::Acl(packet.borrow().get(1..).unwrap())),
+            Ok(Some(HciPacketType::Sco)) => Ok(HciPacket::Sco(packet.borrow().get(1..).unwrap())),
+            Ok(Some(HciPacketType::Event)) => Ok(HciPacket::Event(packet.borrow().get(1..).unwrap())),
+            Ok(Some(HciPacketType::Iso)) => Ok(HciPacket::Iso(packet.borrow().get(1..).unwrap())),
             Err(_) => Err(PacketIndicatorError::UnknownIndicator(
                 packet.borrow().get(0).copied().unwrap(),
             )),
@@ -312,7 +312,7 @@ impl Display for PacketIndicatorError {
     fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
         match self {
             PacketIndicatorError::PacketEmpty => f.write_str("packet is empty"),
-            PacketIndicatorError::UnknownIndicator(val) => write!("unknown indicator {:#x}", val),
+            PacketIndicatorError::UnknownIndicator(val) => write!(f, "unknown indicator {:#x}", val),
         }
     }
 }

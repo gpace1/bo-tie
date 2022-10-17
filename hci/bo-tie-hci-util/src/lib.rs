@@ -1294,12 +1294,31 @@ impl fmt::Display for HciPacketType {
 ///
 /// This is a wrapper around a buffer containing a HCI packet. `HciPacket` is used to describe what
 /// kind of HCI packet is contained within the buffer.
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 pub enum HciPacket<T> {
     Command(T),
     Acl(T),
     Sco(T),
     Event(T),
     Iso(T),
+}
+
+impl<T> HciPacket<T> {
+    /// Map a `HciPacket`
+    ///
+    /// This is used to map a `HciPacket<T>` to a `HciPacket<V>`
+    pub fn map<F, V>(self, f: F) -> HciPacket<V>
+    where
+        F: FnOnce(T) -> V,
+    {
+        match self {
+            HciPacket::Command(t) => HciPacket::Command(f(t)),
+            HciPacket::Acl(t) => HciPacket::Acl(f(t)),
+            HciPacket::Sco(t) => HciPacket::Sco(f(t)),
+            HciPacket::Event(t) => HciPacket::Event(f(t)),
+            HciPacket::Iso(t) => HciPacket::Iso(f(t)),
+        }
+    }
 }
 
 impl<T: Deref<Target = [u8]>> From<FromHostIntraMessage<T>> for HciPacket<T> {
