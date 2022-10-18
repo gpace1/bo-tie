@@ -189,16 +189,16 @@ impl<T> DynBufferReserve<T> {
         Self(Vec::with_capacity(capacity))
     }
 
-    pub fn take(&mut self, front_capacity: usize) -> TakeDynReserveFuture<T>
+    pub fn take(&mut self, front_capacity: usize) -> TakeFuture<T>
     where
         T: crate::buffer::Buffer,
     {
         use crate::buffer::BufferExt;
 
         if let Some(buffer) = self.0.pop() {
-            TakeDynReserveFuture(Some(buffer))
+            TakeFuture(Some(buffer))
         } else {
-            TakeDynReserveFuture(Some(T::with_front_capacity(front_capacity)))
+            TakeFuture(Some(T::with_front_capacity(front_capacity)))
         }
     }
 
@@ -210,9 +210,15 @@ impl<T> DynBufferReserve<T> {
 }
 
 /// A future for taking buffers from a `VecBufferReserve`
-pub struct TakeDynReserveFuture<T>(Option<T>);
+pub struct TakeFuture<T>(Option<T>);
 
-impl<T: Unpin> Future for TakeDynReserveFuture<T> {
+impl<T> TakeFuture<T> {
+    pub fn new(t: T) -> Self {
+        TakeFuture(Some(t))
+    }
+}
+
+impl<T: Unpin> Future for TakeFuture<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
