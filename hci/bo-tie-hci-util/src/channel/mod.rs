@@ -103,6 +103,10 @@ macro_rules! make_error {
     };
 }
 
+mod send_safe;
+
+pub use send_safe::SendSafeChannelReserve;
+
 #[cfg(feature = "tokio")]
 mod tokio;
 
@@ -129,7 +133,7 @@ use crate::{
 use crate::{ConnectionHandle, FlowControlId, FromInterface, HostChannel, InterfaceReceivers, TaskId};
 use bo_tie_util::buffer::de_vec::{DeVec, TakeFuture};
 use bo_tie_util::buffer::BufferExt;
-use core::fmt::{Display, Formatter};
+use core::fmt::{Debug, Display, Formatter};
 
 /// Channel ends for a connection async task
 ///

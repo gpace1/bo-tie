@@ -2,6 +2,7 @@
 //!
 //! [async-std]: async_std
 
+use crate::channel::SendSafeChannelReserve;
 use async_std::channel::{Receiver, Recv, Send, SendError, Sender};
 use core::fmt::Debug;
 use std::future::Future;
@@ -86,7 +87,7 @@ impl<T> Future for ReceiverFuture<'_, T> {
 pub fn async_std_unbounded(
     front_size: usize,
     tail_size: usize,
-) -> (impl crate::ChannelReserve, impl crate::HostChannelEnds) {
+) -> (impl SendSafeChannelReserve, impl crate::HostChannelEnds) {
     use async_std::channel::unbounded;
 
     super::ChannelReserveBuilder::new(front_size, tail_size)
