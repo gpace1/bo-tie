@@ -18,7 +18,7 @@ use crate::{
 };
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
-use bo_tie_util::buffer::de_vec::{DeVec, DynBufferReserve, TakeDynReserveFuture};
+use bo_tie_util::buffer::de_vec::{DeVec, DynBufferReserve, TakeFuture};
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
 use core::task::{Context, Poll, Waker};
@@ -325,7 +325,7 @@ where
     B: bo_tie_util::buffer::Buffer,
 {
     type Buffer = B;
-    type TakeBuffer = TakeDynReserveFuture<B>;
+    type TakeBuffer = TakeFuture<B>;
 
     fn take<F, U>(&self, front_capacity: F, _: U) -> Self::TakeBuffer
     where
