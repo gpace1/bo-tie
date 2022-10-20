@@ -414,7 +414,7 @@ where
             le_iso_receiver,
         };
 
-        let flow_ctrl_recv = FlowCtrlReceiver::new();
+        let flow_ctrl_recv = FlowCtrlReceiver::new(interface_receivers);
 
         let _p = core::marker::PhantomData;
 
