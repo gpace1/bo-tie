@@ -18,7 +18,7 @@ use crate::{
     ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
 use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
-use core::fmt::Debug;
+use core::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -28,457 +28,345 @@ use std::task::{Context, Poll};
 ///
 /// This wrapper is used to add the `Send` bound to the associated types of the traits
 /// [`ChannelReserve`] and [`HostChannelEnds`] without
-pub struct SendSafe<T>(T);
+pub struct SendSafe<T: Send>(T);
 
-impl<T> SendSafe<T> {
+impl<T: Send> SendSafe<T> {
     pub fn new(t: T) -> Self {
         SendSafe(t)
     }
 }
 
-// impl<T: Send + DerefMut<Target = [u8]>> DerefMut<Target = [u8]> for SendSafe<T> {
-//     fn deref_mut(&mut self) -> &mut Self::Target {
-//         self.0.deref_mut()
-//     }
-// }
-//
-// impl<T: Send + Deref> Deref for SendSafe<T> {
-//     type Target = [u8];
-//
-//     fn deref(&self) -> &Self::Target {
-//         self.0.deref()
-//     }
-// }
-//
-// impl<T> TryExtend<u8> for SendSafe<T>
-// where
-//     T: Send + TryExtend<u8>,
-//     T::Error: Send,
-// {
-//     type Error = T::Error;
-//
-//     fn try_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
-//     where
-//         T: IntoIterator<Item = u8>,
-//     {
-//         self.0.try_extend(iter)
-//     }
-// }
-//
-// impl<T> TryRemove<u8> for SendSafe<T>
-// where
-//     T: Send + TryRemove<u8>,
-//     T::Error: Send,
-// {
-//     type Error = T::Error;
-//     type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
-//
-//     fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
-//         self.0.try_remove(how_many)
-//     }
-// }
-//
-// impl<T> TryFrontExtend<u8> for SendSafe<T>
-// where
-//     T: Send + TryFrontExtend<u8>,
-//     T::Error: Send,
-// {
-//     type Error = T::Error;
-//
-//     fn try_front_extend<T>(&mut self, iter: T) -> Result<(), Self::Error>
-//     where
-//         T: IntoIterator<Item = u8>,
-//     {
-//         self.0.try_front_extend(iter)
-//     }
-// }
-//
-// impl<T> TryFrontRemove<u8> for SendSafe<T>
-// where
-//     T: Send + TryFrontRemove<u8>,
-//     T::Error: Send,
-// {
-//     type Error = T::Error;
-//     type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
-//
-//     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
-//         self.0.try_front_remove(how_many)
-//     }
-// }
-//
-// impl<T: Send + Buffer> Buffer for SendSafe<T> {
-//     fn with_capacity(front: usize, back: usize) -> Self
-//     where
-//         Self: Sized,
-//     {
-//         Self(T::with_capacity(front: usize, back: usize))
-//     }
-//
-//     fn clear_with_capacity(&mut self, front: usize, back: usize) {
-//         self.0.clear_with_capacity(front, back)
-//     }
-// }
-//
-// impl<T> Future for SendSafe<T>
-// where
-//     T: Future + Send,
-// {
-//     type Output = T::Output;
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         unsafe { self.map_unchecked_mut(|this| &mut this.0).poll(cx) }
-//     }
-// }
-//
-// impl<'z, T> Sender for SendSafe<T>
-// where
-//     T: SendSafeSender<'z>,
-// {
-//     type Error = T::SendSafeError;
-//     type Message = T::SendSafeMessage;
-//     type SendFuture<'a> = T::SendSafeSendFuture<'a> where Self: 'a;
-//
-//     fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
-//         self.0.send(t)
-//     }
-// }
-//
-// impl<'z, T> Receiver for SendSafe<T>
-// where
-//     T: SendSafeReceiver<'z>,
-// {
-//     type Message = T::SendSafeMessage;
-//     type ReceiveFuture<'a> = T::SendSafeReceiveFuture<'a> where Self: 'a;
-//
-//     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
-//         self.0.poll_recv(cx)
-//     }
-//
-//     fn recv(&mut self) -> Self::ReceiveFuture<'_> {
-//         self.0.recv()
-//     }
-// }
-//
-// impl<T> BufferReserve for SendSafe<T>
-// where
-//     T: SendSafeBufferReserve,
-// {
-//     type Buffer = T::SendSafeBuffer;
-//     type TakeBuffer = T::SendSafeTakeBuffer;
-//
-//     fn take<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
-//     where
-//         F: Into<Option<usize>>,
-//         B: Into<Option<usize>>,
-//     {
-//         self.0.take(front_capacity, back_capacity)
-//     }
-//
-//     fn reclaim(&mut self, buffer: Self::Buffer) {
-//         self.0.reclaim(buffer)
-//     }
-// }
-//
-// impl<T> Channel for SendSafe<T>
-// where
-//     T: SendSafeChannel,
-// {
-//     type SenderError = T::SendSafeSenderError;
-//     type Message = T::SendSafeMessage;
-//     type Sender = T::SendSafeSenderError;
-//     type Receiver = T::SendSafeReceiver;
-//
-//     fn get_sender(&self) -> Self::Sender {
-//         SendSafe(self.0.get_sender())
-//     }
-//
-//     fn take_receiver(&self) -> Option<Self::Receiver> {
-//         self.0.take_receiver().map(|rx| SendSafe(rx))
-//     }
-// }
-//
-// impl<T> ConnectionChannelEnds for SendSafe<T>
-// where
-//     T: Sized + SendSafeConnectionChannelEnds,
-// {
-//     type ToBuffer = T::SendSafeToBuffer;
-//     type FromBuffer = T::SendSafeFromBuffer;
-//     type TakeBuffer = SendSafe(T::SendSafeTakeBuffer);
-//     type Sender = SendSafe(T::SendSafeSender);
-//     type Receiver = SendSafe(T::SendSafeReceiver);
-//
-//     fn get_sender(&self) -> Self::Sender {
-//         SendSafe(self.0.get_sender())
-//     }
-//
-//     fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
-//     where
-//         F: Into<Option<usize>>,
-//         B: Into<Option<usize>>,
-//     {
-//         SendSafe(self.0.take_buffer(front_capacity, back_capacity))
-//     }
-//
-//     fn get_receiver(&self) -> &Self::Receiver {
-//         self.0.get_receiver()
-//     }
-// }
-//
-// impl<T> ChannelReserve for SendSafe<T>
-// where
-//     T: SendSafeChannelReserve,
-// {
-//     type Error = T::SendSafeError;
-//     type SenderError = T::SendSafeSenderError;
-//     type ToHostCmdChannel = T::SendSafeToHostCmdChannel;
-//     type ToHostGenChannel = T::SendSafeToHostGenChannel;
-//     type FromHostChannel = T::SendSafeFromHostChannel;
-//     type ToConnectionChannel = T::SendSafeToConnectionChannel;
-//     type FromConnectionChannel = T::SendSafeFromConnectionChannel;
-//     type ConnectionChannelEnds = T::SendSafeConnectionChannelEnds;
-//
-//     fn try_remove(&mut self, handle: ConnectionHandle) -> Result<(), Self::Error> {
-//         self.0.try_remove(handle)
-//     }
-//
-//     fn add_new_connection(
-//         &self,
-//         handle: ConnectionHandle,
-//         flow_control_id: FlowControlId,
-//     ) -> Result<Self::ConnectionChannelEnds, Self::Error> {
-//         self.0.add_new_connection(handle, flow_control_id)
-//     }
-//
-//     fn get_channel(
-//         &self,
-//         id: TaskId,
-//     ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
-//         self.0.get_channel(id)
-//     }
-//
-//     fn get_flow_control_id(&self, handle: ConnectionHandle) -> Option<FlowControlId> {
-//         self.0.get_flow_control_id(handle)
-//     }
-//
-//     fn get_flow_ctrl_receiver(
-//         &mut self,
-//     ) -> &mut FlowCtrlReceiver<
-//         <Self::FromHostChannel as Channel>::Receiver,
-//         <Self::FromConnectionChannel as Channel>::Receiver,
-//     > {
-//         self.0.get_flow_ctrl_receiver()
-//     }
-// }
-
-pub trait SendSafeSender<'z>:
-    'z
-    + Send
-    + Sender<Error = Self::SendSafeError, Message = Self::SendSafeMessage, SendFuture<'z> = Self::SendSafeSendFuture>
+impl<T> Future for SendSafe<T>
+where
+    T: Future + Send,
 {
-    type SendSafeError: Send + Debug;
-    type SendSafeMessage: Send + Unpin;
-    type SendSafeSendFuture: Send + Future<Output = Result<(), Self::SendSafeError>>;
+    type Output = T::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0).poll(cx) }
+    }
 }
 
-impl<'z, T> SendSafeSender<'z> for T
+impl<T> Iterator for SendSafe<T>
 where
-    T: 'z + Send + Sender,
+    T: Iterator<Item = u8> + Send,
+{
+    type Item = T::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+impl<T: Send + Debug> Debug for SendSafe<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        T::fmt(&self.0, f)
+    }
+}
+
+impl<T: Send + Display> Display for SendSafe<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        T::fmt(&self.0, f)
+    }
+}
+
+impl<T: Send + DerefMut<Target = [u8]>> DerefMut for SendSafe<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.deref_mut()
+    }
+}
+
+impl<T: Send + Deref<Target = [u8]>> Deref for SendSafe<T> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+impl<T> TryExtend<u8> for SendSafe<T>
+where
+    T: Send + TryExtend<u8>,
     T::Error: Send,
-    T::Message: Send,
-    T::SendFuture<'z>: Send,
 {
-    type SendSafeError = T::Error;
-    type SendSafeMessage = T::Message;
-    type SendSafeSendFuture = T::SendFuture<'z>;
+    type Error = SendSafe<T::Error>;
+
+    fn try_extend<E>(&mut self, iter: E) -> Result<(), Self::Error>
+    where
+        E: IntoIterator<Item = u8>,
+    {
+        self.0.try_extend(iter).map_err(|e| SendSafe::new(e))
+    }
 }
 
-pub trait SendSafeReceiver<'z>:
-    'z + Send + Receiver<Message = Self::SendSafeMessage, ReceiveFuture<'z> = Self::SendSafeReceiveFuture>
-{
-    type SendSafeMessage: Send + Unpin;
-    type SendSafeReceiveFuture: Send + Future<Output = Option<Self::SendSafeMessage>>;
-}
-
-impl<'z, T> SendSafeReceiver<'z> for T
+impl<T, I> TryRemove<u8> for SendSafe<T>
 where
-    T: 'z + Send + Receiver,
-    T::Message: Send,
-    T::ReceiveFuture<'z>: Send,
+    for<'a> T: 'a + Send + TryRemove<u8, RemoveIter<'a> = I>,
+    T::Error: Send,
+    I: Iterator<Item = u8> + Send,
 {
-    type SendSafeMessage = T::Message;
-    type SendSafeReceiveFuture = T::ReceiveFuture<'z>;
+    type Error = SendSafe<T::Error>;
+    type RemoveIter<'a> = SendSafe<T::RemoveIter<'a>> where Self: 'a;
+
+    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+        self.0
+            .try_remove(how_many)
+            .map(|iter| SendSafe::new(iter))
+            .map_err(|e| SendSafe::new(e))
+    }
 }
 
-pub trait SendSafeBufferReserve:
-    BufferReserve<Buffer = Self::SendSafeBuffer, TakeBuffer = Self::SendSafeTakeBuffer>
-{
-    type SendSafeBuffer: Send + Buffer + Unpin;
-    type SendSafeTakeBuffer: Future<Output = Self::SendSafeBuffer>;
-}
-
-impl<T> SendSafeBufferReserve for T
+impl<T> TryFrontExtend<u8> for SendSafe<T>
 where
-    T: Send + BufferReserve,
-    T::Buffer: Send,
-    T::TakeBuffer: Send,
+    T: Send + TryFrontExtend<u8>,
+    T::Error: Send,
 {
-    type SendSafeBuffer = T::Buffer;
-    type SendSafeTakeBuffer = T::TakeBuffer;
+    type Error = SendSafe<T::Error>;
+
+    fn try_front_extend<E>(&mut self, iter: E) -> Result<(), Self::Error>
+    where
+        E: IntoIterator<Item = u8>,
+    {
+        self.0.try_front_extend(iter).map_err(|e| SendSafe::new(e))
+    }
 }
 
-pub trait SendSafeChannel:
-    Send
-    + Channel<
-        SenderError = Self::SendSafeSenderError,
-        Message = Self::SendSafeMessage,
-        Sender = Self::SendSafeSender,
-        Receiver = Self::SendSafeReceiver,
-    >
-{
-    type SendSafeSenderError: Send + Debug;
-    type SendSafeMessage: Send + Unpin;
-    type SendSafeSender: for<'z> SendSafeSender<'z>;
-    type SendSafeReceiver: for<'z> SendSafeReceiver<'z>;
-}
-
-impl<T> SendSafeChannel for T
+impl<T, I> TryFrontRemove<u8> for SendSafe<T>
 where
-    T: Send + Channel,
+    for<'a> T: 'a + Send + TryFrontRemove<u8, FrontRemoveIter<'a> = I>,
+    T::Error: Send,
+    I: Iterator<Item = u8> + Send,
+{
+    type Error = SendSafe<T::Error>;
+    type FrontRemoveIter<'a> = SendSafe<T::FrontRemoveIter<'a>> where Self: 'a;
+
+    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+        self.0
+            .try_front_remove(how_many)
+            .map(|iter| SendSafe::new(iter))
+            .map_err(|e| SendSafe::new(e))
+    }
+}
+
+impl<T, I1, I2> Buffer for SendSafe<T>
+where
+    for<'a, 'b> T: 'a + 'b + Send + Buffer<RemoveIter<'a> = I1, FrontRemoveIter<'b> = I2>,
+    <T as TryExtend<u8>>::Error: Send,
+    <T as TryRemove<u8>>::Error: Send,
+    <T as TryFrontExtend<u8>>::Error: Send,
+    <T as TryFrontRemove<u8>>::Error: Send,
+    I1: Iterator<Item = u8> + Send,
+    I2: Iterator<Item = u8> + Send,
+{
+    fn with_capacity(front: usize, back: usize) -> Self
+    where
+        Self: Sized,
+    {
+        Self(T::with_capacity(front, back))
+    }
+
+    fn clear_with_capacity(&mut self, front: usize, back: usize) {
+        self.0.clear_with_capacity(front, back)
+    }
+}
+
+impl<T> BufferReserve for SendSafe<T>
+where
+    T: SendSafeBufferReserve,
+{
+    type Buffer = T::SendSafeBuffer;
+    type TakeBuffer = SendSafe<T::SendSafeTakeBuffer>;
+
+    fn take<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
+    where
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
+    {
+        SendSafe::new(self.0.take(front_capacity, back_capacity))
+    }
+
+    fn reclaim(&mut self, buffer: Self::Buffer) {
+        self.0.reclaim(buffer)
+    }
+}
+
+impl<T, E, M, F> Sender for SendSafe<T>
+where
+    for<'z> T: 'z + Send + Sync + Sender<Error = E, Message = M, SendFuture<'z> = F>,
+    E: Send + Debug,
+    M: Send + Unpin,
+    F: Send + Future<Output = Result<(), E>>,
+{
+    type Error = E;
+    type Message = M;
+    type SendFuture<'a> = SendSafe<F> where Self: 'a;
+
+    fn send(&mut self, t: Self::Message) -> Self::SendFuture<'_> {
+        SendSafe(self.0.send(t))
+    }
+}
+
+impl<T, M, F> Receiver for SendSafe<T>
+where
+    for<'z> T: 'z + Send + Sync + Receiver<Message = M, ReceiveFuture<'z> = F>,
+    M: Send + Unpin,
+    F: Send + Future<Output = Option<M>>,
+{
+    type Message = M;
+    type ReceiveFuture<'a> = SendSafe<F> where Self: 'a;
+
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+        self.0.poll_recv(cx)
+    }
+
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
+        SendSafe(self.0.recv())
+    }
+}
+
+impl<T, S, R> Channel for SendSafe<T>
+where
+    T: Send + Channel<Sender = S, Receiver = R>,
     T::SenderError: Send,
     T::Message: Send,
-    T::Sender: for<'z> SendSafeSender<'z>,
-    T::Receiver: for<'z> SendSafeReceiver<'z>,
+    S: Send + Sender<Error = T::SenderError, Message = T::Message>,
+    R: Send + Receiver<Message = T::Message>,
+    SendSafe<S>: Sender<Error = T::SenderError, Message = T::Message>,
+    SendSafe<R>: Receiver<Message = T::Message>,
 {
-    type SendSafeSenderError = T::SenderError;
-    type SendSafeMessage = T::Message;
-    type SendSafeSender = T::Sender;
-    type SendSafeReceiver = T::Receiver;
+    type SenderError = T::SenderError;
+    type Message = T::Message;
+    type Sender = SendSafe<S>;
+    type Receiver = SendSafe<R>;
+
+    fn get_sender(&self) -> Self::Sender {
+        SendSafe(self.0.get_sender())
+    }
+
+    fn take_receiver(&self) -> Option<Self::Receiver> {
+        self.0.take_receiver().map(|rx| SendSafe(rx))
+    }
 }
 
-pub trait SendSafeConnectionChannelEnds:
-    Send
-    + ConnectionChannelEnds<
-        ToBuffer = Self::SendSafeToBuffer,
-        FromBuffer = Self::SendSafeFromBuffer,
-        TakeBuffer = Self::SendSafeTakeBuffer,
-        Sender = Self::SendSafeSender,
-        Receiver = Self::SendSafeReceiver,
-    >
-{
-    type SendSafeToBuffer: Send + Buffer;
-    type SendSafeFromBuffer: Send + Buffer;
-    type SendSafeTakeBuffer: Send + Future<Output = Self::SendSafeToBuffer>;
-    type SendSafeSender: for<'z> SendSafeSender<
-        'z,
-        SendSafeMessage = FromConnectionIntraMessage<Self::SendSafeToBuffer>,
-    >;
-    type SendSafeReceiver: for<'z> SendSafeReceiver<
-        'z,
-        SendSafeMessage = ToConnectionIntraMessage<Self::SendSafeFromBuffer>,
-    >;
-}
-
-impl<T> SendSafeConnectionChannelEnds for T
+impl<T, ToB, FrB, TakeB, S, R> ConnectionChannelEnds for SendSafe<T>
 where
-    T: Send + ConnectionChannelEnds,
-    T::ToBuffer: Send,
-    T::FromBuffer: Send,
-    T::TakeBuffer: Send,
-    T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = FromConnectionIntraMessage<T::ToBuffer>>,
-    T::Receiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToConnectionIntraMessage<T::FromBuffer>>,
+    T: Send
+        + Sync
+        + ConnectionChannelEnds<ToBuffer = ToB, FromBuffer = FrB, TakeBuffer = TakeB, Sender = S, Receiver = R>,
+    ToB: Send,
+    FrB: Send,
+    TakeB: Send,
+    S: Send,
+    R: Send + Sync + Receiver<Message = ToConnectionIntraMessage<SendSafe<FrB>>>,
+    for<'a> R::ReceiveFuture<'a>: Send,
+    SendSafe<ToB>: Buffer,
+    SendSafe<FrB>: Buffer,
+    SendSafe<TakeB>: Future<Output = SendSafe<ToB>>,
+    SendSafe<S>: Sender<Message = FromConnectionIntraMessage<SendSafe<ToB>>>,
 {
-    type SendSafeToBuffer = T::ToBuffer;
-    type SendSafeFromBuffer = T::FromBuffer;
-    type SendSafeTakeBuffer = T::TakeBuffer;
-    type SendSafeSender = T::Sender;
-    type SendSafeReceiver = T::Receiver;
+    type ToBuffer = SendSafe<ToB>;
+    type FromBuffer = SendSafe<FrB>;
+    type TakeBuffer = SendSafe<TakeB>;
+    type Sender = SendSafe<S>;
+    type Receiver = R;
+
+    fn get_sender(&self) -> Self::Sender {
+        SendSafe::new(self.0.get_sender())
+    }
+
+    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
+    where
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
+    {
+        SendSafe::new(self.0.take_buffer(front_capacity, back_capacity))
+    }
+
+    fn get_receiver(&self) -> &Self::Receiver {
+        self.0.get_receiver()
+    }
+
+    fn get_mut_receiver(&mut self) -> &mut Self::Receiver {
+        self.0.get_mut_receiver()
+    }
 }
 
-pub trait SendSafeChannelReserve:
-    Send
-    + ChannelReserve<
-        Error = Self::SendSafeError,
-        SenderError = Self::SendSafeSenderError,
-        ToHostCmdChannel = Self::SendSafeToHostCmdChannel,
-        ToHostGenChannel = Self::SendSafeToHostGenChannel,
-        FromHostChannel = Self::SendSafeFromHostChannel,
-        ToConnectionChannel = Self::SendSafeToConnectionChannel,
-        FromConnectionChannel = Self::SendSafeFromConnectionChannel,
-        ConnectionChannelEnds = Self::SendSafeConnectionChannelEnds,
-    >
-{
-    type SendSafeError: Debug + Send;
-    type SendSafeSenderError: Debug + Send;
-    type SendSafeToHostCmdChannel: SendSafeChannel<
-        SendSafeSenderError = Self::SendSafeSenderError,
-        SendSafeMessage = ToHostCommandIntraMessage,
-    >;
-    type SendSafeToHostGenChannel: SendSafeChannel<
-        SendSafeSenderError = Self::SenderError,
-        SendSafeMessage = ToHostGeneralIntraMessage<Self::SendSafeConnectionChannelEnds>,
-    >;
-    type SendSafeFromHostChannel: SendSafeBufferReserve
-        + SendSafeChannel<
-            SendSafeSenderError = Self::SenderError,
-            SendSafeMessage = FromHostIntraMessage<
-                <Self::SendSafeFromHostChannel as SendSafeBufferReserve>::SendSafeBuffer,
-            >,
-        >;
-    type SendSafeToConnectionChannel: SendSafeBufferReserve
-        + SendSafeChannel<
-            SendSafeSenderError = Self::SenderError,
-            SendSafeMessage = ToConnectionIntraMessage<
-                <Self::SendSafeToConnectionChannel as SendSafeBufferReserve>::SendSafeBuffer,
-            >,
-        >;
-    type SendSafeFromConnectionChannel: SendSafeBufferReserve
-        + SendSafeChannel<
-            SendSafeSenderError = Self::SenderError,
-            SendSafeMessage = FromConnectionIntraMessage<
-                <Self::SendSafeFromConnectionChannel as SendSafeBufferReserve>::SendSafeBuffer,
-            >,
-        >;
-    type SendSafeConnectionChannelEnds: SendSafeConnectionChannelEnds;
-}
-
-impl<T> SendSafeChannelReserve for T
+impl<T, ToHC, ToHG, FrH, ToC, FrC, CE, B1, B2, B3> ChannelReserve for SendSafe<T>
 where
-    T: Send + ChannelReserve,
+    T: Send
+        + ChannelReserve<
+            ToHostCmdChannel = ToHC,
+            ToHostGenChannel = ToHG,
+            FromHostChannel = FrH,
+            ToConnectionChannel = ToC,
+            FromConnectionChannel = FrC,
+            ConnectionChannelEnds = CE,
+        >,
     T::Error: Send,
     T::SenderError: Send,
-    T::ToHostCmdChannel:
-        SendSafeChannel<SendSafeSenderError = T::SenderError, SendSafeMessage = ToHostCommandIntraMessage>,
-    T::ToHostGenChannel: SendSafeChannel<
-        SendSafeSenderError = T::SenderError,
-        SendSafeMessage = ToHostGeneralIntraMessage<T::ConnectionChannelEnds>,
-    >,
-    T::FromHostChannel: SendSafeBufferReserve
-        + SendSafeChannel<
-            SendSafeSenderError = T::SenderError,
-            SendSafeMessage = FromHostIntraMessage<<T::FromHostChannel as SendSafeBufferReserve>::SendSafeBuffer>,
-        >,
-    T::ToConnectionChannel: SendSafeBufferReserve
-        + SendSafeChannel<
-            SendSafeSenderError = T::SenderError,
-            SendSafeMessage = ToConnectionIntraMessage<
-                <T::ToConnectionChannel as SendSafeBufferReserve>::SendSafeBuffer,
-            >,
-        >,
-    T::FromConnectionChannel: SendSafeBufferReserve
-        + SendSafeChannel<
-            SendSafeSenderError = T::SenderError,
-            SendSafeMessage = FromConnectionIntraMessage<
-                <T::FromConnectionChannel as SendSafeBufferReserve>::SendSafeBuffer,
-            >,
-        >,
-    T::ConnectionChannelEnds: SendSafeConnectionChannelEnds,
+    ToHC: Send,
+    ToHG: Send,
+    FrH: Send,
+    ToC: Send,
+    FrC: Send,
+    CE: Send,
+    B1: Send,
+    B2: Send,
+    B3: Send,
+    SendSafe<ToHC>: Channel<SenderError = T::SenderError, Message = ToHostCommandIntraMessage>,
+    SendSafe<ToHG>: Channel<SenderError = T::SenderError, Message = ToHostGeneralIntraMessage<SendSafe<CE>>>,
+    SendSafe<FrH>: BufferReserve<Buffer = SendSafe<B1>>
+        + Channel<SenderError = T::SenderError, Message = FromHostIntraMessage<SendSafe<B1>>>,
+    SendSafe<ToC>: BufferReserve<Buffer = SendSafe<B2>>
+        + Channel<SenderError = T::SenderError, Message = ToConnectionIntraMessage<SendSafe<B2>>>,
+    SendSafe<FrC>: BufferReserve<Buffer = SendSafe<B3>>
+        + Channel<SenderError = T::SenderError, Message = FromConnectionIntraMessage<SendSafe<B3>>>,
+    SendSafe<CE>: ConnectionChannelEnds,
 {
-    type SendSafeError = T::Error;
-    type SendSafeSenderError = T::SenderError;
-    type SendSafeToHostCmdChannel = T::ToHostCmdChannel;
-    type SendSafeToHostGenChannel = T::ToHostGenChannel;
-    type SendSafeFromHostChannel = T::FromHostChannel;
-    type SendSafeToConnectionChannel = T::ToConnectionChannel;
-    type SendSafeFromConnectionChannel = T::FromConnectionChannel;
-    type SendSafeConnectionChannelEnds = T::ConnectionChannelEnds;
+    type Error = T::Error;
+    type SenderError = T::SenderError;
+    type ToHostCmdChannel = SendSafe<ToHC>;
+    type ToHostGenChannel = SendSafe<ToHG>;
+    type FromHostChannel = SendSafe<FrH>;
+    type ToConnectionChannel = SendSafe<ToC>;
+    type FromConnectionChannel = SendSafe<FrC>;
+    type ConnectionChannelEnds = SendSafe<CE>;
+
+    fn try_remove(&mut self, handle: ConnectionHandle) -> Result<(), Self::Error> {
+        self.0.try_remove(handle)
+    }
+
+    fn add_new_connection(
+        &mut self,
+        handle: ConnectionHandle,
+        flow_control_id: FlowControlId,
+    ) -> Result<Self::ConnectionChannelEnds, Self::Error> {
+        self.0
+            .add_new_connection(handle, flow_control_id)
+            .map(|ce| SendSafe::new(ce))
+    }
+
+    fn get_channel(
+        &self,
+        id: TaskId,
+    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
+        self.0.get_channel(id).map(|fi| match fi {
+            FromInterface::HostCommand(hc) => FromInterface::HostCommand(SendSafe::new(hc)),
+            FromInterface::HostGeneral(hg) => FromInterface::HostGeneral(SendSafe::new(hg)),
+            FromInterface::Connection(c) => FromInterface::Connection(SendSafe::new(c)),
+        })
+    }
+
+    fn get_flow_control_id(&self, handle: ConnectionHandle) -> Option<FlowControlId> {
+        self.0.get_flow_control_id(handle)
+    }
+
+    fn get_flow_ctrl_receiver(
+        &mut self,
+    ) -> &mut FlowCtrlReceiver<
+        <Self::FromHostChannel as Channel>::Receiver,
+        <Self::FromConnectionChannel as Channel>::Receiver,
+    > {
+        self.0.get_flow_ctrl_receiver()
+    }
 }

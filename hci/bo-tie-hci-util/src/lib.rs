@@ -70,6 +70,7 @@
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 
 extern crate alloc;
+extern crate core;
 
 pub mod channel;
 pub mod events;
@@ -679,7 +680,7 @@ pub trait ChannelReserve {
     /// channel used by it to send messages to the new connection async task. The return of this
     /// method is the connection ends for the new connection.
     fn add_new_connection(
-        &self,
+        &mut self,
         handle: ConnectionHandle,
         flow_control_id: FlowControlId,
     ) -> Result<Self::ConnectionChannelEnds, Self::Error>;

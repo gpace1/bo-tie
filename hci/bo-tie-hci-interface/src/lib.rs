@@ -102,7 +102,7 @@ use core::ops::Deref;
 /// received from the interface up to the higher layered protocols. Methods that contain *down* are
 /// for sending packets to the interface and onto the Controller.
 pub struct Interface<R> {
-    channel_reserve: core::cell::RefCell<R>,
+    channel_reserve: R,
 }
 
 impl<R> Interface<R>
@@ -111,8 +111,6 @@ where
 {
     /// Create a new interface
     pub fn new(channel_reserve: R) -> Self {
-        let channel_reserve = core::cell::RefCell::new(channel_reserve);
-
         Interface { channel_reserve }
     }
 
@@ -270,7 +268,6 @@ where
         use buffer::DriverBuffer;
 
         self.channel_reserve
-            .get_mut()
             .receive_next()
             .await
             .map(|intra_message| match intra_message {
@@ -291,12 +288,11 @@ where
     /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
     /// packet.
     fn parse_command_complete_event(
-        &self,
+        &mut self,
         cc_data: &events::parameters::CommandCompleteData,
     ) -> Result<bool, SendError<R>> {
         if 0 != cc_data.number_of_hci_command_packets {
             self.channel_reserve
-                .borrow_mut()
                 .inc_cmd_flow_ctrl(cc_data.number_of_hci_command_packets.into());
         }
 
@@ -308,12 +304,11 @@ where
     /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
     /// packet.
     fn parse_command_status_event(
-        &self,
+        &mut self,
         cs_data: &events::parameters::CommandStatusData,
     ) -> Result<bool, SendError<R>> {
         if 0 != cs_data.number_of_hci_command_packets {
             self.channel_reserve
-                .borrow_mut()
                 .inc_cmd_flow_ctrl(cs_data.number_of_hci_command_packets.into());
         }
 
@@ -325,7 +320,7 @@ where
     /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
     /// packet.
     fn parse_number_of_completed_packets_event(
-        &self,
+        &mut self,
         ncp_data: &events::parameters::Multiple<events::parameters::NumberOfCompletedPacketsData>,
     ) -> Result<(), SendError<R>> {
         for ncp in ncp_data {
@@ -333,15 +328,14 @@ where
                 let how_many: usize = ncp.completed_packets.into();
                 let fc_id = self
                     .channel_reserve
-                    .borrow()
                     .get_flow_control_id(ncp.connection_handle)
                     .ok_or(SendError::<R>::UnknownConnectionHandle(ncp.connection_handle))?;
 
                 match fc_id {
-                    FlowControlId::Acl => self.channel_reserve.borrow_mut().inc_acl_flow_ctrl(how_many),
-                    FlowControlId::Sco => self.channel_reserve.borrow_mut().inc_sco_flow_control(how_many),
-                    FlowControlId::LeAcl => self.channel_reserve.borrow_mut().inc_le_acl_flow_control(how_many),
-                    FlowControlId::LeIso => self.channel_reserve.borrow_mut().inc_le_iso_flow_control(how_many),
+                    FlowControlId::Acl => self.channel_reserve.inc_acl_flow_ctrl(how_many),
+                    FlowControlId::Sco => self.channel_reserve.inc_sco_flow_control(how_many),
+                    FlowControlId::LeAcl => self.channel_reserve.inc_le_acl_flow_control(how_many),
+                    FlowControlId::LeIso => self.channel_reserve.inc_le_iso_flow_control(how_many),
                     FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
                 }
             }
@@ -355,7 +349,7 @@ where
     /// Parsing this event is only enabled with feature `unstable`.
     #[cfg(not(feature = "unstable"))]
     fn parse_number_of_completed_data_blocks_event(
-        &self,
+        &mut self,
         _: &events::parameters::NumberOfCompletedDataBlocksData,
     ) -> Result<(), SendError<R>> {
         Err(SendError::<R>::Unimplemented(
@@ -374,7 +368,7 @@ where
     /// This is unlikely to be a correct implementation.
     #[cfg(feature = "unstable")]
     fn parse_number_of_completed_data_blocks_event(
-        &self,
+        &mut self,
         ncdb_data: &events::parameters::NumberOfCompletedDataBlocksData,
     ) -> Result<(), SendError<R>> {
         // This algorithm for flow control of the block buffers just
@@ -386,13 +380,11 @@ where
         // Block Size* command.
         if let None = ncdb_data.total_data_blocks {
             self.channel_reserve
-                .borrow_mut()
                 .get_flow_ctrl_receiver()
                 .get_mut_acl_flow_control()
                 .halt();
 
             self.channel_reserve
-                .borrow_mut()
                 .get_flow_ctrl_receiver()
                 .get_mut_le_acl_flow_control()
                 .halt();
@@ -402,25 +394,20 @@ where
 
         for ncdb in &ncdb_data.completed_packets_and_blocks {
             if 0 != ncdb.completed_blocks {
-                let block_size = self
-                    .channel_reserve
-                    .borrow_mut()
-                    .get_flow_ctrl_receiver()
-                    .get_block_size();
+                let block_size = self.channel_reserve.get_flow_ctrl_receiver().get_block_size();
 
                 let how_many: usize = block_size * <usize>::from(ncdb.completed_blocks);
 
                 let fc_id = self
                     .channel_reserve
-                    .borrow()
                     .get_flow_control_id(ncdb.connection_handle)
                     .ok_or(SendError::<R>::UnknownConnectionHandle(ncdb.connection_handle))?;
 
                 match fc_id {
-                    FlowControlId::Acl => self.channel_reserve.borrow_mut().inc_acl_flow_ctrl(how_many),
-                    FlowControlId::Sco => self.channel_reserve.borrow_mut().inc_sco_flow_control(how_many),
-                    FlowControlId::LeAcl => self.channel_reserve.borrow_mut().inc_le_acl_flow_control(how_many),
-                    FlowControlId::LeIso => self.channel_reserve.borrow_mut().inc_le_iso_flow_control(how_many),
+                    FlowControlId::Acl => self.channel_reserve.inc_acl_flow_ctrl(how_many),
+                    FlowControlId::Sco => self.channel_reserve.inc_sco_flow_control(how_many),
+                    FlowControlId::LeAcl => self.channel_reserve.inc_le_acl_flow_control(how_many),
+                    FlowControlId::LeIso => self.channel_reserve.inc_le_iso_flow_control(how_many),
                     FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
                 }
             }
@@ -436,13 +423,12 @@ where
     ///
     /// [`ToConnectionIntraMessage`]: bo_tie_hci_util::ToConnectionIntraMessage
     pub async fn create_connection(
-        &self,
+        &mut self,
         handle: ConnectionHandle,
         flow_control_id: FlowControlId,
     ) -> Result<(), SendError<R>> {
         let channel_ends = self
             .channel_reserve
-            .borrow()
             .add_new_connection(handle, flow_control_id)
             .map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
 
@@ -450,7 +436,6 @@ where
 
         if let FromInterface::HostGeneral(mut sender) = self
             .channel_reserve
-            .borrow()
             .get_sender(TaskId::Host(HostChannel::General))
             .ok_or(SendError::<R>::HostClosed)?
         {
@@ -461,7 +446,7 @@ where
     }
 
     pub async fn parse_connection_complete_event(
-        &self,
+        &mut self,
         data: &events::parameters::ConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
         let flow_control_id = match data.link_type {
@@ -474,7 +459,7 @@ where
     }
 
     pub async fn parse_synchronous_connection_complete_event(
-        &self,
+        &mut self,
         data: &events::parameters::SynchronousConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
         let flow_control_id = FlowControlId::Sco;
@@ -483,7 +468,7 @@ where
     }
 
     pub async fn parse_le_connection_complete_event(
-        &self,
+        &mut self,
         data: &events::parameters::LeConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
         let flow_control_id = FlowControlId::Acl;
@@ -492,7 +477,7 @@ where
     }
 
     pub async fn parse_le_enhanced_connection_complete_event(
-        &self,
+        &mut self,
         data: &events::parameters::LeEnhancedConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
         let flow_control_id = FlowControlId::Acl;
@@ -501,14 +486,14 @@ where
     }
 
     pub async fn parse_disconnect(
-        &self,
+        &mut self,
         disconnect: &events::parameters::DisconnectionCompleteData,
     ) -> Result<(), SendError<R>> {
         let task_id = TaskId::Connection(disconnect.connection_handle);
 
         let error = bo_tie_util::errors::Error::from(disconnect.reason);
 
-        if let Some(source) = self.channel_reserve.borrow().get_sender(task_id) {
+        if let Some(source) = self.channel_reserve.get_sender(task_id) {
             if let FromInterface::Connection(mut sender) = source {
                 sender
                     .send(ToConnectionIntraMessage::Disconnect(error).into())
@@ -516,7 +501,6 @@ where
                     .map_err(|e| SendError::<R>::SenderError(e))?;
 
                 self.channel_reserve
-                    .borrow_mut()
                     .try_remove(disconnect.connection_handle)
                     .map_err(|e| SendError::<R>::ReserveError(e))
             } else {
@@ -540,7 +524,7 @@ where
     ///   a specific connection.
     /// * *Number of Completed Data Blocks* event contains information on the number of packets sent
     ///   and
-    async fn parse_event(&self, data: &[u8]) -> Result<Option<events::EventsData>, SendError<R>> {
+    async fn parse_event(&mut self, data: &[u8]) -> Result<Option<events::EventsData>, SendError<R>> {
         use events::{EventsData, LeMetaData};
 
         let ed = EventsData::try_from_packet(data).map_err(|e| SendError::<R>::InvalidHciEventData(e))?;
@@ -580,7 +564,7 @@ where
     /// The events *Number of Completed Packets*, *Number of Completed Data Blocks*, and when either
     /// *Command Complete* and *Command Status* does not contain a command code are not sent to the
     /// host. All the information within those events is only relevant to the interface async task.
-    async fn maybe_send_event(&self, packet: &[u8]) -> Result<(), SendError<R>> {
+    async fn maybe_send_event(&mut self, packet: &[u8]) -> Result<(), SendError<R>> {
         use bo_tie_hci_util::events::EventsData;
 
         match self.parse_event(&packet).await? {
@@ -589,7 +573,6 @@ where
 
                 if let FromInterface::HostCommand(mut sender) = self
                     .channel_reserve
-                    .borrow()
                     .get_sender(TaskId::Host(HostChannel::Command))
                     .ok_or(SendError::<R>::HostClosed)?
                 {
@@ -603,7 +586,6 @@ where
 
                 if let FromInterface::HostCommand(mut sender) = self
                     .channel_reserve
-                    .borrow()
                     .get_sender(TaskId::Host(HostChannel::Command))
                     .ok_or(SendError::<R>::HostClosed)?
                 {
@@ -617,7 +599,6 @@ where
 
                 if let FromInterface::HostGeneral(mut sender) = self
                     .channel_reserve
-                    .borrow()
                     .get_sender(TaskId::Host(HostChannel::General))
                     .ok_or(SendError::<R>::HostClosed)?
                 {
@@ -643,7 +624,7 @@ where
         let connection_handle =
             ConnectionHandle::try_from(raw_handle).map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
 
-        let reserve_ref = self.channel_reserve.borrow();
+        let reserve_ref = &self.channel_reserve;
 
         let id = TaskId::Connection(connection_handle);
 
@@ -738,7 +719,7 @@ pub type SendError<R> = SendErrorReason<
 ///
 /// [`buffer_up_send`]: Interface::buffered_up_send
 pub struct BufferedUpSend<'a, R: ChannelReserve> {
-    interface: &'a Interface<R>,
+    interface: &'a mut Interface<R>,
     packet_type: HciPacketType,
     packet_len: core::cell::Cell<Option<usize>>,
     task_id_state: core::cell::RefCell<BufferedTaskId>,
@@ -817,7 +798,6 @@ where
                     let buffer = if let FromInterface::Connection(channel) = self
                         .interface
                         .channel_reserve
-                        .borrow()
                         .get_channel(TaskId::Connection(handle))
                         .ok_or(SendError::<R>::UnknownConnectionHandle(handle))?
                     {
@@ -1128,7 +1108,6 @@ mod buffered_send {
         if let FromInterface::Connection(mut sender) = bs
             .interface
             .channel_reserve
-            .borrow()
             .get_sender(
                 bs.task_id_state
                     .borrow_mut()

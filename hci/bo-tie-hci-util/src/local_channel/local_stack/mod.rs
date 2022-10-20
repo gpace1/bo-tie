@@ -370,7 +370,7 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
     }
 
     fn add_new_connection(
-        &self,
+        &mut self,
         connection_handle: ConnectionHandle,
         flow_ctrl_id: FlowControlId,
     ) -> Result<Self::ConnectionChannelEnds, Self::Error> {

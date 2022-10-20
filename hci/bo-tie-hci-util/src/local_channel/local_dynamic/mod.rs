@@ -557,7 +557,7 @@ impl ChannelReserve for LocalChannelReserve {
     }
 
     fn add_new_connection(
-        &self,
+        &mut self,
         connection_handle: ConnectionHandle,
         flow_control_id: FlowControlId,
     ) -> Result<Self::ConnectionChannelEnds, Self::Error> {

@@ -324,7 +324,7 @@ where
     incoming_senders: Incoming<S3>,
     flow_ctrl_recv: FlowCtrlReceiver<R1, R2>,
     channel_creator: F,
-    connections: core::cell::RefCell<alloc::vec::Vec<ConnectionData<S4>>>,
+    connections: alloc::vec::Vec<ConnectionData<S4>>,
     _p: core::marker::PhantomData<(P1, P2, P3, P4)>,
 }
 
@@ -383,7 +383,7 @@ where
 
         let (le_iso_sender, le_iso_receiver) = channel4();
 
-        let connections = core::cell::RefCell::new(alloc::vec::Vec::default());
+        let connections = Default::default();
 
         let host_channel_ends = HostChannelEnds {
             front_capacity,
@@ -414,7 +414,7 @@ where
             le_iso_receiver,
         };
 
-        let flow_ctrl_recv = FlowCtrlReceiver::new(interface_receivers);
+        let flow_ctrl_recv = FlowCtrlReceiver::new();
 
         let _p = core::marker::PhantomData;
 
@@ -466,10 +466,9 @@ where
     fn try_remove(&mut self, to_remove: ConnectionHandle) -> Result<(), Self::Error> {
         if let Ok(index) = self
             .connections
-            .get_mut()
             .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&to_remove))
         {
-            self.connections.get_mut().remove(index);
+            self.connections.remove(index);
 
             Ok(())
         } else {
@@ -478,13 +477,12 @@ where
     }
 
     fn add_new_connection(
-        &self,
+        &mut self,
         connection_handle: ConnectionHandle,
         flow_control_id: FlowControlId,
     ) -> Result<Self::ConnectionChannelEnds, Self::Error> {
         let index = match self
             .connections
-            .borrow()
             .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
         {
             Err(index) => index,
@@ -512,7 +510,7 @@ where
             sender: from_interface,
         };
 
-        self.connections.borrow_mut().insert(index, connection_data);
+        self.connections.insert(index, connection_data);
 
         Ok(new_task_ends)
     }
@@ -532,25 +530,20 @@ where
 
                 Some(FromInterface::HostGeneral(channel))
             }
-            TaskId::Connection(connection_handle) => {
-                let ref_connections = self.connections.borrow();
-
-                ref_connections
-                    .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
-                    .ok()
-                    .and_then(|index| ref_connections.get(index))
-                    .map(|ConnectionData { sender, .. }| FromInterface::Connection(Channel::new(sender.clone())))
-            }
+            TaskId::Connection(connection_handle) => self
+                .connections
+                .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
+                .ok()
+                .and_then(|index| self.connections.get(index))
+                .map(|ConnectionData { sender, .. }| FromInterface::Connection(Channel::new(sender.clone()))),
         }
     }
 
     fn get_flow_control_id(&self, connection_handle: ConnectionHandle) -> Option<FlowControlId> {
-        let ref_connections = self.connections.borrow();
-
-        ref_connections
+        self.connections
             .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
             .ok()
-            .and_then(|index| ref_connections.get(index))
+            .and_then(|index| self.connections.get(index))
             .map(|ConnectionData { flow_control_id, .. }| *flow_control_id)
     }
 
