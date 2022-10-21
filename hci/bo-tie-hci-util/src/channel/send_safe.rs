@@ -24,218 +24,60 @@ use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-/// Used to make a `impl ChannelReserve` send safe
-///
-/// The associated type of `impl ChannelReserve`, including the associated types of trait bounds on
-/// the associated types, and the associated types on their bounds (and so on), do not have the
-/// bound for `Send`. When `impl Trait` is returned by a public function or method any other crate
-/// can only interpret the associated types by the direct bounds. [`ChannelReserve`] does not
-/// directly bound `Send` to these associated types as it is implemented for types that are not
-/// `Send`.  
-///
-/// The wrapper `SendSafe` is used for binding `Send` to all the associated types and sub associated
-/// types within `ChannelReserve`.
-pub struct SendSafe<T>(T)
-where
-    T: Send + ChannelReserve,
-    T::Error: Send,
-    T::SenderError: Send,
-    T::ToHostCmdChannel: Send,
-    <T::ToHostCmdChannel as Channel>::Sender: Send,
-    <<T::ToHostCmdChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToHostCmdChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToHostCmdChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToHostCmdChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ToHostGenChannel: Send,
-    <T::ToHostGenChannel as Channel>::Sender: Send,
-    <<T::ToHostGenChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToHostGenChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToHostGenChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToHostGenChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::FromHostChannel: Send,
-    <T::FromHostChannel as BufferReserve>::Buffer: Send,
-    <T::FromHostChannel as BufferReserve>::TakeBuffer: Send,
-    <T::FromHostChannel as Channel>::Sender: Send,
-    <<T::FromHostChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::FromHostChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::FromHostChannel as Channel>::Receiver: Send,
-    for<'a> <<T::FromHostChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ToConnectionChannel: Send,
-    <T::ToConnectionChannel as BufferReserve>::Buffer: Send,
-    <T::ToConnectionChannel as BufferReserve>::TakeBuffer: Send,
-    <T::ToConnectionChannel as Channel>::Sender: Send,
-    <<T::ToConnectionChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToConnectionChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToConnectionChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToConnectionChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::FromConnectionChannel: Send,
-    <T::FromConnectionChannel as BufferReserve>::Buffer: Send,
-    <T::FromConnectionChannel as BufferReserve>::TakeBuffer: Send,
-    <T::FromConnectionChannel as Channel>::Sender: Send,
-    <<T::FromConnectionChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::FromConnectionChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::FromConnectionChannel as Channel>::Receiver: Send,
-    for<'a> <<T::FromConnectionChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ConnectionChannelEnds: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::ToBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::FromBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::TakeBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender: Send,
-    <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::Receiver: Send,
-    for<'a> <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Receiver as Receiver>::ReceiveFuture<'a>: Send;
-
-impl<T> SendSafe<T>
-where
-    T: Send + ChannelReserve,
-    T::Error: Send,
-    T::SenderError: Send,
-    T::ToHostCmdChannel: Send,
-    <T::ToHostCmdChannel as Channel>::Sender: Send,
-    <<T::ToHostCmdChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToHostCmdChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToHostCmdChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToHostCmdChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ToHostGenChannel: Send,
-    <T::ToHostGenChannel as Channel>::Sender: Send,
-    <<T::ToHostGenChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToHostGenChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToHostGenChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToHostGenChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::FromHostChannel: Send,
-    <T::FromHostChannel as BufferReserve>::Buffer: Send,
-    <T::FromHostChannel as BufferReserve>::TakeBuffer: Send,
-    <T::FromHostChannel as Channel>::Sender: Send,
-    <<T::FromHostChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::FromHostChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::FromHostChannel as Channel>::Receiver: Send,
-    for<'a> <<T::FromHostChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ToConnectionChannel: Send,
-    <T::ToConnectionChannel as BufferReserve>::Buffer: Send,
-    <T::ToConnectionChannel as BufferReserve>::TakeBuffer: Send,
-    <T::ToConnectionChannel as Channel>::Sender: Send,
-    <<T::ToConnectionChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToConnectionChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToConnectionChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToConnectionChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::FromConnectionChannel: Send,
-    <T::FromConnectionChannel as BufferReserve>::Buffer: Send,
-    <T::FromConnectionChannel as BufferReserve>::TakeBuffer: Send,
-    <T::FromConnectionChannel as Channel>::Sender: Send,
-    <<T::FromConnectionChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::FromConnectionChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::FromConnectionChannel as Channel>::Receiver: Send,
-    for<'a> <<T::FromConnectionChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ConnectionChannelEnds: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::ToBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::FromBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::TakeBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender: Send,
-    <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::Receiver: Send,
-    for<'a> <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
+pub trait SendSafeBuffer<'a>:
+    'static
+    + Send
+    + Buffer
+    + TryExtend<u8, Error = Self::SendSafeTryExtendError>
+    + TryRemove<u8, Error = Self::SendSafeTryRemoveError, RemoveIter<'a> = Self::SendSafeTryRemoveIter>
+    + TryFrontExtend<u8, Error = Self::SendSafeTryFrontExtendError>
+    + TryFrontRemove<
+        u8,
+        Error = Self::SendSafeTryFrontRemoveError,
+        FrontRemoveIter<'a> = Self::SendSafeTryFrontRemoveIter,
+    >
 {
-    pub fn new(t: T) -> Self
-    where
-        T: SendSafeChannelReserve,
-    {
-        SendSafe(t)
-    }
+    type SendSafeTryExtendError: Debug + Display + Send;
+    type SendSafeTryRemoveError: Debug + Display + Send;
+    type SendSafeTryRemoveIter: Iterator<Item = u8> + Send;
+    type SendSafeTryFrontExtendError: Debug + Display + Send;
+    type SendSafeTryFrontRemoveError: Debug + Display + Send;
+    type SendSafeTryFrontRemoveIter: Iterator<Item = u8> + Send;
 }
 
-impl<T> ChannelReserve for SendSafe<T>
+impl<'a, T> SendSafeBuffer<'a> for T
 where
-    T: Send + ChannelReserve,
-    T::Error: Send,
-    T::SenderError: Send,
-    T::ToHostCmdChannel: Send,
-    <T::ToHostCmdChannel as Channel>::Sender: Send,
-    <<T::ToHostCmdChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToHostCmdChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToHostCmdChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToHostCmdChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ToHostGenChannel: Send,
-    <T::ToHostGenChannel as Channel>::Sender: Send,
-    <<T::ToHostGenChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToHostGenChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToHostGenChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToHostGenChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::FromHostChannel: Send,
-    <T::FromHostChannel as BufferReserve>::Buffer: Send,
-    <T::FromHostChannel as BufferReserve>::TakeBuffer: Send,
-    <T::FromHostChannel as Channel>::Sender: Send,
-    <<T::FromHostChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::FromHostChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::FromHostChannel as Channel>::Receiver: Send,
-    for<'a> <<T::FromHostChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ToConnectionChannel: Send,
-    <T::ToConnectionChannel as BufferReserve>::Buffer: Send,
-    <T::ToConnectionChannel as BufferReserve>::TakeBuffer: Send,
-    <T::ToConnectionChannel as Channel>::Sender: Send,
-    <<T::ToConnectionChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ToConnectionChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ToConnectionChannel as Channel>::Receiver: Send,
-    for<'a> <<T::ToConnectionChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::FromConnectionChannel: Send,
-    <T::FromConnectionChannel as BufferReserve>::Buffer: Send,
-    <T::FromConnectionChannel as BufferReserve>::TakeBuffer: Send,
-    <T::FromConnectionChannel as Channel>::Sender: Send,
-    <<T::FromConnectionChannel as Channel>::Sender as Sender>::Error: Send,
-    for<'a> <<T::FromConnectionChannel as Channel>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::FromConnectionChannel as Channel>::Receiver: Send,
-    for<'a> <<T::FromConnectionChannel as Channel>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
-    T::ConnectionChannelEnds: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::ToBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::FromBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::TakeBuffer: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender: Send,
-    <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender as Sender>::Error: Send,
-    for<'a> <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Sender as Sender>::SendFuture<'a>: Send,
-    <T::ConnectionChannelEnds as ConnectionChannelEnds>::Receiver: Send,
-    for<'a> <<T::ConnectionChannelEnds as ConnectionChannelEnds>::Receiver as Receiver>::ReceiveFuture<'a>: Send,
+    T: 'static + Send + Buffer,
+    <T as TryExtend<u8>>::Error: Send,
+    <T as TryRemove<u8>>::Error: Send,
+    <T as TryRemove<u8>>::RemoveIter<'a>: Send,
+    <T as TryFrontExtend<u8>>::Error: Send,
+    <T as TryFrontRemove<u8>>::Error: Send,
+    <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>: Send,
 {
-    type Error = T::Error;
-    type SenderError = T::SenderError;
-    type ToHostCmdChannel = T::ToHostCmdChannel;
-    type ToHostGenChannel = T::ToHostGenChannel;
-    type FromHostChannel = T::FromHostChannel;
-    type ToConnectionChannel = T::ToConnectionChannel;
-    type FromConnectionChannel = T::FromConnectionChannel;
-    type ConnectionChannelEnds = T::ConnectionChannelEnds;
+    type SendSafeTryExtendError = <T as TryExtend<u8>>::Error;
+    type SendSafeTryRemoveError = <T as TryRemove<u8>>::Error;
+    type SendSafeTryRemoveIter = <T as TryRemove<u8>>::RemoveIter<'a>;
+    type SendSafeTryFrontExtendError = <T as TryFrontExtend<u8>>::Error;
+    type SendSafeTryFrontRemoveError = <T as TryFrontRemove<u8>>::Error;
+    type SendSafeTryFrontRemoveIter = <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>;
+}
 
-    fn try_remove(&mut self, handle: ConnectionHandle) -> Result<(), Self::Error> {
-        self.0.try_remove(handle)
-    }
+pub trait SendSafeBufferReserve:
+    Send + BufferReserve<Buffer = Self::SendSafeBuffer, TakeBuffer = Self::SendSafeTakeBuffer>
+{
+    type SendSafeBuffer: for<'a> SendSafeBuffer<'a>;
+    type SendSafeTakeBuffer: Send + Future<Output = Self::SendSafeBuffer>;
+}
 
-    fn add_new_connection(
-        &mut self,
-        handle: ConnectionHandle,
-        flow_control_id: FlowControlId,
-    ) -> Result<Self::ConnectionChannelEnds, Self::Error> {
-        self.0.add_new_connection(handle, flow_control_id)
-    }
-
-    fn get_channel(
-        &self,
-        id: TaskId,
-    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
-        self.0.get_channel(id)
-    }
-
-    fn get_flow_control_id(&self, handle: ConnectionHandle) -> Option<FlowControlId> {
-        self.0.get_flow_control_id(handle)
-    }
-
-    fn get_flow_ctrl_receiver(
-        &mut self,
-    ) -> &mut FlowCtrlReceiver<
-        <Self::FromHostChannel as Channel>::Receiver,
-        <Self::FromConnectionChannel as Channel>::Receiver,
-    > {
-        self.0.get_flow_ctrl_receiver()
-    }
+impl<T> SendSafeBufferReserve for T
+where
+    T: Send + BufferReserve,
+    T::Buffer: for<'a> SendSafeBuffer<'a>,
+    T::TakeBuffer: Send,
+{
+    type SendSafeBuffer = T::Buffer;
+    type SendSafeTakeBuffer = T::TakeBuffer;
 }
 
 pub trait SendSafeSender<'z>:
@@ -275,23 +117,6 @@ where
 {
     type SendSafeMessage = T::Message;
     type SendSafeReceiveFuture = T::ReceiveFuture<'z>;
-}
-
-pub trait SendSafeBufferReserve:
-    Send + BufferReserve<Buffer = Self::SendSafeBuffer, TakeBuffer = Self::SendSafeTakeBuffer>
-{
-    type SendSafeBuffer: Send + Buffer + Unpin;
-    type SendSafeTakeBuffer: Send + Future<Output = Self::SendSafeBuffer>;
-}
-
-impl<T> SendSafeBufferReserve for T
-where
-    T: Send + BufferReserve,
-    T::Buffer: Send,
-    T::TakeBuffer: Send,
-{
-    type SendSafeBuffer = T::Buffer;
-    type SendSafeTakeBuffer = T::TakeBuffer;
 }
 
 pub trait SendSafeChannel:
@@ -362,6 +187,7 @@ where
     type SendSafeReceiver = T::Receiver;
 }
 
+/// The send safe equivalent for `impl Trait`
 pub trait SendSafeChannelReserve:
     Send
     + ChannelReserve<
@@ -392,7 +218,8 @@ pub trait SendSafeChannelReserve:
                 <Self::SendSafeFromHostChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >;
-    type SendSafeToConnectionChannel: SendSafeBufferReserve
+    type SendSafeToConnectionChannel: Sync
+        + SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = Self::SenderError,
             SendSafeMessage = ToConnectionIntraMessage<
@@ -425,7 +252,8 @@ where
             SendSafeSenderError = T::SenderError,
             SendSafeMessage = FromHostIntraMessage<<T::FromHostChannel as SendSafeBufferReserve>::SendSafeBuffer>,
         >,
-    T::ToConnectionChannel: SendSafeBufferReserve
+    T::ToConnectionChannel: Sync
+        + SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = T::SenderError,
             SendSafeMessage = ToConnectionIntraMessage<
