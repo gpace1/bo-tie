@@ -1191,7 +1191,7 @@ trait ReceiverExt: Receiver {
     {
         PeekableReceiver {
             receiver: self,
-            peeked: core::cell::Cell::new(None),
+            peeked: None,
         }
     }
 }
@@ -1203,19 +1203,19 @@ impl<R: Receiver> ReceiverExt for R {}
 /// This struct is created by the [`peekable`](ReceiverExt::peekable) method on `ReceiverExt`.
 struct PeekableReceiver<R: Receiver> {
     receiver: R,
-    peeked: core::cell::Cell<Option<R::Message>>,
+    peeked: Option<R::Message>,
 }
 
 impl<R: Receiver> PeekableReceiver<R> {
     fn poll_peek(&mut self, cx: &mut Context<'_>) -> Poll<Option<&R::Message>> {
-        if self.peeked.get_mut().is_some() {
-            Poll::Ready(self.peeked.get_mut().as_ref())
+        if self.peeked.is_some() {
+            Poll::Ready(self.peeked.as_ref())
         } else {
             match self.receiver.poll_recv(cx) {
                 Poll::Ready(Some(message)) => {
-                    self.peeked = Some(message).into();
+                    self.peeked = Some(message);
 
-                    Poll::Ready(self.peeked.get_mut().as_ref())
+                    Poll::Ready(self.peeked.as_ref())
                 }
                 Poll::Ready(None) => Poll::Ready(None),
                 Poll::Pending => Poll::Pending,

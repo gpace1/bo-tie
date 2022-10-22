@@ -2,12 +2,14 @@
 //!
 //! [tokio]: tokio
 
+use crate::channel::send_safe::SendSafeHostChannelEnds;
 use crate::channel::SendSafeChannelReserve;
+use crate::{ChannelReserve, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage};
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc::{error, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{error, unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 make_error!(Error, error::SendError, UnboundedSender, UnboundedReceiver);
 
@@ -25,7 +27,7 @@ where
     }
 }
 
-pub struct UnboundedSenderFuture<'a, T>(&'a mut UnboundedSender<T>, Option<T>);
+pub struct UnboundedSenderFuture<'a, T>(&'a UnboundedSender<T>, Option<T>);
 
 impl<T> Future for UnboundedSenderFuture<'_, T>
 where
@@ -75,6 +77,16 @@ where
     }
 }
 
+fn channel<T: Send + Unpin + Debug + 'static>() -> (
+    impl for<'a> crate::channel::send_safe::SendSafeSender<'a, SendSafeMessage = T>,
+    impl for<'a> crate::channel::send_safe::SendSafeReceiver<'a, SendSafeMessage = T>,
+)
+where
+    Error: From<error::SendError<T>>,
+{
+    unbounded_channel()
+}
+
 /// Create a [`ChannelReserve`] and [`HostChannelEnds`] using [tokio's] unbounded channels
 ///
 /// The created `ChannelReserve` (and `HostChannelEnds`) use tokio's unbounded channels for
@@ -90,7 +102,7 @@ where
 pub fn tokio_unbounded(
     front_size: usize,
     tail_size: usize,
-) -> (impl SendSafeChannelReserve, impl crate::HostChannelEnds + Send) {
+) -> (impl SendSafeChannelReserve, impl SendSafeHostChannelEnds) {
     use tokio::sync::mpsc::unbounded_channel;
 
     super::ChannelReserveBuilder::new(front_size, tail_size)

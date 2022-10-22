@@ -103,7 +103,7 @@ macro_rules! make_error {
     };
 }
 
-mod send_safe;
+pub mod send_safe;
 
 pub use send_safe::SendSafeChannelReserve;
 
@@ -228,9 +228,9 @@ impl<S, R> BufferReserve for Channel<S, R> {
 
 /// Channel ends for a host async task
 ///
-/// This is the ends of the channels used by a host async task for sending messages to and from an
+/// These are the ends of the channels used by a host async task for sending messages to and from an
 /// interface async task.
-struct HostChannelEnds<S1, R1, R2, P1, P2> {
+pub struct HostChannelEnds<S1, R1, R2, P1, P2> {
     front_capacity: usize,
     back_capacity: usize,
     cmd_sender: S1,
@@ -351,7 +351,7 @@ where
         channel3: C3,
         channel4: C4,
         channel5: F,
-    ) -> (Self, impl HostChannelEndsTrait)
+    ) -> (Self, HostChannelEnds<S3, R1, R2, S4, R5>)
     where
         C1: FnOnce() -> (S1, R1),
         C2: FnOnce() -> (S2, R2),
@@ -723,7 +723,7 @@ where
         self,
     ) -> (
         ChannelReserve<S1, S2, S4, S5, R3, R4, C5, S3, R1, R2, R5>,
-        impl HostChannelEndsTrait,
+        HostChannelEnds<S3, R1, R2, S4, R5>,
     ) {
         // The type checker will enforce these unwraps
         let c1 = self.c1.unwrap();

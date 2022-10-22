@@ -14,7 +14,7 @@
 
 use crate::{
     BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
-    FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, Receiver, Sender, TaskId,
+    FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannelEnds, Receiver, Sender, TaskId,
     ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
 use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
@@ -158,8 +158,8 @@ pub trait SendSafeConnectionChannelEnds:
         Receiver = Self::SendSafeReceiver,
     >
 {
-    type SendSafeToBuffer: Send + Buffer;
-    type SendSafeFromBuffer: Send + Buffer;
+    type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
+    type SendSafeFromBuffer: for<'a> SendSafeBuffer<'a>;
     type SendSafeTakeBuffer: Send + Future<Output = Self::SendSafeToBuffer>;
     type SendSafeSender: for<'z> SendSafeSender<
         'z,
@@ -174,8 +174,8 @@ pub trait SendSafeConnectionChannelEnds:
 impl<T> SendSafeConnectionChannelEnds for T
 where
     T: Send + ConnectionChannelEnds,
-    T::ToBuffer: Send,
-    T::FromBuffer: Send,
+    T::ToBuffer: for<'a> SendSafeBuffer<'a>,
+    T::FromBuffer: for<'a> SendSafeBuffer<'a>,
     T::TakeBuffer: Send,
     T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = FromConnectionIntraMessage<T::ToBuffer>>,
     T::Receiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToConnectionIntraMessage<T::FromBuffer>>,
@@ -219,6 +219,7 @@ pub trait SendSafeChannelReserve:
             >,
         >;
     type SendSafeToConnectionChannel: Sync
+        /* I don't understand why Sync is required here. I is probably due to a reference across an await but I cannot find location where this is occurring*/
         + SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = Self::SenderError,
@@ -276,5 +277,49 @@ where
     type SendSafeFromHostChannel = T::FromHostChannel;
     type SendSafeToConnectionChannel = T::ToConnectionChannel;
     type SendSafeFromConnectionChannel = T::FromConnectionChannel;
+    type SendSafeConnectionChannelEnds = T::ConnectionChannelEnds;
+}
+
+pub trait SendSafeHostChannelEnds:
+    Send
+    + HostChannelEnds<
+        ToBuffer = Self::SendSafeToBuffer,
+        FromBuffer = Self::SendSafeFromBuffer,
+        TakeBuffer = Self::SendSafeTakeBuffer,
+        Sender = Self::SendSafeSender,
+        CmdReceiver = Self::SendSafeCmdReceiver,
+        GenReceiver = Self::SendSafeGenReceiver,
+        ConnectionChannelEnds = Self::SendSafeConnectionChannelEnds,
+    >
+{
+    type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
+    type SendSafeFromBuffer: for<'a> SendSafeBuffer<'a>;
+    type SendSafeTakeBuffer: Send + Future<Output = Self::ToBuffer>;
+    type SendSafeSender: for<'a> SendSafeSender<'a, Message = FromHostIntraMessage<Self::SendSafeToBuffer>>;
+    type SendSafeCmdReceiver: for<'a> SendSafeReceiver<'a, Message = ToHostCommandIntraMessage>;
+    type SendSafeGenReceiver: for<'a> SendSafeReceiver<
+        'a,
+        Message = ToHostGeneralIntraMessage<Self::SendSafeConnectionChannelEnds>,
+    >;
+    type SendSafeConnectionChannelEnds: SendSafeConnectionChannelEnds;
+}
+
+impl<T> SendSafeHostChannelEnds for T
+where
+    T: Send + HostChannelEnds,
+    T::ToBuffer: for<'a> SendSafeBuffer<'a>,
+    T::FromBuffer: for<'a> SendSafeBuffer<'a>,
+    T::TakeBuffer: Send,
+    T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = FromHostIntraMessage<T::ToBuffer>>,
+    T::CmdReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToHostCommandIntraMessage>,
+    T::GenReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToHostGeneralIntraMessage<T::ConnectionChannelEnds>>,
+    T::ConnectionChannelEnds: SendSafeConnectionChannelEnds,
+{
+    type SendSafeToBuffer = T::ToBuffer;
+    type SendSafeFromBuffer = T::FromBuffer;
+    type SendSafeTakeBuffer = T::TakeBuffer;
+    type SendSafeSender = T::Sender;
+    type SendSafeCmdReceiver = T::CmdReceiver;
+    type SendSafeGenReceiver = T::GenReceiver;
     type SendSafeConnectionChannelEnds = T::ConnectionChannelEnds;
 }

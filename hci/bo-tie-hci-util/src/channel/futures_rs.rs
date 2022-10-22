@@ -3,6 +3,7 @@
 //! [futures-rs]: futures
 
 use crate::channel::SendSafeChannelReserve;
+use crate::ChannelReserve;
 use futures::channel::mpsc;
 use std::pin::Pin;
 use std::task::{Context, Poll};

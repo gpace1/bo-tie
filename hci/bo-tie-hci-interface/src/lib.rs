@@ -963,7 +963,7 @@ where
 /// The buffer for data from the
 enum BufferedBuffer<R: ChannelReserve> {
     // The linear buffer is sized to the maximum length of an HCI event
-    Event(bo_tie_util::buffer::stack::LinearBuffer<258, u8>),
+    Event(LinearBuffer<258, u8>),
     ToConnection(<R::ToConnectionChannel as BufferReserve>::Buffer),
 }
 
