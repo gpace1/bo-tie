@@ -301,10 +301,8 @@ pub mod set_advertising_data {
         where
             T: IntoStruct,
         {
-            let payload_len = self.payload.len();
-
             data.convert_into(&mut self.payload[self.length..])
-                .map(|ad_struct| self.length = payload_len - ad_struct.size())
+                .map(|ad_struct| self.length += ad_struct.size())
         }
 
         /// Get the remaining amount of space available for ADStructures
