@@ -1224,17 +1224,17 @@ pub mod read_buffer_size {
         opcodes::HciCommand::InformationParameters(opcodes::InformationParameters::ReadBufferSize);
 
     pub struct Return {
-        pub hc_acl_data_packet_len: usize,
-        pub hc_synchronous_data_packet_len: usize,
-        pub hc_total_num_acl_data_packets: usize,
-        pub hc_total_num_synchronous_data_packets: usize,
+        pub acl_data_packet_len: usize,
+        pub synchronous_data_packet_len: usize,
+        pub total_num_acl_data_packets: usize,
+        pub total_num_synchronous_data_packets: usize,
     }
 
     impl TryFromCommandComplete for Return {
         fn try_from(cc: &CommandCompleteData) -> Result<Self, CCParameterError> {
             check_status!(cc.return_parameter);
 
-            let hc_acl_data_packet_len = <u16>::from_le_bytes([
+            let acl_data_packet_len = <u16>::from_le_bytes([
                 *cc.return_parameter
                     .get(1)
                     .ok_or(CCParameterError::InvalidEventParameter)?,
@@ -1244,17 +1244,13 @@ pub mod read_buffer_size {
             ])
             .into();
 
-            let hc_synchronous_data_packet_len = <u16>::from_le_bytes([
-                *cc.return_parameter
-                    .get(3)
-                    .ok_or(CCParameterError::InvalidEventParameter)?,
-                *cc.return_parameter
-                    .get(4)
-                    .ok_or(CCParameterError::InvalidEventParameter)?,
-            ])
-            .into();
+            let synchronous_data_packet_len = *cc
+                .return_parameter
+                .get(3)
+                .ok_or(CCParameterError::InvalidEventParameter)?
+                .into();
 
-            let hc_total_num_acl_data_packets = <u16>::from_le_bytes([
+            let total_num_acl_data_packets = <u16>::from_le_bytes([
                 *cc.return_parameter
                     .get(5)
                     .ok_or(CCParameterError::InvalidEventParameter)?,
@@ -1264,7 +1260,7 @@ pub mod read_buffer_size {
             ])
             .into();
 
-            let hc_total_num_synchronous_data_packets = <u16>::from_le_bytes([
+            let total_num_synchronous_data_packets = <u16>::from_le_bytes([
                 *cc.return_parameter
                     .get(7)
                     .ok_or(CCParameterError::InvalidEventParameter)?,
@@ -1275,10 +1271,10 @@ pub mod read_buffer_size {
             .into();
 
             Ok(Self {
-                hc_acl_data_packet_len,
-                hc_synchronous_data_packet_len,
-                hc_total_num_acl_data_packets,
-                hc_total_num_synchronous_data_packets,
+                acl_data_packet_len,
+                synchronous_data_packet_len,
+                total_num_acl_data_packets,
+                total_num_synchronous_data_packets,
             })
         }
     }

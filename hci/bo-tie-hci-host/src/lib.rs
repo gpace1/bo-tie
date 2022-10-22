@@ -498,9 +498,9 @@ where
         // get the main buffer info
         let buffer_info = commands::info_params::read_buffer_size::send(self).await?;
 
-        self.acl_max_mtu = buffer_info.hc_acl_data_packet_len;
+        self.acl_max_mtu = buffer_info.acl_data_packet_len;
 
-        self.sco_max_mtu = buffer_info.hc_synchronous_data_packet_len;
+        self.sco_max_mtu = buffer_info.synchronous_data_packet_len;
 
         // if LE is supported, get the LE info from the controller
         let (le_acl_max_mtu, le_iso_max_mtu) = match commands::le::read_buffer_size::send_v2(self).await {
