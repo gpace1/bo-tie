@@ -15,15 +15,15 @@ async fn advertise_setup<T: bo_tie::hci::HostChannelEnds>(
 ) {
     use bo_tie::hci::commands::le::{set_advertising_data, set_advertising_enable, set_advertising_parameters};
 
-    println!("Advertising Setup:");
+    println!("setting up advertising...");
 
     set_advertising_enable::send(hi, false).await.unwrap();
 
-    println!("{:5>}", "Advertising Disabled");
+    println!("{:5>}", "...advertising disabled");
 
     set_advertising_data::send(hi, data).await.unwrap();
 
-    println!("{:5>}", "Set Advertising Data");
+    println!("{:5>}", "...set advertising data");
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
@@ -31,11 +31,11 @@ async fn advertise_setup<T: bo_tie::hci::HostChannelEnds>(
 
     set_advertising_parameters::send(hi, adv_prams).await.unwrap();
 
-    println!("{:5>}", "Set Advertising Parameters");
+    println!("{:5>}", "...set advertising parameters");
 
     set_advertising_enable::send(hi, true).await.unwrap();
 
-    println!("{:5>}", "Advertising Enabled");
+    println!("{:5>}", "Advertising Enabled!");
 }
 
 async fn advertise_teardown<T: bo_tie::hci::HostChannelEnds>(hi: &mut bo_tie::hci::Host<T>) {
@@ -58,7 +58,7 @@ fn setup_sig() -> impl core::future::Future {
     let hook = tokio::spawn(async move { signals.next().await });
 
     async move {
-        println!("Awaiting for 'ctrl-C' to stop advertising");
+        println!("awaiting for 'ctrl-C' (or sigint) to stop advertising");
 
         hook.await
     }
