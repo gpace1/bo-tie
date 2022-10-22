@@ -377,6 +377,20 @@ pub enum FlowControl {
     },
 }
 
+impl FlowControl {
+    /// Used to create a new `FlowControl` for commands upon Controller reset.
+    ///
+    /// This should only be used after the controller has been reset by the user. The number of
+    /// command packets is set to one, which is only guaranteed to be true after resetting the
+    /// Controller.
+    fn new_command_on_reset() -> Self {
+        FlowControl::Packets {
+            how_many: 1,
+            awaiting: false,
+        }
+    }
+}
+
 impl Default for FlowControl {
     fn default() -> Self {
         FlowControl::Packets {
@@ -608,9 +622,10 @@ pub trait HostChannelEnds {
     fn get_sender(&self) -> Self::Sender;
 
     /// Take a buffer
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>;
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>;
 
     /// Get the receiver of command response messages from the interface async task
     fn get_cmd_recv(&self) -> &Self::CmdReceiver;
@@ -887,7 +902,7 @@ impl<H: Receiver, R: Receiver> FlowCtrlReceiver<H, R> {
         let le_acl_receiver = receivers.le_acl_receiver.peekable();
         let le_iso_receiver = receivers.le_iso_receiver.peekable();
         let last_received = FlowControlId::Cmd;
-        let cmd_flow_control = FlowControl::default();
+        let cmd_flow_control = FlowControl::new_command_on_reset();
         let acl_flow_control = FlowControl::default();
         let sco_flow_control = FlowControl::default();
         let le_acl_flow_control = FlowControl::default();

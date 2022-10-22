@@ -263,11 +263,15 @@ where
         self.cmd_sender.clone()
     }
 
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
-        TakeFuture::new(DeVec::with_front_capacity(front_capacity.into().unwrap_or_default()))
+        TakeFuture::new(DeVec::with_capacity(
+            front_capacity.into().unwrap_or_default(),
+            back_capacity.into().unwrap_or_default(),
+        ))
     }
 
     fn get_cmd_recv(&self) -> &Self::CmdReceiver {

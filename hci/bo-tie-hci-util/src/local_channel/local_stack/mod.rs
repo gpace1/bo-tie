@@ -488,12 +488,15 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         self.from_host_channel.get_sender()
     }
 
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
-        self.from_host_channel
-            .take(front_capacity.into().unwrap_or_default(), None)
+        self.from_host_channel.take(
+            front_capacity.into().unwrap_or_default(),
+            back_capacity.into().unwrap_or_default(),
+        )
     }
 
     fn get_cmd_recv(&self) -> &Self::CmdReceiver {

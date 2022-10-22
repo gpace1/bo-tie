@@ -698,11 +698,12 @@ impl HostChannelEnds for HostDynChannelEnds {
         self.command_channel.get_sender()
     }
 
-    fn take_buffer<C>(&self, front_capacity: C) -> Self::TakeBuffer
+    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
-        C: Into<Option<usize>>,
+        F: Into<Option<usize>>,
+        B: Into<Option<usize>>,
     {
-        self.command_channel.take(front_capacity, None)
+        self.command_channel.take(front_capacity, back_capacity)
     }
 
     fn get_cmd_recv(&self) -> &Self::CmdReceiver {

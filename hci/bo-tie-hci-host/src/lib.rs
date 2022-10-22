@@ -550,7 +550,9 @@ where
     {
         use bo_tie_hci_util::{FromHostIntraMessage, Receiver, Sender};
 
-        let mut buffer = self.host_interface.take_buffer(None).await;
+        let (front_capacity, back_capacity) = self.host_interface.driver_buffer_capacities();
+
+        let mut buffer = self.host_interface.take_buffer(front_capacity, back_capacity).await;
 
         parameter
             .as_command_packet(&mut buffer)
