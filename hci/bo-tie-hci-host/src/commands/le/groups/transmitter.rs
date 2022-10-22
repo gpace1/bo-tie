@@ -321,7 +321,7 @@ pub mod set_advertising_data {
 
             parameter[0] = self.length as u8;
 
-            parameter[1..(self.length + 1)].copy_from_slice(&self.payload);
+            parameter[1..(self.length + 1)].copy_from_slice(&self.payload[..self.length]);
 
             parameter
         }
