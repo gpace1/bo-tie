@@ -503,31 +503,27 @@ where
         self.sco_max_mtu = buffer_info.hc_synchronous_data_packet_len;
 
         // if LE is supported, get the LE info from the controller
-        let (le_acl_max_mtu, le_iso_max_mtu) = if cfg!(feature = "le") {
-            match commands::le::read_buffer_size::send_v2(self).await {
-                Err(CommandError::CommandError(Error::UnknownHciCommand)) => {
-                    if let Some(buffer_size_info_v1) = commands::le::read_buffer_size::send_v1(self).await? {
-                        let le_acl_max_mtu = buffer_size_info_v1.acl.len.into();
+        let (le_acl_max_mtu, le_iso_max_mtu) = match commands::le::read_buffer_size::send_v2(self).await {
+            Err(CommandError::CommandError(Error::UnknownHciCommand)) => {
+                if let Some(buffer_size_info_v1) = commands::le::read_buffer_size::send_v1(self).await? {
+                    let le_acl_max_mtu = buffer_size_info_v1.acl.len.into();
 
-                        (le_acl_max_mtu, 0)
-                    } else {
-                        (0, 0)
-                    }
+                    (le_acl_max_mtu, 0)
+                } else {
+                    (0, 0)
                 }
-                Ok(buffer_size_info_v2) => {
-                    let le_acl_max_mtu = match buffer_size_info_v2.acl {
-                        Some(bs) => bs.len.into(),
-                        None => self.acl_max_mtu,
-                    };
-
-                    let le_iso_max_mtu = buffer_size_info_v2.iso.map(|bs| bs.len.into()).unwrap_or_default();
-
-                    (le_acl_max_mtu, le_iso_max_mtu)
-                }
-                e => return e.map(|_| ()),
             }
-        } else {
-            (0, 0)
+            Ok(buffer_size_info_v2) => {
+                let le_acl_max_mtu = match buffer_size_info_v2.acl {
+                    Some(bs) => bs.len.into(),
+                    None => self.acl_max_mtu,
+                };
+
+                let le_iso_max_mtu = buffer_size_info_v2.iso.map(|bs| bs.len.into()).unwrap_or_default();
+
+                (le_acl_max_mtu, le_iso_max_mtu)
+            }
+            e => return e.map(|_| ()),
         };
 
         self.le_acl_max_mtu = le_acl_max_mtu;
