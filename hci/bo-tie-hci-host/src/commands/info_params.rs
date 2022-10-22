@@ -1244,9 +1244,10 @@ pub mod read_buffer_size {
             ])
             .into();
 
-            let synchronous_data_packet_len = *cc
+            let synchronous_data_packet_len = cc
                 .return_parameter
                 .get(3)
+                .copied()
                 .ok_or(CCParameterError::InvalidEventParameter)?
                 .into();
 
