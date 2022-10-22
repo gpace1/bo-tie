@@ -1253,20 +1253,20 @@ pub mod read_buffer_size {
 
             let total_num_acl_data_packets = <u16>::from_le_bytes([
                 *cc.return_parameter
-                    .get(5)
+                    .get(4)
                     .ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.return_parameter
-                    .get(6)
+                    .get(5)
                     .ok_or(CCParameterError::InvalidEventParameter)?,
             ])
             .into();
 
             let total_num_synchronous_data_packets = <u16>::from_le_bytes([
                 *cc.return_parameter
-                    .get(7)
+                    .get(6)
                     .ok_or(CCParameterError::InvalidEventParameter)?,
                 *cc.return_parameter
-                    .get(8)
+                    .get(7)
                     .ok_or(CCParameterError::InvalidEventParameter)?,
             ])
             .into();
