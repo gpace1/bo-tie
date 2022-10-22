@@ -38,6 +38,8 @@
 //! [`run`]: LinuxInterface::run
 //!
 
+use bo_tie_hci_util::channel::send_safe::SendSafeHostChannelEnds;
+use bo_tie_hci_util::channel::SendSafeChannelReserve;
 use bo_tie_hci_util::{ChannelReserve, HciPacket, HostChannelEnds};
 use std::error;
 use std::fmt;
@@ -283,7 +285,7 @@ pub struct LinuxInterface<C> {
     interface: bo_tie_hci_interface::Interface<C>,
 }
 
-impl<C: ChannelReserve> LinuxInterface<C> {
+impl<T: SendSafeChannelReserve> LinuxInterface<T> {
     /// Run the interface
     ///
     /// This launches the interface to begin processing HCI packets sent to and received from the
@@ -329,7 +331,12 @@ impl<C: ChannelReserve> LinuxInterface<C> {
 }
 
 /// Create a `LinuxInterface` from an ID for the adapter
-fn from_adapter_id(adapter_id: usize) -> (LinuxInterface<impl ChannelReserve>, impl HostChannelEnds) {
+fn from_adapter_id(
+    adapter_id: usize,
+) -> (
+    LinuxInterface<impl SendSafeChannelReserve>,
+    impl SendSafeHostChannelEnds,
+) {
     use nix::libc;
     use nix::sys::epoll::{epoll_create1, epoll_ctl, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
     use nix::sys::eventfd::{eventfd, EfdFlags};
@@ -437,7 +444,12 @@ impl<C> Drop for LinuxInterface<C> {
 /// # Panic
 /// This will panic if there is no Bluetooth adapter or if the `adapter_id` does not exist for
 /// this machine.
-pub fn new<T>(adapter_id: T) -> (LinuxInterface<impl ChannelReserve>, impl HostChannelEnds)
+pub fn new<T>(
+    adapter_id: T,
+) -> (
+    LinuxInterface<impl SendSafeChannelReserve>,
+    impl SendSafeHostChannelEnds,
+)
 where
     T: Into<Option<usize>>,
 {
