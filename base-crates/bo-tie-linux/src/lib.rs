@@ -40,7 +40,7 @@
 
 use bo_tie_hci_util::channel::send_safe::SendSafeHostChannelEnds;
 use bo_tie_hci_util::channel::SendSafeChannelReserve;
-use bo_tie_hci_util::{ChannelReserve, HciPacket, HostChannelEnds};
+use bo_tie_hci_util::HciPacket;
 use std::error;
 use std::fmt;
 use std::ops::Drop;
