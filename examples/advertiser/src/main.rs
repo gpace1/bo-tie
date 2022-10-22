@@ -8,26 +8,20 @@
 //! Super User privileges may be required to interact with your bluetooth peripheral. To do will
 //! probably require the full path to cargo. The cargo binary is usually locacted in your home
 //! directory at `.cargo/bin/cargo`.
-use bo_tie::gap::assigned;
-use bo_tie::hci;
-use bo_tie::hci::le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
 
-async fn advertise_setup(
-    hi: &hci::Host<bo_tie_linux::LinuxInterface>,
-    data: set_advertising_data::AdvertisingData,
-    flag: Arc<AtomicBool>,
+async fn advertise_setup<T: bo_tie::hci::HostChannelEnds>(
+    hi: &mut bo_tie::hci::Host<T>,
+    data: bo_tie::hci::commands::le::set_advertising_data::AdvertisingData,
 ) {
+    use bo_tie::hci::commands::le::{set_advertising_data, set_advertising_enable, set_advertising_parameters};
+
     println!("Advertising Setup:");
 
-    set_advertising_enable::send(&hi, false).await.unwrap();
+    set_advertising_enable::send(hi, false).await.unwrap();
 
     println!("{:5>}", "Advertising Disabled");
 
-    set_advertising_data::send(&hi, data).await.unwrap();
+    set_advertising_data::send(hi, data).await.unwrap();
 
     println!("{:5>}", "Set Advertising Data");
 
@@ -35,31 +29,60 @@ async fn advertise_setup(
 
     adv_prams.advertising_type = set_advertising_parameters::AdvertisingType::NonConnectableUndirectedAdvertising;
 
-    set_advertising_parameters::send(&hi, adv_prams).await.unwrap();
+    set_advertising_parameters::send(hi, adv_prams).await.unwrap();
 
     println!("{:5>}", "Set Advertising Parameters");
 
-    set_advertising_enable::send(&hi, flag.load(Ordering::Relaxed))
-        .await
-        .unwrap();
+    set_advertising_enable::send(hi, true).await.unwrap();
 
     println!("{:5>}", "Advertising Enabled");
 }
 
-async fn advertise_teardown(hi: &hci::Host<bo_tie_linux::LinuxInterface>) {
-    set_advertising_enable::send(&hi, false).await.unwrap();
+async fn advertise_teardown<T: bo_tie::hci::HostChannelEnds>(hi: &mut bo_tie::hci::Host<T>) {
+    bo_tie::hci::commands::le::set_advertising_enable::send(hi, false)
+        .await
+        .unwrap();
 }
 
+/// Signal setup
+///
+/// This sets up the signal handling and returns a future for awaiting the reception of a signal.
 #[cfg(unix)]
-fn handle_sig(flag: Arc<AtomicBool>) {
-    simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
-        flag.store(false, Ordering::Relaxed)
-    });
+fn setup_sig() -> impl core::future::Future {
+    use futures::stream::StreamExt;
+    use signal_hook::consts::signal::*;
+    use signal_hook_tokio::Signals;
+
+    let mut signals = Signals::new(&[SIGHUP, SIGTERM, SIGINT, SIGQUIT]).unwrap();
+
+    let hook = tokio::spawn(async move { signals.next().await });
+
+    async move {
+        println!("Awaiting for 'ctrl-C' to stop advertising");
+
+        hook.await
+    }
 }
 
-#[cfg(not(any(unix)))]
-fn handle_sig(flag: Arc<AtomicBool>) {
-    unimplemented!("handle_sig needs to be implemented for this platform");
+/// Stub for signal setup
+///
+/// This is a generic fallback that returns future that will forever pend. This method should try
+/// to be avoided unless it is intended that the device running the example will be power cycled.
+#[cfg(not(unix))]
+fn setup_sig() -> impl core::future::Future {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+
+    struct ForeverPend;
+
+    impl Future for ForeverPend {
+        type Output = ();
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
 }
 
 fn get_arg_options() -> getopts::Options {
@@ -79,11 +102,7 @@ fn get_arg_options() -> getopts::Options {
     opts
 }
 
-struct ParsedArgs {
-    advertising_data: set_advertising_data::AdvertisingData,
-}
-
-fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
+fn parse_args(mut args: std::env::Args) -> Option<bo_tie::hci::commands::le::set_advertising_data::AdvertisingData> {
     let options = get_arg_options();
 
     let program_name = args.next().unwrap();
@@ -97,13 +116,13 @@ fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
         print!("{}", options.usage(&format!("Usage: {} [options]", program_name)));
         std::process::exit(0);
     } else {
-        let mut advertising_data = set_advertising_data::AdvertisingData::new();
+        let mut advertising_data = bo_tie::hci::commands::le::set_advertising_data::AdvertisingData::new();
 
         // Add service UUIDs to the advertising data
         let services_128 = matches.opt_strs("s").into_iter().fold(
-            bo_tie::gap::assigned::service_uuids::new_128(true),
+            bo_tie::host::gap::assigned::service_uuids::new_128(true),
             |mut services, str_uuid| {
-                let uuid = bo_tie::Uuid::try_from(str_uuid.as_str()).expect("Invalid Uuid");
+                let uuid = bo_tie::host::Uuid::try_from(str_uuid.as_str()).expect("Invalid Uuid");
 
                 services.add(uuid.into());
 
@@ -115,15 +134,15 @@ fn parse_args(mut args: std::env::Args) -> Option<ParsedArgs> {
             advertising_data.try_push(services_128).expect("Couldn't add services");
         }
 
-        Some(ParsedArgs {
-            advertising_data: advertising_data,
-        })
+        Some(advertising_data)
     }
 }
 
-fn main() {
-    use futures::executor;
+#[tokio::main]
+async fn main() {
     use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
+
+    let exit_future = setup_sig();
 
     TermLogger::init(
         LevelFilter::Trace,
@@ -133,26 +152,31 @@ fn main() {
     )
     .unwrap();
 
-    let adv_flag = Arc::new(AtomicBool::new(true));
+    // By using `None` with bo_tie_linux::new, the first
+    // Bluetooth adapter found is the adapter that is used
+    let (interface, host_ends) = bo_tie_linux::new(None);
 
-    let interface = hci::Host::default();
+    // The interface async task must be spawned before any
+    // messages are sent or received with the Bluetooth Controller
+    // (however it does not a multi-threaded executor to be spawned).
+    tokio::spawn(interface.run());
 
-    let adv_name = assigned::local_name::LocalName::new("Adv Test", false);
+    let mut host = bo_tie::hci::Host::init(host_ends)
+        .await
+        .expect("failed to initialize host");
+
+    let adv_name = bo_tie::host::gap::assigned::local_name::LocalName::new("Adv Test", None);
 
     let mut adv_data = match parse_args(std::env::args()) {
-        Some(parse_args) => parse_args.advertising_data,
-        None => set_advertising_data::AdvertisingData::new(),
+        Some(user_advertising_data) => user_advertising_data,
+        None => bo_tie::hci::commands::le::set_advertising_data::AdvertisingData::new(),
     };
 
     adv_data.try_push(adv_name).unwrap();
 
-    handle_sig(adv_flag.clone());
+    advertise_setup(&mut host, adv_data).await;
 
-    executor::block_on(advertise_setup(&interface, adv_data, adv_flag.clone()));
+    exit_future.await;
 
-    println!("Waiting for 'ctrl-C' to stop advertising");
-
-    while adv_flag.load(Ordering::Relaxed) {}
-
-    executor::block_on(advertise_teardown(&interface));
+    advertise_teardown(&mut host).await;
 }
