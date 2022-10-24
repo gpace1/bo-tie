@@ -17,10 +17,6 @@ async fn advertise_setup<T: bo_tie::hci::HostChannelEnds>(
 
     println!("setting up advertising...");
 
-    set_advertising_enable::send(hi, false).await.unwrap();
-
-    println!("{:5>}", "...advertising disabled");
-
     set_advertising_data::send(hi, data).await.unwrap();
 
     println!("{:5>}", "...set advertising data");
@@ -58,7 +54,7 @@ fn setup_sig() -> impl core::future::Future {
     let hook = tokio::spawn(async move { signals.next().await });
 
     async move {
-        println!("awaiting for 'ctrl-C' (or sigint) to stop advertising");
+        println!("awaiting for 'ctrl-C' (or SIGINT) to stop advertising");
 
         hook.await
     }
