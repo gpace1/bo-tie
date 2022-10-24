@@ -74,7 +74,6 @@
 extern crate alloc;
 
 mod buffer;
-mod flow_control;
 pub mod uart;
 
 pub use bo_tie_hci_util::{
