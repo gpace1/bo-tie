@@ -103,9 +103,9 @@ macro_rules! make_error {
     };
 }
 
-pub mod send_safe;
+mod send_safe;
 
-pub use send_safe::SendSafeChannelReserve;
+pub use send_safe::{SendSafeChannelReserve, SendSafeHostChannelEnds};
 
 #[cfg(feature = "tokio")]
 mod tokio;

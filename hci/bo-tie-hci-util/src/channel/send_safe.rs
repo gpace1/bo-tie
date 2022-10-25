@@ -183,7 +183,21 @@ where
     type SendSafeReceiver = T::Receiver;
 }
 
-/// The send safe equivalent for `impl Trait`
+/// The send safe equivalent of [`ChannelReserve`]
+///
+/// The main usage of this is with methods and functions that would normally return
+/// `impl ChannelReserve` instead return `impl SendSafeChannelReserve`. The "need" to switch arises
+/// from the associated types (and the associated types of the associated types (and the associated
+/// types of those associated types (...ect))) of `ChannelReserve` not implementing `Send`. This can
+/// be fixed by extrapolating the `impl ChannelReserve` to explicitly add the send bound to every
+/// associated type, but that requires a massive and ugly `impl Trait` so `SendSafeChannelReserve`
+/// was created to be used instead.
+///
+/// So long as all the associated types `Send` a type that implements `ChannelReserve` will also
+/// implement `SendSafeChannelReserve` with one exception. The associated type
+/// `SendSafeToConnectionChannel` needs to also implement `Sync`.
+///
+/// [`ChannelReserve`]: crate::ChannelReserve
 pub trait SendSafeChannelReserve:
     Send
     + ChannelReserve<
@@ -214,8 +228,10 @@ pub trait SendSafeChannelReserve:
                 <Self::SendSafeFromHostChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >;
+    // I don't understand why Sync is required here. It may be
+    // due to a GAT containing a reference living across an await
+    // but I cannot find a location where this is occurring
     type SendSafeToConnectionChannel: Sync
-        /* I don't understand why Sync is required here. I is probably due to a reference across an await but I cannot find location where this is occurring*/
         + SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = Self::SenderError,
@@ -276,6 +292,20 @@ where
     type SendSafeConnectionChannelEnds = T::ConnectionChannelEnds;
 }
 
+/// The send safe equivalent of [`HostChannelEnds`]
+///
+/// The main usage of this is with methods and functions that would normally return
+/// `impl HostChannelEnds` instead return `impl SendSafeHostChannelEnds`. The "need" to switch
+/// arises from the associated types (and the associated types of the associated types (and the
+/// associated types of those associated types (...ect))) of `HostChannelEnds` not implementing
+/// `Send`. This can be fixed by extrapolating the `impl HostChannelEnds` to explicitly add the send
+/// bound to associated type, but that requires a massive and ugly `impl Trait` so
+/// `SendSafeHostChannelEnds` was created to be used instead.
+///
+/// So long as all the associated types `Send` a type that implements `HostChannelEnds` will also
+/// implement `SendSafeHostChannelEnds`.
+///
+/// [`HostChannelEnds`]: crate::HostChannelEnds
 pub trait SendSafeHostChannelEnds:
     Send
     + HostChannelEnds<
