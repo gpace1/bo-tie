@@ -65,21 +65,7 @@ fn setup_sig() -> impl core::future::Future {
 /// This is a generic fallback that returns future that will forever pend. This method should try
 /// to be avoided unless it is intended that the device running the example will be power cycled.
 #[cfg(not(unix))]
-fn setup_sig() -> impl core::future::Future {
-    use core::future::Future;
-    use core::pin::Pin;
-    use core::task::{Context, Poll};
-
-    struct ForeverPend;
-
-    impl Future for ForeverPend {
-        type Output = ();
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Pending
-        }
-    }
-}
+async fn setup_sig() {}
 
 fn get_arg_options() -> getopts::Options {
     let mut opts = getopts::Options::new();
@@ -134,6 +120,22 @@ fn parse_args(mut args: std::env::Args) -> Option<bo_tie::hci::commands::le::set
     }
 }
 
+#[cfg(target_os = "linux")]
+macro_rules! create_hci {
+    () => {
+        // By using `None` with bo_tie_linux::new, the first
+        // Bluetooth adapter found is the adapter that is used
+        bo_tie_linux::new(None)
+    };
+}
+
+#[cfg(not(target_os = "linux"))]
+macro_rules! create_hci {
+    () => {
+        compile_error!("unsupported target for this example")
+    };
+}
+
 #[tokio::main]
 async fn main() {
     use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
@@ -148,9 +150,7 @@ async fn main() {
     )
     .unwrap();
 
-    // By using `None` with bo_tie_linux::new, the first
-    // Bluetooth adapter found is the adapter that is used
-    let (interface, host_ends) = bo_tie_linux::new(None);
+    let (interface, host_ends) = create_hci!();
 
     // The interface async task must be spawned before any
     // messages are sent or received with the Bluetooth Controller
