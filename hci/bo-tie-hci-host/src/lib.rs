@@ -832,6 +832,16 @@ impl<C: ConnectionChannelEnds> Connection<C> {
         }
     }
 
+    /// Get the connection handle
+    pub fn get_handle(&self) -> bo_tie_hci_util::ConnectionHandle {
+        match &self.kind {
+            ConnectionKind::BrEdr(c) => c.connection_handle,
+            ConnectionKind::BrEdrSco(c) => c.connection_handle,
+            ConnectionKind::Le(c) => c.connection_handle,
+            ConnectionKind::LeEnh(c) => c.connection_handle,
+        }
+    }
+
     /// Get the kind of connection that was made
     ///
     /// A `ConnectionKind` contains the connection information sent by the controller.
