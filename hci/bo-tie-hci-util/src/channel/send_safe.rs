@@ -13,16 +13,12 @@
 //! [`HostChannelEnds`]: crate::HostChannelEnds
 
 use crate::{
-    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
-    FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannelEnds, Receiver, Sender, TaskId,
-    ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, FromConnectionIntraMessage, FromHostIntraMessage,
+    HostChannelEnds, Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
 use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
-use core::fmt::{Debug, Display, Formatter};
+use core::fmt::{Debug, Display};
 use std::future::Future;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 pub trait SendSafeBuffer<'a>:
     'static

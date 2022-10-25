@@ -4,12 +4,11 @@
 
 use crate::channel::send_safe::SendSafeHostChannelEnds;
 use crate::channel::SendSafeChannelReserve;
-use crate::{ChannelReserve, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage};
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc::{error, unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{error, UnboundedReceiver, UnboundedSender};
 
 make_error!(Error, error::SendError, UnboundedSender, UnboundedReceiver);
 
@@ -75,16 +74,6 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().0.poll_recv(cx)
     }
-}
-
-fn channel<T: Send + Unpin + Debug + 'static>() -> (
-    impl for<'a> crate::channel::send_safe::SendSafeSender<'a, SendSafeMessage = T>,
-    impl for<'a> crate::channel::send_safe::SendSafeReceiver<'a, SendSafeMessage = T>,
-)
-where
-    Error: From<error::SendError<T>>,
-{
-    unbounded_channel()
 }
 
 /// Create a [`ChannelReserve`] and [`HostChannelEnds`] using [tokio's] unbounded channels
