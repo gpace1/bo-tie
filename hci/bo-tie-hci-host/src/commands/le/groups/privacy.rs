@@ -19,9 +19,7 @@ impl PeerIdentityAddressType {
 
 /// LE Set Address Resolution Enable command
 pub mod set_address_resolution_enable {
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::SetAddressResolutionEnable);
@@ -42,7 +40,7 @@ pub mod set_address_resolution_enable {
     }
 
     /// Send the LE Set Address Resolution Enable command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>, enable: bool) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>, enable: bool) -> Result<(), CommandError<H>> {
         let parameter = Parameter { enable };
 
         host.send_command_expect_complete(parameter).await
@@ -51,9 +49,7 @@ pub mod set_address_resolution_enable {
 
 /// LE Set Resolvable Private Address Timeout command
 pub mod set_resolvable_private_address_timeout {
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use core::time::Duration;
 
     const COMMAND: opcodes::HciCommand =
@@ -72,7 +68,7 @@ pub mod set_resolvable_private_address_timeout {
 
     pub enum RpaTimeoutCommandError<H>
     where
-        H: HostInterface,
+        H: HostChannelEnds,
     {
         TooSmall(Duration),
         TooLarge(Duration),
@@ -81,7 +77,7 @@ pub mod set_resolvable_private_address_timeout {
 
     impl<H> core::fmt::Debug for RpaTimeoutCommandError<H>
     where
-        H: HostInterface,
+        H: HostChannelEnds,
         CommandError<H>: core::fmt::Debug,
     {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
@@ -95,7 +91,7 @@ pub mod set_resolvable_private_address_timeout {
 
     impl<H> core::fmt::Display for RpaTimeoutCommandError<H>
     where
-        H: HostInterface,
+        H: HostChannelEnds,
         CommandError<H>: core::fmt::Display,
     {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
@@ -109,7 +105,7 @@ pub mod set_resolvable_private_address_timeout {
 
     impl<H> From<CommandError<H>> for RpaTimeoutCommandError<H>
     where
-        H: HostInterface,
+        H: HostChannelEnds,
     {
         fn from(ce: CommandError<H>) -> Self {
             Self::CommandError(ce)
@@ -126,7 +122,7 @@ pub mod set_resolvable_private_address_timeout {
     /// # Note
     /// Using the [`Default`](core::default::Default) value of `Duration` for the input `time_out`
     /// will set the resolvable private address timeout to it's default value of 15 minutes.
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         time_out: Duration,
     ) -> Result<(), RpaTimeoutCommandError<H>> {
@@ -149,9 +145,7 @@ pub mod set_resolvable_private_address_timeout {
 /// LE Add Device To Resolving List command
 pub mod add_device_to_resolving_list {
     use super::PeerIdentityAddressType;
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::AddDeviceToResolvingList);
@@ -182,7 +176,7 @@ pub mod add_device_to_resolving_list {
     }
 
     /// Send the LE Add Device To Resolving List command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(parameter).await
     }
 }
@@ -190,9 +184,7 @@ pub mod add_device_to_resolving_list {
 /// LE Remove Device To Resolving List command
 pub mod remove_device_from_resolving_list {
     use super::PeerIdentityAddressType;
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::RemoveDeviceFromResolvingList);
@@ -216,16 +208,14 @@ pub mod remove_device_from_resolving_list {
     }
 
     /// Send the LE Remove Device To Resolving List command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(parameter).await
     }
 }
 
 /// LE Clear Resolving List command
 pub mod clear_resolving_list {
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ClearResolvingList);
 
@@ -239,7 +229,7 @@ pub mod clear_resolving_list {
     }
 
     /// Send the LE Clear Resolving List command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -247,9 +237,7 @@ pub mod clear_resolving_list {
 /// LE Set Privacy Mode command
 pub mod set_privacy_mode {
     use super::PeerIdentityAddressType;
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetPrivacyMode);
 
@@ -288,7 +276,7 @@ pub mod set_privacy_mode {
         }
     }
 
-    pub async fn send<H: HostInterface>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(parameter).await
     }
 }

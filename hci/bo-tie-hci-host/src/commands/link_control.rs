@@ -3,7 +3,7 @@
 /// Query a connected device for its Controller's version information
 pub mod read_remote_version_information {
 
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand =
@@ -26,7 +26,7 @@ pub mod read_remote_version_information {
     ///
     /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
     /// [`ReadRemoteVersionInformationComplete`]: bo_tie_hci_util::events::Events::ReadRemoteVersionInformationComplete
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<(), CommandError<H>> {
@@ -37,7 +37,7 @@ pub mod read_remote_version_information {
 /// Disconnect a remote device
 pub mod disconnect {
     use crate::errors::Error;
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LinkControl(opcodes::LinkControl::Disconnect);
@@ -135,7 +135,7 @@ pub mod disconnect {
     /// the remote device is disconnected. The event
     /// [`DisconnectionComplete`](bo_tie_hci_util::events::Events::DisconnectionComplete)
     /// must be awaited upon by the `host` to know the device has disconnected.
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         parameter: DisconnectParameters,
     ) -> Result<(), CommandError<H>> {

@@ -20,7 +20,7 @@
 /// [`send`]: set_event_mask::send
 pub mod set_event_mask {
     use crate::events::LeMeta;
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use core::borrow::Borrow;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetEventMask);
@@ -237,7 +237,7 @@ pub mod set_event_mask {
     /// ```
     ///
     /// [module]: self
-    pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
+    pub async fn send<H: HostChannelEnds, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
         M: Into<EventMask<I>>,
         I: Iterator<Item = E>,
@@ -257,7 +257,7 @@ pub mod read_buffer_size {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND_V1: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadBufferSizeV1);
@@ -435,7 +435,7 @@ pub mod read_buffer_size {
     /// for LE.
     ///
     /// [*read buffer size*]: crate::commands::info_params::read_buffer_size
-    pub async fn send_v1<H: HostInterface>(host: &mut Host<H>) -> Result<Option<BufferSizeV1>, CommandError<H>> {
+    pub async fn send_v1<H: HostChannelEnds>(host: &mut Host<H>) -> Result<Option<BufferSizeV1>, CommandError<H>> {
         host.send_command_expect_complete(ParameterV1).await
     }
 
@@ -448,7 +448,7 @@ pub mod read_buffer_size {
     /// for LE.
     ///
     /// [*read buffer size*]: crate::commands::info_params::read_buffer_size
-    pub async fn send_v2<H: HostInterface>(host: &mut Host<H>) -> Result<BufferSizeV2, CommandError<H>> {
+    pub async fn send_v2<H: HostChannelEnds>(host: &mut Host<H>) -> Result<BufferSizeV2, CommandError<H>> {
         host.send_command_expect_complete(ParameterV2).await
     }
 }
@@ -458,7 +458,7 @@ pub mod read_local_supported_features {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_util::{LeDeviceFeatures, LeFeaturesItr};
 
@@ -499,7 +499,7 @@ pub mod read_local_supported_features {
         }
     }
 
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<EnabledLeFeatures, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<EnabledLeFeatures, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -508,7 +508,7 @@ pub mod read_white_list_size {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadWhiteListSize);
@@ -549,14 +549,14 @@ pub mod read_white_list_size {
         }
     }
 
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<WhiteListSize, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<WhiteListSize, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
 
 pub mod clear_white_list {
 
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ClearWhiteList);
 
@@ -570,7 +570,7 @@ pub mod clear_white_list {
     }
 
     /// Send the command to clear the white list
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -578,7 +578,7 @@ pub mod clear_white_list {
 macro_rules! add_remove_white_list_setup {
     ( $command: ident ) => {
         use crate::commands::le::WhiteListedAddressType;
-        use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+        use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
         use bo_tie_util::BluetoothDeviceAddress;
 
         struct CommandPrameter {
@@ -599,7 +599,7 @@ macro_rules! add_remove_white_list_setup {
             }
         }
 
-        pub async fn send<H: HostInterface>(
+        pub async fn send<H: HostChannelEnds>(
             host: &mut Host<H>,
             address_type: WhiteListedAddressType,
             address: BluetoothDeviceAddress,
@@ -632,7 +632,7 @@ pub mod read_supported_states {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadSupportedStates);
@@ -819,7 +819,7 @@ pub mod read_supported_states {
         }
     }
 
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<CurrentStatesAndRoles, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -829,7 +829,7 @@ pub mod test_end {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::TestEnd);
@@ -865,7 +865,7 @@ pub mod test_end {
     }
 
     /// Send the command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }

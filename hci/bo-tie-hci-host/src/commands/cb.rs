@@ -76,7 +76,7 @@
 /// [*Triggered Clock Capture*]: bo_tie_hci_util::events::Events::TriggeredClockCapture
 /// [*Truncated Page Complete*]: bo_tie_hci_util::events::Events::TruncatedPageComplete
 pub mod set_event_mask {
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 
@@ -350,7 +350,7 @@ pub mod set_event_mask {
     /// mask command is not sent to the Controller.
     ///
     /// [module]: self
-    pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
+    pub async fn send<H: HostChannelEnds, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
         M: Into<EventMask<I>>,
         I: Iterator<Item = E>,
@@ -371,7 +371,7 @@ pub mod set_event_mask {
 /// Manager is reset, for LE the Link Layer is reset, and for AMP the PAL is reset.
 pub mod reset {
 
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::Reset);
@@ -387,7 +387,7 @@ pub mod reset {
     }
 
     /// Send the reset command to the controller
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -399,7 +399,7 @@ pub mod reset {
 pub mod read_transmit_power_level {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -467,7 +467,7 @@ pub mod read_transmit_power_level {
     /// Send a read transmit power level command to the controller
     ///
     /// This will send the command to the controller and wait for the transmit power level to be returned by it.
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         parameter: Parameter,
     ) -> Result<TransmitPowerLevel, CommandError<H>> {
@@ -485,7 +485,7 @@ pub mod read_transmit_power_level {
 ///
 /// [`Events`]: bo_tie_hci_util::events::Events
 pub mod set_event_mask_page_2 {
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 
@@ -752,7 +752,7 @@ pub mod set_event_mask_page_2 {
     /// mask command is not sent to the Controller.
     ///
     /// [module]: self
-    pub async fn send<H: HostInterface, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
+    pub async fn send<H: HostChannelEnds, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
         M: Into<EventMask<I>>,
         I: Iterator<Item = E>,

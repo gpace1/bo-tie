@@ -3,7 +3,7 @@
 pub mod read_rssi {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -48,7 +48,7 @@ pub mod read_rssi {
     }
 
     /// Get the RSSI value for a specific connection
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         handle: ConnectionHandle,
     ) -> Result<RSSIInfo, CommandError<H>> {

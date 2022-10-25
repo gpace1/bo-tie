@@ -27,7 +27,7 @@ impl ConnectionIntervalBounds {
 pub mod connection_update {
     use super::ConnectionIntervalBounds;
     use crate::commands::le::{ConnectionEventLength, SupervisionTimeout};
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ConnectionUpdate);
@@ -71,7 +71,7 @@ pub mod connection_update {
     /// host when the connection is updated.
     ///
     /// [`ConnectionUpdateComplete`]: bo_tie_hci_util::events::LeMeta::ConnectionUpdateComplete
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         parameter: ConnectionUpdate,
     ) -> Result<(), CommandError<H>> {
@@ -81,7 +81,7 @@ pub mod connection_update {
 
 /// Send the LE Create Connection Cancel command
 pub mod create_connection_cancel {
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::CreateConnectionCancel);
@@ -97,7 +97,7 @@ pub mod create_connection_cancel {
     }
 
     /// Send the LE Create Connection Cancel command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -108,7 +108,7 @@ pub mod create_connection {
     use crate::commands::le::{
         AddressType, ConnectionEventLength, ConnectionLatency, OwnAddressType, SupervisionTimeout,
     };
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_util::BluetoothDeviceAddress;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::CreateConnection);
@@ -239,7 +239,7 @@ pub mod create_connection {
     /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
     /// [`ConnectionComplete`]: bo_tie_hci_util::events::LeMeta::ConnectionComplete
     /// [`EnhancedConnectionComplete`]: bo_tie_hci_util::events::LeMeta::EnhancedConnectionComplete
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         parameters: ConnectionParameters,
     ) -> Result<(), CommandError<H>> {
@@ -249,7 +249,7 @@ pub mod create_connection {
 
 /// LE Set Host Channel Classification command
 pub mod set_host_channel_classification {
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::SetHostChannelClassification);
@@ -286,7 +286,7 @@ pub mod set_host_channel_classification {
     /// Send the LE Set Host Channel Classification command
     pub async fn send<H, I>(host: &mut Host<H>, channels: I) -> Result<(), CommandError<H>>
     where
-        H: HostInterface,
+        H: HostChannelEnds,
         I: IntoIterator<Item = usize>,
     {
         let parameter = CmdParameter::new(channels);
@@ -300,7 +300,7 @@ pub mod read_channel_map {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -381,7 +381,7 @@ pub mod read_channel_map {
     }
 
     /// Send the LE Read Channel Map command
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<ChannelMapInfo, CommandError<H>> {
@@ -393,7 +393,7 @@ pub mod read_channel_map {
 
 pub mod read_remote_features {
 
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadRemoteFeatures);
@@ -418,7 +418,7 @@ pub mod read_remote_features {
     ///
     /// [`CommandStatus`]: bo_tie_hci_util::events::Events::CommandStatus
     /// [`ReadRemoteFeaturesComplete`]: bo_tie_hci_util::events::LeMeta::ReadRemoteFeaturesComplete
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<(), CommandError<H>> {

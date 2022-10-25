@@ -2,9 +2,7 @@
 pub mod set_scan_parameters {
 
     use crate::commands::le::OwnAddressType;
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetScanParameters);
 
@@ -109,7 +107,7 @@ pub mod set_scan_parameters {
     }
 
     /// Send the LE Set Scan Parameters command
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         parameters: ScanningParameters,
     ) -> Result<(), CommandError<H>> {
@@ -120,9 +118,7 @@ pub mod set_scan_parameters {
 /// LE Set Scan Enable command
 pub mod set_scan_enable {
 
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetScanEnable);
 
@@ -142,7 +138,7 @@ pub mod set_scan_enable {
     }
 
     /// Send the LE Set Scan Enable command
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         enable: bool,
         filter_duplicates: bool,
@@ -160,9 +156,7 @@ pub mod set_scan_enable {
 pub mod receiver_test {
 
     use crate::commands::le::Frequency;
-    use crate::{
-        opcodes, CommandError, CommandParameter, Host, HostInterface,
-    };
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND_V1: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReceiverTest);
 
@@ -178,7 +172,7 @@ pub mod receiver_test {
     }
 
     /// Send LE Receiver Test (v1) command
-    pub async fn send_v1<H: HostInterface>(host: &mut Host<H>, frequency: Frequency) -> Result<(), CommandError<H>> {
+    pub async fn send_v1<H: HostChannelEnds>(host: &mut Host<H>, frequency: Frequency) -> Result<(), CommandError<H>> {
         let parameter = ParameterV1 { frequency };
 
         host.send_command_expect_complete(parameter).await

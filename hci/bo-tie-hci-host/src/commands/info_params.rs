@@ -9,7 +9,7 @@
 pub mod read_local_version_information {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::InformationParameters(
@@ -86,7 +86,7 @@ pub mod read_local_version_information {
     }
 
     /// Get the version information from the Controller
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<VersionInformation, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<VersionInformation, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -98,7 +98,7 @@ pub mod read_local_version_information {
 pub mod read_local_supported_commands {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -1083,7 +1083,7 @@ pub mod read_local_supported_commands {
     }
 
     /// Get the bit mask of enabled commands from the Controller
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -1095,7 +1095,7 @@ pub mod read_local_supported_features {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_util::{DeviceFeatures, Features, FeaturesIter};
 
@@ -1148,7 +1148,7 @@ pub mod read_local_supported_features {
     }
 
     /// Request the features of the Link Manager Protocol on the controller
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<EnabledFeatures, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<EnabledFeatures, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -1161,7 +1161,7 @@ pub mod read_bd_addr {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_util::BluetoothDeviceAddress;
 
@@ -1207,7 +1207,7 @@ pub mod read_bd_addr {
     }
 
     /// Get the public Bluetooth device address
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -1217,7 +1217,7 @@ pub mod read_buffer_size {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -1289,7 +1289,7 @@ pub mod read_buffer_size {
         }
     }
 
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }

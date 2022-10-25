@@ -12,7 +12,7 @@ pub mod encrypt {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::Encrypt);
@@ -69,7 +69,7 @@ pub mod encrypt {
     ///
     /// # Note
     /// The input 'key' must be in native byte order.
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         key: u128,
         plain_text: [u8; 16],
@@ -84,7 +84,7 @@ pub mod encrypt {
 pub mod rand {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::Rand);
@@ -123,14 +123,14 @@ pub mod rand {
     }
 
     /// Send the LE Rand command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<Random, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<Random, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
 
 /// LE Enable Encryption command
 pub mod enable_encryption {
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::ConnectionHandle;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::StartEncryption);
@@ -213,7 +213,7 @@ pub mod enable_encryption {
     /// [`EncryptionChangeV1`]: bo_tie_hci_util::events::Events::EncryptionChangeV1
     /// [`EncryptionChangeV2`]: bo_tie_hci_util::events::Events::EncryptionChangeV2
     /// [`EncryptionKeyRefreshComplete`]: bo_tie_hci_util::events::Events::EncryptionKeyRefreshComplete
-    pub async fn send<H: HostInterface>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>, parameter: Parameter) -> Result<(), CommandError<H>> {
         host.send_command_expect_status(parameter).await
     }
 }
@@ -222,7 +222,7 @@ pub mod enable_encryption {
 pub mod long_term_key_request_reply {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -273,7 +273,7 @@ pub mod long_term_key_request_reply {
     ///
     /// # Note
     /// The input 'long_term_key' must be in native byte order.
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         connection_handle: ConnectionHandle,
         long_term_key: u128,
@@ -291,7 +291,7 @@ pub mod long_term_key_request_reply {
 pub mod long_term_key_request_negative_reply {
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -332,7 +332,7 @@ pub mod long_term_key_request_negative_reply {
     }
 
     /// Send the LE Long Term Key Request Negative Reply Command
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         connection_handle: ConnectionHandle,
     ) -> Result<Return, CommandError<H>> {

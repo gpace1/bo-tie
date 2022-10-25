@@ -31,7 +31,7 @@ pub mod l2cap;
 
 use alloc::vec::Vec;
 use bo_tie_hci_util::ConnectionChannelEnds;
-use bo_tie_hci_util::HostChannelEnds as HostInterface;
+use bo_tie_hci_util::HostChannelEnds;
 use bo_tie_hci_util::{events, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
 use bo_tie_util::errors;
@@ -439,7 +439,7 @@ impl<'a> HciAclData<&'a [u8]> {
 /// use bo_tie_hci_host::commands::cb::reset(&mut host).await;
 /// # }
 /// ```
-pub struct Host<H: HostInterface> {
+pub struct Host<H: HostChannelEnds> {
     host_interface: H,
     acl_max_mtu: usize,
     sco_max_mtu: usize,
@@ -449,7 +449,7 @@ pub struct Host<H: HostInterface> {
 
 impl<H> Host<H>
 where
-    H: HostInterface,
+    H: HostChannelEnds,
 {
     /// Initialize the host
     ///
@@ -920,7 +920,7 @@ pub enum ConnectionKind {
 /// An error when trying to send a command
 pub enum CommandError<H>
 where
-    H: HostInterface,
+    H: HostChannelEnds,
 {
     TryExtendBufferError(<H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error),
     CommandError(errors::Error),
@@ -932,7 +932,7 @@ where
 
 impl<H> core::fmt::Debug for CommandError<H>
 where
-    H: HostInterface,
+    H: HostChannelEnds,
     <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Debug,
     <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Debug,
 {
@@ -950,7 +950,7 @@ where
 
 impl<H> core::fmt::Display for CommandError<H>
 where
-    H: HostInterface,
+    H: HostChannelEnds,
     <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Display,
     <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Display,
 {
@@ -966,19 +966,19 @@ where
     }
 }
 
-impl<H: HostInterface> From<events::EventError> for CommandError<H> {
+impl<H: HostChannelEnds> From<events::EventError> for CommandError<H> {
     fn from(e: events::EventError) -> Self {
         CommandError::EventError(e)
     }
 }
 
-impl<H: HostInterface> From<errors::Error> for CommandError<H> {
+impl<H: HostChannelEnds> From<errors::Error> for CommandError<H> {
     fn from(e: errors::Error) -> Self {
         CommandError::CommandError(e)
     }
 }
 
-impl<H: HostInterface> From<CCParameterError> for CommandError<H> {
+impl<H: HostChannelEnds> From<CCParameterError> for CommandError<H> {
     fn from(e: CCParameterError) -> Self {
         match e {
             CCParameterError::CommandError(e) => CommandError::CommandError(e),

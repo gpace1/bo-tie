@@ -3,7 +3,7 @@ pub mod read_advertising_channel_tx_power {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
     const COMMAND: opcodes::HciCommand =
@@ -47,7 +47,7 @@ pub mod read_advertising_channel_tx_power {
     }
 
     /// Send the LE Read Advertising Physical Channel Tx Power command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>) -> Result<TxPower, CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<TxPower, CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
@@ -55,7 +55,7 @@ pub mod read_advertising_channel_tx_power {
 /// LE Set Advertising Enable command
 pub mod set_advertising_parameters {
     use crate::commands::le::OwnAddressType;
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_util::BluetoothDeviceAddress;
 
     const COMMAND: opcodes::HciCommand =
@@ -250,7 +250,7 @@ pub mod set_advertising_parameters {
     }
 
     /// Send the LE Set Advertising Enable command
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         parameters: AdvertisingParameters<'_>,
     ) -> Result<(), CommandError<H>> {
@@ -261,7 +261,7 @@ pub mod set_advertising_parameters {
 /// LE Set Advertising Data command
 pub mod set_advertising_data {
 
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     #[cfg(feature = "gap")]
     use bo_tie_gap::assigned::{ConvertError, IntoStruct};
 
@@ -329,7 +329,7 @@ pub mod set_advertising_data {
 
     pub async fn send<H, A>(host: &mut Host<H>, advertising_data: A) -> Result<(), CommandError<H>>
     where
-        H: HostInterface,
+        H: HostChannelEnds,
         A: Into<Option<AdvertisingData>>,
     {
         let parameter = advertising_data.into().unwrap_or_default();
@@ -341,7 +341,7 @@ pub mod set_advertising_data {
 /// LE Set Advertising Enable command
 pub mod set_advertising_enable {
 
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetAdvertisingEnable);
 
@@ -357,7 +357,7 @@ pub mod set_advertising_enable {
     }
 
     /// Send the LE Set Advertising Enable command
-    pub async fn send<H: HostInterface>(host: &mut Host<H>, enable: bool) -> Result<(), CommandError<H>> {
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>, enable: bool) -> Result<(), CommandError<H>> {
         let parameter = Parameter { enable };
 
         host.send_command_expect_complete(parameter).await
@@ -366,7 +366,7 @@ pub mod set_advertising_enable {
 
 pub mod set_random_address {
 
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetRandomAddress);
 
@@ -382,7 +382,7 @@ pub mod set_random_address {
         }
     }
 
-    pub async fn send<'a, H: HostInterface>(
+    pub async fn send<'a, H: HostChannelEnds>(
         host: &mut Host<H>,
         address: bo_tie_util::BluetoothDeviceAddress,
     ) -> Result<(), CommandError<H>> {
@@ -396,7 +396,7 @@ pub mod set_random_address {
 pub mod transmitter_test {
 
     use crate::commands::le::Frequency;
-    use crate::{opcodes, CommandError, CommandParameter, Host, HostInterface};
+    use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::TransmitterTest);
 
@@ -441,7 +441,7 @@ pub mod transmitter_test {
     }
 
     /// Send the LE Transmitter Test (v1) command
-    pub async fn send_v1<H: HostInterface>(
+    pub async fn send_v1<H: HostChannelEnds>(
         host: &mut Host<H>,
         channel: Frequency,
         payload: TestPayload,

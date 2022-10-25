@@ -8,7 +8,7 @@ pub mod remote_connection_parameter_request_reply {
     use crate::commands::le::{ConnectionEventLength, ConnectionInterval, ConnectionLatency, SupervisionTimeout};
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -75,7 +75,7 @@ pub mod remote_connection_parameter_request_reply {
         }
     }
 
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         parameters: CommandParameters,
     ) -> Result<Return, CommandError<H>> {
@@ -116,7 +116,7 @@ pub mod remote_connection_parameter_request_negative_reply {
     use crate::errors::Error;
     use crate::events::parameters::CommandCompleteData;
     use crate::{
-        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostInterface, TryFromCommandComplete,
+        opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -164,7 +164,7 @@ pub mod remote_connection_parameter_request_negative_reply {
     }
 
     /// Method for sending the negative reply
-    pub async fn send<H: HostInterface>(
+    pub async fn send<H: HostChannelEnds>(
         host: &mut Host<H>,
         handle: ConnectionHandle,
         reason: Error,
