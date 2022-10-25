@@ -11,7 +11,8 @@ getopts = "0.2"
 simplelog = "0.11"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
+bo-tie-linux = { path = "../../base-crates/bo-tie-linux" }
 signal-hook = "0.3"
 signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 futures = "0.3"
