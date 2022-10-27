@@ -698,8 +698,8 @@ impl core::fmt::Display for EventErrorReason {
 /// Error returned when trying to convert event codes into an `Events`
 #[derive(Debug)]
 pub struct EventCodeError {
-    code: u8,
-    sub_code: Option<u8>,
+    event_code: u8,
+    sub_event_code: Option<u8>,
 }
 
 impl EventCodeError {
@@ -708,21 +708,24 @@ impl EventCodeError {
 
         if code == Events::LeMeta(IRRELEVANT).get_event_code() {
             EventCodeError {
-                code,
-                sub_code: Some(sub_code),
+                event_code: code,
+                sub_event_code: Some(sub_code),
             }
         } else {
-            EventCodeError { code, sub_code: None }
+            EventCodeError {
+                event_code: code,
+                sub_event_code: None,
+            }
         }
     }
 }
 
 impl core::fmt::Display for EventCodeError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        if let Some(ref sub_code) = self.sub_code {
+        if let Some(ref sub_code) = self.sub_event_code {
             write!(f, "unknown LE sub event code: {}", sub_code)
         } else {
-            write!(f, "unknown event code: {}", self.code)
+            write!(f, "unknown event code: {}", self.event_code)
         }
     }
 }
