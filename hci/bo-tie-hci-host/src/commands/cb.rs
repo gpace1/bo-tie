@@ -87,7 +87,7 @@ pub mod set_event_mask {
     ///
     /// # Note
     /// Zero is returned if an event is not maskable is returned or it is on page 2.
-    fn event_to_mask_bit(event: &Events) -> u64 {
+    pub(crate) fn event_to_mask_bit(event: &Events) -> u64 {
         match *event {
             Events::InquiryComplete => 1 << 0,
             Events::InquiryResult => 1 << 1,
@@ -158,6 +158,56 @@ pub mod set_event_mask {
         }
     }
 
+    const MASKED_EVENTS: &'static [Events] = &[
+        Events::InquiryComplete,
+        Events::InquiryResult,
+        Events::ConnectionComplete,
+        Events::ConnectionRequest,
+        Events::DisconnectionComplete,
+        Events::AuthenticationComplete,
+        Events::RemoteNameRequestComplete,
+        Events::EncryptionChangeV1,
+        Events::ChangeConnectionLinkKeyComplete,
+        Events::LinkKeyTypeChanged,
+        Events::ReadRemoteSupportedFeaturesComplete,
+        Events::ReadRemoteVersionInformationComplete,
+        Events::QosSetupComplete,
+        Events::HardwareError,
+        Events::FlushOccurred,
+        Events::RoleChange,
+        Events::ModeChange,
+        Events::ReturnLinkKeys,
+        Events::PinCodeRequest,
+        Events::LinkKeyRequest,
+        Events::LinkKeyNotification,
+        Events::LoopbackCommand,
+        Events::DataBufferOverflow,
+        Events::MaxSlotsChange,
+        Events::ReadClockOffsetComplete,
+        Events::ConnectionPacketTypeChanged,
+        Events::QosViolation,
+        Events::PageScanRepetitionModeChange,
+        Events::FlowSpecificationComplete,
+        Events::InquiryResultWithRssi,
+        Events::ReadRemoteExtendedFeaturesComplete,
+        Events::SynchronousConnectionComplete,
+        Events::SynchronousConnectionChanged,
+        Events::SniffSubrating,
+        Events::ExtendedInquiryResult,
+        Events::EncryptionKeyRefreshComplete,
+        Events::IoCapabilityRequest,
+        Events::IoCapabilityResponse,
+        Events::UserConfirmationRequest,
+        Events::UserPasskeyRequest,
+        Events::RemoteOobDataRequest,
+        Events::SimplePairingComplete,
+        Events::LinkSupervisionTimeoutChanged,
+        Events::EnhancedFlushComplete,
+        Events::UserPasskeyNotification,
+        Events::KeypressNotification,
+        Events::RemoteHostSupportedFeaturesNotification,
+    ];
+
     /// The event mask
     ///
     /// This is the type used for creating an event mask to send to the Controller. Anything that
@@ -180,6 +230,7 @@ pub mod set_event_mask {
     /// [`Events`]: bo_tie_hci_util::events::Events
     pub struct EventMask<T> {
         mask: T,
+        le_is_masked: bool,
     }
 
     impl<I, T> EventMask<I>
@@ -188,8 +239,14 @@ pub mod set_event_mask {
         T: Borrow<Events>,
     {
         /// Create a new `EventMask`
-        pub fn new(t: I) -> Self {
-            EventMask { mask: t }
+        ///
+        /// This creates a new `EventMask` from the iterable type `t` and a boolean indicating if
+        /// LE events are to be enabled.
+        pub fn new(t: I, le_mask: bool) -> Self {
+            EventMask {
+                mask: t,
+                le_is_masked: le_mask,
+            }
         }
     }
 
@@ -199,13 +256,19 @@ pub mod set_event_mask {
         /// This event mask will disable all events that are able to be enabled by the *Set Event
         /// Mask* command.
         pub fn disable_all() -> EventMask<AllUnmasked> {
-            EventMask { mask: AllUnmasked }
+            EventMask {
+                mask: AllUnmasked,
+                le_is_masked: false,
+            }
         }
     }
 
     impl Default for EventMask<DefaultMask> {
         fn default() -> Self {
-            EventMask { mask: DefaultMask }
+            EventMask {
+                mask: DefaultMask,
+                le_is_masked: false,
+            }
         }
     }
 
@@ -215,7 +278,7 @@ pub mod set_event_mask {
         T: Borrow<Events>,
     {
         fn from(t: I) -> Self {
-            Self::new(t.into_iter())
+            Self::new(t.into_iter(), false)
         }
     }
 
@@ -238,6 +301,42 @@ pub mod set_event_mask {
 
     impl DefaultMask {
         const DEFAULT_MASK: u64 = 0x1FFF_FFFF_FFFFu64;
+
+        const ENABLED_EVENTS: &'static [Events] = &[
+            Events::InquiryComplete,
+            Events::InquiryResult,
+            Events::ConnectionComplete,
+            Events::ConnectionRequest,
+            Events::DisconnectionComplete,
+            Events::AuthenticationComplete,
+            Events::RemoteNameRequestComplete,
+            Events::EncryptionChangeV1,
+            Events::ChangeConnectionLinkKeyComplete,
+            Events::LinkKeyTypeChanged,
+            Events::ReadRemoteSupportedFeaturesComplete,
+            Events::ReadRemoteVersionInformationComplete,
+            Events::QosSetupComplete,
+            Events::HardwareError,
+            Events::FlushOccurred,
+            Events::RoleChange,
+            Events::ModeChange,
+            Events::ReturnLinkKeys,
+            Events::PinCodeRequest,
+            Events::LinkKeyRequest,
+            Events::LinkKeyNotification,
+            Events::LoopbackCommand,
+            Events::DataBufferOverflow,
+            Events::MaxSlotsChange,
+            Events::ReadClockOffsetComplete,
+            Events::ConnectionPacketTypeChanged,
+            Events::QosViolation,
+            Events::PageScanRepetitionModeChange,
+            Events::FlowSpecificationComplete,
+            Events::InquiryResultWithRssi,
+            Events::ReadRemoteExtendedFeaturesComplete,
+            Events::SynchronousConnectionComplete,
+            Events::SynchronousConnectionChanged,
+        ];
 
         /// Iterate over the events that make up the default mask
         pub const fn iter() -> impl Iterator<Item = Events> {
@@ -270,54 +369,107 @@ pub mod set_event_mask {
     /// [`disable_all`]: EventMask::disable_all
     pub struct AllUnmasked;
 
+    #[derive(Copy, Clone)]
     pub struct Parameter {
         mask: [u8; 8],
     }
 
-    impl<I, T> TryFrom<EventMask<I>> for Parameter
+    impl<I, T> From<EventMask<I>> for Parameter
     where
         I: IntoIterator<Item = T>,
         T: Borrow<Events>,
     {
-        type Error = ();
-
-        fn try_from(em: EventMask<I>) -> Result<Self, Self::Error> {
-            let mut filtered = em
+        fn from(em: EventMask<I>) -> Self {
+            let mask = em
                 .mask
                 .into_iter()
-                .filter(|e| event_to_mask_bit(e.borrow()) != 0)
-                .peekable();
+                .filter_map(|item| {
+                    let bit = event_to_mask_bit(item.borrow());
 
-            match filtered.peek() {
-                None => Err(()),
-                Some(_) => {
-                    let mask = filtered
-                        .fold(0u64, |mask, e| mask | event_to_mask_bit(e.borrow()))
-                        .to_le_bytes();
+                    (bit != 0).then_some(bit)
+                })
+                .fold(0u64, |mut mask, bit| {
+                    mask |= bit;
+                    mask
+                })
+                .to_le_bytes();
 
-                    Ok(Parameter { mask })
-                }
-            }
+            Parameter { mask }
         }
     }
 
-    impl TryFrom<EventMask<DefaultMask>> for Parameter {
-        type Error = core::convert::Infallible;
+    impl<H, I, T> From<(&mut Host<H>, EventMask<I>)> for Parameter
+    where
+        H: HostChannelEnds,
+        I: IntoIterator<Item = T>,
+        T: Borrow<Events>,
+    {
+        fn from((host, em): (&mut Host<H>, EventMask<I>)) -> Self {
+            host.masked_events.clear_events(MASKED_EVENTS, true);
 
-        fn try_from(_: EventMask<DefaultMask>) -> Result<Self, Self::Error> {
+            let mask = em
+                .mask
+                .into_iter()
+                .filter_map(|item| {
+                    let event = item.borrow();
+
+                    let bit = event_to_mask_bit(item.borrow());
+
+                    if bit != 0 {
+                        host.masked_events.set_event(*event);
+
+                        Some(bit)
+                    } else {
+                        None
+                    }
+                })
+                .fold(0u64, |mut mask, bit| {
+                    mask |= bit;
+                    mask
+                })
+                .to_le_bytes();
+
+            host.masked_events.set_le_mask(em.le_is_masked);
+
+            Parameter { mask }
+        }
+    }
+
+    impl From<EventMask<DefaultMask>> for Parameter {
+        fn from(_: EventMask<DefaultMask>) -> Self {
             let mask = DefaultMask::DEFAULT_MASK.to_le_bytes();
 
-            Ok(Parameter { mask })
+            Parameter { mask }
         }
     }
 
-    impl TryFrom<EventMask<AllUnmasked>> for Parameter {
-        type Error = core::convert::Infallible;
+    impl<H: HostChannelEnds> From<(&mut Host<H>, EventMask<DefaultMask>)> for Parameter {
+        fn from((host, _): (&mut Host<H>, EventMask<DefaultMask>)) -> Parameter {
+            let mask = DefaultMask::DEFAULT_MASK.to_le_bytes();
 
-        fn try_from(_: EventMask<AllUnmasked>) -> Result<Self, Self::Error> {
+            host.masked_events.clear_events(MASKED_EVENTS, true);
+
+            host.masked_events.set_events(DefaultMask::ENABLED_EVENTS);
+
+            Parameter { mask }
+        }
+    }
+
+    impl From<EventMask<AllUnmasked>> for Parameter {
+        fn from(_: EventMask<AllUnmasked>) -> Self {
             let mask = [0; 8];
 
-            Ok(Parameter { mask })
+            Parameter { mask }
+        }
+    }
+
+    impl<H: HostChannelEnds> From<(&mut Host<H>, EventMask<AllUnmasked>)> for Parameter {
+        fn from((host, _): (&mut Host<H>, EventMask<AllUnmasked>)) -> Self {
+            let mask = [0; 8];
+
+            host.masked_events.clear_events(MASKED_EVENTS, true);
+
+            Parameter { mask }
         }
     }
 
@@ -328,6 +480,19 @@ pub mod set_event_mask {
         }
     }
 
+    /// Same as method `send` except it does not effect the host's `EventMask`
+    pub(crate) async fn send_command<H: HostChannelEnds, M, I, E>(
+        host: &mut Host<H>,
+        events: M,
+    ) -> Result<(), CommandError<H>>
+    where
+        M: Into<EventMask<I>>,
+        I: Iterator<Item = E>,
+        E: Borrow<Events>,
+    {
+        host.send_command_expect_complete(Parameter::from(events.into())).await
+    }
+
     /// Send the command
     ///
     /// This will send the *Set Event Mask* command to the controller and await for the command
@@ -335,7 +500,7 @@ pub mod set_event_mask {
     /// masked.
     /// ```
     /// # use bo_tie_hci_util::events::Events;
-    /// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
+    /// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded(0, 0);
     /// # async {
     /// # let mut host = bo_tie_hci_host::Host::init(host_ends).await?;
     /// # use bo_tie_hci_host::commands;
@@ -345,9 +510,35 @@ pub mod set_event_mask {
     /// # };
     /// ```
     ///
-    /// # Note
-    /// If `events` only contains events that are not masked by this command, then the set event
-    /// mask command is not sent to the Controller.
+    /// # LE events
+    /// In addition to their individual mask, all LE events must also be further unmasked by a mask
+    /// bit within this page of event masks. This flag is set if there is a LE event output by the
+    /// iteration of `I` or during the creating of an `EventMask` the boolean for the LE mask is
+    /// set to true.
+    ///
+    /// ```
+    /// # use bo_tie_hci_util::events::{Events, LeMeta};
+    /// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded(0, 0);
+    /// # async {
+    /// # let mut host = bo_tie_hci_host::Host::init(host_ends).await?;
+    /// # use bo_tie_hci_host::commands;
+    /// use bo_tie_hci_host::commands::cb::set_event_mask::EventMask;
+    /// use commands::cb::set_event_mask;
+    ///
+    /// // This will set the masks for the 'Encryption
+    /// // Change (v1)' event and the global mask for LE
+    /// // events. This will not set the individual mask
+    /// // for the LE connection complete event, the field
+    /// // for Events::LeMeta(_) is treated as arbitrary.
+    /// set_event_mask::send(&mut host, [Events::EncryptionChangeV1, Events::LeMeta(LeMeta::ConnectionComplete)]).await?;
+    ///
+    /// // The second input of method `new` is for
+    /// // setting/unsetting the global LE mask.
+    /// let event_mask = EventMask::new([Events::ConnectionComplete, Events::DisconnectionComplete], true);
+    ///
+    /// set_event_mask::send(&mut host, event_mask).await?;
+    /// # };
+    /// ```
     ///
     /// [module]: self
     pub async fn send<H: HostChannelEnds, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
@@ -356,10 +547,7 @@ pub mod set_event_mask {
         I: Iterator<Item = E>,
         E: Borrow<Events>,
     {
-        let parameter = match Parameter::try_from(events.into()) {
-            Err(()) => return Ok(()),
-            Ok(parameter) => parameter,
-        };
+        let parameter = Parameter::from((&mut *host, events.into()));
 
         host.send_command_expect_complete(parameter).await
     }
@@ -496,7 +684,7 @@ pub mod set_event_mask_page_2 {
     ///
     /// # Note
     /// Zero is returned if an event is not maskable is returned or it is on page 2.
-    fn event_to_mask_bit(event: &Events) -> u64 {
+    pub(crate) fn event_to_mask_bit(event: &Events) -> u64 {
         match *event {
             // Page 1 maskable
             Events::InquiryComplete
@@ -567,6 +755,21 @@ pub mod set_event_mask_page_2 {
             Events::EncryptionChangeV2 => 1 << 25,
         }
     }
+
+    const MASKED_EVENTS: &'static [Events] = &[
+        Events::TriggeredClockCapture,
+        Events::SynchronizationTrainComplete,
+        Events::SynchronizationTrainReceived,
+        Events::ConnectionlessPeripheralBroadcastReceive,
+        Events::ConnectionlessPeripheralBroadcastTimeout,
+        Events::TruncatedPageComplete,
+        Events::PeripheralPageResponseTimeout,
+        Events::ConnectionlessSlaveBroadcastChannelMapChange,
+        Events::InquiryResponseNotification,
+        Events::AuthenticatedPayloadTimeoutExpired,
+        Events::SamStatusChange,
+        Events::EncryptionChangeV2,
+    ];
 
     /// The event mask
     ///
@@ -676,50 +879,96 @@ pub mod set_event_mask_page_2 {
         mask: [u8; 8],
     }
 
-    impl<I, T> TryFrom<EventMask<I>> for Parameter
+    impl<I, T> From<EventMask<I>> for Parameter
     where
         I: IntoIterator<Item = T>,
         T: Borrow<Events>,
     {
-        type Error = ();
-
-        fn try_from(em: EventMask<I>) -> Result<Self, Self::Error> {
-            let mut filtered = em
+        fn from(em: EventMask<I>) -> Self {
+            let mask = em
                 .mask
                 .into_iter()
-                .filter(|e| event_to_mask_bit(e.borrow()) != 0)
-                .peekable();
+                .filter_map(|event| {
+                    let bit = event_to_mask_bit(event.borrow());
 
-            match filtered.peek() {
-                None => Err(()),
-                Some(_) => {
-                    let mask = filtered
-                        .fold(0u64, |mask, e| mask | event_to_mask_bit(e.borrow()))
-                        .to_le_bytes();
+                    (bit != 0).then_some(bit)
+                })
+                .fold(0u64, |mut mask, bit| {
+                    mask |= bit;
+                    mask
+                })
+                .to_le_bytes();
 
-                    Ok(Parameter { mask })
-                }
-            }
+            Parameter { mask }
         }
     }
 
-    impl TryFrom<EventMask<DefaultMask>> for Parameter {
-        type Error = core::convert::Infallible;
+    impl<H, I, T> From<(&mut Host<H>, EventMask<I>)> for Parameter
+    where
+        H: HostChannelEnds,
+        I: IntoIterator<Item = T>,
+        T: Borrow<Events>,
+    {
+        fn from((host, em): (&mut Host<H>, EventMask<I>)) -> Self {
+            host.masked_events.clear_events(MASKED_EVENTS, false);
 
-        fn try_from(_: EventMask<DefaultMask>) -> Result<Self, Self::Error> {
-            let mask = [0; 8];
+            let mask = em
+                .mask
+                .into_iter()
+                .filter_map(|event| {
+                    let bit = event_to_mask_bit(event.borrow());
 
-            Ok(Parameter { mask })
+                    if bit != 0 {
+                        host.masked_events.set_event(*event.borrow());
+
+                        Some(bit)
+                    } else {
+                        None
+                    }
+                })
+                .fold(0u64, |mut mask, bit| {
+                    mask |= bit;
+                    mask
+                })
+                .to_le_bytes();
+
+            Parameter { mask }
         }
     }
 
-    impl TryFrom<EventMask<AllUnmasked>> for Parameter {
-        type Error = core::convert::Infallible;
-
-        fn try_from(_: EventMask<AllUnmasked>) -> Result<Self, Self::Error> {
+    impl From<EventMask<DefaultMask>> for Parameter {
+        fn from(_: EventMask<DefaultMask>) -> Self {
             let mask = [0; 8];
 
-            Ok(Parameter { mask })
+            Parameter { mask }
+        }
+    }
+
+    impl<H: HostChannelEnds> From<(&mut Host<H>, EventMask<DefaultMask>)> for Parameter {
+        fn from((host, _): (&mut Host<H>, EventMask<DefaultMask>)) -> Self {
+            let mask = [0; 8];
+
+            host.masked_events.clear_events(MASKED_EVENTS, false);
+
+            Parameter { mask }
+        }
+    }
+
+    impl From<EventMask<AllUnmasked>> for Parameter {
+        fn from(_: EventMask<AllUnmasked>) -> Self {
+            let mask = [0; 8];
+
+            Parameter { mask }
+        }
+    }
+
+    impl<H: HostChannelEnds> From<(&mut Host<H>, EventMask<AllUnmasked>)> for Parameter {
+        fn from((host, _): (&mut Host<H>, EventMask<AllUnmasked>)) -> Self {
+            let mask = [0; 8];
+
+            host.masked_events.clear_events(MASKED_EVENTS, false);
+
+            Parameter { mask }
         }
     }
 
@@ -728,6 +977,19 @@ pub mod set_event_mask_page_2 {
         fn get_parameter(&self) -> [u8; 8] {
             self.mask
         }
+    }
+
+    /// Same as method `send` except it does not effect the host's `EventMask`
+    pub(crate) async fn send_command<H: HostChannelEnds, M, I, E>(
+        host: &mut Host<H>,
+        events: M,
+    ) -> Result<(), CommandError<H>>
+    where
+        M: Into<EventMask<I>>,
+        I: Iterator<Item = E>,
+        E: Borrow<Events>,
+    {
+        host.send_command_expect_complete(Parameter::from(events.into())).await
     }
 
     /// Send the command
@@ -747,10 +1009,6 @@ pub mod set_event_mask_page_2 {
     /// # };
     /// ```
     ///
-    /// # Note
-    /// If `events` only contains events that are not masked by this command, then the set event
-    /// mask command is not sent to the Controller.
-    ///
     /// [module]: self
     pub async fn send<H: HostChannelEnds, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
     where
@@ -758,10 +1016,7 @@ pub mod set_event_mask_page_2 {
         I: Iterator<Item = E>,
         E: Borrow<Events>,
     {
-        let parameter = match Parameter::try_from(events.into()) {
-            Err(()) => return Ok(()),
-            Ok(parameter) => parameter,
-        };
+        let parameter = Parameter::from((&mut *host, events.into()));
 
         host.send_command_expect_complete(parameter).await
     }

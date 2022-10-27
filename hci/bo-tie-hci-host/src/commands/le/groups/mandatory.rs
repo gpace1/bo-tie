@@ -19,13 +19,13 @@
 ///
 /// [`send`]: set_event_mask::send
 pub mod set_event_mask {
-    use crate::events::LeMeta;
+    use crate::events::{Events, LeMeta};
     use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use core::borrow::Borrow;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetEventMask);
 
-    fn event_to_mask_bit(le_meta: &LeMeta) -> u64 {
+    pub(crate) fn event_to_mask_bit(le_meta: &LeMeta) -> u64 {
         match *le_meta {
             LeMeta::ConnectionComplete => 1 << 0,
             LeMeta::AdvertisingReport => 1 << 1,
@@ -49,6 +49,29 @@ pub mod set_event_mask {
             LeMeta::ChannelSelectionAlgorithm => 1 << 19,
         }
     }
+
+    const MASKED_EVENTS: &'static [Events] = &[
+        Events::LeMeta(LeMeta::ConnectionComplete),
+        Events::LeMeta(LeMeta::AdvertisingReport),
+        Events::LeMeta(LeMeta::ConnectionUpdateComplete),
+        Events::LeMeta(LeMeta::ReadRemoteFeaturesComplete),
+        Events::LeMeta(LeMeta::LongTermKeyRequest),
+        Events::LeMeta(LeMeta::RemoteConnectionParameterRequest),
+        Events::LeMeta(LeMeta::DataLengthChange),
+        Events::LeMeta(LeMeta::ReadLocalP256PublicKeyComplete),
+        Events::LeMeta(LeMeta::GenerateDhKeyComplete),
+        Events::LeMeta(LeMeta::EnhancedConnectionComplete),
+        Events::LeMeta(LeMeta::DirectedAdvertisingReport),
+        Events::LeMeta(LeMeta::PhyUpdateComplete),
+        Events::LeMeta(LeMeta::ExtendedAdvertisingReport),
+        Events::LeMeta(LeMeta::PeriodicAdvertisingSyncEstablished),
+        Events::LeMeta(LeMeta::PeriodicAdvertisingReport),
+        Events::LeMeta(LeMeta::PeriodicAdvertisingSyncLost),
+        Events::LeMeta(LeMeta::ScanTimeout),
+        Events::LeMeta(LeMeta::AdvertisingSetTerminated),
+        Events::LeMeta(LeMeta::ScanRequestReceived),
+        Events::LeMeta(LeMeta::ChannelSelectionAlgorithm),
+    ];
 
     /// The event mask
     ///
@@ -131,6 +154,14 @@ pub mod set_event_mask {
     impl DefaultMask {
         const DEFAULT_MASK: u64 = 0x1F;
 
+        const DEFAULT_EVENTS: &'static [Events] = &[
+            Events::LeMeta(LeMeta::ConnectionComplete),
+            Events::LeMeta(LeMeta::AdvertisingReport),
+            Events::LeMeta(LeMeta::ConnectionUpdateComplete),
+            Events::LeMeta(LeMeta::ReadRemoteFeaturesComplete),
+            Events::LeMeta(LeMeta::LongTermKeyRequest),
+        ];
+
         /// Iterate over the events that make up the default mask
         pub const fn iter() -> impl Iterator<Item = LeMeta> {
             struct DefaultMaskIter(usize, u64);
@@ -166,50 +197,96 @@ pub mod set_event_mask {
         mask: [u8; 8],
     }
 
-    impl<I, T> TryFrom<EventMask<I>> for Parameter
+    impl<I, T> From<EventMask<I>> for Parameter
     where
         I: Iterator<Item = T>,
         T: Borrow<LeMeta>,
     {
-        type Error = ();
-
-        fn try_from(em: EventMask<I>) -> Result<Self, Self::Error> {
-            let mut filtered = em
+        fn from(em: EventMask<I>) -> Self {
+            let mask = em
                 .mask
-                .into_iter()
-                .filter(|e| event_to_mask_bit(e.borrow()) != 0)
-                .peekable();
+                .filter_map(|event| {
+                    let bit = event_to_mask_bit(event.borrow());
 
-            match filtered.peek() {
-                None => Err(()),
-                Some(_) => {
-                    let mask = filtered
-                        .fold(0u64, |mask, e| mask | event_to_mask_bit(e.borrow()))
-                        .to_le_bytes();
+                    (bit != 0).then_some(bit)
+                })
+                .fold(0u64, |mut mask, bit| {
+                    mask |= bit;
+                    mask
+                })
+                .to_le_bytes();
 
-                    Ok(Parameter { mask })
-                }
-            }
+            Parameter { mask }
         }
     }
 
-    impl TryFrom<EventMask<DefaultMask>> for Parameter {
-        type Error = core::convert::Infallible;
+    impl<H, I, T> From<(&mut Host<H>, EventMask<I>)> for Parameter
+    where
+        H: HostChannelEnds,
+        I: Iterator<Item = T>,
+        T: Borrow<LeMeta>,
+    {
+        fn from((host, em): (&mut Host<H>, EventMask<I>)) -> Self {
+            host.masked_events.clear_events(MASKED_EVENTS, false);
 
-        fn try_from(_: EventMask<DefaultMask>) -> Result<Self, Self::Error> {
+            let mask = em
+                .mask
+                .filter_map(|event| {
+                    let bit = event_to_mask_bit(event.borrow());
+
+                    if bit != 0 {
+                        host.masked_events.set_event(Events::LeMeta(*event.borrow()));
+
+                        Some(bit)
+                    } else {
+                        None
+                    }
+                })
+                .fold(0u64, |mut mask, bit| {
+                    mask |= bit;
+                    mask
+                })
+                .to_le_bytes();
+
+            Parameter { mask }
+        }
+    }
+
+    impl From<EventMask<DefaultMask>> for Parameter {
+        fn from(_: EventMask<DefaultMask>) -> Self {
             let mask = DefaultMask::DEFAULT_MASK.to_le_bytes();
 
-            Ok(Parameter { mask })
+            Parameter { mask }
         }
     }
 
-    impl TryFrom<EventMask<AllUnmasked>> for Parameter {
-        type Error = core::convert::Infallible;
+    impl<H: HostChannelEnds> From<(&mut Host<H>, EventMask<DefaultMask>)> for Parameter {
+        fn from((host, _): (&mut Host<H>, EventMask<DefaultMask>)) -> Self {
+            let mask = DefaultMask::DEFAULT_MASK.to_le_bytes();
 
-        fn try_from(_: EventMask<AllUnmasked>) -> Result<Self, Self::Error> {
+            host.masked_events.clear_events(MASKED_EVENTS, false);
+
+            host.masked_events.set_events(DefaultMask::DEFAULT_EVENTS);
+
+            Parameter { mask }
+        }
+    }
+
+    impl From<EventMask<AllUnmasked>> for Parameter {
+        fn from(_: EventMask<AllUnmasked>) -> Self {
             let mask = [0; 8];
 
-            Ok(Parameter { mask })
+            Parameter { mask }
+        }
+    }
+
+    impl<H: HostChannelEnds> From<(&mut Host<H>, EventMask<AllUnmasked>)> for Parameter {
+        fn from((host, _): (&mut Host<H>, EventMask<AllUnmasked>)) -> Self {
+            let mask = [0; 8];
+
+            host.masked_events.clear_events(MASKED_EVENTS, false);
+
+            Parameter { mask }
         }
     }
 
@@ -218,6 +295,16 @@ pub mod set_event_mask {
         fn get_parameter(&self) -> [u8; 8] {
             self.mask
         }
+    }
+
+    /// Same as method `send` except it does not effect the host's `EventMask`
+    pub async fn send_command<H: HostChannelEnds, M, I, E>(host: &mut Host<H>, events: M) -> Result<(), CommandError<H>>
+    where
+        M: Into<EventMask<I>>,
+        I: Iterator<Item = E>,
+        E: Borrow<LeMeta>,
+    {
+        host.send_command_expect_complete(Parameter::from(events.into())).await
     }
 
     /// Send the command
@@ -243,10 +330,7 @@ pub mod set_event_mask {
         I: Iterator<Item = E>,
         E: Borrow<LeMeta>,
     {
-        let parameter = match Parameter::try_from(events.into()) {
-            Err(()) => return Ok(()),
-            Ok(parameter) => parameter,
-        };
+        let parameter = Parameter::from((&mut *host, events.into()));
 
         host.send_command_expect_complete(parameter).await
     }

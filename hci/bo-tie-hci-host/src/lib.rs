@@ -30,7 +30,6 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
-use bo_tie_hci_util::ConnectionChannelEnds;
 use bo_tie_hci_util::HostChannelEnds;
 use bo_tie_hci_util::{events, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
@@ -433,18 +432,13 @@ impl<'a> HciAclData<&'a [u8]> {
 /// This is used by the host to interact with the Bluetooth Controller. Its purpose is to send
 /// commands, receive events, and initialize connections between itself and the interface async
 /// task.
-///
-/// ```
-/// # async {
-/// use bo_tie_hci_host::commands::cb::reset(&mut host).await;
-/// # }
-/// ```
 pub struct Host<H: HostChannelEnds> {
     host_interface: H,
     acl_max_mtu: usize,
     sco_max_mtu: usize,
     le_acl_max_mtu: usize,
     _le_iso_max_mtu: usize,
+    masked_events: MaskedEvents,
 }
 
 impl<H> Host<H>
@@ -478,6 +472,7 @@ where
             sco_max_mtu: Default::default(),
             le_acl_max_mtu: Default::default(),
             _le_iso_max_mtu: Default::default(),
+            masked_events: Default::default(),
         };
 
         // reset the controller
@@ -631,6 +626,77 @@ where
         }
     }
 
+    /// Process the next general intra message
+    ///
+    /// Process the next thing sent from the interface async task over
+    fn process_next(
+        &mut self,
+        message: <H::GenReceiver as bo_tie_hci_util::Receiver>::Message,
+        ce: &mut Option<H::ConnectionChannelEnds>,
+    ) -> Result<Option<Next<H::ConnectionChannelEnds>>, NextError> {
+        use bo_tie_hci_util::events::{EventsData, LeMetaData};
+
+        match message {
+            ToHostGeneralIntraMessage::Event(EventsData::ConnectionComplete(cc)) => {
+                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
+                let connection = Connection::new(
+                    head_cap,
+                    tail_cap,
+                    self.acl_max_mtu,
+                    ConnectionKind::BrEdr(cc),
+                    ce.take().ok_or(NextError::MissingConnectionEnds)?,
+                );
+
+                Ok(Some(Next::NewConnection(connection)))
+            }
+            ToHostGeneralIntraMessage::Event(EventsData::SynchronousConnectionComplete(scc)) => {
+                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
+                let connection = Connection::new(
+                    head_cap,
+                    tail_cap,
+                    self.sco_max_mtu,
+                    ConnectionKind::BrEdrSco(scc),
+                    ce.take().ok_or(NextError::MissingConnectionEnds)?,
+                );
+
+                Ok(Some(Next::NewConnection(connection)))
+            }
+            ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::ConnectionComplete(lcc))) => {
+                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
+                let connection = Connection::new(
+                    head_cap,
+                    tail_cap,
+                    self.le_acl_max_mtu,
+                    ConnectionKind::Le(lcc),
+                    ce.take().ok_or(NextError::MissingConnectionEnds)?,
+                );
+
+                Ok(Some(Next::NewConnection(connection)))
+            }
+            ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::EnhancedConnectionComplete(lecc))) => {
+                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+
+                let connection = Connection::new(
+                    head_cap,
+                    tail_cap,
+                    self.le_acl_max_mtu,
+                    ConnectionKind::LeEnh(lecc),
+                    ce.take().ok_or(NextError::MissingConnectionEnds)?,
+                );
+
+                Ok(Some(Next::NewConnection(connection)))
+            }
+            ToHostGeneralIntraMessage::Event(event_data) => Ok(Some(Next::Event(event_data))),
+            ToHostGeneralIntraMessage::NewConnection(ends) => {
+                ce.replace(ends);
+                Ok(None)
+            }
+        }
+    }
+
     /// Get the next thing from the interface async task
     ///
     /// Events and channel ends for a new connection async task are "received" from the controller
@@ -646,7 +712,6 @@ where
     /// [`NumberOfCompletedPackets`]: bo_tie_hci_util::events::Events::NumberOfCompletedPackets
     /// [`NumberOfCompletedDataBlocks`]: bo_tie_hci_util::events::Events::NumberOfCompletedDataBlocks
     pub async fn next(&mut self) -> Result<Next<H::ConnectionChannelEnds>, NextError> {
-        use bo_tie_hci_util::events::{EventsData, LeMetaData};
         use bo_tie_hci_util::Receiver;
 
         let mut connection_ends: Option<H::ConnectionChannelEnds> = None;
@@ -659,64 +724,65 @@ where
                 .await
                 .ok_or(NextError::ReceiverClosed)?;
 
-            match intra_message {
-                ToHostGeneralIntraMessage::Event(EventsData::ConnectionComplete(cc)) => {
-                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+            if let Some(next) = self.process_next(intra_message, &mut connection_ends)? {
+                break Ok(next);
+            }
+        }
+    }
 
-                    let connection = Connection::new(
-                        head_cap,
-                        tail_cap,
-                        self.acl_max_mtu,
-                        ConnectionKind::BrEdr(cc),
-                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
-                    );
+    /// Try to get the next thing from the interface async task
+    ///
+    /// This is `try` version of method [`next`]. If the interface async task has sent something to
+    /// the host async task it will be returned, but if there is nothing within the channel then
+    /// this method will return `None`. This method is still async as it will await for a second
+    /// message if the first message in the channel is a connection ends message.
+    ///
+    /// [`next`]: Host::next
+    pub async fn try_next(&mut self) -> Result<Option<Next<H::ConnectionChannelEnds>>, NextError> {
+        use bo_tie_hci_util::Receiver;
+        use core::future::Future;
+        use core::pin::Pin;
+        use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-                    break Ok(Next::NewConnection(connection));
-                }
-                ToHostGeneralIntraMessage::Event(EventsData::SynchronousConnectionComplete(scc)) => {
-                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_stub, stub, stub, stub);
 
-                    let connection = Connection::new(
-                        head_cap,
-                        tail_cap,
-                        self.sco_max_mtu,
-                        ConnectionKind::BrEdrSco(scc),
-                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
-                    );
+        fn clone_stub(_: *const ()) -> RawWaker {
+            RawWaker::new(core::ptr::null(), &VTABLE)
+        }
 
-                    break Ok(Next::NewConnection(connection));
-                }
-                ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::ConnectionComplete(lcc))) => {
-                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+        fn stub(_: *const ()) {}
 
-                    let connection = Connection::new(
-                        head_cap,
-                        tail_cap,
-                        self.le_acl_max_mtu,
-                        ConnectionKind::Le(lcc),
-                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
-                    );
+        struct PollOnce<'a, R>(&'a mut R);
 
-                    break Ok(Next::NewConnection(connection));
-                }
-                ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::EnhancedConnectionComplete(lecc))) => {
-                    let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
+        impl<R> Future for PollOnce<'_, R>
+        where
+            R: Receiver,
+        {
+            type Output = Poll<Option<R::Message>>;
 
-                    let connection = Connection::new(
-                        head_cap,
-                        tail_cap,
-                        self.le_acl_max_mtu,
-                        ConnectionKind::LeEnh(lecc),
-                        connection_ends.ok_or(NextError::MissingConnectionEnds)?,
-                    );
+            fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+                unsafe {
+                    let rx = &mut self.get_unchecked_mut().0;
 
-                    break Ok(Next::NewConnection(connection));
-                }
-                ToHostGeneralIntraMessage::Event(event_data) => break Ok(Next::Event(event_data)),
-                ToHostGeneralIntraMessage::NewConnection(ends) => {
-                    connection_ends.replace(ends);
+                    let waker = Waker::from_raw(clone_stub(core::ptr::null()));
+
+                    Poll::Ready(rx.poll_recv(&mut Context::from_waker(&waker)))
                 }
             }
+        }
+
+        let mut connection_ends: Option<H::ConnectionChannelEnds> = None;
+
+        match PollOnce(self.host_interface.get_mut_gen_recv()).await {
+            Poll::Ready(Some(message)) => match self.process_next(message, &mut connection_ends)? {
+                Some(next) => Ok(Some(next)),
+                None => {
+                    // need to await the connection event information
+                    self.next().await.map(|next| Some(next))
+                }
+            },
+            Poll::Ready(None) => Err(NextError::ReceiverClosed),
+            Poll::Pending => Ok(None),
         }
     }
 
@@ -746,24 +812,28 @@ where
         use commands::cb::{set_event_mask, set_event_mask_page_2};
         use commands::le::set_event_mask as le_set_event_mask;
 
-        // Set the masks
-        //
-        // note:
-        // these mask functions will not send the any commands if none of the events within `list`
-        // are masked by the command.
+        let (send_page_1, send_page_2, send_le) = self.masked_events.set_events(list.clone());
 
-        set_event_mask::send(self, list.clone()).await?;
+        if send_page_1 {
+            set_event_mask::send_command(self, list.clone()).await?;
+        }
 
-        set_event_mask_page_2::send(self, list.clone()).await?;
+        if send_page_2 {
+            set_event_mask_page_2::send_command(self, list.clone()).await?;
+        }
 
-        le_set_event_mask::send(
-            self,
-            list.into_iter().filter_map(|e| match e.borrow() {
-                events::Events::LeMeta(meta) => Some(*meta),
-                _ => None,
-            }),
-        )
-        .await
+        if send_le {
+            le_set_event_mask::send_command(
+                self,
+                list.into_iter().filter_map(|e| match e.borrow() {
+                    events::Events::LeMeta(meta) => Some(*meta),
+                    _ => None,
+                }),
+            )
+            .await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -773,7 +843,7 @@ where
 ///
 /// [`next`]: Host::next
 #[derive(Debug)]
-pub enum Next<C: ConnectionChannelEnds> {
+pub enum Next<C: bo_tie_hci_util::ConnectionChannelEnds> {
     Event(events::EventsData),
     NewConnection(Connection<C>),
 }
@@ -818,7 +888,7 @@ pub struct Connection<C> {
     ends: C,
 }
 
-impl<C: ConnectionChannelEnds> Connection<C> {
+impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
     fn new(buffer_header_size: usize, buffer_tail_size: usize, hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
         let bounded = false;
 
@@ -1046,5 +1116,133 @@ impl core::fmt::Display for NextError {
 impl From<events::EventError> for NextError {
     fn from(e: events::EventError) -> Self {
         NextError::EventConversionError(e)
+    }
+}
+
+/// List of events masked by the user
+///
+/// A `Host` uses this to mirror the events that are masked on Controller. This contains the mask
+/// of all events and a boolean for the LE Meta event.
+///
+/// # LE Meta
+/// Because this library treats the LE events masks as part of the `Events` list, there needs to be
+/// a separate flag for the mask to enable and disable all LE events.
+#[derive(Default, Copy, Clone)]
+struct MaskedEvents {
+    mask: [u8; events::Events::full_depth() / 8 + 1],
+    le_is_masked: bool,
+}
+
+impl MaskedEvents {
+    /// Set the global mask for LE events
+    fn set_le_mask(&mut self, to: bool) {
+        self.le_is_masked = to;
+    }
+
+    fn set_event(&mut self, event: events::Events) {
+        if let events::Events::LeMeta(_) = event {
+            self.le_is_masked = true;
+        }
+
+        self.set(event.get_depth())
+    }
+
+    fn set(&mut self, pos: usize) {
+        let index = pos / 8;
+        let bit = pos % 8;
+
+        self.mask[index] |= 1 << bit;
+    }
+
+    /// Update check
+    ///
+    /// This updates the list with input iterator of events and returns three booleans to indicate
+    /// if page 1 of the event mask, page 2 of the event mask, and the LE event mask need to be
+    /// updated on the controller.
+    fn update_check(&mut self, old_mask: Self) -> (bool, bool, bool) {
+        use commands::cb::{set_event_mask, set_event_mask_page_2};
+        use commands::le::set_event_mask as le_set_event_mask;
+
+        let mut page_1 = false;
+        let mut page_2 = false;
+        let mut le_page = false;
+        let mut cnt = 0;
+
+        while events::Events::full_depth() > cnt {
+            let index = cnt / 8;
+            let bit = cnt % 8;
+
+            if self.mask[index] == old_mask.mask[index] {
+                // skip bytes that are the same
+                cnt += 8;
+            } else if self.mask[index] & (1 << bit) == old_mask.mask[index] & (1 << bit) {
+                // skip when the bits are the same
+                cnt += 1;
+            } else {
+                // bits are different so check what is changed
+                cnt += 1;
+
+                let event = events::Events::from_depth(cnt);
+
+                page_1 |= 0 != set_event_mask::event_to_mask_bit(&event);
+
+                page_2 |= 0 != set_event_mask_page_2::event_to_mask_bit(&event);
+
+                if let events::Events::LeMeta(le_meta) = event {
+                    le_page |= 0 != le_set_event_mask::event_to_mask_bit(&le_meta);
+                }
+            }
+        }
+
+        (page_1, page_2, le_page)
+    }
+
+    /// Set all events
+    ///
+    /// This sets the events to the events within the input. The return is the output of
+    /// `update_check`.
+    fn set_events<I, E>(&mut self, iter: I) -> (bool, bool, bool)
+    where
+        I: IntoIterator<Item = E>,
+        E: core::borrow::Borrow<events::Events>,
+    {
+        let old_mask = *self;
+
+        *self = Default::default();
+
+        iter.into_iter().for_each(|item| self.set_event(*item.borrow()));
+
+        self.update_check(old_mask)
+    }
+
+    /// Clear the events
+    ///
+    /// This will clear the masks for the events in `clear_events` and set the internal `le_enabled`
+    /// field to false if `le_meta` is true.
+    #[inline]
+    fn clear_events(&mut self, clear_events: &[events::Events], le_meta: bool) {
+        let mut clear_mask = [0xFFu8; events::Events::full_depth() / 8 + 1];
+
+        let mut cnt = 0;
+        let len = clear_events.len();
+
+        while len > cnt {
+            let pos = clear_events[cnt].get_depth();
+            let index = pos / 8;
+            let bit = pos % 8;
+
+            clear_mask[index] &= !(1 << bit);
+
+            cnt += 1;
+        }
+
+        self.mask
+            .iter_mut()
+            .zip(clear_mask.iter())
+            .for_each(|(mask_byte, clear_byte)| *mask_byte &= *clear_byte);
+
+        if le_meta {
+            self.le_is_masked = false;
+        }
     }
 }
