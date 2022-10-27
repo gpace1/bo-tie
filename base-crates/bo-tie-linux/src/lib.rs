@@ -38,8 +38,7 @@
 //! [`run`]: LinuxInterface::run
 //!
 
-use bo_tie_hci_util::channel::send_safe::SendSafeHostChannelEnds;
-use bo_tie_hci_util::channel::SendSafeChannelReserve;
+use bo_tie_hci_util::channel::{SendSafeChannelReserve, SendSafeHostChannelEnds};
 use bo_tie_hci_util::HciPacket;
 use std::error;
 use std::fmt;
