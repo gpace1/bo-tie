@@ -297,17 +297,10 @@ impl<T: SendSafeChannelReserve> LinuxInterface<T> {
                 received = self.receiver.recv() => {
                     match &received {
                         Some(packet) => if let Err(e) = self.interface.up_send(packet).await {
-                            match e {
-                                bo_tie_hci_interface::SendErrorReason::HostClosed |
-                                bo_tie_hci_interface::SendErrorReason::SenderError(_) => {
-                                    log::debug!("host closed, {:?}", e);
-                                    break
-                                }
-                                e => {
-                                    log::error!("failed up send, {:?}", e);
-                                    break
-                                }
-                            }
+                            if let Err(e) = e.try_log() {
+                                log::error!("up send error: {:?}", e);
+                                break
+                            };
                         },
                         None => break,
                     }

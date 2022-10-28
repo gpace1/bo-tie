@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 bo-tie-hci-util = { path = "../bo-tie-hci-util" }
 bo-tie-util = { path = "../../bo-tie-util"}
+log = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync"]}

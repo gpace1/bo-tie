@@ -133,7 +133,7 @@ where
         T: Deref<Target = [u8]>,
     {
         match packet {
-            HciPacket::Command(_) => Err(SendError::<R>::Command),
+            HciPacket::Command(_) => Err(SendError::<R>::InvalidHciPacket(HciPacketType::Command)),
             HciPacket::Acl(packet) => self.send_acl(packet).await.map_err(|e| e.into()),
             HciPacket::Sco(_packet) => Err(SendError::<R>::Unimplemented("HCI SCO packets are unimplemented")),
             HciPacket::Event(packet) => self.maybe_send_event(packet).await.map_err(|e| e.into()),
@@ -658,7 +658,6 @@ pub enum SendErrorReason<E, C, B1, B2, B3> {
     BufferExtendOfHost(B1),
     BufferExtendOfToConnection(B2),
     BufferExtendOfFromConnection(B3),
-    Command,
     InvalidHciPacket(HciPacketType),
     InvalidHciEventData(events::EventError),
     InvalidConnectionHandle,
@@ -666,6 +665,50 @@ pub enum SendErrorReason<E, C, B1, B2, B3> {
     UnknownConnectionHandle(ConnectionHandle),
     HostClosed,
     Unimplemented(&'static str),
+}
+
+impl<E, C, B1, B2, B3> SendErrorReason<E, C, B1, B2, B3> {
+    /// Try to resolve the error by logging
+    ///
+    /// Many of the kind of errors of `SendErrorReason` do not necessarily mean that the application
+    /// needs to exit if the error occurs. Calling this method will induce a logging error if the
+    /// error type is something that does not mean the HCI of `bo-tie` is in a bad state.
+    ///
+    /// When an error is returned, the error was something that caused `bo-tie` to be in a state
+    /// that it should not continue, so the calling procedure should exit or panic on the return of
+    /// an error by `try_log`.
+    pub fn try_log(self) -> Result<(), Self> {
+        match self {
+            e @ SendErrorReason::ReserveError(_)
+            | e @ SendErrorReason::SenderError(_)
+            | e @ SendErrorReason::BufferExtendOfHost(_)
+            | e @ SendErrorReason::BufferExtendOfToConnection(_)
+            | e @ SendErrorReason::InvalidChannel
+            | e @ SendErrorReason::HostClosed
+            | e @ SendErrorReason::Unimplemented(_)
+            | e @ SendErrorReason::BufferExtendOfFromConnection(_) => Err(e),
+            SendErrorReason::InvalidHciPacket(e) => {
+                log::error!("received an invalid {} packet", e);
+
+                Ok(())
+            }
+            SendErrorReason::InvalidHciEventData(e) => {
+                log::error!("invalid event: {:?}", e);
+
+                Ok(())
+            }
+            SendErrorReason::InvalidConnectionHandle => {
+                log::error!("host received an invalid connection handle");
+
+                Ok(())
+            }
+            SendErrorReason::UnknownConnectionHandle(c) => {
+                log::error!("no connection associated by handle {:#}", c);
+
+                Ok(())
+            }
+        }
+    }
 }
 
 impl<E, C, B1, B2, B3> Display for SendErrorReason<E, C, B1, B2, B3>
@@ -683,7 +726,6 @@ where
             SendErrorReason::BufferExtendOfHost(b) => Display::fmt(b, f),
             SendErrorReason::BufferExtendOfToConnection(b) => Display::fmt(b, f),
             SendErrorReason::BufferExtendOfFromConnection(b) => Display::fmt(b, f),
-            SendErrorReason::Command => f.write_str("cannot send command to host"),
             SendErrorReason::InvalidHciPacket(packet) => write!(f, "Invalid packet {packet}"),
             SendErrorReason::InvalidHciEventData(e) => Display::fmt(e, f),
             SendErrorReason::InvalidConnectionHandle => f.write_str("invalid connection handle"),
