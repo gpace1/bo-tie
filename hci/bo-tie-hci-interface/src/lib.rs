@@ -615,9 +615,11 @@ where
             *packet
                 .get(0)
                 .ok_or(SendError::<R>::InvalidHciPacket(HciPacketType::Acl))?,
+            // Only the first 4 bits are part of the handle
             *packet
                 .get(1)
-                .ok_or(SendError::<R>::InvalidHciPacket(HciPacketType::Acl))?,
+                .ok_or(SendError::<R>::InvalidHciPacket(HciPacketType::Acl))?
+                & 0x0F,
         ]);
 
         let connection_handle =
