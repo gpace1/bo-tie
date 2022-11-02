@@ -361,20 +361,33 @@ impl<T> BasicInfoFrame<T> {
         Ok(p)
     }
 
-    /// Fragment a `BasicInfoFrame` data packet using multiple buffers
+    /// Fragment a `BasicInfoFrame` with buffers.
     ///
-    /// This fragments a `BasicInfoFrame` packet into multiple buffers output by `fut_buffers_iter`.
-    /// `fut_buffers_iter` is an iterator over futures that return a buffer. There must be enough
-    /// buffers to contain the entire packet, but the intention of iterating of futures is for
-    /// `into_fragments` to await for more buffers to be available.
+    /// This creates a future for converting this `BasicInfoFrame` into fragments the size of which
+    /// are specified by the input `fragmentation_size`. Fragments are placed into self-resolving
+    /// buffers acquired from the input `buffers_iterator`. Each buffer is filled with the data of
+    /// this `BasicInfoFrame` and then self-resolved before the next buffer is acquired.
     ///
-    /// The buffer type is consumed into a future after a fragment is put into it. It is up to the
-    /// user of `into_fragments` to define what that future does. The purpose of the future within
-    /// `bo-tie` is to send the buffer to the interface.
+    /// # Buffering
+    /// `buffers_iterator` must be an endlessly repeating iterator over futures used for acquiring a
+    /// buffer. The purpose of the future is for awaiting when is no buffers currently available.
+    /// This can occur on systems that have multiple connections all sharing the same buffer pool.
+    /// However, most systems that utilize dynamic allocation will never need to await to acquire a
+    /// buffer, and as such implement the future to always returns ready when polled.
+    ///
+    /// The buffer type (which is the generic `C`) is self completing. Once a buffer is acquired, it
+    /// is filled with bytes until either it returns an error when trying to extend (via its
+    /// implementation of [`TryExtend`]) or the number of bytes within it is equal to
+    /// `fragmentation_size`. The buffer is then self-resolved by converted it into a future with is
+    /// awaited until it is polled to completion. Within `bo-tie` this future is used for sending
+    /// the data to the connected device, but this is outside the scope of `into_fragments` so there
+    /// is no requirement that this is what the future must do.
+    ///
+    /// [`TryExtend`]: bo_tie_util::buffer::TryExtend
     pub fn into_fragments<I, F, C, E>(
         self,
-        mtu: usize,
-        fut_buffers_iter: I,
+        fragmentation_size: usize,
+        buffers_iterator: I,
     ) -> send_future::AsSlicedPacketFuture<I::IntoIter, T, F, C, C::IntoFuture>
     where
         T: core::ops::Deref<Target = [u8]>,
@@ -382,7 +395,7 @@ impl<T> BasicInfoFrame<T> {
         F: Future<Output = C>,
         C: TryExtend<u8> + core::future::IntoFuture<Output = Result<(), E>>,
     {
-        send_future::AsSlicedPacketFuture::new(mtu, self, fut_buffers_iter)
+        send_future::AsSlicedPacketFuture::new(fragmentation_size, self, buffers_iterator)
     }
 
     /// Create a `BasicInfoFrame` from a slice of bytes

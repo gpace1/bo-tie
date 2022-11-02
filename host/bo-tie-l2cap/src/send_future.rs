@@ -7,7 +7,7 @@ use core::task::{Context, Poll};
 const BUFFERS_EXPECT: &'static str = "input 'buffers' returned None";
 
 pub struct AsSlicedPacketFuture<I, D, F, C, S> {
-    mtu: usize,
+    max_size: usize,
     byte_count: usize,
     iter: I,
     len: [u8; 2],
@@ -17,13 +17,15 @@ pub struct AsSlicedPacketFuture<I, D, F, C, S> {
 }
 
 impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
-    pub fn new<T>(mtu: usize, frame: BasicInfoFrame<D>, into_iterator: T) -> Self
+    pub fn new<T>(max_size: usize, frame: BasicInfoFrame<D>, into_iterator: T) -> Self
     where
         T: IntoIterator<IntoIter = I>,
         I: Iterator<Item = F>,
         F: Future<Output = C>,
         D: core::ops::Deref<Target = [u8]>,
     {
+        assert_ne!(max_size, 0, "the maximum transfer unit cannot be zero");
+
         let byte_count = 0;
 
         let len: Result<u16, _> = frame.payload.len().try_into();
@@ -51,7 +53,7 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
         };
 
         Self {
-            mtu,
+            max_size,
             byte_count,
             iter,
             len,
@@ -64,11 +66,12 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
 
 macro_rules! try_extend_current {
     ($this:expr, $current:expr, $val:expr) => {
-        if $this.mtu < $this.byte_count {
+        if $this.byte_count < $this.max_size {
             if let Err(_) = $current.try_extend_one($val) {
                 $this.byte_count = 0;
                 Err(())
             } else {
+                $this.byte_count += 1;
                 Ok(())
             }
         } else {
@@ -173,6 +176,39 @@ where
     }
 }
 
+/// States used to describe the current operation when polling a `AsSlicedPacketFuture`
+///
+/// # States
+/// These states are used for describing the current operation being done when polling. They are
+/// needed as polling to completion need a state machine
+///
+/// ### DataTooLarge
+/// This meta-state is used for returning an error whenever the data to be transferred is larger
+/// than the maximum transfer size of the connection channel.
+///
+/// ### AquireBuffer
+/// The process of acquiring a buffer is done via a future, so this state is used to mark the
+/// operation while the future for acquiring the buffer is polled to completion. The first tuple
+/// field is the future polled to acquire the buffer, while the second and third field are for
+/// moving onto the next state. When calling the third field, the second field is used as the second
+/// input. The third field is called after the first filed is polled to completion.
+///
+/// ### FinishCurrent
+/// `FinishCurrent` is used for completing the process of sending data to the connected device. The
+/// first field is the future used for sending the data, the other fields follow the same operation
+/// as stated for `AcquireBuffer`.
+///
+/// ### Length
+/// This is used for processing the length field of a L2CAP PDU.  
+///
+/// ### ChannelId
+/// This is for processing the channel identifier field of a L2CAP PDU.
+///
+/// ### Data
+/// This is for processing the data (a.k.a. the payload) of a L2CAP PDU.
+///
+/// ### Complete
+/// End state.
 enum State<C, F, S> {
     DataTooLarge,
     AcquireBuffer(F, usize, fn(C, usize) -> Self),
