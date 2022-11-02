@@ -17,6 +17,7 @@ pub struct LeL2cap<C: ConnectionChannelEnds> {
     back_cap: usize,
     max_mtu: usize,
     mtu: Cell<usize>,
+    hci_max_payload_size: usize,
     channel_ends: C,
 }
 
@@ -29,7 +30,14 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
 }
 
 impl<C: ConnectionChannelEnds> LeL2cap<C> {
-    pub(crate) fn new<T>(front_cap: usize, back_cap: usize, max_mtu: usize, initial_mtu: T, channel_ends: C) -> Self
+    pub(crate) fn new<T>(
+        front_cap: usize,
+        back_cap: usize,
+        max_mtu: usize,
+        hci_max_payload_size: usize,
+        initial_mtu: T,
+        channel_ends: C,
+    ) -> Self
     where
         T: Into<Cell<usize>>,
     {
@@ -40,6 +48,7 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
             back_cap,
             max_mtu,
             mtu,
+            hci_max_payload_size,
             channel_ends,
         }
     }
@@ -78,6 +87,14 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
     pub fn set_mtu(&mut self, to: usize) {
         self.mtu.set(to)
     }
+
+    /// Get the fragmentation size
+    ///
+    /// Data sent to (or received from) the connected device cannot exceed this size. This is
+    /// equivalent to the Controller's maximum size of the payload for a HCI ACL packet of LE data.
+    pub fn fragment_size(&self) -> usize {
+        self.hci_max_payload_size
+    }
 }
 
 impl<C> bo_tie_l2cap::ConnectionChannel for LeL2cap<C>
@@ -104,7 +121,7 @@ where
         };
 
         ConnectionChannelSender {
-            sliced_future: data.into_fragments(self.get_mtu(), iter),
+            sliced_future: data.into_fragments(self.fragment_size(), iter),
         }
     }
 

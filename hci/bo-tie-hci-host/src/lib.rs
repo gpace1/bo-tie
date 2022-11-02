@@ -434,10 +434,10 @@ impl<'a> HciAclData<&'a [u8]> {
 /// task.
 pub struct Host<H: HostChannelEnds> {
     host_interface: H,
-    acl_max_mtu: usize,
-    sco_max_mtu: usize,
-    le_acl_max_mtu: usize,
-    _le_iso_max_mtu: usize,
+    acl_max_payload: usize,
+    sco_max_payload: usize,
+    le_acl_max_payload: usize,
+    _le_iso_max_payload: usize,
     masked_events: MaskedEvents,
 }
 
@@ -468,10 +468,10 @@ where
     pub async fn init(ends: H) -> Result<Self, CommandError<H>> {
         let mut host = Host {
             host_interface: ends,
-            acl_max_mtu: Default::default(),
-            sco_max_mtu: Default::default(),
-            le_acl_max_mtu: Default::default(),
-            _le_iso_max_mtu: Default::default(),
+            acl_max_payload: Default::default(),
+            sco_max_payload: Default::default(),
+            le_acl_max_payload: Default::default(),
+            _le_iso_max_payload: Default::default(),
             masked_events: Default::default(),
         };
 
@@ -493,9 +493,9 @@ where
         // get the main buffer info
         let buffer_info = commands::info_params::read_buffer_size::send(self).await?;
 
-        self.acl_max_mtu = buffer_info.acl_data_packet_len;
+        self.acl_max_payload = buffer_info.acl_data_packet_len;
 
-        self.sco_max_mtu = buffer_info.synchronous_data_packet_len;
+        self.sco_max_payload = buffer_info.synchronous_data_packet_len;
 
         // if LE is supported, get the LE info from the controller
         let (le_acl_max_mtu, le_iso_max_mtu) = match commands::le::read_buffer_size::send_v2(self).await {
@@ -511,7 +511,7 @@ where
             Ok(buffer_size_info_v2) => {
                 let le_acl_max_mtu = match buffer_size_info_v2.acl {
                     Some(bs) => bs.len.into(),
-                    None => self.acl_max_mtu,
+                    None => self.acl_max_payload,
                 };
 
                 let le_iso_max_mtu = buffer_size_info_v2.iso.map(|bs| bs.len.into()).unwrap_or_default();
@@ -521,9 +521,9 @@ where
             e => return e.map(|_| ()),
         };
 
-        self.le_acl_max_mtu = le_acl_max_mtu;
+        self.le_acl_max_payload = le_acl_max_mtu;
 
-        self._le_iso_max_mtu = le_iso_max_mtu;
+        self._le_iso_max_payload = le_iso_max_mtu;
 
         Ok(())
     }
@@ -643,7 +643,7 @@ where
                 let connection = Connection::new(
                     head_cap,
                     tail_cap,
-                    self.acl_max_mtu,
+                    self.acl_max_payload,
                     ConnectionKind::BrEdr(cc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
                 );
@@ -656,7 +656,7 @@ where
                 let connection = Connection::new(
                     head_cap,
                     tail_cap,
-                    self.sco_max_mtu,
+                    self.sco_max_payload,
                     ConnectionKind::BrEdrSco(scc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
                 );
@@ -669,7 +669,7 @@ where
                 let connection = Connection::new(
                     head_cap,
                     tail_cap,
-                    self.le_acl_max_mtu,
+                    self.le_acl_max_payload,
                     ConnectionKind::Le(lcc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
                 );
@@ -682,7 +682,7 @@ where
                 let connection = Connection::new(
                     head_cap,
                     tail_cap,
-                    self.le_acl_max_mtu,
+                    self.le_acl_max_payload,
                     ConnectionKind::LeEnh(lecc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
                 );
@@ -882,7 +882,7 @@ pub enum Next<C: bo_tie_hci_util::ConnectionChannelEnds> {
 pub struct Connection<C> {
     buffer_header_size: usize,
     buffer_tail_size: usize,
-    hci_mtu: usize,
+    hci_max: usize,
     bounded: bool,
     kind: ConnectionKind,
     ends: C,
@@ -895,7 +895,7 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
         Self {
             buffer_header_size,
             buffer_tail_size,
-            hci_mtu,
+            hci_max: hci_mtu,
             bounded,
             kind,
             ends,
@@ -958,13 +958,14 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
     pub fn try_into_le(self) -> Result<l2cap::LeL2cap<C>, Self> {
         match self.get_kind() {
             ConnectionKind::Le(_) | ConnectionKind::LeEnh(_) => {
-                let max_mtu = if self.bounded { self.hci_mtu } else { <u16>::MAX.into() };
+                let max_mtu = if self.bounded { self.hci_max } else { <u16>::MAX.into() };
                 let initial_mtu = <bo_tie_l2cap::LeU as bo_tie_l2cap::MinimumMtu>::MIN_MTU;
 
                 let le = l2cap::LeL2cap::new(
                     self.buffer_header_size,
                     self.buffer_tail_size,
                     max_mtu,
+                    self.hci_max,
                     initial_mtu,
                     self.ends,
                 );
