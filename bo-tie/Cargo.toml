@@ -21,7 +21,7 @@ bo-tie-sm = { path = "../host/bo-tie-sm", default-features = false, optional = t
 
 [features]
 default = ["std", "hci", "l2cap", "gap", "att", "gatt", "sm", "cryptography", "sys-rand" ]
-std = ["bo-tie-util/std", "bo-tie-hci-host/std", "bo-tie-hci-interface/std", "bo-tie-hci-util/std", "bo-tie-sm/std"]
+std = ["bo-tie-util/std", "bo-tie-hci-host/std", "bo-tie-hci-interface/std", "bo-tie-hci-util/std", "bo-tie-sm/std", "bo-tie-l2cap/std"]
 hci = ["bo-tie-hci-util", "bo-tie-hci-host", "bo-tie-hci-interface"]
 l2cap = ["bo-tie-host-util", "bo-tie-l2cap", "bo-tie-hci-host/l2cap"]
 gap = ["bo-tie-host-util", "bo-tie-gap", "bo-tie-hci-host/gap", "bo-tie-hci-util/gap"]
