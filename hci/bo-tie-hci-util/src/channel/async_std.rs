@@ -3,7 +3,6 @@
 //! [async-std]: async_std
 
 use crate::channel::SendSafeChannelReserve;
-use crate::ChannelReserve;
 use async_std::channel::{Receiver, Recv, Send, SendError, Sender};
 use core::fmt::Debug;
 use std::future::Future;
