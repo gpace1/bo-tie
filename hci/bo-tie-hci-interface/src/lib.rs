@@ -80,9 +80,9 @@ pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
 use bo_tie_hci_util::{
-    BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HciPacket,
-    HciPacketType, HostChannel, Sender, TaskId, TaskSource, ToConnectionIntraMessage, ToHostCommandIntraMessage,
-    ToHostGeneralIntraMessage,
+    BufferInformation, BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromHostIntraMessage,
+    FromInterface, HciPacket, HciPacketType, HostChannel, Sender, TaskId, TaskSource, ToConnectionIntraMessage,
+    ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
 };
 use bo_tie_util::buffer::stack::LinearBuffer;
 use bo_tie_util::buffer::{Buffer, TryExtend};
@@ -101,6 +101,7 @@ use core::ops::Deref;
 /// received from the interface up to the higher layered protocols. Methods that contain *down* are
 /// for sending packets to the interface and onto the Controller.
 pub struct Interface<R> {
+    buffer_info: BufferInformation,
     channel_reserve: R,
 }
 
@@ -110,7 +111,11 @@ where
 {
     /// Create a new interface
     pub fn new(channel_reserve: R) -> Self {
-        Interface { channel_reserve }
+        let buffer_info = BufferInformation::default();
+        Interface {
+            buffer_info,
+            channel_reserve,
+        }
     }
 
     /// Send a complete HCI packet upward
@@ -266,20 +271,23 @@ where
     pub async fn down_send(&mut self) -> Option<HciPacket<impl Buffer>> {
         use buffer::DriverBuffer;
 
-        self.channel_reserve
-            .receive_next()
-            .await
-            .map(|intra_message| match intra_message {
-                TaskSource::Host(message) => match message {
-                    FromHostIntraMessage::Command(data) => HciPacket::Command(DriverBuffer::Cmd(data)),
+        loop {
+            match self.channel_reserve.receive_next().await {
+                None => break None,
+                Some(intra_message) => match intra_message {
+                    TaskSource::Host(message) => match message {
+                        FromHostIntraMessage::Command(data) => break Some(HciPacket::Command(DriverBuffer::Cmd(data))),
+                        FromHostIntraMessage::BufferInfo(i) => self.parse_buffer_info(i),
+                    },
+                    TaskSource::Connection(message) => match message {
+                        FromConnectionIntraMessage::Acl(data) => break Some(HciPacket::Acl(DriverBuffer::Data(data))),
+                        FromConnectionIntraMessage::Sco(data) => break Some(HciPacket::Sco(DriverBuffer::Data(data))),
+                        FromConnectionIntraMessage::Iso(data) => break Some(HciPacket::Iso(DriverBuffer::Data(data))),
+                        FromConnectionIntraMessage::Disconnect(_) => unreachable!(),
+                    },
                 },
-                TaskSource::Connection(message) => match message {
-                    FromConnectionIntraMessage::Acl(data) => HciPacket::Acl(DriverBuffer::Data(data)),
-                    FromConnectionIntraMessage::Sco(data) => HciPacket::Sco(DriverBuffer::Data(data)),
-                    FromConnectionIntraMessage::Iso(data) => HciPacket::Iso(DriverBuffer::Data(data)),
-                    FromConnectionIntraMessage::Disconnect(_) => unreachable!(),
-                },
-            })
+            }
+        }
     }
 
     /// Parse a command complete event
@@ -470,7 +478,13 @@ where
         &mut self,
         data: &events::parameters::LeConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        let flow_control_id = FlowControlId::Acl;
+        // When LE ACL flow control packet count is zero
+        // then BR/EDR and LE use the same ACL buffer
+        let flow_control_id = if self.buffer_info.le_acl.packet_flow_control().how_many() == 0 {
+            FlowControlId::Acl
+        } else {
+            FlowControlId::LeAcl
+        };
 
         self.create_connection(data.connection_handle, flow_control_id).await
     }
@@ -479,7 +493,13 @@ where
         &mut self,
         data: &events::parameters::LeEnhancedConnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        let flow_control_id = FlowControlId::Acl;
+        // When LE ACL flow control packet count is zero
+        // then BR/EDR and LE use the same ACL buffer
+        let flow_control_id = if self.buffer_info.le_acl.packet_flow_control().how_many() == 0 {
+            FlowControlId::Acl
+        } else {
+            FlowControlId::LeAcl
+        };
 
         self.create_connection(data.connection_handle, flow_control_id).await
     }
@@ -650,6 +670,25 @@ where
             .send(message)
             .await
             .map_err(|e| SendError::<R>::SenderError(e))
+    }
+
+    /// Parse the buffer information sent from the host async task
+    fn parse_buffer_info(&mut self, info: BufferInformation) {
+        self.buffer_info = info;
+
+        // When buffer information is received, all flow control is assumed to be packet based.
+
+        self.channel_reserve
+            .inc_acl_flow_ctrl(self.buffer_info.acl.packet_flow_control().how_many());
+
+        self.channel_reserve
+            .inc_sco_flow_control(self.buffer_info.le_iso.how_many());
+
+        self.channel_reserve
+            .inc_le_acl_flow_control(self.buffer_info.le_acl.packet_flow_control().how_many());
+
+        self.channel_reserve
+            .inc_le_iso_flow_control(self.buffer_info.le_iso.how_many());
     }
 }
 

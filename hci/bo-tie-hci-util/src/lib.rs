@@ -1346,7 +1346,7 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromHostIntraMessage<T>> for HciPacket<T> 
     fn try_from(i: FromHostIntraMessage<T>) -> Result<Self, Self::Error> {
         match i {
             FromHostIntraMessage::Command(c) => Ok(HciPacket::Command(c)),
-            FromHostIntraMessage::BufferInfo(i) => {
+            FromHostIntraMessage::BufferInfo(_) => {
                 Err("'FromHostIntraMessage::BufferInfo' cannot be converted to a HciPacket")
             }
         }
@@ -1373,7 +1373,7 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPack
 /// Packet based flow control is where the Controller will individually buffer packets. The number
 /// of packets that can be buffered along with the maximum size of the payload (a.k.a. the data
 /// portion) of each packet is manufacture specific.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct PacketFlowControl {
     count: usize,
     max_size: usize,
@@ -1396,7 +1396,7 @@ impl PacketFlowControl {
 /// Data block based flow control is where a pool of "data blocks" are used for buffering HCI data
 /// packets. The Controller still has a maximum size of a data packet, but packets can occupy
 /// multiple blocks within the Controller.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct DataBlockFlowControl {
     blocks: usize,
     block_size: usize,
@@ -1422,7 +1422,7 @@ impl DataBlockFlowControl {
 }
 
 /// Information on the buffers for ACL data
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AclDataBufferInformation {
     packets: PacketFlowControl,
     blocks: DataBlockFlowControl,
@@ -1447,15 +1447,11 @@ impl AclDataBufferInformation {
 /// buffers to the interface async task. Without this information, the interface async task will
 /// not know how many packets/data blocks the Controller can accept and will refuse to send any
 /// data to the controller.
-///
-/// # Note
-/// If field `le_acl` is `None` it means that LE ACL HCI data packets use the normal ACL data
-/// buffers.
-#[derive(Debug)]
-pub struct FlowControlInformation {
+#[derive(Debug, Default)]
+pub struct BufferInformation {
     pub acl: AclDataBufferInformation,
     pub sco: PacketFlowControl,
-    pub le_acl: Option<AclDataBufferInformation>,
+    pub le_acl: AclDataBufferInformation,
     pub le_iso: PacketFlowControl,
 }
 
@@ -1466,7 +1462,7 @@ pub struct FlowControlInformation {
 #[derive(Debug)]
 pub enum FromHostIntraMessage<T> {
     Command(T),
-    BufferInfo(FlowControlInformation),
+    BufferInfo(BufferInformation),
 }
 
 impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
