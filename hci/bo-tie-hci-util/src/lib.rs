@@ -1524,8 +1524,6 @@ pub enum FromConnectionIntraMessage<T> {
     Sco(T),
     /// HCI isochronous Data Packet
     Iso(T),
-    /// A disconnection indication
-    Disconnect(bo_tie_util::errors::Error),
 }
 
 impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromConnectionIntraMessage<T> {
