@@ -118,7 +118,7 @@ where
                         match try_extend_current!(this, current, val) {
                             Ok(_) => this.state.next_index(),
                             Err(_) => {
-                                let (current, index) = match core::mem::replace(&mut this.state, State::Complete) {
+                                let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
                                     State::Length(current, index) => (current, index),
                                     _ => unreachable!(),
                                 };
@@ -138,7 +138,7 @@ where
                         match try_extend_current!(this, current, val) {
                             Ok(_) => this.state.next_index(),
                             Err(_) => {
-                                let (current, index) = match core::mem::replace(&mut this.state, State::Complete) {
+                                let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
                                     State::ChannelId(current, index) => (current, index),
                                     _ => unreachable!(),
                                 };
@@ -158,7 +158,7 @@ where
                         match try_extend_current!(this, current, val) {
                             Ok(_) => this.state.next_index(),
                             Err(_) => {
-                                let (current, index) = match core::mem::replace(&mut this.state, State::Complete) {
+                                let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
                                     State::Data(current, index) => (current, index),
                                     _ => unreachable!(),
                                 };
@@ -167,10 +167,20 @@ where
                             }
                         }
                     } else {
-                        this.state = State::Complete
+                        let (current, _) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
+                            State::Data(current, index) => (current, index),
+                            _ => unreachable!(),
+                        };
+
+                        // Note: the second field of `FinishCurrent` is not used by State::complete
+                        this.state = State::Complete(current.into_future())
                     }
                 }
-                State::Complete => break Poll::Ready(Ok(())),
+                State::Complete(s) => {
+                    break unsafe { Pin::new_unchecked(s) }
+                        .poll(cx)
+                        .map(|ready| ready.map_err(|e| Error::User(e)))
+                }
             }
         }
     }
@@ -186,7 +196,7 @@ where
 /// This meta-state is used for returning an error whenever the data to be transferred is larger
 /// than the maximum transfer size of the connection channel.
 ///
-/// ### AquireBuffer
+/// ### AcquireBuffer
 /// The process of acquiring a buffer is done via a future, so this state is used to mark the
 /// operation while the future for acquiring the buffer is polled to completion. The first tuple
 /// field is the future polled to acquire the buffer, while the second and third field are for
@@ -195,8 +205,8 @@ where
 ///
 /// ### FinishCurrent
 /// `FinishCurrent` is used for completing the process of sending data to the connected device. The
-/// first field is the future used for sending the data, the other fields follow the same operation
-/// as stated for `AcquireBuffer`.
+/// first field is the future used for sending the data, the next two fields are fed to
+/// the state `AcquireBuffer`. `AcquireBuffer` always comes after `FinishCurrent`.
 ///
 /// ### Length
 /// This is used for processing the length field of a L2CAP PDU.  
@@ -208,7 +218,7 @@ where
 /// This is for processing the data (a.k.a. the payload) of a L2CAP PDU.
 ///
 /// ### Complete
-/// End state.
+/// The last buffer is polled to completion
 enum State<C, F, S> {
     DataTooLarge,
     AcquireBuffer(F, usize, fn(C, usize) -> Self),
@@ -216,11 +226,16 @@ enum State<C, F, S> {
     Length(C, usize),
     ChannelId(C, usize),
     Data(C, usize),
-    Complete,
+    Complete(S),
 }
 
 impl<C, F, S> State<C, F, S> {
-    const TEMPORARY: Self = State::Complete;
+    /// A temporary state
+    ///
+    /// This "temporary" state is not used when evaluating the operation to be performed. It's used
+    /// as a between state for replacing one state with another when fields of the replaced state
+    /// are also moved to the new state.
+    const TEMPORARY: Self = State::DataTooLarge;
 
     /// Go to the next index
     ///
