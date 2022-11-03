@@ -232,6 +232,9 @@ pub enum HostChannel {
     General,
 }
 
+/// The "kind" of connection
+///
+
 /// Identification for a flow controller
 ///
 /// An [`Interface`] has a different flow controller for each of the possible data buffers in a
@@ -1337,10 +1340,15 @@ impl<T> HciPacket<T> {
     }
 }
 
-impl<T: Deref<Target = [u8]>> From<FromHostIntraMessage<T>> for HciPacket<T> {
-    fn from(i: FromHostIntraMessage<T>) -> Self {
+impl<T: Deref<Target = [u8]>> TryFrom<FromHostIntraMessage<T>> for HciPacket<T> {
+    type Error = &'static str;
+
+    fn try_from(i: FromHostIntraMessage<T>) -> Result<Self, Self::Error> {
         match i {
-            FromHostIntraMessage::Command(c) => HciPacket::Command(c),
+            FromHostIntraMessage::Command(c) => Ok(HciPacket::Command(c)),
+            FromHostIntraMessage::BufferInfo(i) => {
+                Err("'FromHostIntraMessage::BufferInfo' cannot be converted to a HciPacket")
+            }
         }
     }
 }
@@ -1360,6 +1368,97 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPack
     }
 }
 
+/// Packet based flow control buffer information
+///
+/// Packet based flow control is where the Controller will individually buffer packets. The number
+/// of packets that can be buffered along with the maximum size of the payload (a.k.a. the data
+/// portion) of each packet is manufacture specific.
+#[derive(Debug, Clone, Copy)]
+pub struct PacketFlowControl {
+    count: usize,
+    max_size: usize,
+}
+
+impl PacketFlowControl {
+    /// Get the number of data packets that can be stored by the Controller
+    pub fn how_many(&self) -> usize {
+        self.count
+    }
+
+    /// Get the maximum size of the *payload* of a data packet that can be stored by the Controller
+    pub fn max_size(&self) -> usize {
+        self.max_size
+    }
+}
+
+/// Data block based flow control buffer information
+///
+/// Data block based flow control is where a pool of "data blocks" are used for buffering HCI data
+/// packets. The Controller still has a maximum size of a data packet, but packets can occupy
+/// multiple blocks within the Controller.
+#[derive(Debug, Clone, Copy)]
+pub struct DataBlockFlowControl {
+    blocks: usize,
+    block_size: usize,
+    packet_size: usize,
+}
+
+impl DataBlockFlowControl {
+    /// Get the number of blocks
+    pub fn number_of_blocks(&self) -> usize {
+        self.blocks
+    }
+
+    /// Get the size of each block
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    /// Get the maximum size of the *payload* of a data packet that can be transmitted by the
+    /// Controller
+    pub fn max_size(&self) -> usize {
+        self.packet_size
+    }
+}
+
+/// Information on the buffers for ACL data
+#[derive(Debug)]
+pub struct AclDataBufferInformation {
+    packets: PacketFlowControl,
+    blocks: DataBlockFlowControl,
+}
+
+impl AclDataBufferInformation {
+    /// Get the packet based flow control
+    pub fn packet_flow_control(&self) -> &PacketFlowControl {
+        &self.packets
+    }
+
+    /// Get the data block based flow control
+    pub fn data_block_flow_control(&self) -> &DataBlockFlowControl {
+        &self.blocks
+    }
+}
+
+/// Flow Control information regarding the buffers of the Controller
+///
+/// This is sent from the host async task to the interface async task as part of the host's
+/// initialization. It provides the interface task with the flow control information of the data
+/// buffers to the interface async task. Without this information, the interface async task will
+/// not know how many packets/data blocks the Controller can accept and will refuse to send any
+/// data to the controller.
+///
+/// # Note
+/// If field `le_acl` is `None` it means that LE ACL HCI data packets use the normal ACL data
+/// buffers.
+#[derive(Debug)]
+pub struct FlowControlInformation {
+    pub acl: AclDataBufferInformation,
+    pub sco: PacketFlowControl,
+    pub le_acl: Option<AclDataBufferInformation>,
+    pub le_iso: PacketFlowControl,
+}
+
 /// A messages sent from the host async task
 ///
 /// The host async task sends HCI commands to the interface async task, and the interface async task
@@ -1367,6 +1466,7 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPack
 #[derive(Debug)]
 pub enum FromHostIntraMessage<T> {
     Command(T),
+    BufferInfo(FlowControlInformation),
 }
 
 impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
@@ -1377,6 +1477,7 @@ impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
     fn get_payload_size(&self) -> Option<usize> {
         match self {
             FromHostIntraMessage::Command(command) => Some(command[2] as usize),
+            _ => None,
         }
     }
 }

@@ -191,6 +191,7 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferSend
     fn push(&self, packet: Self::Payload) {
         let unsafe_packet = match packet {
             FromHostMsg::Command(t) => UnsafeFromHostMsg::Command(unsafe { BufferReservation::to_unsafe(t) }),
+            FromHostMsg::BufferInfo(i) => UnsafeFromHostMsg::BufferInfo(i),
         };
 
         self.0

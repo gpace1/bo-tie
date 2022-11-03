@@ -206,6 +206,7 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferReceiv
 
         match unsafe_payload {
             UnsafeFromHostMsg::Command(t) => FromHostMsg::Command(unsafe { UnsafeBufferReservation::rebind(t) }),
+            UnsafeFromHostMsg::BufferInfo(i) => FromHostMsg::BufferInfo(i),
         }
     }
 }
