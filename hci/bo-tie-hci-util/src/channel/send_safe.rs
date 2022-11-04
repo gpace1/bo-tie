@@ -13,8 +13,9 @@
 //! [`HostChannelEnds`]: crate::HostChannelEnds
 
 use crate::{
-    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, FromConnectionIntraMessage, FromHostIntraMessage,
-    HostChannelEnds, Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, FromConnectionIntraMessage, HostChannelEnds,
+    Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::fmt::{Debug, Display};
@@ -224,7 +225,7 @@ pub trait SendSafeChannelReserve:
     type SendSafeFromHostChannel: SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = Self::SenderError,
-            SendSafeMessage = FromHostIntraMessage<
+            SendSafeMessage = ToInterfaceIntraMessage<
                 <Self::SendSafeFromHostChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >;
@@ -263,7 +264,7 @@ where
     T::FromHostChannel: SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = T::SenderError,
-            SendSafeMessage = FromHostIntraMessage<<T::FromHostChannel as SendSafeBufferReserve>::SendSafeBuffer>,
+            SendSafeMessage = ToInterfaceIntraMessage<<T::FromHostChannel as SendSafeBufferReserve>::SendSafeBuffer>,
         >,
     T::ToConnectionChannel: Sync
         + SendSafeBufferReserve
@@ -321,7 +322,7 @@ pub trait SendSafeHostChannelEnds:
     type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
     type SendSafeFromBuffer: for<'a> SendSafeBuffer<'a>;
     type SendSafeTakeBuffer: Send + Future<Output = Self::ToBuffer>;
-    type SendSafeSender: for<'a> SendSafeSender<'a, Message = FromHostIntraMessage<Self::SendSafeToBuffer>>;
+    type SendSafeSender: for<'a> SendSafeSender<'a, Message = ToInterfaceIntraMessage<Self::SendSafeToBuffer>>;
     type SendSafeCmdReceiver: for<'a> SendSafeReceiver<'a, Message = ToHostCommandIntraMessage>;
     type SendSafeGenReceiver: for<'a> SendSafeReceiver<
         'a,
@@ -336,7 +337,7 @@ where
     T::ToBuffer: for<'a> SendSafeBuffer<'a>,
     T::FromBuffer: for<'a> SendSafeBuffer<'a>,
     T::TakeBuffer: Send,
-    T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = FromHostIntraMessage<T::ToBuffer>>,
+    T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = ToInterfaceIntraMessage<T::ToBuffer>>,
     T::CmdReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToHostCommandIntraMessage>,
     T::GenReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToHostGeneralIntraMessage<T::ConnectionChannelEnds>>,
     T::ConnectionChannelEnds: SendSafeConnectionChannelEnds,

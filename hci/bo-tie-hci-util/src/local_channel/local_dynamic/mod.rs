@@ -13,8 +13,8 @@ use super::{
 };
 use crate::{
     BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
-    FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannel, HostChannelEnds, InterfaceReceivers,
-    Receiver, Sender, TaskId, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    FromConnectionIntraMessage, FromInterface, HostChannel, HostChannelEnds, InterfaceReceivers, Receiver, Sender,
+    TaskId, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
@@ -456,8 +456,8 @@ pub struct LocalChannelReserve {
     dedicated: DedicatedChannels,
     flow_control_receiver: FlowCtrlReceiver<
         LocalChannelReceiver<
-            LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
-            FromHostIntraMessage<DeVec<u8>>,
+            LocalBufferedChannel<DeVec<u8>, ToInterfaceIntraMessage<DeVec<u8>>>,
+            ToInterfaceIntraMessage<DeVec<u8>>,
         >,
         LocalChannelReceiver<
             LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
@@ -534,7 +534,7 @@ impl ChannelReserve for LocalChannelReserve {
 
     type ToHostGenChannel = LocalChannel<ToHostGeneralIntraMessage<Self::ConnectionChannelEnds>>;
 
-    type FromHostChannel = LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>;
+    type FromHostChannel = LocalBufferedChannel<DeVec<u8>, ToInterfaceIntraMessage<DeVec<u8>>>;
 
     type ToConnectionChannel = LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>;
 
@@ -661,7 +661,7 @@ impl std::error::Error for LocalChannelManagerError {}
 struct HostDynChannelEnds {
     driver_front_capacity: usize,
     driver_back_capacity: usize,
-    command_channel: LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
+    command_channel: LocalBufferedChannel<DeVec<u8>, ToInterfaceIntraMessage<DeVec<u8>>>,
     command_response: LocalChannelReceiver<LocalChannel<ToHostCommandIntraMessage>, ToHostCommandIntraMessage>,
     general: LocalChannelReceiver<
         LocalChannel<ToHostGeneralIntraMessage<ConnectionDynChannelEnds>>,
@@ -674,11 +674,12 @@ impl HostChannelEnds for HostDynChannelEnds {
 
     type FromBuffer = DeVec<u8>;
 
-    type TakeBuffer = <LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>> as BufferReserve>::TakeBuffer;
+    type TakeBuffer =
+        <LocalBufferedChannel<DeVec<u8>, ToInterfaceIntraMessage<DeVec<u8>>> as BufferReserve>::TakeBuffer;
 
     type Sender = LocalChannelSender<
-        LocalBufferedChannel<DeVec<u8>, FromHostIntraMessage<DeVec<u8>>>,
-        FromHostIntraMessage<DeVec<u8>>,
+        LocalBufferedChannel<DeVec<u8>, ToInterfaceIntraMessage<DeVec<u8>>>,
+        ToInterfaceIntraMessage<DeVec<u8>>,
     >;
 
     type CmdReceiver = LocalChannelReceiver<LocalChannel<ToHostCommandIntraMessage>, ToHostCommandIntraMessage>;

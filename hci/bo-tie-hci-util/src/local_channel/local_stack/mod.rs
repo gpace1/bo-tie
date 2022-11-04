@@ -19,9 +19,9 @@ use crate::local_channel::local_stack::receiver::LocalChannelReceiver;
 use crate::local_channel::local_stack::sender::LocalChannelSender;
 use crate::{
     BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds as ChannelEndsTrait, ConnectionHandle, FlowControlId,
-    FlowCtrlReceiver, FromConnectionIntraMessage, FromHostIntraMessage, FromInterface, HostChannel,
-    HostChannelEnds as HostChannelEndsTrait, InterfaceReceivers, TaskId, ToConnectionIntraMessage,
-    ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    FlowCtrlReceiver, FromConnectionIntraMessage, FromInterface, HostChannel, HostChannelEnds as HostChannelEndsTrait,
+    InterfaceReceivers, TaskId, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::stack::{
     BufferReservation, DeLinearBuffer, LinearBuffer, Reservation, StackHotel, UnsafeBufferReservation,
@@ -48,11 +48,11 @@ type ToHostGenMsg<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const 
 type UnsafeToHostGenMsg<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
     ToHostGeneralIntraMessage<UnsafeConnectionEnds<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>;
 
-type FromHostMsg<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
-    FromHostIntraMessage<BufferReservation<'a, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>;
+type ToInterfaceMsg<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
+    ToInterfaceIntraMessage<BufferReservation<'a, DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>;
 
-type UnsafeFromHostMsg<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
-    FromHostIntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>;
+type UnsafeToInterfaceMsg<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
+    ToInterfaceIntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>;
 
 type ToConnMsg<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
     ToConnectionIntraMessage<
@@ -83,8 +83,11 @@ type ToHostCmdChannel<const CHANNEL_SIZE: usize> = LocalChannel<CHANNEL_SIZE, To
 type ToHostGenChannel<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
     LocalChannel<CHANNEL_SIZE, ToHostGeneralIntraMessage<UnsafeConnectionEnds<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>>;
 
-type FromHostChannel<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
-    LocalBufferedChannel<CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, UnsafeFromHostMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
+type FromHostChannel<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> = LocalBufferedChannel<
+    CHANNEL_SIZE,
+    DeLinearBuffer<BUFFER_SIZE, u8>,
+    UnsafeToInterfaceMsg<CHANNEL_SIZE, BUFFER_SIZE>,
+>;
 
 type ToConnectionChannel<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
     LocalBufferedChannel<

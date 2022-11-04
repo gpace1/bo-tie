@@ -80,9 +80,9 @@ pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
 use bo_tie_hci_util::{
-    BufferInformation, BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromHostIntraMessage,
-    FromInterface, HciPacket, HciPacketType, HostChannel, Sender, TaskId, TaskSource, ToConnectionIntraMessage,
-    ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    BufferInformation, BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromInterface, HciPacket,
+    HciPacketType, HostChannel, Sender, TaskId, TaskSource, ToConnectionIntraMessage, ToHostCommandIntraMessage,
+    ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::stack::LinearBuffer;
 use bo_tie_util::buffer::{Buffer, TryExtend};
@@ -102,6 +102,7 @@ use core::ops::Deref;
 /// for sending packets to the interface and onto the Controller.
 pub struct Interface<R> {
     buffer_info: BufferInformation,
+    skip_cmd_response: bool,
     channel_reserve: R,
 }
 
@@ -112,8 +113,12 @@ where
     /// Create a new interface
     pub fn new(channel_reserve: R) -> Self {
         let buffer_info = BufferInformation::default();
+
+        let skip_cmd_response = false;
+
         Interface {
             buffer_info,
+            skip_cmd_response,
             channel_reserve,
         }
     }
@@ -276,14 +281,20 @@ where
                 None => break None,
                 Some(intra_message) => match intra_message {
                     TaskSource::Host(message) => match message {
-                        FromHostIntraMessage::Command(data) => break Some(HciPacket::Command(DriverBuffer::Cmd(data))),
-                        FromHostIntraMessage::BufferInfo(i) => self.parse_buffer_info(i),
+                        ToInterfaceIntraMessage::Command(data) => {
+                            break Some(HciPacket::Command(DriverBuffer::Cmd(data)));
+                        }
+                        ToInterfaceIntraMessage::Disconnect(handle, data) => {
+                            self.parse_disconnect_command(handle);
+
+                            break Some(HciPacket::Command(DriverBuffer::Cmd(data)));
+                        }
+                        ToInterfaceIntraMessage::BufferInfo(i) => self.parse_buffer_info(i),
                     },
                     TaskSource::Connection(message) => match message {
                         FromConnectionIntraMessage::Acl(data) => break Some(HciPacket::Acl(DriverBuffer::Data(data))),
                         FromConnectionIntraMessage::Sco(data) => break Some(HciPacket::Sco(DriverBuffer::Data(data))),
                         FromConnectionIntraMessage::Iso(data) => break Some(HciPacket::Iso(DriverBuffer::Data(data))),
-                        FromConnectionIntraMessage::Disconnect(_) => unreachable!(),
                     },
                 },
             }
@@ -504,7 +515,7 @@ where
         self.create_connection(data.connection_handle, flow_control_id).await
     }
 
-    pub async fn parse_disconnect(
+    pub async fn parse_disconnect_event(
         &mut self,
         disconnect: &events::parameters::DisconnectionCompleteData,
     ) -> Result<(), SendError<R>> {
@@ -549,8 +560,18 @@ where
         let ed = EventsData::try_from_packet(data).map_err(|e| SendError::<R>::InvalidHciEventData(e))?;
 
         match &ed {
-            EventsData::CommandComplete(data) => self.parse_command_complete_event(data).map(|b| b.then_some(ed)),
-            EventsData::CommandStatus(data) => self.parse_command_status_event(data).map(|b| b.then_some(ed)),
+            EventsData::CommandComplete(data) => {
+                let skip = std::mem::take(&mut self.skip_cmd_response);
+
+                self.parse_command_complete_event(data)
+                    .map(|b| (b && !skip).then_some(ed))
+            }
+            EventsData::CommandStatus(data) => {
+                let skip = std::mem::take(&mut self.skip_cmd_response);
+
+                self.parse_command_status_event(data)
+                    .map(|b| (b && !skip).then_some(ed))
+            }
             EventsData::NumberOfCompletedPackets(data) => {
                 self.parse_number_of_completed_packets_event(data).map(|_| None)
             }
@@ -569,7 +590,7 @@ where
                 .parse_le_enhanced_connection_complete_event(data)
                 .await
                 .map(|_| Some(ed)),
-            EventsData::DisconnectionComplete(data) => self.parse_disconnect(data).await.map(|_| Some(ed)),
+            EventsData::DisconnectionComplete(data) => self.parse_disconnect_event(data).await.map(|_| Some(ed)),
             _ => Ok(Some(ed)),
         }
     }
@@ -689,6 +710,13 @@ where
 
         self.channel_reserve
             .inc_le_iso_flow_control(self.buffer_info.le_iso.how_many());
+    }
+
+    /// Parse disconnect of a connection
+    fn parse_disconnect_command(&mut self, handle: ConnectionHandle) {
+        self.channel_reserve.try_remove(handle).ok();
+
+        self.skip_cmd_response = true;
     }
 }
 

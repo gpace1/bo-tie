@@ -10,8 +10,8 @@ use super::receiver::LocalChannelReceiver;
 use super::sender::LocalChannelSender;
 use crate::local_channel::local_stack::channel::LocalChannel;
 use crate::local_channel::local_stack::{
-    BufferReserve, FromConnMsg, FromConnectionChannel, FromHostChannel, FromHostMsg, ToConnMsg, ToConnectionChannel,
-    UnsafeFromConnMsg, UnsafeFromHostMsg, UnsafeToConnMsg,
+    BufferReserve, FromConnMsg, FromConnectionChannel, FromHostChannel, ToConnMsg, ToConnectionChannel, ToInterfaceMsg,
+    UnsafeFromConnMsg, UnsafeToConnMsg, UnsafeToInterfaceMsg,
 };
 use crate::local_channel::LocalSendFutureError;
 use crate::Channel;
@@ -77,9 +77,9 @@ impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Channel
     for &'a FromHostChannel<CHANNEL_SIZE, BUFFER_SIZE>
 {
     type SenderError = LocalSendFutureError;
-    type Message = FromHostMsg<'a, CHANNEL_SIZE, BUFFER_SIZE>;
-    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, UnsafeFromHostMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
-    type Receiver = LocalChannelReceiver<CHANNEL_SIZE, Self, UnsafeFromHostMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
+    type Message = ToInterfaceMsg<'a, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, UnsafeToInterfaceMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
+    type Receiver = LocalChannelReceiver<CHANNEL_SIZE, Self, UnsafeToInterfaceMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
 
     fn get_sender(&self) -> Self::Sender {
         LocalChannelSender::new(self)
@@ -392,7 +392,7 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> UnsafeReservedBuf
 mod test {
     use super::*;
     use crate::test::*;
-    use crate::{FromConnectionIntraMessage, FromHostIntraMessage, ToConnectionIntraMessage};
+    use crate::{FromConnectionIntraMessage, ToConnectionIntraMessage, ToInterfaceIntraMessage};
     use bo_tie_util::errors::Error;
 
     macro_rules! dup {
@@ -449,13 +449,13 @@ mod test {
         let lbc: FromHostChannel<CHANNEL_SIZE, BUFFER_SIZE> = LocalBufferedChannel::new();
 
         let (tx_vals, rx_vals) = dup!([
-            FromHostIntraMessage::Command(create_buffer!(lbc, 105, 220, 84, 248, 217, 99, 255, 92, 142, 27)),
-            FromHostIntraMessage::Command(create_buffer!(lbc, 173, 60, 111, 10, 114, 186, 117, 247, 198, 81)),
-            FromHostIntraMessage::Command(create_buffer!(lbc, 185, 26, 10, 192, 70, 236, 61, 248, 198, 36)),
+            ToInterfaceIntraMessage::Command(create_buffer!(lbc, 105, 220, 84, 248, 217, 99, 255, 92, 142, 27)),
+            ToInterfaceIntraMessage::Command(create_buffer!(lbc, 173, 60, 111, 10, 114, 186, 117, 247, 198, 81)),
+            ToInterfaceIntraMessage::Command(create_buffer!(lbc, 185, 26, 10, 192, 70, 236, 61, 248, 198, 36)),
         ]);
 
         channel_send_and_receive(&lbc, tx_vals, rx_vals, |l, r| match (l, r) {
-            (FromHostIntraMessage::Command(l), FromHostIntraMessage::Command(r)) => l.deref() == r.deref(),
+            (ToInterfaceIntraMessage::Command(l), ToInterfaceIntraMessage::Command(r)) => l.deref() == r.deref(),
         })
         .await
     }

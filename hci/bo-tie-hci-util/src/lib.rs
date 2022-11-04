@@ -604,7 +604,7 @@ pub trait HostChannelEnds {
     type TakeBuffer: Future<Output = Self::ToBuffer>;
 
     /// The type used to send messages to the interface async task
-    type Sender: Sender<Message = FromHostIntraMessage<Self::ToBuffer>>;
+    type Sender: Sender<Message = ToInterfaceIntraMessage<Self::ToBuffer>>;
 
     /// The type used for receiving command response messages from the interface async task
     type CmdReceiver: Receiver<Message = ToHostCommandIntraMessage>;
@@ -669,7 +669,7 @@ pub trait ChannelReserve {
     type FromHostChannel: BufferReserve
         + Channel<
             SenderError = Self::SenderError,
-            Message = FromHostIntraMessage<<Self::FromHostChannel as BufferReserve>::Buffer>,
+            Message = ToInterfaceIntraMessage<<Self::FromHostChannel as BufferReserve>::Buffer>,
         >;
 
     /// The channel type for sending messages to another connection async task
@@ -1340,13 +1340,14 @@ impl<T> HciPacket<T> {
     }
 }
 
-impl<T: Deref<Target = [u8]>> TryFrom<FromHostIntraMessage<T>> for HciPacket<T> {
+impl<T: Deref<Target = [u8]>> TryFrom<ToInterfaceIntraMessage<T>> for HciPacket<T> {
     type Error = &'static str;
 
-    fn try_from(i: FromHostIntraMessage<T>) -> Result<Self, Self::Error> {
+    fn try_from(i: ToInterfaceIntraMessage<T>) -> Result<Self, Self::Error> {
         match i {
-            FromHostIntraMessage::Command(c) => Ok(HciPacket::Command(c)),
-            FromHostIntraMessage::BufferInfo(_) => {
+            ToInterfaceIntraMessage::Command(c) => Ok(HciPacket::Command(c)),
+            ToInterfaceIntraMessage::Disconnect(_, c) => Ok(HciPacket::Command(c)),
+            ToInterfaceIntraMessage::BufferInfo(_) => {
                 Err("'FromHostIntraMessage::BufferInfo' cannot be converted to a HciPacket")
             }
         }
@@ -1361,9 +1362,6 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPack
             FromConnectionIntraMessage::Acl(t) => Ok(HciPacket::Acl(t)),
             FromConnectionIntraMessage::Sco(t) => Ok(HciPacket::Sco(t)),
             FromConnectionIntraMessage::Iso(t) => Ok(HciPacket::Iso(t)),
-            FromConnectionIntraMessage::Disconnect(_) => {
-                Err("'FromConnectionIntraMessage::Disconnect' cannot be converted to a HciPacket")
-            }
         }
     }
 }
@@ -1455,24 +1453,25 @@ pub struct BufferInformation {
     pub le_iso: PacketFlowControl,
 }
 
-/// A messages sent from the host async task
+/// A messages sent from all other async tasks to the interface async task
 ///
-/// The host async task sends HCI commands to the interface async task, and the interface async task
-/// sends these commands on to the controller (after performing command flow control).
+/// The host async task sends `Commands` and `BufferInfo` to the interface async task. Connections
+/// async tasks sends `Disconnect` to the interface async task.
 #[derive(Debug)]
-pub enum FromHostIntraMessage<T> {
+pub enum ToInterfaceIntraMessage<T> {
     Command(T),
     BufferInfo(BufferInformation),
+    Disconnect(ConnectionHandle, T),
 }
 
-impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromHostIntraMessage<T> {
+impl<T: Deref<Target = [u8]>> GetDataPayloadSize for ToInterfaceIntraMessage<T> {
     // This method is never called as there is no block-like flow control for commands, but might as
     // well implement it in case that changes. If this ever does change then the cold attribute
     // needs to be removed.
     #[cold]
     fn get_payload_size(&self) -> Option<usize> {
         match self {
-            FromHostIntraMessage::Command(command) => Some(command[2] as usize),
+            ToInterfaceIntraMessage::Command(command) => Some(command[2] as usize),
             _ => None,
         }
     }

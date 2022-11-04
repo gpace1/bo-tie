@@ -20,7 +20,7 @@ macro_rules! make_error {
                     >,
                 >,
             ),
-            FromHost($($error_name)::*<$crate::FromHostIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
+            FromHost($($error_name)::*<$crate::ToInterfaceIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
             ToConnection($($error_name)::*<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
             FromConnection($($error_name)::*<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
         }
@@ -83,8 +83,8 @@ macro_rules! make_error {
             }
         }
 
-        impl From<$($error_name)::*<$crate::FromHostIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>> for Error {
-            fn from(t: $($error_name)::*<$crate::FromHostIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>) -> Error {
+        impl From<$($error_name)::*<$crate::ToInterfaceIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::ToInterfaceIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>) -> Error {
                 Error::FromHost(t)
             }
         }
@@ -127,8 +127,8 @@ pub use self::futures_rs::futures_unbounded;
 
 use crate::{
     BufferReserve, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannelEnds,
-    FlowCtrlReceiver, FromConnectionIntraMessage, FromHostIntraMessage, HostChannelEnds as HostChannelEndsTrait,
-    Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    FlowCtrlReceiver, FromConnectionIntraMessage, HostChannelEnds as HostChannelEndsTrait, Receiver, Sender,
+    ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use crate::{ConnectionHandle, FlowControlId, FromInterface, HostChannel, InterfaceReceivers, TaskId};
 use bo_tie_util::buffer::de_vec::{DeVec, TakeFuture};
@@ -241,7 +241,7 @@ pub struct HostChannelEnds<S1, R1, R2, P1, P2> {
 
 impl<S1, S2, R1, R2, R3> HostChannelEndsTrait for HostChannelEnds<S1, R1, R2, S2, R3>
 where
-    S1: Sender<Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+    S1: Sender<Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
     S2: Sender<Message = FromConnectionIntraMessage<DeVec<u8>>> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
     R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S2, R3>>>,
@@ -334,7 +334,7 @@ where
 
 impl<S1, S2, S3, S4, S5, R1, R2, R3, R4, R5, F> ChannelReserve<S1, S2, S4, S5, R3, R4, F, S3, R1, R2, R5>
 where
-    R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+    R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
     R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
 {
     /// Create a new `ChannelReserve`
@@ -364,12 +364,12 @@ where
         F: Fn() -> (S5, R5),
         S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
         S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
-        S3: Sender<Error = E, Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+        S3: Sender<Error = E, Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
         S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
         S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
         R1: Receiver<Message = ToHostCommandIntraMessage>,
         R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
-        R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+        R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
         R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
         R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
     {
@@ -440,12 +440,12 @@ impl<S1, S2, S3, S4, S5, R1, R2, R3, R4, R5, F, E> ChannelReserveTrait
 where
     S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
     S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
-    S3: Sender<Error = E, Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+    S3: Sender<Error = E, Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
     S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
     S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
     R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
-    R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+    R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
     R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
     R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
     F: Fn() -> (S5, R5),
@@ -689,12 +689,12 @@ where
     C5: Fn() -> (S5, R5),
     S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
     S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
-    S3: Sender<Error = E, Message = FromHostIntraMessage<DeVec<u8>>> + Clone,
+    S3: Sender<Error = E, Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
     S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
     S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
     R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
-    R3: Receiver<Message = FromHostIntraMessage<DeVec<u8>>>,
+    R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
     R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
     R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
 {

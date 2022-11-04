@@ -539,7 +539,7 @@ where
     where
         P: CommandParameter<CP_SIZE>,
     {
-        use bo_tie_hci_util::{FromHostIntraMessage, Receiver, Sender};
+        use bo_tie_hci_util::{Receiver, Sender, ToInterfaceIntraMessage};
 
         let (front_capacity, back_capacity) = self.host_interface.driver_buffer_capacities();
 
@@ -551,7 +551,7 @@ where
 
         self.host_interface
             .get_sender()
-            .send(FromHostIntraMessage::Command(buffer).into())
+            .send(ToInterfaceIntraMessage::Command(buffer).into())
             .await
             .map_err(|e| CommandError::SendError(e))?;
 
