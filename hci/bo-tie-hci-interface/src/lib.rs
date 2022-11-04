@@ -368,11 +368,9 @@ where
     #[cfg(not(feature = "unstable"))]
     fn parse_number_of_completed_data_blocks_event(
         &mut self,
-        _: &events::parameters::NumberOfCompletedDataBlocksData,
+        ncdb_data: &events::parameters::NumberOfCompletedDataBlocksData,
     ) -> Result<(), SendError<R>> {
-        Err(SendError::<R>::Unimplemented(
-            "Block-based flow control is unimplemented",
-        ))
+        ncdb_data.total_data_blocks
     }
 
     /// Parse a Number of Completed Data Blocks event
