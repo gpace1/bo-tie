@@ -531,17 +531,23 @@ where
                     packet_buffer_info
                         .le_acl
                         .set_max_data_size(buffer_size_info_v1.acl.len.into());
+
                     packet_buffer_info
                         .le_acl
                         .set_number_of_packets(buffer_size_info_v1.acl.cnt.into());
+
                     packet_buffer_info.le_iso.set_max_data_size(0);
+
                     packet_buffer_info.le_iso.set_number_of_packets(0);
 
                     (le_acl_max_mtu, 0)
                 } else {
                     packet_buffer_info.le_acl.set_max_data_size(0);
+
                     packet_buffer_info.le_acl.set_number_of_packets(0);
+
                     packet_buffer_info.le_iso.set_max_data_size(0);
+
                     packet_buffer_info.le_iso.set_number_of_packets(0);
 
                     (0, 0)
@@ -551,12 +557,14 @@ where
                 let le_acl_max_mtu = match buffer_size_info_v2.acl {
                     Some(bs) => {
                         packet_buffer_info.le_acl.set_max_data_size(bs.len.into());
+
                         packet_buffer_info.le_acl.set_number_of_packets(bs.cnt.into());
 
                         bs.len.into()
                     }
                     None => {
                         packet_buffer_info.le_acl.set_max_data_size(0);
+
                         packet_buffer_info.le_acl.set_number_of_packets(0);
 
                         0
@@ -566,12 +574,14 @@ where
                 let le_iso_max_mtu = match buffer_size_info_v2.iso {
                     Some(bs) => {
                         packet_buffer_info.le_iso.set_max_data_size(bs.len.into());
+
                         packet_buffer_info.le_iso.set_number_of_packets(bs.cnt.into());
 
                         bs.len.into()
                     }
                     None => {
                         packet_buffer_info.le_iso.set_max_data_size(0);
+
                         packet_buffer_info.le_iso.set_number_of_packets(0);
 
                         0
