@@ -195,7 +195,7 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferSend
             ToInterfaceMsg::Disconnect(h, t) => {
                 UnsafeToInterfaceMsg::Disconnect(h, unsafe { BufferReservation::to_unsafe(t) })
             }
-            ToInterfaceMsg::BufferInfo(i) => UnsafeToInterfaceMsg::BufferInfo(i),
+            ToInterfaceMsg::PacketBufferInfo(i) => UnsafeToInterfaceMsg::PacketBufferInfo(i),
         };
 
         self.0

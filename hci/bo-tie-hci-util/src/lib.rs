@@ -248,7 +248,7 @@ pub enum HostChannel {
 /// `LeIso` -> LE ISO data buffer
 ///
 /// [`Interface`]: (../bo_tie_hci_interface/Interface/index.html)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bo_tie_macros::DepthCount)]
 pub enum FlowControlId {
     Cmd,
     Acl,
@@ -324,146 +324,217 @@ trait GetDataPayloadSize {
     fn get_payload_size(&self) -> Option<usize>;
 }
 
-/// Flow control information
+/// Command flow control information
 ///
-/// This is flow control information about a specific buffer within the controller. It's used to
-/// monitor the buffer space within the controller by keeping a count of the space available within
-/// it.
+/// This is the information required for flow control of commands to the Controller. `send_count` is
+/// the number of commands that can be sent to the controller, and `awaiting` is used whenever
+/// `send_count` is zero and there is a HCI command packet awaiting to be sent to the Controller.
 ///
-/// `FlowControl` is used for both command and data HCI packets. For commands it contains the
-/// number of commands that can be currently sent to the controller. For data packets it either
-/// contains the number of packets that can be sent to the controller or the number of data blocks
-/// that is free within the controller.
+/// # Note
+/// The default `CommandFlowControl` is created with a `send_count` of one instead of zero.
+/// Otherwise, no commands would be able to be sent to the controller.
+#[derive(Debug, Copy, Clone)]
+struct CommandFlowControl {
+    send_count: usize,
+}
+
+impl Default for CommandFlowControl {
+    fn default() -> Self {
+        CommandFlowControl { send_count: 1 }
+    }
+}
+
+/// Packet based flow control information
 ///
-/// ## Kinds
-/// As specified in the Bluetooth Specification, *packet-based* and *data-block-based* are the two
-/// kinds of buffering done for HCI within a Controller. In `FlowControl` the enumeration `Packets`
-/// corresponds to *packet-based* flow control, and `DataBlocks` corresponds to *data-block-based*
-/// flow control. Users of this library can specify at runtime what kind of flow control to use for
-/// data packets, but command flow control always uses `Packets`.
-///
-/// ### `Packets`
-/// `Packets` is a flow control mechanism of counting the number of packets that can be sent to the
-/// controller. The enumeration consist of `how_many` packets can currently be sent to the
+/// All Controller buffers except for the the ACL buffer (not the LE ACl buffer) utilize packet
+/// based flow control. This is a flow control mechanism of counting the number of packets that can
+/// be sent to the controller. It consist of `how_many` packets can currently be sent to the
 /// controller and the boolean `awaiting` to indicate if interface has messages awaiting for
 /// `how_many` to be greater than 0. When `how_many` is increased to be greater than zero an
 /// `awating` is true, the interface async task send the awaiting message to the interface driver.
+#[derive(Default, Debug, Copy, Clone)]
+struct PacketBasedFlowControl {
+    how_many: usize,
+}
+
+/// Block based flow control information
 ///
-/// ### `DataBlocks`
-/// `DataBlocks` is a flow control mechanism of counting the number of bytes the controller can
-/// currently accept from a HCI data packet. Here, `how_many` represents the maximum number of bytes
-/// in a payload of a HCI data packet that can be currently accepted by the controller. The field
-/// `awaiting` is the size of the payload of the next HCI data packet to be sent to the controller.
-/// When `how_many` is greater than `awaiting` the interface async task will send the awaiting
-/// message to the interface driver. When `awaiting` is none, then there is no awaiting message.
+/// Block based flow control is a method of using blocks of buffers to stage packet data. When a
+/// data packet is received, the data portion of the packet will occupy one or more buffer 'blocks'
+/// within the Controller. The number of data blocks is tracked and a packet will only be sent to
+/// the host when there is enough data blocks to contain it.
 ///
-/// The `halted` field is a flag to halt the sending of messages to the controller, regardless of
-/// the value of `how_many`. `halted` is only true when the controller wants to resize the number of
-/// empty data blocks to a value less than what the host *may* think there is. It used during the
-/// process of re-acquiring the buffer information after the `NumberOfCompletedDataBlocks` event
-/// contains `None` (or zero in the event parameters) for the total number of data blocks.
+/// Packets are only sent when there is enough *empty* blocks to contain the data. Any extra space
+/// not used within the last block occupied by a packet is disregarded by this flow control
+/// mechanism for purposes of flow control.
 ///
-/// Currently *data-block-based* flow control is only supports ACL data.
-///
-/// ### Default
-/// The default flow control type is *packet-based*.
+/// Field `how_many` is the number of known empty blocks within the Controller. `block_size` is the
+/// number of bytes within each block buffer. `awaiting` is a boolean to indicate that there is
+/// currently HCI packet(s) awaiting to be sent to the Controller.  
 #[derive(Debug, Copy, Clone)]
-pub enum FlowControl {
-    Packets {
-        how_many: usize,
-        awaiting: bool,
-    },
-    DataBlocks {
-        how_many: usize,
-        halted: bool,
-        awaiting: Option<usize>,
-    },
+struct BlockBasedFlowControl {
+    total: usize,
+    how_many: usize,
+    block_size: usize,
+    halt: bool,
 }
 
-impl FlowControl {
-    /// Used to create a new `FlowControl` for commands upon Controller reset.
+/// ACL buffer flow control information
+///
+/// Flow control for the ACL data buffer can either be packet based or data block based. The default
+/// flow control type is *packet-based* as that is the kind of flow control used by the ACL data
+/// buffer upon reset of the Controller.
+#[derive(Debug, Copy, Clone)]
+enum AclFlowControl {
+    Packets(PacketBasedFlowControl),
+    DataBlocks(BlockBasedFlowControl),
+}
+
+impl AclFlowControl {
+    /// Set the total number of Data Blocks
     ///
-    /// This should only be used after the controller has been reset by the user. The number of
-    /// command packets is set to one, which is only guaranteed to be true after resetting the
-    /// Controller.
-    fn new_command_on_reset() -> Self {
-        FlowControl::Packets {
-            how_many: 1,
-            awaiting: false,
+    /// # Note
+    /// This method does nothing if this is not the enum `DataBlocks`
+    ///
+    /// # Panic
+    /// A panic occurs when the difference between the previous total number of data blocks and the
+    /// new total number of data blocks is greater than the current value of field `how_many`.
+    fn set_total_block_count(&mut self, total: usize) {
+        if let AclFlowControl::DataBlocks(block) = self {
+            if let Some(reduction) = block.total.checked_sub(total) {
+                block.how_many -= reduction;
+            }
+
+            block.total = total;
+        }
+    }
+
+    /// Halt block based flow control
+    ///
+    /// # Note
+    /// This method does nothing if this is not the enum `DataBlocks`
+    fn halt_block_based(&mut self) {
+        if let AclFlowControl::DataBlocks(block) = self {
+            block.halt = true
+        }
+    }
+
+    /// Resume block based flow control
+    ///
+    /// If block based flow control is resumed, then true is returned.
+    fn resume_block_based(&mut self) -> bool {
+        match self {
+            AclFlowControl::DataBlocks(block) => {
+                let ret = !block.halt;
+
+                block.halt = true;
+
+                ret
+            }
+            _ => false,
         }
     }
 }
-
-impl Default for FlowControl {
+impl Default for AclFlowControl {
     fn default() -> Self {
-        FlowControl::Packets {
-            how_many: 0,
-            awaiting: false,
-        }
+        AclFlowControl::Packets(PacketBasedFlowControl::default())
     }
 }
 
-impl FlowControl {
-    /// Check if it is possible to send another HCI data message
-    fn is_capped(&self) -> bool {
-        0 == match self {
-            FlowControl::Packets { how_many, .. } => *how_many,
-            FlowControl::DataBlocks { how_many, .. } => *how_many,
-        }
+trait FlowControl {
+    /// Increase the flow control
+    fn increase(&mut self, by: usize);
+
+    /// Reduce the flow control by the provided message
+    ///
+    /// This reduces the flow control information. For commands or packet based flow control this
+    /// just reduces the number that can be sent by one. For data block the reduction is based on
+    /// the size of the payload divided by the block size rounded up to the nearest whole number.
+    ///
+    /// An error is returned if the flow control information cannot be reduced.
+    fn try_reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) -> Result<(), ()>;
+
+    /// Check if flow control is halted
+    ///
+    /// When flow control is halted, the flow controller will never clear HCI packets to be sent to
+    /// the Controller.
+    fn is_halted(&self) -> bool;
+}
+
+impl FlowControl for CommandFlowControl {
+    fn increase(&mut self, by: usize) {
+        self.send_count += by;
     }
 
-    /// Reduce the flow control by tye provided message
-    ///
-    /// This reduces the flow control information. For `Packets` the 'how_many' count is reduced by
-    /// one (unless it is already zero). For `DataBlocks` the `how_many` is reduced by the input
-    /// `by` (floored to zero). Both the `awaiting` fields of `Packets` and `DataBlocks` are set to
-    /// their default values after this method is called.
-    ///
-    /// # Note
-    /// Input `by` is ignored if this is `Packets`.
-    ///
-    /// # Panic
-    /// Input `payload_info` must not return `None` from method
-    /// [`get_payload_size`](GetPayloadSize::get_payload_size)
-    fn reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) {
+    fn try_reduce<T: GetDataPayloadSize>(&mut self, _: &T) -> Result<(), ()> {
+        self.send_count = self.send_count.checked_sub(1).ok_or(())?;
+
+        Ok(())
+    }
+
+    fn is_halted(&self) -> bool {
+        false
+    }
+}
+
+impl FlowControl for PacketBasedFlowControl {
+    fn increase(&mut self, by: usize) {
+        self.how_many += by;
+    }
+
+    fn try_reduce<T: GetDataPayloadSize>(&mut self, _: &T) -> Result<(), ()> {
+        self.how_many = self.how_many.checked_sub(1).ok_or(())?;
+
+        Ok(())
+    }
+
+    fn is_halted(&self) -> bool {
+        false
+    }
+}
+
+impl FlowControl for BlockBasedFlowControl {
+    fn increase(&mut self, by: usize) {
+        self.how_many += by;
+    }
+
+    fn try_reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) -> Result<(), ()> {
+        let payload_size = payload_info.get_payload_size().expect("failed to get payload size");
+
+        // For simplicity one is always added instead of performing
+        // a remainder check. Only when `payload_size` is a multiple
+        // of `self.block_size` that an extra block is not needed.
+        let blocks_required = payload_size / self.block_size + 1;
+
+        self.how_many = self.how_many.checked_sub(blocks_required).ok_or(())?;
+
+        Ok(())
+    }
+
+    fn is_halted(&self) -> bool {
+        self.halt
+    }
+}
+
+impl FlowControl for AclFlowControl {
+    fn increase(&mut self, by: usize) {
         match self {
-            FlowControl::Packets { how_many, awaiting } => {
-                how_many.checked_sub(1).map(|new| *how_many = new);
-
-                *awaiting = Default::default();
-            }
-            FlowControl::DataBlocks { how_many, awaiting, .. } => {
-                match how_many.checked_sub(payload_info.get_payload_size().unwrap()) {
-                    Some(new) => *how_many = new,
-                    None => *how_many = 0,
-                };
-
-                *awaiting = Default::default();
-            }
+            Self::Packets(p) => p.increase(by),
+            Self::DataBlocks(b) => b.increase(by),
         }
     }
 
-    /// Set the awaiting message flag
-    ///
-    /// # Panic
-    /// Input `payload_info` must not return `None` from method
-    /// [`get_payload_size`](GetPayloadSize::get_payload_size)
-    fn set_awaiting<T: GetDataPayloadSize>(&mut self, payload_info: &T) {
+    fn try_reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) -> Result<(), ()> {
         match self {
-            FlowControl::Packets { awaiting, .. } => *awaiting = true,
-            FlowControl::DataBlocks { awaiting, .. } => *awaiting = Some(payload_info.get_payload_size().unwrap()),
+            Self::Packets(p) => p.try_reduce(payload_info),
+            Self::DataBlocks(b) => b.try_reduce(payload_info),
         }
     }
 
-    /// Halt the sending of messages to the controller
-    ///
-    /// This halts the sending of messages to the controller regardless of the value of `how_many`
-    ///
-    /// # Note
-    /// This does nothing if `self` is `Packets`
-    pub fn halt(&mut self) {
-        if let FlowControl::DataBlocks { halted, .. } = self {
-            *halted = true
+    fn is_halted(&self) -> bool {
+        match self {
+            Self::Packets(_) => false,
+            Self::DataBlocks(b) => b.is_halted(),
         }
     }
 }
@@ -729,17 +800,6 @@ pub trait ChannelReserve {
     >;
 }
 
-macro_rules! inc_flow_ctrl {
-    ($fc:expr, $ty:ident, $how_many:expr $(,)?) => {{
-        match &mut $fc.$ty {
-            FlowControl::Packets { how_many, .. } => *how_many += $how_many,
-            FlowControl::DataBlocks { how_many, .. } => *how_many += $how_many,
-        }
-
-        $fc.call_waker()
-    }};
-}
-
 pub trait ChannelReserveExt: ChannelReserve {
     /// Get a sender to another async task
     ///
@@ -778,7 +838,11 @@ pub trait ChannelReserveExt: ChannelReserve {
         // todo: allow for more than one command to be sent at a time
         let how_many = core::cmp::min(1, how_many);
 
-        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), cmd_flow_control, how_many);
+        if how_many != 0 {
+            self.get_flow_ctrl_receiver().cmd_flow_control.increase(how_many);
+
+            self.get_flow_ctrl_receiver().call_waker();
+        }
     }
 
     /// Increment the flow control for ACL data
@@ -794,8 +858,8 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
     ///
     /// ## Data-Block-Based
-    /// In data block based flow control, input `how_many` is the number of bytes that the
-    /// controller can currently accept since the last time this method was called. This value must
+    /// In data block based flow control, input `how_many` is the number of blocks the controller
+    /// can currently accept data into since the last time this method was called. This value must
     /// be calculated from the number of data blocks that were completed as stated in the event
     /// [`NumberOfCompletedDataBlocks`](crate::events::EventsData::NumberOfCompletedDataBlocks).
     ///
@@ -804,7 +868,11 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// information through the
     /// [`read_data_block_size`](../bo_tie_hci_host/commands/info_params/read_data_block_size) command.
     fn inc_acl_flow_ctrl(&mut self, how_many: usize) {
-        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), acl_flow_control, how_many);
+        if how_many != 0 {
+            self.get_flow_ctrl_receiver().acl_flow_control.increase(how_many);
+
+            self.get_flow_ctrl_receiver().call_waker();
+        }
     }
 
     /// Increment the flow control for SCO data
@@ -819,7 +887,11 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// to the number of completed packets within the event
     /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
     fn inc_sco_flow_control(&mut self, how_many: usize) {
-        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), sco_flow_control, how_many);
+        if how_many != 0 {
+            self.get_flow_ctrl_receiver().sco_flow_control.increase(how_many);
+
+            self.get_flow_ctrl_receiver().call_waker();
+        }
     }
 
     /// Increment the flow control for LE ACL data
@@ -833,19 +905,12 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// by the controller from the last time this method was called. `how_many` directly corresponds
     /// to the number of completed packets within the event
     /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
-    ///
-    /// ## Data-Block-Based
-    /// In data block based flow control, input `how_many` is the number of bytes that the
-    /// controller can currently accept since the last time this method was called. This value must
-    /// be calculated from the number of data blocks that were completed as stated in the event
-    /// [`NumberOfCompletedDataBlocks`](crate::events::EventsData::NumberOfCompletedDataBlocks).
-    ///
-    /// This method shall not be called if the event `NumberOfCompletedDataBlocks` contained `None`
-    /// for the `total_data_blocks` field. This indicates that the host needs to update its buffer
-    /// information through the
-    /// [`read_data_block_size`](../bo_tie_hci_host/commands/info_params/read_data_block_size) command.
     fn inc_le_acl_flow_control(&mut self, how_many: usize) {
-        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_acl_flow_control, how_many);
+        if how_many != 0 {
+            self.get_flow_ctrl_receiver().le_acl_flow_control.increase(how_many);
+
+            self.get_flow_ctrl_receiver().call_waker();
+        }
     }
 
     /// Increment the flow control for ISO data
@@ -860,7 +925,44 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// to the number of completed packets within the event
     /// [`NumberOfCompletedPackets`](crate::events::EventsData::NumberOfCompletedPackets)
     fn inc_le_iso_flow_control(&mut self, how_many: usize) {
-        inc_flow_ctrl!(self.get_flow_ctrl_receiver(), le_iso_flow_control, how_many);
+        if how_many != 0 {
+            self.get_flow_ctrl_receiver().le_iso_flow_control.increase(how_many);
+
+            self.get_flow_ctrl_receiver().call_waker();
+        }
+    }
+
+    /// Set the total number of blocks for ACL flow control
+    ///
+    /// # Note
+    /// This method does nothing if ACL is currently flow controlled by packets
+    fn set_acl_flow_control_block_count(&mut self, count: usize) {
+        self.get_flow_ctrl_receiver()
+            .acl_flow_control
+            .set_total_block_count(count)
+    }
+
+    /// Halt block based ACL flow control
+    ///
+    /// When flow control is halted, the flow controller will not send HCI ACL packets to the
+    /// Bluetooth Controller until either method [`resume_acl_flow_control`] is called or flow
+    /// control for ACL packets is switched to packed based flow control. Halting is necessary when
+    /// the *Number of Completed Data Blocks* event instructs the host to send the *Read Data Block
+    /// Size* command.
+    ///
+    /// [`resume_acl_flow_control`]: ChannelReserveExt::resume_acl_flow_control
+    fn halt_acl_flow_control(&mut self) {
+        self.get_flow_ctrl_receiver().acl_flow_control.halt_block_based()
+    }
+
+    /// Resume block based ACL flow control
+    ///
+    /// This will remove the halt from the ACL flow controller. This method does nothing if flow
+    /// control is not halted or the ACL flow control is currently packet based.
+    fn resume_acl_flow_control(&mut self) {
+        if self.get_flow_ctrl_receiver().acl_flow_control.resume_block_based() {
+            self.get_flow_ctrl_receiver().call_waker()
+        }
     }
 }
 
@@ -883,37 +985,35 @@ pub struct InterfaceReceivers<H, R> {
 ///
 /// This works by only releasing messages from a channel when the controller can accept it. There is
 /// possibly five different kinds of buffers in a controller. A
-pub struct FlowCtrlReceiver<H: Receiver, R: Receiver> {
+pub struct FlowCtrlReceiver<H: Receiver, C: Receiver> {
     cmd_receiver: PeekableReceiver<H>,
-    acl_receiver: PeekableReceiver<R>,
-    sco_receiver: PeekableReceiver<R>,
-    le_acl_receiver: PeekableReceiver<R>,
-    le_iso_receiver: PeekableReceiver<R>,
+    acl_receiver: PeekableReceiver<C>,
+    sco_receiver: PeekableReceiver<C>,
+    le_acl_receiver: PeekableReceiver<C>,
+    le_iso_receiver: PeekableReceiver<C>,
     last_received: FlowControlId,
-    cmd_flow_control: FlowControl,
-    acl_flow_control: FlowControl,
-    sco_flow_control: FlowControl,
-    le_acl_flow_control: FlowControl,
-    le_iso_flow_control: FlowControl,
-    block_size: usize,
+    cmd_flow_control: CommandFlowControl,
+    acl_flow_control: AclFlowControl,
+    sco_flow_control: PacketBasedFlowControl,
+    le_acl_flow_control: PacketBasedFlowControl,
+    le_iso_flow_control: PacketBasedFlowControl,
     waker: Option<core::task::Waker>,
 }
 
-impl<H: Receiver, R: Receiver> FlowCtrlReceiver<H, R> {
+impl<H: Receiver, C: Receiver> FlowCtrlReceiver<H, C> {
     /// Create a new `FlowCtrlReceiver`
-    fn new(receivers: InterfaceReceivers<H, R>) -> Self {
+    fn new(receivers: InterfaceReceivers<H, C>) -> Self {
         let cmd_receiver = receivers.cmd_receiver.peekable();
         let acl_receiver = receivers.acl_receiver.peekable();
         let sco_receiver = receivers.sco_receiver.peekable();
         let le_acl_receiver = receivers.le_acl_receiver.peekable();
         let le_iso_receiver = receivers.le_iso_receiver.peekable();
         let last_received = FlowControlId::Cmd;
-        let cmd_flow_control = FlowControl::new_command_on_reset();
-        let acl_flow_control = FlowControl::default();
-        let sco_flow_control = FlowControl::default();
-        let le_acl_flow_control = FlowControl::default();
-        let le_iso_flow_control = FlowControl::default();
-        let block_size = 0;
+        let cmd_flow_control = Default::default();
+        let acl_flow_control = Default::default();
+        let sco_flow_control = Default::default();
+        let le_acl_flow_control = Default::default();
+        let le_iso_flow_control = Default::default();
         let waker = None;
 
         Self {
@@ -928,9 +1028,30 @@ impl<H: Receiver, R: Receiver> FlowCtrlReceiver<H, R> {
             sco_flow_control,
             le_acl_flow_control,
             le_iso_flow_control,
-            block_size,
             waker,
         }
+    }
+
+    /// Set the flow control information based on the buffer information from the
+    ///
+    /// # Note
+    /// All flow control will be packet based after this is called
+    pub fn set_to_packet_buffer(&mut self, buffer_info: PacketBufferInformation) {
+        self.acl_flow_control = AclFlowControl::Packets(PacketBasedFlowControl {
+            how_many: buffer_info.acl.count,
+        });
+
+        self.sco_flow_control = PacketBasedFlowControl {
+            how_many: buffer_info.sco.count,
+        };
+
+        self.le_acl_flow_control = PacketBasedFlowControl {
+            how_many: buffer_info.le_acl.count,
+        };
+
+        self.le_iso_flow_control = PacketBasedFlowControl {
+            how_many: buffer_info.le_iso.count,
+        };
     }
 
     pub fn set_waker(&mut self, waker: &core::task::Waker) {
@@ -939,21 +1060,6 @@ impl<H: Receiver, R: Receiver> FlowCtrlReceiver<H, R> {
 
     pub fn call_waker(&mut self) {
         self.waker.take().map(|waker| waker.wake());
-    }
-
-    #[cfg(feature = "unstable")]
-    pub fn get_mut_acl_flow_control(&mut self) -> &mut FlowControl {
-        &mut self.acl_flow_control
-    }
-
-    #[cfg(feature = "unstable")]
-    pub fn get_mut_le_acl_flow_control(&mut self) -> &mut FlowControl {
-        &mut self.le_acl_flow_control
-    }
-
-    #[cfg(feature = "unstable")]
-    pub fn get_block_size(&mut self) -> usize {
-        self.block_size
     }
 }
 
@@ -975,6 +1081,10 @@ where
     type Output = Option<TaskSource<H::Message, R::Message>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let fcr = unsafe { &mut self.get_unchecked_mut().0 };
+
+        let mut dead_cnt = 0;
+
         macro_rules! task_wrap {
             (Host, $msg:expr) => {
                 $msg.map(|o_msg| o_msg.map(|msg| $crate::TaskSource::Host(msg)))
@@ -985,48 +1095,41 @@ where
         }
 
         macro_rules! fc_rx {
-            ($source:tt, $fcr:expr, $receiver:ident, $fc:ident, $cx:expr, $fc_id:expr, $dead_cnt:expr) => {
-                match $fcr.$receiver.poll_peek($cx) {
+            ($source:tt, $receiver:ident, $fc:ident, $fc_id:expr) => {
+                match fcr.$receiver.poll_peek(cx) {
                     core::task::Poll::Pending => {}
-                    core::task::Poll::Ready(None) => $dead_cnt += 1,
+                    core::task::Poll::Ready(None) => dead_cnt += 1,
                     core::task::Poll::Ready(Some(message)) => {
-                        if $fcr.$fc.is_capped() {
-                            $fcr.$fc.set_awaiting(message);
+                        if !fcr.$fc.is_halted() {
+                            match fcr.$fc.try_reduce(message) {
+                                Ok(_) => {
+                                    fcr.last_received = $fc_id;
 
-                            // set the waker to awake this when the
-                            // flow control information is updated.
-                            $fcr.set_waker($cx.waker())
-                        } else {
-                            $fcr.$fc.reduce(message);
+                                    let msg = fcr.$receiver.poll_recv(cx);
 
-                            $fcr.last_received = $fc_id;
+                                    debug_assert!(msg.is_ready());
 
-                            let msg = $fcr.$receiver.poll_recv($cx);
-
-                            debug_assert!(msg.is_ready());
-
-                            return task_wrap!($source, msg);
+                                    return task_wrap!($source, msg);
+                                }
+                                Err(_) => fcr.set_waker(cx.waker()),
+                            }
                         }
                     }
                 }
             };
         }
 
-        let fcr = unsafe { &mut self.get_unchecked_mut().0 };
-
-        let mut dead_cnt = 0;
-
         for fc_id in fcr.last_received.cycle_after() {
             match fc_id {
-                FlowControlId::Cmd => fc_rx!(Host, fcr, cmd_receiver, cmd_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::Acl => fc_rx!(Conn, fcr, acl_receiver, acl_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::Sco => fc_rx!(Conn, fcr, sco_receiver, sco_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::LeAcl => fc_rx!(Conn, fcr, le_acl_receiver, le_acl_flow_control, cx, fc_id, dead_cnt),
-                FlowControlId::LeIso => fc_rx!(Conn, fcr, le_iso_receiver, le_iso_flow_control, cx, fc_id, dead_cnt),
+                FlowControlId::Cmd => fc_rx!(Host, cmd_receiver, cmd_flow_control, fc_id),
+                FlowControlId::Acl => fc_rx!(Conn, acl_receiver, acl_flow_control, fc_id),
+                FlowControlId::Sco => fc_rx!(Conn, sco_receiver, sco_flow_control, fc_id),
+                FlowControlId::LeAcl => fc_rx!(Conn, le_acl_receiver, le_acl_flow_control, fc_id),
+                FlowControlId::LeIso => fc_rx!(Conn, le_iso_receiver, le_iso_flow_control, fc_id),
             }
         }
 
-        if dead_cnt == 5 {
+        if dead_cnt == FlowControlId::full_depth() {
             Poll::Ready(None)
         } else {
             Poll::Pending
@@ -1221,7 +1324,17 @@ impl<R: Receiver> ReceiverExt for R {}
 
 /// A peekable receiver
 ///
-/// This struct is created by the [`peekable`](ReceiverExt::peekable) method on `ReceiverExt`.
+/// This struct is created by the [`peekable`] method of `ReceiverExt`. The method [`poll_peek`] is
+/// used to poll the receiver and return a reference to the message. The trait [`Receiver`] can then
+/// be used to take the peeked message from the `PeekableReceiver`.
+///
+/// # Note
+/// If `poll_peek` has already returned `Poll::Ready`, then the method will act like it is fused
+/// and continue to return a reference to the same message. In order to peek the next message, the
+/// current message must be taken via the methods of `Receiver`.
+///
+/// [`peekable`]: ReceiverExt::peekable
+/// [`poll_peek`]: PeekableReceiver::poll_peek
 struct PeekableReceiver<R: Receiver> {
     receiver: R,
     peeked: Option<R::Message>,
@@ -1350,7 +1463,7 @@ impl<T: Deref<Target = [u8]>> TryFrom<ToInterfaceIntraMessage<T>> for HciPacket<
         match i {
             ToInterfaceIntraMessage::Command(c) => Ok(HciPacket::Command(c)),
             ToInterfaceIntraMessage::Disconnect(_, c) => Ok(HciPacket::Command(c)),
-            ToInterfaceIntraMessage::BufferInfo(_) => {
+            ToInterfaceIntraMessage::PacketBufferInfo(_) => {
                 Err("'FromHostIntraMessage::BufferInfo' cannot be converted to a HciPacket")
             }
         }
@@ -1375,20 +1488,30 @@ impl<T: Deref<Target = [u8]>> TryFrom<FromConnectionIntraMessage<T>> for HciPack
 /// of packets that can be buffered along with the maximum size of the payload (a.k.a. the data
 /// portion) of each packet is manufacture specific.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct PacketFlowControl {
+pub struct PacketFlowCtrlInfo {
     count: usize,
     max_size: usize,
 }
 
-impl PacketFlowControl {
+impl PacketFlowCtrlInfo {
     /// Get the number of data packets that can be stored by the Controller
-    pub fn how_many(&self) -> usize {
+    pub fn get_number_of_packets(&self) -> usize {
         self.count
     }
 
-    /// Get the maximum size of the *payload* of a data packet that can be stored by the Controller
-    pub fn max_size(&self) -> usize {
+    /// Set the number of data packets that can be stored by the Controller
+    pub fn set_number_of_packets(&mut self, count: usize) {
+        self.count = count
+    }
+
+    /// Get the maximum size of the data portion of the packet
+    pub fn get_max_data_size(&self) -> usize {
         self.max_size
+    }
+
+    /// Set the maximum size of the data portion of the packet
+    pub fn set_max_data_size(&mut self, size: usize) {
+        self.max_size = size
     }
 }
 
@@ -1401,43 +1524,38 @@ impl PacketFlowControl {
 pub struct DataBlockFlowControl {
     blocks: usize,
     block_size: usize,
-    packet_size: usize,
+    data_size: usize,
 }
 
 impl DataBlockFlowControl {
     /// Get the number of blocks
-    pub fn number_of_blocks(&self) -> usize {
+    pub fn get_number_of_blocks(&self) -> usize {
         self.blocks
     }
 
+    /// Set the number of blocks
+    pub fn set_number_of_blocks(&mut self, number_of_blocks: usize) {
+        self.blocks = number_of_blocks
+    }
+
     /// Get the size of each block
-    pub fn block_size(&self) -> usize {
+    pub fn get_block_size(&self) -> usize {
         self.block_size
     }
 
-    /// Get the maximum size of the *payload* of a data packet that can be transmitted by the
-    /// Controller
-    pub fn max_size(&self) -> usize {
-        self.packet_size
-    }
-}
-
-/// Information on the buffers for ACL data
-#[derive(Debug, Default)]
-pub struct AclDataBufferInformation {
-    packets: PacketFlowControl,
-    blocks: DataBlockFlowControl,
-}
-
-impl AclDataBufferInformation {
-    /// Get the packet based flow control
-    pub fn packet_flow_control(&self) -> &PacketFlowControl {
-        &self.packets
+    /// Set the block size
+    pub fn set_block_size(&mut self, block_size: usize) {
+        self.block_size = block_size
     }
 
-    /// Get the data block based flow control
-    pub fn data_block_flow_control(&self) -> &DataBlockFlowControl {
-        &self.blocks
+    /// Get the maximum size of the data portion of the packet
+    pub fn get_max_data_size(&self) -> usize {
+        self.data_size
+    }
+
+    /// Set the maximum size of the data portion of the packet
+    pub fn set_max_data_size(&mut self, max_data_size: usize) {
+        self.data_size = max_data_size
     }
 }
 
@@ -1449,11 +1567,11 @@ impl AclDataBufferInformation {
 /// not know how many packets/data blocks the Controller can accept and will refuse to send any
 /// data to the controller.
 #[derive(Debug, Default)]
-pub struct BufferInformation {
-    pub acl: AclDataBufferInformation,
-    pub sco: PacketFlowControl,
-    pub le_acl: AclDataBufferInformation,
-    pub le_iso: PacketFlowControl,
+pub struct PacketBufferInformation {
+    pub acl: PacketFlowCtrlInfo,
+    pub sco: PacketFlowCtrlInfo,
+    pub le_acl: PacketFlowCtrlInfo,
+    pub le_iso: PacketFlowCtrlInfo,
 }
 
 /// A messages sent from all other async tasks to the interface async task
@@ -1463,7 +1581,7 @@ pub struct BufferInformation {
 #[derive(Debug)]
 pub enum ToInterfaceIntraMessage<T> {
     Command(T),
-    BufferInfo(BufferInformation),
+    PacketBufferInfo(PacketBufferInformation),
     Disconnect(ConnectionHandle, T),
 }
 
@@ -1534,7 +1652,6 @@ impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromConnectionIntraMessage<
             FromConnectionIntraMessage::Acl(t) => Some(<u16>::from_le_bytes([t[2], t[3]]).into()),
             FromConnectionIntraMessage::Sco(t) => Some(t[2].into()),
             FromConnectionIntraMessage::Iso(t) => Some(<u16>::from_le_bytes([t[2], t[3] & 0x3F]).into()),
-            _ => None,
         }
     }
 }

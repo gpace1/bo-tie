@@ -80,9 +80,9 @@ pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
 use bo_tie_hci_util::{
-    BufferInformation, BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromInterface, HciPacket,
-    HciPacketType, HostChannel, Sender, TaskId, TaskSource, ToConnectionIntraMessage, ToHostCommandIntraMessage,
-    ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
+    BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromInterface, HciPacket, HciPacketType,
+    HostChannel, PacketBufferInformation, Sender, TaskId, TaskSource, ToConnectionIntraMessage,
+    ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::stack::LinearBuffer;
 use bo_tie_util::buffer::{Buffer, TryExtend};
@@ -101,7 +101,7 @@ use core::ops::Deref;
 /// received from the interface up to the higher layered protocols. Methods that contain *down* are
 /// for sending packets to the interface and onto the Controller.
 pub struct Interface<R> {
-    buffer_info: BufferInformation,
+    packet_buffer_info: PacketBufferInformation,
     skip_cmd_response: bool,
     channel_reserve: R,
 }
@@ -112,12 +112,12 @@ where
 {
     /// Create a new interface
     pub fn new(channel_reserve: R) -> Self {
-        let buffer_info = BufferInformation::default();
+        let packet_buffer_info = PacketBufferInformation::default();
 
         let skip_cmd_response = false;
 
         Interface {
-            buffer_info,
+            packet_buffer_info,
             skip_cmd_response,
             channel_reserve,
         }
@@ -289,7 +289,7 @@ where
 
                             break Some(HciPacket::Command(DriverBuffer::Cmd(data)));
                         }
-                        ToInterfaceIntraMessage::BufferInfo(i) => self.parse_buffer_info(i),
+                        ToInterfaceIntraMessage::PacketBufferInfo(i) => self.parse_buffer_info(i),
                     },
                     TaskSource::Connection(message) => match message {
                         FromConnectionIntraMessage::Acl(data) => break Some(HciPacket::Acl(DriverBuffer::Data(data))),
@@ -364,72 +364,35 @@ where
 
     /// Parse a Number of Completed Data Blocks event
     ///
-    /// Parsing this event is only enabled with feature `unstable`.
-    #[cfg(not(feature = "unstable"))]
+    /// This returns a boolean indicating if the event *Number of Completed Data Blocks* should be
+    /// sent to the host async task. This
     fn parse_number_of_completed_data_blocks_event(
         &mut self,
         ncdb_data: &events::parameters::NumberOfCompletedDataBlocksData,
-    ) -> Result<(), SendError<R>> {
-        ncdb_data.total_data_blocks
-    }
+    ) -> Result<bool, SendError<R>> {
+        if let Some(blocks) = ncdb_data.total_data_blocks {
+            self.channel_reserve.set_acl_flow_control_block_count(blocks.into());
 
-    /// Parse a Number of Completed Data Blocks event
-    ///
-    /// The input `event_parameter` is a byte slice of the event parameter within a HCI event
-    /// packet.
-    ///
-    /// If the return is `Ok` then it always contains `false`.
-    ///
-    /// # TODO Note
-    /// This is unlikely to be a correct implementation.
-    #[cfg(feature = "unstable")]
-    fn parse_number_of_completed_data_blocks_event(
-        &mut self,
-        ncdb_data: &events::parameters::NumberOfCompletedDataBlocksData,
-    ) -> Result<(), SendError<R>> {
-        // This algorithm for flow control of the block buffers just
-        // counts the total number of *bytes* that the controller can
-        // accept (of one or more HCI payloads) within those buffers.
-        // The total number of data blocks does not need to be counted
-        // **unless** the controller sends back the need for the host
-        // to re-check the block buffer information via the *Read Data
-        // Block Size* command.
-        if let None = ncdb_data.total_data_blocks {
-            self.channel_reserve
-                .get_flow_ctrl_receiver()
-                .get_mut_acl_flow_control()
-                .halt();
-
-            self.channel_reserve
-                .get_flow_ctrl_receiver()
-                .get_mut_le_acl_flow_control()
-                .halt();
-
-            todo!("process of re-reading the data block buffer sizes not implemented yet")
-        }
-
-        for ncdb in &ncdb_data.completed_packets_and_blocks {
-            if 0 != ncdb.completed_blocks {
-                let block_size = self.channel_reserve.get_flow_ctrl_receiver().get_block_size();
-
-                let how_many: usize = block_size * <usize>::from(ncdb.completed_blocks);
-
-                let fc_id = self
-                    .channel_reserve
-                    .get_flow_control_id(ncdb.connection_handle)
-                    .ok_or(SendError::<R>::UnknownConnectionHandle(ncdb.connection_handle))?;
-
-                match fc_id {
-                    FlowControlId::Acl => self.channel_reserve.inc_acl_flow_ctrl(how_many),
-                    FlowControlId::Sco => self.channel_reserve.inc_sco_flow_control(how_many),
-                    FlowControlId::LeAcl => self.channel_reserve.inc_le_acl_flow_control(how_many),
-                    FlowControlId::LeIso => self.channel_reserve.inc_le_iso_flow_control(how_many),
-                    FlowControlId::Cmd => panic!("unexpected flow control id 'Cmd'"),
-                }
+            // Increase the number of data blocks based on the total number of blocks sent
+            for ncdb in &ncdb_data.completed_packets_and_blocks {
+                // only the ACL buffers allows for block based flow control
+                self.channel_reserve.inc_acl_flow_ctrl(ncdb.completed_blocks.into());
             }
-        }
 
-        Ok(())
+            Ok(false)
+        } else {
+            // The host needs to re-issue the read data block size command
+
+            self.channel_reserve.halt_acl_flow_control();
+
+            // Increase the number of data blocks based on the total number of blocks sent
+            for ncdb in &ncdb_data.completed_packets_and_blocks {
+                // only the ACL buffers allows for block based flow control
+                self.channel_reserve.inc_acl_flow_ctrl(ncdb.completed_blocks.into());
+            }
+
+            Ok(true)
+        }
     }
 
     /// Initiate a connection async task
@@ -489,7 +452,7 @@ where
     ) -> Result<(), SendError<R>> {
         // When LE ACL flow control packet count is zero
         // then BR/EDR and LE use the same ACL buffer
-        let flow_control_id = if self.buffer_info.le_acl.packet_flow_control().how_many() == 0 {
+        let flow_control_id = if self.packet_buffer_info.le_acl.get_number_of_packets() == 0 {
             FlowControlId::Acl
         } else {
             FlowControlId::LeAcl
@@ -504,7 +467,7 @@ where
     ) -> Result<(), SendError<R>> {
         // When LE ACL flow control packet count is zero
         // then BR/EDR and LE use the same ACL buffer
-        let flow_control_id = if self.buffer_info.le_acl.packet_flow_control().how_many() == 0 {
+        let flow_control_id = if self.packet_buffer_info.le_acl.get_number_of_packets() == 0 {
             FlowControlId::Acl
         } else {
             FlowControlId::LeAcl
@@ -573,9 +536,9 @@ where
             EventsData::NumberOfCompletedPackets(data) => {
                 self.parse_number_of_completed_packets_event(data).map(|_| None)
             }
-            EventsData::NumberOfCompletedDataBlocks(data) => {
-                self.parse_number_of_completed_data_blocks_event(data).map(|_| None)
-            }
+            EventsData::NumberOfCompletedDataBlocks(data) => self
+                .parse_number_of_completed_data_blocks_event(data)
+                .map(|b| b.then_some(ed)),
             EventsData::ConnectionComplete(data) => self.parse_connection_complete_event(data).await.map(|_| Some(ed)),
             EventsData::SynchronousConnectionComplete(data) => self
                 .parse_synchronous_connection_complete_event(data)
@@ -692,22 +655,22 @@ where
     }
 
     /// Parse the buffer information sent from the host async task
-    fn parse_buffer_info(&mut self, info: BufferInformation) {
-        self.buffer_info = info;
+    fn parse_buffer_info(&mut self, info: PacketBufferInformation) {
+        self.packet_buffer_info = info;
 
         // When buffer information is received, all flow control is assumed to be packet based.
 
         self.channel_reserve
-            .inc_acl_flow_ctrl(self.buffer_info.acl.packet_flow_control().how_many());
+            .inc_acl_flow_ctrl(self.packet_buffer_info.acl.get_number_of_packets());
 
         self.channel_reserve
-            .inc_sco_flow_control(self.buffer_info.le_iso.how_many());
+            .inc_sco_flow_control(self.packet_buffer_info.le_iso.get_number_of_packets());
 
         self.channel_reserve
-            .inc_le_acl_flow_control(self.buffer_info.le_acl.packet_flow_control().how_many());
+            .inc_le_acl_flow_control(self.packet_buffer_info.le_acl.get_number_of_packets());
 
         self.channel_reserve
-            .inc_le_iso_flow_control(self.buffer_info.le_iso.how_many());
+            .inc_le_iso_flow_control(self.packet_buffer_info.le_iso.get_number_of_packets());
     }
 
     /// Parse disconnect of a connection
