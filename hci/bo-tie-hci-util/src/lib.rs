@@ -775,6 +775,9 @@ pub trait ChannelReserveExt: ChannelReserve {
     /// This increments the number of commands that can be sent to the controller by the number
     /// provided by input `how_many`.
     fn inc_cmd_flow_ctrl(&mut self, how_many: usize) {
+        // todo: allow for more than one command to be sent at a time
+        let how_many = core::cmp::min(1, how_many);
+
         inc_flow_ctrl!(self.get_flow_ctrl_receiver(), cmd_flow_control, how_many);
     }
 
