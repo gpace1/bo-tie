@@ -30,9 +30,9 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
-use bo_tie_hci_util::HostChannelEnds;
 use bo_tie_hci_util::{events, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
+use bo_tie_hci_util::{HostChannelEnds, PacketBufferInformation};
 use bo_tie_util::errors;
 
 use core::ops::Deref;
@@ -466,6 +466,8 @@ where
     /// An error is returned if the channel ends that were created with input host `ends` were
     /// dropped.
     pub async fn init(ends: H) -> Result<Self, CommandError<H>> {
+        use bo_tie_hci_util::{Sender, ToInterfaceIntraMessage};
+
         let mut host = Host {
             host_interface: ends,
             acl_max_payload: Default::default(),
@@ -478,7 +480,15 @@ where
         // reset the controller
         commands::cb::reset::send(&mut host).await?;
 
-        host.read_buffers().await?;
+        let buffer_info = host.read_buffers().await?;
+
+        let message = ToInterfaceIntraMessage::PacketBufferInfo(buffer_info);
+
+        host.host_interface
+            .get_sender()
+            .send(message)
+            .await
+            .map_err(|e| CommandError::SendError(e))?;
 
         Ok(host)
     }
@@ -487,8 +497,10 @@ where
     ///
     /// This is an exhaustive approach to reading all the different possible buffers that can be on
     /// the controller.
-    async fn read_buffers(&mut self) -> Result<(), CommandError<H>> {
+    async fn read_buffers(&mut self) -> Result<PacketBufferInformation, CommandError<H>> {
         use errors::Error;
+
+        let mut packet_buffer_info = PacketBufferInformation::default();
 
         // get the main buffer info
         let buffer_info = commands::info_params::read_buffer_size::send(self).await?;
@@ -497,35 +509,85 @@ where
 
         self.sco_max_payload = buffer_info.synchronous_data_packet_len;
 
+        packet_buffer_info
+            .acl
+            .set_max_data_size(buffer_info.acl_data_packet_len);
+        packet_buffer_info
+            .acl
+            .set_number_of_packets(buffer_info.total_num_acl_data_packets);
+        packet_buffer_info
+            .sco
+            .set_max_data_size(buffer_info.synchronous_data_packet_len);
+        packet_buffer_info
+            .sco
+            .set_number_of_packets(buffer_info.total_num_acl_data_packets);
+
         // if LE is supported, get the LE info from the controller
         let (le_acl_max_mtu, le_iso_max_mtu) = match commands::le::read_buffer_size::send_v2(self).await {
             Err(CommandError::CommandError(Error::UnknownHciCommand)) => {
                 if let Some(buffer_size_info_v1) = commands::le::read_buffer_size::send_v1(self).await? {
                     let le_acl_max_mtu = buffer_size_info_v1.acl.len.into();
 
+                    packet_buffer_info
+                        .le_acl
+                        .set_max_data_size(buffer_size_info_v1.acl.len.into());
+                    packet_buffer_info
+                        .le_acl
+                        .set_number_of_packets(buffer_size_info_v1.acl.cnt.into());
+                    packet_buffer_info.le_iso.set_max_data_size(0);
+                    packet_buffer_info.le_iso.set_number_of_packets(0);
+
                     (le_acl_max_mtu, 0)
                 } else {
+                    packet_buffer_info.le_acl.set_max_data_size(0);
+                    packet_buffer_info.le_acl.set_number_of_packets(0);
+                    packet_buffer_info.le_iso.set_max_data_size(0);
+                    packet_buffer_info.le_iso.set_number_of_packets(0);
+
                     (0, 0)
                 }
             }
             Ok(buffer_size_info_v2) => {
                 let le_acl_max_mtu = match buffer_size_info_v2.acl {
-                    Some(bs) => bs.len.into(),
-                    None => self.acl_max_payload,
+                    Some(bs) => {
+                        packet_buffer_info.le_acl.set_max_data_size(bs.len.into());
+                        packet_buffer_info.le_acl.set_number_of_packets(bs.cnt.into());
+
+                        bs.len.into()
+                    }
+                    None => {
+                        packet_buffer_info.le_acl.set_max_data_size(0);
+                        packet_buffer_info.le_acl.set_number_of_packets(0);
+
+                        0
+                    }
                 };
 
-                let le_iso_max_mtu = buffer_size_info_v2.iso.map(|bs| bs.len.into()).unwrap_or_default();
+                let le_iso_max_mtu = match buffer_size_info_v2.iso {
+                    Some(bs) => {
+                        packet_buffer_info.le_iso.set_max_data_size(bs.len.into());
+                        packet_buffer_info.le_iso.set_number_of_packets(bs.cnt.into());
+
+                        bs.len.into()
+                    }
+                    None => {
+                        packet_buffer_info.le_iso.set_max_data_size(0);
+                        packet_buffer_info.le_iso.set_number_of_packets(0);
+
+                        0
+                    }
+                };
 
                 (le_acl_max_mtu, le_iso_max_mtu)
             }
-            e => return e.map(|_| ()),
+            Err(e) => return Err(e),
         };
 
         self.le_acl_max_payload = le_acl_max_mtu;
 
         self._le_iso_max_payload = le_iso_max_mtu;
 
-        Ok(())
+        Ok(packet_buffer_info)
     }
 
     /// Send a command with the provided matcher to the interface async task
