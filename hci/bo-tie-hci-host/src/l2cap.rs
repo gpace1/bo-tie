@@ -4,8 +4,8 @@
 //! contains the types that implement the traits of `bo-tie-l2cap` so they can be used by the L2CAP
 //! protocol.
 
-use crate::{Connection, HciAclData};
-use bo_tie_hci_util::ConnectionChannelEnds;
+use crate::{AclBroadcastFlag, AclPacketBoundary, Connection, HciAclData};
+use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle};
 use core::cell::Cell;
 use core::future::Future;
 use core::pin::Pin;
@@ -13,6 +13,7 @@ use core::task::{Context, Poll};
 
 /// A L2CAP connection for LE
 pub struct LeL2cap<C: ConnectionChannelEnds> {
+    handle: ConnectionHandle,
     front_cap: usize,
     back_cap: usize,
     max_mtu: usize,
@@ -31,6 +32,7 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
 
 impl<C: ConnectionChannelEnds> LeL2cap<C> {
     pub(crate) fn new<T>(
+        handle: ConnectionHandle,
         front_cap: usize,
         back_cap: usize,
         max_mtu: usize,
@@ -44,6 +46,7 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
         let mtu = initial_mtu.into();
 
         Self {
+            handle,
             front_cap,
             back_cap,
             max_mtu,
@@ -114,7 +117,13 @@ where
 
         let channel_ends = &self.channel_ends;
 
+        let handle = self.handle;
+
+        let first_packet = true;
+
         let iter = SelfSendBufferIter {
+            first_packet,
+            handle,
             front_capacity,
             back_capacity,
             channel_ends,
@@ -160,7 +169,7 @@ where
 
 struct AclBufferBuilder<C: ConnectionChannelEnds> {
     sender: C::Sender,
-    buffer: Option<C::ToBuffer>,
+    acl_data: Option<HciAclData<C::ToBuffer>>,
 }
 
 impl<C> bo_tie_util::buffer::TryExtend<u8> for AclBufferBuilder<C>
@@ -173,9 +182,14 @@ where
     where
         I: IntoIterator<Item = u8>,
     {
-        self.buffer
+        self.acl_data
             .as_mut()
-            .map(|buffer| buffer.try_extend(iter).map_err(|e| AclBufferError::Buffer(e)))
+            .map(|acl_data| {
+                acl_data
+                    .get_mut_payload()
+                    .try_extend(iter)
+                    .map_err(|e| AclBufferError::Buffer(e))
+            })
             .transpose()
             .map(|_| ())
     }
@@ -192,7 +206,9 @@ where
     fn into_future(mut self) -> Self::IntoFuture {
         use bo_tie_hci_util::Sender;
 
-        let message = bo_tie_hci_util::FromConnectionIntraMessage::Acl(self.buffer.take().unwrap()).into();
+        let packet = self.acl_data.take().unwrap().into_inner_packet().unwrap();
+
+        let message = bo_tie_hci_util::FromConnectionIntraMessage::Acl(packet).into();
 
         async move { self.sender.send(message).await }
     }
@@ -207,7 +223,9 @@ where
     type IntoFuture = AclBufferFuture<C>;
 
     fn into_future(mut self) -> Self::IntoFuture {
-        let message = bo_tie_hci_util::FromConnectionIntraMessage::Acl(self.buffer.take().unwrap()).into();
+        let packet = self.acl_data.take().unwrap().into_inner_packet().unwrap();
+
+        let message = bo_tie_hci_util::FromConnectionIntraMessage::Acl(packet);
 
         AclBufferFuture {
             message: Some(message),
@@ -302,6 +320,8 @@ where
 }
 
 struct SelfSendBufferIter<'a, C: ConnectionChannelEnds> {
+    first_packet: bool,
+    handle: ConnectionHandle,
     front_capacity: usize,
     back_capacity: usize,
     channel_ends: &'a C,
@@ -314,15 +334,32 @@ where
     type Item = SelfSendBufferFutureMap<C>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let boundary_flag = if self.first_packet {
+            self.first_packet = false;
+
+            AclPacketBoundary::FirstNonFlushable
+        } else {
+            AclPacketBoundary::ContinuingFragment
+        };
+
+        let handle = self.handle;
+
         let take_buffer = self.channel_ends.take_buffer(self.front_capacity, self.back_capacity);
 
         let sender = self.channel_ends.get_sender().into();
 
-        Some(SelfSendBufferFutureMap { sender, take_buffer })
+        Some(SelfSendBufferFutureMap {
+            boundary_flag,
+            handle,
+            sender,
+            take_buffer,
+        })
     }
 }
 
 struct SelfSendBufferFutureMap<C: ConnectionChannelEnds> {
+    boundary_flag: AclPacketBoundary,
+    handle: ConnectionHandle,
     sender: Option<C::Sender>,
     take_buffer: C::TakeBuffer,
 }
@@ -339,10 +376,12 @@ where
         unsafe { Pin::new_unchecked(&mut this.take_buffer) }
             .poll(cx)
             .map(|buffer| {
-                let sender = this.sender.take().unwrap();
-                let buffer = buffer.into();
+                let acl_data =
+                    HciAclData::new(this.handle, this.boundary_flag, AclBroadcastFlag::NoBroadcast, buffer).into();
 
-                AclBufferBuilder { sender, buffer }
+                let sender = this.sender.take().unwrap();
+
+                AclBufferBuilder { sender, acl_data }
             })
     }
 }

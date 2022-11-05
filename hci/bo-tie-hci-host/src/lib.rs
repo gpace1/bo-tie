@@ -248,6 +248,10 @@ impl<T> HciAclData<T> {
         &self.payload
     }
 
+    pub fn get_mut_payload(&mut self) -> &mut T {
+        &mut self.payload
+    }
+
     pub fn get_packet_boundary_flag(&self) -> AclPacketBoundary {
         self.packet_boundary_flag
     }
@@ -399,6 +403,32 @@ impl<T> HciAclData<T> {
         v.extend_from_slice(&self.payload);
 
         v
+    }
+
+    /// Create an HCI ACL data packet using the inner buffer
+    ///
+    /// This will convert this `HciAclData` type into the inner buffer. The buffer must have enough
+    /// front capacity to contain the header information (four bytes) of a HCI ACL data packet.
+    ///
+    /// # Error
+    /// The header for the HCI ACL packet could not be pushed to the front of the buffer
+    pub fn into_inner_packet(mut self) -> Result<T, <T as bo_tie_util::buffer::TryExtend<u8>>::Error>
+    where
+        T: bo_tie_util::buffer::Buffer,
+    {
+        let first_2_bytes = self.connection_handle.get_raw_handle()
+            | self.packet_boundary_flag.get_shifted_val()
+            | self.broadcast_flag.get_shifted_val();
+
+        let length = self.payload.len() as u16;
+
+        // front extensions must be done in reverse order by item
+
+        self.payload.try_extend(length.to_le_bytes())?;
+
+        self.payload.try_extend(first_2_bytes.to_le_bytes())?;
+
+        Ok(self.payload)
     }
 }
 
@@ -1034,6 +1064,7 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
                 let initial_mtu = <bo_tie_l2cap::LeU as bo_tie_l2cap::MinimumMtu>::MIN_MTU;
 
                 let le = l2cap::LeL2cap::new(
+                    self.get_handle(),
                     self.buffer_header_size,
                     self.buffer_tail_size,
                     max_mtu,
