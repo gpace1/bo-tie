@@ -30,7 +30,8 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
-use bo_tie_hci_util::{events, ToHostCommandIntraMessage};
+use bo_tie_hci_util::events::parameters::LeConnectionAddressType;
+use bo_tie_hci_util::{events, le, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
 use bo_tie_hci_util::{HostChannelEnds, PacketBufferInformation};
 use bo_tie_util::errors;
@@ -1012,6 +1013,36 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
             ConnectionKind::BrEdrSco(c) => c.connection_handle,
             ConnectionKind::Le(c) => c.connection_handle,
             ConnectionKind::LeEnh(c) => c.connection_handle,
+        }
+    }
+
+    /// Get the peer address
+    ///
+    /// This returns the address of the connected device.
+    pub fn get_peer_address(&self) -> bo_tie_util::BluetoothDeviceAddress {
+        match &self.kind {
+            ConnectionKind::BrEdr(c) => c.bluetooth_address,
+            ConnectionKind::BrEdrSco(c) => c.bluetooth_address,
+            ConnectionKind::Le(c) => c.peer_address,
+            ConnectionKind::LeEnh(c) => c.peer_address,
+        }
+    }
+
+    /// Check if the address is random
+    ///
+    /// # Note
+    /// For a BR/EDR connection this function always returns false.
+    pub fn is_address_random(&self) -> bool {
+        use events::parameters::LeConnectionAddressType;
+        use le::AddressType;
+
+        match &self.kind {
+            ConnectionKind::BrEdr(_) | ConnectionKind::BrEdrSco(_) => false,
+            ConnectionKind::Le(c) => c.peer_address_type == LeConnectionAddressType::RandomDeviceAddress,
+            ConnectionKind::LeEnh(c) => {
+                c.peer_address_type == AddressType::RandomDeviceAddress
+                    || c.peer_address_type == AddressType::RandomIdentityAddress
+            }
         }
     }
 
