@@ -34,7 +34,6 @@ use bo_tie_hci_util::{events, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
 use bo_tie_hci_util::{HostChannelEnds, PacketBufferInformation};
 use bo_tie_util::errors;
-
 use core::ops::Deref;
 
 /// Used to get the information required for sending a command from the host to the controller
