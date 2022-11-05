@@ -30,7 +30,6 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
-use bo_tie_hci_util::events::parameters::LeConnectionAddressType;
 use bo_tie_hci_util::{events, le, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
 use bo_tie_hci_util::{HostChannelEnds, PacketBufferInformation};
