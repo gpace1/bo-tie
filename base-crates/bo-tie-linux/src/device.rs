@@ -110,11 +110,9 @@ pub mod hci {
                 }
             }
         } else {
-            let io_vec = &[std::io::IoSlice::new(&message)];
-
             let flags = nix::sys::socket::MsgFlags::MSG_DONTWAIT;
 
-            nix::sys::socket::sendmsg::<()>(dev.0, io_vec, &[], flags, None)
+            nix::sys::socket::send(dev.0, &message, flags)
         }
     }
 }
