@@ -411,7 +411,7 @@ impl<T> HciAclData<T> {
     ///
     /// # Error
     /// The header for the HCI ACL packet could not be pushed to the front of the buffer
-    pub fn into_inner_packet(mut self) -> Result<T, <T as bo_tie_util::buffer::TryExtend<u8>>::Error>
+    pub fn into_inner_packet(mut self) -> Result<T, <T as bo_tie_util::buffer::TryFrontExtend<u8>>::Error>
     where
         T: bo_tie_util::buffer::Buffer,
     {
@@ -423,9 +423,9 @@ impl<T> HciAclData<T> {
 
         // front extensions must be done in reverse order by item
 
-        self.payload.try_extend(length.to_le_bytes())?;
+        self.payload.try_front_extend(length.to_le_bytes())?;
 
-        self.payload.try_extend(first_2_bytes.to_le_bytes())?;
+        self.payload.try_front_extend(first_2_bytes.to_le_bytes())?;
 
         Ok(self.payload)
     }
