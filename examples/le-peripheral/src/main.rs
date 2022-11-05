@@ -1,10 +1,4 @@
-//! Connection state in the slave role example
-//!
-//! This example shows the basic way to form a connection with this device in the peripheral role.
-//!
-//! To fully execute this example you'll need another bluetooth enabled device that can run in the
-//! central role. If you have an android phone, you can use the 'nRF Connect' app to connect with
-//! this example
+#![doc = include_str!("../README.md")]
 
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
 
