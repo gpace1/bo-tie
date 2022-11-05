@@ -1,13 +1,4 @@
-//! Advertising example
-//!
-//! This examples sets up the bluetooth device to advertise. The only data sent in each advertising
-//! message is just the local name "Advertiser Test". The application will continue to run until
-//! the example is sent a signal (e.g. by pressing ctrl-c on a unix system).
-//!
-//! # Note
-//! Super User privileges may be required to interact with your bluetooth peripheral. To do will
-//! probably require the full path to cargo. The cargo binary is usually locacted in your home
-//! directory at `.cargo/bin/cargo`.
+#![doc = include_str!("../README.md")]
 
 async fn advertise_setup<T: bo_tie::hci::HostChannelEnds>(
     hi: &mut bo_tie::hci::Host<T>,
@@ -67,59 +58,6 @@ fn setup_sig() -> impl core::future::Future {
 #[cfg(not(unix))]
 async fn setup_sig() {}
 
-fn get_arg_options() -> getopts::Options {
-    let mut opts = getopts::Options::new();
-    opts.parsing_style(getopts::ParsingStyle::FloatingFrees);
-    opts.long_only(false);
-    opts.optflag("h", "help", "Print this help menu");
-    opts.opt(
-        "s",
-        "service-uuid",
-        "Space-separated 128 bit service uuids to advertise with. The UUIDs must be in the \
-            format of XX:XX:XX:XX:XX:XX (From most significant to least significant byte)",
-        "UUIDs",
-        getopts::HasArg::Yes,
-        getopts::Occur::Multi,
-    );
-    opts
-}
-
-fn parse_args(mut args: std::env::Args) -> Option<bo_tie::hci::commands::le::set_advertising_data::AdvertisingData> {
-    let options = get_arg_options();
-
-    let program_name = args.next().unwrap();
-
-    let matches = match options.parse(&args.collect::<Vec<_>>()) {
-        Ok(all_match) => all_match,
-        Err(no_match) => panic!("{}", no_match.to_string()),
-    };
-
-    if matches.opt_present("h") {
-        print!("{}", options.usage(&format!("Usage: {} [options]", program_name)));
-        std::process::exit(0);
-    } else {
-        let mut advertising_data = bo_tie::hci::commands::le::set_advertising_data::AdvertisingData::new();
-
-        // Add service UUIDs to the advertising data
-        let services_128 = matches.opt_strs("s").into_iter().fold(
-            bo_tie::host::gap::assigned::service_uuids::new_128(true),
-            |mut services, str_uuid| {
-                let uuid = bo_tie::host::Uuid::try_from(str_uuid.as_str()).expect("Invalid Uuid");
-
-                services.add(uuid.into());
-
-                services
-            },
-        );
-
-        if !services_128.as_ref().is_empty() {
-            advertising_data.try_push(services_128).expect("Couldn't add services");
-        }
-
-        Some(advertising_data)
-    }
-}
-
 #[cfg(target_os = "linux")]
 macro_rules! create_hci {
     () => {
@@ -163,10 +101,7 @@ async fn main() {
 
     let adv_name = bo_tie::host::gap::assigned::local_name::LocalName::new("Adv Test", None);
 
-    let mut adv_data = match parse_args(std::env::args()) {
-        Some(user_advertising_data) => user_advertising_data,
-        None => bo_tie::hci::commands::le::set_advertising_data::AdvertisingData::new(),
-    };
+    let mut adv_data = bo_tie::hci::commands::le::set_advertising_data::AdvertisingData::new();
 
     adv_data.try_push(adv_name).unwrap();
 
