@@ -92,15 +92,29 @@ pub mod hci {
 
     /// Send a HCI packet to the controller
     pub fn send_to_controller(dev: &crate::FileDescriptor, packet: &mut HciPacket<impl Buffer>) -> nix::Result<usize> {
+        let is_command = if let HciPacket::Command(_) = packet {
+            true
+        } else {
+            false
+        };
+
         // Uart is used here at it is the same system used by linux for labeling HCI packets.
         let message =
             bo_tie_hci_interface::uart::PacketIndicator::prepend(packet).expect("failed to prepend packet indicator");
 
-        loop {
-            match nix::unistd::write(dev.0, &message) {
-                Err(nix::Error::EAGAIN) | Err(nix::Error::EINTR) => continue,
-                result => break result,
+        if is_command {
+            loop {
+                match nix::unistd::write(dev.0, &message) {
+                    Err(nix::Error::EAGAIN) | Err(nix::Error::EINTR) => continue,
+                    result => break result,
+                }
             }
+        } else {
+            let io_vec = &[std::io::IoSlice::new(&message)];
+
+            let flags = nix::sys::socket::MsgFlags::MSG_DONTWAIT;
+
+            nix::sys::socket::sendmsg::<()>(dev.0, io_vec, &[], flags, None)
         }
     }
 }
