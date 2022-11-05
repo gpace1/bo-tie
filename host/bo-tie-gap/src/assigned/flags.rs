@@ -7,15 +7,15 @@ use core::cell::Cell;
 
 pub enum CoreFlags {
     /// LE limited discoverable mode
-    LELimitedDiscoverableMode,
+    LeLimitedDiscoverableMode,
     /// LE general discoverable mode
-    LEGeneralDiscoverableMode,
+    LeGeneralDiscoverableMode,
     /// BR/EDR not supported
-    BREDRNotSupported,
+    BrEdrNotSupported,
     /// The controller supports simultaneous BR/EDR and LE to the same device
-    ControllerSupportsSimultaneousLEAndBREDR,
+    ControllerSupportsSimultaneousLeAndBrEdr,
     /// The host supports simultaneous BR/EDR and LE to the same device.
-    HostSupportsSimultaneousLEAndBREDR,
+    HostSupportsSimultaneousLeAndBrEdr,
 }
 
 impl CoreFlags {
@@ -27,21 +27,21 @@ impl CoreFlags {
 
     fn get_position(&self) -> usize {
         match *self {
-            CoreFlags::LELimitedDiscoverableMode => 0,
-            CoreFlags::LEGeneralDiscoverableMode => 1,
-            CoreFlags::BREDRNotSupported => 2,
-            CoreFlags::ControllerSupportsSimultaneousLEAndBREDR => 3,
-            CoreFlags::HostSupportsSimultaneousLEAndBREDR => 4,
+            CoreFlags::LeLimitedDiscoverableMode => 0,
+            CoreFlags::LeGeneralDiscoverableMode => 1,
+            CoreFlags::BrEdrNotSupported => 2,
+            CoreFlags::ControllerSupportsSimultaneousLeAndBrEdr => 3,
+            CoreFlags::HostSupportsSimultaneousLeAndBrEdr => 4,
         }
     }
 
     fn from_position(raw: usize) -> Self {
         match raw {
-            0 => CoreFlags::LELimitedDiscoverableMode,
-            1 => CoreFlags::LEGeneralDiscoverableMode,
-            2 => CoreFlags::BREDRNotSupported,
-            3 => CoreFlags::ControllerSupportsSimultaneousLEAndBREDR,
-            4 => CoreFlags::HostSupportsSimultaneousLEAndBREDR,
+            0 => CoreFlags::LeLimitedDiscoverableMode,
+            1 => CoreFlags::LeGeneralDiscoverableMode,
+            2 => CoreFlags::BrEdrNotSupported,
+            3 => CoreFlags::ControllerSupportsSimultaneousLeAndBrEdr,
+            4 => CoreFlags::HostSupportsSimultaneousLeAndBrEdr,
             _ => panic!("Position beyond core flags"),
         }
     }
@@ -67,7 +67,7 @@ pub enum FlagType {
 /// let mut flags = flags::Flags::new();
 ///
 /// // enable the bluetooth specified flag 'LE limited discoverable mode'
-/// flags.get_core(flags::CoreFlags::LELimitedDiscoverableMode).enable();
+/// flags.get_core(flags::CoreFlags::LeLimitedDiscoverableMode).enable();
 ///
 /// // enable a user specific flag
 /// flags.get_user(0).enable();
@@ -263,7 +263,7 @@ mod test {
     fn into_raw_test() {
         let mut flags = Flags::new();
 
-        flags.get_core(CoreFlags::LELimitedDiscoverableMode).enable();
+        flags.get_core(CoreFlags::LeLimitedDiscoverableMode).enable();
         flags.get_user(2).enable();
 
         assert_eq!(2, flags.data_len().unwrap());
@@ -287,8 +287,8 @@ mod test {
 
         let mut flags = Flags::try_from_struct(packet).unwrap();
 
-        assert!(flags.get_core(CoreFlags::LELimitedDiscoverableMode).get());
-        assert!(flags.get_core(CoreFlags::LEGeneralDiscoverableMode).get());
+        assert!(flags.get_core(CoreFlags::LeLimitedDiscoverableMode).get());
+        assert!(flags.get_core(CoreFlags::LeGeneralDiscoverableMode).get());
         assert!(flags.get_user(3).get());
         assert!(flags.get_user(8).get());
         assert!(flags.get_user(9).get());
