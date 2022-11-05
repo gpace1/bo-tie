@@ -294,7 +294,7 @@ impl<T> HciAclData<T> {
 
         impl<T> Iterator for HciAclPacketIter<'_, T>
         where
-            T: core::ops::Deref<Target = [u8]>,
+            T: Deref<Target = [u8]>,
         {
             type Item = u8;
 
@@ -332,7 +332,7 @@ impl<T> HciAclData<T> {
             }
         }
 
-        impl<T> ExactSizeIterator for HciAclPacketIter<'_, T> where T: core::ops::Deref<Target = [u8]> {}
+        impl<T> ExactSizeIterator for HciAclPacketIter<'_, T> where T: Deref<Target = [u8]> {}
 
         HciAclPacketIter::new(self)
     }
