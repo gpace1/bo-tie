@@ -522,13 +522,13 @@ where
 
         match &ed {
             EventsData::CommandComplete(data) => {
-                let skip = std::mem::take(&mut self.skip_cmd_response);
+                let skip = core::mem::take(&mut self.skip_cmd_response);
 
                 self.parse_command_complete_event(data)
                     .map(|b| (b && !skip).then_some(ed))
             }
             EventsData::CommandStatus(data) => {
-                let skip = std::mem::take(&mut self.skip_cmd_response);
+                let skip = core::mem::take(&mut self.skip_cmd_response);
 
                 self.parse_command_status_event(data)
                     .map(|b| (b && !skip).then_some(ed))
