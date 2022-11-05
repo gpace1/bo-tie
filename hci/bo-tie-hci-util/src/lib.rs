@@ -466,8 +466,10 @@ impl FlowControl for CommandFlowControl {
         self.send_count += by;
     }
 
-    fn try_reduce<T: GetDataPayloadSize>(&mut self, _: &T) -> Result<(), ()> {
-        self.send_count = self.send_count.checked_sub(1).ok_or(())?;
+    fn try_reduce<T: GetDataPayloadSize>(&mut self, data: &T) -> Result<(), ()> {
+        if let Some(_) = data.get_payload_size() {
+            self.send_count = self.send_count.checked_sub(1).ok_or(())?;
+        }
 
         Ok(())
     }
@@ -482,8 +484,10 @@ impl FlowControl for PacketBasedFlowControl {
         self.how_many += by;
     }
 
-    fn try_reduce<T: GetDataPayloadSize>(&mut self, _: &T) -> Result<(), ()> {
-        self.how_many = self.how_many.checked_sub(1).ok_or(())?;
+    fn try_reduce<T: GetDataPayloadSize>(&mut self, data: &T) -> Result<(), ()> {
+        if let Some(_) = data.get_payload_size() {
+            self.how_many = self.how_many.checked_sub(1).ok_or(())?;
+        }
 
         Ok(())
     }
@@ -499,14 +503,14 @@ impl FlowControl for BlockBasedFlowControl {
     }
 
     fn try_reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) -> Result<(), ()> {
-        let payload_size = payload_info.get_payload_size().expect("failed to get payload size");
+        if let Some(payload_size) = payload_info.get_payload_size() {
+            // For simplicity one is always added instead of performing
+            // a remainder check. Only when `payload_size` is a multiple
+            // of `self.block_size` that an extra block is not needed.
+            let blocks_required = payload_size / self.block_size + 1;
 
-        // For simplicity one is always added instead of performing
-        // a remainder check. Only when `payload_size` is a multiple
-        // of `self.block_size` that an extra block is not needed.
-        let blocks_required = payload_size / self.block_size + 1;
-
-        self.how_many = self.how_many.checked_sub(blocks_required).ok_or(())?;
+            self.how_many = self.how_many.checked_sub(blocks_required).ok_or(())?;
+        }
 
         Ok(())
     }
