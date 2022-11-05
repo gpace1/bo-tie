@@ -171,7 +171,7 @@ fn setup_sig() -> impl core::future::Future {
     let hook = tokio::spawn(async move { signals.next().await });
 
     async move {
-        println!("awaiting for 'ctrl-C' (or SIGINT) to stop advertising");
+        println!("awaiting for 'ctrl-C' (or SIGINT) to stop example");
 
         hook.await
     }
