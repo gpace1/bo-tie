@@ -421,11 +421,13 @@ impl<T> HciAclData<T> {
 
         let length = self.payload.len() as u16;
 
-        // front extensions must be done in reverse order by item
+        // front extensions must be done in reverse order by item,
+        // so taking advantage of big endian being the reverse of
+        // little endian for the length and header.
 
-        self.payload.try_front_extend(length.to_le_bytes())?;
+        self.payload.try_front_extend(length.to_be_bytes())?;
 
-        self.payload.try_front_extend(first_2_bytes.to_le_bytes())?;
+        self.payload.try_front_extend(first_2_bytes.to_be_bytes())?;
 
         Ok(self.payload)
     }
