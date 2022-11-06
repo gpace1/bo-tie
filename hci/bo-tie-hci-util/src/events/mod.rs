@@ -636,6 +636,13 @@ impl Events {
             _ => true,
         }
     }
+
+    /// Shortcut for an empty list of Events
+    ///
+    /// This can be helpful when trying to disable all events with the event mask functions.
+    pub fn empty_list() -> [Events; 0] {
+        []
+    }
 }
 
 /// Generic error for trying to convert raw data into an event

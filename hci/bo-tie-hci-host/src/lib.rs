@@ -1171,6 +1171,15 @@ impl<C> core::fmt::Display for TryIntoLeL2capError<C> {
 impl<C> std::error::Error for TryIntoLeL2capError<C> {}
 
 /// An error when trying to send a command
+///
+/// There are various errors that can occur when trying to send a command to the Controller. The
+/// majority of the errors encountered though are Bluetooth errors. `CommandError` needs to account
+/// for catastrophic errors (bugs in bo-tie or the Controller), and these are not very helpful for
+/// the normal Bluetooth operation. `TryFrom<CommandError<H>>` is implemented for [`Error`] so that
+/// Bluetooth's errors can be taken from a `CommandError`, but if `try_from` returns an error then
+/// either the interface async task exited or there was a bug in `bo-tie` or the Controller.
+///
+/// [`Error`]: bo_tie_util::errors::Error
 pub enum CommandError<H>
 where
     H: HostChannelEnds,
@@ -1214,9 +1223,20 @@ where
             CommandError::SendError(e) => core::fmt::Display::fmt(e, f),
             CommandError::EventError(e) => core::fmt::Display::fmt(e, f),
             CommandError::InvalidEventParameter => f.write_str("command complete event contained an invalid parameter"),
-            CommandError::ReceiverClosed => f.write_str("interface is not running"),
+            CommandError::ReceiverClosed => f.write_str("receiver closed; is the interface async task running?"),
         }
     }
+}
+
+#[cfg(feature = "std")]
+impl<H> std::error::Error for CommandError<H>
+where
+    H: HostChannelEnds,
+    <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Debug,
+    <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Debug,
+    <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Display,
+    <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Display,
+{
 }
 
 impl<H: HostChannelEnds> From<events::EventError> for CommandError<H> {
@@ -1236,6 +1256,18 @@ impl<H: HostChannelEnds> From<CCParameterError> for CommandError<H> {
         match e {
             CCParameterError::CommandError(e) => CommandError::CommandError(e),
             CCParameterError::InvalidEventParameter => CommandError::InvalidEventParameter,
+        }
+    }
+}
+
+impl<H: HostChannelEnds> TryFrom<CommandError<H>> for errors::Error {
+    type Error = CommandError<H>;
+
+    fn try_from(value: CommandError<H>) -> Result<Self, Self::Error> {
+        if let CommandError::CommandError(e) = &value {
+            Ok(*e)
+        } else {
+            Err(value)
         }
     }
 }
