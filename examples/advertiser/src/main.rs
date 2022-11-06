@@ -36,19 +36,9 @@ async fn advertise_teardown<T: bo_tie::hci::HostChannelEnds>(hi: &mut bo_tie::hc
 /// This sets up the signal handling and returns a future for awaiting the reception of a signal.
 #[cfg(unix)]
 fn setup_sig() -> impl core::future::Future {
-    use futures::stream::StreamExt;
-    use signal_hook::consts::signal::*;
-    use signal_hook_tokio::Signals;
+    println!("awaiting for 'ctrl-C' (or SIGINT) to stop advertising");
 
-    let mut signals = Signals::new(&[SIGHUP, SIGTERM, SIGINT, SIGQUIT]).unwrap();
-
-    let hook = tokio::spawn(async move { signals.next().await });
-
-    async move {
-        println!("awaiting for 'ctrl-C' (or SIGINT) to stop advertising");
-
-        hook.await
-    }
+    tokio::signal::ctrl_c()
 }
 
 /// Stub for signal setup
