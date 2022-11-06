@@ -10,16 +10,36 @@ pub struct ConnectionIntervalBounds {
 }
 
 impl ConnectionIntervalBounds {
-    /// Create a ConnectionUpdateInterval
+    /// Try to create a `ConnectionIntervalBounds`
     ///
     /// # Errors
-    /// An error is returned if the minimum is greater then the maximum
-    pub fn try_from(min: ConnectionInterval, max: ConnectionInterval) -> Result<Self, &'static str> {
+    /// An error is returned if `min` or `max` cannot be converted into a `ConnectionInterval` or
+    /// `min` is greater than `max`
+    pub fn try_from_bounds<A, B>(min: A, max: B) -> Result<Self, &'static str>
+    where
+        A: TryInto<ConnectionInterval, Error = &'static str>,
+        B: TryInto<ConnectionInterval, Error = &'static str>,
+    {
+        let min = min.try_into()?;
+        let max = max.try_into()?;
+
         if min.get_raw_val() <= max.get_raw_val() {
             Ok(Self { min, max })
         } else {
             Err("'min' is greater than 'max'")
         }
+    }
+}
+
+impl<A, B> TryFrom<(A, B)> for ConnectionIntervalBounds
+where
+    A: TryInto<ConnectionInterval, Error = &'static str>,
+    B: TryInto<ConnectionInterval, Error = &'static str>,
+{
+    type Error = &'static str;
+
+    fn try_from((min, max): (A, B)) -> Result<Self, Self::Error> {
+        Self::try_from_bounds(min, max)
     }
 }
 
