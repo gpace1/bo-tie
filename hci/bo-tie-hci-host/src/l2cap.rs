@@ -56,6 +56,11 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
         }
     }
 
+    /// Get the connection handle
+    pub fn get_connection_handle(&self) -> ConnectionHandle {
+        self.handle
+    }
+
     /// Get the receiver
     pub fn get_receiver(&self) -> &C::Receiver {
         self.channel_ends.get_receiver()
