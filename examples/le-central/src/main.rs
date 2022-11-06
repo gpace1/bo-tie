@@ -30,8 +30,8 @@ async fn scan_for_name<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str) -
 
     set_scan_enable::send(hi, true, true).await.unwrap();
 
-    for next in hi.next().await {
-        if let Next::Event(EventsData::LeMeta(LeMetaData::AdvertisingReport(reports))) = next {
+    loop {
+        if let Next::Event(EventsData::LeMeta(LeMetaData::AdvertisingReport(reports))) = hi.next().await.unwrap() {
             for report in reports.iter().filter_map(|rslt_report| rslt_report.as_ref().ok()) {
                 if report
                     .iter()
@@ -48,8 +48,6 @@ async fn scan_for_name<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str) -
             }
         }
     }
-
-    unreachable!("scan_for_name will continue until a device advertising with the desired local name is found")
 }
 
 /// Connect to the advertising device
