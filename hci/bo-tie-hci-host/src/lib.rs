@@ -1086,27 +1086,37 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
     ///
     /// An `LeConnection` implements [`ConnectionChannel`] for a Bluetooth LE connection.
     ///
+    /// # Errors
+    /// An error is returned if this connection is not a LE Connection, or the connection event's
+    /// status field contains an error (indicating that the connection failed).
+    ///
     /// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
     #[cfg(feature = "l2cap")]
-    pub fn try_into_le(self) -> Result<l2cap::LeL2cap<C>, Self> {
+    pub fn try_into_le(self) -> Result<l2cap::LeL2cap<C>, TryIntoLeL2capError<C>> {
+        use events::parameters::{LeConnectionCompleteData as CC, LeEnhancedConnectionCompleteData as ECC};
+
         match self.get_kind() {
-            ConnectionKind::Le(_) | ConnectionKind::LeEnh(_) => {
-                let max_mtu = if self.bounded { self.hci_max } else { <u16>::MAX.into() };
-                let initial_mtu = <bo_tie_l2cap::LeU as bo_tie_l2cap::MinimumMtu>::MIN_MTU;
+            ConnectionKind::Le(CC { status, .. }) | ConnectionKind::LeEnh(ECC { status, .. }) => {
+                if status == errors::Error::NoError {
+                    let max_mtu = if self.bounded { self.hci_max } else { <u16>::MAX.into() };
+                    let initial_mtu = <bo_tie_l2cap::LeU as bo_tie_l2cap::MinimumMtu>::MIN_MTU;
 
-                let le = l2cap::LeL2cap::new(
-                    self.get_handle(),
-                    self.buffer_header_size,
-                    self.buffer_tail_size,
-                    max_mtu,
-                    self.hci_max,
-                    initial_mtu,
-                    self.ends,
-                );
+                    let le = l2cap::LeL2cap::new(
+                        self.get_handle(),
+                        self.buffer_header_size,
+                        self.buffer_tail_size,
+                        max_mtu,
+                        self.hci_max,
+                        initial_mtu,
+                        self.ends,
+                    );
 
-                Ok(le)
+                    Ok(le)
+                } else {
+                    Err(TryIntoLeL2capError::LeConnectionFailure(status))
+                }
             }
-            _ => Err(self),
+            _ => Err(TryIntoLeL2capError::NotAnLeConnection(self)),
         }
     }
 
@@ -1131,6 +1141,34 @@ pub enum ConnectionKind {
     Le(events::parameters::LeConnectionCompleteData),
     LeEnh(events::parameters::LeEnhancedConnectionCompleteData),
 }
+
+/// Error for trying to convert an `Connection` into a `LeL2Cap`
+#[cfg(feature = "l2cap")]
+pub enum TryIntoLeL2capError<C> {
+    NotAnLeConnection(Connection<C>),
+    LeConnectionFailure(errors::Error),
+}
+
+impl<C> core::fmt::Debug for TryIntoLeL2capError<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            TryIntoLeL2capError::NotAnLeConnection(_) => f.write_str("NotAnLeConnection"),
+            TryIntoLeL2capError::LeConnectionFailure(err) => write!(f, "LeConnectionFailure({:?})", err),
+        }
+    }
+}
+
+impl<C> core::fmt::Display for TryIntoLeL2capError<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            TryIntoLeL2capError::NotAnLeConnection(_) => f.write_str("not an LE connection"),
+            TryIntoLeL2capError::LeConnectionFailure(err) => write!(f, "failed to create LE connection: {}", err),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<C> std::error::Error for TryIntoLeL2capError<C> {}
 
 /// An error when trying to send a command
 pub enum CommandError<H>

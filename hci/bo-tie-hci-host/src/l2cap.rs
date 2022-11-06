@@ -4,7 +4,7 @@
 //! contains the types that implement the traits of `bo-tie-l2cap` so they can be used by the L2CAP
 //! protocol.
 
-use crate::{AclBroadcastFlag, AclPacketBoundary, Connection, HciAclData};
+use crate::{AclBroadcastFlag, AclPacketBoundary, Connection, HciAclData, TryIntoLeL2capError};
 use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle};
 use core::cell::Cell;
 use core::future::Future;
@@ -23,7 +23,7 @@ pub struct LeL2cap<C: ConnectionChannelEnds> {
 }
 
 impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
-    type Error = Connection<C>;
+    type Error = TryIntoLeL2capError<C>;
 
     fn try_from(c: Connection<C>) -> Result<Self, Self::Error> {
         Connection::<C>::try_into_le(c)
