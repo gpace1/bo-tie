@@ -109,7 +109,7 @@ async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Opt
             hi.mask_events(core::iter::empty::<Events>()).await.unwrap();
 
             // send the disconnection if the controller did send a new connection
-            while let Some(next) = hi.try_next().await.unwrap() {
+            if let Some(next) = hi.try_next().await.unwrap() {
                 if let Next::NewConnection(connection) = next {
                     disconnect!(connection.get_handle()).await
                 }
