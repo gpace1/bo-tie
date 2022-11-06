@@ -229,7 +229,7 @@ async fn main() {
     println!(r#"scanning for device with local name "example tester" (note: name is case sensitive)"#);
 
     let advertise_response = tokio::select! {
-        response = scan_for_name(&mut host, name).await => response,
+        response = scan_for_name(&mut host, name) => response,
         _ = &mut exit_future => return
     };
 
