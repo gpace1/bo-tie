@@ -2,7 +2,7 @@
 //!
 
 pub mod groups;
-use bo_tie_hci_util::le::*;
+pub use bo_tie_hci_util::le::*;
 pub use groups::con_pram_req::*;
 pub use groups::connection::*;
 pub use groups::encryption::*;
