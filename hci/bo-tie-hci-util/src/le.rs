@@ -445,6 +445,22 @@ impl SupervisionTimeout {
     }
 }
 
+impl TryFrom<u16> for SupervisionTimeout {
+    type Error = &'static str;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        Self::try_from_raw(value)
+    }
+}
+
+impl TryFrom<core::time::Duration> for SupervisionTimeout {
+    type Error = &'static str;
+
+    fn try_from(value: core::time::Duration) -> Result<Self, Self::Error> {
+        Self::try_from_duration(value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConnectionLatency {
     latency: u16,
