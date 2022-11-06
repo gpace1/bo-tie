@@ -1,52 +1,8 @@
 //! LE connection related commands
 
-use crate::commands::le::ConnectionInterval;
-
-/// ConnectionUpdateInterval contains the minimum and maximum connection intervals for
-/// the le connection update
-pub struct ConnectionIntervalBounds {
-    min: ConnectionInterval,
-    max: ConnectionInterval,
-}
-
-impl ConnectionIntervalBounds {
-    /// Try to create a `ConnectionIntervalBounds`
-    ///
-    /// # Errors
-    /// An error is returned if `min` or `max` cannot be converted into a `ConnectionInterval` or
-    /// `min` is greater than `max`
-    pub fn try_from_bounds<A, B>(min: A, max: B) -> Result<Self, &'static str>
-    where
-        A: TryInto<ConnectionInterval, Error = &'static str>,
-        B: TryInto<ConnectionInterval, Error = &'static str>,
-    {
-        let min = min.try_into()?;
-        let max = max.try_into()?;
-
-        if min.get_raw_val() <= max.get_raw_val() {
-            Ok(Self { min, max })
-        } else {
-            Err("'min' is greater than 'max'")
-        }
-    }
-}
-
-impl<A, B> TryFrom<(A, B)> for ConnectionIntervalBounds
-where
-    A: TryInto<ConnectionInterval, Error = &'static str>,
-    B: TryInto<ConnectionInterval, Error = &'static str>,
-{
-    type Error = &'static str;
-
-    fn try_from((min, max): (A, B)) -> Result<Self, Self::Error> {
-        Self::try_from_bounds(min, max)
-    }
-}
-
 /// LE Connection Update command
 pub mod connection_update {
-    use super::ConnectionIntervalBounds;
-    use crate::commands::le::{ConnectionEventLength, SupervisionTimeout};
+    use crate::commands::le::{ConnectionEventLength, ConnectionIntervalBounds, SupervisionTimeout};
     use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::ConnectionHandle;
 
@@ -67,9 +23,9 @@ pub mod connection_update {
 
             parameter[0..2].copy_from_slice(&self.handle.get_raw_handle().to_le_bytes());
 
-            parameter[2..4].copy_from_slice(&self.interval.min.get_raw_val().to_le_bytes());
+            parameter[2..4].copy_from_slice(&self.interval.get_min().get_raw_val().to_le_bytes());
 
-            parameter[4..6].copy_from_slice(&self.interval.max.get_raw_val().to_le_bytes());
+            parameter[4..6].copy_from_slice(&self.interval.get_max().get_raw_val().to_le_bytes());
 
             parameter[6..8].copy_from_slice(&self.latency.to_le_bytes());
 
@@ -124,9 +80,9 @@ pub mod create_connection_cancel {
 
 /// LE Create Connection command
 pub mod create_connection {
-    use super::ConnectionIntervalBounds;
     use crate::commands::le::{
-        AddressType, ConnectionEventLength, ConnectionLatency, OwnAddressType, SupervisionTimeout,
+        AddressType, ConnectionEventLength, ConnectionIntervalBounds, ConnectionLatency, OwnAddressType,
+        SupervisionTimeout,
     };
     use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_util::BluetoothDeviceAddress;
@@ -180,9 +136,9 @@ pub mod create_connection {
 
             parameter[12] = self.own_address_type.into();
 
-            parameter[13..15].copy_from_slice(&self.connection_interval.min.get_raw_val().to_le_bytes());
+            parameter[13..15].copy_from_slice(&self.connection_interval.get_min().get_raw_val().to_le_bytes());
 
-            parameter[15..17].copy_from_slice(&self.connection_interval.max.get_raw_val().to_le_bytes());
+            parameter[15..17].copy_from_slice(&self.connection_interval.get_max().get_raw_val().to_le_bytes());
 
             parameter[17..19].copy_from_slice(&self.connection_latency.get_latency().to_le_bytes());
 
@@ -202,7 +158,7 @@ pub mod create_connection {
             scan_interval: ScanningInterval,
             scan_window: ScanningWindow,
             peer_address_type: AddressType,
-            peer_address: bo_tie_util::BluetoothDeviceAddress,
+            peer_address: BluetoothDeviceAddress,
             own_address_type: OwnAddressType,
             connection_interval: ConnectionIntervalBounds,
             connection_latency: ConnectionLatency,

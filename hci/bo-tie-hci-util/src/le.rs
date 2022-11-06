@@ -245,6 +245,14 @@ macro_rules! make_interval {
             }
         }
 
+        impl TryFrom<core::time::Duration> for $name {
+            type Error = &'static str;
+
+            fn try_from(duration: core::time::Duration) -> Result<Self, Self::Error> {
+                Self::try_from_duration(duration)
+            }
+        }
+
         /// Create a default interval
         ///
         $(#[ $raw_default_note ])*
@@ -462,5 +470,56 @@ impl ConnectionLatency {
     // Get the latency value
     pub fn get_latency(&self) -> u16 {
         self.latency
+    }
+}
+
+/// ConnectionUpdateInterval contains the minimum and maximum connection intervals for
+/// the le connection update
+pub struct ConnectionIntervalBounds {
+    min: ConnectionInterval,
+    max: ConnectionInterval,
+}
+
+impl ConnectionIntervalBounds {
+    /// Try to create a `ConnectionIntervalBounds`
+    ///
+    /// # Errors
+    /// An error is returned if `min` or `max` cannot be converted into a `ConnectionInterval` or
+    /// `min` is greater than `max`
+    pub fn try_from_bounds<A, B>(min: A, max: B) -> Result<Self, &'static str>
+    where
+        A: TryInto<ConnectionInterval, Error = &'static str>,
+        B: TryInto<ConnectionInterval, Error = &'static str>,
+    {
+        let min = min.try_into()?;
+        let max = max.try_into()?;
+
+        if min.get_raw_val() <= max.get_raw_val() {
+            Ok(Self { min, max })
+        } else {
+            Err("'min' is greater than 'max'")
+        }
+    }
+
+    /// Get the minimum `ConnectionInterval`
+    pub fn get_min(&self) -> ConnectionInterval {
+        self.min
+    }
+
+    /// Get the maximum `ConnectionInterval`
+    pub fn get_max(&self) -> ConnectionInterval {
+        self.max
+    }
+}
+
+impl<A, B> TryFrom<(A, B)> for ConnectionIntervalBounds
+where
+    A: TryInto<ConnectionInterval, Error = &'static str>,
+    B: TryInto<ConnectionInterval, Error = &'static str>,
+{
+    type Error = &'static str;
+
+    fn try_from((min, max): (A, B)) -> Result<Self, Self::Error> {
+        Self::try_from_bounds(min, max)
     }
 }
