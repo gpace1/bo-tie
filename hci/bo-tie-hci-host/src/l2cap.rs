@@ -57,7 +57,7 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
     }
 
     /// Get the connection handle
-    pub fn get_connection_handle(&self) -> ConnectionHandle {
+    pub fn get_handle(&self) -> ConnectionHandle {
         self.handle
     }
 

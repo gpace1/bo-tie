@@ -6,7 +6,9 @@ pub use bo_tie_hci_util::events;
 
 #[cfg(feature = "l2cap")]
 pub use bo_tie_hci_host::l2cap::LeL2cap;
-pub use bo_tie_hci_host::{AclBroadcastFlag, AclPacketBoundary, Connection, ConnectionKind, HciAclData, Host, Next};
+pub use bo_tie_hci_host::{
+    AclBroadcastFlag, AclPacketBoundary, CommandError, Connection, ConnectionKind, HciAclData, Host, Next,
+};
 #[doc(inline)]
 pub use bo_tie_hci_util::channel;
 pub use bo_tie_hci_util::local_channel::local_dynamic::{LocalChannelReserve, LocalChannelReserveBuilder};
