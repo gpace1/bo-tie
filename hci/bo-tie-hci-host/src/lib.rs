@@ -837,8 +837,8 @@ where
     ///
     /// This is `try` version of method [`next`]. If the interface async task has sent something to
     /// the host async task it will be returned, but if there is nothing within the channel then
-    /// this method will return `None`. This method is still async as it will await for a second
-    /// message if the first message in the channel is a connection ends message.
+    /// this method will return `None`. This method is still async as internally, some messages have
+    /// expected preceding messages that must be also be acquired to form the returned `Next`.
     ///
     /// [`next`]: Host::next
     pub async fn try_next(&mut self) -> Result<Option<Next<H::ConnectionChannelEnds>>, NextError> {
