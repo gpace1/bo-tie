@@ -1,0 +1,16 @@
+[package]
+name = "le-central"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bo-tie = { path = "../../bo-tie" }
+futures = "0.3"
+simplelog = "0.12.0"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bo-tie-linux = { path = "../../base-crates/bo-tie-linux"}
+signal-hook = "0.3"
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+futures = "0.3"
