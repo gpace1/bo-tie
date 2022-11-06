@@ -228,7 +228,10 @@ async fn main() {
 
     println!(r#"scanning for device with local name "example tester" (note: name is case sensitive)"#);
 
-    let advertise_response = scan_for_name(&mut host, name).await;
+    let advertise_response = tokio::select! {
+        response = scan_for_name(&mut host, name).await => response,
+        _ = &mut exit_future => return
+    };
 
     let connection_handle = tokio::select! {
         connection = connect(&mut host, advertise_response) => connection.get_handle(),
