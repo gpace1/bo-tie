@@ -237,6 +237,14 @@ macro_rules! make_interval {
             }
         }
 
+        impl TryFrom<u16> for $name {
+            type Error = &'static str;
+
+            fn try_from(v: u16) -> Result<Self, Self::Error> {
+                $name::try_from_raw(v)
+            }
+        }
+
         /// Create a default interval
         ///
         $(#[ $raw_default_note ])*
