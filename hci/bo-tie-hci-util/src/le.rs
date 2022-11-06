@@ -467,9 +467,17 @@ impl ConnectionLatency {
         }
     }
 
-    // Get the latency value
+    /// Get the latency value
     pub fn get_latency(&self) -> u16 {
         self.latency
+    }
+}
+
+impl TryFrom<u16> for ConnectionLatency {
+    type Error = &'static str;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        Self::try_from_raw(value)
     }
 }
 
