@@ -17,12 +17,21 @@ pub enum WhiteListedAddressType {
 }
 
 impl WhiteListedAddressType {
-    pub fn to_value(&self) -> u8 {
+    /// Get the raw value
+    ///
+    /// This is the value that is used to represent a `WhiteListedAddressType` within a HCI packet.
+    pub fn get_raw_val(&self) -> u8 {
         match *self {
             WhiteListedAddressType::PublicDeviceAddress => 0x00u8,
             WhiteListedAddressType::RandomDeviceAddress => 0x01u8,
             WhiteListedAddressType::DevicesSendingAnonymousAdvertisements => 0xFFu8,
         }
+    }
+}
+
+impl From<WhiteListedAddressType> for u8 {
+    fn from(w: WhiteListedAddressType) -> Self {
+        w.get_raw_val()
     }
 }
 
@@ -48,13 +57,22 @@ pub enum OwnAddressType {
 }
 
 impl OwnAddressType {
-    pub fn val(self) -> u8 {
+    /// Get the raw value
+    ///
+    /// This is the value that is used to represent a `OwnAddressType` within a HCI packet.
+    pub fn get_raw_val(self) -> u8 {
         match self {
             OwnAddressType::PublicDeviceAddress => 0x00,
             OwnAddressType::RandomDeviceAddress => 0x01,
             OwnAddressType::RpaFromLocalIrkOrPublicAddress => 0x02,
             OwnAddressType::RpaFromLocalIrkOrRandomAddress => 0x03,
         }
+    }
+}
+
+impl From<OwnAddressType> for u8 {
+    fn from(o: OwnAddressType) -> Self {
+        o.get_raw_val()
     }
 }
 
@@ -95,11 +113,17 @@ impl Frequency {
         }
     }
 
-    /// Get the value
+    /// Get the raw value
     ///
-    /// This returns the value used to represent the frequency.
-    pub fn raw_val(&self) -> u8 {
+    /// This is the value that is used to represent a `Frequency` within a HCI packet.
+    pub fn get_raw_val(&self) -> u8 {
         self.val
+    }
+}
+
+impl From<Frequency> for u8 {
+    fn from(f: Frequency) -> Self {
+        f.get_raw_val()
     }
 }
 
@@ -131,36 +155,7 @@ impl From<IntervalRange<u16>> for IntervalRange<core::time::Duration> {
     }
 }
 
-macro_rules! interval {
-    ( $(#[ $expl:meta ])* $name:ident, $raw_low:expr, $raw_hi:expr,
-        SpecDef, $raw_default:expr, $micro_sec_conv:expr ) =>
-    {
-        make_interval!(
-            $(#[ $expl ])*
-            $name,
-            $raw_low,
-            $raw_hi,
-            #[doc = "This is a Bluetooth Specification defined default value"],
-            $raw_default,
-            $micro_sec_conv
-        );
-    };
-    ( $(#[ $expl:meta ])* $name:ident, $raw_low:expr, $raw_hi:expr,
-        ApiDef, $raw_default:expr, $micro_sec_conv:expr ) =>
-    {
-        make_interval!(
-            $(#[ $expl ])*
-            $name,
-            $raw_low,
-            $raw_hi,
-            #[doc = "This is a default value defined by the API, the Bluetooth Specification"]
-            #[doc = "does not specify a default for this interval"],
-            $raw_default,
-            $micro_sec_conv
-        );
-    }
-}
-
+#[macro_export]
 macro_rules! make_interval {
     ( $(#[ $expl:meta ])*
         $name:ident,
@@ -177,21 +172,21 @@ macro_rules! make_interval {
 
         impl $name {
 
-            const RAW_RANGE: IntervalRange<u16> = IntervalRange{
+            const RAW_RANGE: $crate::le::IntervalRange<u16> = $crate::le::IntervalRange{
                 low: $raw_low,
                 hi: $raw_hi,
                 micro_sec_conv: $micro_sec_conv,
             };
 
             /// Try to create a `
-            #[doc = stringify!($name)]
+            #[doc = core::stringify!($name)]
             /// ` from a raw u16 value
             ///
             /// # Error
             /// Input `raw` is either greater than
-            #[doc = stringify!($raw_hi)]
+            #[doc = core::stringify!($raw_hi)]
             /// or the value is less than
-            #[doc = stringify!($raw_low)]
+            #[doc = core::stringify!($raw_low)]
             /// .
             pub fn try_from_raw( raw: u16 ) -> Result<Self, &'static str> {
                 if $name::RAW_RANGE.contains(&raw) {
@@ -210,7 +205,7 @@ macro_rules! make_interval {
             /// the value is out of bounds.
             pub fn try_from_duration( duration: core::time::Duration ) -> Result<Self, &'static str>
             {
-                let duration_range = IntervalRange::<core::time::Duration>::from($name::RAW_RANGE);
+                let duration_range = $crate::le::IntervalRange::<core::time::Duration>::from($name::RAW_RANGE);
 
                 if duration_range.contains(&duration) {
                     Ok( $name {
@@ -227,7 +222,11 @@ macro_rules! make_interval {
                 }
             }
 
-            /// Get the raw value of the interval
+            /// Get the raw value
+            ///
+            /// This is the value that is used to represent a `
+            #[doc = core::stringify!($name)]
+            /// ` within a HCI packet.
             pub fn get_raw_val(&self) -> u16 { self.interval }
 
             /// Get the value of the interval as a `Duration`
@@ -238,11 +237,10 @@ macro_rules! make_interval {
             }
         }
 
+        /// Create a default interval
+        ///
+        $(#[ $raw_default_note ])*
         impl Default for $name {
-
-            /// Creates an Interval with the default value for the interval
-            ///
-            $(#[ $raw_default_note ])*
             fn default() -> Self {
                 $name{
                     interval: $raw_default,
@@ -250,6 +248,37 @@ macro_rules! make_interval {
             }
         }
     };
+}
+
+#[macro_export]
+macro_rules! interval {
+    ( $(#[ $expl:meta ])* $name:ident, $raw_low:expr, $raw_hi:expr,
+        SpecDef, $raw_default:expr, $micro_sec_conv:expr ) =>
+    {
+        $crate::make_interval!(
+            $(#[ $expl ])*
+            $name,
+            $raw_low,
+            $raw_hi,
+            #[doc = "This is a Bluetooth Specification defined default value"],
+            $raw_default,
+            $micro_sec_conv
+        );
+    };
+    ( $(#[ $expl:meta ])* $name:ident, $raw_low:expr, $raw_hi:expr,
+        ApiDef, $raw_default:expr, $micro_sec_conv:expr ) =>
+    {
+        $crate::make_interval!(
+            $(#[ $expl ])*
+            $name,
+            $raw_low,
+            $raw_hi,
+            #[doc = "This is a default value defined by the API, the Bluetooth Specification"]
+            #[doc = "does not specify a default for this interval"],
+            $raw_default,
+            $micro_sec_conv
+        );
+    }
 }
 
 interval!(
@@ -267,7 +296,7 @@ pub struct ConnectionEventLength {
     pub maximum: u16,
 }
 
-impl ::core::default::Default for ConnectionEventLength {
+impl Default for ConnectionEventLength {
     fn default() -> Self {
         Self {
             minimum: 0,
@@ -285,7 +314,7 @@ pub enum AddressType {
 }
 
 impl AddressType {
-    /// Try to create a `SupervisionTimeout` from a raw u8 value
+    /// Try to create an `AddressType` from a raw u8 value
     ///
     /// # Error
     /// Input `raw` is not a valid identifier for an address type
@@ -299,10 +328,10 @@ impl AddressType {
         }
     }
 
-    /// Get the coded value for the `AddressType`
+    /// Get the raw value
     ///
-    /// The return is the value that is passed over the HCI.
-    pub fn into_raw(&self) -> u8 {
+    /// This is the value that is used to represent a `AddressType` within a HCI packet.
+    pub fn get_raw_val(&self) -> u8 {
         match *self {
             AddressType::PublicDeviceAddress => 0x0,
             AddressType::RandomDeviceAddress => 0x1,

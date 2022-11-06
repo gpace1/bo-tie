@@ -6,8 +6,8 @@ pub mod set_scan_parameters {
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::SetScanParameters);
 
-    interval!(ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
-    interval!(ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
+    bo_tie_hci_util::interval!(ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
+    bo_tie_hci_util::interval!(ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
 
     #[derive(Debug, Copy, Clone, Eq, PartialEq)]
     pub enum LeScanType {
@@ -167,7 +167,7 @@ pub mod receiver_test {
     impl CommandParameter<1> for ParameterV1 {
         const COMMAND: opcodes::HciCommand = COMMAND_V1;
         fn get_parameter(&self) -> [u8; 1] {
-            [self.frequency.get_val()]
+            [self.frequency.get_raw_val()]
         }
     }
 

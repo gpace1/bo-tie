@@ -61,7 +61,7 @@ pub mod set_advertising_parameters {
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::SetAdvertisingParameters);
 
-    interval!(AdvertisingInterval, 0x0020, 0x4000, SpecDef, 0x0800, 625);
+    bo_tie_hci_util::interval!(AdvertisingInterval, 0x0020, 0x4000, SpecDef, 0x0800, 625);
 
     /// Advertising Type
     ///
@@ -448,7 +448,7 @@ pub mod transmitter_test {
         payload_length: u8,
     ) -> Result<(), CommandError<H>> {
         let parameter = ParameterV1 {
-            tx_channel: channel.get_val(),
+            tx_channel: channel.into(),
             length_of_test_data: payload_length,
             packet_payload: payload.into(),
         };

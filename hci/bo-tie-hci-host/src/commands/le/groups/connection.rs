@@ -113,8 +113,8 @@ pub mod create_connection {
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::CreateConnection);
 
-    interval!(ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
-    interval!(ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
+    bo_tie_hci_util::interval!(ScanningInterval, 0x0004, 0x4000, SpecDef, 0x0010, 625);
+    bo_tie_hci_util::interval!(ScanningWindow, 0x0004, 0x4000, SpecDef, 0x0010, 625);
 
     pub enum InitiatorFilterPolicy {
         DoNotUseWhiteList,
@@ -154,7 +154,7 @@ pub mod create_connection {
 
             parameter[4] = self.initiator_filter_policy.val();
 
-            parameter[5] = self.peer_address_type.into_raw();
+            parameter[5] = self.peer_address_type.get_raw_val();
 
             parameter[6..12].copy_from_slice(&self.peer_address);
 
