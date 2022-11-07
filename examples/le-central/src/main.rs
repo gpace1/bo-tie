@@ -1,21 +1,24 @@
 #![doc = include_str!("../README.md")]
 
+mod io;
+
 use bo_tie::hci::events::parameters::LeAdvertisingReportData;
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeL2cap, Next};
 
 /// Scan for a device with the specific local name
 ///
 /// This function will set the Bluetooth Controller into scanning mode and continue scanning until
-/// a device is found advertising with the local name `local_name`. When that device is found the
-/// scanner is disabled and the advertising report is returned.
-///
-/// # Note
-/// This method does not check to verify that that the advertiser is a connectible device. The
-/// assumption is made that the peripheral tested with this example can be connected to.
-async fn scan_for_name<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str) -> LeAdvertisingReportData {
+/// it is stopped by the user with `stop`.
+async fn scan_for_devices<H, F>(hi: &mut Host<H>, stop: F) -> Vec<LeAdvertisingReportData>
+where
+    H: HostChannelEnds,
+    F: std::future::Future,
+{
     use bo_tie::hci::commands::le::{set_scan_enable, set_scan_parameters};
     use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
     use bo_tie::host::gap::assigned::local_name::LocalName;
+
+    let mut devices = Vec::new();
 
     let mut scan_prams = set_scan_parameters::ScanningParameters::default();
 
@@ -30,24 +33,38 @@ async fn scan_for_name<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str) -
 
     set_scan_enable::send(hi, true, true).await.unwrap();
 
-    loop {
-        if let Next::Event(EventsData::LeMeta(LeMetaData::AdvertisingReport(reports))) = hi.next().await.unwrap() {
-            for report in reports.iter().filter_map(|rslt_report| rslt_report.as_ref().ok()) {
-                if report
-                    .iter()
-                    .filter_map(|rslt| rslt.ok())
-                    .filter_map(|ad_struct| ad_struct.try_into::<LocalName<_, _>>().ok())
-                    .any(|name| name.get_name() == local_name)
-                {
-                    set_scan_enable::send(hi, false, false).await.unwrap();
+    let task = async {
+        let mut count = 0;
 
-                    hi.mask_events(core::iter::empty::<Events>()).await.unwrap();
+        loop {
+            if let Next::Event(EventsData::LeMeta(LeMetaData::AdvertisingReport(reports))) = hi.next().await.unwrap() {
+                for report in reports.iter().filter_map(|rslt_report| rslt_report.as_ref().ok()) {
+                    if let Some(name) = report
+                        .iter()
+                        .filter_map(|rslt| rslt.ok())
+                        .find_map(|ad_struct| ad_struct.try_into::<LocalName<_, _>>().ok())
+                    {
+                        count += 1;
 
-                    return report.clone();
+                        println!("{}) {}", count, name.get_name());
+
+                        devices.push(report.clone());
+                    }
                 }
             }
         }
+    };
+
+    tokio::select! {
+        _ = task => unreachable!(),
+        _ = stop => (),
     }
+
+    set_scan_enable::send(hi, false, false).await.unwrap();
+
+    hi.mask_events(core::iter::empty::<Events>()).await.unwrap();
+
+    return devices;
 }
 
 /// Connect to the advertising device
@@ -195,7 +212,7 @@ macro_rules! create_hci {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), &'static str> {
     use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
 
     let mut exit_future = Box::pin(setup_sig());
@@ -214,25 +231,37 @@ async fn main() {
 
     let mut host = Host::init(host_ends).await.expect("failed to initialize host");
 
-    let name = "example tester";
+    println!("scanning for connectible devices with a complete local name");
 
-    println!(r#"scanning for device with local name "example tester" (note: name is case sensitive)"#);
+    let mut responses = tokio::select! {
+        response = scan_for_devices(&mut host, io::detect_escape()) => response,
+        _ = &mut exit_future => return Ok(())
+    };
 
-    let advertise_response = tokio::select! {
-        response = scan_for_name(&mut host, name) => response,
-        _ = &mut exit_future => return
+    if responses.is_empty() {
+        return Err("no devices to connect to");
+    }
+
+    let response = if responses.len() == 1 {
+        responses.remove(0)
+    } else {
+        let selected = io::select_device(1..=responses.len()).await;
+
+        responses.remove(selected - 1)
     };
 
     let connection_handle = tokio::select! {
-        connection = connect(&mut host, advertise_response) => connection.get_handle(),
+        connection = connect(&mut host, response) => connection.get_handle(),
         _ = &mut exit_future => {
             disconnect(&mut host, None).await;
 
-            return
+            return Ok(())
         }
     };
 
     exit_future.await;
 
     disconnect(&mut host, connection_handle).await;
+
+    Ok(())
 }
