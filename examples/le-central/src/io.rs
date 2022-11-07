@@ -13,7 +13,7 @@ use std::ops::RangeInclusive;
 /// Create a future for detection of the escape key
 #[cfg(any(unix, windows))]
 pub fn detect_escape() -> impl std::future::Future {
-    use crossterm::event::{read, Event, KeyCode, KeyEvent, KeyEventKind};
+    use crossterm::event::{read, Event, KeyCode, KeyEvent};
 
     println!("press the escape key to stop scanning");
 
@@ -26,12 +26,7 @@ pub fn detect_escape() -> impl std::future::Future {
                 return;
             }
             Ok(io) => {
-                if let Event::Key(KeyEvent {
-                    code: KeyCode::Esc,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) = io
-                {
+                if let Event::Key(KeyEvent { code: KeyCode::Esc, .. }) = io {
                     sender.send(Ok(())).unwrap();
                     return;
                 }

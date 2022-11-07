@@ -248,7 +248,10 @@ async fn main() -> Result<(), &'static str> {
     let response = if responses.len() == 1 {
         responses.remove(0)
     } else {
-        let selected = io::select_device(1..=responses.len()).await;
+        let selected = tokio::select! {
+            selected = io::select_device(1..=responses.len()) => selected,
+            _ = &mut exit_future => return Ok(()),
+        };
 
         responses.remove(selected - 1)
     };
