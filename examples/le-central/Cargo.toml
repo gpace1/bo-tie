@@ -13,3 +13,6 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 bo-tie-linux = { path = "../../base-crates/bo-tie-linux"}
 crossterm = "0.25.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+
+[features]
+log = []

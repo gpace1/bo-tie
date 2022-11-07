@@ -213,17 +213,20 @@ macro_rules! create_hci {
 
 #[tokio::main]
 async fn main() -> Result<(), &'static str> {
-    use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
-
     let mut exit_future = Box::pin(setup_sig());
 
-    TermLogger::init(
-        LevelFilter::Trace,
-        Config::default(),
-        TerminalMode::Mixed,
-        ColorChoice::Auto,
-    )
-    .unwrap();
+    #[cfg(feature = "log")]
+    {
+        use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
+
+        TermLogger::init(
+            LevelFilter::Trace,
+            Config::default(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        )
+        .unwrap();
+    }
 
     let (interface, host_ends) = create_hci!();
 
