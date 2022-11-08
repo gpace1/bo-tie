@@ -292,8 +292,8 @@ impl<E: core::fmt::Display> core::fmt::Display for BasicFrameError<E> {
 impl<E: std::error::Error> std::error::Error for BasicFrameError<E> {}
 
 impl<E> BasicFrameError<E> {
-    // A temporary method until buffering
-    fn to_infallible(self) -> BasicFrameError<core::convert::Infallible> {
+    #[doc(hidden)]
+    pub fn to_infallible(self) -> BasicFrameError<core::convert::Infallible> {
         match self {
             BasicFrameError::RawDataTooSmall => BasicFrameError::RawDataTooSmall,
             BasicFrameError::PayloadLengthIncorrect => BasicFrameError::PayloadLengthIncorrect,
@@ -302,6 +302,21 @@ impl<E> BasicFrameError<E> {
             BasicFrameError::ConnectionClosed => BasicFrameError::ConnectionClosed,
             BasicFrameError::TryExtendError(_) => panic!("unexpected try extend error"),
             BasicFrameError::Other(o) => BasicFrameError::Other(o),
+        }
+    }
+}
+
+impl BasicFrameError<core::convert::Infallible> {
+    #[doc(hidden)]
+    pub fn from_infallible<E>(self) -> BasicFrameError<E> {
+        match self {
+            BasicFrameError::RawDataTooSmall => BasicFrameError::RawDataTooSmall,
+            BasicFrameError::PayloadLengthIncorrect => BasicFrameError::PayloadLengthIncorrect,
+            BasicFrameError::InvalidChannelId => BasicFrameError::InvalidChannelId,
+            BasicFrameError::ExpectedStartFragment => BasicFrameError::ExpectedStartFragment,
+            BasicFrameError::ConnectionClosed => BasicFrameError::ConnectionClosed,
+            BasicFrameError::Other(o) => BasicFrameError::Other(o),
+            _ => unreachable!(),
         }
     }
 }
