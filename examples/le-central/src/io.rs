@@ -1,40 +1,181 @@
-use std::ops::RangeInclusive;
+//! IO methods
+//!
+//! These methods are not important in *showing* an example of how to create a LE central, but they
+//! necessary to provide user interaction for the example. None of the code here is relevant in
+//! understanding how to use `bo-tie`.
+//!
+//! # Unix & Windows
+//! [`crossterm`] is used for processing terminal I/O.
+//!
+//! [`crossterm`]: https://docs.rs/crossterm/latest/crossterm/
 
-/// IO methods
-///
-/// These methods are not important in *showing* an example of how to create a LE central, but they
-/// necessary to provide user interaction for the example.
-///
-/// # Unix & Windows
-/// [`crossterm`] is used for processing terminal I/O.
-///
-/// [`crossterm`]: https://docs.rs/crossterm/latest/crossterm/
+use crossterm::cursor;
+use std::ops::RangeInclusive;
+use std::sync::mpsc;
+use tokio::sync::oneshot;
+
+/// Spawn a task for handling terminal I/O
+macro_rules! term_raw_mode_task {
+    ($sender:expr, $($job:tt)*) => {
+        std::thread::spawn(move || {
+            macro_rules! ok_or_break {
+                ($result:expr) => {
+                    match $result {
+                        Ok(v) => v,
+                        Err(e) => {
+                            $sender.send(Err(e)).unwrap();
+                            break;
+                        }
+                    }
+                };
+            }
+
+            if let Err(e) = crossterm::terminal::enable_raw_mode() {
+                $sender.send(Err(e)).unwrap();
+                return
+            }
+
+            $($job)*
+
+            crossterm::terminal::disable_raw_mode().unwrap()
+        })
+    };
+}
+
+struct InputTaskCallback<T> {
+    task_success: oneshot::Receiver<T>,
+    task_cancel: Option<mpsc::SyncSender<()>>,
+}
+
+impl<T> InputTaskCallback<T> {
+    fn new(task_done: oneshot::Receiver<T>, task_cancel: mpsc::SyncSender<()>) -> Self {
+        InputTaskCallback {
+            task_success: task_done.into(),
+            task_cancel: task_cancel.into(),
+        }
+    }
+}
+
+impl<T: Unpin> std::future::Future for InputTaskCallback<T> {
+    type Output = Result<T, oneshot::error::RecvError>;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+
+        let poll = core::pin::Pin::new(&mut this.task_success).poll(cx);
+
+        // drop cancel
+        if poll.is_ready() {
+            this.task_cancel.take();
+        }
+
+        poll
+    }
+}
+
+impl<T> Drop for InputTaskCallback<T> {
+    fn drop(&mut self) {
+        self.task_cancel.take().map(|cancel| cancel.send(()).unwrap());
+    }
+}
+
+#[cfg(any(unix, windows))]
+pub fn exit_signal() -> impl std::future::Future {
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    let (ctrl_c_sender, ctrl_c_receiver) = oneshot::channel::<crossterm::Result<()>>();
+    let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
+
+    term_raw_mode_task!(
+        ctrl_c_sender,
+        loop {
+            if poll(core::time::Duration::from_millis(50)).unwrap() {
+                match ok_or_break!(read()) {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) => {
+                        ctrl_c_sender.send(Ok(())).unwrap();
+                        break;
+                    }
+                    _ => continue,
+                }
+            } else if let Ok(_) = cancel_receiver.try_recv() {
+                break;
+            }
+        }
+    );
+
+    async move {
+        InputTaskCallback::new(ctrl_c_receiver, cancel_sender)
+            .await
+            .expect("cannot read input")
+    }
+}
+
+/// Process an advertising result
+#[cfg(any(unix, windows))]
+pub fn on_advertising_result(number: usize, name: &str) {
+    use std::io::Write;
+
+    let mut stdout = std::io::stdout();
+
+    crossterm::execute!(stdout, cursor::MoveToColumn(0)).unwrap();
+
+    write!(stdout, "{}) {}", number, name).unwrap();
+
+    crossterm::execute!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(0)).unwrap();
+}
 
 /// Create a future for detection of the escape key
 #[cfg(any(unix, windows))]
-pub fn detect_escape() -> impl std::future::Future {
-    use crossterm::event::{read, Event, KeyCode, KeyEvent};
+pub fn detect_escape() -> impl std::future::Future<Output = bool> {
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
     println!("press the escape key to stop scanning");
 
-    let (sender, receiver) = tokio::sync::oneshot::channel::<crossterm::Result<()>>();
+    let (sender, receiver) = oneshot::channel::<crossterm::Result<bool>>();
+    let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
-    std::thread::spawn(move || loop {
-        match read() {
-            Err(e) => {
-                sender.send(Err(e)).unwrap();
-                return;
-            }
-            Ok(io) => {
-                if let Event::Key(KeyEvent { code: KeyCode::Esc, .. }) = io {
-                    sender.send(Ok(())).unwrap();
-                    return;
+    term_raw_mode_task!(
+        sender,
+        loop {
+            if ok_or_break!(poll(std::time::Duration::from_millis(50))) {
+                match ok_or_break!(read()) {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Esc,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) => {
+                        sender.send(Ok(true)).unwrap();
+                        break;
+                    }
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    }) => {
+                        sender.send(Ok(false)).unwrap();
+                        break;
+                    }
+                    _ => continue,
+                }
+            } else {
+                if let Ok(_) = cancel_receiver.try_recv() {
+                    break;
                 }
             }
         }
-    });
+    );
 
-    async move { receiver.await.unwrap().expect("cannot read input") }
+    async move {
+        InputTaskCallback::new(receiver, cancel_sender)
+            .await
+            .unwrap()
+            .expect("cannot read input")
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -43,34 +184,71 @@ pub fn detect_escape() -> impl std::future::Future {
 }
 
 #[cfg(any(unix, windows))]
-pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<Output = usize> {
-    use std::io;
+pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<Output = Option<usize>> {
+    use crossterm::cursor::{MoveDown, MoveToColumn};
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use std::io::Write;
 
     println!("input the number of the device to connect to");
 
-    let (sender, receiver) = tokio::sync::oneshot::channel::<io::Result<usize>>();
+    let (sender, receiver) = oneshot::channel::<crossterm::Result<Option<usize>>>();
+    let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
-    std::thread::spawn(move || {
-        let stdin = io::stdin();
+    term_raw_mode_task!(sender,
         let mut buffer = String::new();
 
         loop {
-            match stdin.read_line(&mut buffer) {
-                Err(e) => {
-                    sender.send(Err(e)).unwrap();
-                    return;
-                }
-                Ok(_) => {
-                    if let Ok(v) = buffer.parse::<usize>() {
-                        if range.contains(&v) {
-                            sender.send(Ok(v)).unwrap();
-                            return;
+            if ok_or_break!(poll(std::time::Duration::from_millis(50))) {
+                match ok_or_break!(read()) {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    }) => {
+                        sender.send(Ok(None)).unwrap();
+                        break;
+                    },
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                        ..
+                    }) => {
+                        buffer.push(c)
+                    },
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) => {
+                        if let Ok(value) = buffer.parse() {
+                            if range.contains(&value) {
+                                sender.send(Ok(Some(value))).unwrap();
+                                break;
+                            }
                         }
+
+                        let mut stdout = std::io::stdout();
+
+                        ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
+
+                        write!(stdout, "please enter a valid number between {} and {}", range.start(), range.end()).unwrap();
+
+                        ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
                     }
+                    _ => continue,
+                }
+            } else {
+                if let Ok(_) = cancel_receiver.try_recv() {
+                    break;
                 }
             }
         }
-    });
+    );
 
-    async move { receiver.await.unwrap().expect("cannot read input") }
+    async move {
+        InputTaskCallback::new(receiver, cancel_sender)
+            .await
+            .unwrap()
+            .expect("cannot read input")
+    }
 }

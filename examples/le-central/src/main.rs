@@ -9,10 +9,18 @@ use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeL2cap, Next};
 ///
 /// This function will set the Bluetooth Controller into scanning mode and continue scanning until
 /// it is stopped by the user with `stop`.
-async fn scan_for_devices<H, F>(hi: &mut Host<H>, stop: F) -> Vec<LeAdvertisingReportData>
+///
+/// # Error
+/// An error is returned if the future `stop` outputs false.
+async fn scan_for_devices<H, C, F>(
+    hi: &mut Host<H>,
+    on_result: C,
+    stop: F,
+) -> Result<Vec<LeAdvertisingReportData>, &'static str>
 where
     H: HostChannelEnds,
-    F: std::future::Future,
+    C: Fn(usize, &str),
+    F: std::future::Future<Output = bool>,
 {
     use bo_tie::hci::commands::le::{set_scan_enable, set_scan_parameters};
     use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
@@ -46,7 +54,7 @@ where
                     {
                         count += 1;
 
-                        println!("{}) {}", count, name.get_name());
+                        on_result(count, name.as_str());
 
                         devices.push(report.clone());
                     }
@@ -55,16 +63,16 @@ where
         }
     };
 
-    tokio::select! {
+    let stop_status = tokio::select! {
         _ = task => unreachable!(),
-        _ = stop => (),
-    }
+        status = stop => status,
+    };
 
     set_scan_enable::send(hi, false, false).await.unwrap();
 
     hi.mask_events(core::iter::empty::<Events>()).await.unwrap();
 
-    return devices;
+    return stop_status.then_some(devices).ok_or("exited by user");
 }
 
 /// Connect to the advertising device
@@ -164,37 +172,6 @@ where
     disconnect::send(hi, disconnection_parameters).await.unwrap();
 }
 
-/// Signal setup
-///
-/// This sets up the signal handling and returns a future for awaiting the reception of a signal.
-#[cfg(unix)]
-fn setup_sig() -> impl core::future::Future {
-    println!("awaiting for 'ctrl-C' (or SIGINT) to stop example");
-
-    tokio::signal::ctrl_c()
-}
-
-/// Stub for signal setup
-///
-/// This is a generic fallback that returns future that will forever pend. This method should try
-/// to be avoided unless it is intended that the device running the example will be power cycled.
-#[cfg(not(unix))]
-fn setup_sig() -> impl core::future::Future {
-    use core::future::Future;
-    use core::pin::Pin;
-    use core::task::{Context, Poll};
-
-    struct ForeverPend;
-
-    impl Future for ForeverPend {
-        type Output = ();
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Pending
-        }
-    }
-}
-
 #[cfg(target_os = "linux")]
 macro_rules! create_hci {
     () => {
@@ -213,8 +190,6 @@ macro_rules! create_hci {
 
 #[tokio::main]
 async fn main() -> Result<(), &'static str> {
-    let mut exit_future = Box::pin(setup_sig());
-
     #[cfg(feature = "log")]
     {
         use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
@@ -236,10 +211,7 @@ async fn main() -> Result<(), &'static str> {
 
     println!("scanning for connectible devices with a complete local name");
 
-    let mut responses = tokio::select! {
-        response = scan_for_devices(&mut host, io::detect_escape()) => response,
-        _ = &mut exit_future => return Ok(())
-    };
+    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_escape()).await?;
 
     if responses.is_empty() {
         return Err("no devices to connect to");
@@ -248,24 +220,21 @@ async fn main() -> Result<(), &'static str> {
     let response = if responses.len() == 1 {
         responses.remove(0)
     } else {
-        let selected = tokio::select! {
-            selected = io::select_device(1..=responses.len()) => selected,
-            _ = &mut exit_future => return Ok(()),
-        };
+        let selected = io::select_device(1..=responses.len()).await.ok_or("exited by user")?;
 
         responses.remove(selected - 1)
     };
 
     let connection_handle = tokio::select! {
         connection = connect(&mut host, response) => connection.get_handle(),
-        _ = &mut exit_future => {
+        _ = io::exit_signal() => {
             disconnect(&mut host, None).await;
 
             return Ok(())
         }
     };
 
-    exit_future.await;
+    io::exit_signal().await;
 
     disconnect(&mut host, connection_handle).await;
 
