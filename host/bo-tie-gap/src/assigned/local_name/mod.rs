@@ -169,8 +169,8 @@ where
         }
     }
 
-    /// Get the local name
-    pub fn get_name(&self) -> &str {
+    /// Get the string slice for the name
+    pub fn as_str(&self) -> &str {
         self.name.borrow()
     }
 
@@ -422,11 +422,11 @@ mod tests {
 
         let local_name_2 = LocalName::try_from_struct(test_name_2).unwrap();
 
-        assert_eq!("hello world", local_name_2.get_name());
+        assert_eq!("hello world", local_name_2.as_str());
 
         let local_name_3 = LocalName::try_from_struct(test_name_3).unwrap();
 
-        assert_eq!("hello wo", local_name_3.get_name());
+        assert_eq!("hello wo", local_name_3.as_str());
 
         assert!(LocalName::try_from_struct(test_name_4).is_err());
     }
