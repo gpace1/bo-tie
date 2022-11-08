@@ -229,7 +229,7 @@ async fn main() -> Result<(), &'static str> {
 
     let connection_handle = tokio::select! {
         connection = connect(&mut host, response.0) => connection.get_handle(),
-        _ = io::exit_signal() => {
+        _ = io::exit_signal(false) => {
             disconnect(&mut host, None).await;
 
             return Ok(())
@@ -238,7 +238,7 @@ async fn main() -> Result<(), &'static str> {
 
     println!("connected!");
 
-    io::exit_signal().await;
+    io::exit_signal(true).await;
 
     disconnect(&mut host, connection_handle).await;
 

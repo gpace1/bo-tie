@@ -92,11 +92,15 @@ impl<T> Drop for InputTaskCallback<T> {
 }
 
 #[cfg(any(unix, windows))]
-pub fn exit_signal() -> impl std::future::Future {
+pub fn exit_signal(display_message: bool) -> impl std::future::Future {
     use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
     let (ctrl_c_sender, ctrl_c_receiver) = oneshot::channel::<crossterm::Result<()>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
+
+    if display_message {
+        println!(r#"press "ctrl" + "c" to disconnect and exit example"#)
+    }
 
     std::thread::spawn(move || loop {
         if ok_or_return!(poll(core::time::Duration::from_millis(50)), ctrl_c_sender) {
