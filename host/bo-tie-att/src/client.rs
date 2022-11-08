@@ -125,15 +125,53 @@ where
 
 /// Connect this device to an Attribute Server
 ///
-/// `LeConnectClient` is used for initiating and connecting to an attribute server. It performs a
+/// `ConnectClient` is used for initiating and connecting to an attribute server. It performs a
 /// MTU exchange as part of the connection process. Once the exchange is complete and there were no
-/// errors preventing a connection, a `Client` will be created.
-pub struct LeConnectClient {
+/// errors preventing a connection, a [`Client`] will be created.
+///
+/// ```
+/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) -> Result<(), impl core::fmt::Debug> {
+/// use bo_tie_att::client::ConnectClient;
+///
+/// // Initiate a connection to the Att server with
+/// // a MTU of 64 and then create the client.
+/// let client = ConnectClient::connect(&mut connection_channel, 64).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct ConnectClient {
     requested_mtu: usize,
     skipped_mtu_request: bool,
 }
 
-impl LeConnectClient {
+impl ConnectClient {
+    /// Connect to the Attribute server of the peer device
+    ///
+    /// `connect` initiates the connection and create an Attribute `Client`. This is a combination
+    /// of methods `initiate` + `create_client`. This is a simpler, but it doesn't allow for other
+    /// Bluetooth protocols to transmit PDU's on the same connection channel until it is complete.
+    ///
+    /// # Error
+    /// This expects that the ATT server will only transmit an *Exchange MTU Response* PDU through
+    /// the connection channel until the completion of the future created by `connect`. Any other
+    /// PDU will cause `connect` to return an error.
+    pub async fn connect<C, M>(connection_channel: &mut C, mtu: M) -> Result<Client, super::ConnectionError<C>> {
+        use bo_tie_l2cap::ConnectionChannelExt;
+
+        let connect_client = Self::initiate(connection_channel, mtu).await?;
+
+        let l2cap_pdus = connection_channel.receive_b_frame().await?;
+
+        if l2cap_pdus.len() > 1 {
+            return Err(super::Error::Other("received more than one L2CAP PDU when connecting ATT client").into());
+        }
+
+        // Getting the first will never fail as receive_b_frame().await always returns at least one
+        let response = l2cap_pdus.first().unwrap();
+
+        connect_client.create_client(connection_channel, response).await
+    }
+
     /// Create a new `LeConnectClient` and initiate the connection process
     ///
     /// This takes a connection channel between this device and a slave device with an optional
