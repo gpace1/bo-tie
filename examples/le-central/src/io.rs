@@ -42,6 +42,18 @@ macro_rules! term_raw_mode_task {
     };
 }
 
+macro_rules! ok_or_return {
+    ($result:expr, $sender:expr) => {
+        match $result {
+            Ok(v) => v,
+            Err(e) => {
+                $sender.send(Err(e)).unwrap();
+                return;
+            }
+        }
+    };
+}
+
 struct InputTaskCallback<T> {
     task_success: oneshot::Receiver<T>,
     task_cancel: Option<mpsc::SyncSender<()>>,
@@ -86,27 +98,24 @@ pub fn exit_signal() -> impl std::future::Future {
     let (ctrl_c_sender, ctrl_c_receiver) = oneshot::channel::<crossterm::Result<()>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
-    term_raw_mode_task!(
-        ctrl_c_sender,
-        loop {
-            if poll(core::time::Duration::from_millis(50)).unwrap() {
-                match ok_or_break!(read()) {
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers: KeyModifiers::CONTROL,
-                        kind: KeyEventKind::Press,
-                        ..
-                    }) => {
-                        ctrl_c_sender.send(Ok(())).unwrap();
-                        break;
-                    }
-                    _ => continue,
+    std::thread::spawn(move || loop {
+        if ok_or_return!(poll(core::time::Duration::from_millis(50)), ctrl_c_sender) {
+            match ok_or_return!(read(), ctrl_c_sender) {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    ctrl_c_sender.send(Ok(())).unwrap();
+                    break;
                 }
-            } else if let Ok(_) = cancel_receiver.try_recv() {
-                break;
+                _ => continue,
             }
+        } else if let Ok(_) = cancel_receiver.try_recv() {
+            break;
         }
-    );
+    });
 
     async move {
         InputTaskCallback::new(ctrl_c_receiver, cancel_sender)
@@ -125,6 +134,12 @@ pub fn on_advertising_result(number: usize, name: &str) {
     crossterm::execute!(stdout, cursor::MoveToColumn(0)).unwrap();
 
     write!(stdout, "{}) {}", number, name).unwrap();
+
+    stdout.flush().unwrap();
+
+    if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
+        crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
+    }
 
     crossterm::execute!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(0)).unwrap();
 }
@@ -197,6 +212,18 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
     term_raw_mode_task!(sender,
         let mut buffer = String::new();
 
+        macro_rules! output_buffer {
+            () => {{
+                let mut stdout = std::io::stdout();
+
+                crossterm::execute!(&mut stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine), MoveToColumn(0)).unwrap();
+
+                write!(&mut stdout, "{}", buffer).unwrap();
+
+                stdout.flush().unwrap();
+            }}
+        }
+
         loop {
             if ok_or_break!(poll(std::time::Duration::from_millis(50))) {
                 match ok_or_break!(read()) {
@@ -213,8 +240,19 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
                         kind: KeyEventKind::Press | KeyEventKind::Repeat,
                         ..
                     }) => {
-                        buffer.push(c)
+                        buffer.push(c);
+
+                        output_buffer!()
                     },
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Backspace,
+                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                        ..
+                    }) => {
+                        buffer.pop();
+
+                        output_buffer!()
+                    }
                     Event::Key(KeyEvent {
                         code: KeyCode::Enter,
                         kind: KeyEventKind::Press,
@@ -227,11 +265,23 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
                             }
                         }
 
+                        buffer.clear();
+
                         let mut stdout = std::io::stdout();
+
+                        if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
+                            crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
+                        }
 
                         ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
 
                         write!(stdout, "please enter a valid number between {} and {}", range.start(), range.end()).unwrap();
+
+                        stdout.flush().unwrap();
+
+                        if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
+                            crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
+                        }
 
                         ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
                     }

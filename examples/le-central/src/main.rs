@@ -16,7 +16,7 @@ async fn scan_for_devices<H, C, F>(
     hi: &mut Host<H>,
     on_result: C,
     stop: F,
-) -> Result<Vec<LeAdvertisingReportData>, &'static str>
+) -> Result<Vec<(LeAdvertisingReportData, String)>, &'static str>
 where
     H: HostChannelEnds,
     C: Fn(usize, &str),
@@ -56,7 +56,7 @@ where
 
                         on_result(count, name.as_str());
 
-                        devices.push(report.clone());
+                        devices.push((report.clone(), name.to_string()));
                     }
                 }
             }
@@ -225,14 +225,18 @@ async fn main() -> Result<(), &'static str> {
         responses.remove(selected - 1)
     };
 
+    println!("connecting to '{}'", response.1);
+
     let connection_handle = tokio::select! {
-        connection = connect(&mut host, response) => connection.get_handle(),
+        connection = connect(&mut host, response.0) => connection.get_handle(),
         _ = io::exit_signal() => {
             disconnect(&mut host, None).await;
 
             return Ok(())
         }
     };
+
+    println!("connected!");
 
     io::exit_signal().await;
 
