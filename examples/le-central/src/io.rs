@@ -258,6 +258,14 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
                         kind: KeyEventKind::Press,
                         ..
                     }) => {
+                        let mut stdout = std::io::stdout();
+
+                        if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
+                            crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
+                        }
+
+                        ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
+
                         if let Ok(value) = buffer.parse() {
                             if range.contains(&value) {
                                 sender.send(Ok(Some(value))).unwrap();
@@ -266,14 +274,6 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
                         }
 
                         buffer.clear();
-
-                        let mut stdout = std::io::stdout();
-
-                        if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
-                            crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
-                        }
-
-                        ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
 
                         write!(stdout, "please enter a valid number between {} and {}", range.start(), range.end()).unwrap();
 
