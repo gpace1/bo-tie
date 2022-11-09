@@ -15,7 +15,7 @@ crossterm = "0.25.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 bo-tie-linux = { path = "../../base-crates/bo-tie-linux"}
 
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
 
 [features]
 log = []

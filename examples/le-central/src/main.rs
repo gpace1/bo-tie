@@ -172,6 +172,55 @@ where
     disconnect::send(hi, disconnection_parameters).await.unwrap();
 }
 
+/// Query the services for the GATT server
+///
+/// # Note
+/// If there is not GATT server, then this will print out a messages stating as such
+async fn query_gatt_services<C>(connection: &mut C)
+where
+    C: bo_tie::host::l2cap::ConnectionChannel,
+{
+    use bo_tie::host::att::client::ConnectClient;
+    use bo_tie::host::gatt::Client;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    // Normally you can assume that there exists a
+    // GATT server on the peer device (I think it is
+    // part of the Bluetooth certification process for
+    // every LE device to have some basic GATT server
+    // or client), but here it is not assumed.
+    let gatt_client: Client = match timeout(Duration::from_secs(5), ConnectClient::connect(connection, 64)).await {
+        Err(_timeout) => {
+            println!("failed to connect to GATT (timeout)");
+            return;
+        }
+        Ok(Err(e)) => {
+            println!("failed to connect to GATT ({:?})", e);
+            return;
+        }
+        Ok(Ok(att_client)) => att_client.into(),
+    };
+
+    let mut querier = gatt_client.query_services(connection);
+
+    let mut services = Vec::new();
+
+    while let Some(service) = querier.query_next().await.unwrap() {
+        services.push(service);
+    }
+
+    if services.is_empty() {
+        println!("no services found on connected device")
+    } else {
+        println!("found services:");
+
+        for service in services {
+            println!("\t{:#x}", service.get_uuid())
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 macro_rules! create_hci {
     () => {
@@ -227,8 +276,8 @@ async fn main() -> Result<(), &'static str> {
 
     println!("connecting to '{}'", response.1);
 
-    let connection_handle = tokio::select! {
-        connection = connect(&mut host, response.0) => connection.get_handle(),
+    let mut connection = tokio::select! {
+        connection = connect(&mut host, response.0) => connection,
         _ = io::exit_signal(false) => {
             disconnect(&mut host, None).await;
 
@@ -238,9 +287,13 @@ async fn main() -> Result<(), &'static str> {
 
     println!("connected!");
 
+    query_gatt_services(&mut connection).await;
+
+    println!(r#"press "ctrl + c" to disconnect and exit example"#);
+
     io::exit_signal(true).await;
 
-    disconnect(&mut host, connection_handle).await;
+    disconnect(&mut host, connection.get_handle()).await;
 
     Ok(())
 }
