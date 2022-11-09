@@ -618,7 +618,7 @@ pub trait ConnectionChannel {
     /// Sending error
     ///
     /// This is the error type for the output of the future [`SendFut`](ConnectionChannel::SendFut)
-    type SendFutErr: core::fmt::Debug;
+    type SendFutErr: core::fmt::Debug + core::fmt::Display;
 
     /// The buffer type for received L2CAP fragments
     ///

@@ -1208,7 +1208,7 @@ where
 /// }
 /// ```
 pub trait Sender {
-    type Error: fmt::Debug;
+    type Error: fmt::Debug + fmt::Display;
     type Message: Unpin;
     type SendFuture<'a>: Future<Output = Result<(), Self::Error>>
     where

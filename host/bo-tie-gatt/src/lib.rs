@@ -454,6 +454,20 @@ pub struct ServiceRecord {
     record: ServiceGroupData,
 }
 
+impl ServiceRecord {
+    /// Get the service UUID
+    pub fn get_uuid(&self) -> Uuid {
+        self.record.service_uuid
+    }
+
+    /// Get the handle group range
+    ///
+    /// This returns the range of Attribute handles used by this service
+    pub fn get_range(&self) -> core::ops::RangeInclusive<u16> {
+        self.record.service_handle..=self.record.end_group_handle
+    }
+}
+
 impl From<Service<'_>> for ServiceRecord {
     fn from(s: Service<'_>) -> Self {
         ServiceRecord { record: s.group_data }

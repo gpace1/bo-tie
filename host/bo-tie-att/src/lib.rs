@@ -391,10 +391,7 @@ impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Debug for ConnectionError<C>
     }
 }
 
-impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Display for ConnectionError<C>
-where
-    C::SendFutErr: core::fmt::Display,
-{
+impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Display for ConnectionError<C> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Self::AttError(e) => core::fmt::Display::fmt(e, f),
@@ -405,8 +402,7 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<C: bo_tie_l2cap::ConnectionChannel> std::error::Error for ConnectionError<C> where C::SendFutErr: core::fmt::Display
-{}
+impl<C: bo_tie_l2cap::ConnectionChannel> std::error::Error for ConnectionError<C> {}
 
 #[derive(PartialEq)]
 pub struct TransferFormatError {
