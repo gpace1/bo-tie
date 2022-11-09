@@ -116,6 +116,12 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
     }
 }
 
+impl<T, const SIZE: usize> Default for LinearBuffer<SIZE, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Clone, const SIZE: usize> Clone for LinearBuffer<SIZE, T> {
     fn clone(&self) -> Self {
         let mut buffer: [MaybeUninit<T>; SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
