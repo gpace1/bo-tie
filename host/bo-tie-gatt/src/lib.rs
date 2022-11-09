@@ -978,7 +978,7 @@ pub struct ServicesQuery<'a, C> {
 impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
     fn new(channel: &'a mut C, client: &'a Client) -> Self {
         let iter = None;
-        let handle = 0;
+        let handle = 1;
 
         ServicesQuery {
             channel,
