@@ -9,6 +9,7 @@ bo-tie-host-util = { path = "../bo-tie-host-util" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-util = { path = "../../bo-tie-util" }
 bo-tie-macros = { path = "../../bo-tie-macros" }
+futures = { verstion = "0.3", optional = true}
 aquamarine = "0.1"
 log = "0.4"
 
@@ -19,7 +20,7 @@ tokio = { version = "1", features = ["macros", "rt", "sync"] }
 std = ["bo-tie-att/std", "bo-tie-l2cap/std"]
 uuid-crate = ["bo-tie-att/uuid-crate"]
 tokio = ["bo-tie-att/tokio"]
-futures-rs = ["bo-tie-att/futures-rs"]
+futures-rs = ["bo-tie-att/futures-rs", "futures"]
 async-std = ["bo-tie-att/async-std"]
 
 [package.metadata.docs.rs]

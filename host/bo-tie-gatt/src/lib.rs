@@ -720,7 +720,7 @@ where
         &mut self,
         connection_channel: &mut C,
         acl_data: &l2cap::BasicInfoFrame<Vec<u8>>,
-    ) -> Result<(), att::Error>
+    ) -> Result<(), att::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -754,7 +754,7 @@ where
         &self,
         connection_channel: &C,
         payload: &[u8],
-    ) -> Result<(), att::Error>
+    ) -> Result<(), att::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -900,6 +900,164 @@ impl<Q> core::ops::Deref for Server<Q> {
 impl<Q> core::ops::DerefMut for Server<Q> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut()
+    }
+}
+
+/// A GATT client
+///
+/// This is an extension to an Attribute [`Client`] as it provides the added functionality of
+/// processing the Services and Characteristics of a GATT server.
+///
+/// Since this is really just a wrapper, it can be created from an Attribute `Client`.
+///
+/// ```
+/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) {
+/// use bo_tie_att::client::ConnectClient;
+/// use bo_tie_gatt::Client;
+///
+/// let gatt_client: Client = ConnectClient::connect(&mut connection_channel, 64).await?.into();
+/// # }
+/// ```
+///
+/// [`Client`]: bo_tie_att::client::Client
+pub struct Client {
+    att_client: att::client::Client,
+}
+
+impl Client {
+    fn new(att_client: att::client::Client) -> Self {
+        Client { att_client }
+    }
+
+    /// Query the services
+    ///
+    /// This returns a `ServicesQuery` which is used to get the services on the remote device.
+    pub fn query_services<'a, C: ConnectionChannel>(&'a self, connection_channel: &'a mut C) -> ServicesQuery<'a, C> {
+        ServicesQuery::new(connection_channel, self)
+    }
+}
+
+impl From<att::client::Client> for Client {
+    fn from(c: att::client::Client) -> Self {
+        Client::new(c)
+    }
+}
+
+impl core::ops::Deref for Client {
+    type Target = att::client::Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.att_client
+    }
+}
+
+/// A querier for Services on a GATT server.
+///
+/// This struct is created from the method [`query_services`]. See its documentation for details.
+pub struct ServicesQuery<'a, C> {
+    channel: &'a mut C,
+    client: &'a Client,
+    iter: Option<alloc::vec::IntoIter<bo_tie_att::pdu::ReadGroupTypeData<Uuid>>>,
+    handle: u16,
+}
+
+impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
+    fn new(channel: &'a mut C, client: &'a Client) -> Self {
+        let iter = None;
+        let handle = 0;
+
+        ServicesQuery {
+            channel,
+            client,
+            iter,
+            handle,
+        }
+    }
+
+    /// Send the *Read By Group Type Request*
+    async fn send_request(
+        &mut self,
+    ) -> Result<
+        Option<impl bo_tie_att::client::ResponseProcessor<Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>>,
+        bo_tie_att::ConnectionError<C>,
+    > {
+        if self.handle == <u16>::MAX {
+            return Ok(None);
+        }
+
+        self.client
+            .att_client
+            .read_by_group_type_request(
+                self.channel,
+                self.handle..<u16>::MAX,
+                ServiceDefinition::PRIMARY_SERVICE_TYPE,
+            )
+            .await
+            .map(|rp| Some(rp))
+    }
+
+    /// Await and process the *Read By Group Type Response*
+    async fn await_response(
+        &mut self,
+        response_processor: impl bo_tie_att::client::ResponseProcessor<
+            Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>,
+        >,
+    ) -> Result<Option<bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>, bo_tie_att::ConnectionError<C>> {
+        use bo_tie_att::pdu::Error;
+        use bo_tie_l2cap::ConnectionChannelExt;
+
+        let frames = self.channel.receive_b_frame().await.map_err(|e| e.from_infallible())?;
+
+        if frames.len() != 1 {
+            return Err(bo_tie_att::Error::Other("received more than one L2CAP PDU").into());
+        };
+
+        match response_processor.process_response(frames.first().unwrap()) {
+            Ok(response) => Ok(Some(response)),
+            Err(bo_tie_att::Error::Pdu(pdu)) if pdu.get_parameters().error == Error::AttributeNotFound => Ok(None), // no more services
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Query the next Service
+    ///
+    /// This will return the next service on the Server. If there is no more services then `None`
+    /// is returned.
+    pub async fn query_next(&mut self) -> Result<Option<ServiceRecord>, bo_tie_att::ConnectionError<C>> {
+        loop {
+            if self.iter.is_none() {
+                let response = match self.send_request().await? {
+                    None => break Ok(None),
+                    Some(processor) => match self.await_response(processor).await {
+                        Ok(None) => {
+                            // set the handle to have `send_request` always return `Ok(None)`
+                            self.handle = <u16>::MAX;
+
+                            break Ok(None);
+                        } // no more services
+                        Err(e) => break Err(e),
+                        Ok(Some(response)) => response,
+                    },
+                };
+
+                self.iter = response.into_inner().into_iter().into()
+            }
+
+            match self.iter.as_mut().and_then(|iter| iter.next()) {
+                None => self.iter = None,
+                Some(group_data) => {
+                    let record = ServiceGroupData {
+                        service_handle: group_data.get_handle(),
+                        end_group_handle: group_data.get_end_group_handle(),
+                        service_uuid: *group_data.get_data(),
+                    };
+
+                    self.handle = group_data.get_end_group_handle().checked_add(1).unwrap_or(<u16>::MAX);
+
+                    break Ok(Some(ServiceRecord { record }));
+                }
+            }
+        }
     }
 }
 
