@@ -341,21 +341,13 @@ impl Client {
         if bytes.len() == 0 {
             Err(super::Error::Empty)
         } else if expected_response.is_convertible_from(bytes) {
-            let pdu: Result<pdu::Pdu<P>, _> = TransferFormatTryFrom::try_from(&bytes);
+            let pdu: pdu::Pdu<P> = TransferFormatTryFrom::try_from(&bytes)?;
 
-            match pdu {
-                Ok(pdu) => Ok(pdu.into_parameters()),
-                Err(e) => Err(e.into()),
-            }
+            Ok(pdu.into_parameters())
         } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
-            type ErrPdu = pdu::Pdu<pdu::ErrorResponse>;
+            let err_pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&bytes)?;
 
-            let err_pdu: Result<ErrPdu, _> = TransferFormatTryFrom::try_from(&bytes);
-
-            match err_pdu {
-                Ok(err_pdu) => Err(err_pdu.into()),
-                Err(e) => Err(e.into()),
-            }
+            Err(err_pdu.into())
         } else {
             match ServerPduName::try_from(bytes[0]) {
                 Ok(_) => Err(super::Error::UnexpectedPdu(bytes[0])),
