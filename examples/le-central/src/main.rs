@@ -289,8 +289,6 @@ async fn main() -> Result<(), &'static str> {
 
     query_gatt_services(&mut connection).await;
 
-    println!(r#"press "ctrl + c" to disconnect and exit example"#);
-
     io::exit_signal(true).await;
 
     disconnect(&mut host, connection.get_handle()).await;
