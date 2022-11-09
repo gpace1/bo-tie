@@ -68,8 +68,8 @@ pub mod access_value;
 mod tests;
 
 use crate::{
-    client::ClientPduName, pdu, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
-    TransferFormatTryFrom,
+    client::ClientPduName, pdu, AttributePermissions, AttributeRestriction, ConnectionError, TransferFormatError,
+    TransferFormatInto, TransferFormatTryFrom,
 };
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
@@ -549,7 +549,7 @@ where
         &mut self,
         connection_channel: &mut C,
         acl_packet: &l2cap::BasicInfoFrame<Vec<u8>>,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -612,7 +612,7 @@ where
         connection_channel: &mut C,
         pdu_type: ClientPduName,
         payload: &[u8],
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -692,19 +692,16 @@ where
     ///
     /// This takes a complete Attribute PDU in its transfer byte form. This will package it into
     /// a L2CAP PDU and send it using the `ConnectionChannel`.
-    async fn send_raw_tf<C>(&self, connection_channel: &C, intf_data: Vec<u8>) -> Result<(), super::Error>
+    async fn send_raw_tf<C>(&self, connection_channel: &C, intf_data: Vec<u8>) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
         let acl_data = l2cap::BasicInfoFrame::new(intf_data, super::L2CAP_CHANNEL_ID);
 
-        connection_channel
-            .send(acl_data)
-            .await
-            .map_err(|e| super::Error::send_error::<C>(e))
+        connection_channel.send(acl_data).await.map_err(|e| e.into())
     }
 
-    async fn send<C, D>(&self, connection_channel: &C, data: D) -> Result<(), super::Error>
+    async fn send<C, D>(&self, connection_channel: &C, data: D) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
         D: TransferFormatInto,
@@ -714,7 +711,11 @@ where
     }
 
     /// Send an attribute PDU to the client
-    pub async fn send_pdu<C, D>(&self, connection_channel: &C, pdu: pdu::Pdu<D>) -> Result<(), super::Error>
+    pub async fn send_pdu<C, D>(
+        &self,
+        connection_channel: &C,
+        pdu: pdu::Pdu<D>,
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
         D: TransferFormatInto,
@@ -731,7 +732,7 @@ where
         handle: u16,
         received_opcode: ClientPduName,
         pdu_error: pdu::Error,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -823,7 +824,7 @@ where
         &mut self,
         connection_channel: &mut C,
         client_mtu: u16,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -839,7 +840,11 @@ where
     }
 
     /// Process a Read Request from the client
-    async fn process_read_request<C>(&mut self, connection_channel: &C, handle: u16) -> Result<(), super::Error>
+    async fn process_read_request<C>(
+        &mut self,
+        connection_channel: &C,
+        handle: u16,
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -866,7 +871,11 @@ where
     }
 
     /// Process a Write Request from the client
-    async fn process_write_request<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<(), super::Error>
+    async fn process_write_request<C>(
+        &mut self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -889,7 +898,7 @@ where
         &mut self,
         connection_channel: &C,
         handle_range: pdu::HandleRange,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1025,7 +1034,7 @@ where
         &mut self,
         connection_channel: &C,
         payload: &[u8],
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1115,7 +1124,7 @@ where
         &mut self,
         connection_channel: &C,
         type_request: pdu::TypeRequest,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1241,7 +1250,7 @@ where
         &mut self,
         connection_channel: &C,
         blob_request: pdu::ReadBlobRequest,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1274,7 +1283,7 @@ where
             Err(e) => Err(e.into()),
         } {
             Err(e) => match e {
-                super::Error::PduError(e) => {
+                ConnectionError::AttError(super::Error::PduError(e)) => {
                     self.send_error(
                         connection_channel,
                         blob_request.handle,
@@ -1306,7 +1315,7 @@ where
         &mut self,
         connection_channel: &C,
         br: &pdu::ReadBlobRequest,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1341,7 +1350,11 @@ where
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// that `blob_data` is `Some(_)`
     #[inline]
-    async fn use_blob_send_response<C>(&mut self, connection_channel: &C, offset: u16) -> Result<(), super::Error>
+    async fn use_blob_send_response<C>(
+        &mut self,
+        connection_channel: &C,
+        offset: u16,
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1393,7 +1406,7 @@ where
         &mut self,
         connection_channel: &C,
         payload: &[u8],
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1435,7 +1448,7 @@ where
         &mut self,
         connection_channel: &C,
         request_flag: pdu::ExecuteWriteFlag,
-    ) -> Result<(), super::Error>
+    ) -> Result<(), super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {

@@ -10,8 +10,6 @@ use core::borrow::Borrow;
 pub mod client;
 pub mod server;
 
-use bo_tie_l2cap as l2cap;
-
 pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
 use bo_tie_util::buffer::stack::LinearBuffer;
 pub use client::Client;
@@ -69,8 +67,8 @@ pub mod pdu;
 // End submodules that use the above macros
 //==================================================================================================
 
-pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
-    l2cap::ChannelIdentifier::LE(l2cap::LEUserChannelIdentifier::AttributeProtocol);
+pub const L2CAP_CHANNEL_ID: bo_tie_l2cap::ChannelIdentifier =
+    bo_tie_l2cap::ChannelIdentifier::LE(bo_tie_l2cap::LEUserChannelIdentifier::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bo_tie_macros::DepthCount)]
@@ -273,7 +271,8 @@ impl<V> Attribute<V> {
     }
 }
 
-#[derive(PartialEq)]
+/// General Attribute Error type
+#[derive(PartialEq, Debug)]
 pub enum Error {
     Other(&'static str),
     /// Returned when there is no connection to the bluetooth controller
@@ -294,7 +293,7 @@ pub enum Error {
     Empty,
     /// Unknown opcode
     ///
-    /// An `UnknonwOpcode` is for opcodes that are not recognized by the ATT protocol. They may
+    /// An `UnknownOpcode` is for opcodes that are not recognized by the ATT protocol. They may
     /// be valid for a higher layer protocol.
     UnknownOpcode(u8),
     /// Custom opcode is already used by the Att protocol
@@ -303,8 +302,6 @@ pub enum Error {
     IncorrectChannelId,
     /// Pdu Error
     PduError(pdu::Error),
-    /// Error when trying to send data to the peer device
-    SendError(String),
 }
 
 impl core::fmt::Display for Error {
@@ -326,16 +323,18 @@ impl core::fmt::Display for Error {
                     number for the Attribute Protocol"
             ),
             Error::PduError(err) => write!(f, "Attribute PDU error '{}'", err),
-            Error::SendError(r) => write!(f, "Failed to send data, '{}'", r),
         }
     }
 }
 
-impl core::fmt::Debug for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        core::fmt::Display::fmt(self, f)
-    }
-}
+// impl core::fmt::Debug for Error {
+//     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+//         core::fmt::Display::fmt(self, f)
+//     }
+// }
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
 
 impl From<pdu::Pdu<pdu::ErrorResponse>> for Error {
     fn from(err: pdu::Pdu<pdu::ErrorResponse>) -> Error {
@@ -349,12 +348,65 @@ impl From<TransferFormatError> for Error {
     }
 }
 
-impl Error {
-    /// An error generated when trying to send with a connection channel
-    fn send_error<C: bo_tie_l2cap::ConnectionChannel>(error: bo_tie_l2cap::send_future::Error<C::SendFutErr>) -> Self {
-        Self::SendError(format!("{:?}", error))
+/// Connection Channel Attribute Error
+///
+/// This is used by the Attribute client and server implementations when dealing with a
+/// [`ConnectionChannel`]
+///
+/// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
+pub enum ConnectionError<C: bo_tie_l2cap::ConnectionChannel> {
+    AttError(Error),
+    RecvError(bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>),
+    SendError(bo_tie_l2cap::send_future::Error<C::SendFutErr>),
+}
+
+impl<C: bo_tie_l2cap::ConnectionChannel, E: Into<Error>> From<E> for ConnectionError<C> {
+    fn from(e: E) -> Self {
+        Self::AttError(e.into())
     }
 }
+
+impl<C: bo_tie_l2cap::ConnectionChannel>
+    From<bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>>
+    for ConnectionError<C>
+{
+    fn from(e: bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>) -> Self {
+        Self::RecvError(e)
+    }
+}
+
+impl<C: bo_tie_l2cap::ConnectionChannel> From<bo_tie_l2cap::send_future::Error<C::SendFutErr>> for ConnectionError<C> {
+    fn from(e: bo_tie_l2cap::send_future::Error<C::SendFutErr>) -> Self {
+        Self::SendError(e)
+    }
+}
+
+impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Debug for ConnectionError<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Self::AttError(e) => write!(f, "AttError({e:?})"),
+            Self::RecvError(e) => write!(f, "RecvError({e:?})"),
+            Self::SendError(e) => write!(f, "SendError({e:?})"),
+        }
+    }
+}
+
+impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Display for ConnectionError<C>
+where
+    C::SendFutErr: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Self::AttError(e) => core::fmt::Display::fmt(e, f),
+            Self::RecvError(rx) => core::fmt::Display::fmt(rx, f),
+            Self::SendError(tx) => core::fmt::Display::fmt(tx, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<C: bo_tie_l2cap::ConnectionChannel> std::error::Error for ConnectionError<C> where C::SendFutErr: core::fmt::Display
+{}
 
 #[derive(PartialEq)]
 pub struct TransferFormatError {
@@ -995,7 +1047,7 @@ mod test {
         }
     }
 
-    impl l2cap::ConnectionChannel for Channel1 {
+    impl bo_tie_l2cap::ConnectionChannel for Channel1 {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut<1>;
         type SendFutErr = ();
@@ -1025,7 +1077,7 @@ mod test {
         }
     }
 
-    impl l2cap::ConnectionChannel for Channel2 {
+    impl bo_tie_l2cap::ConnectionChannel for Channel2 {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut<2>;
         type SendFutErr = ();
@@ -1192,7 +1244,7 @@ mod test {
             }
         }
 
-        let le_client_setup = client::LeConnectClient::initiate(&c1, 512).await.unwrap();
+        let le_client_setup = client::ConnectClient::initiate(&c1, 512).await.unwrap();
 
         let mtu_rsp = task_timeout(
             thread_panicked.clone(),
