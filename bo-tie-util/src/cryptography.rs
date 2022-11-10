@@ -282,4 +282,53 @@ mod tests {
         assert_eq!(0xdfa66747_de9ae630_30ca3261_1497c827, aes_cmac_generate(k, &m[..40]));
         assert_eq!(0x51f0bebf_7e3b9d92_fc497417_79363cfe, aes_cmac_generate(k, &m));
     }
+
+    #[cfg(target_os = "linux")]
+    fn openssl_aes_cmac_generate(k: u128, m: &[u8]) -> u128 {
+        use std::io::Write;
+
+        let mut child = std::process::Command::new("openssl")
+            .arg("dgst")
+            .args(["-mac", "cmac"])
+            .args(["-macopt", "cipher:AES-128-CBC"])
+            .args(["-macopt", &format!("hexkey:{:X}", k)])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to create openssl process");
+
+        let mut openssl_stdin = child.stdin.take().expect("failed to open stdin");
+
+        openssl_stdin.write_all(&m).expect("failed to write to stdin");
+
+        drop(openssl_stdin);
+
+        let output = child.wait_with_output().expect("failed to read stdout");
+
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+        // openssl outputs something like "(stdin)= XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        let output = String::from_utf8_lossy(&output.stdout).trim().replace("(stdin)= ", "");
+
+        <u128>::from_str_radix(&output, 16).expect("failed to create generated")
+    }
+
+    /// Random message tests (comparing with OpenSSL)
+    ///
+    /// This test requires the openssl command be installed on the machine
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn aes_cmac_openssl_cmp_test() {
+        let k: u128 = rand::random();
+
+        let m: Vec<u8> = (0..1000).map(|_| rand::random()).collect();
+
+        assert_eq!(aes_cmac_generate(k, &m[..0]), openssl_aes_cmac_generate(k, &m[..0]));
+        assert_eq!(aes_cmac_generate(k, &m[..15]), openssl_aes_cmac_generate(k, &m[..15]));
+        assert_eq!(aes_cmac_generate(k, &m[..16]), openssl_aes_cmac_generate(k, &m[..16]));
+        assert_eq!(aes_cmac_generate(k, &m[..17]), openssl_aes_cmac_generate(k, &m[..17]));
+        assert_eq!(aes_cmac_generate(k, &m[..32]), openssl_aes_cmac_generate(k, &m[..32]));
+        assert_eq!(aes_cmac_generate(k, &m[..40]), openssl_aes_cmac_generate(k, &m[..40]));
+        assert_eq!(aes_cmac_generate(k, &m), openssl_aes_cmac_generate(k, &m));
+    }
 }
