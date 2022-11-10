@@ -3,6 +3,7 @@
 /// Identity Address Type
 ///
 /// This is used to label the peer address as either a Public Address or a Static Random Address
+#[derive(Debug, Copy, Clone)]
 pub enum PeerIdentityAddressType {
     PublicIdentityAddress,
     RandomStaticIdentityAddress,
