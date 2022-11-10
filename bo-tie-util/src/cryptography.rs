@@ -78,23 +78,30 @@ fn aes_cmac_subkey_gen(k: u128) -> (u128, u128) {
     (k1, k2)
 }
 
-fn aes_cmac_padding(r: &[u8]) -> u128 {
+fn aes_cmac_padding<I, V>(r: I, r_len: usize) -> u128
+where
+    I: Iterator<Item = V>,
+    V: core::borrow::Borrow<u8>,
+{
     let unpad = r
-        .iter()
         .enumerate()
-        .fold(0u128, |p, (i, v)| p | (<u128>::from(*v) << (8 * (15 - i))));
+        .fold(0u128, |p, (i, v)| p | (<u128>::from(*v.borrow()) << (8 * (15 - i))));
 
-    unpad | (1 << (127 - (8 * r.len())))
+    unpad | (1 << (127 - (8 * r_len)))
 }
 
 /// Convert a slice of *plain text* with a length of 16 into a u128, big endian value.
 ///
 /// The AES algorithm require that the plain text be in big endian order to produce a *cypher text*
 /// that is also in big endian order.
-fn to_u128_be(chunk_16_bytes: &[u8]) -> u128 {
+fn to_u128_be<I, V>(chunk_16_bytes: I) -> u128
+where
+    I: Iterator<Item = V>,
+    V: core::borrow::Borrow<u8>,
+{
     let mut c = [0u8; 16];
 
-    c.clone_from_slice(chunk_16_bytes);
+    c.iter_mut().zip(chunk_16_bytes).for_each(|(l, r)| *l = *r.borrow());
 
     <u128>::from_ne_bytes(c).to_be()
 }
@@ -105,22 +112,35 @@ fn to_u128_be(chunk_16_bytes: &[u8]) -> u128 {
 /// code for the message.
 ///
 /// This method is derived from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493).
-pub fn aes_cmac_generate(key: u128, msg: &[u8]) -> u128 {
+pub fn aes_cmac_generate<T, V>(key: u128, msg: T) -> u128
+where
+    T: IntoIterator<Item = V>,
+    T::IntoIter: ExactSizeIterator,
+    V: core::borrow::Borrow<u8>,
+{
+    const CHUNK_SIZE: usize = 16;
+
     let (k1, k2) = aes_cmac_subkey_gen(key);
 
-    let mut chunks = msg.chunks(16);
+    let mut iterator = msg.into_iter().peekable();
 
-    let chunks_len = chunks.len();
+    let chunks_div = iterator.len() / CHUNK_SIZE;
+    let chunks_rem = iterator.len() % CHUNK_SIZE;
 
-    let x = chunks
-        .by_ref()
-        .take(if chunks_len == 0 { 0 } else { chunks_len - 1 })
-        .fold(0u128, |y, chunk| e(key, y ^ to_u128_be(chunk)));
+    let chunks_len = if chunks_div > 0 && chunks_rem > 0 {
+        chunks_div + 1
+    } else {
+        chunks_div
+    };
 
-    let y = match chunks.rfind(|_| true).map(|last| (last, last.len())) {
-        None => aes_cmac_padding(&[]) ^ k2 ^ x,
-        Some((bytes, 16)) => to_u128_be(bytes) ^ k1 ^ x,
-        Some((bytes, _)) => aes_cmac_padding(bytes) ^ k2 ^ x,
+    let count = if chunks_len == 0 { 0 } else { chunks_len - 1 };
+
+    let x = (0..count).fold(0u128, |x, _| e(key, x ^ to_u128_be((&mut iterator).take(CHUNK_SIZE))));
+
+    let y = match (iterator.peek(), chunks_rem) {
+        (None, _) => aes_cmac_padding(core::iter::empty::<u8>(), 0) ^ k2 ^ x,
+        (Some(_), 0) => to_u128_be(iterator) ^ k1 ^ x,
+        (Some(_), len) => aes_cmac_padding(iterator, len) ^ k2 ^ x,
     };
 
     e(key, y)
@@ -203,7 +223,10 @@ mod tests {
     fn aes_cmac_padding_test() {
         let b = [0x11, 0x22, 0x33];
 
-        assert_eq!(0x1122_3380_0000_0000_0000_0000_0000_0000u128, aes_cmac_padding(&b));
+        assert_eq!(
+            0x1122_3380_0000_0000_0000_0000_0000_0000u128,
+            aes_cmac_padding(b.iter(), 3)
+        );
     }
 
     /// The tests data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)

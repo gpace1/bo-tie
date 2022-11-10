@@ -1339,6 +1339,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::buffer::{TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 
     #[test]
     fn linear_buffer_init() {
@@ -1613,15 +1614,16 @@ mod test {
     /// This creates a `HeapAllocatedStackHotel` from a zeroed dynamic allocation and then
     /// transforms it into a `StackHotel`. This is about as unsafely stupid as you can get
     /// without it being UB. The only check made
-    unsafe fn inboxed_buffer_reserve<const SIZE: usize>() -> Box<StackHotel<usize, SIZE>> {
+    unsafe fn inboxed_buffer_reserve<const SIZE: usize, const BUFFER_SIZE: usize>(
+    ) -> Box<StackHotel<DeLinearBuffer<BUFFER_SIZE, u8>, SIZE>> {
         use std::ptr::write;
 
-        let layout = std::alloc::Layout::new::<StackHotel<usize, SIZE>>();
+        let layout = std::alloc::Layout::new::<StackHotel<DeLinearBuffer<BUFFER_SIZE, u8>, SIZE>>();
 
-        let allocation = std::alloc::alloc(layout) as *mut StackHotel<usize, SIZE>;
+        let allocation = std::alloc::alloc(layout) as *mut StackHotel<DeLinearBuffer<BUFFER_SIZE, u8>, SIZE>;
 
         // uninit_boxed_buffer should be though of
-        let mut uninit_boxed_buffer: Box<StackHotel<usize, SIZE>> = Box::from_raw(allocation);
+        let mut uninit_boxed_buffer: Box<StackHotel<DeLinearBuffer<BUFFER_SIZE, u8>, SIZE>> = Box::from_raw(allocation);
 
         // The extensive use of the method std::ptr::write is to avoid
         // dropping an uninitialized value even when dropping would
@@ -1653,23 +1655,24 @@ mod test {
     #[test]
     fn reserved_buffer_init() {
         const BUFFER_AMOUNT: usize = 15;
+        const BUFFER_SIZE: usize = 0;
 
-        let reserve_buffer = unsafe { inboxed_buffer_reserve::<BUFFER_AMOUNT>() };
+        let reserve_buffer = unsafe { inboxed_buffer_reserve::<BUFFER_AMOUNT, BUFFER_SIZE>() };
 
         let mut reserved_holder = Vec::with_capacity(BUFFER_AMOUNT);
 
         for _ in 0..BUFFER_AMOUNT {
-            let taken = reserve_buffer.take_buffer().expect("failed to take buffer");
+            let taken = reserve_buffer.take_buffer(0, 0).expect("failed to take buffer");
 
             reserved_holder.push(taken);
         }
 
-        assert!(reserve_buffer.take_buffer().is_none());
+        assert!(reserve_buffer.take_buffer(0, 0).is_none());
 
         reserved_holder.drain(..).for_each(|reserve| drop(reserve));
 
         for _ in 0..BUFFER_AMOUNT {
-            let taken = reserve_buffer.take_buffer().expect("failed to take buffer");
+            let taken = reserve_buffer.take_buffer(0, 0).expect("failed to take buffer");
 
             reserved_holder.push(taken);
         }
@@ -1705,20 +1708,21 @@ mod test {
     #[test]
     fn reserved_buffer_take_and_drop() {
         const BUFFER_AMOUNT: usize = 512;
+        const BUFFER_SIZE: usize = 0;
 
-        let reserve_buffer = unsafe { inboxed_buffer_reserve::<BUFFER_AMOUNT>() };
+        let reserve_buffer = unsafe { inboxed_buffer_reserve::<BUFFER_AMOUNT, BUFFER_SIZE>() };
 
         let mut reserved_holder = Vec::with_capacity(BUFFER_AMOUNT);
 
         for _ in 0..1024 {
-            match reserve_buffer.take_buffer() {
+            match reserve_buffer.take_buffer(0, 0) {
                 Some(reserved) => reserved_holder.push(reserved),
                 None => rand_drop_from(&mut reserved_holder, 45),
             }
         }
 
         while reserved_holder.len() != reserved_holder.capacity() {
-            reserved_holder.push(reserve_buffer.take_buffer().unwrap())
+            reserved_holder.push(reserve_buffer.take_buffer(0, 0).unwrap())
         }
 
         reserved_holder.into_iter().for_each(|reserve| drop(reserve))
@@ -1727,14 +1731,15 @@ mod test {
     #[test]
     fn reserved_buffer_grow() {
         const BUFFER_AMOUNT: usize = 32;
+        const BUFFER_SIZE: usize = 0;
 
-        let reserve_buffer = unsafe { inboxed_buffer_reserve::<BUFFER_AMOUNT>() };
+        let reserve_buffer = unsafe { inboxed_buffer_reserve::<BUFFER_AMOUNT, BUFFER_SIZE>() };
 
         let mut reserved_holder = Vec::with_capacity(BUFFER_AMOUNT);
 
         for end in 0..BUFFER_AMOUNT {
             for _ in 0..end {
-                let reserved = reserve_buffer.take_buffer().expect("failed to take buffer");
+                let reserved = reserve_buffer.take_buffer(0, 0).expect("failed to take buffer");
 
                 reserved_holder.push(reserved);
             }
