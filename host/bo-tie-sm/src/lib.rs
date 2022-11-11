@@ -143,7 +143,7 @@ const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
 /// The L2CAP channel identifier for the Security Manager
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
-    l2cap::ChannelIdentifier::LE(crate::l2cap::LEUserChannelIdentifier::SecurityManagerProtocol);
+    l2cap::ChannelIdentifier::LE(crate::l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
 
 #[derive(Debug, Clone)]
 pub enum Error {

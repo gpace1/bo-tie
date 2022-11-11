@@ -575,10 +575,10 @@ where
         &self,
         acl_packet: &'a l2cap::BasicInfoFrame<Vec<u8>>,
     ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
-        use l2cap::{ChannelIdentifier, LEUserChannelIdentifier};
+        use l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
 
         match acl_packet.get_channel_id() {
-            ChannelIdentifier::LE(LEUserChannelIdentifier::AttributeProtocol) => {
+            ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) => {
                 let (att_type, payload) = acl_packet.get_payload().split_at(1);
 
                 if att_type.len() > 0 {

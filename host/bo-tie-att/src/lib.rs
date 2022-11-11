@@ -68,7 +68,7 @@ pub mod pdu;
 //==================================================================================================
 
 pub const L2CAP_CHANNEL_ID: bo_tie_l2cap::ChannelIdentifier =
-    bo_tie_l2cap::ChannelIdentifier::LE(bo_tie_l2cap::LEUserChannelIdentifier::AttributeProtocol);
+    bo_tie_l2cap::ChannelIdentifier::LE(bo_tie_l2cap::LeUserChannelIdentifier::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bo_tie_macros::DepthCount)]

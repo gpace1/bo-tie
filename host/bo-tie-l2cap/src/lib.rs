@@ -59,7 +59,7 @@ pub enum ChannelIdentifier {
     /// ACL-U identifiers
     ACL(ACLUserChannelIdentifier),
     /// LE-U identifiers
-    LE(LEUserChannelIdentifier),
+    LE(LeUserChannelIdentifier),
 }
 
 impl ChannelIdentifier {
@@ -76,7 +76,7 @@ impl ChannelIdentifier {
 
     /// Try to convert a raw value into a LE-U channel identifier
     pub fn le_try_from_raw(val: u16) -> Result<Self, ()> {
-        LEUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
+        LeUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
     }
 
     /// Try to convert a raw value into a ACL-U channel identifier
@@ -85,8 +85,8 @@ impl ChannelIdentifier {
     }
 }
 
-impl From<LEUserChannelIdentifier> for ChannelIdentifier {
-    fn from(le: LEUserChannelIdentifier) -> Self {
+impl From<LeUserChannelIdentifier> for ChannelIdentifier {
+    fn from(le: LeUserChannelIdentifier) -> Self {
         ChannelIdentifier::LE(le)
     }
 }
@@ -129,9 +129,9 @@ impl DynChannelId<LeU> {
     /// [`LE_LOWER`](#const.LE_LOWER) and
     /// [`LE_UPPER`](#const.LE_UPPER). If the input is not between those bounds, then an error is
     /// returned containing the infringing input value.
-    pub fn new_le(channel_id: u16) -> Result<LEUserChannelIdentifier, u16> {
+    pub fn new_le(channel_id: u16) -> Result<LeUserChannelIdentifier, u16> {
         if Self::LE_BOUNDS.contains(&channel_id) {
-            Ok(LEUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
+            Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
                 channel_id,
             )))
         } else {
@@ -195,7 +195,7 @@ impl ACLUserChannelIdentifier {
 ///
 /// These are the channel identifiers for a LE
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LEUserChannelIdentifier {
+pub enum LeUserChannelIdentifier {
     /// Channel for the Attribute Protocol
     ///
     /// This channel is used for the attribute protocol, which also means that all GATT data will
@@ -218,23 +218,23 @@ pub enum LEUserChannelIdentifier {
     DynamicallyAllocated(DynChannelId<LeU>),
 }
 
-impl LEUserChannelIdentifier {
+impl LeUserChannelIdentifier {
     fn to_val(&self) -> u16 {
         match self {
-            LEUserChannelIdentifier::AttributeProtocol => 0x4,
-            LEUserChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
-            LEUserChannelIdentifier::SecurityManagerProtocol => 0x6,
-            LEUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
+            LeUserChannelIdentifier::AttributeProtocol => 0x4,
+            LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
+            LeUserChannelIdentifier::SecurityManagerProtocol => 0x6,
+            LeUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
         }
     }
 
     fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
-            0x4 => Ok(LEUserChannelIdentifier::AttributeProtocol),
-            0x5 => Ok(LEUserChannelIdentifier::LowEnergyL2CAPSignalingChannel),
-            0x6 => Ok(LEUserChannelIdentifier::SecurityManagerProtocol),
+            0x4 => Ok(LeUserChannelIdentifier::AttributeProtocol),
+            0x5 => Ok(LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel),
+            0x6 => Ok(LeUserChannelIdentifier::SecurityManagerProtocol),
             _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
-                Ok(LEUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
+                Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
             }
             _ => Err(()),
         }
@@ -457,7 +457,7 @@ impl<T> BasicInfoFrame<T> {
                     .and_then(|_| {
                         Ok(Self {
                             channel_id: ChannelIdentifier::LE(
-                                LEUserChannelIdentifier::try_from_raw(raw_channel_id)
+                                LeUserChannelIdentifier::try_from_raw(raw_channel_id)
                                     .or(Err(BasicFrameError::InvalidChannelId))?,
                             ),
                             payload: buffer,

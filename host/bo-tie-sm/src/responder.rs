@@ -1336,7 +1336,7 @@ where
     /// # use std::error::Error;
     /// # use bo_tie_sm::oob::ExternalOobReceiver;
     /// # use std::future::Future;
-    /// # use bo_tie_l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannel, ConnectionChannelExt, L2capFragment, LEUserChannelIdentifier};
+    /// # use bo_tie_l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannel, ConnectionChannelExt, L2capFragment, LeUserChannelIdentifier};
     /// # use bo_tie_sm::responder::SecurityManagerBuilder;
     /// # use bo_tie_util::BluetoothDeviceAddress;
     /// # let mut security_manager_builder = SecurityManagerBuilder::new(BluetoothDeviceAddress::zeroed(), BluetoothDeviceAddress::zeroed(), false, false);
@@ -1359,7 +1359,7 @@ where
     /// # async {
     /// # let _r: Result<(), Box<dyn Error>> = async {
     /// const SM_CHANNEL_ID: ChannelIdentifier = ChannelIdentifier::LE(
-    ///     LEUserChannelIdentifier::SecurityManagerProtocol
+    ///     LeUserChannelIdentifier::SecurityManagerProtocol
     /// );
     ///    
     /// let mut security_manager = security_manager_builder
