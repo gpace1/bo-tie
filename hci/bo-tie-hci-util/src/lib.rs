@@ -162,11 +162,39 @@ impl TryFrom<[u8; 2]> for ConnectionHandle {
     }
 }
 
+/// Encryption Level
+///
+/// This is used to report if Encryption is enabled and what encryption is enabled. It is
+/// recommended to never use `E0` with BR/EDR operation as it is quite a week cypher (see the
+/// [wiki] for details).
+///
+/// [wiki]: https://en.wikipedia.org/wiki/E0_%28cipher%29
 #[derive(Debug, PartialEq, Eq)]
 pub enum EncryptionLevel {
     Off,
     E0,
     AesCcm,
+}
+
+impl EncryptionLevel {
+    /// Check if encryption is off
+    pub fn is_off(&self) -> bool {
+        *self == EncryptionLevel::Off
+    }
+
+    /// Check if the encryption is enabled and using the E0 cypher
+    ///
+    /// # Note
+    /// This cypher is also only available for BR/EDR.
+
+    pub fn is_e0(&self) -> bool {
+        *self == EncryptionLevel::E0
+    }
+
+    /// Check if the encryption is enabled and using the AES-CCM cypher
+    pub fn is_aes_ccm(&self) -> bool {
+        *self == EncryptionLevel::AesCcm
+    }
 }
 
 /// A matcher of events in response to a command
