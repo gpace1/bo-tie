@@ -578,7 +578,7 @@ where
         use l2cap::{ChannelIdentifier, LeUserChannelIdentifier};
 
         match acl_packet.get_channel_id() {
-            ChannelIdentifier::LE(LeUserChannelIdentifier::AttributeProtocol) => {
+            ChannelIdentifier::Le(LeUserChannelIdentifier::AttributeProtocol) => {
                 let (att_type, payload) = acl_packet.get_payload().split_at(1);
 
                 if att_type.len() > 0 {

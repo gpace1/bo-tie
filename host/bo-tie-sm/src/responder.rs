@@ -1358,7 +1358,7 @@ where
     /// # let oob_data = &[];
     /// # async {
     /// # let _r: Result<(), Box<dyn Error>> = async {
-    /// const SM_CHANNEL_ID: ChannelIdentifier = ChannelIdentifier::LE(
+    /// const SM_CHANNEL_ID: ChannelIdentifier = ChannelIdentifier::Le(
     ///     LeUserChannelIdentifier::SecurityManagerProtocol
     /// );
     ///    

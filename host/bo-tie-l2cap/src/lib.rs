@@ -59,7 +59,7 @@ pub enum ChannelIdentifier {
     /// ACL-U identifiers
     ACL(ACLUserChannelIdentifier),
     /// LE-U identifiers
-    LE(LeUserChannelIdentifier),
+    Le(LeUserChannelIdentifier),
 }
 
 impl ChannelIdentifier {
@@ -70,7 +70,7 @@ impl ChannelIdentifier {
         match self {
             ChannelIdentifier::NullIdentifier => 0,
             ChannelIdentifier::ACL(ci) => ci.to_val(),
-            ChannelIdentifier::LE(ci) => ci.to_val(),
+            ChannelIdentifier::Le(ci) => ci.to_val(),
         }
     }
 
@@ -87,7 +87,7 @@ impl ChannelIdentifier {
 
 impl From<LeUserChannelIdentifier> for ChannelIdentifier {
     fn from(le: LeUserChannelIdentifier) -> Self {
-        ChannelIdentifier::LE(le)
+        ChannelIdentifier::Le(le)
     }
 }
 
@@ -456,7 +456,7 @@ impl<T> BasicInfoFrame<T> {
                     .map_err(|e| BasicFrameError::TryExtendError(e))
                     .and_then(|_| {
                         Ok(Self {
-                            channel_id: ChannelIdentifier::LE(
+                            channel_id: ChannelIdentifier::Le(
                                 LeUserChannelIdentifier::try_from_raw(raw_channel_id)
                                     .or(Err(BasicFrameError::InvalidChannelId))?,
                             ),
