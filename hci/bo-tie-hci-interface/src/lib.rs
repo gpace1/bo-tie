@@ -80,8 +80,8 @@ pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
 use bo_tie_hci_util::{
-    BufferReserve, Channel, FlowControlId, FromConnectionIntraMessage, FromInterface, HciPacket, HciPacketType,
-    HostChannel, PacketBufferInformation, Sender, TaskId, TaskSource, ToConnectionIntraMessage,
+    BufferReserve, Channel, EventRoutingPolicy, FlowControlId, FromConnectionIntraMessage, FromInterface, HciPacket,
+    HciPacketType, HostChannel, PacketBufferInformation, Sender, TaskId, TaskSource, ToConnectionIntraMessage,
     ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::stack::LinearBuffer;
@@ -102,6 +102,7 @@ use core::ops::Deref;
 /// for sending packets to the interface and onto the Controller.
 pub struct Interface<R> {
     packet_buffer_info: PacketBufferInformation,
+    event_routing_policy: EventRoutingPolicy,
     skip_cmd_response: bool,
     channel_reserve: R,
 }
@@ -114,10 +115,13 @@ where
     pub fn new(channel_reserve: R) -> Self {
         let packet_buffer_info = PacketBufferInformation::default();
 
+        let event_routing_policy = EventRoutingPolicy::default();
+
         let skip_cmd_response = false;
 
         Interface {
             packet_buffer_info,
+            event_routing_policy,
             skip_cmd_response,
             channel_reserve,
         }
@@ -290,6 +294,7 @@ where
                             break Some(HciPacket::Command(DriverBuffer::Cmd(data)));
                         }
                         ToInterfaceIntraMessage::PacketBufferInfo(i) => self.parse_buffer_info(i),
+                        ToInterfaceIntraMessage::EventRoutingPolicy(p) => self.parse_event_routing_policy(p),
                     },
                     TaskSource::Connection(message) => match message {
                         FromConnectionIntraMessage::Acl(data) => break Some(HciPacket::Acl(DriverBuffer::Data(data))),
@@ -480,41 +485,51 @@ where
         &mut self,
         disconnect: &events::parameters::DisconnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        let task_id = TaskId::Connection(disconnect.connection_handle);
+        use events::EventsData;
 
-        let error = bo_tie_util::errors::Error::from(disconnect.reason);
-
-        if let Some(source) = self.channel_reserve.get_sender(task_id) {
-            if let FromInterface::Connection(mut sender) = source {
-                sender
-                    .send(ToConnectionIntraMessage::Disconnect(error).into())
-                    .await
-                    .map_err(|e| SendError::<R>::SenderError(e))?;
-
-                self.channel_reserve
-                    .try_remove(disconnect.connection_handle)
-                    .map_err(|e| SendError::<R>::ReserveError(e))
+        if let Some(mut sender) = self.channel_reserve.get_connection_sender(disconnect.connection_handle) {
+            let message = if self.event_routing_policy.route_to_connection() {
+                ToConnectionIntraMessage::RoutedEvent(EventsData::DisconnectionComplete(disconnect.clone()))
             } else {
-                Err(SendError::<R>::InvalidChannel)
-            }
+                let error = bo_tie_util::errors::Error::from(disconnect.reason);
+
+                ToConnectionIntraMessage::Disconnect(error)
+            };
+
+            sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))?;
+
+            self.channel_reserve
+                .try_remove(disconnect.connection_handle)
+                .map_err(|e| SendError::<R>::ReserveError(e))
         } else {
             Ok(())
         }
+    }
+
+    /// Perform event routing
+    ///
+    /// This will perform routing of the event to the connection (if enabled) and return a boolean
+    /// indicating if the event should be routed to the host.
+    pub async fn event_routing(&mut self, event_data: &events::EventsData) -> Result<bool, SendError<R>> {
+        if self.event_routing_policy.route_to_connection() {
+            if let Some(handle) = event_data.get_handle() {
+                if let Some(mut sender) = self.channel_reserve.get_connection_sender(handle) {
+                    sender
+                        .send(ToConnectionIntraMessage::RoutedEvent(event_data.clone()))
+                        .await
+                        .map_err(|e| SendError::<R>::SenderError(e))?;
+                }
+            }
+        }
+
+        Ok(self.event_routing_policy.rout_to_host())
     }
 
     /// Parse an event for information that is relevant to this interface
     ///
     /// The interface needs to know of a few things from certain events.
     ///
-    /// `true` is returned if the event is to be returned to the host.
-    ///
-    /// # Processed Events
-    /// * *Command Complete* and *Command Status* events contain the information on how many HCI
-    ///   commands can be sent to the controller.
-    /// * *Number of Completed Packets* event contains information on the number of packets sent for
-    ///   a specific connection.
-    /// * *Number of Completed Data Blocks* event contains information on the number of packets sent
-    ///   and
+    /// `true` is returned if the event is to be sent to the host.
     async fn parse_event(&mut self, data: &[u8]) -> Result<Option<events::EventsData>, SendError<R>> {
         use events::{EventsData, LeMetaData};
 
@@ -552,7 +567,10 @@ where
                 .await
                 .map(|_| Some(ed)),
             EventsData::DisconnectionComplete(data) => self.parse_disconnect_event(data).await.map(|_| Some(ed)),
-            _ => Ok(Some(ed)),
+            e => self
+                .event_routing(e)
+                .await
+                .map(|rout_to_host| rout_to_host.then_some(ed)),
         }
     }
 
@@ -673,11 +691,41 @@ where
             .inc_le_iso_flow_control(self.packet_buffer_info.le_iso.get_number_of_packets());
     }
 
+    /// Parse the event routing policy
+    fn parse_event_routing_policy(&mut self, policy: EventRoutingPolicy) {
+        self.event_routing_policy = policy
+    }
+
     /// Parse disconnect of a connection
     fn parse_disconnect_command(&mut self, handle: ConnectionHandle) {
         self.channel_reserve.try_remove(handle).ok();
 
         self.skip_cmd_response = true;
+    }
+}
+
+/// Trait for turning event routing information into boolean checks
+trait EventRouting {
+    fn route_to_connection(&self) -> bool;
+
+    fn rout_to_host(&self) -> bool;
+}
+
+impl EventRouting for EventRoutingPolicy {
+    fn route_to_connection(&self) -> bool {
+        match self {
+            EventRoutingPolicy::All => true,
+            EventRoutingPolicy::OnlyConnection => true,
+            _ => false,
+        }
+    }
+
+    fn rout_to_host(&self) -> bool {
+        match self {
+            EventRoutingPolicy::All => true,
+            EventRoutingPolicy::OnlyHost => true,
+            _ => false,
+        }
     }
 }
 

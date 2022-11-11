@@ -854,6 +854,22 @@ pub trait ChannelReserveExt: ChannelReserve {
         })
     }
 
+    /// Get a sender to a connection async task
+    ///
+    /// # Panic
+    /// A panic will occur if trying to get the method `get_channel` returns a channel to a task
+    /// other than a connection async task.
+    fn get_connection_sender(
+        &self,
+        handle: ConnectionHandle,
+    ) -> Option<<Self::ToConnectionChannel as Channel>::Sender> {
+        if let FromInterface::Connection(sender) = self.get_sender(TaskId::Connection(handle))? {
+            Some(sender)
+        } else {
+            panic!("incorrect sender for a connection async task")
+        }
+    }
+
     /// Receive the next message
     fn receive_next(
         &mut self,
@@ -1495,7 +1511,7 @@ impl<T: Deref<Target = [u8]>> TryFrom<ToInterfaceIntraMessage<T>> for HciPacket<
         match i {
             ToInterfaceIntraMessage::Command(c) => Ok(HciPacket::Command(c)),
             ToInterfaceIntraMessage::Disconnect(_, c) => Ok(HciPacket::Command(c)),
-            ToInterfaceIntraMessage::PacketBufferInfo(_) => {
+            ToInterfaceIntraMessage::PacketBufferInfo(_) | ToInterfaceIntraMessage::EventRoutingPolicy(_) => {
                 Err("'FromHostIntraMessage::BufferInfo' cannot be converted to a HciPacket")
             }
         }
@@ -1606,6 +1622,105 @@ pub struct PacketBufferInformation {
     pub le_iso: PacketFlowCtrlInfo,
 }
 
+/// Policy for Distributing Events
+///
+/// Some HCI events are specific to a certain connection. By default all events are sent to the
+/// host async task, but the host may change this policy to have the interface send some events to
+/// their respective connection task.
+///
+/// Only events that are specific to a currently active connection may be routed to another
+/// connection. Except for connection events, every event with a connection handle is re-routable.
+/// Connection events must must go to the host async task in order to create a new connection async
+/// task.
+///
+/// ### Routable Events
+/// * [`Events::DisconnectionComplete`]
+/// * [`Events::AuthenticationComplete`]
+/// * [`Events::EncryptionChangeV1`]
+/// * [`Events::EncryptionChangeV2`]
+/// * [`Events::ChangeConnectionLinkKeyComplete`]
+/// * [`Events::LinkKeyTypeChanged`]
+/// * [`Events::ReadRemoteSupportedFeaturesComplete`]
+/// * [`Events::ReadRemoteVersionInformationComplete`]
+/// * [`Events::QosSetupComplete`]
+/// * [`Events::FlushOccurred`]
+/// * [`Events::ModeChange`]
+/// * [`Events::MaxSlotsChange`]
+/// * [`Events::ReadClockOffsetComplete`]
+/// * [`Events::ConnectionPacketTypeChanged`]
+/// * [`Events::QosViolation`]
+/// * [`Events::FlowSpecificationComplete`]
+/// * [`Events::ReadRemoteExtendedFeaturesComplete`]
+/// * [`Events::SynchronousConnectionChanged`]
+/// * [`Events::SniffSubrating`]
+/// * [`Events::EncryptionKeyRefreshComplete`]
+/// * [`Events::LinkSupervisionTimeoutChanged`]
+/// * [`Events::EnhancedFlushComplete`]
+/// * [`Events::LeMeta(LeMeta::ConnectionUpdateComplete)`]
+/// * [`Events::LeMeta(LeMeta::ReadRemoteFeaturesComplete)`]
+/// * [`Events::LeMeta(LeMeta::LongTermKeyRequest)`]
+/// * [`Events::LeMeta(LeMeta::RemoteConnectionParameterRequest)`]
+/// * [`Events::LeMeta(LeMeta::DataLengthChange)`]
+/// * [`Events::LeMeta(LeMeta::PhyUpdateComplete)`]
+/// * [`Events::LeMeta(LeMeta::PeriodicAdvertisingSyncEstablished)`]
+/// * [`Events::LeMeta(LeMeta::PeriodicAdvertisingReport)`]
+/// * [`Events::LeMeta(LeMeta::PeriodicAdvertisingSyncLost)`]
+/// * [`Events::LeMeta(LeMeta::AdvertisingSetTerminated)`]
+/// * [`Events::LeMeta(LeMeta::ChannelSelectionAlgorithm)`]
+/// * [`Events::AuthenticatedPayloadTimeoutExpired`]
+///
+/// [`Events::DisconnectionComplete`]: bo_tie_hci_util::events::Events::DisconnectionComplete
+/// [`Events::AuthenticationComplete`]: bo_tie_hci_util::events::Events::AuthenticationComplete
+/// [`Events::EncryptionChangeV1`]: bo_tie_hci_util::events::Events::EncryptionChangeV1
+/// [`Events::EncryptionChangeV2`]: bo_tie_hci_util::events::Events::EncryptionChangeV2
+/// [`Events::ChangeConnectionLinkKeyComplete`]: bo_tie_hci_util::events::Events::ChangeConnectionLinkKeyComplete
+/// [`Events::LinkKeyTypeChanged`]: bo_tie_hci_util::events::Events::LinkKeyTypeChanged
+/// [`Events::ReadRemoteSupportedFeaturesComplete`]: bo_tie_hci_util::events::Events::ReadRemoteSupportedFeaturesComplete
+/// [`Events::ReadRemoteVersionInformationComplete`]: bo_tie_hci_util::events::Events::ReadRemoteVersionInformationComplete
+/// [`Events::QosSetupComplete`]: bo_tie_hci_util::events::Events::QosSetupComplete
+/// [`Events::FlushOccurred`]: bo_tie_hci_util::events::Events::FlushOccurred
+/// [`Events::ModeChange`]: bo_tie_hci_util::events::Events::ModeChange
+/// [`Events::MaxSlotsChange`]: bo_tie_hci_util::events::Events::MaxSlotsChange
+/// [`Events::ReadClockOffsetComplete`]: bo_tie_hci_util::events::Events::ReadClockOffsetComplete
+/// [`Events::ConnectionPacketTypeChanged`]: bo_tie_hci_util::events::Events::ConnectionPacketTypeChanged
+/// [`Events::QosViolation`]: bo_tie_hci_util::events::Events::QosViolation
+/// [`Events::FlowSpecificationComplete`]: bo_tie_hci_util::events::Events::FlowSpecificationComplete
+/// [`Events::ReadRemoteExtendedFeaturesComplete`]: bo_tie_hci_util::events::Events::ReadRemoteExtendedFeaturesComplete
+/// [`Events::SynchronousConnectionChanged`]: bo_tie_hci_util::events::Events::SynchronousConnectionChanged
+/// [`Events::SniffSubrating`]: bo_tie_hci_util::events::Events::SniffSubrating
+/// [`Events::EncryptionKeyRefreshComplete`]: bo_tie_hci_util::events::Events::EncryptionKeyRefreshComplete
+/// [`Events::LinkSupervisionTimeoutChanged`]: bo_tie_hci_util::events::Events::LinkSupervisionTimeoutChanged
+/// [`Events::EnhancedFlushComplete`]: bo_tie_hci_util::events::Events::EnhancedFlushComplete
+/// [`Events::LeMeta(LeMeta::ConnectionUpdateComplete)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::ConnectionUpdateComplete)
+/// [`Events::LeMeta(LeMeta::ReadRemoteFeaturesComplete)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::ReadRemoteFeaturesComplete)
+/// [`Events::LeMeta(LeMeta::LongTermKeyRequest)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::LongTermKeyRequest)
+/// [`Events::LeMeta(LeMeta::RemoteConnectionParameterRequest)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::RemoteConnectionParameterRequest)
+/// [`Events::LeMeta(LeMeta::DataLengthChange)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::DataLengthChange)
+/// [`Events::LeMeta(LeMeta::PhyUpdateComplete)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::PhyUpdateComplete)
+/// [`Events::LeMeta(LeMeta::PeriodicAdvertisingSyncEstablished)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::PeriodicAdvertisingSyncEstablished)
+/// [`Events::LeMeta(LeMeta::PeriodicAdvertisingReport)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::PeriodicAdvertisingReport)
+/// [`Events::LeMeta(LeMeta::PeriodicAdvertisingSyncLost)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::PeriodicAdvertisingSyncLost)
+/// [`Events::LeMeta(LeMeta::AdvertisingSetTerminated)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::AdvertisingSetTerminated)
+/// [`Events::LeMeta(LeMeta::ChannelSelectionAlgorithm)`]: bo_tie_hci_util::events::Events::LeMeta(LeMeta::ChannelSelectionAlgorithm)
+/// [`Events::AuthenticatedPayloadTimeoutExpired`]: bo_tie_hci_util::events::Events::AuthenticatedPayloadTimeoutExpired
+#[derive(Debug)]
+pub enum EventRoutingPolicy {
+    /// Have the interface async task only send events to the host async task (Default)
+    OnlyHost,
+    /// Have the interface async task clone connection related events and send them to both the host
+    /// and connection async tasks.
+    All,
+    /// Events that related to a connection are sent to their respective connection async task and
+    /// not to the host async task.
+    OnlyConnection,
+}
+
+impl Default for EventRoutingPolicy {
+    fn default() -> Self {
+        EventRoutingPolicy::OnlyHost
+    }
+}
+
 /// A messages sent from all other async tasks to the interface async task
 ///
 /// The host async task sends `Commands` and `BufferInfo` to the interface async task. Connections
@@ -1614,6 +1729,7 @@ pub struct PacketBufferInformation {
 pub enum ToInterfaceIntraMessage<T> {
     Command(T),
     PacketBufferInfo(PacketBufferInformation),
+    EventRoutingPolicy(EventRoutingPolicy),
     Disconnect(ConnectionHandle, T),
 }
 
@@ -1700,7 +1816,12 @@ pub enum ToConnectionIntraMessage<T> {
     /// HCI isochronous Data Packet
     Iso(T),
     /// A disconnection indication
+    ///
+    /// # Note
+    /// This is not sent if the disconnection event is routed to the connection in a `RoutedEvent`.
     Disconnect(bo_tie_util::errors::Error),
+    /// An event routed to the connection async task
+    RoutedEvent(events::EventsData),
 }
 
 /// An enumeration of different channels from the interface async task

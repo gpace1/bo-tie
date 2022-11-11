@@ -143,6 +143,7 @@ macro_rules! chew_handle {
 
 pub mod parameters;
 
+use crate::ConnectionHandle;
 use parameters::{
     AuthenticatedPayloadTimeoutExpiredData, AuthenticationCompleteData, ChangeConnectionLinkKeyCompleteData,
     CommandCompleteData, CommandStatusData, ConnectionCompleteData, ConnectionPacketTypeChangedData,
@@ -637,11 +638,108 @@ impl Events {
         }
     }
 
+    /// Check if an event can be routed to a connection async task
+    ///
+    /// True is returned if this event can be routed to another async task. See
+    /// [`EventRoutingPolicy`] and [`Host::set_event_routing_policy`] for details.
+    ///
+    /// [`EventRoutingPolicy`]:
+    /// [`Host::set_event_routing_policy`]:
+    pub fn is_routable(&self) -> bool {
+        match self {
+            Events::DisconnectionComplete |
+            Events::AuthenticationComplete |
+            Events::EncryptionChangeV1 |
+            Events::EncryptionChangeV2 |
+            Events::ChangeConnectionLinkKeyComplete |
+            Events::LinkKeyTypeChanged |
+            Events::ReadRemoteSupportedFeaturesComplete |
+            Events::ReadRemoteVersionInformationComplete |
+            Events::QosSetupComplete |
+            Events::FlushOccurred |
+            Events::ModeChange |
+            Events::MaxSlotsChange |
+            Events::ReadClockOffsetComplete |
+            Events::ConnectionPacketTypeChanged |
+            Events::QosViolation |
+            Events::FlowSpecificationComplete |
+            Events::ReadRemoteExtendedFeaturesComplete |
+            Events::SynchronousConnectionChanged |
+            Events::SniffSubrating |
+            Events::EncryptionKeyRefreshComplete |
+            Events::LinkSupervisionTimeoutChanged |
+            Events::EnhancedFlushComplete |
+            Events::LeMeta(LeMeta::ConnectionUpdateComplete) |
+            Events::LeMeta(LeMeta::ReadRemoteFeaturesComplete) |
+            Events::LeMeta(LeMeta::LongTermKeyRequest) |
+            Events::LeMeta(LeMeta::RemoteConnectionParameterRequest) |
+            Events::LeMeta(LeMeta::DataLengthChange) |
+            Events::LeMeta(LeMeta::PhyUpdateComplete) |
+
+            // Not sure if synced advertising will have their own
+            // async tasks in the future, but it doesn't matter
+            // for now as bo-tie doesn't support this yet :)
+            Events::LeMeta(LeMeta::PeriodicAdvertisingSyncEstablished) |
+            Events::LeMeta(LeMeta::PeriodicAdvertisingReport) |
+            Events::LeMeta(LeMeta::PeriodicAdvertisingSyncLost) |
+            Events::LeMeta(LeMeta::AdvertisingSetTerminated) |
+
+            Events::LeMeta(LeMeta::ChannelSelectionAlgorithm) |
+            Events::AuthenticatedPayloadTimeoutExpired => true,
+            _ => false
+        }
+    }
+
     /// Shortcut for an empty list of Events
     ///
     /// This can be helpful when trying to disable all events with the event mask functions.
     pub fn empty_list() -> [Events; 0] {
         []
+    }
+}
+
+impl EventsData {
+    /// Get the Connection Handle
+    ///
+    /// This will return a handle if the event contains a connection handle or a sync handle.
+    pub fn get_handle(&self) -> Option<ConnectionHandle> {
+        match self {
+            EventsData::DisconnectionComplete(d) => Some(d.connection_handle),
+            EventsData::AuthenticationComplete(d) => Some(d.connection_handle),
+            EventsData::EncryptionChangeV1(d) => Some(d.connection_handle),
+            EventsData::EncryptionChangeV2(d) => Some(d.connection_handle),
+            EventsData::ChangeConnectionLinkKeyComplete(d) => Some(d.connection_handle),
+            EventsData::LinkKeyTypeChanged(d) => Some(d.connection_handle),
+            EventsData::ReadRemoteSupportedFeaturesComplete(d) => Some(d.connection_handle),
+            EventsData::ReadRemoteVersionInformationComplete(d) => Some(d.connection_handle),
+            EventsData::QosSetupComplete(d) => Some(d.connection_handle),
+            EventsData::FlushOccurred(d) => Some(d.handle),
+            EventsData::ModeChange(d) => Some(d.connection_handle),
+            EventsData::MaxSlotsChange(d) => Some(d.connection_handle),
+            EventsData::ReadClockOffsetComplete(d) => Some(d.connection_handle),
+            EventsData::ConnectionPacketTypeChanged(d) => Some(d.connection_handle),
+            EventsData::QosViolation(d) => Some(d.connection_handle),
+            EventsData::FlowSpecificationComplete(d) => Some(d.connection_handle),
+            EventsData::ReadRemoteExtendedFeaturesComplete(d) => Some(d.connection_handle),
+            EventsData::SynchronousConnectionChanged(d) => Some(d.connection_handle),
+            EventsData::SniffSubrating(d) => Some(d.connection_handle),
+            EventsData::EncryptionKeyRefreshComplete(d) => Some(d.connection_handle),
+            EventsData::LinkSupervisionTimeoutChanged(d) => Some(d.connection_handle),
+            EventsData::EnhancedFlushComplete(d) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::ConnectionUpdateComplete(d)) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::ReadRemoteFeaturesComplete(d)) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::LongTermKeyRequest(d)) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::RemoteConnectionParameterRequest(d)) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::DataLengthChange(d)) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::PhyUpdateComplete(d)) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::PeriodicAdvertisingSyncEstablished(d)) => Some(d.sync_handle),
+            EventsData::LeMeta(LeMetaData::PeriodicAdvertisingReport(d)) => Some(d.sync_handle),
+            EventsData::LeMeta(LeMetaData::PeriodicAdvertisingSyncLost(d)) => Some(d.sync_handle),
+            EventsData::LeMeta(LeMetaData::AdvertisingSetTerminated(d)) => Some(d.connection_handle),
+            EventsData::LeMeta(LeMetaData::ChannelSelectionAlgorithm(d)) => Some(d.connection_handle),
+            EventsData::AuthenticatedPayloadTimeoutExpired(d) => Some(d.connection_handle),
+            _ => None,
+        }
     }
 }
 
