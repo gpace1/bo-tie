@@ -246,11 +246,10 @@ impl CommandEventMatcher {
 #[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone)]
 pub enum TaskId {
     Host(HostChannel),
-    Connection(ConnectionHandle),
+    Connection(ConnectionChannel),
 }
 
-/// The interface async task has two channels for sending to the Host async task, whereas the Host
-/// only has one channel for sending commands to the interface async task. The `CommandEvent`
+/// The interface async task has two channels for sending to the host async task. The `CommandEvent`
 /// channel is for sending the `CommandComplete` and `CommandStatus` events to the host. The
 /// `GeneralEvent` channel is for sending all other events except for those that pertain to flow
 /// control to the Controller.
@@ -258,6 +257,13 @@ pub enum TaskId {
 pub enum HostChannel {
     Command,
     General,
+}
+
+/// The interface async task has two channels for sending to a specific connection async task.
+#[derive(Eq, PartialEq, PartialOrd, Ord, Copy, Clone)]
+pub enum ConnectionChannel {
+    Data(ConnectionHandle),
+    Event(ConnectionHandle),
 }
 
 /// The "kind" of connection
@@ -665,8 +671,11 @@ pub trait ConnectionChannelEnds: Sized {
     /// The type used to send messages to the interface async task
     type Sender: Sender<Message = FromConnectionIntraMessage<Self::ToBuffer>>;
 
-    /// The type used for receiving messages from the interface async task
-    type Receiver: Receiver<Message = ToConnectionIntraMessage<Self::FromBuffer>>;
+    /// The type used for receiving HCI data messages from the interface async task
+    type DataReceiver: Receiver<Message = ToConnectionDataIntraMessage<Self::FromBuffer>>;
+
+    /// The type used for receiving HCI events (for this connection) from the interface async task
+    type EventReceiver: Receiver<Message = ToConnectionEventIntraMessage>;
 
     /// Get the sender of messages to the interface async task
     fn get_sender(&self) -> Self::Sender;
@@ -677,11 +686,17 @@ pub trait ConnectionChannelEnds: Sized {
         F: Into<Option<usize>>,
         B: Into<Option<usize>>;
 
-    /// Get the receiver of messages from the interface async task
-    fn get_receiver(&self) -> &Self::Receiver;
+    /// Get the receiver of data messages from the interface async task
+    fn get_data_receiver(&self) -> &Self::DataReceiver;
 
-    /// Get a mutable reference to the receiver of messages from the interface async task
-    fn get_mut_receiver(&mut self) -> &mut Self::Receiver;
+    /// Get a mutable reference to the receiver of HCI data messages from the interface async task
+    fn get_mut_data_receiver(&mut self) -> &mut Self::DataReceiver;
+
+    /// Get the receiver of event messages from the interface async task
+    fn get_event_receiver(&self) -> &Self::EventReceiver;
+
+    /// Get a mutable reference to the receiver of HCI data messages from the interface async task
+    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver;
 }
 
 /// Ends of the channels used by the Host
@@ -775,12 +790,15 @@ pub trait ChannelReserve {
             Message = ToInterfaceIntraMessage<<Self::FromHostChannel as BufferReserve>::Buffer>,
         >;
 
-    /// The channel type for sending messages to another connection async task
-    type ToConnectionChannel: BufferReserve
+    /// The channel type for sending data messages to another connection async task
+    type ToConnectionDataChannel: BufferReserve
         + Channel<
             SenderError = Self::SenderError,
-            Message = ToConnectionIntraMessage<<Self::ToConnectionChannel as BufferReserve>::Buffer>,
+            Message = ToConnectionDataIntraMessage<<Self::ToConnectionDataChannel as BufferReserve>::Buffer>,
         >;
+
+    /// The channel type for sending event messages to another connection async task
+    type ToConnectionEventChannel: Channel<SenderError = Self::SenderError, Message = ToConnectionEventIntraMessage>;
 
     /// The channel type for messages sent from another connection async task
     type FromConnectionChannel: BufferReserve
@@ -812,7 +830,14 @@ pub trait ChannelReserve {
     fn get_channel(
         &self,
         id: TaskId,
-    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>>;
+    ) -> Option<
+        FromInterface<
+            Self::ToHostCmdChannel,
+            Self::ToHostGenChannel,
+            Self::ToConnectionDataChannel,
+            Self::ToConnectionEventChannel,
+        >,
+    >;
 
     /// Get the controller flow control identification for a connection
     ///
@@ -844,30 +869,16 @@ pub trait ChannelReserveExt: ChannelReserve {
         FromInterface<
             <Self::ToHostCmdChannel as Channel>::Sender,
             <Self::ToHostGenChannel as Channel>::Sender,
-            <Self::ToConnectionChannel as Channel>::Sender,
+            <Self::ToConnectionDataChannel as Channel>::Sender,
+            <Self::ToConnectionEventChannel as Channel>::Sender,
         >,
     > {
         self.get_channel(id).map(|channel_type| match channel_type {
             FromInterface::HostCommand(hc) => FromInterface::HostCommand(hc.get_sender()),
             FromInterface::HostGeneral(hg) => FromInterface::HostGeneral(hg.get_sender()),
-            FromInterface::Connection(c) => FromInterface::Connection(c.get_sender()),
+            FromInterface::ConnectionData(c) => FromInterface::ConnectionData(c.get_sender()),
+            FromInterface::ConnectionEvent(c) => FromInterface::ConnectionEvent(c.get_sender()),
         })
-    }
-
-    /// Get a sender to a connection async task
-    ///
-    /// # Panic
-    /// A panic will occur if trying to get the method `get_channel` returns a channel to a task
-    /// other than a connection async task.
-    fn get_connection_sender(
-        &self,
-        handle: ConnectionHandle,
-    ) -> Option<<Self::ToConnectionChannel as Channel>::Sender> {
-        if let FromInterface::Connection(sender) = self.get_sender(TaskId::Connection(handle))? {
-            Some(sender)
-        } else {
-            panic!("incorrect sender for a connection async task")
-        }
     }
 
     /// Receive the next message
@@ -1804,11 +1815,11 @@ impl<T: Deref<Target = [u8]>> GetDataPayloadSize for FromConnectionIntraMessage<
     }
 }
 
-/// A messages to a connection async task
+/// A data messages to a connection async task
 ///
 /// This is a message sent to a connection async task from the interface async task.
 #[derive(Debug)]
-pub enum ToConnectionIntraMessage<T> {
+pub enum ToConnectionDataIntraMessage<T> {
     /// HCI asynchronous Connection-Oriented Data Packet
     Acl(T),
     /// HCI synchronous Connection-Oriented Data Packet
@@ -1816,11 +1827,14 @@ pub enum ToConnectionIntraMessage<T> {
     /// HCI isochronous Data Packet
     Iso(T),
     /// A disconnection indication
-    ///
-    /// # Note
-    /// This is not sent if the disconnection event is routed to the connection in a `RoutedEvent`.
     Disconnect(bo_tie_util::errors::Error),
-    /// An event routed to the connection async task
+}
+
+/// An event message to a connection async task
+///
+/// This is a message sent to a connection async task from the interface async task
+#[derive(Debug)]
+pub enum ToConnectionEventIntraMessage {
     RoutedEvent(events::EventsData),
 }
 
@@ -1831,10 +1845,11 @@ pub enum ToConnectionIntraMessage<T> {
 ///
 /// [`get_channel`]: ChannelReserve::get_channel
 /// [`get_sender`]: ChannelReserveExt::get_sender
-pub enum FromInterface<Hc, Hg, C> {
+pub enum FromInterface<Hc, Hg, Cd, Ce> {
     HostCommand(Hc),
     HostGeneral(Hg),
-    Connection(C),
+    ConnectionData(Cd),
+    ConnectionEvent(Ce),
 }
 
 /// An enumeration of different channels to the interface async task

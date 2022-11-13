@@ -18,10 +18,10 @@ use crate::local_channel::local_stack::channel::LocalChannel;
 use crate::local_channel::local_stack::receiver::LocalChannelReceiver;
 use crate::local_channel::local_stack::sender::LocalChannelSender;
 use crate::{
-    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds as ChannelEndsTrait, ConnectionHandle, FlowControlId,
-    FlowCtrlReceiver, FromConnectionIntraMessage, FromInterface, HostChannel, HostChannelEnds as HostChannelEndsTrait,
-    InterfaceReceivers, TaskId, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
-    ToInterfaceIntraMessage,
+    BufferReserve, Channel, ChannelReserve, ConnectionChannel, ConnectionChannelEnds as ChannelEndsTrait,
+    ConnectionHandle, FlowControlId, FlowCtrlReceiver, FromConnectionIntraMessage, FromInterface, HostChannel,
+    HostChannelEnds as HostChannelEndsTrait, InterfaceReceivers, TaskId, ToConnectionDataIntraMessage,
+    ToConnectionEventIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::stack::{
     BufferReservation, DeLinearBuffer, LinearBuffer, Reservation, StackHotel, UnsafeBufferReservation,
@@ -54,22 +54,22 @@ type ToInterfaceMsg<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
 type UnsafeToInterfaceMsg<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
     ToInterfaceIntraMessage<UnsafeBufferReservation<DeLinearBuffer<BUFFER_SIZE, u8>, CHANNEL_SIZE>>;
 
-type ToConnMsg<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
-    ToConnectionIntraMessage<
+type ToConnDataMsg<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
+    ToConnectionDataIntraMessage<
         ReservedBuffer<
             'a,
             TASK_COUNT,
             CHANNEL_SIZE,
             DeLinearBuffer<BUFFER_SIZE, u8>,
-            UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+            UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
         >,
     >;
 
 // This requires the usage of keyword `Self` so this cannot be a type
 // alias and needs to be declared as a structure
 #[doc(hidden)]
-pub struct UnsafeToConnMsg<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
-    ToConnectionIntraMessage<UnsafeReservedBuffer<TASK_COUNT, CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, Self>>,
+pub struct UnsafeToConnDataMsg<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>(
+    ToConnectionDataIntraMessage<UnsafeReservedBuffer<TASK_COUNT, CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, Self>>,
 );
 
 type FromConnMsg<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
@@ -89,12 +89,14 @@ type FromHostChannel<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> = Loca
     UnsafeToInterfaceMsg<CHANNEL_SIZE, BUFFER_SIZE>,
 >;
 
-type ToConnectionChannel<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
+type ToConnectionDataChannel<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
     LocalBufferedChannel<
         CHANNEL_SIZE,
         DeLinearBuffer<BUFFER_SIZE, u8>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >;
+
+type ToConnectionEventChannel<const CHANNEL_SIZE: usize> = LocalChannel<CHANNEL_SIZE, ToConnectionEventIntraMessage>;
 
 type FromConnectionChannel<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> =
     LocalBufferedChannel<CHANNEL_SIZE, DeLinearBuffer<BUFFER_SIZE, u8>, UnsafeFromConnMsg<CHANNEL_SIZE, BUFFER_SIZE>>;
@@ -109,7 +111,8 @@ type FlowControlReceiver<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize
 /// This contains the channel used for sending data to a connection async task along with the flow
 /// control information for messages sent from it.
 struct ConnectionData<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    channel: Reservation<'z, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    data_channel: Reservation<'z, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    event_channel: Reservation<'z, ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>,
     handle: ConnectionHandle,
     flow_ctrl_id: FlowControlId,
 }
@@ -120,10 +123,15 @@ struct ConnectionData<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, co
 /// async task.
 pub struct ConnectionEnds<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
     sender_channel: &'z FromConnectionChannel<CHANNEL_SIZE, BUFFER_SIZE>,
-    receiver: LocalChannelReceiver<
+    data_receiver: LocalChannelReceiver<
         CHANNEL_SIZE,
-        Reservation<'z, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'z, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+    >,
+    event_receiver: LocalChannelReceiver<
+        CHANNEL_SIZE,
+        Reservation<'z, ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>,
+        ToConnectionEventIntraMessage,
     >,
 }
 
@@ -137,7 +145,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         TASK_COUNT,
         CHANNEL_SIZE,
         DeLinearBuffer<BUFFER_SIZE, u8>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >;
 
     type TakeBuffer = TakeBuffer<&'z FromConnectionChannel<CHANNEL_SIZE, BUFFER_SIZE>>;
@@ -148,10 +156,16 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         UnsafeFromConnMsg<CHANNEL_SIZE, BUFFER_SIZE>,
     >;
 
-    type Receiver = LocalChannelReceiver<
+    type DataReceiver = LocalChannelReceiver<
         CHANNEL_SIZE,
-        Reservation<'z, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'z, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+    >;
+
+    type EventReceiver = LocalChannelReceiver<
+        CHANNEL_SIZE,
+        Reservation<'z, ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>,
+        ToConnectionEventIntraMessage,
     >;
 
     fn get_sender(&self) -> Self::Sender {
@@ -166,12 +180,20 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         self.sender_channel.take(front_capacity, back_capacity)
     }
 
-    fn get_receiver(&self) -> &Self::Receiver {
-        &self.receiver
+    fn get_data_receiver(&self) -> &Self::DataReceiver {
+        &self.data_receiver
     }
 
-    fn get_mut_receiver(&mut self) -> &mut Self::Receiver {
-        &mut self.receiver
+    fn get_mut_data_receiver(&mut self) -> &mut Self::DataReceiver {
+        &mut self.data_receiver
+    }
+
+    fn get_event_receiver(&self) -> &Self::EventReceiver {
+        &self.event_receiver
+    }
+
+    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver {
+        &mut self.event_receiver
     }
 }
 
@@ -182,7 +204,9 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 /// used as the intermediary
 pub struct UnsafeConnectionEnds<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
     sender_channel: *const FromConnectionChannel<CHANNEL_SIZE, BUFFER_SIZE>,
-    unsafe_receive_channel: UnsafeReservation<ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    unsafe_data_receive_channel:
+        UnsafeReservation<ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    unsafe_event_receive_channel: UnsafeReservation<ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>,
 }
 
 impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
@@ -191,36 +215,47 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
     unsafe fn from(ends: ConnectionEnds<'_, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>) -> Self {
         let sender_channel = ends.sender_channel as *const _;
 
-        let reservation: Reservation<'_, _, TASK_COUNT> = ends.receiver.forget_and_unwrap();
+        let data_reservation: Reservation<'_, _, TASK_COUNT> = ends.data_receiver.forget_and_unwrap();
 
-        let unsafe_receive_channel = Reservation::to_unsafe(reservation);
+        let event_reservation: Reservation<'_, _, TASK_COUNT> = ends.event_receiver.forget_and_unwrap();
+
+        let unsafe_data_receive_channel = Reservation::to_unsafe(data_reservation);
+
+        let unsafe_event_receive_channel = Reservation::to_unsafe(event_reservation);
 
         UnsafeConnectionEnds {
             sender_channel,
-            unsafe_receive_channel,
+            unsafe_data_receive_channel,
+            unsafe_event_receive_channel,
         }
     }
 
     unsafe fn into<'a>(self) -> ConnectionEnds<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE> {
-        let receiver_reservation = UnsafeReservation::rebind(self.unsafe_receive_channel);
+        let data_receiver_reservation = UnsafeReservation::rebind(self.unsafe_data_receive_channel);
+
+        let event_receiver_reservation = UnsafeReservation::rebind(self.unsafe_event_receive_channel);
 
         // new is deliberately not called to create the receiver.
         // This method is intended to act like a 'rebuilding' of a
         // StackChannelEnds, not the creation a 'new' StackChannelEnds.
-        let receiver = LocalChannelReceiver::new(receiver_reservation);
+        let data_receiver = LocalChannelReceiver::new(data_receiver_reservation);
+
+        let event_receiver = LocalChannelReceiver::new(event_receiver_reservation);
 
         let sender_channel = self.sender_channel.as_ref().unwrap();
 
         ConnectionEnds {
             sender_channel,
-            receiver,
+            data_receiver,
+            event_receiver,
         }
     }
 }
 
 /// Channels for messages sent from the interface async task
 struct Outgoing<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> {
-    connections: StackHotel<ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    data_connection_channels: StackHotel<ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+    event_connection_channels: StackHotel<ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>,
     host_cmd: ToHostCmdChannel<CHANNEL_SIZE>,
     host_gen: ToHostGenChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
 }
@@ -255,7 +290,8 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
     /// maximum size of the tail applied to the HCI packets by the interface driver.
     pub fn new() -> Self {
         let outgoing = Outgoing {
-            connections: StackHotel::new(),
+            data_connection_channels: StackHotel::new(),
+            event_connection_channels: StackHotel::new(),
             host_cmd: ToHostCmdChannel::new(),
             host_gen: ToHostGenChannel::new(),
         };
@@ -350,7 +386,10 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 
     type FromHostChannel = &'a FromHostChannel<CHANNEL_SIZE, BUFFER_SIZE>;
 
-    type ToConnectionChannel = Reservation<'a, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>;
+    type ToConnectionDataChannel =
+        Reservation<'a, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>;
+
+    type ToConnectionEventChannel = Reservation<'a, ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>;
 
     type FromConnectionChannel = &'a FromConnectionChannel<CHANNEL_SIZE, BUFFER_SIZE>;
 
@@ -391,17 +430,27 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
             .expect_err("handle already associated to another async task");
 
-        let new_channel = self
+        let new_data_channel = self
             .data
             .outgoing
-            .connections
-            .take(ToConnectionChannel::new())
+            .data_connection_channels
+            .take(ToConnectionDataChannel::new())
             .ok_or(LocalStackChannelsError::TaskCountReached)?;
 
-        let new_channel_clone = new_channel.clone();
+        let new_event_channel = self
+            .data
+            .outgoing
+            .event_connection_channels
+            .take(ToConnectionEventChannel::new())
+            .ok_or(LocalStackChannelsError::TaskCountReached)?;
+
+        let new_data_channel_clone = new_data_channel.clone();
+
+        let new_event_channel_clone = new_event_channel.clone();
 
         let new_task_data = ConnectionData {
-            channel: new_channel,
+            data_channel: new_data_channel,
+            event_channel: new_event_channel,
             handle: connection_handle,
             flow_ctrl_id,
         };
@@ -411,29 +460,49 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             .try_insert(new_task_data, insertion_index)
             .map_err(|_| LocalStackChannelsError::TaskCountReached)?;
 
-        let receiver = new_channel_clone.take_receiver().unwrap();
+        let data_receiver = new_data_channel_clone.take_receiver().unwrap();
+
+        let event_receiver = new_event_channel_clone.take_receiver().unwrap();
 
         Ok(ConnectionEnds {
             sender_channel,
-            receiver,
+            data_receiver,
+            event_receiver,
         })
     }
 
     fn get_channel(
         &self,
         id: TaskId,
-    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
+    ) -> Option<
+        FromInterface<
+            Self::ToHostCmdChannel,
+            Self::ToHostGenChannel,
+            Self::ToConnectionDataChannel,
+            Self::ToConnectionEventChannel,
+        >,
+    > {
         match id {
             TaskId::Host(HostChannel::Command) => Some(FromInterface::HostCommand(&self.data.outgoing.host_cmd)),
             TaskId::Host(HostChannel::General) => Some(FromInterface::HostGeneral(&self.data.outgoing.host_gen)),
-            TaskId::Connection(connection_handle) => {
+            TaskId::Connection(channel @ ConnectionChannel::Data(connection_handle))
+            | TaskId::Connection(channel @ ConnectionChannel::Event(connection_handle)) => {
                 let ref_task_data = self.connection_data.borrow();
 
                 ref_task_data
                     .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
                     .ok()
                     .and_then(|index| ref_task_data.get(index))
-                    .map(|ConnectionData { channel, .. }| FromInterface::Connection(channel.clone()))
+                    .map(
+                        |ConnectionData {
+                             data_channel,
+                             event_channel,
+                             ..
+                         }| match channel {
+                            ConnectionChannel::Data(_) => FromInterface::ConnectionData(data_channel.clone()),
+                            ConnectionChannel::Event(_) => FromInterface::ConnectionEvent(event_channel.clone()),
+                        },
+                    )
             }
         }
     }

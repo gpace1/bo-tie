@@ -14,12 +14,12 @@
 
 use crate::{
     BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, FromConnectionIntraMessage, HostChannelEnds,
-    Receiver, Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
-    ToInterfaceIntraMessage,
+    Receiver, Sender, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage,
+    ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::fmt::{Debug, Display};
-use std::future::Future;
+use core::future::Future;
 
 pub trait SendSafeBuffer<'a>:
     'static
@@ -152,7 +152,7 @@ pub trait SendSafeConnectionChannelEnds:
         FromBuffer = Self::SendSafeFromBuffer,
         TakeBuffer = Self::SendSafeTakeBuffer,
         Sender = Self::SendSafeSender,
-        Receiver = Self::SendSafeReceiver,
+        DataReceiver = Self::SendSafeReceiver,
     >
 {
     type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
@@ -164,7 +164,7 @@ pub trait SendSafeConnectionChannelEnds:
     >;
     type SendSafeReceiver: for<'z> SendSafeReceiver<
         'z,
-        SendSafeMessage = ToConnectionIntraMessage<Self::SendSafeFromBuffer>,
+        SendSafeMessage = ToConnectionDataIntraMessage<Self::SendSafeFromBuffer>,
     >;
 }
 
@@ -175,13 +175,13 @@ where
     T::FromBuffer: for<'a> SendSafeBuffer<'a>,
     T::TakeBuffer: Send,
     T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = FromConnectionIntraMessage<T::ToBuffer>>,
-    T::Receiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToConnectionIntraMessage<T::FromBuffer>>,
+    T::DataReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToConnectionDataIntraMessage<T::FromBuffer>>,
 {
     type SendSafeToBuffer = T::ToBuffer;
     type SendSafeFromBuffer = T::FromBuffer;
     type SendSafeTakeBuffer = T::TakeBuffer;
     type SendSafeSender = T::Sender;
-    type SendSafeReceiver = T::Receiver;
+    type SendSafeReceiver = T::DataReceiver;
 }
 
 /// The send safe equivalent of [`ChannelReserve`]
@@ -207,7 +207,8 @@ pub trait SendSafeChannelReserve:
         ToHostCmdChannel = Self::SendSafeToHostCmdChannel,
         ToHostGenChannel = Self::SendSafeToHostGenChannel,
         FromHostChannel = Self::SendSafeFromHostChannel,
-        ToConnectionChannel = Self::SendSafeToConnectionChannel,
+        ToConnectionDataChannel = Self::SendSafeToConnectionDataChannel,
+        ToConnectionEventChannel = Self::SendSafeToConnectionEventChannel,
         FromConnectionChannel = Self::SendSafeFromConnectionChannel,
         ConnectionChannelEnds = Self::SendSafeConnectionChannelEnds,
     >
@@ -229,17 +230,22 @@ pub trait SendSafeChannelReserve:
                 <Self::SendSafeFromHostChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >;
-    // I don't understand why Sync is required here. It may be
-    // due to a GAT containing a reference living across an await
-    // but I cannot find a location where this is occurring
-    type SendSafeToConnectionChannel: Sync
+    // This probably needs to be send safe as it gets "split"
+    // between the interface and host async tasks at runtime.
+    type SendSafeToConnectionDataChannel: Sync
         + SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = Self::SenderError,
-            SendSafeMessage = ToConnectionIntraMessage<
-                <Self::SendSafeToConnectionChannel as SendSafeBufferReserve>::SendSafeBuffer,
+            SendSafeMessage = ToConnectionDataIntraMessage<
+                <Self::SendSafeToConnectionDataChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >;
+
+    type SendSafeToConnectionEventChannel: SendSafeChannel<
+        SendSafeSenderError = Self::SenderError,
+        SendSafeMessage = ToConnectionEventIntraMessage,
+    >;
+
     type SendSafeFromConnectionChannel: SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = Self::SenderError,
@@ -266,14 +272,17 @@ where
             SendSafeSenderError = T::SenderError,
             SendSafeMessage = ToInterfaceIntraMessage<<T::FromHostChannel as SendSafeBufferReserve>::SendSafeBuffer>,
         >,
-    T::ToConnectionChannel: Sync
+    T::ToConnectionDataChannel: Sync
         + SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = T::SenderError,
-            SendSafeMessage = ToConnectionIntraMessage<
-                <T::ToConnectionChannel as SendSafeBufferReserve>::SendSafeBuffer,
+            SendSafeMessage = ToConnectionDataIntraMessage<
+                <T::ToConnectionDataChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >,
+    T::ToConnectionEventChannel:
+        SendSafeChannel<SendSafeSenderError = T::SenderError, SendSafeMessage = ToConnectionEventIntraMessage>,
+
     T::FromConnectionChannel: SendSafeBufferReserve
         + SendSafeChannel<
             SendSafeSenderError = T::SenderError,
@@ -288,7 +297,8 @@ where
     type SendSafeToHostCmdChannel = T::ToHostCmdChannel;
     type SendSafeToHostGenChannel = T::ToHostGenChannel;
     type SendSafeFromHostChannel = T::FromHostChannel;
-    type SendSafeToConnectionChannel = T::ToConnectionChannel;
+    type SendSafeToConnectionDataChannel = T::ToConnectionDataChannel;
+    type SendSafeToConnectionEventChannel = T::ToConnectionEventChannel;
     type SendSafeFromConnectionChannel = T::FromConnectionChannel;
     type SendSafeConnectionChannelEnds = T::ConnectionChannelEnds;
 }

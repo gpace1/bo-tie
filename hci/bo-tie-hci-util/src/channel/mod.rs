@@ -15,13 +15,15 @@ macro_rules! make_error {
                     $crate::ToHostGeneralIntraMessage<
                         super::ConnectionEnds<
                             $sender<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
-                            $receiver<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionDataIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionEventIntraMessage>,
                         >,
                     >,
                 >,
             ),
             FromHost($($error_name)::*<$crate::ToInterfaceIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
-            ToConnection($($error_name)::*<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
+            ToConnectionData($($error_name)::*<$crate::ToConnectionDataIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
+            ToConnectionEvent($($error_name)::*<$crate::ToConnectionEventIntraMessage>),
             FromConnection($($error_name)::*<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>),
         }
 
@@ -31,7 +33,8 @@ macro_rules! make_error {
                     Error::ToHostCmd(e) => std::fmt::Debug::fmt(e, f),
                     Error::ToHostGen(e) => std::fmt::Debug::fmt(e, f),
                     Error::FromHost(e) => std::fmt::Debug::fmt(e, f),
-                    Error::ToConnection(e) => std::fmt::Debug::fmt(e, f),
+                    Error::ToConnectionData(e) => std::fmt::Debug::fmt(e, f),
+                    Error::ToConnectionEvent(e) => std::fmt::Debug::fmt(e, f),
                     Error::FromConnection(e) => std::fmt::Debug::fmt(e, f),
                 }
             }
@@ -43,7 +46,8 @@ macro_rules! make_error {
                     Error::ToHostCmd(e) => std::fmt::Display::fmt(e, f),
                     Error::ToHostGen(e) => std::fmt::Display::fmt(e, f),
                     Error::FromHost(e) => std::fmt::Display::fmt(e, f),
-                    Error::ToConnection(e) => std::fmt::Display::fmt(e, f),
+                    Error::ToConnectionData(e) => std::fmt::Display::fmt(e, f),
+                    Error::ToConnectionEvent(e) => std::fmt::Display::fmt(e, f),
                     Error::FromConnection(e) => std::fmt::Display::fmt(e, f),
                 }
             }
@@ -63,7 +67,8 @@ macro_rules! make_error {
                     $crate::ToHostGeneralIntraMessage<
                         super::ConnectionEnds<
                             $sender<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
-                            $receiver<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionDataIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionEventIntraMessage>,
                         >,
                     >,
                 >,
@@ -74,7 +79,8 @@ macro_rules! make_error {
                     $crate::ToHostGeneralIntraMessage<
                         super::ConnectionEnds<
                             $sender<$crate::FromConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
-                            $receiver<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionDataIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>,
+                            $receiver<$crate::ToConnectionEventIntraMessage>,
                         >,
                     >,
                 >,
@@ -89,9 +95,15 @@ macro_rules! make_error {
             }
         }
 
-        impl From<$($error_name)::*<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>> for Error {
-            fn from(t: $($error_name)::*<$crate::ToConnectionIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>) -> Error {
-                Error::ToConnection(t)
+        impl From<$($error_name)::*<$crate::ToConnectionDataIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>> for Error {
+            fn from(t: $($error_name)::*<$crate::ToConnectionDataIntraMessage<bo_tie_util::buffer::de_vec::DeVec<u8>>>) -> Error {
+                Error::ToConnectionData(t)
+            }
+        }
+
+        impl From<$($error_name)::*<$crate::ToConnectionEventIntraMessage>> for Error {
+            fn from(t: $($error_name)::*<$crate::ToConnectionEventIntraMessage>) -> Error {
+                Error::ToConnectionEvent(t)
             }
         }
 
@@ -126,9 +138,10 @@ pub use self::async_std::async_std_unbounded;
 pub use self::futures_rs::futures_unbounded;
 
 use crate::{
-    BufferReserve, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannelEnds,
-    FlowCtrlReceiver, FromConnectionIntraMessage, HostChannelEnds as HostChannelEndsTrait, Receiver, Sender,
-    ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
+    BufferReserve, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannel,
+    ConnectionChannelEnds, FlowCtrlReceiver, FromConnectionIntraMessage, HostChannelEnds as HostChannelEndsTrait,
+    Receiver, Sender, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage,
+    ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use crate::{ConnectionHandle, FlowControlId, FromInterface, HostChannel, InterfaceReceivers, TaskId};
 use bo_tie_util::buffer::de_vec::{DeVec, TakeFuture};
@@ -140,21 +153,24 @@ use core::fmt::{Debug, Display, Formatter};
 /// This is the ends of the channels used by a connection async task for sending messages to and
 /// from an interface async task.
 #[derive(Debug)]
-pub struct ConnectionEnds<S, R> {
+pub struct ConnectionEnds<S, R1, R2> {
     from_connection: S,
-    to_connection: R,
+    data_to_connection: R1,
+    event_to_connection: R2,
 }
 
-impl<'a, S, R> ConnectionChannelEnds for ConnectionEnds<S, R>
+impl<'a, S, R1, R2> ConnectionChannelEnds for ConnectionEnds<S, R1, R2>
 where
     S: Sender<Message = FromConnectionIntraMessage<DeVec<u8>>> + Clone,
-    R: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>>,
+    R1: Receiver<Message = ToConnectionDataIntraMessage<DeVec<u8>>>,
+    R2: Receiver<Message = ToConnectionEventIntraMessage>,
 {
     type ToBuffer = DeVec<u8>;
     type FromBuffer = DeVec<u8>;
     type TakeBuffer = TakeFuture<DeVec<u8>>;
     type Sender = S;
-    type Receiver = R;
+    type DataReceiver = R1;
+    type EventReceiver = R2;
 
     fn get_sender(&self) -> Self::Sender {
         self.from_connection.clone()
@@ -168,12 +184,20 @@ where
         TakeFuture::new(DeVec::with_front_capacity(front_capacity.into().unwrap_or_default()))
     }
 
-    fn get_receiver(&self) -> &Self::Receiver {
-        &self.to_connection
+    fn get_data_receiver(&self) -> &Self::DataReceiver {
+        &self.data_to_connection
     }
 
-    fn get_mut_receiver(&mut self) -> &mut Self::Receiver {
-        &mut self.to_connection
+    fn get_mut_data_receiver(&mut self) -> &mut Self::DataReceiver {
+        &mut self.data_to_connection
+    }
+
+    fn get_event_receiver(&self) -> &Self::EventReceiver {
+        &self.event_to_connection
+    }
+
+    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver {
+        &mut self.event_to_connection
     }
 }
 
@@ -230,22 +254,23 @@ impl<S, R> BufferReserve for Channel<S, R> {
 ///
 /// These are the ends of the channels used by a host async task for sending messages to and from an
 /// interface async task.
-pub struct HostChannelEnds<S1, R1, R2, P1, P2> {
+pub struct HostChannelEnds<S1, R1, R2, P1, P2, P3> {
     front_capacity: usize,
     back_capacity: usize,
     cmd_sender: S1,
     cmd_rsp_recv: R1,
     gen_recv: R2,
-    _p: core::marker::PhantomData<(P1, P2)>,
+    _p: core::marker::PhantomData<(P1, P2, P3)>,
 }
 
-impl<S1, S2, R1, R2, R3> HostChannelEndsTrait for HostChannelEnds<S1, R1, R2, S2, R3>
+impl<S1, S2, R1, R2, R3, R4> HostChannelEndsTrait for HostChannelEnds<S1, R1, R2, S2, R3, R4>
 where
     S1: Sender<Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
     S2: Sender<Message = FromConnectionIntraMessage<DeVec<u8>>> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
-    R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S2, R3>>>,
-    R3: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>>,
+    R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S2, R3, R4>>>,
+    R3: Receiver<Message = ToConnectionDataIntraMessage<DeVec<u8>>>,
+    R4: Receiver<Message = ToConnectionEventIntraMessage>,
 {
     type ToBuffer = DeVec<u8>;
     type FromBuffer = DeVec<u8>;
@@ -253,7 +278,7 @@ where
     type Sender = S1;
     type CmdReceiver = R1;
     type GenReceiver = R2;
-    type ConnectionChannelEnds = ConnectionEnds<S2, R3>;
+    type ConnectionChannelEnds = ConnectionEnds<S2, R3, R4>;
 
     fn driver_buffer_capacities(&self) -> (usize, usize) {
         (self.front_capacity, self.back_capacity)
@@ -306,10 +331,11 @@ struct Incoming<S> {
 }
 
 /// Data for connections
-struct ConnectionData<S> {
+struct ConnectionData<Sd, Se> {
     handle: ConnectionHandle,
     flow_control_id: FlowControlId,
-    sender: S,
+    data_sender: Sd,
+    event_sender: Se,
 }
 
 /// The channel reserve
@@ -319,7 +345,7 @@ struct ConnectionData<S> {
 /// communication with those other tasks.
 ///
 /// A `ChannelReserve` is constructed by a [`ChannelReserveBuilder`].
-pub struct ChannelReserve<S1, S2, S3, S4, R1, R2, F, P1, P2, P3, P4>
+pub struct ChannelReserve<S1, S2, S3, S4, S5, R1, R2, F1, F2, P1, P2, P3, P4, P5>
 where
     R1: Receiver,
     R2: Receiver,
@@ -327,12 +353,14 @@ where
     outgoing_senders: Outgoing<S1, S2>,
     incoming_senders: Incoming<S3>,
     flow_ctrl_recv: FlowCtrlReceiver<R1, R2>,
-    channel_creator: F,
-    connections: alloc::vec::Vec<ConnectionData<S4>>,
-    _p: core::marker::PhantomData<(P1, P2, P3, P4)>,
+    data_channel_creator: F1,
+    event_channel_creator: F2,
+    connections: alloc::vec::Vec<ConnectionData<S4, S5>>,
+    _p: core::marker::PhantomData<(P1, P2, P3, P4, P5)>,
 }
 
-impl<S1, S2, S3, S4, S5, R1, R2, R3, R4, R5, F> ChannelReserve<S1, S2, S4, S5, R3, R4, F, S3, R1, R2, R5>
+impl<S1, S2, S3, S4, S5, S6, R1, R2, R3, R4, R5, R6, F1, F2>
+    ChannelReserve<S1, S2, S4, S5, S6, R3, R4, F1, F2, S3, R1, R2, R5, R6>
 where
     R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
     R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
@@ -344,9 +372,10 @@ where
     ///             async task
     /// `channel2`: channel for general messages from the interface async task to the host async
     ///             task
-    /// `channel3`: channel for commands from the host async task to the interface async task
-    /// `channel4`: channel for messages from the interface async task to a connection async task
-    /// `channel5`: channel for messages from a connection async task to the interface async task
+    /// * `channel3`: channel for commands from the host async task to the interface async task
+    /// * `channel4`: channel for messages from a connection async task to the interface async task
+    /// * `channel5`: channel for HCI data from the interface async task to a connection async task
+    /// * `channel6`: channel for events from the interface async task to a connection async task
     fn new<C1, C2, C3, C4, E>(
         front_capacity: usize,
         back_capacity: usize,
@@ -354,24 +383,28 @@ where
         channel2: C2,
         channel3: C3,
         channel4: C4,
-        channel5: F,
-    ) -> (Self, HostChannelEnds<S3, R1, R2, S4, R5>)
+        channel5: F1,
+        channel6: F2,
+    ) -> (Self, HostChannelEnds<S3, R1, R2, S4, R5, R6>)
     where
         C1: FnOnce() -> (S1, R1),
         C2: FnOnce() -> (S2, R2),
         C3: FnOnce() -> (S3, R3),
         C4: Fn() -> (S4, R4),
-        F: Fn() -> (S5, R5),
+        F1: Fn() -> (S5, R5),
+        F2: Fn() -> (S6, R6),
         S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
-        S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
+        S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5, R6>>> + Clone,
         S3: Sender<Error = E, Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
         S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
-        S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
+        S5: Sender<Error = E, Message = ToConnectionDataIntraMessage<DeVec<u8>>> + Clone,
+        S6: Sender<Error = E, Message = ToConnectionEventIntraMessage> + Clone,
         R1: Receiver<Message = ToHostCommandIntraMessage>,
-        R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
+        R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5, R6>>>,
         R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
         R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
-        R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
+        R5: Receiver<Message = ToConnectionDataIntraMessage<DeVec<u8>>> + Unpin,
+        R6: Receiver<Message = ToConnectionEventIntraMessage> + Unpin,
     {
         let (to_host_cmd_sender, host_cmd_event_recv) = channel1();
 
@@ -426,7 +459,8 @@ where
             outgoing_senders,
             incoming_senders,
             flow_ctrl_recv,
-            channel_creator: channel5,
+            data_channel_creator: channel5,
+            event_channel_creator: channel6,
             connections,
             _p,
         };
@@ -435,20 +469,23 @@ where
     }
 }
 
-impl<S1, S2, S3, S4, S5, R1, R2, R3, R4, R5, F, E> ChannelReserveTrait
-    for ChannelReserve<S1, S2, S4, S5, R3, R4, F, S3, R1, R2, R5>
+impl<S1, S2, S3, S4, S5, S6, R1, R2, R3, R4, R5, R6, F1, F2, E> ChannelReserveTrait
+    for ChannelReserve<S1, S2, S4, S5, S6, R3, R4, F1, F2, S3, R1, R2, R5, R6>
 where
     S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
-    S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
+    S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5, R6>>> + Clone,
     S3: Sender<Error = E, Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
     S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
-    S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
+    S5: Sender<Error = E, Message = ToConnectionDataIntraMessage<DeVec<u8>>> + Clone,
+    S6: Sender<Error = E, Message = ToConnectionEventIntraMessage> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
-    R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
+    R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5, R6>>>,
     R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
     R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
-    R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
-    F: Fn() -> (S5, R5),
+    R5: Receiver<Message = ToConnectionDataIntraMessage<DeVec<u8>>> + Unpin,
+    R6: Receiver<Message = ToConnectionEventIntraMessage> + Unpin,
+    F1: Fn() -> (S5, R5),
+    F2: Fn() -> (S6, R6),
     E: core::fmt::Debug,
 {
     type Error = ChannelReserveError;
@@ -461,11 +498,13 @@ where
 
     type FromHostChannel = Channel<S3, R3>;
 
-    type ToConnectionChannel = Channel<S5, R5>;
+    type ToConnectionDataChannel = Channel<S5, R5>;
+
+    type ToConnectionEventChannel = Channel<S6, R6>;
 
     type FromConnectionChannel = Channel<S4, R4>;
 
-    type ConnectionChannelEnds = ConnectionEnds<S4, R5>;
+    type ConnectionChannelEnds = ConnectionEnds<S4, R5, R6>;
 
     fn try_remove(&mut self, to_remove: ConnectionHandle) -> Result<(), Self::Error> {
         if let Ok(index) = self
@@ -501,17 +540,20 @@ where
             FlowControlId::LeIso => self.incoming_senders.le_iso.clone(),
         };
 
-        let (from_interface, to_connection) = (self.channel_creator)();
+        let (data_from_interface, data_to_connection) = (self.data_channel_creator)();
+        let (event_from_interface, event_to_connection) = (self.event_channel_creator)();
 
         let new_task_ends = ConnectionEnds {
             from_connection,
-            to_connection,
+            data_to_connection,
+            event_to_connection,
         };
 
         let connection_data = ConnectionData {
             handle: connection_handle,
             flow_control_id,
-            sender: from_interface,
+            data_sender: data_from_interface,
+            event_sender: event_from_interface,
         };
 
         self.connections.insert(index, connection_data);
@@ -522,7 +564,14 @@ where
     fn get_channel(
         &self,
         id: TaskId,
-    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
+    ) -> Option<
+        FromInterface<
+            Self::ToHostCmdChannel,
+            Self::ToHostGenChannel,
+            Self::ToConnectionDataChannel,
+            Self::ToConnectionEventChannel,
+        >,
+    > {
         match id {
             TaskId::Host(HostChannel::Command) => {
                 let channel = Channel::new(self.outgoing_senders.to_host_cmd_sender.clone());
@@ -534,12 +583,24 @@ where
 
                 Some(FromInterface::HostGeneral(channel))
             }
-            TaskId::Connection(connection_handle) => self
+            TaskId::Connection(channel_type @ ConnectionChannel::Data(connection_handle))
+            | TaskId::Connection(channel_type @ ConnectionChannel::Event(connection_handle)) => self
                 .connections
                 .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
                 .ok()
                 .and_then(|index| self.connections.get(index))
-                .map(|ConnectionData { sender, .. }| FromInterface::Connection(Channel::new(sender.clone()))),
+                .map(
+                    |ConnectionData {
+                         data_sender,
+                         event_sender,
+                         ..
+                     }| match channel_type {
+                        ConnectionChannel::Data(_) => FromInterface::ConnectionData(Channel::new(data_sender.clone())),
+                        ConnectionChannel::Event(_) => {
+                            FromInterface::ConnectionEvent(Channel::new(event_sender.clone()))
+                        }
+                    },
+                ),
         }
     }
 
@@ -650,7 +711,7 @@ where
 /// [`set_c5`]: ChannelReserveBuilder::set_c5
 /// [`Sender<Message = T>`]: crate::Sender
 /// [`Receiver<Message = T>`]: crate::Receiver
-pub struct ChannelReserveBuilder<C1, C2, C3, C4, C5> {
+pub struct ChannelReserveBuilder<C1, C2, C3, C4, C5, C6> {
     buffer_front_capacity: usize,
     buffer_back_capacity: usize,
     c1: Option<C1>,
@@ -658,9 +719,10 @@ pub struct ChannelReserveBuilder<C1, C2, C3, C4, C5> {
     c3: Option<C3>,
     c4: Option<C4>,
     c5: Option<C5>,
+    c6: Option<C6>,
 }
 
-impl<C1, C2, C3, C4, C5> ChannelReserveBuilder<C1, C2, C3, C4, C5> {
+impl<C1, C2, C3, C4, C5, C6> ChannelReserveBuilder<C1, C2, C3, C4, C5, C6> {
     /// Create a new `ChannelReserveBuilder`
     ///
     /// The inputs `header_size` and `tail_size` are the maximum sizes of the header and tail the
@@ -676,27 +738,32 @@ impl<C1, C2, C3, C4, C5> ChannelReserveBuilder<C1, C2, C3, C4, C5> {
             c3: None,
             c4: None,
             c5: None,
+            c6: None,
         }
     }
 }
 
-impl<C1, C2, C3, C4, C5, S1, S2, S3, S4, S5, R1, R2, R3, R4, R5, E> ChannelReserveBuilder<C1, C2, C3, C4, C5>
+impl<C1, C2, C3, C4, C5, C6, S1, S2, S3, S4, S5, S6, R1, R2, R3, R4, R5, R6, E>
+    ChannelReserveBuilder<C1, C2, C3, C4, C5, C6>
 where
     C1: FnOnce() -> (S1, R1),
     C2: FnOnce() -> (S2, R2),
     C3: FnOnce() -> (S3, R3),
     C4: Fn() -> (S4, R4),
     C5: Fn() -> (S5, R5),
+    C6: Fn() -> (S6, R6),
     S1: Sender<Error = E, Message = ToHostCommandIntraMessage> + Clone,
-    S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>> + Clone,
+    S2: Sender<Error = E, Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5, R6>>> + Clone,
     S3: Sender<Error = E, Message = ToInterfaceIntraMessage<DeVec<u8>>> + Clone,
     S4: Sender<Error = E, Message = FromConnectionIntraMessage<DeVec<u8>>> + Unpin + Clone,
-    S5: Sender<Error = E, Message = ToConnectionIntraMessage<DeVec<u8>>> + Clone,
+    S5: Sender<Error = E, Message = ToConnectionDataIntraMessage<DeVec<u8>>> + Clone,
+    S6: Sender<Error = E, Message = ToConnectionEventIntraMessage> + Clone,
     R1: Receiver<Message = ToHostCommandIntraMessage>,
-    R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5>>>,
+    R2: Receiver<Message = ToHostGeneralIntraMessage<ConnectionEnds<S4, R5, R6>>>,
     R3: Receiver<Message = ToInterfaceIntraMessage<DeVec<u8>>>,
     R4: Receiver<Message = FromConnectionIntraMessage<DeVec<u8>>>,
-    R5: Receiver<Message = ToConnectionIntraMessage<DeVec<u8>>> + Unpin,
+    R5: Receiver<Message = ToConnectionDataIntraMessage<DeVec<u8>>> + Unpin,
+    R6: Receiver<Message = ToConnectionEventIntraMessage> + Unpin,
 {
     pub fn set_c1(mut self, c1: C1) -> Self {
         self.c1 = Some(c1);
@@ -723,11 +790,16 @@ where
         self
     }
 
+    pub fn set_c6(mut self, c6: C6) -> Self {
+        self.c6 = Some(c6);
+        self
+    }
+
     pub fn build(
         self,
     ) -> (
-        ChannelReserve<S1, S2, S4, S5, R3, R4, C5, S3, R1, R2, R5>,
-        HostChannelEnds<S3, R1, R2, S4, R5>,
+        ChannelReserve<S1, S2, S4, S5, S6, R3, R4, C5, C6, S3, R1, R2, R5, R6>,
+        HostChannelEnds<S3, R1, R2, S4, R5, R6>,
     ) {
         // The type checker will enforce these unwraps
         let c1 = self.c1.unwrap();
@@ -735,6 +807,7 @@ where
         let c3 = self.c3.unwrap();
         let c4 = self.c4.unwrap();
         let c5 = self.c5.unwrap();
+        let c6 = self.c6.unwrap();
 
         ChannelReserve::new(
             self.buffer_front_capacity,
@@ -744,6 +817,7 @@ where
             c3,
             c4,
             c5,
+            c6,
         )
     }
 }

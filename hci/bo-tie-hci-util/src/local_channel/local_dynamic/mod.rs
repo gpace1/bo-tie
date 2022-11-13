@@ -12,9 +12,10 @@ use super::{
     LocalSendFutureError,
 };
 use crate::{
-    BufferReserve, Channel, ChannelReserve, ConnectionChannelEnds, ConnectionHandle, FlowControlId, FlowCtrlReceiver,
-    FromConnectionIntraMessage, FromInterface, HostChannel, HostChannelEnds, InterfaceReceivers, Receiver, Sender,
-    TaskId, ToConnectionIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
+    BufferReserve, Channel, ChannelReserve, ConnectionChannel, ConnectionChannelEnds, ConnectionHandle, FlowControlId,
+    FlowCtrlReceiver, FromConnectionIntraMessage, FromInterface, HostChannel, HostChannelEnds, InterfaceReceivers,
+    Receiver, Sender, TaskId, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage,
+    ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
@@ -364,10 +365,11 @@ impl<B, T> LocalBufferedChannelInner<B, T> {
 /// Channel ends for a connection
 pub struct ConnectionDynChannelEnds {
     send_channel: LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>,
-    receiver: LocalChannelReceiver<
-        LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>,
-        ToConnectionIntraMessage<DeVec<u8>>,
+    data_receiver: LocalChannelReceiver<
+        LocalBufferedChannel<DeVec<u8>, ToConnectionDataIntraMessage<DeVec<u8>>>,
+        ToConnectionDataIntraMessage<DeVec<u8>>,
     >,
+    event_receiver: LocalChannelReceiver<LocalChannel<ToConnectionEventIntraMessage>, ToConnectionEventIntraMessage>,
 }
 
 impl ConnectionChannelEnds for ConnectionDynChannelEnds {
@@ -383,10 +385,13 @@ impl ConnectionChannelEnds for ConnectionDynChannelEnds {
         FromConnectionIntraMessage<DeVec<u8>>,
     >;
 
-    type Receiver = LocalChannelReceiver<
-        LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>,
-        ToConnectionIntraMessage<DeVec<u8>>,
+    type DataReceiver = LocalChannelReceiver<
+        LocalBufferedChannel<DeVec<u8>, ToConnectionDataIntraMessage<DeVec<u8>>>,
+        ToConnectionDataIntraMessage<DeVec<u8>>,
     >;
+
+    type EventReceiver =
+        LocalChannelReceiver<LocalChannel<ToConnectionEventIntraMessage>, ToConnectionEventIntraMessage>;
 
     fn get_sender(&self) -> Self::Sender {
         self.send_channel.get_sender()
@@ -400,12 +405,20 @@ impl ConnectionChannelEnds for ConnectionDynChannelEnds {
         self.send_channel.take(front_capacity, None)
     }
 
-    fn get_receiver(&self) -> &Self::Receiver {
-        &self.receiver
+    fn get_data_receiver(&self) -> &Self::DataReceiver {
+        &self.data_receiver
     }
 
-    fn get_mut_receiver(&mut self) -> &mut Self::Receiver {
-        &mut self.receiver
+    fn get_mut_data_receiver(&mut self) -> &mut Self::DataReceiver {
+        &mut self.data_receiver
+    }
+
+    fn get_event_receiver(&self) -> &Self::EventReceiver {
+        &self.event_receiver
+    }
+
+    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver {
+        &mut self.event_receiver
     }
 }
 
@@ -413,7 +426,8 @@ impl ConnectionChannelEnds for ConnectionDynChannelEnds {
 ///
 /// This is the information required for communicating to a connection async task.
 struct ConnectionData {
-    sender_channel: LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>,
+    data_sender_channel: LocalBufferedChannel<DeVec<u8>, ToConnectionDataIntraMessage<DeVec<u8>>>,
+    event_sender_channel: LocalChannel<ToConnectionEventIntraMessage>,
     handle: ConnectionHandle,
     flow_control_id: FlowControlId,
 }
@@ -536,7 +550,9 @@ impl ChannelReserve for LocalChannelReserve {
 
     type FromHostChannel = LocalBufferedChannel<DeVec<u8>, ToInterfaceIntraMessage<DeVec<u8>>>;
 
-    type ToConnectionChannel = LocalBufferedChannel<DeVec<u8>, ToConnectionIntraMessage<DeVec<u8>>>;
+    type ToConnectionDataChannel = LocalBufferedChannel<DeVec<u8>, ToConnectionDataIntraMessage<DeVec<u8>>>;
+
+    type ToConnectionEventChannel = LocalChannel<ToConnectionEventIntraMessage>;
 
     type FromConnectionChannel = LocalBufferedChannel<DeVec<u8>, FromConnectionIntraMessage<DeVec<u8>>>;
 
@@ -569,11 +585,13 @@ impl ChannelReserve for LocalChannelReserve {
             FlowControlId::LeIso => self.dedicated.incoming.le_iso.clone(),
         };
 
-        let to_new_task_channel = LocalBufferedChannel::new(self.new_channels_size);
+        let data_channel = LocalBufferedChannel::new(self.new_channels_size);
+        let event_channel = LocalChannel::new(self.new_channels_size);
 
         let new_task_ends = ConnectionDynChannelEnds {
             send_channel: from_new_task_channel,
-            receiver: to_new_task_channel.take_receiver().unwrap(),
+            data_receiver: data_channel.take_receiver().unwrap(),
+            event_receiver: event_channel.take_receiver().unwrap(),
         };
 
         let index = if let Err(index) = self
@@ -587,7 +605,8 @@ impl ChannelReserve for LocalChannelReserve {
         };
 
         let channel_data = ConnectionData {
-            sender_channel: to_new_task_channel,
+            data_sender_channel: data_channel,
+            event_sender_channel: event_channel,
             handle: connection_handle,
             flow_control_id,
         };
@@ -600,7 +619,14 @@ impl ChannelReserve for LocalChannelReserve {
     fn get_channel(
         &self,
         id: TaskId,
-    ) -> Option<FromInterface<Self::ToHostCmdChannel, Self::ToHostGenChannel, Self::ToConnectionChannel>> {
+    ) -> Option<
+        FromInterface<
+            Self::ToHostCmdChannel,
+            Self::ToHostGenChannel,
+            Self::ToConnectionDataChannel,
+            Self::ToConnectionEventChannel,
+        >,
+    > {
         match id {
             TaskId::Host(HostChannel::Command) => Some(FromInterface::HostCommand(
                 self.dedicated.outgoing.host_command_response.clone(),
@@ -608,14 +634,24 @@ impl ChannelReserve for LocalChannelReserve {
             TaskId::Host(HostChannel::General) => {
                 Some(FromInterface::HostGeneral(self.dedicated.outgoing.host_general.clone()))
             }
-            TaskId::Connection(connection_handle) => {
+            TaskId::Connection(channel_type @ ConnectionChannel::Data(connection_handle))
+            | TaskId::Connection(channel_type @ ConnectionChannel::Event(connection_handle)) => {
                 let ref_connections = self.connections.borrow();
 
                 ref_connections
                     .binary_search_by(|ConnectionData { handle, .. }| handle.cmp(&connection_handle))
                     .ok()
                     .and_then(|index| ref_connections.get(index))
-                    .map(|ConnectionData { sender_channel, .. }| FromInterface::Connection(sender_channel.clone()))
+                    .map(
+                        |ConnectionData {
+                             data_sender_channel,
+                             event_sender_channel,
+                             ..
+                         }| match channel_type {
+                            ConnectionChannel::Data(_) => FromInterface::ConnectionData(data_sender_channel.clone()),
+                            ConnectionChannel::Event(_) => FromInterface::ConnectionEvent(event_sender_channel.clone()),
+                        },
+                    )
             }
         }
     }

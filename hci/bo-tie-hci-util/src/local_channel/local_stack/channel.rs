@@ -4,10 +4,11 @@
 
 use super::sender::LocalChannelSender;
 use crate::local_channel::local_stack::receiver::LocalChannelReceiver;
-use crate::local_channel::local_stack::{ToHostGenChannel, ToHostGenMsg, UnsafeToHostGenMsg};
+use crate::local_channel::local_stack::{ToConnectionEventChannel, ToHostGenChannel, ToHostGenMsg, UnsafeToHostGenMsg};
 use crate::local_channel::LocalSendFutureError;
-use crate::{Channel, ToHostCommandIntraMessage};
-use bo_tie_util::buffer::stack::QueueBuffer;
+use crate::{Channel, ToConnectionEventIntraMessage, ToHostCommandIntraMessage};
+use bo_tie_util::buffer::stack::{QueueBuffer, Reservation};
+use core::borrow::Borrow;
 use core::cell::{Cell, RefCell};
 use core::task::Waker;
 
@@ -40,6 +41,14 @@ impl<const CHANNEL_SIZE: usize, T> LocalChannel<CHANNEL_SIZE, T> {
             receiver_exists,
             waker,
         }
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, T> Borrow<LocalChannel<CHANNEL_SIZE, T>>
+    for Reservation<'_, LocalChannel<CHANNEL_SIZE, T>, TASK_COUNT>
+{
+    fn borrow(&self) -> &LocalChannel<CHANNEL_SIZE, T> {
+        &*self
     }
 }
 
@@ -79,6 +88,27 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
             None
         } else {
             Some(LocalChannelReceiver::new(*self))
+        }
+    }
+}
+
+impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize> Channel
+    for Reservation<'a, ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>
+{
+    type SenderError = LocalSendFutureError;
+    type Message = ToConnectionEventIntraMessage;
+    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, ToConnectionEventIntraMessage>;
+    type Receiver = LocalChannelReceiver<CHANNEL_SIZE, Self, ToConnectionEventIntraMessage>;
+
+    fn get_sender(&self) -> Self::Sender {
+        LocalChannelSender::new(self.clone())
+    }
+
+    fn take_receiver(&self) -> Option<Self::Receiver> {
+        if self.receiver_exists.get() {
+            None
+        } else {
+            Some(LocalChannelReceiver::new(self.clone()))
         }
     }
 }

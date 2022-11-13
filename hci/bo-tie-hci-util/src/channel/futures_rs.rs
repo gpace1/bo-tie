@@ -61,5 +61,6 @@ pub fn futures_unbounded(
         .set_c3(unbounded)
         .set_c4(unbounded)
         .set_c5(unbounded)
+        .set_c6(unbounded)
         .build()
 }

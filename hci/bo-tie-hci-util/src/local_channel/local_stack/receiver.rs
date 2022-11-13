@@ -5,11 +5,11 @@
 use crate::local_channel::local_stack::buffered_channel::UnsafeReservedBuffer;
 use crate::local_channel::local_stack::channel::LocalChannel;
 use crate::local_channel::local_stack::{
-    FromConnMsg, FromConnectionChannel, FromHostChannel, ToConnMsg, ToConnectionChannel, ToHostGenChannel,
-    ToHostGenMsg, ToInterfaceMsg, UnsafeFromConnMsg, UnsafeToConnMsg, UnsafeToHostGenMsg, UnsafeToInterfaceMsg,
+    FromConnMsg, FromConnectionChannel, FromHostChannel, ToConnDataMsg, ToConnectionDataChannel, ToHostGenChannel,
+    ToHostGenMsg, ToInterfaceMsg, UnsafeFromConnMsg, UnsafeToConnDataMsg, UnsafeToHostGenMsg, UnsafeToInterfaceMsg,
 };
 use crate::local_channel::{LocalQueueBuffer, LocalQueueBufferReceive, LocalReceiverFuture};
-use crate::{Receiver, ToConnectionIntraMessage, ToHostCommandIntraMessage};
+use crate::{Receiver, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage};
 use bo_tie_util::buffer::stack::{Reservation, UnsafeBufferReservation};
 use core::borrow::Borrow;
 use core::task::Waker;
@@ -106,11 +106,11 @@ impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBuffer
 impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBuffer
     for LocalChannelReceiver<
         CHANNEL_SIZE,
-        Reservation<'a, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'a, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >
 {
-    type Payload = ToConnMsg<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Payload = ToConnDataMsg<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
 
     fn call_waker(&self) {
         self.0.channel.waker.take().map(|w| w.wake());
@@ -118,6 +118,22 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 
     fn set_waker(&self, waker: Waker) {
         self.0.channel.waker.set(Some(waker))
+    }
+}
+
+impl<const CHANNEL_SIZE: usize, C> LocalQueueBuffer
+    for LocalChannelReceiver<CHANNEL_SIZE, C, ToConnectionEventIntraMessage>
+where
+    C: Borrow<LocalChannel<CHANNEL_SIZE, ToConnectionEventIntraMessage>>,
+{
+    type Payload = ToConnectionEventIntraMessage;
+
+    fn call_waker(&self) {
+        self.0.borrow().waker.take().map(|w| w.wake());
+    }
+
+    fn set_waker(&self, waker: Waker) {
+        self.0.borrow().waker.set(Some(waker))
     }
 }
 
@@ -210,6 +226,7 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferReceiv
                 ToInterfaceMsg::Disconnect(h, unsafe { UnsafeBufferReservation::rebind(t) })
             }
             UnsafeToInterfaceMsg::PacketBufferInfo(i) => ToInterfaceMsg::PacketBufferInfo(i),
+            UnsafeToInterfaceMsg::EventRoutingPolicy(p) => ToInterfaceMsg::EventRoutingPolicy(p),
         }
     }
 }
@@ -217,8 +234,8 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferReceiv
 impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferReceive
     for LocalChannelReceiver<
         CHANNEL_SIZE,
-        Reservation<'_, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'_, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >
 {
     fn has_senders(&self) -> bool {
@@ -233,17 +250,35 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
         let unsafe_payload = self.0.channel.message_queue.borrow_mut().try_remove().unwrap();
 
         match unsafe_payload {
-            UnsafeToConnMsg(ToConnectionIntraMessage::Acl(t)) => {
-                ToConnMsg::Acl(unsafe { UnsafeReservedBuffer::into_res(t) })
+            UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Acl(t)) => {
+                ToConnDataMsg::Acl(unsafe { UnsafeReservedBuffer::into_res(t) })
             }
-            UnsafeToConnMsg(ToConnectionIntraMessage::Sco(t)) => {
-                ToConnMsg::Sco(unsafe { UnsafeReservedBuffer::into_res(t) })
+            UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Sco(t)) => {
+                ToConnDataMsg::Sco(unsafe { UnsafeReservedBuffer::into_res(t) })
             }
-            UnsafeToConnMsg(ToConnectionIntraMessage::Iso(t)) => {
-                ToConnMsg::Iso(unsafe { UnsafeReservedBuffer::into_res(t) })
+            UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Iso(t)) => {
+                ToConnDataMsg::Iso(unsafe { UnsafeReservedBuffer::into_res(t) })
             }
-            UnsafeToConnMsg(ToConnectionIntraMessage::Disconnect(e)) => ToConnMsg::Disconnect(e),
+            UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Disconnect(e)) => ToConnDataMsg::Disconnect(e),
         }
+    }
+}
+
+impl<const CHANNEL_SIZE: usize, C> LocalQueueBufferReceive
+    for LocalChannelReceiver<CHANNEL_SIZE, C, ToConnectionEventIntraMessage>
+where
+    C: Borrow<LocalChannel<CHANNEL_SIZE, ToConnectionEventIntraMessage>>,
+{
+    fn has_senders(&self) -> bool {
+        self.0.borrow().sender_count.get() != 0
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.borrow().message_queue.borrow().is_empty()
+    }
+
+    fn pop_next(&self) -> Self::Payload {
+        self.0.borrow().message_queue.borrow_mut().try_remove().unwrap()
     }
 }
 
@@ -360,17 +395,43 @@ impl<'z, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Receiver
 impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Receiver
     for LocalChannelReceiver<
         CHANNEL_SIZE,
-        Reservation<'z, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'z, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >
 {
-    type Message = ToConnMsg<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Message = ToConnDataMsg<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
     type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where Self: 'a;
 
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
         if self.has_senders() {
             if self.is_empty() {
                 self.0.channel.waker.set(Some(cx.waker().clone()));
+
+                Poll::Pending
+            } else {
+                Poll::Ready(Some(self.pop_next()))
+            }
+        } else {
+            Poll::Ready(None)
+        }
+    }
+
+    fn recv(&mut self) -> Self::ReceiveFuture<'_> {
+        LocalReceiverFuture(self)
+    }
+}
+
+impl<const CHANNEL_SIZE: usize, C> Receiver for LocalChannelReceiver<CHANNEL_SIZE, C, ToConnectionEventIntraMessage>
+where
+    C: Borrow<LocalChannel<CHANNEL_SIZE, ToConnectionEventIntraMessage>>,
+{
+    type Message = ToConnectionEventIntraMessage;
+    type ReceiveFuture<'a> = LocalReceiverFuture<'a, Self> where Self: 'a;
+
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Self::Message>> {
+        if self.has_senders() {
+            if self.is_empty() {
+                self.0.borrow().waker.set(Some(cx.waker().clone()));
 
                 Poll::Pending
             } else {

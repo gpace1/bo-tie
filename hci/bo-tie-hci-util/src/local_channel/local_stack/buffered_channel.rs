@@ -10,8 +10,8 @@ use super::receiver::LocalChannelReceiver;
 use super::sender::LocalChannelSender;
 use crate::local_channel::local_stack::channel::LocalChannel;
 use crate::local_channel::local_stack::{
-    BufferReserve, FromConnMsg, FromConnectionChannel, FromHostChannel, ToConnMsg, ToConnectionChannel, ToInterfaceMsg,
-    UnsafeFromConnMsg, UnsafeToConnMsg, UnsafeToInterfaceMsg,
+    BufferReserve, FromConnMsg, FromConnectionChannel, FromHostChannel, ToConnDataMsg, ToConnectionDataChannel,
+    ToInterfaceMsg, UnsafeFromConnMsg, UnsafeToConnDataMsg, UnsafeToInterfaceMsg,
 };
 use crate::local_channel::LocalSendFutureError;
 use crate::Channel;
@@ -95,12 +95,13 @@ impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Channel
 }
 
 impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Channel
-    for Reservation<'a, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>
+    for Reservation<'a, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>
 {
     type SenderError = LocalSendFutureError;
-    type Message = ToConnMsg<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
-    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>;
-    type Receiver = LocalChannelReceiver<CHANNEL_SIZE, Self, UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>;
+    type Message = ToConnDataMsg<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Sender = LocalChannelSender<CHANNEL_SIZE, Self, UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>;
+    type Receiver =
+        LocalChannelReceiver<CHANNEL_SIZE, Self, UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>>;
 
     fn get_sender(&self) -> Self::Sender {
         LocalChannelSender::new(self.clone())
@@ -392,7 +393,7 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> UnsafeReservedBuf
 mod test {
     use super::*;
     use crate::test::*;
-    use crate::{FromConnectionIntraMessage, ToConnectionIntraMessage, ToInterfaceIntraMessage};
+    use crate::{FromConnectionIntraMessage, ToConnectionDataIntraMessage, ToInterfaceIntraMessage};
     use bo_tie_util::errors::Error;
 
     macro_rules! dup {
@@ -467,20 +468,20 @@ mod test {
 
         let hotel = StackHotel::<_, 1>::new();
 
-        let lbc: Reservation<ToConnectionChannel<1, CHANNEL_SIZE, BUFFER_SIZE>, 1> =
+        let lbc: Reservation<ToConnectionDataChannel<1, CHANNEL_SIZE, BUFFER_SIZE>, 1> =
             hotel.take(LocalBufferedChannel::new()).unwrap();
 
         let (tx_vals, rx_vals) = dup!([
-            ToConnectionIntraMessage::Acl(create_buffer!(lbc, 85, 21, 81, 12, 9, 117, 132, 156, 202, 4)),
-            ToConnectionIntraMessage::Sco(create_buffer!(lbc, 197, 26, 164, 139, 220, 176, 33, 30, 1, 75)),
-            ToConnectionIntraMessage::Iso(create_buffer!(lbc, 33, 207, 153, 191, 26, 18, 21, 63, 190, 211)),
+            ToConnectionDataIntraMessage::Acl(create_buffer!(lbc, 85, 21, 81, 12, 9, 117, 132, 156, 202, 4)),
+            ToConnectionDataIntraMessage::Sco(create_buffer!(lbc, 197, 26, 164, 139, 220, 176, 33, 30, 1, 75)),
+            ToConnectionDataIntraMessage::Iso(create_buffer!(lbc, 33, 207, 153, 191, 26, 18, 21, 63, 190, 211)),
         ]);
 
         channel_send_and_receive(lbc, tx_vals, rx_vals, |l, r| match (l, r) {
-            (ToConnectionIntraMessage::Acl(l), ToConnectionIntraMessage::Acl(r)) => l.deref() == r.deref(),
-            (ToConnectionIntraMessage::Sco(l), ToConnectionIntraMessage::Sco(r)) => l.deref() == r.deref(),
-            (ToConnectionIntraMessage::Iso(l), ToConnectionIntraMessage::Iso(r)) => l.deref() == r.deref(),
-            (ToConnectionIntraMessage::Disconnect(l), ToConnectionIntraMessage::Disconnect(r)) => l == r,
+            (ToConnectionDataIntraMessage::Acl(l), ToConnectionDataIntraMessage::Acl(r)) => l.deref() == r.deref(),
+            (ToConnectionDataIntraMessage::Sco(l), ToConnectionDataIntraMessage::Sco(r)) => l.deref() == r.deref(),
+            (ToConnectionDataIntraMessage::Iso(l), ToConnectionDataIntraMessage::Iso(r)) => l.deref() == r.deref(),
+            (ToConnectionDataIntraMessage::Disconnect(l), ToConnectionDataIntraMessage::Disconnect(r)) => l == r,
             _ => false,
         })
         .await

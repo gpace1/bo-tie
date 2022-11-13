@@ -5,12 +5,12 @@
 use crate::local_channel::local_stack::buffered_channel::UnsafeReservedBuffer;
 use crate::local_channel::local_stack::channel::LocalChannel;
 use crate::local_channel::local_stack::{
-    FromConnMsg, FromConnectionChannel, FromHostChannel, ToConnMsg, ToConnectionChannel, ToHostGenChannel,
-    ToHostGenMsg, ToInterfaceMsg, UnsafeConnectionEnds, UnsafeFromConnMsg, UnsafeToConnMsg, UnsafeToHostGenMsg,
+    FromConnMsg, FromConnectionChannel, FromHostChannel, ToConnDataMsg, ToConnectionDataChannel, ToHostGenChannel,
+    ToHostGenMsg, ToInterfaceMsg, UnsafeConnectionEnds, UnsafeFromConnMsg, UnsafeToConnDataMsg, UnsafeToHostGenMsg,
     UnsafeToInterfaceMsg,
 };
 use crate::local_channel::{LocalQueueBuffer, LocalQueueBufferSend, LocalSendFuture, LocalSendFutureError};
-use crate::{Sender, ToConnectionIntraMessage, ToHostCommandIntraMessage};
+use crate::{Sender, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage};
 use bo_tie_util::buffer::stack::{BufferReservation, Reservation};
 use core::borrow::Borrow;
 use core::task::Waker;
@@ -94,11 +94,11 @@ impl<'a, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBuffer
 impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBuffer
     for LocalChannelSender<
         CHANNEL_SIZE,
-        Reservation<'a, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'a, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >
 {
-    type Payload = ToConnMsg<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Payload = ToConnDataMsg<'a, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
 
     fn call_waker(&self) {
         self.0.channel.waker.take().map(|w| w.wake());
@@ -106,6 +106,22 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
 
     fn set_waker(&self, waker: Waker) {
         self.0.channel.waker.set(Some(waker))
+    }
+}
+
+impl<const CHANNEL_SIZE: usize, C> LocalQueueBuffer
+    for LocalChannelSender<CHANNEL_SIZE, C, ToConnectionEventIntraMessage>
+where
+    C: Borrow<LocalChannel<CHANNEL_SIZE, ToConnectionEventIntraMessage>>,
+{
+    type Payload = ToConnectionEventIntraMessage;
+
+    fn call_waker(&self) {
+        self.0.borrow().waker.take().map(|w| w.wake());
+    }
+
+    fn set_waker(&self, waker: Waker) {
+        self.0.borrow().waker.set(Some(waker))
     }
 }
 
@@ -196,6 +212,7 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferSend
                 UnsafeToInterfaceMsg::Disconnect(h, unsafe { BufferReservation::to_unsafe(t) })
             }
             ToInterfaceMsg::PacketBufferInfo(i) => UnsafeToInterfaceMsg::PacketBufferInfo(i),
+            ToInterfaceMsg::EventRoutingPolicy(p) => UnsafeToInterfaceMsg::EventRoutingPolicy(p),
         };
 
         self.0
@@ -210,8 +227,8 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferSend
 impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferSend
     for LocalChannelSender<
         CHANNEL_SIZE,
-        Reservation<'_, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'_, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >
 {
     fn is_full(&self) -> bool {
@@ -224,16 +241,16 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
 
     fn push(&self, packet: Self::Payload) {
         let unsafe_packet = match packet {
-            ToConnMsg::Iso(t) => UnsafeToConnMsg(ToConnectionIntraMessage::Iso(unsafe {
+            ToConnDataMsg::Iso(t) => UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Iso(unsafe {
                 UnsafeReservedBuffer::from_res(t)
             })),
-            ToConnMsg::Acl(t) => UnsafeToConnMsg(ToConnectionIntraMessage::Acl(unsafe {
+            ToConnDataMsg::Acl(t) => UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Acl(unsafe {
                 UnsafeReservedBuffer::from_res(t)
             })),
-            ToConnMsg::Sco(t) => UnsafeToConnMsg(ToConnectionIntraMessage::Sco(unsafe {
+            ToConnDataMsg::Sco(t) => UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Sco(unsafe {
                 UnsafeReservedBuffer::from_res(t)
             })),
-            ToConnMsg::Disconnect(e) => UnsafeToConnMsg(ToConnectionIntraMessage::Disconnect(e)),
+            ToConnDataMsg::Disconnect(e) => UnsafeToConnDataMsg(ToConnectionDataIntraMessage::Disconnect(e)),
         };
 
         self.0
@@ -242,6 +259,24 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
             .borrow_mut()
             .try_push(unsafe_packet)
             .unwrap();
+    }
+}
+
+impl<const CHANNEL_SIZE: usize, C> LocalQueueBufferSend
+    for LocalChannelSender<CHANNEL_SIZE, C, ToConnectionEventIntraMessage>
+where
+    C: Borrow<LocalChannel<CHANNEL_SIZE, ToConnectionEventIntraMessage>>,
+{
+    fn is_full(&self) -> bool {
+        self.0.borrow().message_queue.borrow().is_full()
+    }
+
+    fn receiver_exists(&self) -> bool {
+        self.0.borrow().receiver_exists.get()
+    }
+
+    fn push(&self, packet: Self::Payload) {
+        self.0.borrow().message_queue.borrow_mut().try_push(packet).unwrap();
     }
 }
 
@@ -275,6 +310,7 @@ impl<const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> LocalQueueBufferSend
             .unwrap();
     }
 }
+
 impl<const CHANNEL_SIZE: usize, C> Sender for LocalChannelSender<CHANNEL_SIZE, C, ToHostCommandIntraMessage>
 where
     C: Borrow<LocalChannel<CHANNEL_SIZE, ToHostCommandIntraMessage>>,
@@ -332,12 +368,28 @@ impl<'z, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Sender
 impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize> Sender
     for LocalChannelSender<
         CHANNEL_SIZE,
-        Reservation<'z, ToConnectionChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
-        UnsafeToConnMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
+        Reservation<'z, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
+        UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >
 {
     type Error = LocalSendFutureError;
-    type Message = ToConnMsg<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+    type Message = ToConnDataMsg<'z, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>;
+    type SendFuture<'a> = LocalSendFuture<'a, Self, Self::Message> where Self: 'a;
+
+    fn send(&mut self, message: Self::Message) -> Self::SendFuture<'_> {
+        LocalSendFuture {
+            packet: Some(message),
+            local_sender: self,
+        }
+    }
+}
+
+impl<const CHANNEL_SIZE: usize, C> Sender for LocalChannelSender<CHANNEL_SIZE, C, ToConnectionEventIntraMessage>
+where
+    C: Borrow<LocalChannel<CHANNEL_SIZE, ToConnectionEventIntraMessage>>,
+{
+    type Error = LocalSendFutureError;
+    type Message = ToConnectionEventIntraMessage;
     type SendFuture<'a> = LocalSendFuture<'a, Self, Self::Message> where Self: 'a;
 
     fn send(&mut self, message: Self::Message) -> Self::SendFuture<'_> {

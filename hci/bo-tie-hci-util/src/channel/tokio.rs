@@ -100,5 +100,6 @@ pub fn tokio_unbounded(
         .set_c3(unbounded_channel)
         .set_c4(unbounded_channel)
         .set_c5(unbounded_channel)
+        .set_c6(unbounded_channel)
         .build()
 }
