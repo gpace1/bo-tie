@@ -30,7 +30,7 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
-use bo_tie_hci_util::{events, le, EventRoutingPolicy, ToHostCommandIntraMessage};
+use bo_tie_hci_util::{events, le, ConnectionChannelEnds, EventRoutingPolicy, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
 use bo_tie_hci_util::{HostChannelEnds, PacketBufferInformation};
 use bo_tie_util::errors;
@@ -1168,8 +1168,10 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
     /// [`Host::set_event_routing_policy`]: Host::set_event_routing_policy
     /// [`All`]: bo_tie_hci_util::EventRoutingPolicy::All
     /// [`OnlyConnections`]: bo_tie_hci_util::EventRoutingPolicy::OnlyConnections
-    pub fn take_event_receiver(&mut self) -> Option<ConnectionEventReceiver<C::EventReceiver>> {
-        self.ends.take_event_receiver().map(|r| ConnectionEventReceiver(r))
+    pub fn take_event_receiver(&mut self) -> Option<ConnectionEventReceiver<C>> {
+        self.ends
+            .take_event_receiver()
+            .map(|r| ConnectionEventReceiver::<C>::new(r))
     }
 
     /// Convert this into its inner channel ends
@@ -1501,14 +1503,25 @@ impl MaskedEvents {
 /// Receiver of Events sent to a Connections
 ///
 /// This is returned by the method [`Connection::take_event_receiver`].
-pub struct ConnectionEventReceiver<R>(R);
+// This uses channel ends instead of just the event receiver for the generic
+// as it is easier/cleaner for the user to bound `ConnectionChannelEnds` then
+// having to bound the type for C::EventReceiver.
+pub struct ConnectionEventReceiver<C: ConnectionChannelEnds> {
+    event_receiver: C::EventReceiver,
+    pd: core::marker::PhantomData<C>,
+}
 
-impl<R> ConnectionEventReceiver<R>
-where
-    R: bo_tie_hci_util::Receiver<Message = bo_tie_hci_util::ToConnectionEventIntraMessage>,
-{
+impl<C: ConnectionChannelEnds> ConnectionEventReceiver<C> {
+    fn new(event_receiver: C::EventReceiver) -> Self {
+        let pd = core::marker::PhantomData;
+
+        ConnectionEventReceiver { event_receiver, pd }
+    }
+
     pub async fn recv(&mut self) -> Option<events::EventsData> {
-        self.0.recv().await.map(|ed| match ed {
+        use bo_tie_hci_util::Receiver;
+
+        self.event_receiver.recv().await.map(|ed| match ed {
             bo_tie_hci_util::ToConnectionEventIntraMessage::RoutedEvent(ed) => ed,
         })
     }
