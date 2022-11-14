@@ -369,7 +369,8 @@ pub struct ConnectionDynChannelEnds {
         LocalBufferedChannel<DeVec<u8>, ToConnectionDataIntraMessage<DeVec<u8>>>,
         ToConnectionDataIntraMessage<DeVec<u8>>,
     >,
-    event_receiver: LocalChannelReceiver<LocalChannel<ToConnectionEventIntraMessage>, ToConnectionEventIntraMessage>,
+    event_receiver:
+        Option<LocalChannelReceiver<LocalChannel<ToConnectionEventIntraMessage>, ToConnectionEventIntraMessage>>,
 }
 
 impl ConnectionChannelEnds for ConnectionDynChannelEnds {
@@ -413,12 +414,8 @@ impl ConnectionChannelEnds for ConnectionDynChannelEnds {
         &mut self.data_receiver
     }
 
-    fn get_event_receiver(&self) -> &Self::EventReceiver {
-        &self.event_receiver
-    }
-
-    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver {
-        &mut self.event_receiver
+    fn take_event_receiver(&mut self) -> Option<Self::EventReceiver> {
+        self.event_receiver.take()
     }
 }
 
@@ -591,7 +588,7 @@ impl ChannelReserve for LocalChannelReserve {
         let new_task_ends = ConnectionDynChannelEnds {
             send_channel: from_new_task_channel,
             data_receiver: data_channel.take_receiver().unwrap(),
-            event_receiver: event_channel.take_receiver().unwrap(),
+            event_receiver: event_channel.take_receiver(),
         };
 
         let index = if let Err(index) = self

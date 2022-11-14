@@ -156,7 +156,7 @@ use core::fmt::{Debug, Display, Formatter};
 pub struct ConnectionEnds<S, R1, R2> {
     from_connection: S,
     data_to_connection: R1,
-    event_to_connection: R2,
+    event_to_connection: Option<R2>,
 }
 
 impl<'a, S, R1, R2> ConnectionChannelEnds for ConnectionEnds<S, R1, R2>
@@ -192,12 +192,8 @@ where
         &mut self.data_to_connection
     }
 
-    fn get_event_receiver(&self) -> &Self::EventReceiver {
-        &self.event_to_connection
-    }
-
-    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver {
-        &mut self.event_to_connection
+    fn take_event_receiver(&mut self) -> Option<Self::EventReceiver> {
+        self.event_to_connection.take()
     }
 }
 
@@ -546,7 +542,7 @@ where
         let new_task_ends = ConnectionEnds {
             from_connection,
             data_to_connection,
-            event_to_connection,
+            event_to_connection: event_to_connection.into(),
         };
 
         let connection_data = ConnectionData {

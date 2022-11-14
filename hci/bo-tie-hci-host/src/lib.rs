@@ -30,7 +30,7 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
-use bo_tie_hci_util::{events, le, ToHostCommandIntraMessage};
+use bo_tie_hci_util::{events, le, EventRoutingPolicy, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
 use bo_tie_hci_util::{HostChannelEnds, PacketBufferInformation};
 use bo_tie_util::errors;
@@ -654,7 +654,7 @@ where
 
         self.host_interface
             .get_sender()
-            .send(ToInterfaceIntraMessage::Command(buffer).into())
+            .send(ToInterfaceIntraMessage::Command(buffer))
             .await
             .map_err(|e| CommandError::SendError(e))?;
 
@@ -938,6 +938,28 @@ where
 
         Ok(())
     }
+
+    /// Set the routing policy for connection related events
+    ///
+    /// This is used to set the policy for routing events with connection handles from the interface
+    /// async task to other connection async tasks. The default policy is to only send these events
+    /// to this host async task. Changing the policy to `All` will have these events sent to both
+    /// the host and connection async tasks, and
+    ///
+    /// Events without a connection handle are only sent to this host async task.
+    ///
+    /// For a list of events that can be routed see [`EventRoutingPolicy`]
+    pub async fn set_event_routing_policy(&mut self, policy: EventRoutingPolicy) -> Result<(), CommandError<H>> {
+        use bo_tie_hci_util::Sender;
+
+        let message = bo_tie_hci_util::ToInterfaceIntraMessage::EventRoutingPolicy(policy);
+
+        self.host_interface
+            .get_sender()
+            .send(message)
+            .await
+            .map_err(|e| CommandError::SendError(e))
+    }
 }
 
 /// The type returned by method [`next`] of `Host`
@@ -1082,9 +1104,12 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
         self.bounded = false
     }
 
-    /// Try to create an `LeConnection`
+    /// Try to create an `LeL2cap`
     ///
-    /// An `LeConnection` implements [`ConnectionChannel`] for a Bluetooth LE connection.
+    /// An `LeL2cap` implements [`ConnectionChannel`] for a Bluetooth LE connection. A connection
+    /// channel allows for data communication (in this case ACL) between this device and the peer
+    /// device. `LeL2cap` is for a Bluetooth LE connection, it can only be created if the *kind* of
+    /// connection made is `ConnectionKind::Le` or `ConnectionKind::LeEnh`.
     ///
     /// # Errors
     /// An error is returned if this connection is not a LE Connection, or the connection event's
@@ -1118,6 +1143,22 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
             }
             _ => Err(TryIntoLeL2capError::NotAnLeConnection(self)),
         }
+    }
+
+    /// Take the event receiver
+    ///
+    /// Take the receiver of events routed to this connection.
+    ///
+    /// # Note
+    /// In order for this receiver to be sent anything, the method
+    /// [`Host::set_event_routing_policy`] must be called with the routing policy of [`All`] or
+    /// [`OnlyConnection`].
+    ///
+    /// [`Host::set_event_routing_policy`]: Host::set_event_routing_policy
+    /// [`All`]: bo_tie_util::EventRoutingPolicy::All
+    /// [`OnlyConnections`]: bo_tie_util::EventRoutingPolicy::OnlyConnections
+    pub fn take_event_receiver(&mut self) -> Option<C::EventReceiver> {
+        self.ends.take_event_receiver()
     }
 
     /// Convert this into its inner channel ends

@@ -62,8 +62,8 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
     }
 
     /// Get the receiver
-    pub fn get_receiver(&self) -> &C::Receiver {
-        self.channel_ends.get_receiver()
+    pub fn get_receiver(&self) -> &C::DataReceiver {
+        self.channel_ends.get_data_receiver()
     }
 
     /// Get the sender
@@ -159,7 +159,7 @@ where
 
     fn receive(&mut self) -> Self::RecvFut<'_> {
         AclReceiverMap {
-            receiver: self.channel_ends.get_mut_receiver(),
+            receiver: self.channel_ends.get_mut_data_receiver(),
             _p: core::marker::PhantomData,
             receive_future: None,
         }
@@ -414,9 +414,9 @@ where
 
 pub struct AclReceiverMap<'a, C: ConnectionChannelEnds> {
     // todo: raw pointers (and associated unsafety) can probably be converted to references when rust issue #100135 is closed
-    receiver: *mut C::Receiver,
-    _p: core::marker::PhantomData<&'a C::Receiver>,
-    receive_future: Option<<C::Receiver as bo_tie_hci_util::Receiver>::ReceiveFuture<'a>>,
+    receiver: *mut C::DataReceiver,
+    _p: core::marker::PhantomData<&'a C::DataReceiver>,
+    receive_future: Option<<C::DataReceiver as bo_tie_hci_util::Receiver>::ReceiveFuture<'a>>,
 }
 
 impl<'a, C> Future for AclReceiverMap<'a, C>
@@ -431,7 +431,7 @@ where
     >;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        use bo_tie_hci_util::{Receiver, ToConnectionIntraMessage};
+        use bo_tie_hci_util::{Receiver, ToConnectionDataIntraMessage};
         use bo_tie_l2cap::BasicFrameError;
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -442,29 +442,31 @@ where
                 Some(ref mut receiver) => match unsafe { Pin::new_unchecked(receiver) }.poll(cx) {
                     Poll::Pending => break Poll::Pending,
                     Poll::Ready(None) => break Poll::Ready(None),
-                    Poll::Ready(Some(ToConnectionIntraMessage::Acl(data))) => match HciAclData::try_from_buffer(data) {
-                        Ok(data) => {
-                            let fragment = bo_tie_l2cap::L2capFragment::from(data);
+                    Poll::Ready(Some(ToConnectionDataIntraMessage::Acl(data))) => {
+                        match HciAclData::try_from_buffer(data) {
+                            Ok(data) => {
+                                let fragment = bo_tie_l2cap::L2capFragment::from(data);
 
-                            break Poll::Ready(Some(Ok(fragment)));
+                                break Poll::Ready(Some(Ok(fragment)));
+                            }
+                            Err(_) => {
+                                break Poll::Ready(Some(Err(BasicFrameError::Other(
+                                    "Received invalid HCI ACL Data packet",
+                                ))))
+                            }
                         }
-                        Err(_) => {
-                            break Poll::Ready(Some(Err(BasicFrameError::Other(
-                                "Received invalid HCI ACL Data packet",
-                            ))))
-                        }
-                    },
-                    Poll::Ready(Some(ToConnectionIntraMessage::Sco(_))) => {
+                    }
+                    Poll::Ready(Some(ToConnectionDataIntraMessage::Sco(_))) => {
                         break Poll::Ready(Some(Err(BasicFrameError::Other(
                             "synchronous connection data is not implemented",
                         ))))
                     }
-                    Poll::Ready(Some(ToConnectionIntraMessage::Iso(_))) => {
+                    Poll::Ready(Some(ToConnectionDataIntraMessage::Iso(_))) => {
                         break Poll::Ready(Some(Err(BasicFrameError::Other(
                             "isochronous connection data is not implemented",
                         ))))
                     }
-                    Poll::Ready(Some(ToConnectionIntraMessage::Disconnect(_reason))) => break Poll::Ready(None),
+                    Poll::Ready(Some(ToConnectionDataIntraMessage::Disconnect(_reason))) => break Poll::Ready(None),
                 },
             }
         }

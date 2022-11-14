@@ -128,10 +128,12 @@ pub struct ConnectionEnds<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize
         Reservation<'z, ToConnectionDataChannel<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>, TASK_COUNT>,
         UnsafeToConnDataMsg<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>,
     >,
-    event_receiver: LocalChannelReceiver<
-        CHANNEL_SIZE,
-        Reservation<'z, ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>,
-        ToConnectionEventIntraMessage,
+    event_receiver: Option<
+        LocalChannelReceiver<
+            CHANNEL_SIZE,
+            Reservation<'z, ToConnectionEventChannel<CHANNEL_SIZE>, TASK_COUNT>,
+            ToConnectionEventIntraMessage,
+        >,
     >,
 }
 
@@ -188,12 +190,8 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         &mut self.data_receiver
     }
 
-    fn get_event_receiver(&self) -> &Self::EventReceiver {
-        &self.event_receiver
-    }
-
-    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver {
-        &mut self.event_receiver
+    fn take_event_receiver(&mut self) -> Option<Self::EventReceiver> {
+        self.event_receiver.take()
     }
 }
 
@@ -212,12 +210,12 @@ pub struct UnsafeConnectionEnds<const TASK_COUNT: usize, const CHANNEL_SIZE: usi
 impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usize>
     UnsafeConnectionEnds<TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>
 {
-    unsafe fn from(ends: ConnectionEnds<'_, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>) -> Self {
+    unsafe fn from(mut ends: ConnectionEnds<'_, TASK_COUNT, CHANNEL_SIZE, BUFFER_SIZE>) -> Self {
         let sender_channel = ends.sender_channel as *const _;
 
         let data_reservation: Reservation<'_, _, TASK_COUNT> = ends.data_receiver.forget_and_unwrap();
 
-        let event_reservation: Reservation<'_, _, TASK_COUNT> = ends.event_receiver.forget_and_unwrap();
+        let event_reservation: Reservation<'_, _, TASK_COUNT> = ends.event_receiver.take().unwrap().forget_and_unwrap();
 
         let unsafe_data_receive_channel = Reservation::to_unsafe(data_reservation);
 
@@ -247,7 +245,7 @@ impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: usiz
         ConnectionEnds {
             sender_channel,
             data_receiver,
-            event_receiver,
+            event_receiver: Some(event_receiver),
         }
     }
 }
@@ -467,7 +465,7 @@ impl<'a, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         Ok(ConnectionEnds {
             sender_channel,
             data_receiver,
-            event_receiver,
+            event_receiver: Some(event_receiver),
         })
     }
 

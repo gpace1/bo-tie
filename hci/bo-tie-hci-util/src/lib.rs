@@ -692,11 +692,8 @@ pub trait ConnectionChannelEnds: Sized {
     /// Get a mutable reference to the receiver of HCI data messages from the interface async task
     fn get_mut_data_receiver(&mut self) -> &mut Self::DataReceiver;
 
-    /// Get the receiver of event messages from the interface async task
-    fn get_event_receiver(&self) -> &Self::EventReceiver;
-
-    /// Get a mutable reference to the receiver of HCI data messages from the interface async task
-    fn get_mut_event_receiver(&mut self) -> &mut Self::EventReceiver;
+    /// Take the receiver of event messages from the interface async task
+    fn take_event_receiver(&mut self) -> Option<Self::EventReceiver>;
 }
 
 /// Ends of the channels used by the Host
@@ -1723,7 +1720,7 @@ pub enum EventRoutingPolicy {
     All,
     /// Events that related to a connection are sent to their respective connection async task and
     /// not to the host async task.
-    OnlyConnection,
+    OnlyConnections,
 }
 
 impl Default for EventRoutingPolicy {

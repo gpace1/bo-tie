@@ -737,7 +737,7 @@ impl EventRouting for EventRoutingPolicy {
     fn route_to_connection(&self) -> bool {
         match self {
             EventRoutingPolicy::All => true,
-            EventRoutingPolicy::OnlyConnection => true,
+            EventRoutingPolicy::OnlyConnections => true,
             _ => false,
         }
     }
