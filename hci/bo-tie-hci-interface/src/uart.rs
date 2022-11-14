@@ -181,7 +181,7 @@ where
 impl<R: ChannelReserve> Debug for UartBufferedSendError<R>
 where
     <<<R as ChannelReserve>::FromHostChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Debug,
-    <<<R as ChannelReserve>::ToConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Debug,
+    <<<R as ChannelReserve>::ToConnectionDataChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Debug,
     <<<R as ChannelReserve>::FromConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
@@ -198,7 +198,7 @@ where
     R::Error: Display,
     R::SenderError: Display,
     <<<R as ChannelReserve>::FromHostChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Display,
-    <<<R as ChannelReserve>::ToConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Display,
+    <<<R as ChannelReserve>::ToConnectionDataChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Display,
     <<<R as ChannelReserve>::FromConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error: Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {

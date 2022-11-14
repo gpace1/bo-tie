@@ -80,9 +80,10 @@ pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
 use bo_tie_hci_util::{
-    BufferReserve, Channel, EventRoutingPolicy, FlowControlId, FromConnectionIntraMessage, FromInterface, HciPacket,
-    HciPacketType, HostChannel, PacketBufferInformation, Sender, TaskId, TaskSource, ToConnectionIntraMessage,
-    ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
+    BufferReserve, Channel, ConnectionChannel, EventRoutingPolicy, FlowControlId, FromConnectionIntraMessage,
+    FromInterface, HciPacket, HciPacketType, HostChannel, PacketBufferInformation, Sender, TaskId, TaskSource,
+    ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
+    ToInterfaceIntraMessage,
 };
 use bo_tie_util::buffer::stack::LinearBuffer;
 use bo_tie_util::buffer::{Buffer, TryExtend};
@@ -487,16 +488,34 @@ where
     ) -> Result<(), SendError<R>> {
         use events::EventsData;
 
-        if let Some(mut sender) = self.channel_reserve.get_connection_sender(disconnect.connection_handle) {
-            let message = if self.event_routing_policy.route_to_connection() {
-                ToConnectionIntraMessage::RoutedEvent(EventsData::DisconnectionComplete(disconnect.clone()))
-            } else {
-                let error = bo_tie_util::errors::Error::from(disconnect.reason);
+        if let Some(FromInterface::ConnectionData(mut sender)) =
+            self.channel_reserve
+                .get_sender(TaskId::Connection(ConnectionChannel::Data(
+                    disconnect.connection_handle,
+                )))
+        {
+            let error = bo_tie_util::errors::Error::from(disconnect.reason);
 
-                ToConnectionIntraMessage::Disconnect(error)
-            };
+            let message = ToConnectionDataIntraMessage::Disconnect(error);
 
             sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))?;
+
+            if self.event_routing_policy.route_to_connection() {
+                if let Some(FromInterface::ConnectionEvent(mut sender)) =
+                    self.channel_reserve
+                        .get_sender(TaskId::Connection(ConnectionChannel::Event(
+                            disconnect.connection_handle,
+                        )))
+                {
+                    let message = ToConnectionEventIntraMessage::RoutedEvent(EventsData::DisconnectionComplete(
+                        disconnect.clone(),
+                    ));
+
+                    sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))?;
+                } else {
+                    return Err(SendError::<R>::InvalidChannel);
+                }
+            }
 
             self.channel_reserve
                 .try_remove(disconnect.connection_handle)
@@ -513,9 +532,12 @@ where
     pub async fn event_routing(&mut self, event_data: &events::EventsData) -> Result<bool, SendError<R>> {
         if self.event_routing_policy.route_to_connection() {
             if let Some(handle) = event_data.get_handle() {
-                if let Some(mut sender) = self.channel_reserve.get_connection_sender(handle) {
+                if let Some(FromInterface::ConnectionEvent(mut sender)) = self
+                    .channel_reserve
+                    .get_sender(TaskId::Connection(ConnectionChannel::Event(handle)))
+                {
                     sender
-                        .send(ToConnectionIntraMessage::RoutedEvent(event_data.clone()))
+                        .send(ToConnectionEventIntraMessage::RoutedEvent(event_data.clone()))
                         .await
                         .map_err(|e| SendError::<R>::SenderError(e))?;
                 }
@@ -647,12 +669,12 @@ where
 
         let reserve_ref = &self.channel_reserve;
 
-        let id = TaskId::Connection(connection_handle);
+        let id = TaskId::Connection(ConnectionChannel::Data(connection_handle));
 
         let channel = reserve_ref
             .get_channel(id)
             .and_then(|channel| match channel {
-                FromInterface::Connection(channel) => Some(channel),
+                FromInterface::ConnectionData(channel) => Some(channel),
                 _ => None, // actually unreachable
             })
             .ok_or_else(|| SendError::<R>::UnknownConnectionHandle(connection_handle))?;
@@ -663,7 +685,7 @@ where
             .try_extend(packet.iter().cloned())
             .map_err(|e| SendError::<R>::BufferExtendOfToConnection(e))?;
 
-        let message = ToConnectionIntraMessage::Acl(buffer).into();
+        let message = ToConnectionDataIntraMessage::Acl(buffer).into();
 
         channel
             .get_sender()
@@ -823,7 +845,7 @@ pub type SendError<R> = SendErrorReason<
     <R as ChannelReserve>::Error,
     <R as ChannelReserve>::SenderError,
     <<<R as ChannelReserve>::FromHostChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error,
-    <<<R as ChannelReserve>::ToConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error,
+    <<<R as ChannelReserve>::ToConnectionDataChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error,
     <<<R as ChannelReserve>::FromConnectionChannel as BufferReserve>::Buffer as TryExtend<u8>>::Error,
 >;
 
@@ -914,10 +936,10 @@ where
                     .map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
 
                 if let Some(handle) = opt_handle {
-                    let buffer = if let FromInterface::Connection(channel) = self
+                    let buffer = if let FromInterface::ConnectionData(channel) = self
                         .interface
                         .channel_reserve
-                        .get_channel(TaskId::Connection(handle))
+                        .get_channel(TaskId::Connection(ConnectionChannel::Data(handle)))
                         .ok_or(SendError::<R>::UnknownConnectionHandle(handle))?
                     {
                         channel.take(None, None).await
@@ -995,7 +1017,7 @@ where
     /// ```
     /// # use bo_tie_hci_interface::Interface;
     /// # use bo_tie_hci_util::HciPacketType;
-    /// # let (channel_reserve, _host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
+    /// # let (channel_reserve, _host_ends) = bo_tie_hci_util::channel::tokio_unbounded(0,0);
     /// # let mut interface = Interface::new(channel_reserve);
     /// # let doc_test = async {
     /// let mut buffered_send = interface.buffered_up_send(HciPacketType::Event);
@@ -1083,7 +1105,7 @@ where
 enum BufferedBuffer<R: ChannelReserve> {
     // The linear buffer is sized to the maximum length of an HCI event
     Event(LinearBuffer<258, u8>),
-    ToConnection(<R::ToConnectionChannel as BufferReserve>::Buffer),
+    ToConnection(<R::ToConnectionDataChannel as BufferReserve>::Buffer),
 }
 
 impl<R: ChannelReserve> BufferedBuffer<R> {
@@ -1175,7 +1197,7 @@ impl BufferedTaskId {
         match self {
             BufferedTaskId::None | BufferedTaskId::ConnectionHandleFirstByte(_) => None,
             BufferedTaskId::Host(host_channel) => Some(TaskId::Host(*host_channel)),
-            BufferedTaskId::ConnectionHandle(handle) => Some(TaskId::Connection(*handle)),
+            BufferedTaskId::ConnectionHandle(handle) => Some(TaskId::Connection(ConnectionChannel::Data(*handle))),
         }
     }
 }
@@ -1222,9 +1244,9 @@ mod buffered_send {
             _ => return Err(SendError::<R>::InvalidHciPacket(bs.packet_type)),
         };
 
-        let message = ToConnectionIntraMessage::Acl(buffer).into();
+        let message = ToConnectionDataIntraMessage::Acl(buffer).into();
 
-        if let FromInterface::Connection(mut sender) = bs
+        if let FromInterface::ConnectionData(mut sender) = bs
             .interface
             .channel_reserve
             .get_sender(
@@ -1328,7 +1350,7 @@ mod test {
     async fn channel_interface_test() {
         use bo_tie_hci_util::channel::tokio_unbounded;
 
-        let (channel_reserve, _host_ends) = tokio_unbounded();
+        let (channel_reserve, _host_ends) = tokio_unbounded(0, 0);
         let mut interface = Interface::new(channel_reserve);
 
         interface_test!(interface).await
@@ -1340,7 +1362,7 @@ mod test {
         use bo_tie_hci_util::local_channel::local_stack::*;
 
         let channel_reserve_data = LocalStackChannelReserveData::<3, 10, 50>::new();
-        let (channel_reserve, _host_ends) = LocalStackChannelReserve::new(&channel_reserve_data);
+        let (channel_reserve, _host_ends) = LocalStackChannelReserve::new(&channel_reserve_data, 0, 0);
         let mut interface = Interface::new(channel_reserve);
 
         interface_test!(interface).await
