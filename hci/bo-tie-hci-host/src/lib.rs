@@ -1077,6 +1077,7 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
     ///
     /// [`Le`]: ConnectionKind::Le
     /// [`LeEnh`]: ConnectionKind::LeEnh
+    /// [`try_into_le`]: Connection::try_into_le
     pub fn get_kind(&self) -> ConnectionKind {
         self.kind.clone()
     }
@@ -1147,27 +1148,31 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
 
     /// Take the event receiver
     ///
-    /// Take the receiver of events routed to this connection.
+    /// The event receiver is used to await for events specific to this connection. Any event that
+    /// contains a connection handle of this connection can be received by this receiver. However,
+    /// In order for this receiver to be sent events, the method [`Host::set_event_routing_policy`]
+    /// must be called with the routing policy of [`All`] or [`OnlyConnections`].
     ///
-    /// # Note
-    /// In order for this receiver to be sent anything, the method
-    /// [`Host::set_event_routing_policy`] must be called with the routing policy of [`All`] or
-    /// [`OnlyConnection`].
+    /// ``` ignore
+    /// use bo_tie_hci_util::events::EventsData;
+    ///
+    /// let event_receiver = connection.take_event_receiver().unwrap();
+    ///
+    /// match event_receiver.recv().await {
+    ///     EventsData::EncryptionChangeV1(ed) => if ed.encryption_enabled.get_for_le().is_aes_ccm() {
+    ///         // ...
+    ///     }
+    /// }
+    /// ```
     ///
     /// [`Host::set_event_routing_policy`]: Host::set_event_routing_policy
-    /// [`All`]: bo_tie_util::EventRoutingPolicy::All
-    /// [`OnlyConnections`]: bo_tie_util::EventRoutingPolicy::OnlyConnections
-    pub fn take_event_receiver(&mut self) -> Option<C::EventReceiver> {
-        self.ends.take_event_receiver()
+    /// [`All`]: bo_tie_hci_util::EventRoutingPolicy::All
+    /// [`OnlyConnections`]: bo_tie_hci_util::EventRoutingPolicy::OnlyConnections
+    pub fn take_event_receiver(&mut self) -> Option<ConnectionEventReceiver<C::EventReceiver>> {
+        self.ends.take_event_receiver().map(|r| ConnectionEventReceiver(r))
     }
 
     /// Convert this into its inner channel ends
-    ///
-    /// This should be used whenever the upper Bluetooth protocols layers are implemented by another
-    /// library. The method [`get_kind`] must still be used to get the 'kind' of connection that was
-    /// created.
-    ///
-    /// [`get_kind`]: Connection::get_kind
     pub fn into_inner(self) -> C {
         self.ends
     }
@@ -1490,5 +1495,21 @@ impl MaskedEvents {
         if le_meta {
             self.le_is_masked = false;
         }
+    }
+}
+
+/// Receiver of Events sent to a Connections
+///
+/// This is returned by the method [`Connection::take_event_receiver`].
+pub struct ConnectionEventReceiver<R>(R);
+
+impl<R> ConnectionEventReceiver<R>
+where
+    R: bo_tie_hci_util::Receiver<Message = bo_tie_hci_util::ToConnectionEventIntraMessage>,
+{
+    pub async fn recv(&mut self) -> Option<events::EventsData> {
+        self.0.recv().await.map(|ed| match ed {
+            bo_tie_hci_util::ToConnectionEventIntraMessage::RoutedEvent(ed) => ed,
+        })
     }
 }
