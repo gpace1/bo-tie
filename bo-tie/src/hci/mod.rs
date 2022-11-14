@@ -15,7 +15,7 @@ pub use bo_tie_hci_util::local_channel::local_dynamic::{LocalChannelReserve, Loc
 #[cfg(feature = "unstable")]
 pub use bo_tie_hci_util::local_channel::local_stack::{LocalStackChannelReserve, LocalStackChannelReserveData};
 pub use bo_tie_hci_util::ConnectionHandle;
-pub use bo_tie_hci_util::{ChannelReserve, HostChannelEnds};
+pub use bo_tie_hci_util::{ChannelReserve, ConnectionChannelEnds, HostChannelEnds};
 
 #[cfg(feature = "async-std")]
 pub use bo_tie_hci_util::channel::async_std_unbounded;
