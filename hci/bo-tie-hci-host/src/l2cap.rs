@@ -237,13 +237,19 @@ where
 
 /// This is a temporary type until 'type_alias_impl_trait` feature is stable
 #[cfg(not(feature = "unstable-type-alias-impl-trait"))]
+struct BoxedSendFuture<S: bo_tie_hci_util::Sender>(Pin<alloc::boxed::Box<dyn Future<Output = Result<(), S::Error>>>>);
+
+#[cfg(not(feature = "unstable-type-alias-impl-trait"))]
+unsafe impl<T: bo_tie_hci_util::Sender> Send for BoxedSendFuture<T> where T: Send {}
+
+#[cfg(not(feature = "unstable-type-alias-impl-trait"))]
+unsafe impl<T: bo_tie_hci_util::Sender> Sync for BoxedSendFuture<T> where T: Sync {}
+
+/// This is a temporary type until 'type_alias_impl_trait` feature is stable
+#[cfg(not(feature = "unstable-type-alias-impl-trait"))]
 struct AclBufferFuture<C: ConnectionChannelEnds> {
     message: Option<<C::Sender as bo_tie_hci_util::Sender>::Message>,
-    sender_future: Option<
-        core::pin::Pin<
-            alloc::boxed::Box<dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>>,
-        >,
-    >,
+    sender_future: Option<BoxedSendFuture<C::Sender>>,
     sender: C::Sender,
     _p: core::marker::PhantomPinned,
 }
@@ -260,30 +266,24 @@ impl<C: ConnectionChannelEnds> Future for AclBufferFuture<C> {
 
         loop {
             match this.sender_future.as_mut() {
-                Some(future) => break Pin::new(future).poll(cx),
+                Some(future) => break Pin::new(&mut future.0).poll(cx),
                 None => {
                     let message = this.message.take().unwrap();
 
                     let future = alloc::boxed::Box::pin(this.sender.send(message))
-                        as Pin<
-                            alloc::boxed::Box<
-                                dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>,
-                            >,
-                        >;
+                        as Pin<alloc::boxed::Box<dyn Future<Output = Result<(), <C::Sender as Sender>::Error>>>>;
 
+                    // Convert this hidden lifetime to 'static
+                    //
                     // This is 'ok' only because `this` is pinned
                     let sender_future = unsafe {
                         transmute::<
                             _,
-                            Pin<
-                                alloc::boxed::Box<
-                                    dyn Future<Output = Result<(), <C::Sender as bo_tie_hci_util::Sender>::Error>>,
-                                >,
-                            >,
+                            Pin<alloc::boxed::Box<dyn Future<Output = Result<(), <C::Sender as Sender>::Error>>>>,
                         >(future)
                     };
 
-                    this.sender_future = Some(sender_future);
+                    this.sender_future = Some(BoxedSendFuture(sender_future));
                 }
             }
         }
