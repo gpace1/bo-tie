@@ -138,10 +138,12 @@ pub(super) mod sealed_receiver_type {
         type Output: core::borrow::Borrow<[u8]>;
 
         #[doc(hidden)]
-        type Future: core::future::Future<Output = Self::Output>;
+        type Future<'a>: core::future::Future<Output = Self::Output>
+        where
+            Self: 'a;
 
         #[doc(hidden)]
-        fn receive(&mut self) -> Self::Future;
+        fn receive(&mut self) -> Self::Future<'_>;
     }
 }
 
@@ -165,9 +167,9 @@ where
 
     type Output = F::Output;
 
-    type Future = F::Future;
+    type Future<'a> = F::Future where Self: 'a;
 
-    fn receive(&mut self) -> Self::Future {
+    fn receive(&mut self) -> Self::Future<'_> {
         OutOfBandReceive::receive(self)
     }
 }
@@ -189,9 +191,9 @@ impl sealed_receiver_type::SealedTrait for ExternalOobReceiver {
 
     type Output = [u8; 0];
 
-    type Future = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = Self::Output>>>;
+    type Future<'a> = &'a mut (dyn Future<Output = Self::Output> + Send + Sync + Unpin) where Self: 'a;
 
-    fn receive(&mut self) -> Self::Future {
+    fn receive(&mut self) -> Self::Future<'_> {
         unreachable!("Called receive on external receiver")
     }
 }
@@ -220,9 +222,9 @@ impl sealed_receiver_type::SealedTrait for Unsupported {
 
     type Output = [u8; 0];
 
-    type Future = core::pin::Pin<alloc::boxed::Box<dyn Future<Output = Self::Output>>>;
+    type Future<'a> = &'a mut (dyn Future<Output = Self::Output> + Send + Sync + Unpin) where Self: 'a;
 
-    fn receive(&mut self) -> Self::Future {
+    fn receive(&mut self) -> Self::Future<'_> {
         unreachable!("Called receive on external receiver")
     }
 }
