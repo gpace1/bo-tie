@@ -17,7 +17,7 @@ pub struct LeL2cap<C: ConnectionChannelEnds> {
     front_cap: usize,
     back_cap: usize,
     max_mtu: usize,
-    mtu: Cell<usize>,
+    mtu: usize,
     hci_max_payload_size: usize,
     channel_ends: C,
 }
@@ -31,26 +31,21 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
 }
 
 impl<C: ConnectionChannelEnds> LeL2cap<C> {
-    pub(crate) fn new<T>(
+    pub(crate) fn new(
         handle: ConnectionHandle,
         front_cap: usize,
         back_cap: usize,
         max_mtu: usize,
         hci_max_payload_size: usize,
-        initial_mtu: T,
+        initial_mtu: usize,
         channel_ends: C,
-    ) -> Self
-    where
-        T: Into<Cell<usize>>,
-    {
-        let mtu = initial_mtu.into();
-
+    ) -> Self {
         Self {
             handle,
             front_cap,
             back_cap,
             max_mtu,
-            mtu,
+            mtu: initial_mtu,
             hci_max_payload_size,
             channel_ends,
         }
@@ -86,14 +81,14 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
     ///
     /// Get the currently set maximum transmission unit.
     pub fn get_mtu(&self) -> usize {
-        self.mtu.get()
+        self.mtu
     }
 
     /// Set the current maximum transmission size
     ///
     /// Set the current maximum transmission unit.
     pub fn set_mtu(&mut self, to: usize) {
-        self.mtu.set(to)
+        self.mtu = to
     }
 
     /// Get the fragmentation size
@@ -140,11 +135,11 @@ where
     }
 
     fn set_mtu(&mut self, mtu: u16) {
-        self.mtu.set(mtu.into())
+        self.mtu = mtu.into()
     }
 
     fn get_mtu(&self) -> usize {
-        self.mtu.get()
+        self.mtu
     }
 
     fn max_mtu(&self) -> usize {
