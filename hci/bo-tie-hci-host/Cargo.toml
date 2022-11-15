@@ -22,7 +22,7 @@ l2cap = ["bo-tie-l2cap"]
 std = ["bo-tie-hci-interface/std", "bo-tie-hci-util/std", "bo-tie-util/std"]
 
 # unstable bo-tie features (note: unstable features are not additive see: https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
-unstable = ["bo-tie-hci-util/unstable", "bo-tie-hci-interface/unstable"]
+unstable = ["bo-tie-hci-util/unstable", "bo-tie-hci-interface/unstable", "unstable-type-alias-impl-trait"]
 unstable-type-alias-impl-trait = []
 
 # These features map to the LE features. Every feature listed within

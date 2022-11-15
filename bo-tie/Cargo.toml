@@ -38,12 +38,10 @@ serde = ["bo-tie-util/serde", "bo-tie-sm/serde"]
 
 # Unstable features
 #
-# These are subject to change and code enabled by this feature may not be "additive" (see: https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
-
+# These are subject to change and code enabled by these features may not be "additive" (see: https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
 unstable = [
     "bo-tie-hci-util/unstable", "bo-tie-hci-host/unstable", "bo-tie-hci-interface/unstable"
 ]
-unstable-type-alias-impl-trait = [ "bo-tie-hci-host/unstable-type-alias-impl-trait" ]
 
 
 [package.metadata.docs.rs]
