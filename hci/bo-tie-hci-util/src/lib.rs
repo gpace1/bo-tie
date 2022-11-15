@@ -74,6 +74,7 @@ extern crate core;
 
 pub mod channel;
 pub mod events;
+mod impl_trait_ext;
 pub mod le;
 pub mod local_channel;
 pub mod opcodes;

@@ -2,8 +2,8 @@
 //!
 //! [tokio]: tokio
 
-use crate::channel::impl_trait_ext::SendSafeHostChannelEnds;
 use crate::channel::SendSafeChannelReserve;
+use crate::impl_trait_ext::SendSafeHostChannelEnds;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
