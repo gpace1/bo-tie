@@ -184,17 +184,17 @@ pub trait SendAndSyncSafeSender<'z>:
         SendFuture<'z> = Self::SendAndSyncSafeSendFuture,
     >
 {
-    type SendAndSyncSafeError: Send + Debug;
-    type SendAndSyncSafeMessage: Send + Unpin;
-    type SendAndSyncSafeSendFuture: Send + Future<Output = Result<(), Self::SendAndSyncSafeError>>;
+    type SendAndSyncSafeError: Send + Sync + Debug;
+    type SendAndSyncSafeMessage: Send + Sync + Unpin;
+    type SendAndSyncSafeSendFuture: Send + Sync + Future<Output = Result<(), Self::SendAndSyncSafeError>>;
 }
 
 impl<'z, T> SendAndSyncSafeSender<'z> for T
 where
     T: 'z + Send + Sync + Sender,
-    T::Error: Send,
-    T::Message: Send,
-    T::SendFuture<'z>: Send,
+    T::Error: Send + Sync,
+    T::Message: Send + Sync,
+    T::SendFuture<'z>: Send + Sync,
 {
     type SendAndSyncSafeError = T::Error;
     type SendAndSyncSafeMessage = T::Message;
@@ -289,8 +289,8 @@ pub trait SendAndSyncSafeChannel:
         Receiver = Self::SendAndSyncSafeReceiver,
     >
 {
-    type SendAndSyncSafeSenderError: Send + Debug;
-    type SendAndSyncSafeMessage: Send + Unpin;
+    type SendAndSyncSafeSenderError: Send + Sync + Debug;
+    type SendAndSyncSafeMessage: Send + Sync + Unpin;
     type SendAndSyncSafeSender: for<'z> SendAndSyncSafeSender<'z>;
     type SendAndSyncSafeReceiver: for<'z> SendAndSyncSafeReceiver<'z>;
 }
@@ -551,8 +551,8 @@ pub trait SendAndSyncSafeChannelReserve:
         ConnectionChannelEnds = Self::SendAndSyncSafeConnectionChannelEnds,
     >
 {
-    type SendAndSyncSafeError: Debug + Send;
-    type SendAndSyncSafeSenderError: Debug + Send;
+    type SendAndSyncSafeError: Debug + Send + Sync;
+    type SendAndSyncSafeSenderError: Debug + Send + Sync;
     type SendAndSyncSafeToHostCmdChannel: SendAndSyncSafeChannel<
         SendAndSyncSafeSenderError = Self::SendAndSyncSafeSenderError,
         SendAndSyncSafeMessage = ToHostCommandIntraMessage,
@@ -594,8 +594,8 @@ pub trait SendAndSyncSafeChannelReserve:
 impl<T> SendAndSyncSafeChannelReserve for T
 where
     T: Send + Sync + ChannelReserve,
-    T::Error: Send,
-    T::SenderError: Send,
+    T::Error: Send + Sync,
+    T::SenderError: Send + Sync,
     T::ToHostCmdChannel: SendAndSyncSafeChannel<
         SendAndSyncSafeSenderError = T::SenderError,
         SendAndSyncSafeMessage = ToHostCommandIntraMessage,
@@ -717,6 +717,7 @@ where
 /// [`HostChannelEnds`]: crate::HostChannelEnds
 pub trait SendAndSyncSafeHostChannelEnds:
     Send
+    + Sync
     + HostChannelEnds<
         ToBuffer = Self::SendAndSyncSafeToBuffer,
         FromBuffer = Self::SendAndSyncSafeFromBuffer,
@@ -729,7 +730,7 @@ pub trait SendAndSyncSafeHostChannelEnds:
 {
     type SendAndSyncSafeToBuffer: for<'a> SendAndSyncSafeBuffer<'a>;
     type SendAndSyncSafeFromBuffer: for<'a> SendAndSyncSafeBuffer<'a>;
-    type SendAndSyncSafeTakeBuffer: Send + Future<Output = Self::ToBuffer>;
+    type SendAndSyncSafeTakeBuffer: Send + Sync + Future<Output = Self::ToBuffer>;
     type SendAndSyncSafeSender: for<'a> SendAndSyncSafeSender<
         'a,
         Message = ToInterfaceIntraMessage<Self::SendAndSyncSafeToBuffer>,
@@ -744,10 +745,10 @@ pub trait SendAndSyncSafeHostChannelEnds:
 
 impl<T> SendAndSyncSafeHostChannelEnds for T
 where
-    T: Send + HostChannelEnds,
+    T: Send + Sync + HostChannelEnds,
     T::ToBuffer: for<'a> SendAndSyncSafeBuffer<'a>,
     T::FromBuffer: for<'a> SendAndSyncSafeBuffer<'a>,
-    T::TakeBuffer: Send,
+    T::TakeBuffer: Send + Sync,
     T::Sender: for<'a> SendAndSyncSafeSender<'a, SendAndSyncSafeMessage = ToInterfaceIntraMessage<T::ToBuffer>>,
     T::CmdReceiver: for<'a> SendAndSyncSafeReceiver<'a, SendAndSyncSafeMessage = ToHostCommandIntraMessage>,
     T::GenReceiver: for<'a> SendAndSyncSafeReceiver<
