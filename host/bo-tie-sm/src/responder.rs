@@ -402,7 +402,7 @@ impl<S, R> SecurityManager<S, R> {
         Irk: Into<Option<u128>>,
     {
         if self.link_encrypted {
-            let irk = irk.into().unwrap_or(toolbox::rand_u128());
+            let irk = irk.into().unwrap_or_else(|| toolbox::rand_u128());
 
             if let Some(super::Keys {
                 irk: ref mut irk_opt, ..
@@ -441,7 +441,7 @@ impl<S, R> SecurityManager<S, R> {
         Csrk: Into<Option<u128>>,
     {
         if self.link_encrypted {
-            let csrk = csrk.into().unwrap_or(toolbox::rand_u128());
+            let csrk = csrk.into().unwrap_or_else(|| toolbox::rand_u128());
 
             if let Some(super::Keys {
                 csrk: ref mut csrk_opt, ..
