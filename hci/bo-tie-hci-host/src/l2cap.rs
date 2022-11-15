@@ -6,7 +6,6 @@
 
 use crate::{AclBroadcastFlag, AclPacketBoundary, Connection, HciAclData, TryIntoLeL2capError};
 use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle};
-use core::cell::Cell;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
