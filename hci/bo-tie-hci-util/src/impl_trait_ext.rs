@@ -442,32 +442,32 @@ pub trait SendSafeChannelReserve:
         SendSafeMessage = ToHostCommandIntraMessage,
     >;
     type SendSafeToHostGenChannel: SendSafeChannel<
-        SendSafeSenderError = Self::SenderError,
+        SendSafeSenderError = Self::SendSafeSenderError,
         SendSafeMessage = ToHostGeneralIntraMessage<Self::SendSafeConnectionChannelEnds>,
     >;
     type SendSafeFromHostChannel: SendSafeBufferReserve
         + SendSafeChannel<
-            SendSafeSenderError = Self::SenderError,
+            SendSafeSenderError = Self::SendSafeSenderError,
             SendSafeMessage = ToInterfaceIntraMessage<
                 <Self::SendSafeFromHostChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >;
     type SendSafeToConnectionDataChannel: SendSafeBufferReserve
         + SendSafeChannel<
-            SendSafeSenderError = Self::SenderError,
+            SendSafeSenderError = Self::SendSafeSenderError,
             SendSafeMessage = ToConnectionDataIntraMessage<
                 <Self::SendSafeToConnectionDataChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
         >;
 
     type SendSafeToConnectionEventChannel: SendSafeChannel<
-        SendSafeSenderError = Self::SenderError,
+        SendSafeSenderError = Self::SendSafeSenderError,
         SendSafeMessage = ToConnectionEventIntraMessage,
     >;
 
     type SendSafeFromConnectionChannel: SendSafeBufferReserve
         + SendSafeChannel<
-            SendSafeSenderError = Self::SenderError,
+            SendSafeSenderError = Self::SendSafeSenderError,
             SendSafeMessage = FromConnectionIntraMessage<
                 <Self::SendSafeFromConnectionChannel as SendSafeBufferReserve>::SendSafeBuffer,
             >,
@@ -558,32 +558,32 @@ pub trait SendAndSyncSafeChannelReserve:
         SendAndSyncSafeMessage = ToHostCommandIntraMessage,
     >;
     type SendAndSyncSafeToHostGenChannel: SendAndSyncSafeChannel<
-        SendAndSyncSafeSenderError = Self::SenderError,
+        SendAndSyncSafeSenderError = Self::SendAndSyncSafeSenderError,
         SendAndSyncSafeMessage = ToHostGeneralIntraMessage<Self::SendAndSyncSafeConnectionChannelEnds>,
     >;
     type SendAndSyncSafeFromHostChannel: SendAndSyncSafeBufferReserve
         + SendAndSyncSafeChannel<
-            SendAndSyncSafeSenderError = Self::SenderError,
+            SendAndSyncSafeSenderError = Self::SendAndSyncSafeSenderError,
             SendAndSyncSafeMessage = ToInterfaceIntraMessage<
                 <Self::SendAndSyncSafeFromHostChannel as SendAndSyncSafeBufferReserve>::SendAndSyncSafeBuffer,
             >,
         >;
     type SendAndSyncSafeToConnectionDataChannel: SendAndSyncSafeBufferReserve
         + SendAndSyncSafeChannel<
-            SendAndSyncSafeSenderError = Self::SenderError,
+            SendAndSyncSafeSenderError = Self::SendAndSyncSafeSenderError,
             SendAndSyncSafeMessage = ToConnectionDataIntraMessage<
                 <Self::SendAndSyncSafeToConnectionDataChannel as SendAndSyncSafeBufferReserve>::SendAndSyncSafeBuffer,
             >,
         >;
 
     type SendAndSyncSafeToConnectionEventChannel: SendAndSyncSafeChannel<
-        SendAndSyncSafeSenderError = Self::SenderError,
+        SendAndSyncSafeSenderError = Self::SendAndSyncSafeSenderError,
         SendAndSyncSafeMessage = ToConnectionEventIntraMessage,
     >;
 
     type SendAndSyncSafeFromConnectionChannel: SendAndSyncSafeBufferReserve
         + SendAndSyncSafeChannel<
-            SendAndSyncSafeSenderError = Self::SenderError,
+            SendAndSyncSafeSenderError = Self::SendAndSyncSafeSenderError,
             SendAndSyncSafeMessage = FromConnectionIntraMessage<
                 <Self::SendAndSyncSafeFromConnectionChannel as SendAndSyncSafeBufferReserve>::SendAndSyncSafeBuffer,
             >,
@@ -672,11 +672,11 @@ pub trait SendSafeHostChannelEnds:
     type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
     type SendSafeFromBuffer: for<'a> SendSafeBuffer<'a>;
     type SendSafeTakeBuffer: Send + Future<Output = Self::ToBuffer>;
-    type SendSafeSender: for<'a> SendSafeSender<'a, Message = ToInterfaceIntraMessage<Self::SendSafeToBuffer>>;
-    type SendSafeCmdReceiver: for<'a> SendSafeReceiver<'a, Message = ToHostCommandIntraMessage>;
+    type SendSafeSender: for<'a> SendSafeSender<'a, SendSafeMessage = ToInterfaceIntraMessage<Self::SendSafeToBuffer>>;
+    type SendSafeCmdReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToHostCommandIntraMessage>;
     type SendSafeGenReceiver: for<'a> SendSafeReceiver<
         'a,
-        Message = ToHostGeneralIntraMessage<Self::SendSafeConnectionChannelEnds>,
+        SendSafeMessage = ToHostGeneralIntraMessage<Self::SendSafeConnectionChannelEnds>,
     >;
     type SendSafeConnectionChannelEnds: SendSafeConnectionChannelEnds;
 }
@@ -733,12 +733,15 @@ pub trait SendAndSyncSafeHostChannelEnds:
     type SendAndSyncSafeTakeBuffer: Send + Sync + Future<Output = Self::ToBuffer>;
     type SendAndSyncSafeSender: for<'a> SendAndSyncSafeSender<
         'a,
-        Message = ToInterfaceIntraMessage<Self::SendAndSyncSafeToBuffer>,
+        SendAndSyncSafeMessage = ToInterfaceIntraMessage<Self::SendAndSyncSafeToBuffer>,
     >;
-    type SendAndSyncSafeCmdReceiver: for<'a> SendAndSyncSafeReceiver<'a, Message = ToHostCommandIntraMessage>;
+    type SendAndSyncSafeCmdReceiver: for<'a> SendAndSyncSafeReceiver<
+        'a,
+        SendAndSyncSafeMessage = ToHostCommandIntraMessage,
+    >;
     type SendAndSyncSafeGenReceiver: for<'a> SendAndSyncSafeReceiver<
         'a,
-        Message = ToHostGeneralIntraMessage<Self::SendAndSyncSafeConnectionChannelEnds>,
+        SendAndSyncSafeMessage = ToHostGeneralIntraMessage<Self::SendAndSyncSafeConnectionChannelEnds>,
     >;
     type SendAndSyncSafeConnectionChannelEnds: SendAndSyncSafeConnectionChannelEnds;
 }
