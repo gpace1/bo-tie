@@ -152,7 +152,8 @@ pub trait SendSafeConnectionChannelEnds:
         FromBuffer = Self::SendSafeFromBuffer,
         TakeBuffer = Self::SendSafeTakeBuffer,
         Sender = Self::SendSafeSender,
-        DataReceiver = Self::SendSafeReceiver,
+        DataReceiver = Self::SendSafeDataReceiver,
+        EventReceiver = Self::SendSafeEventReceiver,
     >
 {
     type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
@@ -162,10 +163,11 @@ pub trait SendSafeConnectionChannelEnds:
         'z,
         SendSafeMessage = FromConnectionIntraMessage<Self::SendSafeToBuffer>,
     >;
-    type SendSafeReceiver: for<'z> SendSafeReceiver<
+    type SendSafeDataReceiver: for<'z> SendSafeReceiver<
         'z,
         SendSafeMessage = ToConnectionDataIntraMessage<Self::SendSafeFromBuffer>,
     >;
+    type SendSafeEventReceiver: for<'z> SendSafeReceiver<'z, SendSafeMessage = ToConnectionEventIntraMessage>;
 }
 
 impl<T> SendSafeConnectionChannelEnds for T
@@ -176,12 +178,14 @@ where
     T::TakeBuffer: Send,
     T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = FromConnectionIntraMessage<T::ToBuffer>>,
     T::DataReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToConnectionDataIntraMessage<T::FromBuffer>>,
+    T::EventReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToConnectionEventIntraMessage>,
 {
     type SendSafeToBuffer = T::ToBuffer;
     type SendSafeFromBuffer = T::FromBuffer;
     type SendSafeTakeBuffer = T::TakeBuffer;
     type SendSafeSender = T::Sender;
-    type SendSafeReceiver = T::DataReceiver;
+    type SendSafeDataReceiver = T::DataReceiver;
+    type SendSafeEventReceiver = T::EventReceiver;
 }
 
 /// The send safe equivalent of [`ChannelReserve`]
