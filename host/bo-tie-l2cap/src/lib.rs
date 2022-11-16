@@ -245,7 +245,7 @@ impl LeUserChannelIdentifier {
 ///
 /// These are errors that can occur when trying to translate raw data into a L2CAP basic information
 /// frame.
-#[derive(Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum BasicFrameError<E> {
     /// Raw data is too small for an ACL frame
     RawDataTooSmall,
