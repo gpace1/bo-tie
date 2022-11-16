@@ -360,6 +360,24 @@ pub enum ConnectionError<C: bo_tie_l2cap::ConnectionChannel> {
     SendError(bo_tie_l2cap::send_future::Error<C::SendFutErr>),
 }
 
+impl<C> PartialEq for ConnectionError<C>
+where
+    C: bo_tie_l2cap::ConnectionChannel,
+    <C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: PartialEq,
+    C::SendFutErr: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        use ConnectionError::*;
+
+        match (self, other) {
+            (AttError(e1), AttError(e2)) => e1.eq(e2),
+            (RecvError(r1), RecvError(r2)) => r1.eq(r2),
+            (SendError(s1), SendError(s2)) => s1.eq(s2),
+            _ => false,
+        }
+    }
+}
+
 impl<C: bo_tie_l2cap::ConnectionChannel, E: Into<Error>> From<E> for ConnectionError<C> {
     fn from(e: E) -> Self {
         Self::AttError(e.into())
@@ -955,7 +973,7 @@ mod test {
     struct DummySendFut<const DIRECTION: usize>(Arc<Mutex<TwoWayChannel>>, Vec<u8>);
 
     impl<const DIRECTION: usize> Future for DummySendFut<DIRECTION> {
-        type Output = Result<(), bo_tie_l2cap::send_future::Error<()>>;
+        type Output = Result<(), bo_tie_l2cap::send_future::Error<usize>>;
 
         fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.get_mut();
@@ -1046,7 +1064,7 @@ mod test {
     impl bo_tie_l2cap::ConnectionChannel for Channel1 {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut<1>;
-        type SendFutErr = ();
+        type SendFutErr = usize;
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<2>;
 
@@ -1076,7 +1094,7 @@ mod test {
     impl bo_tie_l2cap::ConnectionChannel for Channel2 {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut<2>;
-        type SendFutErr = ();
+        type SendFutErr = usize;
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<1>;
 
@@ -1179,7 +1197,11 @@ mod test {
                     Ok(l2cap_data_vec) => {
                         for l2cap_pdu in l2cap_data_vec {
                             match server.process_acl_data(&mut c2, &l2cap_pdu).await {
-                                Err(super::Error::UnknownOpcode(op)) if op == kill_opcode => break 'server_loop Ok(()),
+                                Err(ConnectionError::AttError(super::Error::UnknownOpcode(op)))
+                                    if op == kill_opcode =>
+                                {
+                                    break 'server_loop Ok(())
+                                }
                                 Err(e) => {
                                     break 'server_loop Err(format!(
                                         "Pdu error: {:?}, att pdu op: {:?}",
