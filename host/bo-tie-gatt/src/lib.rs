@@ -625,8 +625,8 @@ impl Default for GapServiceBuilder<'_> {
 /// # struct CC;
 /// # impl bo_tie_l2cap::ConnectionChannel for CC {
 /// #     type SendBuffer = DeVec<u8>;
-/// #     type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), send_future::Error<()>>>>>;
-/// #     type SendFutErr = ();
+/// #     type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), send_future::Error<usize>>>>>;
+/// #     type SendFutErr = usize;
 /// #     type RecvBuffer = DeVec<u8>;
 /// #     type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>>>>;
 /// #     fn send(&self,data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
@@ -772,95 +772,228 @@ where
     where
         C: ConnectionChannel,
     {
+        struct Response<'a, Q> {
+            server: &'a Server<Q>,
+            is_128_uuids: bool,
+            start_handle: usize,
+            ending_handle: usize,
+            max_payload_size: usize,
+            shortcut: usize,
+        }
+
+        impl<'a, Q: att::server::QueuedWriter> Response<'a, Q> {
+            fn new<C: ConnectionChannel>(
+                connection_channel: &C,
+                server: &'a Server<Q>,
+                is_128_uuids: bool,
+                start_handle: usize,
+                ending_handle: usize,
+            ) -> Self {
+                // The first 2 bytes of the response are the attribute opcode and length
+                let max_payload_size = core::cmp::min(connection_channel.get_mtu() - 2, <u8>::MAX.into());
+
+                let shortcut = 0;
+
+                Self {
+                    server,
+                    is_128_uuids,
+                    start_handle,
+                    ending_handle,
+                    max_payload_size,
+                    shortcut,
+                }
+            }
+
+            fn check(&self, service: &ServiceGroupData) -> bool {
+                if self.is_128_uuids {
+                    (!service.service_uuid.can_be_16_bit())
+                        && <usize>::from(service.service_handle) >= self.start_handle
+                        && <usize>::from(service.service_handle) <= self.ending_handle
+                        && self.server.rbgt_permission_check(service).is_ok()
+                } else {
+                    service.service_uuid.can_be_16_bit()
+                        && <usize>::from(service.service_handle) >= self.start_handle
+                        && <usize>::from(service.service_handle) <= self.ending_handle
+                        && self.server.rbgt_permission_check(service).is_ok()
+                }
+            }
+
+            /// Check if any
+            ///
+            /// # Returns
+            /// * `Ok(true)` -> when a service is found that the client can read
+            /// * `Ok(false)` -> no service is found
+            /// * `Err(error)` -> a service was found but the client does
+            ///                   not have permissions to read it.
+            fn has_any(&mut self) -> Result<bool, att::pdu::Error> {
+                self.server.primary_services[self.shortcut..]
+                    .iter()
+                    .enumerate()
+                    .find_map(|(cnt, service_data)| {
+                        if self.is_128_uuids
+                            && (!service_data.service_uuid.can_be_16_bit())
+                            && <usize>::from(service_data.service_handle) >= self.start_handle
+                            && <usize>::from(service_data.service_handle) <= self.ending_handle
+                        {
+                            self.shortcut = self.shortcut + cnt;
+
+                            Some(self.server.rbgt_permission_check(service_data))
+                        } else if !self.is_128_uuids
+                            && service_data.service_uuid.can_be_16_bit()
+                            && <usize>::from(service_data.service_handle) >= self.start_handle
+                            && <usize>::from(service_data.service_handle) <= self.ending_handle
+                            && self.server.rbgt_permission_check(service_data).is_ok()
+                        {
+                            self.shortcut = self.shortcut + cnt;
+
+                            Some(self.server.rbgt_permission_check(service_data))
+                        } else {
+                            None
+                        }
+                    })
+                    .transpose()
+                    .map(|o| o.is_some())
+            }
+
+            /// The size of each response structure
+            ///
+            /// A response structure contains the attribute handle of the service, the end group
+            /// handle of the service, and the UUID of the service value.
+            fn data_size(&self) -> usize {
+                if self.is_128_uuids {
+                    4 + 16
+                } else {
+                    4 + 2
+                }
+            }
+        }
+
+        impl<Q: att::server::QueuedWriter> bo_tie_att::TransferFormatInto for Response<'_, Q> {
+            fn len_of_into(&self) -> usize {
+                1 + self.server.primary_services[self.shortcut..]
+                    .iter()
+                    .filter(|service_data| self.check(service_data))
+                    .enumerate()
+                    .take_while(|(cnt, _)| self.max_payload_size >= (cnt + 1) * self.data_size())
+                    .map(|_| self.data_size())
+                    .sum::<usize>()
+            }
+
+            fn build_into_ret(&self, into_ret: &mut [u8]) {
+                into_ret[0] = self.data_size() as u8;
+
+                self.server.primary_services[self.shortcut..]
+                    .iter()
+                    .filter(|service_data| self.check(service_data))
+                    .enumerate()
+                    .take_while(|(cnt, _)| self.max_payload_size >= (cnt + 1) * self.data_size())
+                    .map(|(_, service_data)| service_data)
+                    .fold(&mut into_ret[1..], |into_ret, service_data| {
+                        service_data.service_handle.build_into_ret(&mut into_ret[..2]);
+
+                        service_data.end_group_handle.build_into_ret(&mut into_ret[2..4]);
+
+                        service_data
+                            .service_uuid
+                            .build_into_ret(&mut into_ret[4..self.data_size()]);
+
+                        &mut into_ret[self.data_size()..]
+                    });
+            }
+        }
+
         match att::TransferFormatTryFrom::try_from(payload) {
             Ok(att::pdu::TypeRequest {
                 handle_range,
                 attr_type: ServiceDefinition::PRIMARY_SERVICE_TYPE,
             }) => {
-                use att::pdu::{ReadByGroupTypeResponse, ReadGroupTypeData};
+                if handle_range.is_valid() {
+                    let mut list_16 = Response::new(
+                        connection_channel,
+                        self,
+                        false,
+                        handle_range.starting_handle.into(),
+                        handle_range.ending_handle.into(),
+                    );
 
-                let mut service_iter = self
-                    .primary_services
-                    .iter()
-                    .filter(|s| {
-                        s.service_handle >= handle_range.starting_handle
-                            && s.service_handle <= handle_range.ending_handle
-                    })
-                    .map(|s| self.rbgt_permission_check(s).map(|_| s))
-                    .peekable();
+                    let mut list_128 = Response::new(
+                        connection_channel,
+                        self,
+                        true,
+                        handle_range.starting_handle.into(),
+                        handle_range.ending_handle.into(),
+                    );
 
-                // Check the permissions of the first service and determine if the client can
-                // access the service UUID. If no error is returned by `permissions_error` then
-                // the next UUIDs of the same type (16 bits or 128 bits) and permissible to the
-                // client are added to the response packet until the max size of the packet is
-                // reached. The first packet processed that is not of the same type or is not
-                // permissible to the client stops the addition of UUIDs and the response packet
-                // is then sent to the client.
-                match service_iter.peek() {
-                    Some(Ok(first_service)) => {
-                        // pdu header size is 2 bytes
-                        let payload_size = connection_channel.get_mtu() - 2;
-                        let can_be_16_bit = first_service.service_uuid.can_be_16_bit();
+                    // Start with 16 bit UUIDs
+                    match list_16.has_any() {
+                        Ok(true) => {
+                            let pdu =
+                                att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), list_16);
 
-                        let build_response_iter =
-                            service_iter.take_while(|rslt| rslt.is_ok()).map(|rslt| rslt.unwrap());
+                            self.server.send_pdu(connection_channel, pdu).await
+                        }
+                        Err(e) => {
+                            self.server
+                                .send_error(
+                                    connection_channel,
+                                    handle_range.starting_handle,
+                                    att::client::ClientPduName::ReadByGroupTypeRequest,
+                                    e,
+                                )
+                                .await?;
 
-                        // Each data_size is 4 bytes for the attribute handle + the end group handle
-                        // and either 2 bytes for short UUIDs or 16 bytes for full UUIDs
-                        //
-                        // Each collection is made to take while the *current* iteration does not
-                        // overrun the maximum payload size.
-                        let response = if can_be_16_bit {
-                            build_response_iter
-                                .take_while(|s| s.service_uuid.can_be_16_bit())
-                                .enumerate()
-                                .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 2))
-                                .by_ref()
-                                .map(|(_, s)| {
-                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_uuid)
-                                })
-                                .collect()
-                        } else {
-                            build_response_iter
-                                .enumerate()
-                                .take_while(|(cnt, _)| payload_size > (cnt + 1) * (4 + 16))
-                                .by_ref()
-                                .map(|(_, s)| {
-                                    ReadGroupTypeData::new(s.service_handle, s.end_group_handle, s.service_uuid)
-                                })
-                                .collect()
-                        };
+                            Err(e.into())
+                        }
+                        // try 128 bit UUIDs
+                        Ok(false) => match list_128.has_any() {
+                            Ok(true) => {
+                                let pdu = att::pdu::Pdu::new(
+                                    att::server::ServerPduName::ReadByGroupTypeResponse.into(),
+                                    list_128,
+                                );
 
-                        let pdu = att::pdu::read_by_group_type_response(ReadByGroupTypeResponse::new(response));
+                                self.server.send_pdu(connection_channel, pdu).await
+                            }
+                            Ok(false) => {
+                                self.server
+                                    .send_error(
+                                        connection_channel,
+                                        handle_range.starting_handle,
+                                        att::client::ClientPduName::ReadByGroupTypeRequest,
+                                        att::pdu::Error::AttributeNotFound,
+                                    )
+                                    .await?;
 
-                        self.server.send_pdu(connection_channel, pdu).await
+                                // This does not return an error as it may
+                                // be part of the normal operation of service
+                                // discovery.
+                                Ok(())
+                            }
+                            Err(e) => {
+                                self.server
+                                    .send_error(
+                                        connection_channel,
+                                        handle_range.starting_handle,
+                                        att::client::ClientPduName::ReadByGroupTypeRequest,
+                                        e,
+                                    )
+                                    .await?;
+
+                                Err(e.into())
+                            }
+                        },
                     }
+                } else {
+                    self.server
+                        .send_error(
+                            connection_channel,
+                            0,
+                            att::client::ClientPduName::ReadByGroupTypeRequest,
+                            att::pdu::Error::UnlikelyError,
+                        )
+                        .await?;
 
-                    // Client didn't have adequate permissions to access the first service
-                    Some(Err(e)) => {
-                        self.server
-                            .send_error(
-                                connection_channel,
-                                handle_range.starting_handle,
-                                att::client::ClientPduName::ReadByGroupTypeRequest,
-                                (*e).into(),
-                            )
-                            .await?;
-
-                        return Err((*e).into());
-                    }
-
-                    // No service attributes found within the requested range
-                    None => {
-                        self.server
-                            .send_error(
-                                connection_channel,
-                                handle_range.starting_handle,
-                                att::client::ClientPduName::ReadByGroupTypeRequest,
-                                att::pdu::Error::AttributeNotFound,
-                            )
-                            .await
-                    }
+                    Err(att::pdu::Error::UnlikelyError.into())
                 }
             }
             Ok(att::pdu::TypeRequest { handle_range, .. }) => {
@@ -925,12 +1058,12 @@ impl<Q> core::ops::DerefMut for Server<Q> {
 /// Since this is really just a wrapper, it can be created from an Attribute `Client`.
 ///
 /// ```
-/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) {
+/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) -> Result<(), bo_tie_att::ConnectionError<C>> {
 /// use bo_tie_att::client::ConnectClient;
 /// use bo_tie_gatt::Client;
 ///
 /// let gatt_client: Client = ConnectClient::connect(&mut connection_channel, 64).await?.into();
-/// # }
+/// # Ok(()) }
 /// ```
 ///
 /// [`Client`]: bo_tie_att::client::Client
@@ -1097,7 +1230,7 @@ mod tests {
     struct DummySendFut;
 
     impl Future for DummySendFut {
-        type Output = Result<(), send_future::Error<()>>;
+        type Output = Result<(), send_future::Error<usize>>;
 
         fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
             Poll::Ready(Ok(()))
@@ -1197,7 +1330,7 @@ mod tests {
     impl ConnectionChannel for TestChannel {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut;
-        type SendFutErr = ();
+        type SendFutErr = usize;
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut where Self: 'a,;
 
@@ -1331,5 +1464,22 @@ mod tests {
             Ok(()),
             server.process_acl_data(&mut test_channel, &acl_client_pdu).await
         );
+    }
+
+    fn is_send<T: Future + Send>(t: T) {}
+
+    #[allow(dead_code)]
+    fn send_test<C>(mut c: C)
+    where
+        C: ConnectionChannel + Send + Sync,
+        <C::RecvBuffer as TryExtend<u8>>::Error: Send,
+        C::SendFutErr: Send,
+        for<'a> C::SendFut<'a>: Send,
+    {
+        let gap = GapServiceBuilder::new("dev", None);
+
+        let server = ServerBuilder::from(gap).make_server(NoQueuedWrites);
+
+        is_send(server.process_read_by_group_type_request(&c, &[]))
     }
 }
