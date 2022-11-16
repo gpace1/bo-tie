@@ -529,7 +529,7 @@ where
 
     /// Check if a client can write the given attribute
     ///
-    /// Returns the error as to why the client couldn't read the attribute
+    /// Returns the error as to why the client cannot write to the the attribute
     fn client_can_write_attribute<V>(&self, att: &super::Attribute<V>) -> Option<pdu::Error> {
         self.validate_permissions(att.get_permissions(), &super::FULL_WRITE_PERMISSIONS)
     }
@@ -908,39 +908,97 @@ where
             handle_range.ending_handle
         );
 
-        /// Handle with UUID iterator
-        ///
-        /// The boolean is used to indicate whether or not the iterator is over short or long UUIDs.
-        struct HandleUuidItr<I: Iterator<Item = (u16, crate::Uuid)> + Clone>(bool, I);
+        macro_rules! iter_response {
+            ($response:expr) => {
+                $response
+                    .server
+                    .attributes
+                    .attributes
+                    .get($response.start_handle..=$response.ending_handle)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .take_while(|(cnt, _)| {
+                        let parameter_size = if $response.is_128_uuids { 16 } else { 2 } + 2;
 
-        impl<I: Iterator<Item = (u16, crate::Uuid)> + Clone> TransferFormatInto for HandleUuidItr<I> {
+                        (cnt + 1) * parameter_size < $response.max_payload_size
+                    })
+                    .map(|(_, attribute)| attribute)
+            };
+        }
+        /// Response to a find information request
+        struct Response<'a, Q> {
+            server: &'a Server<Q>,
+            start_handle: usize,
+            ending_handle: usize,
+            is_128_uuids: bool,
+            max_payload_size: usize,
+        }
+
+        impl<'a, Q> Response<'a, Q>
+        where
+            Q: QueuedWriter,
+        {
+            fn new<C: ConnectionChannel>(
+                connection_channel: &C,
+                server: &'a Server<Q>,
+                is_128_uuids: bool,
+                start_handle: usize,
+                ending_handle: usize,
+            ) -> Self {
+                let max_payload_size = core::cmp::min(connection_channel.get_mtu() - 2, <u8>::MAX.into());
+
+                Self {
+                    server,
+                    start_handle,
+                    ending_handle,
+                    is_128_uuids,
+                    max_payload_size,
+                }
+            }
+
+            /// Check the UUID of the attribute
+            fn check<T>(&self, attribute: &crate::Attribute<T>) -> bool {
+                if self.is_128_uuids {
+                    !attribute.get_uuid().can_be_16_bit() && self.server.client_can_read_attribute(attribute).is_none()
+                } else {
+                    attribute.get_uuid().can_be_16_bit() && self.server.client_can_read_attribute(attribute).is_none()
+                }
+            }
+
+            fn has_any(&self) -> bool {
+                iter_response!(self).any(|attribute| self.check(attribute))
+            }
+        }
+
+        impl<Q: QueuedWriter> TransferFormatInto for Response<'_, Q> {
             fn len_of_into(&self) -> usize {
-                1 + self
-                    .1
-                    .clone()
-                    .fold(0usize, |acc, (h, u)| acc + h.len_of_into() + u.len_of_into())
+                iter_response!(self)
+                    .filter(|attribute| self.check(attribute))
+                    .map(|_| 2 + if self.is_128_uuids { 16 } else { 2 })
+                    .sum::<usize>()
+                    + 1
             }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
                 const SHORT_FORMAT: u8 = 1;
                 const LONG_FORMAT: u8 = 2;
 
-                let mut offset = 1;
+                into_ret[0] = if self.is_128_uuids { SHORT_FORMAT } else { LONG_FORMAT };
 
-                into_ret[0] = if self.0 { SHORT_FORMAT } else { LONG_FORMAT };
+                iter_response!(self).fold(&mut into_ret[1..], |into_ret, attribute| {
+                    attribute.get_handle().unwrap().build_into_ret(&mut into_ret[..2]);
 
-                self.1.clone().for_each(|(h, u)| {
-                    let h_len = h.len_of_into();
-                    let u_len = u.len_of_into();
+                    if self.is_128_uuids {
+                        attribute.get_uuid().build_into_ret(&mut into_ret[2..18]);
 
-                    h.build_into_ret(&mut into_ret[offset..(offset + h_len)]);
+                        &mut into_ret[18..]
+                    } else {
+                        attribute.get_uuid().build_into_ret(&mut into_ret[2..4]);
 
-                    offset += h_len;
-
-                    u.build_into_ret(&mut into_ret[offset..(offset + u_len)]);
-
-                    offset += u_len;
-                })
+                        &mut into_ret[4..]
+                    }
+                });
             }
         }
 
@@ -951,46 +1009,17 @@ where
             let start = min(handle_range.starting_handle as usize, self.attributes.count());
             let stop = min(handle_range.ending_handle as usize, self.attributes.count());
 
-            let payload_max = connection_channel.get_mtu() - 2;
-
-            // Size of each handle + 16-bit-uuid responded pair
-            let item_size_16 = 4;
-
             // Try to build response_payload full of 16 bit attribute types. This will stop at the
             // first attribute type that cannot be converted into a shortened 16 bit UUID or where
             // the client does not have permissions to access the attribute.
-            let mut handle_uuids_16_bit_itr = HandleUuidItr(
-                false,
-                self.attributes.attributes[start..stop]
-                    .iter()
-                    .filter(|att| att.get_uuid().can_be_16_bit())
-                    .take_while(|att| self.client_can_write_attribute(att).is_none())
-                    .enumerate()
-                    .take_while(|(cnt, _)| (cnt + 1) * item_size_16 < payload_max)
-                    .map(|(_, att)| (att.get_handle().unwrap(), *att.get_uuid()))
-                    .peekable(),
-            );
+            let response_16 = Response::new(connection_channel, self, false, start, stop);
 
-            if let None = handle_uuids_16_bit_itr.1.peek() {
+            if !response_16.has_any() {
                 // If there is no 16 bit UUIDs then the UUIDs must be sent in the full 128 bit form.
 
-                // Size of each handle + 128-bit uuid responded pair
-                let item_size_128 = 18;
+                let response_128 = Response::new(connection_channel, self, true, start, stop);
 
-                // Collect all UUIDs until the PDU is full or the first unreadable attribute is
-                // found.
-                let mut handle_uuids_128_bit_itr = HandleUuidItr(
-                    true,
-                    self.attributes.attributes[start..start]
-                        .iter()
-                        .take_while(|att| self.client_can_read_attribute(att).is_none())
-                        .enumerate()
-                        .take_while(|(cnt, _)| (cnt + 1) * item_size_128 < payload_max)
-                        .map(|(_, att)| (att.get_handle().unwrap(), *att.get_uuid()))
-                        .peekable(),
-                );
-
-                if let None = handle_uuids_128_bit_itr.1.peek() {
+                if !response_128.has_any() {
                     // If there are still no UUIDs then there are no UUIDs within the given range
                     // or none had the required read permissions for this operation.
 
@@ -1002,14 +1031,12 @@ where
                     )
                     .await
                 } else {
-                    let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_128_bit_itr);
+                    let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response_128);
 
                     self.send_pdu(connection_channel, pdu).await
                 }
             } else {
-                // Send the 16 bit UUIDs
-
-                let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), handle_uuids_16_bit_itr);
+                let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response_16);
 
                 self.send_pdu(connection_channel, pdu).await
             }

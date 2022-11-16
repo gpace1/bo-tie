@@ -35,7 +35,7 @@ impl SendWatchConnection {
 impl ConnectionChannel for SendWatchConnection {
     type SendBuffer = DeVec<u8>;
     type SendFut<'a> = DummySendFut;
-    type SendFutErr = ();
+    type SendFutErr = usize;
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 

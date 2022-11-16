@@ -4,10 +4,14 @@ mod basic_queue_writer;
 mod blob_data;
 mod permissions;
 
-use crate::{pdu, TransferFormatInto};
+use crate::client::ClientPduName;
+use crate::pdu::{ExecuteWriteFlag, HandleRange, ReadBlobRequest, TypeRequest};
+use crate::server::{NoQueuedWrites, ServerAttributes};
+use crate::{pdu, Server, TransferFormatInto};
 use alloc::vec::Vec;
+use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::send_future::Error;
-use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ConnectionChannel, L2capFragment, MinimumMtu};
+use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ChannelIdentifier, ConnectionChannel, L2capFragment, MinimumMtu};
 use bo_tie_util::buffer::de_vec::DeVec;
 use bo_tie_util::buffer::TryExtend;
 use core::{
@@ -25,7 +29,7 @@ struct DummyConnection;
 struct DummySendFut;
 
 impl Future for DummySendFut {
-    type Output = Result<(), Error<()>>;
+    type Output = Result<(), Error<usize>>;
 
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(Ok(()))
@@ -45,7 +49,7 @@ impl Future for DummyRecvFut {
 impl ConnectionChannel for DummyConnection {
     type SendBuffer = DeVec<u8>;
     type SendFut<'a> = DummySendFut;
-    type SendFutErr = ();
+    type SendFutErr = usize;
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
@@ -83,7 +87,7 @@ struct PayloadConnection {
 impl ConnectionChannel for PayloadConnection {
     type SendBuffer = DeVec<u8>;
     type SendFut<'a> = DummySendFut;
-    type SendFutErr = ();
+    type SendFutErr = usize;
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
@@ -98,15 +102,15 @@ impl ConnectionChannel for PayloadConnection {
     }
 
     fn get_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
     fn max_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
     fn min_mtu(&self) -> usize {
-        crate::l2cap::LeU::MIN_MTU
+        bo_tie_l2cap::LeU::MIN_MTU
     }
 
     fn receive(&mut self) -> Self::RecvFut<'_> {
@@ -116,4 +120,59 @@ impl ConnectionChannel for PayloadConnection {
 
 fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D>) -> BasicInfoFrame<Vec<u8>> {
     BasicInfoFrame::new(TransferFormatInto::into(&pdu), crate::L2CAP_CHANNEL_ID)
+}
+
+fn is_send<T: Future + Send>(t: T) {}
+
+#[allow(dead_code)]
+fn send_test<C>(mut c: C)
+where
+    C: ConnectionChannel + Send + Sync,
+    <C::RecvBuffer as TryExtend<u8>>::Error: Send,
+    C::SendFutErr: Send,
+    for<'a> C::SendFut<'a>: Send,
+{
+    let attributes = ServerAttributes::new();
+
+    let mut server = Server::new(attributes, NoQueuedWrites);
+
+    is_send(server.process_exchange_mtu_request(&mut c, 0));
+
+    is_send(server.process_write_request(&mut c, &[]));
+
+    is_send(server.process_read_request(&mut c, 0));
+
+    is_send(server.process_find_information_request(
+        &mut c,
+        HandleRange {
+            starting_handle: 0,
+            ending_handle: 0,
+        },
+    ));
+
+    is_send(server.process_find_by_type_value_request(&mut c, &[]));
+
+    is_send(server.process_read_by_type_request(
+        &mut c,
+        TypeRequest {
+            handle_range: HandleRange {
+                starting_handle: 0,
+                ending_handle: 0,
+            },
+            attr_type: Uuid::from_u16(0),
+        },
+    ));
+
+    is_send(server.process_read_blob_request(&mut c, ReadBlobRequest { handle: 0, offset: 0 }));
+
+    is_send(server.process_prepare_write_request(&mut c, &[]));
+
+    is_send(server.process_execute_write_request(&mut c, ExecuteWriteFlag::CancelAllPreparedWrites));
+
+    is_send(server.process_parsed_acl_data(&mut c, ClientPduName::FindInformationRequest, &[]));
+
+    is_send(server.process_acl_data(
+        &mut c,
+        &BasicInfoFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier),
+    ))
 }
