@@ -130,7 +130,7 @@ where
 /// errors preventing a connection, a [`Client`] will be created.
 ///
 /// ```
-/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) -> Result<(), impl core::fmt::Debug> {
+/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) -> Result<(), bo_tie_att::ConnectionError<C>> {
 /// use bo_tie_att::client::ConnectClient;
 ///
 /// // Initiate a connection to the Att server with
