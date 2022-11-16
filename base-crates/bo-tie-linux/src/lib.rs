@@ -383,7 +383,7 @@ fn from_adapter_id(
     let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).expect("epoll_create1 failed");
 
     // A set of signals used to abort the epoll
-    let mut signals_set = SigSet::all();
+    let mut signals_set = SigSet::empty();
 
     signals_set.add(Signal::SIGABRT);
     signals_set.add(Signal::SIGTERM);
