@@ -624,6 +624,8 @@ async fn main() {
                     if let Some(keys) = opt_keys.unwrap() {
                         keys
                     } else {
+                        println!("client disconnected but is not bonded, exiting example");
+
                         break
                     }
                 }
@@ -638,6 +640,8 @@ async fn main() {
                     ).await
                 }} => unreachable!(),
             );
+
+            println!("client disconnected and is bonded, beginning private directed advertising");
 
             // set advertising to directed
             advertising_type = AdvertisingType::Directed(keys);
