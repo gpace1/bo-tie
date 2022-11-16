@@ -84,6 +84,7 @@ impl ArcFileDesc {
 enum EPollResult {
     BluetoothController,
     TaskExit,
+    TaskTerm,
 }
 
 impl From<u64> for EPollResult {
@@ -91,6 +92,7 @@ impl From<u64> for EPollResult {
         match val {
             0 => EPollResult::BluetoothController,
             1 => EPollResult::TaskExit,
+            2 => EPollResult::TaskTerm,
             _ => panic!("Invalid EPollResult '{}'", val),
         }
     }
@@ -101,6 +103,7 @@ impl From<EPollResult> for u64 {
         match epr {
             EPollResult::BluetoothController => 0,
             EPollResult::TaskExit => 1,
+            EPollResult::TaskTerm => 2,
         }
     }
 }
@@ -228,6 +231,8 @@ impl AdapterThread {
                         read(self.exit_fd.raw_fd(), &mut [0u8; 8]).unwrap();
                         break 'task;
                     }
+
+                    EPollResult::TaskTerm => break 'task,
                 }
             }
         }
@@ -332,6 +337,8 @@ fn from_adapter_id(
     use nix::libc;
     use nix::sys::epoll::{epoll_create1, epoll_ctl, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
     use nix::sys::eventfd::{eventfd, EfdFlags};
+    use nix::sys::signal::{SigSet, Signal};
+    use nix::sys::signalfd::{signalfd, SfdFlags};
 
     use std::convert::TryInto;
 
@@ -375,6 +382,14 @@ fn from_adapter_id(
 
     let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).expect("epoll_create1 failed");
 
+    // A set of signals used to abort the epoll
+    let mut signals_set = SigSet::all();
+
+    signals_set.add(Signal::SIGABRT);
+    signals_set.add(Signal::SIGTERM);
+
+    let signals_fd = signalfd(-1, &signals_set, SfdFlags::SFD_CLOEXEC).expect("singalfd failed");
+
     epoll_ctl(
         epoll_fd,
         EpollOp::EpollCtlAdd,
@@ -388,6 +403,14 @@ fn from_adapter_id(
         EpollOp::EpollCtlAdd,
         exit_evt_fd,
         &mut EpollEvent::new(EpollFlags::EPOLLIN, EPollResult::TaskExit.into()),
+    )
+    .expect("epoll_ctl failed");
+
+    epoll_ctl(
+        epoll_fd,
+        EpollOp::EpollCtlAdd,
+        signals_fd,
+        &mut EpollEvent::new(EpollFlags::EPOLLIN, EPollResult::TaskTerm.into()),
     )
     .expect("epoll_ctl failed");
 
