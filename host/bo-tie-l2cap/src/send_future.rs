@@ -267,6 +267,7 @@ impl<C, F, S> State<C, F, S> {
 }
 
 /// Send future error
+#[derive(PartialEq)]
 pub enum Error<E> {
     DataTooLarge,
     User(E),
