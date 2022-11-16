@@ -582,7 +582,7 @@ async fn main() {
     let mut opt_connection_handle = None;
 
     let task = async {
-        loop {
+        'task: loop {
             let own_address_info = advertising_setup(&mut host, &advertising_type).await.unwrap();
 
             let connection = wait_for_connection(&mut host).await;
@@ -626,18 +626,21 @@ async fn main() {
                     } else {
                         println!("client disconnected but is not bonded, exiting example");
 
-                        break
+                        break 'task;
                     }
                 }
 
                 _ = async { loop {
-                    let opt_ltk = ltk_receiver.recv().await.unwrap();
-
-                    on_ltk_request_event(
-                        &mut host,
-                        opt_connection_handle.unwrap(),
-                        opt_ltk
-                    ).await
+                    if let Some(opt_ltk) = ltk_receiver.recv().await {
+                        on_ltk_request_event(
+                            &mut host,
+                            opt_connection_handle.unwrap(),
+                            opt_ltk
+                        ).await
+                    } else {
+                        // this may be reached if the `handle` is not polled first
+                        core::future::pending::<()>().await;
+                    }
                 }} => unreachable!(),
             );
 
@@ -649,7 +652,7 @@ async fn main() {
     };
 
     tokio::select!(
-        _ = task => unreachable!(),
+        _ = task => (),
         _ = exit_sig => (),
     );
 
