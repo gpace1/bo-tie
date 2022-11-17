@@ -10,6 +10,7 @@ bo-tie-gap = { path = "../../host/bo-tie-gap", optional = true }
 tokio = { version = "1", features = ["sync"], optional = true }
 futures = { version = "0.3", optional = true }
 async-std = { version = "1", optional = true }
+log = "0.4"
 
 [dev-dependencies]
 bo-tie-hci-host = { path = "../bo-tie-hci-host" }

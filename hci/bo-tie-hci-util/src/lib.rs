@@ -476,6 +476,12 @@ impl Default for AclFlowControl {
     }
 }
 
+pub struct ScoFlowControl(PacketBasedFlowControl);
+
+pub struct LeAclFlowControl(PacketBasedFlowControl);
+
+pub struct LeIsoFlowControl(PacketBasedFlowControl);
+
 trait FlowControl {
     /// Increase the flow control
     fn increase(&mut self, by: usize);
@@ -499,11 +505,22 @@ trait FlowControl {
 impl FlowControl for CommandFlowControl {
     fn increase(&mut self, by: usize) {
         self.send_count += by;
+
+        log::debug!(
+            "flow control: increasing command count by {} to {}",
+            by,
+            self.send_count
+        );
     }
 
     fn try_reduce<T: GetDataPayloadSize>(&mut self, data: &T) -> Result<(), ()> {
         if let Some(_) = data.get_payload_size() {
             self.send_count = self.send_count.checked_sub(1).ok_or(())?;
+
+            log::debug!(
+                "flow control: sent command to controller. Can send {} more",
+                self.send_count
+            );
         }
 
         Ok(())
@@ -558,15 +575,35 @@ impl FlowControl for BlockBasedFlowControl {
 impl FlowControl for AclFlowControl {
     fn increase(&mut self, by: usize) {
         match self {
-            Self::Packets(p) => p.increase(by),
-            Self::DataBlocks(b) => b.increase(by),
+            Self::Packets(p) => {
+                p.increase(by);
+
+                log::debug!("flow control: increasing ACL packet count by {} to {}", by, p.how_many);
+            }
+            Self::DataBlocks(b) => {
+                b.increase(by);
+
+                log::debug!("flow control: increasing ACL block count by {} to {}", by, b.how_many);
+            }
         }
     }
 
     fn try_reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) -> Result<(), ()> {
         match self {
-            Self::Packets(p) => p.try_reduce(payload_info),
-            Self::DataBlocks(b) => b.try_reduce(payload_info),
+            Self::Packets(p) => {
+                p.try_reduce(payload_info)?;
+
+                log::debug!("flow control: reducing ACL packet count to {}", p.how_many);
+
+                Ok(())
+            }
+            Self::DataBlocks(b) => {
+                b.try_reduce(payload_info)?;
+
+                log::debug!("flow control: reducing ACL block count to {}", b.how_many);
+
+                Ok(())
+            }
         }
     }
 
@@ -577,6 +614,49 @@ impl FlowControl for AclFlowControl {
         }
     }
 }
+
+macro_rules! impl_packet_based_fc_for {
+    ( $({ $ty:ty : $lit:literal }),* ) => {
+        $(
+            impl FlowControl for $ty {
+                fn increase(&mut self, by: usize) {
+                    self.0.increase(by);
+
+                    log::debug!(
+                        concat!("flow control: increasing ", $lit, " packet count by {} to {}"),
+                        by,
+                        self.0.how_many,
+                    );
+                }
+
+                fn try_reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) -> Result<(), ()> {
+                    self.0.try_reduce(payload_info)?;
+
+                    if log::log_enabled!(log::Level::Debug) {
+                        if payload_info.get_payload_size().is_some() {
+                            log::debug!(
+                                concat!("flow control: decreasing ", $lit, " packet count to {}"),
+                                self.0.how_many,
+                            );
+                        }
+                    }
+
+                    Ok(())
+                }
+
+                fn is_halted(&self) -> bool {
+                    self.0.is_halted()
+                }
+            }
+        )*
+    };
+}
+
+impl_packet_based_fc_for!(
+    { ScoFlowControl : "SCO" },
+    { LeAclFlowControl: "LE-ACL" },
+    { LeIsoFlowControl: "LE-ISO" }
+);
 
 /// A reserve of buffers
 ///
