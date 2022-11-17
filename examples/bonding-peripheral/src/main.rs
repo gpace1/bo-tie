@@ -56,6 +56,13 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
+    hi.mask_events([
+        Events::LeMeta(LeMeta::EnhancedConnectionComplete),
+        Events::DisconnectionComplete,
+    ])
+    .await
+    .unwrap();
+
     match ty {
         AdvertisingType::Undirected(local_name, address_info) => {
             let address = address_info.address;
@@ -79,23 +86,13 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             };
 
             set_random_address::send(hi, address).await.unwrap();
-
-            hi.mask_events([
-                Events::LeMeta(LeMeta::ConnectionComplete),
-                Events::DisconnectionComplete,
-            ])
-            .await
-            .unwrap();
         }
         AdvertisingType::Resolvable(keys) => {
             adv_data.try_push(adv_flags).unwrap();
 
-            hi.mask_events([
-                Events::LeMeta(LeMeta::ConnectionComplete),
-                Events::DisconnectionComplete,
-            ])
-            .await
-            .unwrap();
+            let identity = keys.get_identity().unwrap().get_address();
+
+            set_random_address::send(hi, identity).await.unwrap();
 
             use_resolving_list(hi, keys).await;
 
@@ -106,19 +103,19 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             if keys.get_peer_irk().is_some() {
                 adv_prams.advertising_type =
                     set_advertising_parameters::AdvertisingType::ConnectableLowDutyCycleDirectedAdvertising;
+
+                // This is directed advertising so the peer identity address is needed.
+                adv_prams.peer_address = keys.get_peer_identity().unwrap().1;
+
+                adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().0 {
+                    set_advertising_parameters::PeerAddressType::PublicAddress
+                } else {
+                    set_advertising_parameters::PeerAddressType::RandomAddress
+                };
             } else {
                 adv_prams.advertising_type =
                     set_advertising_parameters::AdvertisingType::ConnectableAndScannableUndirectedAdvertising;
             }
-
-            // This is directed advertising so the peer identity address is needed.
-            adv_prams.peer_address = keys.get_peer_identity().unwrap().1;
-
-            adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().0 {
-                set_advertising_parameters::PeerAddressType::PublicAddress
-            } else {
-                set_advertising_parameters::PeerAddressType::RandomAddress
-            };
 
             // this is the key for advertising with a resolvable private address
             adv_prams.own_address_type = OwnAddressType::RpaFromLocalIrkOrRandomAddress;
