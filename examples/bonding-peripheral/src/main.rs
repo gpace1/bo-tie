@@ -139,7 +139,8 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
 /// this is the default privacy of the controller).
 async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
     use bo_tie::hci::commands::le::{
-        add_device_to_resolving_list, set_privacy_mode, set_resolvable_private_address_timeout, PeerIdentityAddressType,
+        add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
+        set_resolvable_private_address_timeout, PeerIdentityAddressType,
     };
     use bo_tie::BluetoothDeviceAddress;
 
@@ -176,7 +177,7 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
         privacy_mode,
     };
 
-    // this is a 5.0+ command so it may not be available
+    // this is a 4.2+ command so it may not be available
     //
     // # Note
     // `PrivacyMode::DevicePrivacy` is only 5.0+ so for
@@ -189,12 +190,17 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
     set_resolvable_private_address_timeout::send(hi, std::time::Duration::from_secs(60 * 4))
         .await
         .unwrap();
+
+    set_address_resolution_enable::send(hi, true);
 }
 
 async fn remove_from_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
-    use bo_tie::hci::commands::le::remove_device_from_resolving_list;
-    use bo_tie::hci::commands::le::PeerIdentityAddressType;
+    use bo_tie::hci::commands::le::{
+        remove_device_from_resolving_list, set_address_resolution_enable, PeerIdentityAddressType,
+    };
     use bo_tie::BluetoothDeviceAddress;
+
+    set_address_resolution_enable::send(hi, false);
 
     let peer_identity_address_type = if keys.get_peer_identity().unwrap().0 {
         PeerIdentityAddressType::PublicIdentityAddress
@@ -608,7 +614,7 @@ async fn main() {
 
     // this example needs to set the routing policy to send the
     // encryption event to the connection async task.
-    host.set_event_routing_policy(bo_tie::hci::EventRoutingPolicy::All)
+    host.set_event_routing_policy(bo_tie::hci::EventRoutingPolicy::OnlyConnections)
         .await
         .unwrap();
 
