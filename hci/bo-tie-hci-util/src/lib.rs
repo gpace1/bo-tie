@@ -476,10 +476,13 @@ impl Default for AclFlowControl {
     }
 }
 
+#[derive(Default)]
 pub struct ScoFlowControl(PacketBasedFlowControl);
 
+#[derive(Default)]
 pub struct LeAclFlowControl(PacketBasedFlowControl);
 
+#[derive(Default)]
 pub struct LeIsoFlowControl(PacketBasedFlowControl);
 
 trait FlowControl {
@@ -506,7 +509,7 @@ impl FlowControl for CommandFlowControl {
     fn increase(&mut self, by: usize) {
         self.send_count += by;
 
-        log::debug!(
+        log::trace!(
             "flow control: increasing command count by {} to {}",
             by,
             self.send_count
@@ -517,7 +520,7 @@ impl FlowControl for CommandFlowControl {
         if let Some(_) = data.get_payload_size() {
             self.send_count = self.send_count.checked_sub(1).ok_or(())?;
 
-            log::debug!(
+            log::trace!(
                 "flow control: sent command to controller. Can send {} more",
                 self.send_count
             );
@@ -578,12 +581,12 @@ impl FlowControl for AclFlowControl {
             Self::Packets(p) => {
                 p.increase(by);
 
-                log::debug!("flow control: increasing ACL packet count by {} to {}", by, p.how_many);
+                log::trace!("flow control: increasing ACL packet count by {} to {}", by, p.how_many);
             }
             Self::DataBlocks(b) => {
                 b.increase(by);
 
-                log::debug!("flow control: increasing ACL block count by {} to {}", by, b.how_many);
+                log::trace!("flow control: increasing ACL block count by {} to {}", by, b.how_many);
             }
         }
     }
@@ -593,14 +596,14 @@ impl FlowControl for AclFlowControl {
             Self::Packets(p) => {
                 p.try_reduce(payload_info)?;
 
-                log::debug!("flow control: reducing ACL packet count to {}", p.how_many);
+                log::trace!("flow control: reducing ACL packet count to {}", p.how_many);
 
                 Ok(())
             }
             Self::DataBlocks(b) => {
                 b.try_reduce(payload_info)?;
 
-                log::debug!("flow control: reducing ACL block count to {}", b.how_many);
+                log::trace!("flow control: reducing ACL block count to {}", b.how_many);
 
                 Ok(())
             }
@@ -622,7 +625,7 @@ macro_rules! impl_packet_based_fc_for {
                 fn increase(&mut self, by: usize) {
                     self.0.increase(by);
 
-                    log::debug!(
+                    log::trace!(
                         concat!("flow control: increasing ", $lit, " packet count by {} to {}"),
                         by,
                         self.0.how_many,
@@ -632,9 +635,9 @@ macro_rules! impl_packet_based_fc_for {
                 fn try_reduce<T: GetDataPayloadSize>(&mut self, payload_info: &T) -> Result<(), ()> {
                     self.0.try_reduce(payload_info)?;
 
-                    if log::log_enabled!(log::Level::Debug) {
+                    if log::log_enabled!(log::Level::Trace) {
                         if payload_info.get_payload_size().is_some() {
-                            log::debug!(
+                            log::trace!(
                                 concat!("flow control: decreasing ", $lit, " packet count to {}"),
                                 self.0.how_many,
                             );
@@ -1131,9 +1134,9 @@ pub struct FlowCtrlReceiver<H: Receiver, C: Receiver> {
     last_received: FlowControlId,
     cmd_flow_control: CommandFlowControl,
     acl_flow_control: AclFlowControl,
-    sco_flow_control: PacketBasedFlowControl,
-    le_acl_flow_control: PacketBasedFlowControl,
-    le_iso_flow_control: PacketBasedFlowControl,
+    sco_flow_control: ScoFlowControl,
+    le_acl_flow_control: LeAclFlowControl,
+    le_iso_flow_control: LeIsoFlowControl,
     waker: Option<core::task::Waker>,
 }
 
@@ -1178,17 +1181,17 @@ impl<H: Receiver, C: Receiver> FlowCtrlReceiver<H, C> {
             how_many: buffer_info.acl.count,
         });
 
-        self.sco_flow_control = PacketBasedFlowControl {
+        self.sco_flow_control = ScoFlowControl(PacketBasedFlowControl {
             how_many: buffer_info.sco.count,
-        };
+        });
 
-        self.le_acl_flow_control = PacketBasedFlowControl {
+        self.le_acl_flow_control = LeAclFlowControl(PacketBasedFlowControl {
             how_many: buffer_info.le_acl.count,
-        };
+        });
 
-        self.le_iso_flow_control = PacketBasedFlowControl {
+        self.le_iso_flow_control = LeIsoFlowControl(PacketBasedFlowControl {
             how_many: buffer_info.le_iso.count,
-        };
+        });
     }
 
     pub fn set_waker(&mut self, waker: &core::task::Waker) {
