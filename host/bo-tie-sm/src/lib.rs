@@ -655,11 +655,8 @@ impl Keys {
     ///
     /// Returns a bluetooth device address along with a flag to indicate if the address is a public.
     /// If the flag is false then the address is a static random address.
-    pub fn get_peer_identity(&self) -> Option<(bool, crate::BluetoothDeviceAddress)> {
-        self.peer_identity.clone().map(|addr| match addr {
-            IdentityAddress::Public(addr) => (true, addr),
-            IdentityAddress::StaticRandom(addr) => (false, addr),
-        })
+    pub fn get_peer_identity(&self) -> Option<IdentityAddress> {
+        self.peer_identity.clone()
     }
 
     /// Get the Identity Resolving Key
