@@ -34,7 +34,7 @@ mod heart_rate_service {
     use bo_tie::gatt;
     use bo_tie::l2cap;
 
-    pub const HEART_RATE_SERVICE_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0x180D);
+    pub const HEART_RATE_SERVICE_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0x180D);
 
     pub mod characteristics {
         use bo_tie::att;
@@ -43,7 +43,7 @@ mod heart_rate_service {
         use std::sync::{atomic, Arc};
 
         /// This is the UUID for the Heart Rate Measurement Characteristic
-        pub const HEART_RATE_MEASUREMENT_UUID: bo_tie::UUID = bo_tie::UUID::from_u16(0x2A37);
+        pub const HEART_RATE_MEASUREMENT_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0x2A37);
 
         #[derive(PartialEq, Clone, Copy)]
         pub struct HrsFlags {
@@ -246,7 +246,10 @@ mod heart_rate_service {
 }
 
 /// This sets up the advertising and waits for the connection complete event
-async fn advertise_setup<'a, M: Send + 'static>(hi: &'a hci::Host<bo_tie_linux::HCIAdapter, M>, local_name: &'a str) {
+async fn advertise_setup<'a, M: Send + 'static>(
+    hi: &'a hci::Host<bo_tie_linux::LinuxInterface, M>,
+    local_name: &'a str,
+) {
     let adv_name = assigned::local_name::LocalName::new(local_name, false);
 
     let mut adv_flags = assigned::flags::Flags::new();
@@ -294,7 +297,7 @@ async fn advertise_setup<'a, M: Send + 'static>(hi: &'a hci::Host<bo_tie_linux::
 // For simplicity, I've left the a race condition in here. There could be a case where the
 // connection is made and the ConnectionComplete event isn't propagated & processed
 async fn wait_for_connection<M: Send + 'static>(
-    hi: &hci::Host<bo_tie_linux::HCIAdapter, M>,
+    hi: &hci::Host<bo_tie_linux::LinuxInterface, M>,
 ) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
     println!("Waiting for a connection (timeout is 60 seconds)");
 
@@ -321,7 +324,7 @@ async fn wait_for_connection<M: Send + 'static>(
 }
 
 async fn disconnect<M: Send + 'static>(
-    hi: &hci::Host<bo_tie_linux::HCIAdapter, M>,
+    hi: &hci::Host<bo_tie_linux::LinuxInterface, M>,
     connection_handle: hci::common::ConnectionHandle,
 ) {
     use bo_tie::hci::le::connection::disconnect;
@@ -334,7 +337,10 @@ async fn disconnect<M: Send + 'static>(
     disconnect::send(&hi, prams).await.expect("Failed to disconnect");
 }
 
-fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::Host<bo_tie_linux::HCIAdapter, M>>, raw_handle: Arc<AtomicU16>) {
+fn handle_sig<M: Sync + Send + 'static>(
+    hi: Arc<hci::Host<bo_tie_linux::LinuxInterface, M>>,
+    raw_handle: Arc<AtomicU16>,
+) {
     simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
         // Cancel advertising if advertising (there is no consequence if not advertising)
         futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
