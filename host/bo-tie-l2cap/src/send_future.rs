@@ -64,18 +64,31 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
     }
 }
 
-macro_rules! try_extend_current {
-    ($this:expr, $current:expr, $val:expr) => {
-        if $this.byte_count < $this.max_size {
-            if let Err(_) = $current.try_extend_one($val) {
-                $this.byte_count = 0;
-                Err(())
-            } else {
-                $this.byte_count += 1;
-                Ok(())
-            }
+macro_rules! greedy_extend_current {
+    ($this:expr, $current:expr, $data_index:expr, $item_start:expr, $item_end:expr, $item:expr) => {
+        if $item_end - $data_index < $this.max_size - $this.byte_count {
+            let start = $data_index - $item_start;
+
+            $current
+                .try_extend($item.get(start..).unwrap().iter().copied())
+                .unwrap();
+
+            $this.byte_count += $item_end - $data_index;
+
+            $data_index = $item_end;
+
+            // true returned to indicate that the current buffer can still be used
+            true
         } else {
-            Err(())
+            let start = $data_index - $item_start;
+            let end = $this.max_size - $this.byte_count + $data_index;
+
+            $current
+                .try_extend($item.get(start..end).unwrap().iter().copied())
+                .unwrap();
+
+            // false returned to indicate that the current buffer must be finished
+            false
         }
     };
 }
@@ -118,66 +131,50 @@ where
                     }
                 }
                 State::Length(current, index) => {
-                    if let Some(val) = this.len.get(*index).copied() {
-                        match try_extend_current!(this, current, val) {
-                            Ok(_) => this.state.next_index(),
-                            Err(_) => {
-                                let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
-                                    State::Length(current, index) => (current, index),
-                                    _ => unreachable!(),
-                                };
-
-                                this.state = State::FinishCurrent(current.into_future(), index, State::length)
-                            }
-                        }
-                    } else {
+                    if greedy_extend_current!(this, current, *index, 0, 2, this.len) {
                         match core::mem::replace(&mut this.state, State::TEMPORARY) {
                             State::Length(current, _) => this.state = State::ChannelId(current, 0),
                             _ => unreachable!(),
                         }
+                    } else {
+                        let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
+                            State::Length(current, index) => (current, index),
+                            _ => unreachable!(),
+                        };
+
+                        this.state = State::FinishCurrent(current.into_future(), index, State::length)
                     }
                 }
                 State::ChannelId(current, index) => {
-                    if let Some(val) = this.channel_id.get(*index).copied() {
-                        match try_extend_current!(this, current, val) {
-                            Ok(_) => this.state.next_index(),
-                            Err(_) => {
-                                let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
-                                    State::ChannelId(current, index) => (current, index),
-                                    _ => unreachable!(),
-                                };
-
-                                this.state = State::FinishCurrent(current.into_future(), index, State::channel_id)
-                            }
-                        }
-                    } else {
+                    if greedy_extend_current!(this, current, *index, 2, 4, this.channel_id) {
                         match core::mem::replace(&mut this.state, State::TEMPORARY) {
                             State::ChannelId(current, _) => this.state = State::Data(current, 0),
                             _ => unreachable!(),
                         }
+                    } else {
+                        let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
+                            State::ChannelId(current, index) => (current, index),
+                            _ => unreachable!(),
+                        };
+
+                        this.state = State::FinishCurrent(current.into_future(), index, State::channel_id)
                     }
                 }
                 State::Data(current, index) => {
-                    if let Some(val) = this.data.get(*index).copied() {
-                        match try_extend_current!(this, current, val) {
-                            Ok(_) => this.state.next_index(),
-                            Err(_) => {
-                                let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
-                                    State::Data(current, index) => (current, index),
-                                    _ => unreachable!(),
-                                };
-
-                                this.state = State::FinishCurrent(current.into_future(), index, State::data)
-                            }
-                        }
-                    } else {
+                    if greedy_extend_current!(this, current, *index, 4, this.data.len(), this.data) {
                         let (current, _) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
                             State::Data(current, index) => (current, index),
                             _ => unreachable!(),
                         };
 
-                        // Note: the second field of `FinishCurrent` is not used by State::complete
                         this.state = State::Complete(current.into_future())
+                    } else {
+                        let (current, index) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
+                            State::Data(current, index) => (current, index),
+                            _ => unreachable!(),
+                        };
+
+                        this.state = State::FinishCurrent(current.into_future(), index, State::data)
                     }
                 }
                 State::Complete(s) => {
@@ -240,19 +237,6 @@ impl<C, F, S> State<C, F, S> {
     /// as a between state for replacing one state with another when fields of the replaced state
     /// are also moved to the new state.
     const TEMPORARY: Self = State::DataTooLarge;
-
-    /// Go to the next index
-    ///
-    /// # Panic
-    /// If `next_index` is called an enum other than `Length`, `ChannelId`, or `Data`.
-    fn next_index(&mut self) {
-        match self {
-            State::Length(_, index) => index.add_assign(1),
-            State::ChannelId(_, index) => index.add_assign(1),
-            State::Data(_, index) => index.add_assign(1),
-            _ => panic!("next_index called on an invalid State"),
-        }
-    }
 
     /// Create a Length enum
     fn length(current: C, index: usize) -> Self {
