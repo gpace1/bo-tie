@@ -486,8 +486,6 @@ where
         &mut self,
         disconnect: &events::parameters::DisconnectionCompleteData,
     ) -> Result<(), SendError<R>> {
-        use events::EventsData;
-
         if let Some(FromInterface::ConnectionData(mut sender)) =
             self.channel_reserve
                 .get_sender(TaskId::Connection(ConnectionChannel::Data(
