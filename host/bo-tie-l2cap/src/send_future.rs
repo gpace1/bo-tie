@@ -128,7 +128,7 @@ where
                     }
                 }
                 State::Length(current, index) => {
-                    if greedy_extend_current!(this, current, *index, 0, 2, this.len) {
+                    if greedy_extend_current!(this, current, *index, this.len.len(), this.len) {
                         match core::mem::replace(&mut this.state, State::TEMPORARY) {
                             State::Length(current, _) => this.state = State::ChannelId(current, 0),
                             _ => unreachable!(),
@@ -143,7 +143,7 @@ where
                     }
                 }
                 State::ChannelId(current, index) => {
-                    if greedy_extend_current!(this, current, *index, 2, 4, this.channel_id) {
+                    if greedy_extend_current!(this, current, *index, this.channel_id.len(), this.channel_id) {
                         match core::mem::replace(&mut this.state, State::TEMPORARY) {
                             State::ChannelId(current, _) => this.state = State::Data(current, 0),
                             _ => unreachable!(),
@@ -158,7 +158,7 @@ where
                     }
                 }
                 State::Data(current, index) => {
-                    if greedy_extend_current!(this, current, *index, 4, this.data.len(), this.data) {
+                    if greedy_extend_current!(this, current, *index, this.data.len(), this.data) {
                         let (current, _) = match core::mem::replace(&mut this.state, State::TEMPORARY) {
                             State::Data(current, index) => (current, index),
                             _ => unreachable!(),
