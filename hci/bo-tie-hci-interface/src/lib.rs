@@ -500,23 +500,6 @@ where
 
             sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))?;
 
-            if self.event_routing_policy.route_to_connection() {
-                if let Some(FromInterface::ConnectionEvent(mut sender)) =
-                    self.channel_reserve
-                        .get_sender(TaskId::Connection(ConnectionChannel::Event(
-                            disconnect.connection_handle,
-                        )))
-                {
-                    let message = ToConnectionEventIntraMessage::RoutedEvent(EventsData::DisconnectionComplete(
-                        disconnect.clone(),
-                    ));
-
-                    sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))?;
-                } else {
-                    return Err(SendError::<R>::InvalidChannel);
-                }
-            }
-
             self.channel_reserve
                 .try_remove(disconnect.connection_handle)
                 .map_err(|e| SendError::<R>::ReserveError(e))
@@ -588,9 +571,15 @@ where
                 .parse_le_enhanced_connection_complete_event(data)
                 .await
                 .map(|_| Some(ed)),
-            EventsData::DisconnectionComplete(data) => self.parse_disconnect_event(data).await.map(|_| Some(ed)),
-            e => self
-                .event_routing(e)
+            EventsData::DisconnectionComplete(data) => {
+                self.parse_disconnect_event(data).await?;
+
+                self.event_routing(&ed)
+                    .await
+                    .map(|rout_to_host| rout_to_host.then_some(ed))
+            }
+            _ => self
+                .event_routing(&ed)
                 .await
                 .map(|rout_to_host| rout_to_host.then_some(ed)),
         }
