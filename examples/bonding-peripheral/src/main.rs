@@ -251,13 +251,30 @@ async fn on_encryption_change<C, S, R, Q>(
         gatt_server.give_permissions_to_client(AttributePermissions::Read(AttributeRestriction::Encryption(
             EncryptionKeySize::Bits128,
         )));
-    }
 
-    // Send the local IRK if has not been sent yet.
-    if let None = security_manager.get_keys().unwrap().get_irk() {
-        // distribute the irk (using `None` means the
-        // security manager will generate the key).
-        security_manager.send_irk(le_connection_channel, None).await.unwrap();
+        // Send the local IRK if has not been sent yet.
+        if let None = security_manager.get_keys().unwrap().get_irk() {
+            // distribute the irk (using `None` means the
+            // security manager will generate the key) and
+            // the identity address.
+
+            security_manager.send_irk(le_connection_channel, None).await.unwrap();
+
+            // The identity address does not matter here as
+            // this example uses network privacy mode. Only
+            // the peer device will use this address with
+            // its identity resolving list. If you want to
+            // use device privacy mode this identity address
+            // should be saved with your bonding keys.
+            security_manager.send_static_rand_addr(
+                le_connection_channel,
+                bo_tie::BluetoothDeviceAddress::new_random_static(),
+            )
+        } else {
+            gatt_server.revoke_permissions_of_client(AttributePermissions::Read(AttributeRestriction::Encryption(
+                EncryptionKeySize::Bits128,
+            )));
+        }
     }
 }
 
@@ -329,7 +346,7 @@ where
             }
             event_data = event_receiver.recv() => match event_data {
                 Some(EventsData::EncryptionChangeV1(ed) )=> {
-                    on_encryption_change(&ed, &le_connection_channel, &mut security_manager, &mut gatt_server).await;
+                    on_encryption_enable(&ed, &le_connection_channel, &mut security_manager, &mut gatt_server).await;
                 }
                 Some(EventsData::LeMeta(LeMetaData::LongTermKeyRequest(_))) => {
                     let opt_ltk = security_manager.get_keys().and_then(|keys| keys.get_ltk());
