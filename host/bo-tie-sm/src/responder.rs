@@ -469,12 +469,18 @@ impl<S, R> SecurityManager<S, R> {
     /// The identity address will be set in the cypher keys if the cypher keys exist within this
     /// security manager.
     ///
+    /// The return is the identity address information sent to the peer device.
+    ///
     /// # Error
     /// An error will occur if the encryption flag is not set or an error occurs trying to send the
     /// message to the peer device.
     ///
     /// [`set_encrypted`]: crate::sm::responder::SecurityManager::set_encrypted
-    pub async fn send_identity<C, I>(&mut self, connection_channel: &C, identity: I) -> Result<(), Error>
+    pub async fn send_identity<C, I>(
+        &mut self,
+        connection_channel: &C,
+        identity: I,
+    ) -> Result<crate::IdentityAddress, Error>
     where
         C: ConnectionChannel,
         I: Into<Option<crate::IdentityAddress>>,
@@ -518,7 +524,7 @@ impl<S, R> SecurityManager<S, R> {
                 *identity_opt = Some(identity);
             }
 
-            Ok(())
+            Ok(identity)
         } else {
             Err(Error::UnknownIfLinkIsEncrypted)
         }
