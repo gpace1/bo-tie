@@ -65,29 +65,26 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
 }
 
 macro_rules! greedy_extend_current {
-    ($this:expr, $current:expr, $data_index:expr, $item_start:expr, $item_end:expr, $item:expr) => {
-        if $item_end - $data_index < $this.max_size - $this.byte_count {
-            let start = $data_index - $item_start;
-
+    ($this:expr, $current:expr, $index:expr, $item_size:expr, $item:expr) => {
+        if $item_size - $index < $this.max_size - $this.byte_count {
             $current
-                .try_extend($item.get(start..).unwrap().iter().copied())
+                .try_extend($item.get($index..).unwrap().iter().copied())
                 .unwrap();
 
-            $this.byte_count += $item_end - $data_index;
+            $this.byte_count += $item_size - $index;
 
-            $data_index = $item_end;
-
-            // true returned to indicate that the current buffer can still be used
+            // true returned to indicate that the current item is finished
             true
         } else {
-            let start = $data_index - $item_start;
-            let end = $this.max_size - $this.byte_count + $data_index;
+            let end = $this.max_size - $this.byte_count + $index;
 
             $current
-                .try_extend($item.get(start..end).unwrap().iter().copied())
+                .try_extend($item.get($index..end).unwrap().iter().copied())
                 .unwrap();
 
-            // false returned to indicate that the current buffer must be finished
+            $index += $this.max_size - $this.byte_count;
+
+            // false returned to indicate that the item was not completed
             false
         }
     };
