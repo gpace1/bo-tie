@@ -97,10 +97,17 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
 
             use_resolving_list(hi, keys).await;
 
-            // Either high duty or low duty cycle can be used,
-            // just depends on the use case of the application.
-            adv_prams.advertising_type =
-                set_advertising_parameters::AdvertisingType::ConnectableLowDutyCycleDirectedAdvertising;
+            // If the peer has given its IRK then advertising
+            // will be directed, if it has not then advertising
+            // is undirected. This is so the identity address
+            // of this device is not exposed.
+            if keys.get_peer_irk().is_some() {
+                adv_prams.advertising_type =
+                    set_advertising_parameters::AdvertisingType::ConnectableLowDutyCycleDirectedAdvertising;
+            } else {
+                adv_prams.advertising_type =
+                    set_advertising_parameters::AdvertisingType::ConnectableAndScannableUndirectedAdvertising;
+            }
 
             // This is directed advertising so the peer identity address is needed.
             adv_prams.peer_address = keys.get_peer_addr().unwrap().1;
@@ -146,7 +153,8 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
 
     let peer_identity_address = keys.get_peer_addr().unwrap().1;
 
-    let peer_irk = keys.get_peer_irk().unwrap();
+    // The peer may have or may not have sent an IRK.
+    let peer_irk = keys.get_peer_irk().unwrap_or_default();
 
     let local_irk = keys.get_irk().unwrap();
 
@@ -366,7 +374,7 @@ where
     security_manager
         .get_keys()
         .into_iter()
-        .filter(|keys| keys.get_irk().is_some() && keys.get_peer_irk().is_some())
+        .filter(|keys| keys.get_irk().is_some())
         .next()
         .cloned()
 }
