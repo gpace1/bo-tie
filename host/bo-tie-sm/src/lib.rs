@@ -548,6 +548,29 @@ pub enum IdentityAddress {
     StaticRandom(BluetoothDeviceAddress),
 }
 
+impl IdentityAddress {
+    /// Get the identity address
+    pub fn get_address(&self) -> BluetoothDeviceAddress {
+        match self {
+            IdentityAddress::Public(address) => *address,
+            IdentityAddress::StaticRandom(address) => *address,
+        }
+    }
+
+    /// Check if the identity address is a public device address
+    pub fn is_public(&self) -> bool {
+        match self {
+            IdentityAddress::Public(_) => true,
+            IdentityAddress::StaticRandom(_) => false,
+        }
+    }
+
+    /// Check if the identity address is a random device address
+    pub fn is_random(&self) -> bool {
+        !self.is_public()
+    }
+}
+
 impl Keys {
     /// Construct a new `Keys` with no keys
     pub fn new() -> Self {
