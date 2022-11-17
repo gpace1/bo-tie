@@ -102,19 +102,19 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             if keys.get_peer_irk().is_some() {
                 adv_prams.advertising_type =
                     set_advertising_parameters::AdvertisingType::ConnectableLowDutyCycleDirectedAdvertising;
-
-                // This is directed advertising so the peer identity address is needed.
-                adv_prams.peer_address = keys.get_peer_identity().unwrap().get_address();
-
-                adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().is_public() {
-                    set_advertising_parameters::PeerAddressType::PublicAddress
-                } else {
-                    set_advertising_parameters::PeerAddressType::RandomAddress
-                };
             } else {
                 adv_prams.advertising_type =
                     set_advertising_parameters::AdvertisingType::ConnectableAndScannableUndirectedAdvertising;
             }
+
+            // This is directed advertising so the peer identity address is needed.
+            adv_prams.peer_address = keys.get_peer_identity().unwrap().get_address();
+
+            adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().is_public() {
+                set_advertising_parameters::PeerAddressType::PublicAddress
+            } else {
+                set_advertising_parameters::PeerAddressType::RandomAddress
+            };
 
             // this is the key for advertising with a resolvable private address
             adv_prams.own_address_type = OwnAddressType::RpaFromLocalIrkOrRandomAddress;
