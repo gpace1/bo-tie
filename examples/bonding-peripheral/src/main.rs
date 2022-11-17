@@ -157,10 +157,10 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
 
     let local_irk = keys.get_irk().unwrap();
 
-    // A peer using its identity address and not a resolvable
-    // private address will be rejected during the connection
-    // process.
-    let privacy_mode = set_privacy_mode::PrivacyMode::NetworkPrivacy;
+    // The default mode of `NetworkPrivacy` is recommended to
+    // be used over `DevicePrivacy` but no all test apps (like
+    // nRF connect) support `NetworkPrivacy` mode.
+    let privacy_mode = set_privacy_mode::PrivacyMode::DevicePrivacy;
 
     let parameter = add_device_to_resolving_list::Parameter {
         peer_identity_address_type,
