@@ -2,7 +2,7 @@
 
 mod io;
 
-use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, Next};
+use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
 use bo_tie::host::sm::Keys;
 
 #[derive(Clone, Copy)]
@@ -42,13 +42,12 @@ impl AdvertisingType {
 /// The return is the address information that was used as part of the undirected advertising. When
 /// directed advertising is used, there is no returned advertising information.
 async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &AdvertisingType) {
+    use bo_tie::hci::commands::le::OwnAddressType;
     use bo_tie::hci::commands::le::{
         set_advertising_data, set_advertising_enable, set_advertising_parameters, set_random_address,
     };
-    use bo_tie::hci::commands::le::{OwnAddressType, PeerIdentityAddressType};
     use bo_tie::hci::events::{Events, LeMeta};
     use bo_tie::host::gap::assigned;
-    use bo_tie::BluetoothDeviceAddress;
 
     let mut adv_flags = assigned::flags::Flags::new();
 
@@ -105,9 +104,9 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
                     set_advertising_parameters::AdvertisingType::ConnectableLowDutyCycleDirectedAdvertising;
 
                 // This is directed advertising so the peer identity address is needed.
-                adv_prams.peer_address = keys.get_peer_identity().unwrap().1;
+                adv_prams.peer_address = keys.get_peer_identity().unwrap().get_address();
 
-                adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().0 {
+                adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().is_public() {
                     set_advertising_parameters::PeerAddressType::PublicAddress
                 } else {
                     set_advertising_parameters::PeerAddressType::RandomAddress
@@ -139,25 +138,19 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
         add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
         set_resolvable_private_address_timeout, PeerIdentityAddressType,
     };
-    use bo_tie::BluetoothDeviceAddress;
 
-    let peer_identity_address_type = if keys.get_peer_identity().unwrap().0 {
+    let peer_identity_address_type = if keys.get_peer_identity().unwrap().is_public() {
         PeerIdentityAddressType::PublicIdentityAddress
     } else {
         PeerIdentityAddressType::RandomStaticIdentityAddress
     };
 
-    let peer_identity_address = keys.get_peer_identity().unwrap().1;
+    let peer_identity_address = keys.get_peer_identity().unwrap().get_address();
 
     // The peer may have or may not have sent an IRK.
     let peer_irk = keys.get_peer_irk().unwrap_or_default();
 
     let local_irk = keys.get_irk().unwrap();
-
-    // The default mode of `NetworkPrivacy` is recommended to
-    // be used over `DevicePrivacy` but no all test apps (like
-    // nRF connect) support `NetworkPrivacy` mode.
-    let privacy_mode = set_privacy_mode::PrivacyMode::DevicePrivacy;
 
     let parameter = add_device_to_resolving_list::Parameter {
         peer_identity_address_type,
@@ -168,18 +161,18 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
 
     add_device_to_resolving_list::send(hi, parameter).await.unwrap();
 
+    // The default mode of `NetworkPrivacy` is recommended to
+    // be used over `DevicePrivacy` but no all test apps (like
+    // nRF connect) support `NetworkPrivacy` mode.
+    let privacy_mode = set_privacy_mode::PrivacyMode::DevicePrivacy;
+
     let parameter = set_privacy_mode::Parameter {
         peer_identity_address_type,
         peer_identity_address,
         privacy_mode,
     };
 
-    // this is a 4.2+ command so it may not be available
-    //
-    // # Note
-    // `PrivacyMode::DevicePrivacy` is only 5.0+ so for
-    // 4.2 it does not matter if this fails
-    set_privacy_mode::send(hi, parameter).await.ok();
+    set_privacy_mode::send(hi, parameter).await.unwrap();
 
     // This isn't totally necessary for this example as
     // the client is going to reconnect right away, but
@@ -188,24 +181,24 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
         .await
         .unwrap();
 
-    set_address_resolution_enable::send(hi, true);
+    // This is only needed if the peer sent an IRK
+    set_address_resolution_enable::send(hi, true).await.unwrap();
 }
 
 async fn remove_from_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
     use bo_tie::hci::commands::le::{
         remove_device_from_resolving_list, set_address_resolution_enable, PeerIdentityAddressType,
     };
-    use bo_tie::BluetoothDeviceAddress;
 
-    set_address_resolution_enable::send(hi, false);
+    set_address_resolution_enable::send(hi, false).await.unwrap();
 
-    let peer_identity_address_type = if keys.get_peer_identity().unwrap().0 {
+    let peer_identity_address_type = if keys.get_peer_identity().unwrap().is_public() {
         PeerIdentityAddressType::PublicIdentityAddress
     } else {
         PeerIdentityAddressType::RandomStaticIdentityAddress
     };
 
-    let peer_identity_address = keys.get_peer_identity().unwrap().1;
+    let peer_identity_address = keys.get_peer_identity().unwrap().get_address();
 
     let parameter = remove_device_from_resolving_list::Parameter {
         peer_identity_address_type,
@@ -233,7 +226,6 @@ async fn stop_advertising<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertising
 async fn wait_for_connection<H: HostChannelEnds>(
     hi: &mut Host<H>,
 ) -> bo_tie::hci::Connection<H::ConnectionChannelEnds> {
-    use bo_tie::hci::events::{Events, LeMeta};
     use bo_tie::hci::Next;
 
     let connection = if let Next::NewConnection(connection) = hi.next().await.unwrap() {
@@ -390,8 +382,6 @@ async fn on_ltk_request_event<H: HostChannelEnds>(
     ltk: Option<u128>,
 ) {
     use bo_tie::hci::commands::le::{long_term_key_request_negative_reply, long_term_key_request_reply};
-    use bo_tie::hci::events::parameters::LeLongTermKeyRequestData;
-    use bo_tie::hci::events::{EventsData, LeMeta, LeMetaData};
 
     match ltk {
         None => {
@@ -635,7 +625,8 @@ async fn main() {
             opt_connection_handle = connection.get_handle().into();
 
             // Unmask the 'LE connection complete' event as it is
-            // no longer needed and enable the LongTermKeyEvent.
+            // no longer needed and enable the LongTermKeyRequest
+            // and EncryptionChange events.
             host.mask_events([
                 Events::DisconnectionComplete,
                 Events::EncryptionChangeV1,
