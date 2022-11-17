@@ -266,10 +266,13 @@ async fn on_encryption_change<C, S, R, Q>(
             // its identity resolving list. If you want to
             // use device privacy mode this identity address
             // should be saved with your bonding keys.
-            security_manager.send_static_rand_addr(
-                le_connection_channel,
-                bo_tie::BluetoothDeviceAddress::new_random_static(),
-            )
+            security_manager
+                .send_static_rand_addr(
+                    le_connection_channel,
+                    bo_tie::BluetoothDeviceAddress::new_random_static(),
+                )
+                .await
+                .unwrap();
         } else {
             gatt_server.revoke_permissions_of_client(AttributePermissions::Read(AttributeRestriction::Encryption(
                 EncryptionKeySize::Bits128,
@@ -346,7 +349,7 @@ where
             }
             event_data = event_receiver.recv() => match event_data {
                 Some(EventsData::EncryptionChangeV1(ed) )=> {
-                    on_encryption_enable(&ed, &le_connection_channel, &mut security_manager, &mut gatt_server).await;
+                    on_encryption_change(&ed, &le_connection_channel, &mut security_manager, &mut gatt_server).await;
                 }
                 Some(EventsData::LeMeta(LeMetaData::LongTermKeyRequest(_))) => {
                     let opt_ltk = security_manager.get_keys().and_then(|keys| keys.get_ltk());
