@@ -12,14 +12,14 @@ struct AddressInfo {
 }
 
 enum AdvertisingType {
-    Undirected(&'static str),
-    Directed(Keys),
+    Undirected(&'static str, AddressInfo),
+    Resolvable(Keys),
 }
 
 impl AdvertisingType {
     fn get_keys(&self) -> Option<Keys> {
         match self {
-            AdvertisingType::Directed(keys) => keys.clone().into(),
+            AdvertisingType::Resolvable(keys) => keys.clone().into(),
             _ => None,
         }
     }
@@ -41,7 +41,7 @@ impl AdvertisingType {
 ///
 /// The return is the address information that was used as part of the undirected advertising. When
 /// directed advertising is used, there is no returned advertising information.
-async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &AdvertisingType) -> Option<AddressInfo> {
+async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &AdvertisingType) {
     use bo_tie::hci::commands::le::{
         set_advertising_data, set_advertising_enable, set_advertising_parameters, set_random_address,
     };
@@ -56,9 +56,9 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
-    let opt_own_address_info = match ty {
-        AdvertisingType::Undirected(local_name) => {
-            let address = BluetoothDeviceAddress::new_random_static();
+    match ty {
+        AdvertisingType::Undirected(local_name, address_info) => {
+            let address = address_info.address;
 
             let adv_name = assigned::local_name::LocalName::new(*local_name, None);
 
@@ -72,7 +72,11 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             adv_data.try_push(adv_flags).unwrap();
             adv_data.try_push(adv_name).unwrap();
 
-            adv_prams.own_address_type = OwnAddressType::RandomDeviceAddress;
+            adv_prams.own_address_type = if address_info.is_pub {
+                OwnAddressType::PublicDeviceAddress
+            } else {
+                OwnAddressType::RandomDeviceAddress
+            };
 
             set_random_address::send(hi, address).await.unwrap();
 
@@ -82,10 +86,8 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             ])
             .await
             .unwrap();
-
-            Some(AddressInfo { is_pub: false, address })
         }
-        AdvertisingType::Directed(keys) => {
+        AdvertisingType::Resolvable(keys) => {
             adv_data.try_push(adv_flags).unwrap();
 
             hi.mask_events([
@@ -110,9 +112,9 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             }
 
             // This is directed advertising so the peer identity address is needed.
-            adv_prams.peer_address = keys.get_peer_addr().unwrap().1;
+            adv_prams.peer_address = keys.get_peer_identity().unwrap().1;
 
-            adv_prams.peer_address_type = if keys.get_peer_addr().unwrap().0 {
+            adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().0 {
                 set_advertising_parameters::PeerAddressType::PublicAddress
             } else {
                 set_advertising_parameters::PeerAddressType::RandomAddress
@@ -120,18 +122,14 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
 
             // this is the key for advertising with a resolvable private address
             adv_prams.own_address_type = OwnAddressType::RpaFromLocalIrkOrRandomAddress;
-
-            None
         }
-    };
+    }
 
     set_advertising_data::send(hi, adv_data).await.unwrap();
 
     set_advertising_parameters::send(hi, adv_prams).await.unwrap();
 
     set_advertising_enable::send(hi, true).await.unwrap();
-
-    opt_own_address_info
 }
 
 /// Use the resolving list
@@ -145,13 +143,13 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
     };
     use bo_tie::BluetoothDeviceAddress;
 
-    let peer_identity_address_type = if keys.get_peer_addr().unwrap().0 {
+    let peer_identity_address_type = if keys.get_peer_identity().unwrap().0 {
         PeerIdentityAddressType::PublicIdentityAddress
     } else {
         PeerIdentityAddressType::RandomStaticIdentityAddress
     };
 
-    let peer_identity_address = keys.get_peer_addr().unwrap().1;
+    let peer_identity_address = keys.get_peer_identity().unwrap().1;
 
     // The peer may have or may not have sent an IRK.
     let peer_irk = keys.get_peer_irk().unwrap_or_default();
@@ -193,7 +191,28 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
         .unwrap();
 }
 
-async fn stop_advertising<H: HostChannelEnds>(hi: &mut Host<H>) {
+async fn remove_from_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
+    use bo_tie::hci::commands::le::remove_device_from_resolving_list;
+    use bo_tie::hci::commands::le::PeerIdentityAddressType;
+    use bo_tie::BluetoothDeviceAddress;
+
+    let peer_identity_address_type = if keys.get_peer_identity().unwrap().0 {
+        PeerIdentityAddressType::PublicIdentityAddress
+    } else {
+        PeerIdentityAddressType::RandomStaticIdentityAddress
+    };
+
+    let peer_identity_address = keys.get_peer_identity().unwrap().1;
+
+    let parameter = remove_device_from_resolving_list::Parameter {
+        peer_identity_address_type,
+        peer_identity_address,
+    };
+
+    remove_device_from_resolving_list::send(hi, parameter).await.unwrap();
+}
+
+async fn stop_advertising<H: HostChannelEnds>(hi: &mut Host<H>, ty: &AdvertisingType) {
     // This does not panic as some times Controllers do not
     // like for the current advertising state to be written
     // to the controller (btw there is no Spec. reason for
@@ -202,27 +221,10 @@ async fn stop_advertising<H: HostChannelEnds>(hi: &mut Host<H>) {
     bo_tie::hci::commands::le::set_advertising_enable::send(hi, false)
         .await
         .ok();
-}
 
-async fn remove_from_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
-    use bo_tie::hci::commands::le::remove_device_from_resolving_list;
-    use bo_tie::hci::commands::le::PeerIdentityAddressType;
-    use bo_tie::BluetoothDeviceAddress;
-
-    let peer_identity_address_type = if keys.get_peer_addr().unwrap().0 {
-        PeerIdentityAddressType::PublicIdentityAddress
-    } else {
-        PeerIdentityAddressType::RandomStaticIdentityAddress
-    };
-
-    let peer_identity_address = keys.get_peer_addr().unwrap().1;
-
-    let parameter = remove_device_from_resolving_list::Parameter {
-        peer_identity_address_type,
-        peer_identity_address,
-    };
-
-    remove_device_from_resolving_list::send(hi, parameter).await.unwrap();
+    if let AdvertisingType::Resolvable(keys) = ty {
+        remove_from_resolving_list(hi, keys).await;
+    }
 }
 
 async fn wait_for_connection<H: HostChannelEnds>(
@@ -275,9 +277,9 @@ async fn on_encryption_change<C, S, R, Q>(
             // use device privacy mode this identity address
             // should be saved with your bonding keys.
             security_manager
-                .send_static_rand_addr(
+                .send_identity(
                     le_connection_channel,
-                    bo_tie::BluetoothDeviceAddress::new_random_static(),
+                    bo_tie::host::sm::IdentityAddress::StaticRandom(bo_tie::BluetoothDeviceAddress::new_random_static()),
                 )
                 .await
                 .unwrap();
@@ -553,9 +555,10 @@ async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Opt
 
 async fn exit_example<H: HostChannelEnds>(
     host: &mut Host<H>,
-    connection_handle: Option<bo_tie::hci::ConnectionHandle>,
+    connection_handle: Option<ConnectionHandle>,
+    adv_ty: &AdvertisingType,
 ) {
-    stop_advertising(host).await;
+    stop_advertising(host, adv_ty).await;
 
     disconnect(host, connection_handle).await;
 }
@@ -603,15 +606,26 @@ async fn main() {
 
     let mut host = Host::init(host_ends).await.expect("failed to initialize host");
 
+    // this example needs to set the routing policy to send the
+    // encryption event to the connection async task.
+    host.set_event_routing_policy(bo_tie::hci::EventRoutingPolicy::All)
+        .await
+        .unwrap();
+
     println!("beginning undirected advertising");
 
-    let mut advertising_type = AdvertisingType::Undirected(example_name);
+    let own_address_info = AddressInfo {
+        address: bo_tie::BluetoothDeviceAddress::new_random_static(),
+        is_pub: false,
+    };
+
+    let mut advertising_type = AdvertisingType::Undirected(example_name, own_address_info);
 
     let mut opt_connection_handle = None;
 
     let task = async {
         'task: loop {
-            let own_address_info = advertising_setup(&mut host, &advertising_type).await.unwrap();
+            advertising_setup(&mut host, &advertising_type).await;
 
             let connection = wait_for_connection(&mut host).await;
 
@@ -627,13 +641,7 @@ async fn main() {
             .await
             .unwrap();
 
-            stop_advertising(&mut host).await;
-
-            // this example needs to set the routing policy to send the
-            // encryption event to the connection async task.
-            host.set_event_routing_policy(bo_tie::hci::EventRoutingPolicy::All)
-                .await
-                .unwrap();
+            stop_advertising(&mut host, &advertising_type).await;
 
             let (ltk_sender, mut ltk_receiver) = tokio::sync::mpsc::channel(1);
 
@@ -675,7 +683,7 @@ async fn main() {
             println!("client disconnected and is bonded, beginning private directed advertising");
 
             // set advertising to directed
-            advertising_type = AdvertisingType::Directed(keys);
+            advertising_type = AdvertisingType::Resolvable(keys);
         }
     };
 
@@ -684,5 +692,5 @@ async fn main() {
         _ = exit_sig => (),
     );
 
-    exit_example(&mut host, opt_connection_handle).await;
+    exit_example(&mut host, opt_connection_handle, &advertising_type).await;
 }
