@@ -244,20 +244,20 @@ impl IdentityAddressInformation {
         self.address
     }
 
-    pub(super) fn as_blu_addr(&self) -> BluAddr {
+    pub(super) fn as_blu_addr(&self) -> IdentityAddress {
         if self.is_address_public() {
-            BluAddr::Public(self.get_address())
+            IdentityAddress::Public(self.get_address())
         } else {
-            BluAddr::StaticRandom(self.get_address())
+            IdentityAddress::StaticRandom(self.get_address())
         }
     }
 }
 
-impl From<IdentityAddressInformation> for BluAddr {
+impl From<IdentityAddressInformation> for IdentityAddress {
     fn from(iai: IdentityAddressInformation) -> Self {
         match iai.addr_type {
-            AddressType::Public => BluAddr::Public(iai.address),
-            AddressType::StaticRandom => BluAddr::StaticRandom(iai.address),
+            AddressType::Public => IdentityAddress::Public(iai.address),
+            AddressType::StaticRandom => IdentityAddress::StaticRandom(iai.address),
         }
     }
 }

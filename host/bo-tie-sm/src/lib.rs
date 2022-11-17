@@ -527,19 +527,23 @@ pub struct Keys {
     /// This device's Identity Resolving Key
     irk: Option<u128>,
 
+    /// This devices identity address
+    identity: Option<IdentityAddress>,
+
     /// The peer device's Connection Signature Resolving Key and sign counter
     peer_csrk: Option<(u128, u32)>,
 
     /// The peer's Identity Resolving Key (IRK)
     peer_irk: Option<u128>,
 
-    /// The peer's public or static random address
-    peer_addr: Option<BluAddr>,
+    /// The peer's identity address
+    peer_identity: Option<IdentityAddress>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// The identity address of an device
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-enum BluAddr {
+pub enum IdentityAddress {
     Public(BluetoothDeviceAddress),
     StaticRandom(BluetoothDeviceAddress),
 }
@@ -554,14 +558,14 @@ impl Keys {
     fn cmp_entry_by_keys<'a, I, A>(&self, peer_irk: I, peer_addr: A) -> core::cmp::Ordering
     where
         I: Into<Option<&'a u128>> + 'a,
-        A: Into<Option<&'a BluAddr>> + 'a,
+        A: Into<Option<&'a IdentityAddress>> + 'a,
     {
         use core::cmp::Ordering;
 
         match (
             self.peer_irk.as_ref(),
             peer_irk.into(),
-            self.peer_addr.as_ref(),
+            self.peer_identity.as_ref(),
             peer_addr.into(),
         ) {
             (Some(this), Some(other), _, _) => this.cmp(other),
@@ -606,7 +610,7 @@ impl Keys {
     /// |    None    |     None    |      None      |     Some(D)     |  Greater |
     /// |    None    |     None    |      None      |       None      |   Equal  |
     pub fn compare_keys(&self, other: &Self) -> core::cmp::Ordering {
-        self.cmp_entry_by_keys(other.peer_irk.as_ref(), other.peer_addr.as_ref())
+        self.cmp_entry_by_keys(other.peer_irk.as_ref(), other.peer_identity.as_ref())
     }
 
     /// Get the peer devices Identity Resolving Key
@@ -624,14 +628,14 @@ impl Keys {
         self.csrk.map(|(_, c)| c)
     }
 
-    /// Get the peer devices address
+    /// Get the peer's identity address
     ///
     /// Returns a bluetooth device address along with a flag to indicate if the address is a public.
     /// If the flag is false then the address is a static random address.
-    pub fn get_peer_addr(&self) -> Option<(bool, crate::BluetoothDeviceAddress)> {
-        self.peer_addr.clone().map(|addr| match addr {
-            BluAddr::Public(addr) => (true, addr),
-            BluAddr::StaticRandom(addr) => (false, addr),
+    pub fn get_peer_identity(&self) -> Option<(bool, crate::BluetoothDeviceAddress)> {
+        self.peer_identity.clone().map(|addr| match addr {
+            IdentityAddress::Public(addr) => (true, addr),
+            IdentityAddress::StaticRandom(addr) => (false, addr),
         })
     }
 
@@ -665,27 +669,15 @@ impl Keys {
         self.ltk
     }
 
-    /// Set the Long Term Key
-    ///
-    /// The normal way to generate an LTK is through the successful completion of the pairing
-    /// process. However if the LTK was generated through other means, this can be used to set the
-    /// LTK. **This method is not to be used if the LTK is generated through pairing**. The LTK is
-    /// set within the returned `Keys` when pairing completes by the security managers within this
-    /// library.
-    ///
-    /// # Note
-    /// if `ltk` is `None` the LTK is dropped.
-    pub unsafe fn set_ltk<K>(&mut self, ltk: K)
-    where
-        K: Into<Option<u128>>,
-    {
-        self.ltk = ltk.into();
+    /// Get the identity address of this device
+    pub fn get_identity(&self) -> Option<IdentityAddress> {
+        self.identity
     }
 }
 
 impl PartialEq for Keys {
     fn eq(&self, other: &Self) -> bool {
-        self.peer_addr.eq(&other.peer_addr)
+        self.peer_identity.eq(&other.peer_identity)
     }
 }
 
@@ -699,7 +691,7 @@ impl PartialOrd for Keys {
 
 impl Ord for Keys {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.peer_addr.cmp(&other.peer_addr)
+        self.peer_identity.cmp(&other.peer_identity)
     }
 }
 
@@ -708,7 +700,7 @@ impl core::hash::Hash for Keys {
     where
         H: core::hash::Hasher,
     {
-        self.peer_addr.hash(state)
+        self.peer_identity.hash(state)
     }
 }
 
@@ -741,7 +733,7 @@ impl KeyDB {
     fn get<'s, 'a, I, A>(&'s self, irk: I, address: A) -> Option<&'s Keys>
     where
         I: Into<Option<&'a u128>>,
-        A: Into<Option<&'a BluAddr>>,
+        A: Into<Option<&'a IdentityAddress>>,
     {
         let i = irk.into();
         let a = address.into();
@@ -770,7 +762,7 @@ impl KeyDB {
     fn remove<'a, I, A>(&'a mut self, irk: I, address: A) -> bool
     where
         I: Into<Option<&'a u128>>,
-        A: Into<Option<&'a BluAddr>>,
+        A: Into<Option<&'a IdentityAddress>>,
     {
         let i = irk.into();
         let a = address.into();
@@ -871,7 +863,10 @@ impl SecurityManagerKeys {
     /// This function will return true if `keys` was added to the database.
     pub fn add_keys(&mut self, keys: Keys) -> bool {
         match keys {
-            Keys { peer_irk: Some(_), .. } | Keys { peer_addr: Some(_), .. } => {
+            Keys { peer_irk: Some(_), .. }
+            | Keys {
+                peer_identity: Some(_), ..
+            } => {
                 self.keys_db.add(keys);
                 true
             }
@@ -883,7 +878,7 @@ impl SecurityManagerKeys {
     ///
     /// Removes the entry that matches `keys` in the database
     pub fn remove_keys(&mut self, keys: &Keys) -> bool {
-        self.keys_db.remove(keys.peer_irk.as_ref(), keys.peer_addr.as_ref())
+        self.keys_db.remove(keys.peer_irk.as_ref(), keys.peer_identity.as_ref())
     }
 
     /// Get a specific `Keys` from its peer IRK and peer Address
@@ -894,9 +889,9 @@ impl SecurityManagerKeys {
     {
         let peer_addr = peer_addr.into().map(|addr| {
             if peer_addr_is_pub {
-                BluAddr::Public(addr)
+                IdentityAddress::Public(addr)
             } else {
-                BluAddr::StaticRandom(addr)
+                IdentityAddress::StaticRandom(addr)
             }
         });
 

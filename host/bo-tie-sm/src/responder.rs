@@ -459,60 +459,68 @@ impl<S, R> SecurityManager<S, R> {
         }
     }
 
-    /// Send the public address to the Master Device.
+    /// Send the identity address to the peer Device.
     ///
-    /// This will send `addr` as a Public Device Address to the Master Device if the internal
-    /// encryption flag is set to true by
-    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
-    /// If the function returns false then `addr` isn't sent to the Master Device.
-    pub async fn send_pub_addr<C>(
-        &self,
-        connection_channel: &C,
-        addr: crate::BluetoothDeviceAddress,
-    ) -> Result<bool, Error>
+    /// This will send the `identity` address of this device to the peer Device if the internal
+    /// encryption flag is set to true by [`set_encrypted`]. If `identity` is `None` then the
+    /// address sent will fall back to either the identity within the cypher keys or the address
+    /// used when pairing the devices, in that order.
+    ///
+    /// The identity address will be set in the cypher keys if the cypher keys exist within this
+    /// security manager.
+    ///
+    /// # Error
+    /// An error will occur if the encryption flag is not set or an error occurs trying to send the
+    /// message to the peer device.
+    ///
+    /// [`set_encrypted`]: crate::sm::responder::SecurityManager::set_encrypted
+    pub async fn send_identity<C, I>(&mut self, connection_channel: &C, identity: I) -> Result<(), Error>
     where
         C: ConnectionChannel,
+        I: Into<Option<crate::IdentityAddress>>,
     {
-        if self.link_encrypted {
-            self.send(
-                connection_channel,
-                encrypt_info::IdentityAddressInformation::new_pub(addr),
-            )
-            .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
+        let identity = match identity.into() {
+            Some(identity) => identity,
+            None => {
+                if let Some(super::Keys {
+                    identity: Some(identity),
+                    ..
+                }) = self.keys
+                {
+                    identity
+                } else {
+                    if self.responder_address_is_random {
+                        crate::IdentityAddress::StaticRandom(self.responder_address)
+                    } else {
+                        crate::IdentityAddress::Public(self.responder_address)
+                    }
+                }
+            }
+        };
 
-    /// Send the static random address to the Master Device.
-    ///
-    /// This will send `addr` as a Static Random Device Address to the Master Device if the internal
-    /// encryption flag is set to true by
-    /// [`set_encrypted`](crate::sm::responder::SlaveSecurityManager::set_encrypted).
-    /// If the function returns false then `addr` isn't sent to the Master Device.
-    ///
-    /// # Warning
-    /// This function doesn't validate that `address` is a valid static device address. The format
-    /// of a static random device address can be found in the Bluetooth Specification (v5.0 | Vol 6,
-    /// Part B, section 1.3.2.1).
-    pub async fn send_static_rand_addr<C>(
-        &self,
-        connection_channel: &C,
-        addr: crate::BluetoothDeviceAddress,
-    ) -> Result<bool, Error>
-    where
-        C: ConnectionChannel,
-    {
         if self.link_encrypted {
             self.send(
                 connection_channel,
-                encrypt_info::IdentityAddressInformation::new_static_rand(addr),
+                match identity {
+                    crate::IdentityAddress::Public(addr) => encrypt_info::IdentityAddressInformation::new_pub(addr),
+                    crate::IdentityAddress::StaticRandom(addr) => {
+                        encrypt_info::IdentityAddressInformation::new_static_rand(addr)
+                    }
+                },
             )
             .await?;
-            Ok(true)
+
+            if let Some(super::Keys {
+                identity: ref mut identity_opt,
+                ..
+            }) = self.keys
+            {
+                *identity_opt = Some(identity);
+            }
+
+            Ok(())
         } else {
-            Ok(false)
+            Err(Error::UnknownIfLinkIsEncrypted)
         }
     }
 
@@ -1160,13 +1168,14 @@ where
                         irk: None,
                         csrk: None,
                         peer_irk: None,
-                        peer_addr: if self.initiator_address_is_random {
-                            super::BluAddr::StaticRandom(self.initiator_address)
+                        peer_identity: if self.initiator_address_is_random {
+                            super::IdentityAddress::StaticRandom(self.initiator_address)
                         } else {
-                            super::BluAddr::Public(self.initiator_address)
+                            super::IdentityAddress::Public(self.initiator_address)
                         }
                         .into(),
                         peer_csrk: None,
+                        identity: None,
                     }
                     .into();
 
@@ -1251,7 +1260,7 @@ where
 
         if self.link_encrypted {
             if let Some(ref mut keys) = self.keys {
-                keys.peer_addr = Some(identity_addr_info.into());
+                keys.peer_identity = Some(identity_addr_info.into());
 
                 Ok(Some(keys))
             } else {
