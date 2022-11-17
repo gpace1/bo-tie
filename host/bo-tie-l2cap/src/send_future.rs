@@ -99,10 +99,14 @@ where
         loop {
             match &mut this.state {
                 State::DataTooLarge => return Poll::Ready(Err(Error::DataTooLarge)),
-                State::AcquireBuffer(future, index, to_next) => match unsafe { Pin::new_unchecked(future) }.poll(cx) {
-                    Poll::Ready(current) => this.state = to_next(current, *index),
-                    Poll::Pending => break Poll::Pending,
-                },
+                State::AcquireBuffer(future, index, to_next) => {
+                    this.byte_count = 0;
+
+                    match unsafe { Pin::new_unchecked(future) }.poll(cx) {
+                        Poll::Ready(current) => this.state = to_next(current, *index),
+                        Poll::Pending => break Poll::Pending,
+                    }
+                }
                 State::FinishCurrent(current, index, to_next) => {
                     match unsafe { Pin::new_unchecked(current) }.poll(cx)? {
                         Poll::Ready(_) => {
