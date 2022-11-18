@@ -53,7 +53,7 @@ pub struct EncryptionInformation {
 
 impl CommandData for EncryptionInformation {
     fn into_command_format(self) -> LinearBuffer<65, u8> {
-        LinearBuffer::try_from(*&self.long_term_key.to_be_bytes()).unwrap()
+        LinearBuffer::try_from(*&self.long_term_key.to_le_bytes()).unwrap()
     }
 
     fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
@@ -63,7 +63,7 @@ impl CommandData for EncryptionInformation {
             v.copy_from_slice(icd);
 
             Ok(EncryptionInformation {
-                long_term_key: <u128>::from_be_bytes(v),
+                long_term_key: <u128>::from_le_bytes(v),
             })
         } else {
             Err(Error::Size)
@@ -153,7 +153,7 @@ impl IdentityInformation {
 
 impl CommandData for IdentityInformation {
     fn into_command_format(self) -> LinearBuffer<65, u8> {
-        LinearBuffer::try_from(*&self.irk.to_be_bytes()).unwrap()
+        LinearBuffer::try_from(*&self.irk.to_le_bytes()).unwrap()
     }
 
     fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
@@ -163,7 +163,7 @@ impl CommandData for IdentityInformation {
             v.copy_from_slice(icd);
 
             Ok(IdentityInformation {
-                irk: <u128>::from_be_bytes(v),
+                irk: <u128>::from_le_bytes(v),
             })
         } else {
             Err(Error::Size)
@@ -283,7 +283,7 @@ pub struct SigningInformation {
 impl CommandData for SigningInformation {
     fn into_command_format(self) -> LinearBuffer<65, u8> {
         self.signature_key
-            .to_be_bytes()
+            .to_le_bytes()
             .into_iter()
             .fold(LinearBuffer::new(), |mut lb, byte| {
                 lb.try_push(byte).unwrap();
@@ -298,7 +298,7 @@ impl CommandData for SigningInformation {
             key_arr.copy_from_slice(&icd);
 
             Ok(SigningInformation {
-                signature_key: <u128>::from_be_bytes(key_arr),
+                signature_key: <u128>::from_le_bytes(key_arr),
             })
         } else {
             Err(Error::Size)
