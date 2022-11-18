@@ -114,6 +114,26 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
             unsafe { is_init.assume_init_drop() }
         }
     }
+
+    /// Try to extend the linear buffer from a slice
+    ///
+    /// # Error
+    /// An error is returned if `src` cannot fit within the linear buffer
+    pub fn try_extend_from_slice(&mut self, src: &[T]) -> Result<(), LinearBufferError>
+    where
+        T: Copy,
+    {
+        if src.len() > self.buffer.len() - self.count {
+            Err(LinearBufferError::InsufficientCapacity)
+        } else {
+            self.buffer[self.count..(self.count + src.len())]
+                .clone_from_slice(unsafe { transmute::<_, &[MaybeUninit<T>]>(src) });
+
+            self.count += src.len();
+
+            Ok(())
+        }
+    }
 }
 
 impl<T, const SIZE: usize> Default for LinearBuffer<SIZE, T> {
@@ -1414,6 +1434,23 @@ mod test {
             Err(LinearBufferError::IndexOutOfRange) => (),
             v => panic!("Expected LinearBufferError::IndexOutOfRange, received {:?}", v),
         }
+    }
+
+    #[test]
+    fn linear_buffer_copy_from_slice() {
+        let mut l: LinearBuffer<25, usize> = LinearBuffer::new();
+
+        l.try_extend_from_slice(&[33, 23, 123, 432, 123, 321, 56, 4848])
+            .unwrap();
+
+        assert_eq!(&[33, 23, 123, 432, 123, 321, 56, 4848], &*l);
+
+        l.try_extend_from_slice(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])
+            .unwrap();
+
+        l.try_push(2).unwrap_err();
+
+        l.try_extend_from_slice(&[2, 3]).unwrap_err();
     }
 
     #[test]
