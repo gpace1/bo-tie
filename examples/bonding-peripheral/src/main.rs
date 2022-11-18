@@ -271,9 +271,7 @@ async fn on_encryption_change<C, S, R, Q>(
             // The identity address does not matter here as
             // this example uses network privacy mode. Only
             // the peer device will use this address with
-            // its identity resolving list. If you want to
-            // use device privacy mode this identity address
-            // should be saved with your bonding keys.
+            // its identity resolving list.
             security_manager
                 .send_identity(
                     le_connection_channel,
@@ -329,12 +327,12 @@ where
     );
 
     let mut security_manager = if let Some(keys) = bonding_keys {
-        // no pairing (and bonding) is to be done as the keys were already generated
+        // no pairing (and bonding) is to be done as the keys were already generate
         security_manager_builder.set_already_paired(keys).unwrap().build()
     } else {
         // !!! The security manager must be set to distribute and accept bonding keys !!!
         security_manager_builder
-            .sent_bonding_keys(|enabled_keys| enabled_keys.enable_irk().enable_identity())
+            .sent_bonding_keys(|sent| sent.enable_irk().enable_identity())
             .accepted_bonding_keys(|accepted| accepted.enable_irk().enable_identity())
             .build()
     };
