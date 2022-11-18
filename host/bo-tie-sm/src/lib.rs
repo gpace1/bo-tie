@@ -930,7 +930,6 @@ impl GetXOfP256Key for [u8; 64] {
 pub struct EnabledBondingKeysBuilder {
     irk: bool,
     csrk: bool,
-    identity: bool,
 }
 
 impl EnabledBondingKeysBuilder {
@@ -938,7 +937,6 @@ impl EnabledBondingKeysBuilder {
         EnabledBondingKeysBuilder {
             irk: false,
             csrk: false,
-            identity: false,
         }
     }
 
@@ -951,12 +949,6 @@ impl EnabledBondingKeysBuilder {
     /// Enable the distribution of the connection signature resolving key
     pub fn enable_csrk(&mut self) -> &mut Self {
         self.csrk = true;
-        self
-    }
-
-    /// Enable the distribution of the identity address
-    pub fn enable_identity(&mut self) -> &mut Self {
-        self.identity = true;
         self
     }
 }

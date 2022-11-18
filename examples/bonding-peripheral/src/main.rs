@@ -332,8 +332,8 @@ where
     } else {
         // !!! The security manager must be set to distribute and accept bonding keys !!!
         security_manager_builder
-            .sent_bonding_keys(|sent| sent.enable_irk().enable_identity())
-            .accepted_bonding_keys(|accepted| accepted.enable_irk().enable_identity())
+            .sent_bonding_keys(|sent| sent.enable_irk())
+            .accepted_bonding_keys(|accepted| accepted.enable_irk())
             .build()
     };
 
