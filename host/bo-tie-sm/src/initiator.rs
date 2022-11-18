@@ -103,7 +103,7 @@ use super::{
 use crate::l2cap::ConnectionChannel;
 use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
 use crate::oob::{ExternalOobReceiver, OobDirection, OobReceiverType};
-use crate::EnabledBondingKeysBuilder;
+use crate::{EnabledBondingKeysBuilder, IdentityAddress};
 use alloc::vec::Vec;
 
 pub struct SecurityManagerBuilder<S, R> {
@@ -900,8 +900,18 @@ where
             irk: None,
             peer_csrk: None,
             peer_irk: None,
-            peer_identity: None,
-            identity: None,
+            peer_identity: if self.responder_address_is_random {
+                IdentityAddress::StaticRandom(self.responder_address)
+            } else {
+                IdentityAddress::Public(self.responder_address)
+            }
+            .into(),
+            identity: if self.initiator_address_is_random {
+                IdentityAddress::StaticRandom(self.initiator_address)
+            } else {
+                IdentityAddress::Public(self.initiator_address)
+            }
+            .into(),
         });
 
         Ok(())

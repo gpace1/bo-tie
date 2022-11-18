@@ -1181,7 +1181,12 @@ where
                         }
                         .into(),
                         peer_csrk: None,
-                        identity: None,
+                        identity: if self.responder_address_is_random {
+                            super::IdentityAddress::StaticRandom(self.responder_address)
+                        } else {
+                            super::IdentityAddress::Public(self.responder_address)
+                        }
+                        .into(),
                     }
                     .into();
 
