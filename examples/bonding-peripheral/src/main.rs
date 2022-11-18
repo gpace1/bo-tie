@@ -164,7 +164,7 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
     // The default mode of `NetworkPrivacy` is recommended to
     // be used over `DevicePrivacy` but no all test apps (like
     // nRF connect) support `NetworkPrivacy` mode.
-    let privacy_mode = set_privacy_mode::PrivacyMode::DevicePrivacy;
+    let privacy_mode = set_privacy_mode::PrivacyMode::NetworkPrivacy;
 
     let parameter = set_privacy_mode::Parameter {
         peer_identity_address_type,
@@ -172,7 +172,10 @@ async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
         privacy_mode,
     };
 
-    set_privacy_mode::send(hi, parameter).await.unwrap();
+    // this is a 5.0+ command so it may not be available,
+    // but that is fine as 4.2 only supports the equivalent
+    // of NetworkPrivacy.
+    set_privacy_mode::send(hi, parameter).await.ok();
 
     // This isn't totally necessary for this example as
     // the client is going to reconnect right away, but
@@ -326,9 +329,14 @@ where
     );
 
     let mut security_manager = if let Some(keys) = bonding_keys {
+        // no pairing (and bonding) is to be done as the keys were already generated
         security_manager_builder.set_already_paired(keys).unwrap().build()
     } else {
-        security_manager_builder.build()
+        // !!! The security manager must be set to distribute and accept bonding keys !!!
+        security_manager_builder
+            .sent_bonding_keys(|enabled_keys| enabled_keys.enable_irk().enable_identity())
+            .accepted_bonding_keys(|accepted| accepted.enable_irk().enable_identity())
+            .build()
     };
 
     loop {
