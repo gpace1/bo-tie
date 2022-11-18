@@ -15,6 +15,7 @@
 //! For the the functions defined in the specification, all array inputs need to be in big-endian
 //! order.
 
+use bo_tie_util::buffer::stack::LinearBuffer;
 pub use bo_tie_util::cryptography::{
     aes_cmac_generate, aes_cmac_verify, ah, e, ecc_gen, ecdh, nonce, rand_u128, PriKey, PubKey,
 };
@@ -48,22 +49,25 @@ impl super::GetXOfP256Key for PubKey {
 impl super::CommandData for PubKey {
     /// # Panics
     /// This will panic if `PubKey` is compressed
-    fn into_icd(self) -> alloc::vec::Vec<u8> {
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
         let encoded_point = elliptic_curve::sec1::EncodedPoint::<p256::NistP256>::from(&self);
 
-        let mut key = alloc::vec::Vec::with_capacity(64);
+        let mut ret = LinearBuffer::new();
 
-        key.extend_from_slice(encoded_point.x().unwrap().as_slice());
-        key.extend_from_slice(encoded_point.y().unwrap().as_slice());
+        ret.try_extend_from_slice(encoded_point.x().unwrap().as_slice())
+            .unwrap();
+
+        ret.try_extend_from_slice(encoded_point.y().unwrap().as_slice())
+            .unwrap();
 
         // Reverse the keys from big endian to little endian
-        key[..32].reverse(); // x
-        key[32..].reverse(); // y
+        ret[..32].reverse(); // x
+        ret[32..64].reverse(); // y
 
-        key
+        ret
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, super::Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, super::Error> {
         // The icd doesn't contain the compression byte indicator in Bluetooth's Security Manager
         // PDUs.
         if icd.len() == PUB_KEY_BYTE_LEN - 1 {
@@ -641,7 +645,7 @@ mod tests {
         raw_peer_key[..32].reverse();
         raw_peer_key[32..].reverse();
 
-        let peer_key = PubKey::try_from_icd(&raw_peer_key).expect("Failed to make PeerKey");
+        let peer_key = PubKey::try_from_command_format(&raw_peer_key).expect("Failed to make PeerKey");
 
         let _secret = ecdh(pri_key, &peer_key);
     }

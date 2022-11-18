@@ -2,6 +2,7 @@
 
 use super::encrypt_info::AuthRequirements;
 use super::*;
+use bo_tie_util::buffer::stack::LinearBuffer;
 
 fn convert_io_cap(
     auth_req: &[encrypt_info::AuthRequirements],
@@ -131,18 +132,28 @@ pub struct PairingRequest {
 }
 
 impl CommandData for PairingRequest {
-    fn into_icd(self) -> Vec<u8> {
-        alloc::vec![
-            self.io_capability.into_val(),
-            self.oob_data_flag.into_val(),
-            AuthRequirements::make_auth_req_val(&self.auth_req),
-            self.max_encryption_size as u8,
-            KeyDistributions::make_key_dist_val(&self.initiator_key_distribution),
-            KeyDistributions::make_key_dist_val(&self.responder_key_distribution),
-        ]
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        let mut ret = LinearBuffer::new();
+
+        ret.try_push(self.io_capability.into_val()).unwrap();
+
+        ret.try_push(self.oob_data_flag.into_val()).unwrap();
+
+        ret.try_push(AuthRequirements::make_auth_req_val(&self.auth_req))
+            .unwrap();
+
+        ret.try_push(self.max_encryption_size as u8).unwrap();
+
+        ret.try_push(KeyDistributions::make_key_dist_val(&self.initiator_key_distribution))
+            .unwrap();
+
+        ret.try_push(KeyDistributions::make_key_dist_val(&self.responder_key_distribution))
+            .unwrap();
+
+        ret
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         log::trace!("received pairing request: {:x?}", icd);
         if icd.len() == 6 {
             Ok(Self {
@@ -278,18 +289,28 @@ pub struct PairingResponse {
 }
 
 impl CommandData for PairingResponse {
-    fn into_icd(self) -> Vec<u8> {
-        alloc::vec![
-            self.io_capability.into_val(),
-            self.oob_data_flag.into_val(),
-            AuthRequirements::make_auth_req_val(&self.auth_req),
-            self.max_encryption_size as u8,
-            KeyDistributions::make_key_dist_val(&self.initiator_key_distribution),
-            KeyDistributions::make_key_dist_val(&self.responder_key_distribution),
-        ]
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        let mut ret = LinearBuffer::new();
+
+        ret.try_push(self.io_capability.into_val()).unwrap();
+
+        ret.try_push(self.oob_data_flag.into_val()).unwrap();
+
+        ret.try_push(AuthRequirements::make_auth_req_val(&self.auth_req))
+            .unwrap();
+
+        ret.try_push(self.max_encryption_size as u8).unwrap();
+
+        ret.try_push(KeyDistributions::make_key_dist_val(&self.initiator_key_distribution))
+            .unwrap();
+
+        ret.try_push(KeyDistributions::make_key_dist_val(&self.responder_key_distribution))
+            .unwrap();
+
+        ret
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 6 {
             Ok(Self {
                 io_capability: IOCapability::try_from_val(icd[0])?,
@@ -418,11 +439,11 @@ pub struct PairingConfirm {
 }
 
 impl CommandData for PairingConfirm {
-    fn into_icd(self) -> Vec<u8> {
-        self.value.to_le_bytes().to_vec()
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        LinearBuffer::try_from(*&self.value.to_le_bytes()).unwrap()
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
             let mut v = [0u8; 16];
 
@@ -464,11 +485,11 @@ pub struct PairingRandom {
 }
 
 impl CommandData for PairingRandom {
-    fn into_icd(self) -> Vec<u8> {
-        self.value.to_le_bytes().to_vec()
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        LinearBuffer::try_from(*&self.value.to_le_bytes()).unwrap()
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
             let mut v = [0u8; 16];
 
@@ -592,11 +613,15 @@ pub struct PairingFailed {
 }
 
 impl CommandData for PairingFailed {
-    fn into_icd(self) -> Vec<u8> {
-        alloc::vec![self.reason.into_val()]
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        let mut ret = LinearBuffer::new();
+
+        ret.try_push(self.reason.into_val()).unwrap();
+
+        ret
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 1 {
             Ok(PairingFailed {
                 reason: PairingFailedReason::try_from_val(icd[0])?,
@@ -634,11 +659,11 @@ pub struct PairingPubKey {
 }
 
 impl CommandData for PairingPubKey {
-    fn into_icd(self) -> Vec<u8> {
-        self.x_y.to_vec()
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        LinearBuffer::try_from(*&self.x_y).unwrap()
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 64 {
             let mut x_y = [0u8; 64];
 
@@ -675,11 +700,11 @@ pub struct PairingDHKeyCheck {
 }
 
 impl CommandData for PairingDHKeyCheck {
-    fn into_icd(self) -> Vec<u8> {
-        self.check.to_le_bytes().to_vec()
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        LinearBuffer::try_from(*&self.check.to_le_bytes()).unwrap()
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
             let mut arr = [0u8; 16];
 
@@ -725,11 +750,15 @@ pub enum KeyPressNotification {
 }
 
 impl CommandData for KeyPressNotification {
-    fn into_icd(self) -> Vec<u8> {
-        alloc::vec![self.into_val()]
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        let mut ret = LinearBuffer::new();
+
+        ret.try_push(self.into_val()).unwrap();
+
+        ret
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 1 {
             Ok(Self::try_from_val(icd[0])?)
         } else {

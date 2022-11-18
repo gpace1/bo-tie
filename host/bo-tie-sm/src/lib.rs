@@ -320,19 +320,16 @@ impl core::convert::TryFrom<&'_ BasicInfoFrame<Vec<u8>>> for CommandType {
 
 /// Command Data
 ///
-/// A trait for converting to or from the data format sent over the radio as specified in the
-/// Bluetooth Specification Security Manager Protocol (Vol 3, Part H
+/// A trait for converting to or from the format within a Security Manager Command PDU
 trait CommandData
 where
     Self: Sized,
 {
-    /// Convert into the interface formatted command data
-    fn into_icd(self) -> Vec<u8>;
+    /// Convert into command data
+    fn into_command_format(self) -> bo_tie_util::buffer::stack::LinearBuffer<65, u8>;
 
-    /// Convert from the interface formatted command data
-    ///
-    /// If `icd` is incorrectly formatted or sized an `Err` is returned.
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error>;
+    /// Try to convert from command data
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error>;
 }
 
 struct Command<D> {
@@ -350,25 +347,21 @@ impl<D> CommandData for Command<D>
 where
     D: CommandData,
 {
-    fn into_icd(self) -> Vec<u8> {
-        let mut data_v = self.data.into_icd();
+    fn into_command_format(self) -> bo_tie_util::buffer::stack::LinearBuffer<65, u8> {
+        let mut data = self.data.into_command_format();
 
-        let mut rec = Vec::with_capacity(1 + data_v.len());
+        data.try_insert(self.command_type.into_val(), 0).unwrap();
 
-        rec.push(self.command_type.into_val());
-
-        rec.append(&mut data_v);
-
-        rec
+        data
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 0 {
             Err(Error::Size)
         } else {
             Ok(Command {
                 command_type: CommandType::try_from_val(icd[0])?,
-                data: D::try_from_icd(&icd[1..])?,
+                data: D::try_from_command_format(&icd[1..])?,
             })
         }
     }

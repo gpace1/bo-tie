@@ -184,7 +184,7 @@ impl<S, R> SecurityManagerBuilder<S, R> {
     /// method does not need to be called if the default key configuration is desired.
     pub fn sent_bonding_keys<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut EnabledBondingKeysBuilder),
+        F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
     {
         let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
@@ -207,7 +207,7 @@ impl<S, R> SecurityManagerBuilder<S, R> {
     /// be called if the default key configuration is desired.
     pub fn accepted_bonding_keys<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut EnabledBondingKeysBuilder),
+        F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
     {
         let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
@@ -538,7 +538,7 @@ impl<S, R> SecurityManager<S, R> {
     {
         use crate::l2cap::BasicInfoFrame;
 
-        let acl_data = BasicInfoFrame::new(command.into().into_icd(), super::L2CAP_CHANNEL_ID);
+        let acl_data = BasicInfoFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
 
         connection_channel
             .send(acl_data)
@@ -798,7 +798,7 @@ where
     {
         log::trace!("(SM) Processing pairing request");
 
-        let request = match pairing::PairingRequest::try_from_icd(data) {
+        let request = match pairing::PairingRequest::try_from_command_format(data) {
             Ok(request) => request,
             Err(_) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -873,7 +873,7 @@ where
     {
         log::trace!("(SM) Processing pairing public Key");
 
-        let initiator_pub_key = match pairing::PairingPubKey::try_from_icd(data) {
+        let initiator_pub_key = match pairing::PairingPubKey::try_from_command_format(data) {
             Ok(request) => request,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -894,7 +894,7 @@ where
                 ..
             }) => {
                 let raw_pub_key = {
-                    let key_bytes = public_key.clone().into_icd();
+                    let key_bytes = public_key.clone().into_command_format();
 
                     let mut raw_key = [0u8; 64];
 
@@ -907,7 +907,7 @@ where
 
                 log::trace!("remote public key: {:x?}", remote_public_key.as_ref());
 
-                let peer_pub_key = match toolbox::PubKey::try_from_icd(&remote_public_key) {
+                let peer_pub_key = match toolbox::PubKey::try_from_command_format(&remote_public_key) {
                     Ok(k) => k,
                     Err(e) => {
                         self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -975,7 +975,7 @@ where
     {
         log::trace!("(SM) Processing pairing confirm");
 
-        let _initiator_confirm = match pairing::PairingConfirm::try_from_icd(payload) {
+        let _initiator_confirm = match pairing::PairingConfirm::try_from_command_format(payload) {
             Ok(request) => request,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -1018,7 +1018,7 @@ where
     {
         log::trace!("(SM) Processing pairing random");
 
-        let initiator_random = match pairing::PairingRandom::try_from_icd(payload) {
+        let initiator_random = match pairing::PairingRandom::try_from_command_format(payload) {
             Ok(request) => request,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -1085,7 +1085,7 @@ where
     {
         log::trace!("(SM) Processing pairing failed");
 
-        let initiator_fail = match pairing::PairingFailed::try_from_icd(payload) {
+        let initiator_fail = match pairing::PairingFailed::try_from_command_format(payload) {
             Ok(request) => request,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -1110,7 +1110,7 @@ where
     {
         log::trace!("(SM) Processing pairing dh key check");
 
-        let initiator_dh_key_check = match pairing::PairingDHKeyCheck::try_from_icd(payload) {
+        let initiator_dh_key_check = match pairing::PairingDHKeyCheck::try_from_command_format(payload) {
             Ok(request) => request,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -1215,7 +1215,7 @@ where
     {
         log::trace!("(SM) Processing peer IRK");
 
-        let identity_info = match encrypt_info::IdentityInformation::try_from_icd(payload) {
+        let identity_info = match encrypt_info::IdentityInformation::try_from_command_format(payload) {
             Ok(ii) => ii,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -1254,7 +1254,7 @@ where
     {
         log::trace!("(SM) Processing peer address info");
 
-        let identity_addr_info = match encrypt_info::IdentityAddressInformation::try_from_icd(payload) {
+        let identity_addr_info = match encrypt_info::IdentityAddressInformation::try_from_command_format(payload) {
             Ok(iai) => iai,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -1293,7 +1293,7 @@ where
     {
         log::trace!("(SM) Processing peer signing info (CSRK)");
 
-        let signing_info = match encrypt_info::SigningInformation::try_from_icd(payload) {
+        let signing_info = match encrypt_info::SigningInformation::try_from_command_format(payload) {
             Ok(si) => si,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)

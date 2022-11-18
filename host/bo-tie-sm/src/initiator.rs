@@ -177,7 +177,7 @@ impl<S, R> SecurityManagerBuilder<S, R> {
     /// be called if the default key configuration is desired.
     pub fn sent_bonding_keys<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut EnabledBondingKeysBuilder),
+        F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
     {
         let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
@@ -199,7 +199,7 @@ impl<S, R> SecurityManagerBuilder<S, R> {
     /// be called if the default key configuration is desired.
     pub fn accepted_bonding_keys<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut EnabledBondingKeysBuilder),
+        F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
     {
         let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
 
@@ -417,7 +417,7 @@ impl<S, R> SecurityManager<S, R> {
     {
         use crate::l2cap::BasicInfoFrame;
 
-        let acl_data = BasicInfoFrame::new(command.into().into_icd(), super::L2CAP_CHANNEL_ID);
+        let acl_data = BasicInfoFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
 
         connection_channel
             .send(acl_data)
@@ -600,7 +600,7 @@ where
     where
         C: ConnectionChannel,
     {
-        let response = pairing::PairingResponse::try_from_icd(payload)?;
+        let response = pairing::PairingResponse::try_from_command_format(payload)?;
 
         if response.get_max_encryption_size() < self.encryption_key_size_min {
             self.send_err(connection_channel, pairing::PairingFailedReason::EncryptionKeySize)
@@ -651,7 +651,7 @@ where
         match self.pairing_data {
             Some(PairingData { ref public_key, .. }) => {
                 let raw_pub_key = {
-                    let key_bytes = public_key.clone().into_icd();
+                    let key_bytes = public_key.clone().into_command_format();
 
                     let mut raw_key = [0u8; 64];
 
@@ -673,7 +673,7 @@ where
     where
         C: ConnectionChannel,
     {
-        let pub_key = pairing::PairingPubKey::try_from_icd(payload);
+        let pub_key = pairing::PairingPubKey::try_from_command_format(payload);
 
         match (&pub_key, &mut self.pairing_data) {
             (
@@ -685,7 +685,7 @@ where
                     ..
                 }),
             ) => {
-                let remote_pub_key = match toolbox::PubKey::try_from_icd(&peer_pub_key_pdu.get_key()) {
+                let remote_pub_key = match toolbox::PubKey::try_from_command_format(&peer_pub_key_pdu.get_key()) {
                     Ok(k) => k,
                     Err(e) => {
                         self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -717,7 +717,10 @@ where
     where
         C: ConnectionChannel,
     {
-        match (&pairing::PairingConfirm::try_from_icd(payload), &mut self.pairing_data) {
+        match (
+            &pairing::PairingConfirm::try_from_command_format(payload),
+            &mut self.pairing_data,
+        ) {
             (
                 Ok(responder_confirm),
                 Some(PairingData {
@@ -780,7 +783,7 @@ where
     where
         C: ConnectionChannel,
     {
-        let responder_nonce = match pairing::PairingRandom::try_from_icd(payload) {
+        let responder_nonce = match pairing::PairingRandom::try_from_command_format(payload) {
             Ok(pairing_random) => pairing_random.get_value(),
             _ => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -908,7 +911,7 @@ where
     where
         C: ConnectionChannel,
     {
-        let eb = match pairing::PairingDHKeyCheck::try_from_icd(payload) {
+        let eb = match pairing::PairingDHKeyCheck::try_from_command_format(payload) {
             Ok(responder_confirm) => responder_confirm,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
@@ -1238,7 +1241,7 @@ where
                     self.pairing_expected_cmd = super::CommandType::PairingFailed.into();
 
                     Err(Error::PairingFailed(
-                        pairing::PairingFailed::try_from_icd(payload)?.get_reason(),
+                        pairing::PairingFailed::try_from_command_format(payload)?.get_reason(),
                     ))
                 }
                 Ok(cmd) if Some(cmd) == self.pairing_expected_cmd => self.next_step(connection_channel, payload).await,
@@ -1403,7 +1406,7 @@ where
                 match (
                     self.link_encrypted,
                     $this.keys.is_some(),
-                    encrypt_info::$key_type::try_from_icd($payload),
+                    encrypt_info::$key_type::try_from_command_format($payload),
                 ) {
                     (true, true, Ok(packet)) => {
                         let keys = $this.keys.as_mut().unwrap();

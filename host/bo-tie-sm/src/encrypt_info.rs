@@ -3,6 +3,7 @@
 //! These packets are defined under the Security In Bluetooth Low Energy section of the Bluetooth
 //! Specification (v5.0 | Vol 3, Part H, section 3.6)
 use super::*;
+use bo_tie_util::buffer::stack::LinearBuffer;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AuthRequirements {
@@ -51,18 +52,18 @@ pub struct EncryptionInformation {
 }
 
 impl CommandData for EncryptionInformation {
-    fn into_icd(self) -> Vec<u8> {
-        self.long_term_key.to_le_bytes().to_vec()
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        LinearBuffer::try_from(*&self.long_term_key.to_be_bytes()).unwrap()
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
             let mut v = [0u8; 16];
 
             v.copy_from_slice(icd);
 
             Ok(EncryptionInformation {
-                long_term_key: <u128>::from_le_bytes(v),
+                long_term_key: <u128>::from_be_bytes(v),
             })
         } else {
             Err(Error::Size)
@@ -88,14 +89,19 @@ pub struct MasterIdentification {
 }
 
 impl CommandData for MasterIdentification {
-    fn into_icd(self) -> Vec<u8> {
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
         let ediv = self.encryption_diversifier.to_le_bytes();
         let rand = self.random.to_le_bytes();
 
-        ediv.iter().chain(rand.iter()).copied().collect()
+        ediv.into_iter()
+            .chain(rand.into_iter())
+            .fold(LinearBuffer::new(), |mut lb, byte| {
+                lb.try_push(byte).unwrap();
+                lb
+            })
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 10 {
             let mut ediv_a = [0u8; 2];
             let mut rand_a = [0u8; 8];
@@ -146,18 +152,18 @@ impl IdentityInformation {
 }
 
 impl CommandData for IdentityInformation {
-    fn into_icd(self) -> Vec<u8> {
-        self.irk.to_le_bytes().to_vec()
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        LinearBuffer::try_from(*&self.irk.to_be_bytes()).unwrap()
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
             let mut v = [0u8; 16];
 
             v.copy_from_slice(icd);
 
             Ok(IdentityInformation {
-                irk: <u128>::from_le_bytes(v),
+                irk: <u128>::from_be_bytes(v),
             })
         } else {
             Err(Error::Size)
@@ -183,20 +189,22 @@ pub struct IdentityAddressInformation {
 }
 
 impl CommandData for IdentityAddressInformation {
-    fn into_icd(self) -> Vec<u8> {
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        let mut ret = LinearBuffer::new();
+
         let addr_type_val = match self.addr_type {
             AddressType::Public => 0,
             AddressType::StaticRandom => 1,
         };
 
-        let mut v = alloc::vec![addr_type_val];
+        ret.try_push(addr_type_val).unwrap();
 
-        v.extend_from_slice(&self.address.0);
+        self.address.0.into_iter().for_each(|byte| ret.try_push(byte).unwrap());
 
-        v
+        ret
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 7 {
             let addr_type = match icd[0] {
                 0 => AddressType::Public,
@@ -273,18 +281,24 @@ pub struct SigningInformation {
 }
 
 impl CommandData for SigningInformation {
-    fn into_icd(self) -> Vec<u8> {
-        self.signature_key.to_le_bytes().to_vec()
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        self.signature_key
+            .to_be_bytes()
+            .into_iter()
+            .fold(LinearBuffer::new(), |mut lb, byte| {
+                lb.try_push(byte).unwrap();
+                lb
+            })
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 16 {
             let mut key_arr = [0u8; 16];
 
             key_arr.copy_from_slice(&icd);
 
             Ok(SigningInformation {
-                signature_key: <u128>::from_le_bytes(key_arr),
+                signature_key: <u128>::from_be_bytes(key_arr),
             })
         } else {
             Err(Error::Size)
@@ -317,11 +331,16 @@ pub struct SecurityRequest {
 }
 
 impl CommandData for SecurityRequest {
-    fn into_icd(self) -> Vec<u8> {
-        alloc::vec![AuthRequirements::make_auth_req_val(&self.auth_req)]
+    fn into_command_format(self) -> LinearBuffer<65, u8> {
+        let mut ret = LinearBuffer::new();
+
+        ret.try_push(AuthRequirements::make_auth_req_val(&self.auth_req))
+            .unwrap();
+
+        ret
     }
 
-    fn try_from_icd(icd: &[u8]) -> Result<Self, Error> {
+    fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 1 {
             let auth_req = AuthRequirements::vec_from_val(icd[0]);
 
