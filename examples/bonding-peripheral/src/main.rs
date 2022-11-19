@@ -273,10 +273,7 @@ async fn on_encryption_change<C, S, R, Q>(
             // the peer device will use this address with
             // its identity resolving list.
             security_manager
-                .send_identity(
-                    le_connection_channel,
-                    bo_tie::host::sm::IdentityAddress::StaticRandom(bo_tie::BluetoothDeviceAddress::new_random_static()),
-                )
+                .send_identity(le_connection_channel, None)
                 .await
                 .unwrap();
         } else {
@@ -402,117 +399,6 @@ async fn on_ltk_request_event<H: HostChannelEnds>(
         }
     }
 }
-
-// /// Reconnection advertising via private address
-// async fn reconnect_advertising(
-//     &self,
-//     this_irk: u128,
-//     peer_irk: Option<u128>,
-//     peer_address_info: AddressInfo,
-// ) -> Option<hci::events::LEEnhancedConnectionCompleteData> {
-//     use hci::events::EventsData;
-//     use hci::events::LeMeta::EnhancedConnectionComplete;
-//     use hci::events::LeMetaData::EnhancedConnectionComplete as ECCData;
-//     use hci::le::{
-//         privacy::{
-//             add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
-//             set_resolvable_private_address_timeout, PeerIdentityAddressType,
-//         },
-//         transmitter::{
-//             set_advertising_enable,
-//             set_advertising_parameters::{self, PeerAddressType},
-//         },
-//     };
-//
-//     let resolve_list_param = add_device_to_resolving_list::Parameter {
-//         peer_identity_address_type: if peer_address_info.is_pub {
-//             PeerIdentityAddressType::PublicIdentityAddress
-//         } else {
-//             PeerIdentityAddressType::RandomStaticIdentityAddress
-//         },
-//         peer_identity_address: peer_address_info.address,
-//         peer_irk: peer_irk.unwrap_or_default(),
-//         local_irk: this_irk,
-//     };
-//
-//     let mut advertise_param = set_advertising_parameters::AdvertisingParameters::default();
-//
-//     advertise_param.own_address_type = if self.is_address_public() {
-//         OwnAddressType::RPAFromLocalIRKOrPA
-//     } else {
-//         OwnAddressType::RPAFromLocalIRKOrRA
-//     };
-//
-//     advertise_param.peer_address = peer_address_info.address;
-//
-//     advertise_param.peer_address_type = if peer_address_info.is_pub {
-//         PeerAddressType::PublicAddress
-//     } else {
-//         PeerAddressType::RandomAddress
-//     };
-//
-//     let privacy_mode_param = set_privacy_mode::Parameter {
-//         peer_identity_address: peer_address_info.address,
-//         peer_identity_address_type: if peer_address_info.is_pub {
-//             PeerIdentityAddressType::PublicIdentityAddress
-//         } else {
-//             PeerIdentityAddressType::RandomStaticIdentityAddress
-//         },
-//         privacy_mode: set_privacy_mode::PrivacyMode::DevicePrivacy,
-//     };
-//
-//     self.set_le_events(&[EnhancedConnectionComplete], true).await;
-//
-//     set_advertising_enable::send(&self.hi, false).await.unwrap();
-//
-//     add_device_to_resolving_list::send(&self.hi, resolve_list_param)
-//         .await
-//         .unwrap();
-//
-//     set_resolvable_private_address_timeout::send(&self.hi, core::time::Duration::default())
-//         .await
-//         .unwrap();
-//
-//     set_address_resolution_enable::send(&self.hi, true).await.unwrap();
-//
-//     set_privacy_mode::send(&self.hi, privacy_mode_param).await.unwrap();
-//
-//     set_advertising_parameters::send(&self.hi, advertise_param)
-//         .await
-//         .unwrap();
-//
-//     set_advertising_enable::send(&self.hi, true).await.unwrap();
-//
-//     let event_rslt = self.hi.wait_for_event(Some(EnhancedConnectionComplete.into())).await;
-//
-//     let event_data_opt = match event_rslt {
-//         Err(e) => {
-//             eprintln!("Failed to receive EnhancedConnectionComplete: {:?}", e);
-//             None
-//         }
-//         Ok(EventsData::LeMeta(ECCData(event_data))) => {
-//             if event_data.status == hci::error::Error::NoError {
-//                 *self.handle.lock().await = Some(event_data.connection_handle);
-//                 Some(event_data)
-//             } else {
-//                 eprintln!("Received bad enhanced connection: {}", event_data.status);
-//                 None
-//             }
-//         }
-//         Ok(e) => {
-//             eprintln!("Received unexpected event: {:?}", e);
-//             None
-//         }
-//     };
-//
-//     set_advertising_enable::send(&self.hi, false).await.unwrap();
-//
-//     self.set_le_events(&[EnhancedConnectionComplete], false).await;
-//
-//     set_address_resolution_enable::send(&self.hi, false).await.unwrap();
-//
-//     event_data_opt
-// }
 
 async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Option<ConnectionHandle>) {
     use bo_tie::hci::commands::link_control::disconnect;
