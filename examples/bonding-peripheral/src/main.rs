@@ -49,8 +49,6 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
     use bo_tie::hci::events::{Events, LeMeta};
     use bo_tie::host::gap::assigned;
 
-    let mut adv_flags = assigned::flags::Flags::new();
-
     let mut adv_data = set_advertising_data::AdvertisingData::new();
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
@@ -64,9 +62,7 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
 
     match ty {
         AdvertisingType::Undirected(local_name, address_info) => {
-            let address = address_info.address;
-
-            let adv_name = assigned::local_name::LocalName::new(*local_name, None);
+            let mut adv_flags = assigned::flags::Flags::new();
 
             adv_flags
                 .get_core(assigned::flags::CoreFlags::LeLimitedDiscoverableMode)
@@ -74,6 +70,8 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             adv_flags
                 .get_core(assigned::flags::CoreFlags::BrEdrNotSupported)
                 .enable();
+
+            let adv_name = assigned::local_name::LocalName::new(*local_name, None);
 
             adv_data.try_push(adv_flags).unwrap();
             adv_data.try_push(adv_name).unwrap();
@@ -84,7 +82,7 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
                 OwnAddressType::RandomDeviceAddress
             };
 
-            set_random_address::send(hi, address).await.unwrap();
+            set_random_address::send(hi, address_info.address).await.unwrap();
         }
         AdvertisingType::Resolvable(keys) => {
             adv_data.try_push(adv_flags).unwrap();
