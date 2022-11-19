@@ -262,16 +262,17 @@ async fn on_encryption_change<C, S, R, Q>(
 
         // Send the local IRK if has not been sent yet.
         if let None = security_manager.get_keys().unwrap().get_irk() {
-            // distribute the irk (using `None` means the
-            // security manager will generate the key) and
-            // the identity address.
-
+            // Distribute the irk (using `None` means the
+            // security manager will generate the key).
             security_manager.send_irk(le_connection_channel, None).await.unwrap();
 
-            // The identity address does not matter here as
-            // this example uses network privacy mode. Only
-            // the peer device will use this address with
-            // its identity resolving list.
+            // The identity address should not matter here,
+            // but for some devices it does. This is not a
+            // Bluetooth issue, its an issue with devices
+            // not updating the access list to match this
+            // identity address, so he address used for
+            // pairing must be the one used sent as the
+            // identity address.
             security_manager
                 .send_identity(le_connection_channel, None)
                 .await
