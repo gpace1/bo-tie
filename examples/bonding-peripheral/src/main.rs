@@ -27,20 +27,16 @@ impl AdvertisingType {
 
 /// Starting advertising
 ///
-/// This advertising has two different setups. The first kind is where advertising is undirected, as
-/// there is no bonding information and any device can connect. The setup for this is no different
-/// than for the advertising setup in the `le-peripheral` example. The other type of advertising is
-/// directed, where the device is trying to reconnect with a previously bonded peer device. In this
-/// case the device was previously bonded and a resolvable private addresses will be used to *only*
-/// reconnect with it.
-///
-/// The setup for directed advertising is very different for a previously bonded device. This
-/// example uses the Controller's resolving list to reestablish a connection to a previously bonded
-/// device. This requires knowing the identity resolving key which is only shared between the
-/// devices after successfully bonding.
-///
-/// The return is the address information that was used as part of the undirected advertising. When
-/// directed advertising is used, there is no returned advertising information.
+/// There is two different kinds of advertising done by this example. The example starts out in
+/// undirected advertising (with the flag `LeLimitedDiscoverableMode`), and any device can
+/// successfully form a connection to the device running this example. Not much is different from
+/// this form of advertising to the advertising done in the `le-peripheral` example. However, after
+/// bonding is completed advertising is switched to directed, where by the address fields of the
+/// advertising PDU for both the advertiser and target are resolvable private addresses. Network
+/// privacy is used, so in order a device to connect it must also use a resolvable private address
+/// in its connection initiation message (for itself). This means that only the bonded devices will
+/// be allowed by the controller to form a Connection as both the central and peripheral must be
+/// able to resolve each other's addresses.
 async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &AdvertisingType) {
     use bo_tie::hci::commands::le::OwnAddressType;
     use bo_tie::hci::commands::le::{
