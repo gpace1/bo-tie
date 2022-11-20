@@ -81,8 +81,6 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             set_random_address::send(hi, address_info.address).await.unwrap();
         }
         AdvertisingType::Resolvable(keys) => {
-            adv_data.try_push(adv_flags).unwrap();
-
             let identity = keys.get_identity().unwrap().get_address();
 
             set_random_address::send(hi, identity).await.unwrap();
@@ -286,7 +284,7 @@ async fn server_loop<C>(
     local_name: &'static str,
     own_address: AddressInfo,
     bonding_keys: Option<Keys>,
-) -> Option<Keys>
+) -> Result<Keys, &'static str>
 where
     C: bo_tie::hci::ConnectionChannelEnds,
 {
@@ -365,13 +363,12 @@ where
         }
     }
 
-    // return the keys if bonding was completed
-    security_manager
-        .get_keys()
-        .into_iter()
-        .filter(|keys| keys.get_irk().is_some())
-        .next()
-        .cloned()
+    match security_manager.get_keys() {
+        Some(keys) if keys.get_irk().is_some() && keys.get_peer_irk().is_some() => Ok(keys.clone()),
+        Some(keys) if keys.get_peer_irk().is_none() => Err("the central device did not distribute an IRK"),
+        Some(_) => Err("devices disconnected before bonding"),
+        None => Err("client disconnected but is not bonded, exiting example"),
+    }
 }
 
 async fn on_ltk_request_event<H: HostChannelEnds>(
@@ -535,15 +532,15 @@ async fn main() {
             ));
 
             let keys = tokio::select!(
-                opt_keys = handle => {
+                opt_rslt_keys = handle => {
                     opt_connection_handle = None;
 
-                    if let Some(keys) = opt_keys.unwrap() {
-                        keys
-                    } else {
-                        println!("client disconnected but is not bonded, exiting example");
-
-                        break 'task;
+                    match opt_rslt_keys.unwrap() {
+                        Ok(keys) => keys,
+                        Err(e) => {
+                            println!("{}", e);
+                            break 'task;
+                        }
                     }
                 }
 
