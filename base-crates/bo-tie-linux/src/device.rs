@@ -5,14 +5,6 @@
 //! functionality used by this library. These are linux specific and have no relation to the
 //! bluetooth specification.
 
-pub const BTPROTO_HCI: i32 = 1;
-
-/// The default maximum bluetooth device to get the list of
-const BLU_DEV_LIST_DEFAULT_CNT: usize = 16;
-
-// pub const HCI_CHANNEL_RAW: i32 = 0; // A raw channel works with the linux hci implementation
-pub const HCI_CHANNEL_USER: i32 = 1; // User channel gives total control, but requires hci
-
 pub mod hci {
     use bo_tie_hci_util::HciPacket;
     use bo_tie_util::buffer::Buffer;
@@ -44,7 +36,6 @@ pub mod hci {
         A: Into<Option<BluetoothDeviceAddress>>,
     {
         use nix::libc;
-        use std::os::raw::c_int;
 
         let mut hci_dev_list = super::hci_dev_list_req::default();
 
@@ -59,10 +50,25 @@ pub mod hci {
                 return Err(nix::errno::Errno::last().into());
             }
 
+            // deliberately bind HCI_DEV_NONE as we only want to interface with the linux driver.
+            //
+            // Note: this is unnecessary, but it makes me feel better to do this :)
+            let sa_p = &super::sockaddr_hci {
+                hci_family: libc::AF_BLUETOOTH as u16,
+                hci_dev: super::HCI_DEV_NONE,
+                hci_channel: super::HCI_CHANNEL_RAW,
+            } as *const super::sockaddr_hci as *const libc::sockaddr;
+
+            let sa_len = std::mem::size_of::<super::sockaddr_hci>() as libc::socklen_t;
+
+            if libc::bind(raw_fd, sa_p, sa_len) < 0 {
+                return Err(nix::errno::Errno::last().into());
+            }
+
             crate::FileDescriptor(raw_fd)
         };
 
-        unsafe { super::hci_get_dev_list(sock.0, &mut hci_dev_list as *mut _ as *mut c_int)? };
+        unsafe { super::hci_get_dev_list(sock.0, &mut hci_dev_list)? };
 
         let device_address_opt = device_address.into();
 
@@ -75,7 +81,7 @@ pub mod hci {
 
                 dev_info.dev_id = id;
 
-                let di_rslt = unsafe { super::hci_get_dev_info(sock.0, &mut dev_info as *mut _ as *mut c_int) };
+                let di_rslt = unsafe { super::hci_get_dev_info(sock.0, &mut dev_info) };
 
                 if di_rslt.is_err() || test_flag(HCI_RAW, &[dev_info.flags]) {
                     return None;
@@ -117,30 +123,56 @@ pub mod hci {
     }
 }
 
-#[repr(C)]
-#[derive(Default)]
-pub struct hci_filter {
-    pub type_mask: u32,
-    pub event_mask: [u32; 2usize],
-    pub opcode: u16,
-}
+///////////
+// c structures and constants taken from include/bluetooth/hci_sock.h
+////
 
+pub const BTPROTO_HCI: i32 = 1;
+
+pub const HCI_DEV_NONE: u16 = 0xffff;
+
+/// The default maximum bluetooth device to get the list of
+const BLU_DEV_LIST_DEFAULT_CNT: usize = 16;
+
+/// A raw HCI channel
+pub const HCI_CHANNEL_RAW: u16 = 0;
+
+/// A user HCI channel
+///
+/// This channel is slightly more performant as capability checks only done when binding a socket,
+/// whereas a raw channel needs to do them for every system call. See [hci_sock.c].
+///
+/// [hci_sock.c]: https://elixir.bootlin.com/linux/latest/source/net/bluetooth/hci_sock.c
+pub const HCI_CHANNEL_USER: u16 = 1;
+
+/// linux c struct sockaddr_hci
+///
+/// This is taken from include/bluetooth/hci_sock.h
 #[repr(C)]
 #[derive(Default)]
+#[allow(non_camel_case_types)]
 pub struct sockaddr_hci {
     pub hci_family: nix::libc::sa_family_t,
     pub hci_dev: u16,
     pub hci_channel: u16,
 }
 
+/// linux c struct hci_dev_req
+///
+/// This is taken from include/bluetooth/hci_sock.h
 #[repr(C)]
 #[derive(Default)]
+#[allow(non_camel_case_types)]
 pub struct hci_dev_req {
     dev_id: u16,
     dev_opt: u32,
 }
 
+/// linux c struct hci_dev_list_req
+///
+/// This is taken from include/bluetooth/hci_sock.h
 #[repr(C)]
+#[allow(non_camel_case_types)]
 pub struct hci_dev_list_req {
     dev_num: u16,
     dev_req: [hci_dev_req; BLU_DEV_LIST_DEFAULT_CNT],
@@ -155,8 +187,12 @@ impl Default for hci_dev_list_req {
     }
 }
 
+/// linux c struct hci_dev_info
+///
+/// This is taken from include/bluetooth/hci_sock.h
 #[repr(C)]
 #[derive(Default)]
+#[allow(non_camel_case_types)]
 pub struct hci_dev_info {
     dev_id: u16,
     name: [std::os::raw::c_char; 8],
@@ -174,8 +210,12 @@ pub struct hci_dev_info {
     stat: hci_dev_stats,
 }
 
+/// linux c struct hci_dev_stats
+///
+/// This is taken from include/bluetooth/hci_sock.h
 #[repr(C)]
 #[derive(Default)]
+#[allow(non_camel_case_types)]
 pub struct hci_dev_stats {
     err_rx: u32,
     err_tx: u32,
@@ -198,15 +238,29 @@ const HCI_IOC_HCIGETDEVINFO: u8 = 211;
 
 nix::ioctl_write_int!(hci_dev_up, HCI_IOC_MAGIC, HCI_IOC_HCIDEVUP);
 nix::ioctl_write_int!(hci_dev_down, HCI_IOC_MAGIC, HCI_IOC_HCIDEVDOWN);
-nix::ioctl_read!(
-    hci_get_dev_list,
-    HCI_IOC_MAGIC,
-    HCI_IOC_HCIGETDEVLIST,
-    std::os::raw::c_int
-);
-nix::ioctl_read!(
-    hci_get_dev_info,
-    HCI_IOC_MAGIC,
-    HCI_IOC_HCIGETDEVINFO,
-    std::os::raw::c_int
-);
+
+//////
+// The following functions cannot use nix's handy ioctl_read! macros because the request code
+// does not use the same type as `hci_dev_list_req`
+
+unsafe fn hci_get_dev_list(fd: nix::libc::c_int, req: &mut hci_dev_list_req) -> nix::Result<nix::libc::c_int> {
+    use nix::libc::{c_int, c_void};
+    use std::mem::size_of;
+
+    let request_code = nix::request_code_read!(HCI_IOC_MAGIC, HCI_IOC_HCIGETDEVLIST, size_of::<c_int>());
+
+    let raw_errno = nix::libc::ioctl(fd, request_code, req as *mut _ as *mut c_void);
+
+    nix::errno::Errno::result(raw_errno)
+}
+
+unsafe fn hci_get_dev_info(fd: nix::libc::c_int, info: &mut hci_dev_info) -> nix::Result<nix::libc::c_int> {
+    use nix::libc::{c_int, c_void};
+    use std::mem::size_of;
+
+    let request_code = nix::request_code_read!(HCI_IOC_MAGIC, HCI_IOC_HCIGETDEVINFO, size_of::<c_int>());
+
+    let raw_errno = nix::libc::ioctl(fd, request_code, info as *mut _ as *mut c_void);
+
+    nix::errno::Errno::result(raw_errno)
+}
