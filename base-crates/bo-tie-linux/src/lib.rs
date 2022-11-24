@@ -295,7 +295,7 @@ impl<T: ChannelReserve> LinuxInterface<T> {
     /// This launches the interface to begin processing HCI packets sent to and received from the
     /// Bluetooth Controller.
     pub async fn run(mut self) {
-        use device::hci::send_to_controller;
+        use device::send_to_controller;
 
         loop {
             tokio::select! {
@@ -346,7 +346,7 @@ fn from_adapter_id(
         libc::socket(
             libc::AF_BLUETOOTH,
             libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-            device::BTPROTO_HCI,
+            device::bindings::BTPROTO_HCI as i32,
         )
     };
 
@@ -354,13 +354,13 @@ fn from_adapter_id(
         panic!("Bluetooth not supported on this system");
     }
 
-    let sa_p = &device::sockaddr_hci {
+    let sa_p = &device::bindings::sockaddr_hci {
         hci_family: libc::AF_BLUETOOTH as u16,
         hci_dev: adapter_id as u16,
-        hci_channel: device::HCI_CHANNEL_USER as u16,
-    } as *const device::sockaddr_hci as *const libc::sockaddr;
+        hci_channel: device::bindings::HCI_CHANNEL_USER as u16,
+    } as *const device::bindings::sockaddr_hci as *const libc::sockaddr;
 
-    let sa_len = std::mem::size_of::<device::sockaddr_hci>() as libc::socklen_t;
+    let sa_len = std::mem::size_of::<device::bindings::sockaddr_hci>() as libc::socklen_t;
 
     if let Err(e) = unsafe { device::hci_dev_down(device_fd, adapter_id.try_into().unwrap()) } {
         panic!("Failed to close hci device '{}', {}", adapter_id, e);
@@ -471,7 +471,7 @@ where
     match adapter_id.into() {
         Some(id) => from_adapter_id(id),
         None => {
-            let adapter_id = device::hci::get_dev_id(None).expect("No Bluetooth adapter found on this system");
+            let adapter_id = device::get_dev_id(None).expect("No Bluetooth adapter found on this system");
 
             from_adapter_id(adapter_id)
         }
