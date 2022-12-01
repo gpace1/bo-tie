@@ -35,13 +35,10 @@ pub const HCI_DEV_NONE: u32 = 65535;
 pub const HCI_CHANNEL_RAW: u32 = 0;
 pub const HCI_CHANNEL_USER: u32 = 1;
 pub type sa_family_t = ::std::os::raw::c_ushort;
-pub type __u8 = ::std::os::raw::c_uchar;
-pub type __u16 = ::std::os::raw::c_ushort;
-pub type __u32 = ::std::os::raw::c_uint;
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 pub struct bdaddr_t {
-    pub b: [__u8; 6usize],
+    pub b: [u8; 6usize],
 }
 #[test]
 fn bindgen_test_layout_bdaddr_t() {
@@ -60,7 +57,12 @@ fn bindgen_test_layout_bdaddr_t() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).b) as usize - ptr as usize },
         0usize,
-        concat!("Offset of field: ", stringify!(bdaddr_t), "::", stringify!(b))
+        concat!(
+            "Offset of field: ",
+            stringify!(bdaddr_t),
+            "::",
+            stringify!(b)
+        )
     );
 }
 #[repr(C)]
@@ -97,7 +99,12 @@ fn bindgen_test_layout_sockaddr_hci() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).hci_dev) as usize - ptr as usize },
         2usize,
-        concat!("Offset of field: ", stringify!(sockaddr_hci), "::", stringify!(hci_dev))
+        concat!(
+            "Offset of field: ",
+            stringify!(sockaddr_hci),
+            "::",
+            stringify!(hci_dev)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).hci_channel) as usize - ptr as usize },
@@ -113,16 +120,16 @@ fn bindgen_test_layout_sockaddr_hci() {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hci_dev_stats {
-    pub err_rx: __u32,
-    pub err_tx: __u32,
-    pub cmd_tx: __u32,
-    pub evt_rx: __u32,
-    pub acl_tx: __u32,
-    pub acl_rx: __u32,
-    pub sco_tx: __u32,
-    pub sco_rx: __u32,
-    pub byte_rx: __u32,
-    pub byte_tx: __u32,
+    pub err_rx: u32,
+    pub err_tx: u32,
+    pub cmd_tx: u32,
+    pub evt_rx: u32,
+    pub acl_tx: u32,
+    pub acl_rx: u32,
+    pub sco_tx: u32,
+    pub sco_rx: u32,
+    pub byte_rx: u32,
+    pub byte_tx: u32,
 }
 #[test]
 fn bindgen_test_layout_hci_dev_stats() {
@@ -141,42 +148,82 @@ fn bindgen_test_layout_hci_dev_stats() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).err_rx) as usize - ptr as usize },
         0usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(err_rx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(err_rx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).err_tx) as usize - ptr as usize },
         4usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(err_tx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(err_tx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).cmd_tx) as usize - ptr as usize },
         8usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(cmd_tx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(cmd_tx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).evt_rx) as usize - ptr as usize },
         12usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(evt_rx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(evt_rx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).acl_tx) as usize - ptr as usize },
         16usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(acl_tx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(acl_tx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).acl_rx) as usize - ptr as usize },
         20usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(acl_rx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(acl_rx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).sco_tx) as usize - ptr as usize },
         24usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(sco_tx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(sco_tx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).sco_rx) as usize - ptr as usize },
         28usize,
-        concat!("Offset of field: ", stringify!(hci_dev_stats), "::", stringify!(sco_rx))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_stats),
+            "::",
+            stringify!(sco_rx)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).byte_rx) as usize - ptr as usize },
@@ -202,19 +249,19 @@ fn bindgen_test_layout_hci_dev_stats() {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hci_dev_info {
-    pub dev_id: __u16,
+    pub dev_id: u16,
     pub name: [::std::os::raw::c_char; 8usize],
     pub bdaddr: bdaddr_t,
-    pub flags: __u32,
-    pub type_: __u8,
-    pub features: [__u8; 8usize],
-    pub pkt_type: __u32,
-    pub link_policy: __u32,
-    pub link_mode: __u32,
-    pub acl_mtu: __u16,
-    pub acl_pkts: __u16,
-    pub sco_mtu: __u16,
-    pub sco_pkts: __u16,
+    pub flags: u32,
+    pub type_: u8,
+    pub features: [u8; 8usize],
+    pub pkt_type: u32,
+    pub link_policy: u32,
+    pub link_mode: u32,
+    pub acl_mtu: u16,
+    pub acl_pkts: u16,
+    pub sco_mtu: u16,
+    pub sco_pkts: u16,
     pub stat: hci_dev_stats,
 }
 #[test]
@@ -234,27 +281,52 @@ fn bindgen_test_layout_hci_dev_info() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).dev_id) as usize - ptr as usize },
         0usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(dev_id))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(dev_id)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).name) as usize - ptr as usize },
         2usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(name))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(name)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).bdaddr) as usize - ptr as usize },
         10usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(bdaddr))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(bdaddr)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).flags) as usize - ptr as usize },
         16usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(flags))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(flags)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).type_) as usize - ptr as usize },
         20usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(type_))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(type_)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).features) as usize - ptr as usize },
@@ -299,7 +371,12 @@ fn bindgen_test_layout_hci_dev_info() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).acl_mtu) as usize - ptr as usize },
         44usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(acl_mtu))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(acl_mtu)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).acl_pkts) as usize - ptr as usize },
@@ -314,7 +391,12 @@ fn bindgen_test_layout_hci_dev_info() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).sco_mtu) as usize - ptr as usize },
         48usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(sco_mtu))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(sco_mtu)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).sco_pkts) as usize - ptr as usize },
@@ -329,14 +411,19 @@ fn bindgen_test_layout_hci_dev_info() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).stat) as usize - ptr as usize },
         52usize,
-        concat!("Offset of field: ", stringify!(hci_dev_info), "::", stringify!(stat))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_info),
+            "::",
+            stringify!(stat)
+        )
     );
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct hci_dev_req {
-    pub dev_id: __u16,
-    pub dev_opt: __u32,
+    pub dev_id: u16,
+    pub dev_opt: u32,
 }
 #[test]
 fn bindgen_test_layout_hci_dev_req() {
@@ -355,18 +442,28 @@ fn bindgen_test_layout_hci_dev_req() {
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).dev_id) as usize - ptr as usize },
         0usize,
-        concat!("Offset of field: ", stringify!(hci_dev_req), "::", stringify!(dev_id))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_req),
+            "::",
+            stringify!(dev_id)
+        )
     );
     assert_eq!(
         unsafe { ::std::ptr::addr_of!((*ptr).dev_opt) as usize - ptr as usize },
         4usize,
-        concat!("Offset of field: ", stringify!(hci_dev_req), "::", stringify!(dev_opt))
+        concat!(
+            "Offset of field: ",
+            stringify!(hci_dev_req),
+            "::",
+            stringify!(dev_opt)
+        )
     );
 }
 #[repr(C)]
 #[derive(Debug)]
 pub struct hci_dev_list_req {
-    pub dev_num: __u16,
+    pub dev_num: u16,
     pub dev_req: __IncompleteArrayField<hci_dev_req>,
 }
 #[test]
