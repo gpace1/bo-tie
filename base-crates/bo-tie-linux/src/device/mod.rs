@@ -174,7 +174,7 @@ impl BoxedHciDevListReq {
     fn new() -> Self {
         use std::alloc::{alloc, Layout};
 
-        let layout = Layout::new::<bindings::__u16>()
+        let layout = Layout::new::<u16>()
             .extend(Layout::array::<Self>(Self::REQUEST_COUNT.into()).unwrap())
             .unwrap()
             .0
