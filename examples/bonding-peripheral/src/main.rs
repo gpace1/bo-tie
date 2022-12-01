@@ -365,8 +365,10 @@ where
 
     match security_manager.get_keys() {
         Some(keys) if keys.get_irk().is_some() && keys.get_peer_irk().is_some() => Ok(keys.clone()),
-        Some(keys) if keys.get_peer_irk().is_none() => Err("the central device did not distribute an IRK"),
-        Some(_) => Err("devices disconnected before bonding"),
+        Some(keys) if keys.get_irk().is_some() && keys.get_peer_irk().is_none() => {
+            Err("bonding failed, the central device did not distribute an IRK")
+        }
+        Some(_) => Err("devices disconnected before bonding (this may be due to a failure in pairing)"),
         None => Err("client disconnected but is not bonded, exiting example"),
     }
 }
