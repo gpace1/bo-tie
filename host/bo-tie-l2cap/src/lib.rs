@@ -527,7 +527,7 @@ impl core::fmt::Display for BasicInfoFrame<alloc::vec::Vec<u8>> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(
             f,
-            "Basic Info Frame {{ channel id: {}, payload: {:#?} }}",
+            "Basic Info Frame {{ channel id: {}, payload: {:x?} }}",
             self.channel_id, self.payload
         )
     }
