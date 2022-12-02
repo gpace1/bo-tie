@@ -652,6 +652,7 @@ where
             .as_command_packet(&mut buffer)
             .map_err(|e| CommandError::TryExtendBufferError(e))?;
 
+        log::info!("sending command {}", P::COMMAND);
         self.host_interface
             .get_sender()
             .send(ToInterfaceIntraMessage::Command(buffer))

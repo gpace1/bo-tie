@@ -15,6 +15,7 @@
 //! ```
 
 use core::convert::TryFrom;
+use core::fmt::Write;
 
 /// Enumerations of the various HCI command opcodes.
 ///
@@ -42,6 +43,42 @@ impl HciCommand {
             HciCommand::InformationParameters(ocf) => ocf.into_opcode_pair(),
             HciCommand::StatusParameters(ocf) => ocf.into_opcode_pair(),
             HciCommand::LEController(ocf) => ocf.into_opcode_pair(),
+        }
+    }
+}
+
+impl core::fmt::Display for HciCommand {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            HciCommand::LinkControl(c) => {
+                let opcode = c.into_opcode_pair();
+
+                write!(f, "link control - {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
+            }
+            HciCommand::ControllerAndBaseband(c) => {
+                let opcode = c.into_opcode_pair();
+
+                write!(
+                    f,
+                    "controller and baseband - {} ({:#x}:{:#x})",
+                    c, opcode.ogf, opcode.ocf
+                )
+            }
+            HciCommand::InformationParameters(c) => {
+                let opcode = c.into_opcode_pair();
+
+                write!(f, "information parameters {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
+            }
+            HciCommand::StatusParameters(c) => {
+                let opcode = c.into_opcode_pair();
+
+                write!(f, "status parameters {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
+            }
+            HciCommand::LEController(c) => {
+                let opcode = c.into_opcode_pair();
+
+                write!(f, "LE controller {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
+            }
         }
     }
 }
@@ -148,6 +185,15 @@ impl LinkControl {
     }
 }
 
+impl core::fmt::Display for LinkControl {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            LinkControl::Disconnect => f.write_str("disconnect"),
+            LinkControl::ReadRemoteVersionInformation => f.write_str(""),
+        }
+    }
+}
+
 /// Controller and baseband commands
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
@@ -179,6 +225,16 @@ impl ControllerAndBaseband {
             0x3 => Ok(ControllerAndBaseband::Reset),
             0x2d => Ok(ControllerAndBaseband::ReadTransmitPowerLevel),
             _ => Err(alloc::format!(ocf_error!(), "Controller and Baseband", ocf)),
+        }
+    }
+}
+
+impl core::fmt::Display for ControllerAndBaseband {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ControllerAndBaseband::SetEventMask => f.write_str("set event mask"),
+            ControllerAndBaseband::Reset => f.write_str("reset"),
+            ControllerAndBaseband::ReadTransmitPowerLevel => f.write_str("read transmit power level"),
         }
     }
 }
@@ -225,6 +281,20 @@ impl InformationParameters {
     }
 }
 
+impl core::fmt::Display for InformationParameters {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            InformationParameters::ReadLocalSupportedVersionInformation => {
+                f.write_str("read local supported version information")
+            }
+            InformationParameters::ReadLocalSupportedCommands => f.write_str("read local supported commands"),
+            InformationParameters::ReadLocalSupportedFeatures => f.write_str("read local supported features"),
+            InformationParameters::ReadBD_ADDR => f.write_str("read BR_ADDR"),
+            InformationParameters::ReadBufferSize => f.write_str("read buffer size"),
+        }
+    }
+}
+
 /// Status parameter commands
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[non_exhaustive]
@@ -250,6 +320,14 @@ impl StatusParameters {
         match ocf {
             0x5 => Ok(StatusParameters::ReadRSSI),
             _ => Err(alloc::format!(ocf_error!(), "Status Parameters", ocf)),
+        }
+    }
+}
+
+impl core::fmt::Display for StatusParameters {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            StatusParameters::ReadRSSI => f.write_str("read RSSI"),
         }
     }
 }
@@ -393,6 +471,54 @@ impl LEController {
             0x29 => Ok(LEController::ClearResolvingList),
             0x4e => Ok(LEController::SetPrivacyMode),
             _ => Err(alloc::format!(ocf_error!(), "LE Controller", ocf)),
+        }
+    }
+}
+
+impl core::fmt::Display for LEController {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            LEController::SetEventMask => f.write_str("set event mask"),
+            LEController::ReadBufferSizeV1 => f.write_str("read buffer size (v1)"),
+            LEController::ReadBufferSizeV2 => f.write_str("read buffer size (v2)"),
+            LEController::ReadLocalSupportedFeatures => f.write_str("read local supported features"),
+            LEController::SetRandomAddress => f.write_str("set random address"),
+            LEController::SetAdvertisingParameters => f.write_str("set advertising parameters"),
+            LEController::ReadAdvertisingChannelTxPower => f.write_str("read advertising channel tx power"),
+            LEController::SetAdvertisingData => f.write_str("set advertising data"),
+            LEController::SetScanResponseData => f.write_str("set scan response data"),
+            LEController::SetAdvertisingEnable => f.write_str("set advertising enable"),
+            LEController::SetScanParameters => f.write_str("set scan parameters"),
+            LEController::SetScanEnable => f.write_str("set scan enable"),
+            LEController::CreateConnection => f.write_str("create connection"),
+            LEController::CreateConnectionCancel => f.write_str("create connection cancel"),
+            LEController::ReadWhiteListSize => f.write_str("read white list size"),
+            LEController::ClearWhiteList => f.write_str("clear white list"),
+            LEController::AddDeviceToWhiteList => f.write_str("add device to white list"),
+            LEController::RemoveDeviceFromWhiteList => f.write_str("remove device from white list"),
+            LEController::ConnectionUpdate => f.write_str("connection update"),
+            LEController::SetHostChannelClassification => f.write_str("set host channel classification"),
+            LEController::ReadChannelMap => f.write_str("read channel map"),
+            LEController::ReadRemoteFeatures => f.write_str("read remote features"),
+            LEController::Encrypt => f.write_str("encrypt"),
+            LEController::Rand => f.write_str("rand"),
+            LEController::StartEncryption => f.write_str("start encryption"),
+            LEController::LongTermKeyRequestReply => f.write_str("long term key request reply"),
+            LEController::LongTermKeyRequestNegativeReply => f.write_str("long term key request negative reply"),
+            LEController::ReadSupportedStates => f.write_str("read supported states"),
+            LEController::ReceiverTest => f.write_str("receiver test"),
+            LEController::TransmitterTest => f.write_str("transmitter test"),
+            LEController::TestEnd => f.write_str("test end"),
+            LEController::ReadConnectionParameterRequestReply => f.write_str("read connection parameter request reply"),
+            LEController::ReadConnectionParameterRequestNegativeReply => {
+                f.write_str("read connection parameter request negative reply")
+            }
+            LEController::SetResolvablePrivateAddressTimeout => f.write_str("set resolvable private address timeout"),
+            LEController::SetAddressResolutionEnable => f.write_str("set address resolution enable"),
+            LEController::AddDeviceToResolvingList => f.write_str("add device to resolving list"),
+            LEController::RemoveDeviceFromResolvingList => f.write_str("remove device from resolving list"),
+            LEController::ClearResolvingList => f.write_str("clear resolving list"),
+            LEController::SetPrivacyMode => f.write_str("set privacy mode"),
         }
     }
 }

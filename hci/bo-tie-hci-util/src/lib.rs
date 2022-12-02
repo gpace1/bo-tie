@@ -70,7 +70,6 @@
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 
 extern crate alloc;
-extern crate core;
 
 pub mod channel;
 pub mod events;
