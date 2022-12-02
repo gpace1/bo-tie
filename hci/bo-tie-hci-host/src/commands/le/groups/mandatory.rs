@@ -417,7 +417,7 @@ pub mod read_buffer_size {
                 Some(packet_cnt) => packet_cnt,
                 None => {
                     log::info!(
-                        "within the return parameters for the LE read buffer size (v1) \
+                        "(HCI) within the return parameters for the LE read buffer size (v1) \
                         command, the packet count is unexpectedly zero as the packet length was \
                         not zero"
                     );
@@ -479,9 +479,9 @@ pub mod read_buffer_size {
                         Some((len, raw_acl_packet_cnt))
                     } else {
                         log::info!(
-                            "within the return parameters for the LE read buffer size (v2) \
-                        command, the ACL packet count is unexpectedly zero as the ACL packet \
-                        length was not zero"
+                            "(HCI) within the return parameters for the LE read buffer size (v2) \
+                            command, the ACL packet count is unexpectedly zero as the ACL packet \
+                            length was not zero"
                         );
 
                         None
@@ -496,9 +496,9 @@ pub mod read_buffer_size {
                         Some((len, raw_iso_packet_cnt))
                     } else {
                         log::info!(
-                            "within the return parameters for the LE read buffer size (v2) \
-                        command, the ISO packet count is unexpectedly zero as the ISO packet \
-                        length was not zero"
+                            "(HCI) within the return parameters for the LE read buffer size (v2) \
+                            command, the ISO packet count is unexpectedly zero as the ISO packet \
+                            length was not zero"
                         );
 
                         None

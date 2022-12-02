@@ -720,7 +720,7 @@ where
         C: ConnectionChannel,
         D: TransferFormatInto,
     {
-        log::trace!("Sending {}", pdu.get_opcode());
+        log::info!("(ATT) sending {}", pdu.get_opcode());
 
         self.send(connection_channel, pdu).await
     }
@@ -737,7 +737,7 @@ where
         C: ConnectionChannel,
     {
         log::info!(
-            "Sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
+            "(ATT) sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
             Into::<u8>::into(received_opcode),
             handle,
             pdu_error
@@ -828,7 +828,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::info!("Processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
+        log::info!("(ATT) processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
 
         connection_channel.set_mtu(client_mtu);
 
@@ -848,7 +848,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::info!("Processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
+        log::info!("(ATT) processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
 
         match self.read_att_and(handle, |att_tf| att_tf.read_response()).await {
             Ok(mut tf) => {
@@ -882,7 +882,7 @@ where
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
 
-        log::info!("Processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
+        log::info!("(ATT) processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
 
         match self.write_att(handle, &payload[2..]).await {
             Ok(_) => self.send_pdu(connection_channel, pdu::write_response()).await,
@@ -903,7 +903,7 @@ where
         C: ConnectionChannel,
     {
         log::info!(
-            "Processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {}, end handle: {} }}",
+            "(ATT) processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {}, end handle: {} }}",
             handle_range.starting_handle,
             handle_range.ending_handle
         );
@@ -1071,7 +1071,7 @@ where
             let att_type: crate::Uuid = TransferFormatTryFrom::try_from(&payload[4..6]).unwrap();
 
             log::info!(
-                "Processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
+                "(ATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
                 handle: {:#X}, type: {:?}}}",
                 handle_range.starting_handle,
                 handle_range.ending_handle,
@@ -1156,7 +1156,7 @@ where
         C: ConnectionChannel,
     {
         log::info!(
-            "Processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
+            "(ATT) processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
             type: {:?} }}",
             type_request.handle_range.starting_handle,
             type_request.handle_range.ending_handle,
@@ -1282,7 +1282,7 @@ where
         C: ConnectionChannel,
     {
         log::info!(
-            "Processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
+            "(ATT) processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
             blob_request.handle,
             blob_request.offset
         );
@@ -1440,7 +1440,7 @@ where
         if let Err((h, e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => {
                 log::info!(
-                    "Processing ATT_PREPARE_WRITE_REQ {{ handle: {:#X}, offset {} }}",
+                    "(ATT) processing ATT_PREPARE_WRITE_REQ {{ handle: {:#X}, offset {} }}",
                     request.get_handle(),
                     request.get_prepared_offset()
                 );
@@ -1479,7 +1479,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::info!("Processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
+        log::info!("(ATT) processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
 
         match match self.queued_writer.process_execute(request_flag) {
             Ok(Some(iter)) => {
@@ -2176,14 +2176,14 @@ impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send + 
 
 impl ServerAttribute for ReservedHandle {
     fn read(&self) -> PinnedFuture<Vec<u8>> {
-        log::error!("Tried to read the reserved handle");
+        log::error!("(ATT) client tried to read the reserved handle");
 
         Box::pin(async { Vec::new() })
     }
 
     fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
         Box::pin(async {
-            log::error!("Tried to read the reserved handle for a read response");
+            log::error!("(ATT) client tried to read the reserved handle for a read response");
 
             pdu::read_response(Vec::new())
         })
@@ -2191,7 +2191,7 @@ impl ServerAttribute for ReservedHandle {
 
     fn notification(&self, _: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
         Box::pin(async {
-            log::error!("Tried to used the reserved handle as a notification");
+            log::error!("(ATT) client tried to used the reserved handle as a notification");
 
             pdu::handle_value_notification(0, Vec::new())
         })
@@ -2199,7 +2199,7 @@ impl ServerAttribute for ReservedHandle {
 
     fn single_read_by_type_response(&self, _: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>> {
         Box::pin(async {
-            log::error!("Tried to read the reserved handle for a read by type response");
+            log::error!("(ATT) client tried to read the reserved handle for a read by type response");
 
             pdu::ReadTypeResponse::new(0, Vec::new())
         })
@@ -2210,7 +2210,7 @@ impl ServerAttribute for ReservedHandle {
         _: &[u8],
     ) -> PinnedFuture<'_, Result<(), super::TransferFormatError>> {
         Box::pin(async {
-            log::error!("Tried to write to reserved attribute handle");
+            log::error!("(ATT) client tried to write to reserved attribute handle");
 
             Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
         })

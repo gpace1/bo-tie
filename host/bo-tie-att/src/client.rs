@@ -259,7 +259,7 @@ impl ConnectClient {
 
                 if connection_channel.min_mtu() > mtu {
                     log::info!(
-                        "Received a bad MTU (MTU is less than the minimum) \
+                        "(ATT) received a bad MTU (MTU is less than the minimum) \
                         from the server, default to using the minimum MTU"
                     );
 
@@ -282,7 +282,7 @@ impl ConnectClient {
                 // Log that exchange MTU is not supported by the server, and return a
                 // client with the default MTU
 
-                log::info!("Server doesn't support 'MTU exchange'; default MTU is used",);
+                log::info!("(ATT) server doesn't support 'MTU exchange'; default MTU is used",);
 
                 Ok(Client::new())
             }

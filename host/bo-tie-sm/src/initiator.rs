@@ -739,7 +739,7 @@ where
             ) => {
                 *responder_pairing_confirm = responder_confirm.get_value().into();
 
-                log::trace!("Responder Commitment: {:?}", responder_confirm.get_value());
+                log::trace!("(SM) responder Commitment: {:?}", responder_confirm.get_value());
 
                 Ok(())
             }
@@ -768,7 +768,7 @@ where
     {
         match self.pairing_data {
             Some(PairingData { nonce, .. }) => {
-                log::trace!("Initiator nonce: {:?}", nonce);
+                log::trace!("(SM) initiator nonce: {:?}", nonce);
 
                 self.send(connection_channel, pairing::PairingRandom::new(nonce))
                     .await?;
@@ -793,7 +793,7 @@ where
             }
         };
 
-        log::trace!("Responder Nonce: {:?}", responder_nonce);
+        log::trace!("(SM) responder Nonce: {:?}", responder_nonce);
 
         match &mut self.pairing_data {
             Some(PairingData {

@@ -154,7 +154,7 @@ impl CommandData for PairingRequest {
     }
 
     fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
-        log::trace!("received pairing request: {:x?}", icd);
+        log::trace!("(SM) received pairing request: {:x?}", icd);
         if icd.len() == 6 {
             Ok(Self {
                 io_capability: IOCapability::try_from_val(icd[0])?,
@@ -170,8 +170,8 @@ impl CommandData for PairingRequest {
                 io_cap_f6: [icd[2], icd[1], icd[0]],
             })
         } else {
-            log::error!("(SM) Failed to generate 'pairing request' from raw data");
-            log::trace!("Failed raw data: '{:x?}'", icd);
+            log::error!("(SM) failed to generate 'pairing request' from raw data");
+            log::trace!("(SM) failed raw data: '{:x?}'", icd);
             Err(Error::Size)
         }
     }
@@ -326,8 +326,8 @@ impl CommandData for PairingResponse {
                 io_cap_f6: [icd[2], icd[1], icd[0]],
             })
         } else {
-            log::error!("(SM) Failed to generate 'pairing response' from raw data");
-            log::trace!("Failed raw data: '{:x?}", icd);
+            log::error!("(SM) failed to generate 'pairing response' from raw data");
+            log::trace!("(SM) failed raw data: '{:x?}", icd);
             Err(Error::Size)
         }
     }
@@ -453,8 +453,8 @@ impl CommandData for PairingConfirm {
                 value: <u128>::from_le_bytes(v),
             })
         } else {
-            log::error!("(SM) Failed to generate 'pairing confirm' from raw data");
-            log::trace!("(SM) Failed raw data: {:x?}", icd);
+            log::error!("(SM) failed to generate 'pairing confirm' from raw data");
+            log::trace!("(SM) failed raw data: {:x?}", icd);
             Err(Error::Size)
         }
     }
@@ -499,8 +499,8 @@ impl CommandData for PairingRandom {
                 value: <u128>::from_le_bytes(v),
             })
         } else {
-            log::error!("(SM) Failed to generate 'pairing random' from raw data");
-            log::trace!("(SM) Failed raw data: {:x?}", icd);
+            log::error!("(SM) failed to generate 'pairing random' from raw data");
+            log::trace!("(SM) failed raw data: {:x?}", icd);
             Err(Error::Size)
         }
     }
@@ -627,8 +627,8 @@ impl CommandData for PairingFailed {
                 reason: PairingFailedReason::try_from_val(icd[0])?,
             })
         } else {
-            log::error!("(SM) Failed to generate 'pairing failed' from raw data");
-            log::trace!("(SM) Failed raw data: {:x?}", icd);
+            log::error!("(SM) failed to generate 'pairing failed' from raw data");
+            log::trace!("(SM) failed raw data: {:x?}", icd);
             Err(Error::Size)
         }
     }
@@ -671,8 +671,8 @@ impl CommandData for PairingPubKey {
 
             Ok(PairingPubKey { x_y })
         } else {
-            log::error!("(SM) Failed to generate 'pairing public key' from raw data");
-            log::trace!("(SM) Failed raw data: {:x?}", icd);
+            log::error!("(SM) failed to generate 'pairing public key' from raw data");
+            log::trace!("(SM) failed raw data: {:x?}", icd);
             Err(Error::Size)
         }
     }
@@ -714,8 +714,8 @@ impl CommandData for PairingDHKeyCheck {
                 check: <u128>::from_le_bytes(arr),
             })
         } else {
-            log::error!("(SM) Failed to generate 'pairing Diffie-Hellman Key check' from raw data");
-            log::trace!("(SM) Failed raw data: {:x?}", icd);
+            log::error!("(SM) failed to generate 'pairing Diffie-Hellman Key check' from raw data");
+            log::trace!("(SM) failed raw data: {:x?}", icd);
             Err(Error::Size)
         }
     }
@@ -762,8 +762,8 @@ impl CommandData for KeyPressNotification {
         if icd.len() == 1 {
             Ok(Self::try_from_val(icd[0])?)
         } else {
-            log::error!("(SM) Failed to generate 'Key Press Notification' from raw data");
-            log::trace!("(SM) Failed raw data: {:x?}", icd);
+            log::error!("(SM) failed to generate 'Key Press Notification' from raw data");
+            log::trace!("(SM) failed raw data: {:x?}", icd);
             Err(Error::Size)
         }
     }

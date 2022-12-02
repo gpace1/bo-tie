@@ -110,7 +110,7 @@ where
     type RecvFut<'a> = AclReceiverMap<'a, C> where Self: 'a;
 
     fn send(&self, data: bo_tie_l2cap::BasicInfoFrame<alloc::vec::Vec<u8>>) -> Self::SendFut<'_> {
-        log::info!("sending data: {}", data);
+        log::info!("(HCI) sending data: {}", data);
 
         let front_capacity = HciAclData::<()>::HEADER_SIZE + self.front_cap;
 

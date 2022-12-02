@@ -775,22 +775,22 @@ impl<E, C, B1, B2, B3> SendErrorReason<E, C, B1, B2, B3> {
             | e @ SendErrorReason::Unimplemented(_)
             | e @ SendErrorReason::BufferExtendOfFromConnection(_) => Err(e),
             SendErrorReason::InvalidHciPacket(e) => {
-                log::error!("received an invalid {} packet", e);
+                log::error!("(HCI) received an invalid {} packet", e);
 
                 Ok(())
             }
             SendErrorReason::InvalidHciEventData(e) => {
-                log::error!("invalid event: {:?}", e);
+                log::error!("(HCI) invalid event: {:?}", e);
 
                 Ok(())
             }
             SendErrorReason::InvalidConnectionHandle => {
-                log::error!("host received an invalid connection handle");
+                log::error!("(HCI) host received an invalid connection handle");
 
                 Ok(())
             }
             SendErrorReason::UnknownConnectionHandle(c) => {
-                log::error!("no connection associated by handle {:#}", c);
+                log::error!("(HCI) no connection associated by handle {:#}", c);
 
                 Ok(())
             }

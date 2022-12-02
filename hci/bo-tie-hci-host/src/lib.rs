@@ -652,7 +652,7 @@ where
             .as_command_packet(&mut buffer)
             .map_err(|e| CommandError::TryExtendBufferError(e))?;
 
-        log::info!(r#"sending command "{}""#, P::COMMAND);
+        log::info!(r#"(HCI) sending command "{}""#, P::COMMAND);
 
         self.host_interface
             .get_sender()

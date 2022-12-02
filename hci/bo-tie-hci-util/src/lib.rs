@@ -509,7 +509,7 @@ impl FlowControl for CommandFlowControl {
         self.send_count += by;
 
         log::trace!(
-            "flow control: increasing command count by {} to {}",
+            "(HCI) flow control: increasing command count by {} to {}",
             by,
             self.send_count
         );
@@ -520,7 +520,7 @@ impl FlowControl for CommandFlowControl {
             self.send_count = self.send_count.checked_sub(1).ok_or(())?;
 
             log::trace!(
-                "flow control: sent command to controller. Can send {} more",
+                "(HCI) flow control: sent command to controller. Can send {} more",
                 self.send_count
             );
         }
@@ -580,12 +580,20 @@ impl FlowControl for AclFlowControl {
             Self::Packets(p) => {
                 p.increase(by);
 
-                log::trace!("flow control: increasing ACL packet count by {} to {}", by, p.how_many);
+                log::trace!(
+                    "(HCI) flow control: increasing ACL packet count by {} to {}",
+                    by,
+                    p.how_many
+                );
             }
             Self::DataBlocks(b) => {
                 b.increase(by);
 
-                log::trace!("flow control: increasing ACL block count by {} to {}", by, b.how_many);
+                log::trace!(
+                    "(HCI) flow control: increasing ACL block count by {} to {}",
+                    by,
+                    b.how_many
+                );
             }
         }
     }
@@ -595,14 +603,14 @@ impl FlowControl for AclFlowControl {
             Self::Packets(p) => {
                 p.try_reduce(payload_info)?;
 
-                log::trace!("flow control: reducing ACL packet count to {}", p.how_many);
+                log::trace!("(HCI) flow control: reducing ACL packet count to {}", p.how_many);
 
                 Ok(())
             }
             Self::DataBlocks(b) => {
                 b.try_reduce(payload_info)?;
 
-                log::trace!("flow control: reducing ACL block count to {}", b.how_many);
+                log::trace!("(HCI) flow control: reducing ACL block count to {}", b.how_many);
 
                 Ok(())
             }
@@ -625,7 +633,7 @@ macro_rules! impl_packet_based_fc_for {
                     self.0.increase(by);
 
                     log::trace!(
-                        concat!("flow control: increasing ", $lit, " packet count by {} to {}"),
+                        concat!("(HCI) flow control: increasing ", $lit, " packet count by {} to {}"),
                         by,
                         self.0.how_many,
                     );
@@ -637,7 +645,7 @@ macro_rules! impl_packet_based_fc_for {
                     if log::log_enabled!(log::Level::Trace) {
                         if payload_info.get_payload_size().is_some() {
                             log::trace!(
-                                concat!("flow control: decreasing ", $lit, " packet count to {}"),
+                                concat!("(HCI) flow control: decreasing ", $lit, " packet count to {}"),
                                 self.0.how_many,
                             );
                         }

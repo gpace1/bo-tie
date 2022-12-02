@@ -796,7 +796,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing pairing request");
+        log::info!("(SM) processing pairing request");
 
         let request = match pairing::PairingRequest::try_from_command_format(data) {
             Ok(request) => request,
@@ -842,7 +842,7 @@ where
 
             let (private_key, public_key) = toolbox::ecc_gen();
 
-            log::info!("Pairing Method: {:?}", pairing_method);
+            log::info!("(SM) pairing Method: {:?}", pairing_method);
 
             self.pairing_data = Some(PairingData {
                 pairing_method,
@@ -871,7 +871,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing pairing public Key");
+        log::info!("(SM) processing pairing public Key");
 
         let initiator_pub_key = match pairing::PairingPubKey::try_from_command_format(data) {
             Ok(request) => request,
@@ -905,7 +905,7 @@ where
 
                 let remote_public_key = initiator_pub_key.get_key();
 
-                log::trace!("remote public key: {:x?}", remote_public_key.as_ref());
+                log::trace!("(SM) remote public key: {:x?}", remote_public_key.as_ref());
 
                 let peer_pub_key = match toolbox::PubKey::try_from_command_format(&remote_public_key) {
                     Ok(k) => k,
@@ -973,7 +973,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing pairing confirm");
+        log::info!("(SM) processing pairing confirm");
 
         let _initiator_confirm = match pairing::PairingConfirm::try_from_command_format(payload) {
             Ok(request) => request,
@@ -1016,7 +1016,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing pairing random");
+        log::info!("(SM) processing pairing random");
 
         let initiator_random = match pairing::PairingRandom::try_from_command_format(payload) {
             Ok(request) => request,
@@ -1083,7 +1083,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing pairing failed");
+        log::info!("(SM) processing pairing failed");
 
         let initiator_fail = match pairing::PairingFailed::try_from_command_format(payload) {
             Ok(request) => request,
@@ -1108,7 +1108,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing pairing dh key check");
+        log::info!("(SM) processing pairing dh key check");
 
         let initiator_dh_key_check = match pairing::PairingDHKeyCheck::try_from_command_format(payload) {
             Ok(request) => request,
@@ -1135,17 +1135,17 @@ where
 
                 let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
 
-                log::trace!("secret key: {:x?}", dh_key);
-                log::trace!("remote nonce: {:x?}", peer_nonce);
-                log::trace!("this nonce: {:x?}", nonce);
-                log::trace!("remote address: {:x?}", a_addr);
-                log::trace!("this address: {:x?}", b_addr);
+                log::trace!("(SM) secret key: {:x?}", dh_key);
+                log::trace!("(SM) remote nonce: {:x?}", peer_nonce);
+                log::trace!("(SM) this nonce: {:x?}", nonce);
+                log::trace!("(SM) remote address: {:x?}", a_addr);
+                log::trace!("(SM) this address: {:x?}", b_addr);
 
                 let (mac_key, ltk) = toolbox::f5(*dh_key, *peer_nonce, *nonce, a_addr.clone(), b_addr.clone());
 
-                log::trace!("mac_key: {:x?}", mac_key);
-                log::trace!("ltk: {:x?}", ltk);
-                log::trace!("initiator_io_cap: {:x?}", initiator_io_cap);
+                log::trace!("(SM) mac_key: {:x?}", mac_key);
+                log::trace!("(SM) ltk: {:x?}", ltk);
+                log::trace!("(SM) initiator_io_cap: {:x?}", initiator_io_cap);
 
                 let ea = toolbox::f6(
                     mac_key,
@@ -1160,7 +1160,7 @@ where
                 let received_ea = initiator_dh_key_check.get_key_check();
 
                 if received_ea == ea {
-                    log::trace!("responder_io_cap: {:x?}", responder_io_cap);
+                    log::trace!("(SM) responder_io_cap: {:x?}", responder_io_cap);
 
                     let eb = toolbox::f6(mac_key, *nonce, *peer_nonce, 0, *responder_io_cap, b_addr, a_addr);
 
@@ -1195,8 +1195,8 @@ where
                     self.send_err(connection_channel, pairing::PairingFailedReason::DHKeyCheckFailed)
                         .await?;
 
-                    log::trace!("received ea: {:x?}", received_ea);
-                    log::trace!("calculated ea: {:x?}", ea);
+                    log::trace!("(SM) received ea: {:x?}", received_ea);
+                    log::trace!("(SM) calculated ea: {:x?}", ea);
 
                     Err(Error::PairingFailed(pairing::PairingFailedReason::DHKeyCheckFailed))
                 }
@@ -1218,7 +1218,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing peer IRK");
+        log::info!("(SM) processing peer IRK");
 
         let identity_info = match encrypt_info::IdentityInformation::try_from_command_format(payload) {
             Ok(ii) => ii,
@@ -1257,7 +1257,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing peer address info");
+        log::info!("(SM) processing peer address info");
 
         let identity_addr_info = match encrypt_info::IdentityAddressInformation::try_from_command_format(payload) {
             Ok(iai) => iai,
@@ -1296,7 +1296,7 @@ where
     where
         C: ConnectionChannel,
     {
-        log::trace!("(SM) Processing peer signing info (CSRK)");
+        log::info!("(SM) processing peer signing info (CSRK)");
 
         let signing_info = match encrypt_info::SigningInformation::try_from_command_format(payload) {
             Ok(si) => si,
