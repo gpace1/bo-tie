@@ -16,7 +16,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-type Base = bo_tie_linux::HCIAdapter;
+type Base = bo_tie_linux::LinuxInterface;
 
 /// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
 /// from the controller to the user.
