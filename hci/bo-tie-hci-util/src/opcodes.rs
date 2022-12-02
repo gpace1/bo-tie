@@ -67,17 +67,21 @@ impl core::fmt::Display for HciCommand {
             HciCommand::InformationParameters(c) => {
                 let opcode = c.into_opcode_pair();
 
-                write!(f, "information parameters {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
+                write!(
+                    f,
+                    "information parameters - {} ({:#x}:{:#x})",
+                    c, opcode.ogf, opcode.ocf
+                )
             }
             HciCommand::StatusParameters(c) => {
                 let opcode = c.into_opcode_pair();
 
-                write!(f, "status parameters {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
+                write!(f, "status parameters - {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
             }
             HciCommand::LEController(c) => {
                 let opcode = c.into_opcode_pair();
 
-                write!(f, "LE controller {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
+                write!(f, "LE controller - {} ({:#x}:{:#x})", c, opcode.ogf, opcode.ocf)
             }
         }
     }
