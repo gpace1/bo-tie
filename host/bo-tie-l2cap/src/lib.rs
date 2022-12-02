@@ -57,7 +57,7 @@ impl MinimumMtu for ACLU {
 pub enum ChannelIdentifier {
     NullIdentifier,
     /// ACL-U identifiers
-    ACL(ACLUserChannelIdentifier),
+    ACL(AclUserChannelIdentifier),
     /// LE-U identifiers
     Le(LeUserChannelIdentifier),
 }
@@ -81,7 +81,17 @@ impl ChannelIdentifier {
 
     /// Try to convert a raw value into a ACL-U channel identifier
     pub fn acl_try_from_raw(val: u16) -> Result<Self, ()> {
-        ACLUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
+        AclUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
+    }
+}
+
+impl core::fmt::Display for ChannelIdentifier {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ChannelIdentifier::NullIdentifier => f.write_str("null identifier"),
+            ChannelIdentifier::ACL(id) => write!(f, "ACL {}", id),
+            ChannelIdentifier::Le(id) => write!(f, "LE {}", id),
+        }
     }
 }
 
@@ -91,8 +101,8 @@ impl From<LeUserChannelIdentifier> for ChannelIdentifier {
     }
 }
 
-impl From<ACLUserChannelIdentifier> for ChannelIdentifier {
-    fn from(acl: ACLUserChannelIdentifier) -> Self {
+impl From<AclUserChannelIdentifier> for ChannelIdentifier {
+    fn from(acl: AclUserChannelIdentifier) -> Self {
         ChannelIdentifier::ACL(acl)
     }
 }
@@ -143,9 +153,9 @@ impl DynChannelId<LeU> {
 impl DynChannelId<ACLU> {
     pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
 
-    pub fn new_acl(channel_id: u16) -> Result<ACLUserChannelIdentifier, u16> {
+    pub fn new_acl(channel_id: u16) -> Result<AclUserChannelIdentifier, u16> {
         if Self::ACL_BOUNDS.contains(&channel_id) {
-            Ok(ACLUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
+            Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
                 channel_id,
             )))
         } else {
@@ -154,8 +164,14 @@ impl DynChannelId<ACLU> {
     }
 }
 
+impl<T> core::fmt::Display for DynChannelId<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.channel_id, f)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ACLUserChannelIdentifier {
+pub enum AclUserChannelIdentifier {
     SignalingChannel,
     ConnectionlessChannel,
     AmpManagerProtocol,
@@ -164,29 +180,42 @@ pub enum ACLUserChannelIdentifier {
     DynamicallyAllocated(DynChannelId<ACLU>),
 }
 
-impl ACLUserChannelIdentifier {
+impl AclUserChannelIdentifier {
     fn to_val(&self) -> u16 {
         match self {
-            ACLUserChannelIdentifier::SignalingChannel => 0x1,
-            ACLUserChannelIdentifier::ConnectionlessChannel => 0x2,
-            ACLUserChannelIdentifier::AmpManagerProtocol => 0x3,
-            ACLUserChannelIdentifier::BrEdrSecurityManager => 0x7,
-            ACLUserChannelIdentifier::AmpTestManager => 0x3F,
-            ACLUserChannelIdentifier::DynamicallyAllocated(ci) => ci.get_val(),
+            AclUserChannelIdentifier::SignalingChannel => 0x1,
+            AclUserChannelIdentifier::ConnectionlessChannel => 0x2,
+            AclUserChannelIdentifier::AmpManagerProtocol => 0x3,
+            AclUserChannelIdentifier::BrEdrSecurityManager => 0x7,
+            AclUserChannelIdentifier::AmpTestManager => 0x3F,
+            AclUserChannelIdentifier::DynamicallyAllocated(ci) => ci.get_val(),
         }
     }
 
     fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
-            0x1 => Ok(ACLUserChannelIdentifier::SignalingChannel),
-            0x2 => Ok(ACLUserChannelIdentifier::ConnectionlessChannel),
-            0x3 => Ok(ACLUserChannelIdentifier::AmpManagerProtocol),
-            0x7 => Ok(ACLUserChannelIdentifier::BrEdrSecurityManager),
-            0x3F => Ok(ACLUserChannelIdentifier::AmpTestManager),
+            0x1 => Ok(AclUserChannelIdentifier::SignalingChannel),
+            0x2 => Ok(AclUserChannelIdentifier::ConnectionlessChannel),
+            0x3 => Ok(AclUserChannelIdentifier::AmpManagerProtocol),
+            0x7 => Ok(AclUserChannelIdentifier::BrEdrSecurityManager),
+            0x3F => Ok(AclUserChannelIdentifier::AmpTestManager),
             val if DynChannelId::<ACLU>::ACL_BOUNDS.contains(&val) => {
-                Ok(ACLUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
+                Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
             }
             _ => Err(()),
+        }
+    }
+}
+
+impl core::fmt::Display for AclUserChannelIdentifier {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            AclUserChannelIdentifier::SignalingChannel => f.write_str("signaling channel"),
+            AclUserChannelIdentifier::ConnectionlessChannel => f.write_str("connectionless channel"),
+            AclUserChannelIdentifier::AmpManagerProtocol => f.write_str("AMP manager protocol"),
+            AclUserChannelIdentifier::BrEdrSecurityManager => f.write_str("BR/EDR security manager"),
+            AclUserChannelIdentifier::AmpTestManager => f.write_str("AMP test manager"),
+            AclUserChannelIdentifier::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
         }
     }
 }
@@ -204,7 +233,7 @@ pub enum LeUserChannelIdentifier {
     /// Channel signaling
     ///
     /// See the Bluetooth Specification V5 | Vol 3, Part A Section 4
-    LowEnergyL2CAPSignalingChannel,
+    LowEnergyL2capSignalingChannel,
     /// Security Manager Protocol
     SecurityManagerProtocol,
     /// Dynamically allocated channel identifiers
@@ -222,7 +251,7 @@ impl LeUserChannelIdentifier {
     fn to_val(&self) -> u16 {
         match self {
             LeUserChannelIdentifier::AttributeProtocol => 0x4,
-            LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel => 0x5,
+            LeUserChannelIdentifier::LowEnergyL2capSignalingChannel => 0x5,
             LeUserChannelIdentifier::SecurityManagerProtocol => 0x6,
             LeUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
         }
@@ -231,12 +260,23 @@ impl LeUserChannelIdentifier {
     fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
             0x4 => Ok(LeUserChannelIdentifier::AttributeProtocol),
-            0x5 => Ok(LeUserChannelIdentifier::LowEnergyL2CAPSignalingChannel),
+            0x5 => Ok(LeUserChannelIdentifier::LowEnergyL2capSignalingChannel),
             0x6 => Ok(LeUserChannelIdentifier::SecurityManagerProtocol),
             _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
                 Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
             }
             _ => Err(()),
+        }
+    }
+}
+
+impl core::fmt::Display for LeUserChannelIdentifier {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            LeUserChannelIdentifier::AttributeProtocol => f.write_str("attribute protocol"),
+            LeUserChannelIdentifier::LowEnergyL2capSignalingChannel => f.write_str("LE L2CAP signaling channel"),
+            LeUserChannelIdentifier::SecurityManagerProtocol => f.write_str("security manager protocol"),
+            LeUserChannelIdentifier::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
         }
     }
 }
@@ -480,6 +520,16 @@ where
 
     fn try_from(slice: &'a [u8]) -> Result<Self, Self::Error> {
         Self::try_from_slice(slice)
+    }
+}
+
+impl core::fmt::Display for BasicInfoFrame<alloc::vec::Vec<u8>> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(
+            f,
+            "Basic Info Frame {{ channel id: {}, payload: {:#?} }}",
+            self.channel_id, self.payload
+        )
     }
 }
 

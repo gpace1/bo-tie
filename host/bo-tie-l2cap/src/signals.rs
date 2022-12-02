@@ -6,7 +6,7 @@
 //! This module is very unfinished and is gated behind the feature `unstable`
 
 const ACL_U_SIG_CHANNEL_ID: super::ChannelIdentifier =
-    super::ChannelIdentifier::ACL(super::ACLUserChannelIdentifier::SignalingChannel);
+    super::ChannelIdentifier::ACL(super::AclUserChannelIdentifier::SignalingChannel);
 
 /// Codes for each Signal Type
 ///
