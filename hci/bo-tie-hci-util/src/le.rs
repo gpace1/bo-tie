@@ -347,12 +347,22 @@ impl AddressType {
     /// Get the raw value
     ///
     /// This is the value that is used to represent a `AddressType` within a HCI packet.
-    pub fn get_raw_val(&self) -> u8 {
-        match *self {
+    pub fn get_raw_val(self) -> u8 {
+        match self {
             AddressType::PublicDeviceAddress => 0x0,
             AddressType::RandomDeviceAddress => 0x1,
             AddressType::PublicIdentityAddress => 0x2,
             AddressType::RandomIdentityAddress => 0x3,
+        }
+    }
+
+    /// Check if the address type is public
+    ///
+    /// `true` is returned if self is either `PublicDeviceAddress` or `PublicIdentityAddress`
+    pub fn is_public(self) -> bool {
+        match self {
+            AddressType::PublicDeviceAddress | AddressType::PublicIdentityAddress => true,
+            AddressType::RandomDeviceAddress | AddressType::RandomIdentityAddress => false,
         }
     }
 }
