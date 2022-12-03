@@ -1368,6 +1368,9 @@ impl core::fmt::Display for NextError {
     }
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for NextError {}
+
 impl From<events::EventError> for NextError {
     fn from(e: events::EventError) -> Self {
         NextError::EventConversionError(e)
