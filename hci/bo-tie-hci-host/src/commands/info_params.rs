@@ -1168,7 +1168,7 @@ pub mod read_bd_addr {
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::InformationParameters(opcodes::InformationParameters::ReadBD_ADDR);
 
-    pub struct Return {
+    struct Return {
         address: BluetoothDeviceAddress,
     }
 
@@ -1207,8 +1207,10 @@ pub mod read_bd_addr {
     }
 
     /// Get the public Bluetooth device address
-    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<Return, CommandError<H>> {
-        host.send_command_expect_complete(Parameter).await
+    pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<BluetoothDeviceAddress, CommandError<H>> {
+        let ret: Return = host.send_command_expect_complete(Parameter).await?;
+
+        Ok(ret.address)
     }
 }
 
