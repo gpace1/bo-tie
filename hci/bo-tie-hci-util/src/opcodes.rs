@@ -15,7 +15,6 @@
 //! ```
 
 use core::convert::TryFrom;
-use core::fmt::Write;
 
 /// Enumerations of the various HCI command opcodes.
 ///
