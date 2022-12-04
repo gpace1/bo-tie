@@ -1,357 +1,566 @@
-//! Bonding Master tests
-//!
-//! This will bond with a connectible device advertising with the name provided for .
-//!
-//! # Notes
-//! The advertising device must be advertising in connectible undirected and the address must not
-//! be a resolvable private address.
-//!
-//! You will need to delete the bonding information on the peer device after the example has run
-//! unless it doesn't save bonding information.
+#![doc = include_str!("../README.md")]
 
-use bo_tie::hci;
-use std::sync::{
-    atomic::{AtomicU16, Ordering},
-    Arc,
-};
-use std::time::Duration;
+mod io;
 
-type Base = bo_tie_linux::LinuxInterface;
+use bo_tie::hci::{Host, HostChannelEnds, Next};
 
-/// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
-/// from the controller to the user.
-const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
-
-#[derive(Default)]
-struct AsyncLock(futures::lock::Mutex<()>);
-
-impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
-    type Guard = futures::lock::MutexGuard<'a, ()>;
-    type Locker = futures::lock::MutexLockFuture<'a, ()>;
-
-    fn lock(&'a self) -> Self::Locker {
-        self.0.lock()
-    }
-}
-
-/// Scan for a specific address
-async fn start_scanning_for_addr<M: Send + 'static>(
-    hi: &hci::Host<Base, M>,
-    local_name: &str,
-) -> bo_tie::hci::events::LEAdvertisingReportData {
-    use bo_tie::hci::cb::set_event_mask::{self, EventMask};
-    use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
-    use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
-    use bo_tie::hci::le::receiver::{set_scan_enable, set_scan_parameters};
-
-    let scan_params = set_scan_parameters::ScanningParameters::default();
-
-    // Some systems you cannot disable scanning through the host controller interface, if at all,
-    // so the result is just converted into an option.
-    set_scan_enable::send(hi, false, false).await.ok();
-
-    set_event_mask::send(hi, &[EventMask::LeMeta]).await.unwrap();
-
-    le_set_event_mask::send(hi, &[LeMeta::AdvertisingReport.into()])
-        .await
-        .unwrap();
-
-    set_scan_parameters::send(hi, scan_params).await.unwrap();
-
-    set_scan_enable::send(hi, true, true).await.unwrap();
-
-    let waited_event = Some(Events::from(LeMeta::AdvertisingReport));
-    let ret = 'outer: loop {
-        match hi.wait_for_event(waited_event).await.unwrap() {
-            EventsData::LeMeta(LeMetaData::AdvertisingReport(reports)) => {
-                if let Some(report) = reports
-                    .iter()
-                    .filter_map(|r| r.as_ref().ok())
-                    .find(|r| match_report(r, local_name))
-                {
-                    break 'outer report.clone();
-                }
-            }
-            e => panic!("Received unexpected event data: {:?}", e),
-        }
-    };
-
-    set_scan_enable::send(hi, false, false).await.unwrap();
-
-    ret
-}
-
-fn match_report(report: &&hci::events::LEAdvertisingReportData, name: &str) -> bool {
-    use bo_tie::gap::assigned::local_name::LocalName;
-    use bo_tie::gap::assigned::TryFromRawAdvData;
-
-    let mut data: &[u8] = &report.data;
-
-    // In a AD type, the first byte gives the length of the data part of the type
-    while let Some((len, rest)) = data.split_first() {
-        let (first, rest) = rest.split_at(*len as usize);
-
-        data = rest;
-
-        if LocalName::try_from_raw(first)
-            .map(|ln| &*ln == name)
-            .unwrap_or_default()
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-async fn connect_to<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
-    hi: Arc<hci::Host<Base, M>>,
-    peer_address: &bo_tie::BluetoothDeviceAddress,
-    peer_address_type: bo_tie::hci::le::commonAddressType,
-    raw_handle: Arc<AtomicU16>,
-) -> impl bo_tie::l2cap::ConnectionChannel {
-    use bo_tie::hci::cb::set_event_mask::{self, EventMask};
-    use bo_tie::hci::common::{ConnectionLatency, SupervisionTimeout};
-    use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
-    use bo_tie::hci::le::common::{ConnectionEventLength, OwnAddressType};
-    use bo_tie::hci::le::connection::{
-        create_connection::{self, ConnectionParameters, ScanningInterval, ScanningWindow},
-        ConnectionInterval, ConnectionIntervalBounds,
-    };
-    use bo_tie::hci::le::mandatory::set_event_mask as le_set_event_mask;
-
-    set_event_mask::send(&hi, &[EventMask::DisconnectionComplete, EventMask::LeMeta])
-        .await
-        .unwrap();
-
-    le_set_event_mask::send(&hi, &[LeMeta::ConnectionComplete])
-        .await
-        .unwrap();
-
-    let parameters = ConnectionParameters::new_without_whitelist(
-        ScanningInterval::default(),
-        ScanningWindow::default(),
-        peer_address_type,
-        peer_address.clone(),
-        OwnAddressType::PublicDeviceAddress,
-        ConnectionIntervalBounds::try_from(
-            ConnectionInterval::try_from_raw(0x10).unwrap(),
-            ConnectionInterval::try_from_raw(0x10).unwrap(),
-        )
-        .unwrap(),
-        ConnectionLatency::try_from(0).unwrap(),
-        SupervisionTimeout::try_from_raw(0x10).unwrap(),
-        ConnectionEventLength {
-            minimum: 0,
-            maximum: 0xFFFF,
-        },
-    );
-
-    create_connection::send(&hi, parameters).await.unwrap();
-
-    let awaited_event = Some(Events::from(LeMeta::ConnectionComplete));
-
-    match hi.wait_for_event(awaited_event).await.unwrap() {
-        EventsData::LeMeta(LeMetaData::ConnectionComplete(data)) => {
-            raw_handle.store(data.connection_handle.get_raw_handle(), Ordering::Relaxed);
-
-            hi.flow_ctrl_channel(data.connection_handle, 512)
-        }
-        e => panic!("Received Unexpected event: {:?}", e),
-    }
-}
-
-/// Start pairing
+/// Scan for a device with the specific local name
 ///
-/// Returns the long term key (LTK) if the pairing process succeeded.
-async fn pair<C>(cc: &C, msm: &mut bo_tie::sm::initiator::MasterSecurityManager<'_, C, (), ()>) -> Option<u128>
+/// This function will set the Bluetooth Controller into scanning mode and continue scanning until
+/// it is stopped by the user with `stop`.
+///
+/// # Note
+/// There is no difference between this method and the method `scan_for_devices` in the example
+/// 'le-central'
+///
+/// # Error
+/// An error is returned if the future `stop` outputs false.
+async fn scan_for_devices<H, C, F>(
+    host: &mut Host<H>,
+    on_result: C,
+    stop: F,
+) -> Result<Vec<(bo_tie::hci::events::parameters::LeAdvertisingReportData, String)>, &'static str>
 where
-    C: bo_tie::l2cap::ConnectionChannel,
+    H: HostChannelEnds,
+    C: Fn(usize, &str),
+    F: std::future::Future<Output = bool>,
 {
-    msm.start_pairing().await;
+    use bo_tie::hci::commands::le::{set_scan_enable, set_scan_parameters};
+    use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
+    use bo_tie::host::gap::assigned::local_name::LocalName;
 
-    'outer: loop {
-        match cc.receive_b_frame().await {
-            Ok(vec_data) => {
-                for data in vec_data {
-                    // All data that is not Security Manager related is ignored for this example
-                    if data.get_channel_id() == bo_tie::sm::L2CAP_CHANNEL_ID {
-                        match msm.continue_pairing(&data).await {
-                            Ok(true) => break 'outer msm.get_keys().and_then(|keys| keys.get_ltk()),
-                            Ok(false) => {}
-                            Err(e) => panic!("Pairing Error Occured: {:?}", e),
-                        }
+    let mut devices = Vec::new();
+
+    let mut scan_prams = set_scan_parameters::ScanningParameters::default();
+
+    scan_prams.scan_type = set_scan_parameters::LeScanType::PassiveScanning;
+    scan_prams.scanning_filter_policy = set_scan_parameters::ScanningFilterPolicy::AcceptAll;
+
+    host.mask_events([Events::LeMeta(LeMeta::AdvertisingReport)])
+        .await
+        .unwrap();
+
+    set_scan_parameters::send(host, scan_prams).await.unwrap();
+
+    set_scan_enable::send(host, true, true).await.unwrap();
+
+    let task = async {
+        let mut count = 0;
+
+        loop {
+            if let Next::Event(EventsData::LeMeta(LeMetaData::AdvertisingReport(reports))) = host.next().await.unwrap()
+            {
+                for report in reports.iter().filter_map(|rslt_report| rslt_report.as_ref().ok()) {
+                    if let Some(name) = report
+                        .iter()
+                        .filter_map(|rslt| rslt.ok())
+                        .find_map(|ad_struct| ad_struct.try_into::<LocalName<_, _>>().ok())
+                    {
+                        count += 1;
+
+                        on_result(count, name.as_str());
+
+                        devices.push((report.clone(), name.to_string()));
                     }
                 }
             }
-            Err(e) => panic!("Error when receiving ACL data: {:?}", e),
+        }
+    };
+
+    let stop_status = tokio::select! {
+        _ = task => unreachable!(),
+        status = stop => status,
+    };
+
+    set_scan_enable::send(host, false, false).await.unwrap();
+
+    host.mask_events(core::iter::empty::<Events>()).await.unwrap();
+
+    return stop_status.then_some(devices).ok_or("exited by user");
+}
+
+/// Connect to the advertising device
+///
+/// Connecting is done two different ways depending on the bonding state.
+///
+/// When no device is bonded then a connection is made based on an advertising report. This
+/// procedure is no different from the method `connect` within the example 'le-central'.
+///
+/// Once a device is bonded, the identity address of the peripheral device will be used to generate
+/// a resolvable private address to reconnect to the device.
+async fn connect<H: HostChannelEnds>(
+    host: &mut Host<H>,
+    report: &bo_tie::hci::events::parameters::LeAdvertisingReportData,
+) -> bo_tie::hci::LeL2cap<H::ConnectionChannelEnds> {
+    use bo_tie::hci::commands::le::create_connection;
+    use bo_tie::hci::events::{Events, LeMeta};
+    use std::time::Duration;
+
+    // This device is not part of the whitelist, so
+    // the whitelist is ignored here.
+    let connection_parameters = create_connection::ConnectionParameters::new_without_whitelist(
+        create_connection::ScanningInterval::default(),
+        create_connection::ScanningWindow::default(),
+        report.address_type,
+        report.address,
+        Default::default(),
+        TryFrom::try_from((Duration::from_millis(10), Duration::from_millis(40))).unwrap(),
+        TryFrom::try_from(0).unwrap(),
+        TryFrom::try_from(Duration::from_secs(5)).unwrap(),
+        Default::default(),
+    );
+
+    // enable the LE Connection Complete and Disconnection Complete events
+    host.mask_events([
+        Events::LeMeta(LeMeta::ConnectionComplete),
+        Events::DisconnectionComplete,
+    ])
+    .await
+    .unwrap();
+
+    // create the connection
+    create_connection::send(host, connection_parameters).await.unwrap();
+
+    if let Next::NewConnection(connection) = host.next().await.unwrap() {
+        // disable the LE Connection Complete event but keep Disconnection Complete enabled
+        host.mask_events([Events::DisconnectionComplete]).await.unwrap();
+
+        connection.try_into_le().expect("failed to create connection")
+    } else {
+        unreachable!("no events except for Connection Complete are enabled")
+    }
+}
+
+/// Cancel the connection
+///
+/// This will cancel the connection if there is a pending.
+///
+/// # Note
+/// This method assumes that only the connection complete and disconnection complete events are
+/// masked on the controller.
+async fn cancel_connect<H: HostChannelEnds>(host: &mut Host<H>) {
+    match bo_tie::hci::commands::le::create_connection_cancel::send(host)
+        .await
+        .map_err(|e| e.try_into().unwrap())
+    {
+        Ok(_) => (),
+        Err(bo_tie::Error::CommandDisallowed) => {
+            // Command disallowed can be sent by the controller if
+            // the connection was made before the connection cancel
+            // command was sent. Simply dropping the HCI connection
+            // object will cause the HCI interface async task to send
+            // the disconnection.
+            host.next().await.unwrap();
+        },
+        Err(e) => panic!("{}", e),
+    }
+}
+
+/// Disconnect the peripheral device
+async fn disconnect<H>(host: &mut Host<H>, connection_handle: bo_tie::hci::ConnectionHandle)
+where
+    H: HostChannelEnds,
+{
+    use bo_tie::hci::commands::link_control::disconnect;
+    use bo_tie::hci::events::Events;
+
+    host.mask_events(core::iter::empty::<Events>()).await.unwrap();
+
+    let disconnection_parameters = disconnect::DisconnectParameters {
+        connection_handle,
+        disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
+    };
+
+    disconnect::send(host, disconnection_parameters).await.unwrap();
+}
+
+/// Pair with a connected device
+async fn pair<C, S, R>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager<S, R>) -> u128
+where
+    C: bo_tie::host::l2cap::ConnectionChannel,
+    S: for<'a> bo_tie::host::sm::oob::OutOfBandSend<'a>,
+    R: bo_tie::host::sm::oob::OobReceiverType,
+{
+    use bo_tie::host::l2cap::ConnectionChannelExt;
+
+    sm.start_pairing(connection_channel).await.unwrap();
+
+    'outer: loop {
+        for basic_frame in connection_channel.receive_b_frame().await.unwrap() {
+            // All data that is not Security Manager related is ignored for this example
+            if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
+                if sm.continue_pairing(connection_channel, &basic_frame).await.unwrap() {
+                    break 'outer sm.get_keys().unwrap().get_ltk().unwrap();
+                }
+            }
         }
     }
 }
 
-/// Start encryption
-async fn encrypt<M: Send + 'static>(
-    hi: &hci::Host<Base, M>,
-    connection_handle: hci::common::ConnectionHandle,
-    ltk: u128,
-) {
-    use hci::cb::set_event_mask::{self, EventMask};
-    use hci::common::EncryptionLevel;
-    use hci::events::{Events, EventsData};
-    use hci::le::encryption::enable_encryption::{self, Parameter};
+/// Complete encryption with a device
+async fn encrypt<H: HostChannelEnds>(
+    host: &mut Host<H>,
+    connection_handle: bo_tie::hci::ConnectionHandle,
+    long_term_key: u128,
+) -> Result<(), &'static str> {
+    use bo_tie::hci::commands::le::enable_encryption;
+    use bo_tie::hci::events::{Events, EventsData};
 
-    set_event_mask::send(hi, &[EventMask::DisconnectionComplete, EventMask::EncryptionChange])
+    host.mask_events([
+        Events::DisconnectionComplete,
+        Events::EncryptionChangeV1,
+        Events::EncryptionChangeV2,
+    ])
+    .await
+        .unwrap();
+
+    let parameter = enable_encryption::Parameter::new_sc(connection_handle, long_term_key);
+
+    enable_encryption::send(host, parameter).await.unwrap();
+
+    match host.next().await.unwrap() {
+        Next::Event(events_data) => match events_data {
+            EventsData::EncryptionChangeV1(e) => e
+                .encryption_enabled
+                .get_for_le()
+                .is_aes_ccm()
+                .then_some(())
+                .expect("encryption failed"),
+            EventsData::EncryptionChangeV2(e) => e
+                .encryption_enabled
+                .get_for_le()
+                .is_aes_ccm()
+                .then_some(())
+                .expect("encryption failed"),
+            EventsData::DisconnectionComplete(d) => {
+                if d.connection_handle == connection_handle {
+                    return Err("peer device disconnected".into());
+                }
+            }
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    };
+
+    Ok(())
+}
+
+/// Bond with a paired device
+///
+/// # Note
+/// This must be called after method `encrypt`
+async fn bond<C, S, R>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager<S, R>)
+where
+    C: bo_tie::host::l2cap::ConnectionChannel,
+    S: for<'a> bo_tie::host::sm::oob::OutOfBandSend<'a>,
+    R: bo_tie::host::sm::oob::OobReceiverType,
+{
+    use bo_tie::host::l2cap::ConnectionChannelExt;
+
+    sm.set_encrypted(true);
+
+    'outer: loop {
+        for basic_frame in connection_channel.receive_b_frame().await.unwrap() {
+            // All data that is not Security Manager related is ignored for this example
+            if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
+                if let Some(keys) = sm.process_bonding(connection_channel, &basic_frame).await.unwrap() {
+                    if keys.get_peer_irk().is_some() && keys.get_peer_identity().is_some() {
+                        // once the peripheral has sent its bonding
+                        // information then this bonding information
+                        // is sent to the device.
+
+                        sm.send_irk(connection_channel, None).await.unwrap();
+                        sm.send_identity(connection_channel, None).await.unwrap();
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Query the services for the GATT server
+///
+/// # Note
+/// If there is not GATT server, then this will print out a messages stating as such
+async fn query_gatt_services<C>(connection: &mut C)
+where
+    C: bo_tie::host::l2cap::ConnectionChannel,
+{
+    use bo_tie::host::att::client::ConnectClient;
+    use bo_tie::host::gatt::Client;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    // Normally you can assume that there exists a
+    // GATT server on the peer device (I think it is
+    // part of the Bluetooth certification process for
+    // every LE device to have some basic GATT server
+    // or client), but here it is not assumed.
+    let gatt_client: Client = match timeout(Duration::from_secs(5), ConnectClient::connect(connection, 64)).await {
+        Err(_timeout) => {
+            println!("failed to connect to GATT (timeout)");
+            return;
+        }
+        Ok(Err(e)) => {
+            println!("failed to connect to GATT ({:?})", e);
+            return;
+        }
+        Ok(Ok(att_client)) => att_client.into(),
+    };
+
+    let mut querier = gatt_client.query_services(connection);
+
+    let mut services = Vec::new();
+
+    while let Some(service) = querier.query_next().await.unwrap() {
+        services.push(service);
+    }
+
+    if services.is_empty() {
+        println!("no services found on connected device")
+    } else {
+        println!("found services:");
+
+        for service in services {
+            println!("\t{:#x}", service.get_uuid())
+        }
+    }
+}
+
+/// Set the peer device to be reconnected
+///
+/// Once bonding is completed, the peer device needs to be added to both the filter list and
+/// resolving list.
+async fn setup_reconnect<H: HostChannelEnds>(host: &mut Host<H>, keys: &bo_tie::host::sm::Keys) {
+    use bo_tie::hci::commands::le::{
+        add_device_to_filter_list, add_device_to_resolving_list,
+        set_address_resolution_enable, set_privacy_mode, FilterListAddressType,
+        PeerIdentityAddressType,
+    };
+
+    let peer_identity_info = keys.get_peer_identity().unwrap();
+
+    let filter_list_address_type = if peer_identity_info.is_public() {
+        FilterListAddressType::PublicDeviceAddress
+    } else {
+        FilterListAddressType::RandomDeviceAddress
+    };
+
+    let peer_identity_address_type = if peer_identity_info.is_public() {
+        PeerIdentityAddressType::PublicIdentityAddress
+    } else {
+        PeerIdentityAddressType::RandomStaticIdentityAddress
+    };
+
+    let resolving_list_parameters = add_device_to_resolving_list::Parameter {
+        peer_identity_address_type,
+        peer_identity_address: peer_identity_info.get_address(),
+        local_irk: keys.get_irk().unwrap(),
+        peer_irk: keys.get_irk().unwrap(),
+    };
+
+    let privacy_mode_parameters = set_privacy_mode::Parameter {
+        peer_identity_address_type,
+        peer_identity_address: peer_identity_info.get_address(),
+        privacy_mode: set_privacy_mode::PrivacyMode::NetworkPrivacy,
+    };
+
+    add_device_to_filter_list::send(host, filter_list_address_type, peer_identity_info.get_address())
         .await
         .unwrap();
 
-    // Because the security manager implementation only supports a LE secure connections
-    // implementation, both the `random_number` and `encrypted_diversifier` are zero as per the
-    // specification (v5.0 | Vol 3, Part H, Section 2.4.4).
-    let parameter = Parameter {
-        handle: connection_handle,
-        random_number: 0,
-        encrypted_diversifier: 0,
-        long_term_key: ltk,
-    };
+    add_device_to_resolving_list::send(host, resolving_list_parameters)
+        .await
+        .unwrap();
 
-    enable_encryption::send(hi, parameter).await.unwrap();
+    set_address_resolution_enable::send(host, true).await.unwrap();
 
-    match hi.wait_for_event(Events::EncryptionChange).await {
-        Ok(EventsData::EncryptionChange(data)) => {
-            if (data.encryption_enabled.get_for_le() == EncryptionLevel::AESCCM)
-                || (data.encryption_enabled.get_for_le() == EncryptionLevel::E0)
-            {
-                println!("Encryption started!")
-            } else {
-                panic!("Encryption did not start")
-            }
-        }
-        Ok(e) => panic!("Received incorrect event: {:?}", e),
-        Err(e) => panic!("Encryption failed: {:?}", e),
+    set_privacy_mode::send(host, privacy_mode_parameters).await.unwrap();
+}
+
+async fn reconnect<H: HostChannelEnds>(host: &mut Host<H>) -> bo_tie::hci::LeL2cap<H::ConnectionChannelEnds> {
+    use bo_tie::hci::commands::le::{create_connection, OwnAddressType};
+    use bo_tie::hci::events::{Events, LeMeta};
+    use std::time::Duration;
+
+    let create_connection_parameters = create_connection::ConnectionParameters::new_with_filter_list(
+        Default::default(),
+        Default::default(),
+        OwnAddressType::RpaFromLocalIrkOrPublicAddress,
+        TryFrom::try_from((Duration::from_millis(10), Duration::from_millis(40))).unwrap(),
+        TryFrom::try_from(0).unwrap(),
+        TryFrom::try_from(Duration::from_secs(5)).unwrap(),
+        Default::default(),
+    );
+
+    host.mask_events([
+        Events::LeMeta(LeMeta::ConnectionComplete),
+        Events::DisconnectionComplete,
+    ])
+    .await
+    .unwrap();
+
+    create_connection::send(host, create_connection_parameters)
+        .await
+        .unwrap();
+
+    match host.next().await.unwrap() {
+        Next::NewConnection(connection) => connection.try_into_le().unwrap(),
+        _ => unreachable!(),
     }
 }
 
-async fn disconnect<M: Send + 'static>(hi: &hci::Host<Base, M>, connection_handle: hci::common::ConnectionHandle) {
-    use hci::link_control::disconnect::{self, DisconnectParameters, DisconnectReason};
+#[cfg(target_os = "linux")]
+macro_rules! create_hci {
+    () => {
+        // By using `None` with bo_tie_linux::new, the first
+        // Bluetooth adapter found is the adapter that is used
+        bo_tie_linux::new(None)
+    };
+}
 
-    let dp = DisconnectParameters {
-        connection_handle,
-        disconnect_reason: DisconnectReason::RemoteUserTerminatedConnection,
+#[cfg(not(target_os = "linux"))]
+macro_rules! create_hci {
+    () => {
+        compile_error!("unsupported target for this example")
+    };
+}
+
+macro_rules! await_or_exit {
+    ($host:expr, $connection:expr, $task:expr) => {
+        loop {
+            tokio::select! {
+                next = $host.next() => {
+                    if let bo_tie::hci::Next::Event(bo_tie::hci::events::EventsData::DisconnectionComplete(_)) = next.unwrap() {
+                        return Err("peer device disconnected")
+                    }
+                }
+                _ = io::exit_signal() => {
+                    disconnect(&mut $host, $connection.get_handle()).await;
+
+                    return Ok(())
+                }
+                ret = $task => break ret
+            }
+        }
+    };
+}
+
+#[tokio::main]
+async fn main() -> Result<(), &'static str> {
+    println!(r#"press "ctrl" + "c" anytime to exit this example"#);
+
+    #[cfg(feature = "log")]
+    {
+        use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
+
+        TermLogger::init(
+            LevelFilter::Trace,
+            Config::default(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        )
+        .unwrap();
+    }
+
+    let (interface, host_ends) = create_hci!();
+
+    tokio::spawn(interface.run());
+
+    let mut host = Host::init(host_ends).await.expect("failed to initialize host");
+
+    println!("scanning for connectible devices with a complete local name");
+
+    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_escape())
+        .await
+        .unwrap();
+
+    if responses.is_empty() {
+        return Err("no devices to connect to");
+    }
+
+    let report = if responses.len() == 1 {
+        responses.remove(0)
+    } else {
+        let selected = io::select_device(1..=responses.len())
+            .await
+            .ok_or("exited by user")
+            .unwrap();
+
+        responses.remove(selected - 1)
     };
 
-    disconnect::send(hi, dp).await.ok();
-}
+    println!("connecting to '{}'", report.1);
 
-fn handle_sig<M: Sync + Send + 'static>(hi: Arc<hci::Host<Base, M>>, raw_handle: Arc<AtomicU16>) {
-    use hci::common::ConnectionHandle;
-    use hci::le::connection::create_connection_cancel;
+    let mut connection = tokio::select! {
+        connection = connect(&mut host, &report.0) => connection,
+        _ = io::exit_signal() => {
+            cancel_connect(&mut host).await;
 
-    simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
-        // Cancel connecting (if in process of connecting, there is no consequence if not
-        // connecting, but an error is returned so all errors are ignored as a result)
-        futures::executor::block_on(create_connection_cancel::send(&hi)).ok();
-
-        let handle = ConnectionHandle::try_from(raw_handle.load(Ordering::Relaxed));
-
-        if let Ok(connection_handle) = handle {
-            futures::executor::block_on(disconnect(&hi, connection_handle));
+            return Ok(())
         }
+    };
 
-        println!("Exiting example");
+    println!("pairing and bonding with {}", report.1);
 
-        // Force dropping the `HostInterface`. Not doing this may cause problems with your
-        // bluetooth controller if the HCI is not closed cleanly, espically when running
-        // with a superuser.
-        unsafe {
-            let b = Box::from_raw(Arc::into_raw(hi.clone()) as *mut hci::Host<Base, M>);
-
-            std::mem::drop(b)
-        };
-
-        std::process::exit(0);
-    });
-}
-
-async fn bonding<M: for<'a> bo_tie::hci::AsyncLock<'a> + Send + 'static>(
-    interface: Arc<hci::Host<Base, M>>,
-    raw_ch: Arc<AtomicU16>,
-    adv_local_name: &str,
-) {
-    use bo_tie::sm::initiator::MasterSecurityManagerBuilder;
-
-    let this_addr = hci::info_params::read_bd_addr::send(&interface).await.unwrap();
-
-    let adv_info = start_scanning_for_addr(&interface, &adv_local_name).await;
-
-    let peer_addr = adv_info.address;
-
-    let peer_addr_type = adv_info.address_type;
-
-    let cc = connect_to(interface.clone(), &peer_addr, peer_addr_type, raw_ch.clone()).await;
-
-    let connection_handle = hci::common::ConnectionHandle::try_from(raw_ch.load(Ordering::Relaxed)).unwrap();
-
-    let mut msm = MasterSecurityManagerBuilder::new(
-        &cc,
-        &peer_addr,
-        &this_addr,
-        peer_addr_type == hci::le::commonAddressType::RandomDeviceAddress,
+    let mut security_manager = bo_tie::host::sm::initiator::SecurityManagerBuilder::new(
+        report.0.address,
+        bo_tie::hci::commands::info_params::read_bd_addr::send(&mut host)
+            .await
+            .unwrap(),
+        !report.0.address_type.is_public(),
         false,
     )
     .build();
 
-    let ltk = pair(&cc, &mut msm).await.expect("Pairing Failed");
+    let long_term_key = await_or_exit!(host, connection, pair(&mut connection, &mut security_manager));
 
-    encrypt(&interface, connection_handle, ltk).await;
+    println!("pairing completed");
 
-    msm.set_encrypted(true);
+    encrypt(&mut host, connection.get_handle(), long_term_key).await?;
 
-    println!("Bonding Complete");
-}
+    println!("encryption established");
 
-#[derive(structopt::StructOpt)]
-struct Opts {
-    #[structopt(short = "n", long = "local-name", default_value = "Bonding Test")]
-    /// The complete local name in the advertising data
-    ///
-    /// The is the name that will appear as part of the advertising data of the device to run this
-    /// example with. The advertising packet for this tests requires a complete local name so that
-    /// this example can determine what advertiser to connect to.
-    local_name: String,
-}
+    await_or_exit!(host, connection, bond(&mut connection, &mut security_manager));
 
-fn main() {
-    use futures::executor;
-    use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
-    use structopt::StructOpt;
+    println!("bonding completed");
 
-    let args = Opts::from_args();
+    setup_reconnect(&mut host, security_manager.get_keys().unwrap()).await;
 
-    TermLogger::init(
-        LevelFilter::Trace,
-        Config::default(),
-        TerminalMode::Mixed,
-        ColorChoice::Auto,
-    )
-    .unwrap();
+    loop {
+        host.mask_events([bo_tie::hci::events::Events::DisconnectionComplete])
+            .await
+            .unwrap();
 
-    let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
+        query_gatt_services(&mut connection).await;
 
-    let interface = futures::executor::block_on(hci::Host::<_, AsyncLock>::new());
+        println!("press 'escape' to disconnect peripheral device");
 
-    handle_sig(interface.clone(), raw_connection_handle.clone());
+        tokio::select! {
+            _ = host.next() => {
+                println!("peer device disconnected")
+            },
+            _ = io::exit_signal() => {
+                disconnect(&mut host, connection.get_handle()).await;
 
-    executor::block_on(bonding(
-        interface.clone(),
-        raw_connection_handle.clone(),
-        &args.local_name,
-    ));
+                return Ok(())
+            }
+            _ = io::detect_escape() => (),
+        }
 
-    std::thread::sleep(Duration::from_secs(5));
+        println!(
+            "to reconnect, have the peripheral device perform directed \
+            advertising for this device using private resolvable addresses"
+        );
 
-    if let Ok(handle) = hci::common::ConnectionHandle::try_from(raw_connection_handle.load(Ordering::Relaxed)) {
-        executor::block_on(disconnect(&interface, handle));
+        tokio::select! {
+            new_conneciton = reconnect(&mut host) => connection = new_conneciton,
+            _ = io::exit_signal() => {
+                cancel_connect(&mut host).await;
+
+                return Ok(())
+            }
+        }
     }
-
-    println!("Exiting example");
 }
