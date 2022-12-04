@@ -153,7 +153,7 @@ pub mod create_connection {
     }
 
     impl ConnectionParameters {
-        /// Command Parameters for connecting without the white list
+        /// Command Parameters for connecting without the filter list
         pub fn new_without_whitelist(
             scan_interval: ScanningInterval,
             scan_window: ScanningWindow,
@@ -179,8 +179,8 @@ pub mod create_connection {
             }
         }
 
-        /// Command parameters for connecting with the white list
-        pub fn new_with_whitelist(
+        /// Command parameters for connecting with the filter list
+        pub fn new_with_filter_list(
             scan_interval: ScanningInterval,
             scan_window: ScanningWindow,
             own_address_type: OwnAddressType,

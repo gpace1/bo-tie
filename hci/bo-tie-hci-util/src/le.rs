@@ -10,27 +10,27 @@
 ///     A bluetooth random address
 /// - DevicesSendingAnonymousAdvertisements
 ///     A device sending advertisement packets without an address
-pub enum WhiteListedAddressType {
+pub enum FilterListAddressType {
     PublicDeviceAddress,
     RandomDeviceAddress,
     DevicesSendingAnonymousAdvertisements,
 }
 
-impl WhiteListedAddressType {
+impl FilterListAddressType {
     /// Get the raw value
     ///
-    /// This is the value that is used to represent a `WhiteListedAddressType` within a HCI packet.
+    /// This is the value that is used to represent a `FilterListAddressType` within a HCI packet.
     pub fn get_raw_val(&self) -> u8 {
         match *self {
-            WhiteListedAddressType::PublicDeviceAddress => 0x00u8,
-            WhiteListedAddressType::RandomDeviceAddress => 0x01u8,
-            WhiteListedAddressType::DevicesSendingAnonymousAdvertisements => 0xFFu8,
+            FilterListAddressType::PublicDeviceAddress => 0x00u8,
+            FilterListAddressType::RandomDeviceAddress => 0x01u8,
+            FilterListAddressType::DevicesSendingAnonymousAdvertisements => 0xFFu8,
         }
     }
 }
 
-impl From<WhiteListedAddressType> for u8 {
-    fn from(w: WhiteListedAddressType) -> Self {
+impl From<FilterListAddressType> for u8 {
+    fn from(w: FilterListAddressType) -> Self {
         w.get_raw_val()
     }
 }

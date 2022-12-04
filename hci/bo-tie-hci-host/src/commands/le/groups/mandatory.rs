@@ -588,14 +588,14 @@ pub mod read_local_supported_features {
     }
 }
 
-pub mod read_white_list_size {
+pub mod read_filter_list_size {
 
     use crate::events::parameters::CommandCompleteData;
     use crate::{
         opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
 
-    const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadWhiteListSize);
+    const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ReadFilterListSize);
 
     pub struct WhiteListSize {
         pub list_size: usize,
@@ -638,11 +638,11 @@ pub mod read_white_list_size {
     }
 }
 
-pub mod clear_white_list {
+pub mod clear_filter_list {
 
     use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
 
-    const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ClearWhiteList);
+    const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::ClearFilterList);
 
     struct Parameter;
 
@@ -653,15 +653,15 @@ pub mod clear_white_list {
         }
     }
 
-    /// Send the command to clear the white list
+    /// Send the command to clear the filter list
     pub async fn send<H: HostChannelEnds>(host: &mut Host<H>) -> Result<(), CommandError<H>> {
         host.send_command_expect_complete(Parameter).await
     }
 }
 
-macro_rules! add_remove_white_list_setup {
+macro_rules! add_remove_filter_list_setup {
     ( $command: ident ) => {
-        use crate::commands::le::WhiteListedAddressType;
+        use crate::commands::le::FilterListAddressType;
         use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
         use bo_tie_util::BluetoothDeviceAddress;
 
@@ -685,7 +685,7 @@ macro_rules! add_remove_white_list_setup {
 
         pub async fn send<H: HostChannelEnds>(
             host: &mut Host<H>,
-            address_type: WhiteListedAddressType,
+            address_type: FilterListAddressType,
             address: BluetoothDeviceAddress,
         ) -> Result<(), CommandError<H>> {
             let parameter = CommandPrameter {
@@ -698,18 +698,19 @@ macro_rules! add_remove_white_list_setup {
     };
 }
 
-pub mod add_device_to_white_list {
-    const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::AddDeviceToWhiteList);
+pub mod add_device_to_filter_list {
+    const COMMAND: opcodes::HciCommand =
+        opcodes::HciCommand::LEController(opcodes::LEController::AddDeviceToFilterList);
 
-    add_remove_white_list_setup!(COMMAND);
+    add_remove_filter_list_setup!(COMMAND);
 }
 
-pub mod remove_device_from_white_list {
+pub mod remove_device_from_filter_list {
 
     const COMMAND: opcodes::HciCommand =
-        opcodes::HciCommand::LEController(opcodes::LEController::RemoveDeviceFromWhiteList);
+        opcodes::HciCommand::LEController(opcodes::LEController::RemoveDeviceFromFilterList);
 
-    add_remove_white_list_setup!(COMMAND);
+    add_remove_filter_list_setup!(COMMAND);
 }
 
 pub mod read_supported_states {
