@@ -1438,8 +1438,6 @@ impl MaskedEvents {
                 cnt += 1;
             } else {
                 // bits are different so check what is changed
-                cnt += 1;
-
                 let event = events::Events::from_depth(cnt);
 
                 page_1 |= 0 != set_event_mask::event_to_mask_bit(&event);
@@ -1449,6 +1447,8 @@ impl MaskedEvents {
                 if let events::Events::LeMeta(le_meta) = event {
                     le_page |= 0 != le_set_event_mask::event_to_mask_bit(&le_meta);
                 }
+
+                cnt += 1;
             }
         }
 
