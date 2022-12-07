@@ -15,15 +15,16 @@ use bo_tie::hci::{Host, HostChannelEnds, Next};
 ///
 /// # Error
 /// An error is returned if the future `stop` outputs false.
-async fn scan_for_devices<H, C, F>(
+async fn scan_for_devices<H, C, Fun, Fut>(
     host: &mut Host<H>,
     on_result: C,
-    stop: F,
+    stop: Fun,
 ) -> Result<Vec<(bo_tie::hci::events::parameters::LeAdvertisingReportData, String)>, &'static str>
 where
     H: HostChannelEnds,
     C: Fn(usize, &str),
-    F: std::future::Future<Output = bool>,
+    Fun: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = bool>,
 {
     use bo_tie::hci::commands::le::{set_scan_enable, set_scan_parameters};
     use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
@@ -69,7 +70,7 @@ where
 
     let stop_status = tokio::select! {
         _ = task => unreachable!(),
-        status = stop => status,
+        status = stop() => status,
     };
 
     set_scan_enable::send(host, false, false).await.unwrap();
@@ -151,7 +152,7 @@ async fn cancel_connect<H: HostChannelEnds>(host: &mut Host<H>) {
             // object will cause the HCI interface async task to send
             // the disconnection.
             host.next().await.unwrap();
-        },
+        }
         Err(e) => panic!("{}", e),
     }
 }
@@ -212,7 +213,7 @@ async fn encrypt<H: HostChannelEnds>(
         Events::EncryptionChangeV2,
     ])
     .await
-        .unwrap();
+    .unwrap();
 
     let parameter = enable_encryption::Parameter::new_sc(connection_handle, long_term_key);
 
@@ -334,9 +335,8 @@ where
 /// resolving list.
 async fn setup_reconnect<H: HostChannelEnds>(host: &mut Host<H>, keys: &bo_tie::host::sm::Keys) {
     use bo_tie::hci::commands::le::{
-        add_device_to_filter_list, add_device_to_resolving_list,
-        set_address_resolution_enable, set_privacy_mode, FilterListAddressType,
-        PeerIdentityAddressType,
+        add_device_to_filter_list, add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
+        FilterListAddressType, PeerIdentityAddressType,
     };
 
     let peer_identity_info = keys.get_peer_identity().unwrap();
@@ -472,7 +472,7 @@ async fn main() -> Result<(), &'static str> {
 
     println!("scanning for connectible devices with a complete local name");
 
-    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_escape())
+    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_escape)
         .await
         .unwrap();
 

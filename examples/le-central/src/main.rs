@@ -12,15 +12,16 @@ use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeL2cap, Next};
 ///
 /// # Error
 /// An error is returned if the future `stop` outputs false.
-async fn scan_for_devices<H, C, F>(
+async fn scan_for_devices<H, C, Fun, Fut>(
     hi: &mut Host<H>,
     on_result: C,
-    stop: F,
+    stop: Fun,
 ) -> Result<Vec<(LeAdvertisingReportData, String)>, &'static str>
 where
     H: HostChannelEnds,
     C: Fn(usize, &str),
-    F: std::future::Future<Output = bool>,
+    Fun: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = bool>,
 {
     use bo_tie::hci::commands::le::{set_scan_enable, set_scan_parameters};
     use bo_tie::hci::events::{Events, EventsData, LeMeta, LeMetaData};
@@ -65,7 +66,7 @@ where
 
     let stop_status = tokio::select! {
         _ = task => unreachable!(),
-        status = stop => status,
+        status = stop() => status,
     };
 
     set_scan_enable::send(hi, false, false).await.unwrap();
@@ -260,7 +261,7 @@ async fn main() -> Result<(), &'static str> {
 
     println!("scanning for connectible devices with a complete local name");
 
-    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_escape()).await?;
+    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_escape).await?;
 
     if responses.is_empty() {
         return Err("no devices to connect to");
