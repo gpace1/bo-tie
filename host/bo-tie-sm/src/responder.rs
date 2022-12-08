@@ -150,8 +150,8 @@ impl SecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupported> {
             accept_irk: false,
             accept_csrk: false,
             prior_keys: None,
-            oob_sender: crate::oob::Unsupported,
-            oob_receiver: crate::oob::Unsupported,
+            oob_sender: (),
+            oob_receiver: (),
         }
     }
 }

@@ -201,7 +201,7 @@ impl sealed_receiver_type::SealedTrait for ExternalOobReceiver {
 impl OobReceiverType for ExternalOobReceiver {}
 
 /// A marker type for not supporting out of band data
-pub struct Unsupported;
+pub type Unsupported = ();
 
 impl<'a> OutOfBandSend<'a> for Unsupported {
     type Future = UnusedOobInterface<()>;
