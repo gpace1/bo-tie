@@ -124,6 +124,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod encrypt_info;
 pub mod initiator;
+pub mod io;
 pub mod oob;
 pub mod pairing;
 pub mod responder;
