@@ -52,6 +52,23 @@ impl IOCapability {
             _ => Err(Error::Value),
         }
     }
+
+    /// Map the input and output capabilities
+    ///
+    /// ```
+    /// # use bo_tie_sm::pairing::IOCapability;
+    ///
+    /// assert_eq!(IOCapability::DisplayOnly, IOCapability::map(false, false, true))
+    /// ```
+    pub fn map(yes_no: bool, keyboard: bool, display: bool) -> IOCapability {
+        match (yes_no, keyboard, display) {
+            (_, true, true) => IOCapability::KeyboardDisplay,
+            (true, false, true) => IOCapability::DisplayWithYesOrNo,
+            (false, false, true) => IOCapability::DisplayOnly,
+            (false, true, false) => IOCapability::KeyboardOnly,
+            _ => IOCapability::NoInputNoOutput,
+        }
+    }
 }
 
 /// Flag if out of band data can be received
