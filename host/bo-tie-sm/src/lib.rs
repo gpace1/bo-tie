@@ -117,6 +117,7 @@ use alloc::vec::Vec;
 pub use bo_tie_l2cap as l2cap;
 pub use bo_tie_util::BluetoothDeviceAddress;
 
+use crate::io::UserKeyboardInput;
 use l2cap::BasicInfoFrame;
 use oob::OobDirection;
 #[cfg(feature = "serde")]
@@ -200,6 +201,125 @@ impl core::fmt::Display for Error {
 
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
+
+/// Authentication Capabilities used by a Security Manager
+///
+/// Authentication requires the usage of features that are out of scope of this Security Manager
+/// implementation. This trait is a container of the types used for setting the out of scope
+/// functionality required to enable pairing methods that also provide authentication.
+///
+/// ### Associated Types
+/// When a Security Manager builder in this library is created, the associated types are set to a
+/// 'Unsupported' type. This can be changed in a builder when calling the method associated with the
+/// specific type.
+///
+/// ### Input
+/// If this is set to a type that can facilitate input of `char`s from the application user, then
+/// the Security Manager will have the capability of at least 'input' for the purposes of
+/// determining a pairing method.
+///
+/// The *input* can be set by calling `set_input` on a Security Manager builder.
+///
+/// ### Output
+/// If this is set to a type that can facilitate output of a `char`s from a Security Manager to the
+/// user, then the Security Manager will have the capability of at least 'output' for the purposes
+/// of determining a pairing method.
+///
+/// The *output* can be set by calling `set_output` on a Security Manager builder.
+///
+/// ### OobSender
+/// If this is set to a type that can facilitate the sending of Security Manager out of band data,
+/// then the Security Manager will have the capability to send out of band data.
+///
+/// The *out of band sender* can be set by calling `set_oob_sender` on a Security Manager builder.
+///
+/// ### OobReceiver
+/// If this is set to a type that can facilitate the receiving of Security Manager out of band data,
+/// then the Security Manager will have the capability to receive out of band data.
+///
+/// The *out of band receiver* can be set by calling `set_oob_receiver` on a Security Manager
+/// builder.
+pub trait AuthenticationCapabilities {
+    type YesNoInput: io::YesNoInput;
+    type PasskeyInput: io::KeyboardInput;
+    type Output: io::Output;
+    type OobSender: for<'a> oob::OutOfBandSend<'a>;
+    type OobReceiver: oob::OobReceiverType;
+
+    fn has_yes_no_input() -> bool {
+        <Self::YesNoInput as io::YesNoInput>::can_read()
+    }
+
+    fn has_passkey_input() -> bool {
+        <Self::PasskeyInput as io::KeyboardInput>::can_read()
+    }
+
+    fn has_output() -> bool {
+        <Self::Output as io::Output>::can_write()
+    }
+
+    fn has_oob_send() -> bool {
+        <Self::OobSender as oob::OutOfBandSend>::can_send()
+    }
+
+    fn has_oob_receive() -> bool {
+        <Self::OobReceiver as oob::sealed_receiver_type::SealedTrait>::can_receive()
+    }
+
+    fn get_mut_yes_no_input(&mut self) -> &mut Self::YesNoInput;
+
+    fn get_mut_passkey_input(&mut self) -> &mut UserKeyboardInput<Self::PasskeyInput>;
+
+    fn get_mut_output(&mut self) -> &mut Self::Output;
+
+    fn get_mut_oob_sender(&mut self) -> &mut Self::OobSender;
+
+    fn get_mut_oob_receiver(&mut self) -> &mut Self::OobReceiver;
+}
+
+/// Type used to contain the Authentication functionality  
+struct Authentication<Y, K, O, S, R> {
+    yes_no_input: Y,
+    passkey_input: UserKeyboardInput<K>,
+    output: O,
+    oob_sender: S,
+    oob_receiver: R,
+}
+
+impl<Y, K, O, S, R> AuthenticationCapabilities for Authentication<Y, K, O, S, R>
+where
+    Y: io::YesNoInput,
+    K: io::KeyboardInput,
+    O: io::Output,
+    S: for<'a> oob::OutOfBandSend<'a>,
+    R: oob::OobReceiverType,
+{
+    type YesNoInput = Y;
+    type PasskeyInput = K;
+    type Output = O;
+    type OobSender = S;
+    type OobReceiver = R;
+
+    fn get_mut_yes_no_input(&mut self) -> &mut Self::YesNoInput {
+        &mut self.yes_no_input
+    }
+
+    fn get_mut_passkey_input(&mut self) -> &mut UserKeyboardInput<Self::PasskeyInput> {
+        &mut self.passkey_input
+    }
+
+    fn get_mut_output(&mut self) -> &mut Self::Output {
+        &mut self.output
+    }
+
+    fn get_mut_oob_sender(&mut self) -> &mut Self::OobSender {
+        &mut self.oob_sender
+    }
+
+    fn get_mut_oob_receiver(&mut self) -> &mut Self::OobReceiver {
+        &mut self.oob_receiver
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CommandType {
