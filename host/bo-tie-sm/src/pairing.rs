@@ -141,7 +141,7 @@ const MAX_ENCRYPTION_SIZE_RANGE: core::ops::RangeInclusive<usize> = 7..=16;
 pub struct PairingRequest {
     io_capability: IOCapability,
     oob_data_flag: OOBDataFlag,
-    auth_req: Vec<AuthRequirements>,
+    auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
     max_encryption_size: usize,
     initiator_key_distribution: &'static [KeyDistributions],
     responder_key_distribution: &'static [KeyDistributions],
@@ -176,7 +176,7 @@ impl CommandData for PairingRequest {
             Ok(Self {
                 io_capability: IOCapability::try_from_val(icd[0])?,
                 oob_data_flag: OOBDataFlag::try_from_val(icd[1])?,
-                auth_req: AuthRequirements::vec_from_val(icd[2]),
+                auth_req: AuthRequirements::from_val(icd[2]),
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
                     icd[3] as usize
                 } else {
@@ -198,7 +198,7 @@ impl PairingRequest {
     pub fn new(
         io_capability: IOCapability,
         oob_data_flag: OOBDataFlag,
-        auth_req: Vec<AuthRequirements>,
+        auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
         max_encryption_size: usize,
         initiator_key_distribution: &'static [KeyDistributions],
         responder_key_distribution: &'static [KeyDistributions],
@@ -244,8 +244,18 @@ impl PairingRequest {
     }
 
     /// Set authentication data
-    pub fn set_auth_requirements(&mut self, reqs: Vec<AuthRequirements>) {
-        self.auth_req = reqs
+    ///
+    /// Input `reqs` should be a slice of unique authorization requirements.
+    pub fn set_authorization_requirements(&mut self, reqs: &[AuthRequirements]) {
+        let mut auth_req = LinearBuffer::new();
+
+        for a in reqs {
+            if !auth_req.contains(a) {
+                auth_req.try_push(*a).unwrap();
+            }
+        }
+
+        self.auth_req = auth_req
     }
 
     /// Set the maximum encryption key size
@@ -298,7 +308,7 @@ impl From<PairingRequest> for Command<PairingRequest> {
 pub struct PairingResponse {
     io_capability: IOCapability,
     oob_data_flag: OOBDataFlag,
-    auth_req: Vec<AuthRequirements>,
+    auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
     max_encryption_size: usize,
     initiator_key_distribution: &'static [KeyDistributions],
     responder_key_distribution: &'static [KeyDistributions],
@@ -332,7 +342,7 @@ impl CommandData for PairingResponse {
             Ok(Self {
                 io_capability: IOCapability::try_from_val(icd[0])?,
                 oob_data_flag: OOBDataFlag::try_from_val(icd[1])?,
-                auth_req: AuthRequirements::vec_from_val(icd[2]),
+                auth_req: AuthRequirements::from_val(icd[2]),
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
                     icd[3] as usize
                 } else {
@@ -354,7 +364,7 @@ impl PairingResponse {
     pub fn new(
         io_capability: IOCapability,
         oob_data_flag: OOBDataFlag,
-        auth_req: Vec<AuthRequirements>,
+        auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
         max_encryption_size: usize,
         initiator_key_distribution: &'static [KeyDistributions],
         responder_key_distribution: &'static [KeyDistributions],
@@ -400,8 +410,18 @@ impl PairingResponse {
     }
 
     /// Set authentication data
-    pub fn set_auth_requirements(&mut self, reqs: Vec<AuthRequirements>) {
-        self.auth_req = reqs
+    ///
+    /// Input `reqs` should be a slice of unique authorization requirements.
+    pub fn set_authorization_requirements(&mut self, reqs: &[AuthRequirements]) {
+        let mut auth_req = LinearBuffer::new();
+
+        for a in reqs {
+            if !auth_req.contains(a) {
+                auth_req.try_push(*a).unwrap();
+            }
+        }
+
+        self.auth_req = auth_req
     }
 
     /// Set the maximum encryption key size

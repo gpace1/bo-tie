@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 bo-tie-gap = { path = "../bo-tie-gap" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
+bo-tie-macros = { path = "../../bo-tie-macros" }
 bo-tie-util = { path = "../../bo-tie-util", features = ["sys-rand", "cryptography"] }
 elliptic-curve = "0.12"
 log = "0.4"

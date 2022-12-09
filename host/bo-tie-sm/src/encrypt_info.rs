@@ -5,7 +5,8 @@
 use super::*;
 use bo_tie_util::buffer::stack::LinearBuffer;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, bo_tie_macros::DepthCount)]
+#[non_exhaustive]
 pub enum AuthRequirements {
     Bonding,
     ManInTheMiddleProtection,
@@ -24,26 +25,26 @@ impl AuthRequirements {
         })
     }
 
-    pub(super) fn vec_from_val(val: u8) -> Vec<Self> {
-        let mut v = Vec::new();
+    pub(super) fn from_val(val: u8) -> LinearBuffer<{ Self::full_depth() }, Self> {
+        let mut lb = LinearBuffer::new();
 
         if 1 == val & 0x11 {
-            v.push(AuthRequirements::Bonding)
+            lb.try_push(AuthRequirements::Bonding).unwrap();
         }
 
         if 1 == (val >> 2) & 0x1 {
-            v.push(AuthRequirements::ManInTheMiddleProtection)
+            lb.try_push(AuthRequirements::ManInTheMiddleProtection).unwrap();
         }
 
         if 1 == (val >> 3) & 0x1 {
-            v.push(AuthRequirements::Sc)
+            lb.try_push(AuthRequirements::Sc).unwrap();
         }
 
         if 1 == (val >> 4) & 0x1 {
-            v.push(AuthRequirements::KeyPress)
+            lb.try_push(AuthRequirements::KeyPress).unwrap();
         }
 
-        v
+        lb
     }
 }
 
@@ -327,7 +328,7 @@ impl From<SigningInformation> for Command<SigningInformation> {
 }
 
 pub struct SecurityRequest {
-    auth_req: Vec<AuthRequirements>,
+    auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
 }
 
 impl CommandData for SecurityRequest {
@@ -342,7 +343,7 @@ impl CommandData for SecurityRequest {
 
     fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 1 {
-            let auth_req = AuthRequirements::vec_from_val(icd[0]);
+            let auth_req = AuthRequirements::from_val(icd[0]);
 
             Ok(SecurityRequest { auth_req })
         } else {
@@ -352,7 +353,19 @@ impl CommandData for SecurityRequest {
 }
 
 impl SecurityRequest {
-    pub fn set_auth_requirements(&mut self, req: Vec<AuthRequirements>) {
+    /// Create a new SecurityRequest
+    ///
+    /// The input `auth_req` is the list of Authorization requirements within the Security Request.
+    /// This list should only contain unique entries.
+    pub fn new(&mut self, auth_req: &[AuthRequirements]) {
+        let mut req = LinearBuffer::new();
+
+        for a in auth_req {
+            if !req.contains(a) {
+                req.try_push(*a).unwrap();
+            }
+        }
+
         self.auth_req = req
     }
 }
