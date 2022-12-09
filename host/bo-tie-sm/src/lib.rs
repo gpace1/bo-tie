@@ -505,7 +505,7 @@ impl PairingMethod {
     /// # Note
     /// `is_legacy` must be false as the security manager doesn't support legacy. It is only left
     /// here in case that changes (which is unlikely).
-    fn determine_method_secure_connection(
+    fn determine_method(
         initiator_oob_data: pairing::OOBDataFlag,
         responder_oob_data: pairing::OOBDataFlag,
         initiator_io_capability: pairing::IOCapability,
