@@ -567,47 +567,65 @@ impl PairingMethod {
             OOBDataFlag::AuthenticationDataNotPresent as Unavailable,
         };
 
-        // This match should match Table 2.8 in the Bluetooth Specification v5.0 | Vol 3, Part H,
-        // section 2.3.5.1
-        match (initiator_oob_data, responder_oob_data) {
-            (Present, Present) => PairingMethod::Oob(OobDirection::BothSendOob),
-
-            (Present, Unavailable) => PairingMethod::Oob(OobDirection::OnlyResponderSendsOob),
-
-            (Unavailable, Present) => PairingMethod::Oob(OobDirection::OnlyInitiatorSendsOob),
-
-            (_, _) => match (initiator_io_capability, responder_io_capability) {
-                (DisplayOnly, KeyboardOnly) | (DisplayOnly, KeyboardDisplay) => PairingMethod::PassKeyEntry,
-
-                (DisplayWithYesOrNo, DisplayWithYesOrNo) if !is_legacy => PairingMethod::NumbComp,
-
-                (DisplayWithYesOrNo, KeyboardOnly) => PairingMethod::PassKeyEntry,
-
-                (DisplayWithYesOrNo, KeyboardDisplay) => {
-                    if is_legacy {
-                        PairingMethod::PassKeyEntry
-                    } else {
-                        PairingMethod::NumbComp
-                    }
-                }
-
-                (KeyboardOnly, DisplayOnly)
-                | (KeyboardOnly, DisplayWithYesOrNo)
-                | (KeyboardOnly, KeyboardOnly)
-                | (KeyboardOnly, KeyboardDisplay) => PairingMethod::PassKeyEntry,
-
-                (KeyboardDisplay, DisplayOnly) | (KeyboardDisplay, KeyboardOnly) => PairingMethod::PassKeyEntry,
-
-                (KeyboardDisplay, DisplayWithYesOrNo) | (KeyboardDisplay, KeyboardDisplay) => {
-                    if is_legacy {
-                        PairingMethod::PassKeyEntry
-                    } else {
-                        PairingMethod::NumbComp
-                    }
-                }
-
-                (_, _) => PairingMethod::JustWorks,
-            },
+        match (
+            initiator_oob_data,
+            responder_oob_data,
+            responder_io_capability,
+            initiator_io_capability,
+            is_legacy,
+        ) {
+            (Present, Present, _, _, _) => PairingMethod::Oob(OobDirection::BothSendOob),
+            (Present, Unavailable, _, _, _) => PairingMethod::Oob(OobDirection::OnlyResponderSendsOob),
+            (Unavailable, Present, _, _, _) => PairingMethod::Oob(OobDirection::OnlyInitiatorSendsOob),
+            (_, _, DisplayOnly, DisplayOnly, _) => PairingMethod::JustWorks,
+            (_, _, DisplayOnly, DisplayWithYesOrNo, _) => PairingMethod::JustWorks,
+            (_, _, DisplayOnly, KeyboardOnly, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+            }
+            (_, _, DisplayOnly, NoInputNoOutput, _) => PairingMethod::JustWorks,
+            (_, _, DisplayOnly, KeyboardDisplay, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+            }
+            (_, _, DisplayWithYesOrNo, DisplayOnly, _) => PairingMethod::JustWorks,
+            (_, _, DisplayWithYesOrNo, DisplayWithYesOrNo, false) => PairingMethod::NumbComp,
+            (_, _, DisplayWithYesOrNo, DisplayWithYesOrNo, true) => PairingMethod::JustWorks,
+            (_, _, DisplayWithYesOrNo, KeyboardOnly, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+            }
+            (_, _, DisplayWithYesOrNo, NoInputNoOutput, _) => PairingMethod::JustWorks,
+            (_, _, DisplayWithYesOrNo, KeyboardDisplay, false) => PairingMethod::NumbComp,
+            (_, _, DisplayWithYesOrNo, KeyboardDisplay, true) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+            }
+            (_, _, KeyboardOnly, DisplayOnly, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+            }
+            (_, _, KeyboardOnly, DisplayWithYesOrNo, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+            }
+            (_, _, KeyboardOnly, KeyboardOnly, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorAndResponderInput)
+            }
+            (_, _, KeyboardOnly, NoInputNoOutput, _) => PairingMethod::JustWorks,
+            (_, _, KeyboardOnly, KeyboardDisplay, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+            }
+            (_, _, NoInputNoOutput, _, _) => PairingMethod::JustWorks,
+            (_, _, KeyboardDisplay, DisplayOnly, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+            }
+            (_, _, KeyboardDisplay, DisplayWithYesOrNo, false) => PairingMethod::NumbComp,
+            (_, _, KeyboardDisplay, DisplayWithYesOrNo, true) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+            }
+            (_, _, KeyboardDisplay, KeyboardOnly, _) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+            }
+            (_, _, KeyboardDisplay, NoInputNoOutput, _) => PairingMethod::NumbComp,
+            (_, _, KeyboardDisplay, KeyboardDisplay, false) => PairingMethod::NumbComp,
+            (_, _, KeyboardDisplay, KeyboardDisplay, true) => {
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+            }
         }
     }
 }
