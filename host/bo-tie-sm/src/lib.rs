@@ -117,7 +117,6 @@ use alloc::vec::Vec;
 pub use bo_tie_l2cap as l2cap;
 pub use bo_tie_util::BluetoothDeviceAddress;
 
-use crate::io::UserKeyboardInput;
 use l2cap::BasicInfoFrame;
 use oob::OobDirection;
 #[cfg(feature = "serde")]
@@ -147,6 +146,7 @@ const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
     l2cap::ChannelIdentifier::Le(l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
 
+/// General error within the Security Manager Protocol
 #[derive(Debug, Clone)]
 pub enum Error {
     /// Incorrect Size
@@ -201,6 +201,56 @@ impl core::fmt::Display for Error {
 
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
+
+/// Errors specific to a Security Manager
+#[derive(Clone)]
+pub enum SecurityManagerError<Y, K> {
+    Error(Error),
+    YesNoInput(Y),
+    KeyboardInput(io::KeyboardError<K>),
+}
+
+impl<Y, K> From<Error> for SecurityManagerError<Y, K> {
+    fn from(e: Error) -> Self {
+        SecurityManagerError::Error(e)
+    }
+}
+
+impl<Y, K> core::fmt::Debug for SecurityManagerError<Y, K>
+where
+    Y: core::fmt::Debug,
+    K: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            SecurityManagerError::Error(e) => core::fmt::Debug::fmt(e, f),
+            SecurityManagerError::YesNoInput(y) => core::fmt::Debug::fmt(y, f),
+            SecurityManagerError::KeyboardInput(k) => core::fmt::Debug::fmt(k, f),
+        }
+    }
+}
+
+impl<Y, K> core::fmt::Display for SecurityManagerError<Y, K>
+where
+    Y: core::fmt::Display,
+    K: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            SecurityManagerError::Error(e) => core::fmt::Display::fmt(e, f),
+            SecurityManagerError::YesNoInput(y) => core::fmt::Display::fmt(y, f),
+            SecurityManagerError::KeyboardInput(k) => core::fmt::Display::fmt(k, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<Y, K> std::error::Error for SecurityManagerError<Y, K>
+where
+    Y: std::error::Error,
+    K: std::error::Error,
+{
+}
 
 /// Authentication Capabilities used by a Security Manager
 ///
