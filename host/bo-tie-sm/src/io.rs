@@ -3,6 +3,8 @@
 //! A Security Manager requires I/O functionality for most of the Man In The Middle Protection
 //! methods. In order to provide that functionality the library user must provide methods to access
 
+use bo_tie_util::buffer::stack::LinearBuffer;
+use core::fmt::Arguments;
 use core::future::Future;
 
 /// Trait for a Yes/No input
@@ -21,12 +23,12 @@ pub trait YesNoInput {
 
     fn can_read() -> bool;
 
-    fn read(&mut self) -> Self::YesNoFuture<'_>;
+    fn read(&mut self, compare_value: CompareValue) -> Self::YesNoFuture<'_>;
 }
 
 impl<T, F, E> YesNoInput for T
 where
-    T: FnMut() -> F,
+    T: FnMut(CompareValue) -> F,
     F: Future<Output = Result<bool, E>>,
 {
     type Error = E;
@@ -36,8 +38,8 @@ where
         true
     }
 
-    fn read(&mut self) -> Self::YesNoFuture<'_> {
-        self()
+    fn read(&mut self, compare_value: CompareValue) -> Self::YesNoFuture<'_> {
+        self(compare_value)
     }
 }
 
@@ -79,7 +81,7 @@ pub enum KeyInput {
 /// The keyboard is to be used for a passkey. The field within `Passkey` is a boolean for indicating
 /// that the passkey has started.
 pub enum InputKind {
-    YesNo,
+    YesNo(CompareValue),
     Passkey(bool),
 }
 
@@ -135,11 +137,14 @@ impl<T> UserKeyboardInput<T> {
     }
 
     /// Process the next passkey key
-    pub async fn next_passkey(&mut self) -> Result<crate::pairing::KeyPressNotification, KeyboardError<T::Error>>
+    pub async fn next_passkey(
+        &mut self,
+        first: bool,
+    ) -> Result<crate::pairing::KeyPressNotification, KeyboardError<T::Error>>
     where
         T: KeyboardInput,
     {
-        match self.source.next().await? {
+        match self.source.next(InputKind::Passkey(first)).await? {
             KeyInput::Entered(c) => {
                 self.keys[self.current] = c;
                 self.current += 1;
@@ -161,16 +166,8 @@ impl<T> UserKeyboardInput<T> {
         }
     }
 
-    /// Process Yes/No
-    pub async fn yes_no(&mut self) -> Result<bool, KeyboardError<T::Error>>
-    where
-        T: KeyboardInput,
-    {
-        match self.source.next().await? {
-            KeyInput::Yes => Ok(true),
-            KeyInput::No => Ok(false),
-            _ => Err(KeyboardError::ExpectedYesOrNo),
-        }
+    pub fn get_mut_source(&mut self) -> &mut T {
+        &mut self.source
     }
 
     pub fn get_key_count(&self) -> usize {
@@ -233,7 +230,7 @@ impl YesNoInput for Unsupported {
     fn can_read() -> bool {
         false
     }
-    fn read(&mut self) -> Self::YesNoFuture<'_> {
+    fn read(&mut self, _: CompareValue) -> Self::YesNoFuture<'_> {
         unreachable!()
     }
 }
@@ -246,7 +243,7 @@ impl KeyboardInput for Unsupported {
         false
     }
 
-    fn next(&mut self) -> Self::KeypressFuture<'_> {
+    fn next(&mut self, _: InputKind) -> Self::KeypressFuture<'_> {
         unreachable!()
     }
 }
@@ -263,6 +260,7 @@ impl Output for Unsupported {
     }
 }
 
+#[derive(Clone)]
 pub enum KeyboardError<E> {
     UnexpectedYesOrNo,
     ExpectedYesOrNo,
@@ -312,3 +310,12 @@ where
 
 #[cfg(feature = "std")]
 impl<E> std::error::Error for KeyboardError<E> where E: std::error::Error {}
+
+/// The compare value used for number comparison
+pub struct CompareValue(pub(crate) u32);
+
+impl core::fmt::Display for CompareValue {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{:06}", self.0 % 1_000_000)
+    }
+}
