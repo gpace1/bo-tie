@@ -3,8 +3,14 @@
 //! This contains the setup for enabling the usage of out of band pairing with the Security Manager
 //! implementations in this library.
 
-use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
-use core::future::Future;
+use bo_tie_gap::assigned::le_device_address::LeDeviceAddress;
+use bo_tie_gap::assigned::le_role::LeRole;
+use bo_tie_gap::assigned::sc_confirm_value::ScConfirmValue;
+use bo_tie_gap::assigned::sc_random_value::ScRandomValue;
+use bo_tie_gap::assigned::security_manager_tk_value::SecurityManagerTkValue;
+use bo_tie_gap::assigned::{AssignedTypes, ConvertError, EirOrAdStruct, Sequence};
+use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_util::BluetoothDeviceAddress;
 
 /// Supported direction of OOB
 ///
@@ -19,214 +25,108 @@ pub(super) enum OobDirection {
     BothSendOob,
 }
 
-/// Error for method [`OutOfBandMethodBuilder::build`](OutOfBandMethodBuilder::build)
+/// Required Out of Band data
 ///
-/// When initializing bi-directional OOB support for a Security Manager, a method for sending
-/// and a method for receiving must be set. If either of these methods are not set, then this error
-/// is returned when trying to build a Security Manager.
-///
-/// # Note
-/// If it was the intention not to set the method, then when constructing a Security Manager look
-/// for the `build_with
-pub enum OobBuildError {
-    Send,
-    Receive,
+/// This is data that is sent 'out of band' of the Bluetooth connection between two devices. In
+/// order to ensure authentication, it must be sent over a channel that has sufficient man in the
+/// middle protection.
+pub(crate) enum RequiredOutOfBandData {
+    // Right now (possibly never) the Security Managers of
+    // bo-tie do not support legacy pairing.
+    //
+    // LeLegacy {
+    //     tk: u128
+    // },
+    SecureConnections {
+        address: BluetoothDeviceAddress,
+        sc_random: u128,
+        sc_confirm: u128,
+    },
 }
 
-impl core::fmt::Debug for OobBuildError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        <Self as core::fmt::Display>::fmt(self, f)
-    }
-}
+impl RequiredOutOfBandData {
+    /// Create a new OutOfBandData for Secure Connections
+    pub fn new_sc(address: BluetoothDeviceAddress, random: u128, confirm: u128) -> Self {
+        let address = address.into();
+        let sc_random = random.into();
+        let sc_confirm = confirm.into();
 
-impl core::fmt::Display for OobBuildError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            OobBuildError::Send => f.write_str("Send method not set for OOB data"),
-            OobBuildError::Receive => f.write_str("Receive method not set for OOB data"),
+        RequiredOutOfBandData::SecureConnections {
+            address,
+            sc_random,
+            sc_confirm,
         }
     }
-}
 
-/// The trait to used by a Security Manager send data over an out of band (OOB) interface
-///
-/// This is auto implemented for anything that implements `Fn(&[u8]) -> impl Future`.
-pub trait OutOfBandSend<'a> {
-    type Future: Future + 'a;
+    /// Write to out of band data to `buffer`
+    pub fn write_to(&self, buffer: &mut [u8]) -> Result<(), ConvertError> {
+        let mut sequence = Sequence::new(buffer);
 
-    fn can_send() -> bool;
+        if let Some(address) = self.address {
+            let address = LeDeviceAddress::from(addres);
 
-    fn send(&mut self, data: &'a [u8]) -> Self::Future;
-}
+            sequence.try_add(&address)?;
+        }
 
-impl<'a, S, F> OutOfBandSend<'a> for S
-where
-    S: FnMut(&'a [u8]) -> F,
-    F: Future + 'a,
-{
-    type Future = F;
+        if let Some(temp_key) = self.temp_key {
+            let temp_key = SecurityManagerTkValue::new(temp_key);
 
-    fn can_send() -> bool {
-        true
-    }
+            sequence.try_add(&temp_key)?;
+        }
 
-    fn send(&mut self, data: &'a [u8]) -> Self::Future {
-        self(data)
-    }
-}
+        if let Some(confirm) = self.sc_confirm {
+            let sc_confirm = ScConfirmValue::new(confirm);
 
-/// The trait to used by a Security Manager send data over an out of band (OOB) interface
-///
-/// This is auto implemented for anything that implements `Fn() -> impl Future<Output = Vec<u8>>`.
-pub trait OutOfBandReceive {
-    type Output: core::borrow::Borrow<[u8]>;
-    type Future: Future<Output = Self::Output>;
+            sequence.try_add(&sc_confirm)?;
+        }
 
-    fn receive(&mut self) -> Self::Future;
-}
+        if let Some(random) = self.sc_random {
+            let sc_random = ScRandomValue::new(random);
 
-impl<R, F, V> OutOfBandReceive for R
-where
-    R: FnMut() -> F,
-    F: Future<Output = V>,
-    V: core::borrow::Borrow<[u8]>,
-{
-    type Output = V;
-    type Future = F;
+            sequence.try_add(&sc_random)?;
+        }
 
-    fn receive(&mut self) -> Self::Future {
-        self()
+        Ok(())
     }
 }
 
-/// Future used as the return for an unavailable OOB interface
-#[doc(hidden)]
-pub struct UnusedOobInterface<V>(core::marker::PhantomData<V>);
+impl OutOfBandData for RequiredOutOfBandData {
+    fn append_to(&self, sequence: &mut Sequence) -> Result<(), ConvertError> {
+        match self {
+            RequiredOutOfBandData::SecureConnections {
+                address,
+                sc_random,
+                sc_confirm,
+            } => {
+                let device_address = LeDeviceAddress::from(*address);
+                let sc_confirm_value = ScConfirmValue::new(*sc_confirm);
+                let sc_random_value = ScRandomValue::new(*sc_random);
 
-impl<V> Future for UnusedOobInterface<V> {
-    type Output = V;
-    fn poll(self: core::pin::Pin<&mut Self>, _: &mut core::task::Context<'_>) -> core::task::Poll<Self::Output> {
-        unreachable!()
-    }
-}
+                sequence.try_add(&device_address)?;
+                sequence.try_add(&sc_confirm_value)?;
+                sequence.try_add(&sc_random_value)?;
 
-pub(super) mod sealed_receiver_type {
-
-    /// The type of implementor for the `OobReceiverType`. These correspond to the types
-    /// `InternalOobReceiver`, `ExternalOobReceiver`, and `()`.
-    #[doc(hidden)]
-    #[derive(Eq, PartialEq)]
-    pub enum OobReceiverTypeVariant {
-        Internal,
-        External,
-        DoesNotExist,
-    }
-
-    pub trait SealedTrait {
-        #[doc(hidden)]
-        fn receiver_type() -> OobReceiverTypeVariant;
-
-        #[doc(hidden)]
-        fn can_receive() -> bool {
-            match Self::receiver_type() {
-                OobReceiverTypeVariant::Internal | OobReceiverTypeVariant::External => true,
-                OobReceiverTypeVariant::DoesNotExist => false,
+                Ok(())
             }
         }
-
-        #[doc(hidden)]
-        type Output: core::borrow::Borrow<[u8]>;
-
-        #[doc(hidden)]
-        type Future<'a>: core::future::Future<Output = Self::Output>
-        where
-            Self: 'a;
-
-        #[doc(hidden)]
-        fn receive(&mut self) -> Self::Future<'_>;
     }
 }
 
-/// The trait for receiving out of band data
+/// Trait for formulating out of band data
 ///
-/// Out of band data is received outside of the Bluetooth connection. The method for receiving
-/// the data is implemented outside of this library, somehow acquired by a security manager during
-/// the process of pairing.
-///
-/// This trait is sealed, but anything that implements `OutOfBandReceive` will also implement
-/// `OobReceiverType`
-pub trait OobReceiverType: sealed_receiver_type::SealedTrait {}
+/// The library will give
+pub trait OutOfBandData {
+    fn append_to(&self, sequence: &mut Sequence) -> Result<(), ConvertError>;
 
-impl<F> sealed_receiver_type::SealedTrait for F
-where
-    F: OutOfBandReceive,
-{
-    fn receiver_type() -> OobReceiverTypeVariant {
-        OobReceiverTypeVariant::Internal
-    }
+    /// Write the out of band data to a buffer
+    ///
+    /// The return is a [`Sequence`] that owns the buffer. It can be used to add further AD
+    /// structures to the buffer for out of band data.
+    fn write_to<'a>(&self, buffer: &'a mut [u8]) -> Result<Sequence<'a>, ConvertError> {
+        let mut sequence = Sequence::new(buffer);
 
-    type Output = F::Output;
+        self.append_to(&mut sequence)?;
 
-    type Future<'a> = F::Future where Self: 'a;
-
-    fn receive(&mut self) -> Self::Future<'_> {
-        OutOfBandReceive::receive(self)
+        Ok(sequence)
     }
 }
-
-impl<F> OobReceiverType for F where F: OutOfBandReceive {}
-
-/// Marker type for 'externally' resolving reception of OOB data
-///
-/// This should be used only when another implementor of [`OobReceiverType`] cannot be used because
-/// the data must be explicitly set. The reason  being that this will require a method call to set
-/// the received out of band data at the correct time within pairing. Both types of security manager
-/// have a method to set the received OOB data that is only available when this type is used.
-pub struct ExternalOobReceiver;
-
-impl sealed_receiver_type::SealedTrait for ExternalOobReceiver {
-    fn receiver_type() -> OobReceiverTypeVariant {
-        sealed_receiver_type::OobReceiverTypeVariant::External
-    }
-
-    type Output = [u8; 0];
-
-    type Future<'a> = &'a mut (dyn Future<Output = Self::Output> + Send + Sync + Unpin) where Self: 'a;
-
-    fn receive(&mut self) -> Self::Future<'_> {
-        unreachable!("Called receive on external receiver")
-    }
-}
-
-impl OobReceiverType for ExternalOobReceiver {}
-
-/// A marker type for not supporting out of band data
-pub type Unsupported = ();
-
-impl<'a> OutOfBandSend<'a> for Unsupported {
-    type Future = UnusedOobInterface<()>;
-
-    fn can_send() -> bool {
-        false
-    }
-
-    fn send(&mut self, _: &'a [u8]) -> Self::Future {
-        panic!("Tried to send OOB data on a nonexistent interface")
-    }
-}
-
-impl sealed_receiver_type::SealedTrait for Unsupported {
-    fn receiver_type() -> OobReceiverTypeVariant {
-        OobReceiverTypeVariant::DoesNotExist
-    }
-
-    type Output = [u8; 0];
-
-    type Future<'a> = &'a mut (dyn Future<Output = Self::Output> + Send + Sync + Unpin) where Self: 'a;
-
-    fn receive(&mut self) -> Self::Future<'_> {
-        unreachable!("Called receive on external receiver")
-    }
-}
-
-impl OobReceiverType for Unsupported {}

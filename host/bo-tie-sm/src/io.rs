@@ -7,39 +7,103 @@ use bo_tie_util::buffer::stack::LinearBuffer;
 use core::fmt::Arguments;
 use core::future::Future;
 
-/// Trait for a Yes/No input
+/// Input from the application user
 ///
-/// This is used when the device has the capability of sending the equivalent of yes or no from the
-/// user to the Security Manager.
-///
-/// When the Security Manager wants to acquire verification of successful authentication from the
-/// user, it will call `read` and await `YesNoFuture` until it it polls to completion. The
-/// successful output is a boolean indicating if the user replied with yes (`true`) or no (`false`).
-pub trait YesNoInput {
-    type Error;
-    type YesNoFuture<'a>: Future<Output = Result<bool, Self::Error>>
-    where
-        Self: 'a;
+/// This is used by the Security Managers to process user input.
+pub struct UserInput(UserInputInner);
 
-    fn can_read() -> bool;
-
-    fn read(&mut self, compare_value: CompareValue) -> Self::YesNoFuture<'_>;
-}
-
-impl<T, F, E> YesNoInput for T
-where
-    T: FnMut(CompareValue) -> F,
-    F: Future<Output = Result<bool, E>>,
-{
-    type Error = E;
-    type YesNoFuture<'a> = F where Self: 'a;
-
-    fn can_read() -> bool {
-        true
+impl UserInput {
+    fn yes() -> Self {
+        UserInput(UserInputInner::Yes)
     }
 
-    fn read(&mut self, compare_value: CompareValue) -> Self::YesNoFuture<'_> {
-        self(compare_value)
+    fn no() -> Self {
+        UserInput(UserInputInner::No)
+    }
+
+    fn key() -> Self {
+        UserInput(UserInputInner::Key)
+    }
+
+    fn key_erase() -> Self {
+        UserInput(UserInputInner::KeyErase)
+    }
+
+    fn passkey_clear() -> Self {
+        UserInput(UserInputInner::PasskeyClear)
+    }
+
+    fn passkey_complete(passkey: u32) -> Self {
+        UserInput(UserInputInner::PasskeyComplete(passkey))
+    }
+
+    pub(crate) fn into_inner(self) -> UserInputInner {
+        self.0
+    }
+}
+
+pub(crate) enum UserInputInner {
+    Yes,
+    No,
+    Key,
+    KeyErase,
+    PasskeyClear,
+    PasskeyComplete(u32),
+}
+
+/// The compare value used for number comparison
+pub struct CompareValue(pub(crate) u32);
+
+impl core::fmt::Display for CompareValue {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{:06}", self.0 % 1_000_000)
+    }
+}
+
+/// Yes/No input from the application user
+///
+/// A `YesNoInput` is used for confirmation that a *compare value* matches on both devices of the
+/// connection. The user of both devices must enter yes on both sides for pairing to be successfully
+/// completed.
+///
+/// The compare value can be displayed to the user using the [`Display`] trait (this also means it
+/// implements [`ToString`]).
+/// ```
+/// # use bo_tie_sm::io::{YesNoInput, UserInput};
+/// fn check_compare_value(y: YesNoInput) -> UserInput {
+///     println!("pairing check value: {}", y);
+///     println!("does this match (y/n)?");
+///
+///     let mut input = String::new();
+///
+///     let input = std::io::stdin().read_line(&mut input);
+///
+///     if input == "y" {
+///         y.into_yes()
+///     } else {
+///         y.into_no()
+///     }
+/// }
+/// ```
+///
+/// The returned `UserInput` must be provided to the Security Manager to continue pairing.
+///
+/// [`Display`]: std::fmt::Display
+pub struct YesNoInput(CompareValue);
+
+impl YesNoInput {
+    /// Convert into "yes"
+    ///
+    /// This converts this `YesNotInput` into a `UserInput` containing "yes".
+    pub fn into_yes(self) -> UserInput {
+        UserInput::yes()
+    }
+
+    /// Convert into "no"
+    ///
+    /// This converts this `YesNotInput` into a `UserInput` containing "no".
+    pub fn into_no(self) -> UserInput {
+        UserInput::no()
     }
 }
 
@@ -67,255 +131,137 @@ pub enum KeyInput {
     Completed,
 }
 
-/// Keyboard Input Kind
+/// Passkey input from the application user
 ///
-/// Keyboard input can either be Yes/No or Passkey. This cannot be determined until both the
-/// initiating and responding devices have determined the method for pairing. This is used for the
-/// input of the method `KeyboardInput::next`, but most implementations of the trait `KeyboardInput`
-/// will use it as the input to the closure.
+/// Passkeys are used for both legacy and secure connection pairing with a Security Manager. Passkey
+/// entry requires the Security Manager to know every keypress of the user so that it may send a
+/// keypress notification to the peer's Security Manager. Every time the user enters a passkey digit
+/// this `PasskeyInput` needs to know about it. The same is true for erasing digits or clearing the
+/// entire passcode.
 ///
-/// ### Yes/No
-/// The keyboard is to be used for yes or no input values.
+/// Every time a digit is entered by the user, the method `add` should be called. *The user must
+/// enter the passcode from left to right, the most significant digit must be the first digit
+/// entered*. Once all six digits of the passcode, the application must call `complete` to finish
+/// the passcode.
 ///
-/// ### PassKey
-/// The keyboard is to be used for a passkey. The field within `Passkey` is a boolean for indicating
-/// that the passkey has started.
-pub enum InputKind {
-    YesNo(CompareValue),
-    Passkey(bool),
+/// All methods of `PasskeyInput` return a `UserInput` that must be provided to the Security Manager
+/// in order to continue pairing. See the respective Security Manager module ([`initiator`] or
+/// [`responder`]) for example usage.
+///
+/// [`initiator`]: crate::initiator
+/// [`responder`]: crate::responder
+pub struct PasskeyInput {
+    passkey: [char; 6],
+    count: usize,
 }
 
-/// Trait for Keyboard Input
-///
-/// This is used whenever the device has a keyboard. With a keyboard the Security Manager will
-/// support both Yes/No input and Passkey pairing. The keyboard is required to have some way to
-/// enter digits (zero through nine) in order for the user to enter in a passcode. There should also
-/// be some way to enter yes/no.
-pub trait KeyboardInput {
-    type Error;
-    type KeypressFuture<'a>: Future<Output = Result<KeyInput, Self::Error>>
-    where
-        Self: 'a;
+impl PasskeyInput {
+    /// Add a key to the passcode
+    ///
+    /// # Error
+    /// An error is returned if six digits are already in the passcode or input `key` is not a digit
+    /// character.
+    pub fn add(&mut self, key: char) -> Result<UserInput, PasskeyError> {
+        if !key.is_digit(10) {
+            return Err(PasskeyError::NotADigit(key));
+        }
 
-    fn can_read() -> bool;
+        *self.passkey.get_mut(self.count).ok_or(PasskeyError::TooManyKeys(key))? = key;
 
-    fn next(&mut self, kind: InputKind) -> Self::KeypressFuture<'_>;
-}
+        self.count += 1;
 
-impl<T, F, E> KeyboardInput for T
-where
-    T: FnMut(InputKind) -> F,
-    F: Future<Output = Result<KeyInput, E>>,
-{
-    type Error = E;
-    type KeypressFuture<'a> = F where Self: 'a;
-
-    fn can_read() -> bool {
-        true
+        Ok(UserInput::key())
     }
 
-    fn next(&mut self, kind: InputKind) -> Self::KeypressFuture<'_> {
-        self(kind)
-    }
-}
-
-#[doc(hidden)]
-/// User passkey input processor
-pub struct UserKeyboardInput<T> {
-    source: T,
-    keys: [char; 6],
-    current: usize,
-}
-
-impl<T> UserKeyboardInput<T> {
-    pub fn new(source: T) -> Self {
-        Self {
-            source,
-            keys: ['0'; 6],
-            current: 0usize,
+    /// Remove a key from the passcode
+    ///
+    /// # Error
+    /// The index must be the index of a key already added to this `PasskeyInput` or an error is
+    /// returned.
+    pub fn remove(&mut self, index: usize) -> Result<UserInput, PasskeyError> {
+        if index < self.count {
+            self.passkey[index..self.count].rotate_left(1);
+            self.count -= 1;
+            Ok(UserInput::key_erase())
+        } else {
+            Err(PasskeyError::InvalidKeyPosition(index))
         }
     }
 
-    /// Process the next passkey key
-    pub async fn next_passkey(
-        &mut self,
-        first: bool,
-    ) -> Result<crate::pairing::KeyPressNotification, KeyboardError<T::Error>>
-    where
-        T: KeyboardInput,
-    {
-        match self.source.next(InputKind::Passkey(first)).await? {
-            KeyInput::Entered(c) => {
-                self.keys[self.current] = c;
-                self.current += 1;
-                Ok(crate::pairing::KeyPressNotification::PasskeyDigitEntered)
-            }
-            KeyInput::Erased(pos) => {
-                self.keys[pos] = '0';
-                self.keys[pos..self.current].rotate_left(1);
-                self.current -= 1;
-                Ok(crate::pairing::KeyPressNotification::PasskeyDigitErased)
-            }
-            KeyInput::Cleared => {
-                self.keys = ['0'; 6];
-                self.current = 0;
-                Ok(crate::pairing::KeyPressNotification::PasskeyCleared)
-            }
-            KeyInput::Completed => Ok(crate::pairing::KeyPressNotification::PasskeyEntryCompleted),
-            KeyInput::Yes | KeyInput::No => Err(KeyboardError::UnexpectedYesOrNo),
+    /// Clear the Passcode
+    ///
+    /// After this is called, the passcode is reset to contain zero digits
+    pub fn clear(&mut self) -> UserInput {
+        self.count = 0;
+
+        UserInput::passkey_clear()
+    }
+
+    /// Passcode Completed
+    ///
+    /// # Error
+    /// The passcode must be a complete six digit number.
+    pub fn complete(self) -> Result<UserInput, PasskeyError> {
+        if self.count != 6 {
+            return Err(PasskeyError::PasskeyIncomplete);
         }
-    }
 
-    pub fn get_mut_source(&mut self) -> &mut T {
-        &mut self.source
-    }
+        let (_, val) = self
+            .passkey
+            .into_iter()
+            .rev()
+            .fold((1, 0), |(mul, sum), digit| (mul * 10, sum + digit.to_digit(10) * mul));
 
-    pub fn get_key_count(&self) -> usize {
-        self.current
-    }
-}
-
-/// Output for the Security Manager
-///
-/// `Output` is used to provide a display or other means to output information to the device user.
-pub trait Output {
-    fn can_write() -> bool;
-
-    type Error;
-    type WriteFuture<'a>: Future<Output = Result<(), Self::Error>>
-    where
-        Self: 'a;
-
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteFuture<'a>;
-}
-
-impl<T, F, E> Output for T
-where
-    T: FnMut(&[u8]) -> F,
-    F: Future<Output = Result<(), E>>,
-{
-    fn can_write() -> bool {
-        true
-    }
-
-    type Error = E;
-    type WriteFuture<'a> = F where T: 'a;
-
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteFuture<'a> {
-        self(buf)
+        Ok(UserInput::passkey_complete(val))
     }
 }
 
-#[cfg(feature = "std")]
-impl Output for std::io::Stdout {
-    fn can_write() -> bool {
-        true
-    }
-
-    type Error = std::io::Error;
-    type WriteFuture<'a> = std::future::Ready<Result<(), Self::Error>>;
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteFuture<'a> {
-        use std::io::Write;
-
-        std::future::ready(self.write_all(buf))
-    }
-}
-
-/// Marker type for unsupported [`Input`] or [`Output`]
-pub type Unsupported = ();
-
-impl YesNoInput for Unsupported {
-    type Error = core::convert::Infallible;
-    type YesNoFuture<'a> = core::future::Pending<Result<bool, Self::Error>>;
-    fn can_read() -> bool {
-        false
-    }
-    fn read(&mut self, _: CompareValue) -> Self::YesNoFuture<'_> {
-        unreachable!()
-    }
-}
-
-impl KeyboardInput for Unsupported {
-    type Error = core::convert::Infallible;
-    type KeypressFuture<'a> = core::future::Pending<Result<KeyInput, Self::Error>>;
-
-    fn can_read() -> bool {
-        false
-    }
-
-    fn next(&mut self, _: InputKind) -> Self::KeypressFuture<'_> {
-        unreachable!()
-    }
-}
-
-impl Output for Unsupported {
-    fn can_write() -> bool {
-        false
-    }
-
-    type Error = core::convert::Infallible;
-    type WriteFuture<'a> = core::future::Pending<Result<(), Self::Error>>;
-    fn write<'a>(&'a mut self, _: &'a [u8]) -> Self::WriteFuture<'a> {
-        unreachable!()
-    }
-}
-
-#[derive(Clone)]
-pub enum KeyboardError<E> {
+/// Passkey error
+#[derive(Clone, Debug)]
+pub enum PasskeyError {
     UnexpectedYesOrNo,
     ExpectedYesOrNo,
     NotADigit(char),
     TooManyKeys(char),
-    InvalidErasurePosition(usize),
-    Impl(E),
+    InvalidKeyPosition(usize),
+    PasskeyIncomplete,
 }
 
-impl<E> From<E> for KeyboardError<E> {
-    fn from(e: E) -> Self {
-        KeyboardError::Impl(e)
-    }
-}
-
-impl<E> core::fmt::Debug for KeyboardError<E>
-where
-    E: core::fmt::Debug,
-{
+impl core::fmt::Display for PasskeyError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            KeyboardError::UnexpectedYesOrNo => f.write_str("UnexpectedYesOrNo"),
-            KeyboardError::ExpectedYesOrNo => f.write_str("ExpectedYesOrNo"),
-            KeyboardError::NotADigit(c) => write!(f, "NotADigit({})", c),
-            KeyboardError::TooManyKeys(c) => write!(f, "TooManyKeys({})", c),
-            KeyboardError::InvalidErasurePosition(p) => write!(f, "InvalidErasurePosition({})", p),
-            KeyboardError::Impl(e) => core::fmt::Debug::fmt(e, f),
-        }
-    }
-}
-
-impl<E> core::fmt::Display for KeyboardError<E>
-where
-    E: core::fmt::Display,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            KeyboardError::UnexpectedYesOrNo => f.write_str("expected passkey digit, not yes or no"),
-            KeyboardError::ExpectedYesOrNo => f.write_str("expected yes or no, not a passkey digit"),
-            KeyboardError::NotADigit(c) => write!(f, "non-digit entered in passkey ({})", c),
-            KeyboardError::TooManyKeys(c) => write!(f, "too many keys entered for passkey ({})", c),
-            KeyboardError::InvalidErasurePosition(p) => write!(f, "cannot erase key at position ({})", p),
-            KeyboardError::Impl(e) => core::fmt::Display::fmt(e, f),
+            PasskeyError::UnexpectedYesOrNo => f.write_str("expected passkey digit, not yes or no"),
+            PasskeyError::ExpectedYesOrNo => f.write_str("expected yes or no, not a passkey digit"),
+            PasskeyError::NotADigit(c) => write!(f, "non-digit entered in passkey ({})", c),
+            PasskeyError::TooManyKeys(c) => write!(f, "too many keys entered for passkey ({})", c),
+            PasskeyError::InvalidKeyPosition(p) => write!(f, "cannot erase key at position ({})", p),
+            PasskeyError::PasskeyIncomplete => f.write_str("full passkey not entered"),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl<E> std::error::Error for KeyboardError<E> where E: std::error::Error {}
+impl std::error::Error for PasskeyError {}
 
-/// The compare value used for number comparison
-pub struct CompareValue(pub(crate) u32);
+/// Output of a Passkey
+///
+/// This is returned by a Security Manager whenever a passkey is generated by it. The user will then
+/// input the passkey on the other device.
+///
+/// The compare value can be displayed to the user using the [`Display`] trait (this also means it
+/// implements [`ToString`]).
+///
+/// ```
+/// # use bo_tie_sm::io::PasskeyOutput;
+///
+/// fn display_passkey(p: PasskeyOutput) {
+///     println!("please enter this passkey on the other device: {}", p);
+/// }
+/// ```
+pub struct PasskeyOutput(u32);
 
-impl core::fmt::Display for CompareValue {
+impl core::fmt::Display for PasskeyOutput {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "{:06}", self.0 % 1_000_000)
+        write!(f, "{:06}", self.0 % 999_999)
     }
 }
