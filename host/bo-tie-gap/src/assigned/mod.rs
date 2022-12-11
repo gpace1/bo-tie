@@ -19,6 +19,7 @@ pub mod le_role;
 pub mod local_name;
 pub mod sc_confirm_value;
 pub mod sc_random_value;
+pub mod security_manager_tk_value;
 pub mod service_data;
 pub mod service_uuids;
 
@@ -360,8 +361,7 @@ impl std::error::Error for ConvertError {}
 /// A wrapper around an EIR or AD structure
 ///
 /// There is no functional difference between an EIR struct and an AD struct, but they are used
-/// in different places within the Bluetooth specification and consequently within `bo-tie`. When
-/// used, these places have provided an alias to this as either an EIR struct or an AD struct.
+/// in different places within the Bluetooth Specification and consequently within `bo-tie`.
 #[derive(Clone, Copy, Debug)]
 pub struct EirOrAdStruct<'a>(&'a [u8]);
 
@@ -393,6 +393,11 @@ impl<'a> EirOrAdStruct<'a> {
     /// This returns the EIR or AD type.
     pub fn get_type(&self) -> u8 {
         self.0[1]
+    }
+
+    /// Check if the EIR or AD type matches an assigned type
+    pub fn is_assigned_type(&self, assigned_type: AssignedTypes) -> bool {
+        self.get_type() == assigned_type.get_type()
     }
 
     /// Get the data bytes
@@ -437,12 +442,8 @@ impl<'a> EirOrAdStruct<'a> {
 ///
 /// This is used to iterate over a contiguous series of either EIR or AD structures.
 ///
-/// The iterator will stop if it a structure if there is no more data or a length field is zero
-/// (which is used to indicate an early termination).
-///
-/// # Note: OOB data block
-/// An OOB data block contain more data than just a series of EIR structures. Be sure to only
-/// include the part that contains EIR structures when creating a `EirOrAdIterator`.
+/// The iterator will stop if when there is no more data or a length field is zero (which is used to
+/// indicate an early termination).
 #[derive(Clone, Copy, Debug)]
 pub struct EirOrAdIterator<'a>(&'a [u8]);
 
