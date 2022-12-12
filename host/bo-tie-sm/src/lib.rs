@@ -207,7 +207,7 @@ impl std::error::Error for Error {}
 pub enum SecurityManagerError<Y, K> {
     Error(Error),
     YesNoInput(Y),
-    KeyboardInput(io::KeyboardError<K>),
+    KeyboardInput(io::PasskeyError<K>),
 }
 
 impl<Y, K> From<Error> for SecurityManagerError<Y, K> {
@@ -291,7 +291,7 @@ where
 /// builder.
 pub trait AuthenticationCapabilities {
     type YesNoInput: io::YesNoInput;
-    type PasskeyInput: io::KeyboardInput;
+    type KeyboardInput: io::KeyboardInput;
     type Output: io::Output;
     type OobSender: for<'a> oob::OutOfBandSend<'a>;
     type OobReceiver: oob::OobReceiverType;
@@ -300,8 +300,8 @@ pub trait AuthenticationCapabilities {
         <Self::YesNoInput as io::YesNoInput>::can_read()
     }
 
-    fn has_passkey_input() -> bool {
-        <Self::PasskeyInput as io::KeyboardInput>::can_read()
+    fn has_keyboard_input() -> bool {
+        <Self::KeyboardInput as io::KeyboardInput>::can_read()
     }
 
     fn has_output() -> bool {
@@ -316,9 +316,15 @@ pub trait AuthenticationCapabilities {
         <Self::OobReceiver as oob::sealed_receiver_type::SealedTrait>::can_receive()
     }
 
-    fn get_mut_yes_no_input(&mut self) -> &mut Self::YesNoInput;
+    fn yes_no_input(
+        &mut self,
+        compare_value: io::CompareValue,
+    ) -> YesNoInputFuture<
+        <Self::YesNoInput as io::YesNoInput>::YesNoFuture<'_>,
+        <Self::KeyboardInput as io::KeyboardInput>::KeypressFuture<'_>,
+    >;
 
-    fn get_mut_passkey_input(&mut self) -> &mut UserKeyboardInput<Self::PasskeyInput>;
+    fn passkey_input(&mut self) -> &mut io::UserKeyboardInput<Self::KeyboardInput>;
 
     fn get_mut_output(&mut self) -> &mut Self::Output;
 
@@ -330,7 +336,7 @@ pub trait AuthenticationCapabilities {
 /// Type used to contain the Authentication functionality  
 struct Authentication<Y, K, O, S, R> {
     yes_no_input: Y,
-    passkey_input: UserKeyboardInput<K>,
+    keyboard_input: io::UserKeyboardInput<K>,
     output: O,
     oob_sender: S,
     oob_receiver: R,
@@ -345,17 +351,39 @@ where
     R: oob::OobReceiverType,
 {
     type YesNoInput = Y;
-    type PasskeyInput = K;
+    type KeyboardInput = K;
     type Output = O;
     type OobSender = S;
     type OobReceiver = R;
 
-    fn get_mut_yes_no_input(&mut self) -> &mut Self::YesNoInput {
-        &mut self.yes_no_input
+    fn yes_no_input(
+        &mut self,
+        compare_value: io::CompareValue,
+    ) -> YesNoInputFuture<
+        <Self::YesNoInput as io::YesNoInput>::YesNoFuture<'_>,
+        <Self::KeyboardInput as io::KeyboardInput>::KeypressFuture<'_>,
+    > {
+        if Self::has_yes_no_input() {
+            YesNoInputFuture {
+                yes_no_fut: Some(self.yes_no_input.read(compare_value)),
+                keypress_fut: None,
+            }
+        } else if Self::has_keyboard_input() {
+            YesNoInputFuture {
+                yes_no_fut: None,
+                keypress_fut: Some(
+                    self.keyboard_input
+                        .get_mut_source()
+                        .next(io::InputKind::YesNo(compare_value)),
+                ),
+            }
+        } else {
+            unreachable!("yes no input called when no input set")
+        }
     }
 
-    fn get_mut_passkey_input(&mut self) -> &mut UserKeyboardInput<Self::PasskeyInput> {
-        &mut self.passkey_input
+    fn passkey_input(&mut self) -> &mut io::UserKeyboardInput<Self::KeyboardInput> {
+        &mut self.keyboard_input
     }
 
     fn get_mut_output(&mut self) -> &mut Self::Output {
@@ -368,6 +396,44 @@ where
 
     fn get_mut_oob_receiver(&mut self) -> &mut Self::OobReceiver {
         &mut self.oob_receiver
+    }
+}
+
+/// temporary future until async traits are stable
+#[doc(hidden)]
+pub struct YesNoInputFuture<Y, K> {
+    yes_no_fut: Option<Y>,
+    keypress_fut: Option<K>,
+}
+
+impl<Y, K, Ye, Ke> core::future::Future for YesNoInputFuture<Y, K>
+where
+    Y: core::future::Future<Output = Result<bool, Ye>>,
+    K: core::future::Future<Output = Result<io::KeyInput, Ke>>,
+{
+    type Output = Result<bool, SecurityManagerError<Ye, Ke>>;
+
+    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        if let Some(y) = this.yes_no_fut.as_mut() {
+            unsafe { core::pin::Pin::new_unchecked(y) }
+                .poll(cx)
+                .map(|rslt| rslt.map_err(|e| SecurityManagerError::YesNoInput(e)))
+        } else if let Some(k) = this.keypress_fut.as_mut() {
+            unsafe { core::pin::Pin::new_unchecked(k) }
+                .poll(cx)
+                .map(|rslt| match rslt {
+                    Err(e) => Err(SecurityManagerError::KeyboardInput(io::PasskeyError::Impl(e))),
+                    Ok(key_input) => match key_input {
+                        io::KeyInput::Yes => Ok(true),
+                        io::KeyInput::No => Ok(false),
+                        _ => Err(SecurityManagerError::KeyboardInput(io::PasskeyError::ExpectedYesOrNo)),
+                    },
+                })
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -538,11 +604,17 @@ where
     }
 }
 
+enum PasskeyDirection {
+    ResponderDisplaysInitiatorInputs,
+    InitiatorDisplaysResponderInputs,
+    InitiatorAndResponderInput,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PairingMethod {
     /// Out of Bound
     Oob(OobDirection),
-    PassKeyEntry,
+    PassKeyEntry(PasskeyDirection),
     JustWorks,
     /// Numeric comparison
     NumbComp,
@@ -1157,3 +1229,23 @@ fn get_keys(ltk: bool, csrk: bool) -> &'static [pairing::KeyDistributions] {
         (false, false) => &[],
     }
 }
+
+/// Error for a Security Manager Builder
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum SecurityManagerBuilderError {
+    NoPairingMethodSet,
+}
+
+impl core::fmt::Display for SecurityManagerBuilderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            SecurityManagerBuilderError::NoPairingMethodSet => f.write_str(
+                "Security Manager is configured with no pairing method, if this \
+                is the intended operation then do not use a Security Manager",
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for SecurityManagerBuilderError {}

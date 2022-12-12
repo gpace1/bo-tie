@@ -778,6 +778,7 @@ impl From<PairingDHKeyCheck> for Command<PairingDHKeyCheck> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub enum KeyPressNotification {
     PasskeyEntryStarted,
     PasskeyDigitEntered,

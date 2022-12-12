@@ -105,6 +105,7 @@ use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
 use crate::oob::{ExternalOobReceiver, OobDirection, OobReceiverType};
 use crate::{EnabledBondingKeysBuilder, IdentityAddress};
 use alloc::vec::Vec;
+use bo_tie_util::buffer::stack::LinearBuffer;
 
 pub struct SecurityManagerBuilder<S, R> {
     io_capabilities: pairing::IOCapability,
@@ -323,11 +324,7 @@ impl<S, R> SecurityManagerBuilder<S, R> {
         S: OutOfBandSend<'a>,
         R: OobReceiverType,
     {
-        let auth_req = alloc::vec![
-            encrypt_info::AuthRequirements::Bonding,
-            encrypt_info::AuthRequirements::ManInTheMiddleProtection,
-            encrypt_info::AuthRequirements::Sc,
-        ];
+        let auth_req = LinearBuffer::new();
 
         let initiator_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
 
@@ -608,7 +605,7 @@ where
 
             Err(Error::PairingFailed(pairing::PairingFailedReason::EncryptionKeySize))
         } else {
-            let pairing_method = PairingMethod::determine_method_secure_connection(
+            let pairing_method = PairingMethod::determine_method(
                 self.pairing_request.get_oob_data_flag(),
                 response.get_oob_data_flag(),
                 self.pairing_request.get_io_capability(),
@@ -895,6 +892,7 @@ where
         };
 
         self.keys = Some(super::Keys {
+            is_authenticated: todo!(),
             ltk: ltk.into(),
             csrk: None,
             irk: None,
