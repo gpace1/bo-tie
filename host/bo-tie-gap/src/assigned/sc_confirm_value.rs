@@ -26,6 +26,10 @@ impl ScConfirmValue {
     pub fn new(c: u128) -> Self {
         ScConfirmValue(c)
     }
+
+    pub fn into_inner(self) -> u128 {
+        self.0
+    }
 }
 
 impl IntoStruct for ScConfirmValue {

@@ -22,6 +22,10 @@ impl ScRandomValue {
     pub fn new(r: u128) -> Self {
         ScRandomValue(r)
     }
+
+    pub fn into_inner(self) -> u128 {
+        self.0
+    }
 }
 
 impl IntoStruct for ScRandomValue {
