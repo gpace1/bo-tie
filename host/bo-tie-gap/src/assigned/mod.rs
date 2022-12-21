@@ -680,3 +680,14 @@ impl SequenceVec {
         self.0
     }
 }
+
+impl<T> From<T> for SequenceVec
+where
+    T: core::borrow::Borrow<[u8]>,
+{
+    fn from(val: T) -> Self {
+        let vec = val.borrow().to_vec();
+
+        SequenceVec(vec)
+    }
+}
