@@ -528,10 +528,20 @@ pub struct Sequence<'a> {
 }
 
 impl<'a> Sequence<'a> {
+    /// Create a new `Sequence`
     pub fn new(buffer: &'a mut [u8]) -> Self {
         let len = 0;
 
         Sequence { len, buffer }
+    }
+
+    /// Get the number of bytes containing EIR or AD structures
+    ///
+    /// This returns the number of bytes used to contain the EIR or AD structures added to the
+    /// `Sequence`. Calling the method `len` will just return the length of the buffer used to
+    /// create the `Sequence`.
+    pub fn count(&self) -> usize {
+        self.len
     }
 
     /// Try to a a fully sized structure
