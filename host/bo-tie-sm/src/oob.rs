@@ -12,14 +12,12 @@ use bo_tie_gap::assigned::{AssignedTypes, ConvertError, EirOrAdStruct, Sequence}
 use bo_tie_util::buffer::stack::LinearBuffer;
 use bo_tie_util::BluetoothDeviceAddress;
 
-/// Supported direction of OOB
+/// Direction of Out Of Band Data
 ///
-/// Most of the time the user is going to use `BothSendOob` with is used to indicate that both
-/// sending and receiving of OOB data is sported. However if one of the methods cannot be done as
-/// the OOB data is sent unidirectional, `OnlyResponderSendsOob` is used for OOB data sent from the
-/// responder to the initiator, and `OnlyInitiatorSendsOob` is used for the opposite data direction.
+/// OOB data can be sent from either both Security Managers or just one of them. This is used to
+/// indicate the direction of which out of band data is sent between the two Security Managers.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum OobDirection {
+pub enum OobDirection {
     OnlyResponderSendsOob,
     OnlyInitiatorSendsOob,
     BothSendOob,
