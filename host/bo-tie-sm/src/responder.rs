@@ -158,8 +158,8 @@ macro_rules! passkey_r {
 pub struct SecurityManagerBuilder {
     encryption_key_min: usize,
     encryption_key_max: usize,
-    remote_address: crate::BluetoothDeviceAddress,
-    this_address: crate::BluetoothDeviceAddress,
+    remote_address: BluetoothDeviceAddress,
+    this_address: BluetoothDeviceAddress,
     remote_address_is_random: bool,
     this_address_is_random: bool,
     enable_just_works: bool,
@@ -179,8 +179,8 @@ pub struct SecurityManagerBuilder {
 impl SecurityManagerBuilder {
     /// Create a new `SlaveSecurityManagerBuilder`
     pub fn new(
-        connected_device_address: crate::BluetoothDeviceAddress,
-        this_device_address: crate::BluetoothDeviceAddress,
+        connected_device_address: BluetoothDeviceAddress,
+        this_device_address: BluetoothDeviceAddress,
         is_connected_devices_address_random: bool,
         is_this_device_address_random: bool,
     ) -> Self {
