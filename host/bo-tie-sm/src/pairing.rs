@@ -6,7 +6,7 @@ use bo_tie_util::buffer::stack::LinearBuffer;
 
 fn convert_io_cap(
     auth_req: &[encrypt_info::AuthRequirements],
-    oob_flag: pairing::OOBDataFlag,
+    oob_flag: pairing::OobDataFlag,
     io_cap: pairing::IOCapability,
 ) -> [u8; 3] {
     [
@@ -32,7 +32,7 @@ pub enum IOCapability {
 }
 
 impl IOCapability {
-    pub(super) fn into_val(self) -> u8 {
+    pub(crate) fn into_val(self) -> u8 {
         match self {
             IOCapability::DisplayOnly => 0x0,
             IOCapability::DisplayWithYesOrNo => 0x1,
@@ -53,20 +53,11 @@ impl IOCapability {
         }
     }
 
-    /// Map the input and output capabilities
-    ///
-    /// ```
-    /// # use bo_tie_sm::pairing::IOCapability;
-    ///
-    /// assert_eq!(IOCapability::DisplayOnly, IOCapability::map(false, false, true))
-    /// ```
-    pub fn map(yes_no: bool, keyboard: bool, display: bool) -> IOCapability {
-        match (yes_no, keyboard, display) {
-            (_, true, true) => IOCapability::KeyboardDisplay,
-            (true, false, true) => IOCapability::DisplayWithYesOrNo,
-            (false, false, true) => IOCapability::DisplayOnly,
-            (false, true, false) => IOCapability::KeyboardOnly,
-            _ => IOCapability::NoInputNoOutput,
+    pub fn no_io_capability(self) -> bool {
+        if let IOCapability::NoInputNoOutput = self {
+            true
+        } else {
+            false
         }
     }
 }
@@ -78,23 +69,23 @@ impl IOCapability {
 /// `AuthenticationDataFromRemoteDevicePresent` means that authentication data can be received. This
 /// flag is used internally within the security manager.
 #[derive(Debug, Clone, Copy)]
-pub enum OOBDataFlag {
+pub enum OobDataFlag {
     AuthenticationDataNotPresent,
     AuthenticationDataFromRemoteDevicePresent,
 }
 
-impl OOBDataFlag {
+impl OobDataFlag {
     pub(super) fn into_val(self) -> u8 {
         match self {
-            OOBDataFlag::AuthenticationDataNotPresent => 0x0,
-            OOBDataFlag::AuthenticationDataFromRemoteDevicePresent => 0x1,
+            OobDataFlag::AuthenticationDataNotPresent => 0x0,
+            OobDataFlag::AuthenticationDataFromRemoteDevicePresent => 0x1,
         }
     }
 
     fn try_from_val(val: u8) -> Result<Self, Error> {
         match val {
-            0x0 => Ok(OOBDataFlag::AuthenticationDataNotPresent),
-            0x1 => Ok(OOBDataFlag::AuthenticationDataFromRemoteDevicePresent),
+            0x0 => Ok(OobDataFlag::AuthenticationDataNotPresent),
+            0x1 => Ok(OobDataFlag::AuthenticationDataFromRemoteDevicePresent),
             _ => Err(Error::Value),
         }
     }
@@ -104,7 +95,7 @@ impl OOBDataFlag {
 ///
 /// See the security manager key distribution and generation section of the Bluetooth
 /// Specification (v5.0 | vol 3, Part H, section 3.6.1)
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KeyDistributions {
     EncKey,
     IdKey,
@@ -140,7 +131,7 @@ const MAX_ENCRYPTION_SIZE_RANGE: core::ops::RangeInclusive<usize> = 7..=16;
 #[derive(Clone)]
 pub struct PairingRequest {
     io_capability: IOCapability,
-    oob_data_flag: OOBDataFlag,
+    oob_data_flag: OobDataFlag,
     auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
     max_encryption_size: usize,
     initiator_key_distribution: &'static [KeyDistributions],
@@ -175,7 +166,7 @@ impl CommandData for PairingRequest {
         if icd.len() == 6 {
             Ok(Self {
                 io_capability: IOCapability::try_from_val(icd[0])?,
-                oob_data_flag: OOBDataFlag::try_from_val(icd[1])?,
+                oob_data_flag: OobDataFlag::try_from_val(icd[1])?,
                 auth_req: AuthRequirements::from_val(icd[2]),
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
                     icd[3] as usize
@@ -197,7 +188,7 @@ impl CommandData for PairingRequest {
 impl PairingRequest {
     pub fn new(
         io_capability: IOCapability,
-        oob_data_flag: OOBDataFlag,
+        oob_data_flag: OobDataFlag,
         auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
         max_encryption_size: usize,
         initiator_key_distribution: &'static [KeyDistributions],
@@ -218,7 +209,7 @@ impl PairingRequest {
         self.io_capability
     }
 
-    pub fn get_oob_data_flag(&self) -> OOBDataFlag {
+    pub fn get_oob_data_flag(&self) -> OobDataFlag {
         self.oob_data_flag
     }
 
@@ -307,7 +298,7 @@ impl From<PairingRequest> for Command<PairingRequest> {
 
 pub struct PairingResponse {
     io_capability: IOCapability,
-    oob_data_flag: OOBDataFlag,
+    oob_data_flag: OobDataFlag,
     auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
     max_encryption_size: usize,
     initiator_key_distribution: &'static [KeyDistributions],
@@ -341,7 +332,7 @@ impl CommandData for PairingResponse {
         if icd.len() == 6 {
             Ok(Self {
                 io_capability: IOCapability::try_from_val(icd[0])?,
-                oob_data_flag: OOBDataFlag::try_from_val(icd[1])?,
+                oob_data_flag: OobDataFlag::try_from_val(icd[1])?,
                 auth_req: AuthRequirements::from_val(icd[2]),
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
                     icd[3] as usize
@@ -363,7 +354,7 @@ impl CommandData for PairingResponse {
 impl PairingResponse {
     pub fn new(
         io_capability: IOCapability,
-        oob_data_flag: OOBDataFlag,
+        oob_data_flag: OobDataFlag,
         auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
         max_encryption_size: usize,
         initiator_key_distribution: &'static [KeyDistributions],
@@ -384,7 +375,7 @@ impl PairingResponse {
         self.io_capability
     }
 
-    pub fn get_oob_data_flag(&self) -> OOBDataFlag {
+    pub fn get_oob_data_flag(&self) -> OobDataFlag {
         self.oob_data_flag
     }
 

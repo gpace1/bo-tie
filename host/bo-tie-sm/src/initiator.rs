@@ -96,7 +96,6 @@ use bo_tie_sm::responder::SecurityManagerBuilder;
 //!     .build()
 //! # ;
 //! ```
-use super::oob::OutOfBandSend;
 use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
 };

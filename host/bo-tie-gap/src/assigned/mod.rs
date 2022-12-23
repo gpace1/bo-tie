@@ -397,7 +397,7 @@ impl<'a> EirOrAdStruct<'a> {
 
     /// Check if the EIR or AD type matches an assigned type
     pub fn is_assigned_type(&self, assigned_type: AssignedTypes) -> bool {
-        self.get_type() == assigned_type.get_type()
+        self.get_type() == assigned_type.val()
     }
 
     /// Get the data bytes

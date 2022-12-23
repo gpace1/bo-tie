@@ -111,6 +111,7 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 extern crate alloc;
+extern crate core;
 
 use alloc::vec::Vec;
 
@@ -118,14 +119,11 @@ pub use bo_tie_l2cap as l2cap;
 pub use bo_tie_util::BluetoothDeviceAddress;
 
 use l2cap::BasicInfoFrame;
-use oob::OobDirection;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 pub mod encrypt_info;
 pub mod initiator;
-pub mod io;
-pub mod oob;
 pub mod pairing;
 pub mod responder;
 pub mod toolbox;
@@ -159,21 +157,13 @@ pub enum Error {
     IncorrectCommand(CommandType),
     /// Feature is unsupported
     UnsupportedFeature,
-    /// Pairing Failed
-    PairingFailed(pairing::PairingFailedReason),
     /// The operation required encryption, but it is unknown if the connection is encrypted. The
     /// security manager must be told that a link is encrypted with the method `set_encrypted`.
     UnknownIfLinkIsEncrypted,
     /// Incorrect L2CAP channel ID
     IncorrectL2capChannelId,
-    /// Send related error
-    DataSend(alloc::string::String),
     /// ACL Data related
     ACLData(l2cap::BasicFrameError<core::convert::Infallible>), // temporarily using infallible
-    /// Out of band data was not provided to the Security Manager via the `received_oob_data`
-    /// method of either the initiator or responder security manager before continuing the process
-    /// of pairing.
-    ExternalOobNotProvided,
     /// The operation requires this device to be paired with the connected device.
     OperationRequiresPairing,
 }
@@ -186,14 +176,11 @@ impl core::fmt::Display for Error {
             Error::Value => f.write_str("value"),
             Error::IncorrectCommand(c) => write!(f, "incorrect command: {}", c),
             Error::UnsupportedFeature => f.write_str("unsupported feature"),
-            Error::PairingFailed(reason) => write!(f, "pairing failed: {}", reason),
             Error::UnknownIfLinkIsEncrypted => f.write_str("unknown if connection is encrypted"),
             Error::IncorrectL2capChannelId => {
                 f.write_str("incorrect channel identifier for the security manager protocol")
             }
-            Error::DataSend(e) => write!(f, "failed to send data: {}", e),
             Error::ACLData(e) => write!(f, "invalid ACL basic frame: {}", e),
-            Error::ExternalOobNotProvided => f.write_str("external out of band data not provided"),
             Error::OperationRequiresPairing => f.write_str("operation requires pairing"),
         }
     }
@@ -202,238 +189,27 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-/// Errors specific to a Security Manager
-#[derive(Clone)]
-pub enum SecurityManagerError<Y, K> {
+#[derive(Debug)]
+pub enum SecurityManagerError<S> {
     Error(Error),
-    YesNoInput(Y),
-    KeyboardInput(io::PasskeyError<K>),
+    Sender(S),
 }
 
-impl<Y, K> From<Error> for SecurityManagerError<Y, K> {
-    fn from(e: Error) -> Self {
-        SecurityManagerError::Error(e)
-    }
-}
-
-impl<Y, K> core::fmt::Debug for SecurityManagerError<Y, K>
+impl<S> core::fmt::Display for SecurityManagerError<S>
 where
-    Y: core::fmt::Debug,
-    K: core::fmt::Debug,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            SecurityManagerError::Error(e) => core::fmt::Debug::fmt(e, f),
-            SecurityManagerError::YesNoInput(y) => core::fmt::Debug::fmt(y, f),
-            SecurityManagerError::KeyboardInput(k) => core::fmt::Debug::fmt(k, f),
-        }
-    }
-}
-
-impl<Y, K> core::fmt::Display for SecurityManagerError<Y, K>
-where
-    Y: core::fmt::Display,
-    K: core::fmt::Display,
+    S: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             SecurityManagerError::Error(e) => core::fmt::Display::fmt(e, f),
-            SecurityManagerError::YesNoInput(y) => core::fmt::Display::fmt(y, f),
-            SecurityManagerError::KeyboardInput(k) => core::fmt::Display::fmt(k, f),
+            SecurityManagerError::Sender(s) => core::fmt::Display::fmt(s, f),
         }
     }
 }
 
-#[cfg(feature = "std")]
-impl<Y, K> std::error::Error for SecurityManagerError<Y, K>
-where
-    Y: std::error::Error,
-    K: std::error::Error,
-{
-}
-
-/// Authentication Capabilities used by a Security Manager
-///
-/// Authentication requires the usage of features that are out of scope of this Security Manager
-/// implementation. This trait is a container of the types used for setting the out of scope
-/// functionality required to enable pairing methods that also provide authentication.
-///
-/// ### Associated Types
-/// When a Security Manager builder in this library is created, the associated types are set to a
-/// 'Unsupported' type. This can be changed in a builder when calling the method associated with the
-/// specific type.
-///
-/// ### Input
-/// If this is set to a type that can facilitate input of `char`s from the application user, then
-/// the Security Manager will have the capability of at least 'input' for the purposes of
-/// determining a pairing method.
-///
-/// The *input* can be set by calling `set_input` on a Security Manager builder.
-///
-/// ### Output
-/// If this is set to a type that can facilitate output of a `char`s from a Security Manager to the
-/// user, then the Security Manager will have the capability of at least 'output' for the purposes
-/// of determining a pairing method.
-///
-/// The *output* can be set by calling `set_output` on a Security Manager builder.
-///
-/// ### OobSender
-/// If this is set to a type that can facilitate the sending of Security Manager out of band data,
-/// then the Security Manager will have the capability to send out of band data.
-///
-/// The *out of band sender* can be set by calling `set_oob_sender` on a Security Manager builder.
-///
-/// ### OobReceiver
-/// If this is set to a type that can facilitate the receiving of Security Manager out of band data,
-/// then the Security Manager will have the capability to receive out of band data.
-///
-/// The *out of band receiver* can be set by calling `set_oob_receiver` on a Security Manager
-/// builder.
-pub trait AuthenticationCapabilities {
-    type YesNoInput: io::YesNoInput;
-    type KeyboardInput: io::KeyboardInput;
-    type Output: io::Output;
-    type OobSender: for<'a> oob::OutOfBandSend<'a>;
-    type OobReceiver: oob::OobReceiverType;
-
-    fn has_yes_no_input() -> bool {
-        <Self::YesNoInput as io::YesNoInput>::can_read()
-    }
-
-    fn has_keyboard_input() -> bool {
-        <Self::KeyboardInput as io::KeyboardInput>::can_read()
-    }
-
-    fn has_output() -> bool {
-        <Self::Output as io::Output>::can_write()
-    }
-
-    fn has_oob_send() -> bool {
-        <Self::OobSender as oob::OutOfBandSend>::can_send()
-    }
-
-    fn has_oob_receive() -> bool {
-        <Self::OobReceiver as oob::sealed_receiver_type::SealedTrait>::can_receive()
-    }
-
-    fn yes_no_input(
-        &mut self,
-        compare_value: io::CompareValue,
-    ) -> YesNoInputFuture<
-        <Self::YesNoInput as io::YesNoInput>::YesNoFuture<'_>,
-        <Self::KeyboardInput as io::KeyboardInput>::KeypressFuture<'_>,
-    >;
-
-    fn passkey_input(&mut self) -> &mut io::UserKeyboardInput<Self::KeyboardInput>;
-
-    fn get_mut_output(&mut self) -> &mut Self::Output;
-
-    fn get_mut_oob_sender(&mut self) -> &mut Self::OobSender;
-
-    fn get_mut_oob_receiver(&mut self) -> &mut Self::OobReceiver;
-}
-
-/// Type used to contain the Authentication functionality  
-struct Authentication<Y, K, O, S, R> {
-    yes_no_input: Y,
-    keyboard_input: io::UserKeyboardInput<K>,
-    output: O,
-    oob_sender: S,
-    oob_receiver: R,
-}
-
-impl<Y, K, O, S, R> AuthenticationCapabilities for Authentication<Y, K, O, S, R>
-where
-    Y: io::YesNoInput,
-    K: io::KeyboardInput,
-    O: io::Output,
-    S: for<'a> oob::OutOfBandSend<'a>,
-    R: oob::OobReceiverType,
-{
-    type YesNoInput = Y;
-    type KeyboardInput = K;
-    type Output = O;
-    type OobSender = S;
-    type OobReceiver = R;
-
-    fn yes_no_input(
-        &mut self,
-        compare_value: io::CompareValue,
-    ) -> YesNoInputFuture<
-        <Self::YesNoInput as io::YesNoInput>::YesNoFuture<'_>,
-        <Self::KeyboardInput as io::KeyboardInput>::KeypressFuture<'_>,
-    > {
-        if Self::has_yes_no_input() {
-            YesNoInputFuture {
-                yes_no_fut: Some(self.yes_no_input.read(compare_value)),
-                keypress_fut: None,
-            }
-        } else if Self::has_keyboard_input() {
-            YesNoInputFuture {
-                yes_no_fut: None,
-                keypress_fut: Some(
-                    self.keyboard_input
-                        .get_mut_source()
-                        .next(io::InputKind::YesNo(compare_value)),
-                ),
-            }
-        } else {
-            unreachable!("yes no input called when no input set")
-        }
-    }
-
-    fn passkey_input(&mut self) -> &mut io::UserKeyboardInput<Self::KeyboardInput> {
-        &mut self.keyboard_input
-    }
-
-    fn get_mut_output(&mut self) -> &mut Self::Output {
-        &mut self.output
-    }
-
-    fn get_mut_oob_sender(&mut self) -> &mut Self::OobSender {
-        &mut self.oob_sender
-    }
-
-    fn get_mut_oob_receiver(&mut self) -> &mut Self::OobReceiver {
-        &mut self.oob_receiver
-    }
-}
-
-/// temporary future until async traits are stable
-#[doc(hidden)]
-pub struct YesNoInputFuture<Y, K> {
-    yes_no_fut: Option<Y>,
-    keypress_fut: Option<K>,
-}
-
-impl<Y, K, Ye, Ke> core::future::Future for YesNoInputFuture<Y, K>
-where
-    Y: core::future::Future<Output = Result<bool, Ye>>,
-    K: core::future::Future<Output = Result<io::KeyInput, Ke>>,
-{
-    type Output = Result<bool, SecurityManagerError<Ye, Ke>>;
-
-    fn poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::Context) -> core::task::Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-
-        if let Some(y) = this.yes_no_fut.as_mut() {
-            unsafe { core::pin::Pin::new_unchecked(y) }
-                .poll(cx)
-                .map(|rslt| rslt.map_err(|e| SecurityManagerError::YesNoInput(e)))
-        } else if let Some(k) = this.keypress_fut.as_mut() {
-            unsafe { core::pin::Pin::new_unchecked(k) }
-                .poll(cx)
-                .map(|rslt| match rslt {
-                    Err(e) => Err(SecurityManagerError::KeyboardInput(io::PasskeyError::Impl(e))),
-                    Ok(key_input) => match key_input {
-                        io::KeyInput::Yes => Ok(true),
-                        io::KeyInput::No => Ok(false),
-                        _ => Err(SecurityManagerError::KeyboardInput(io::PasskeyError::ExpectedYesOrNo)),
-                    },
-                })
-        } else {
-            unreachable!()
-        }
+impl<S> From<Error> for SecurityManagerError<S> {
+    fn from(e: Error) -> Self {
+        SecurityManagerError::Error(e)
     }
 }
 
@@ -604,6 +380,11 @@ where
     }
 }
 
+/// Direction of the passkey
+///
+/// Either both devices enter a passkey or one device displays the passkey and the other device
+/// enters the passkey.
+#[derive(Debug, Clone, Copy)]
 enum PasskeyDirection {
     ResponderDisplaysInitiatorInputs,
     InitiatorDisplaysResponderInputs,
@@ -628,15 +409,15 @@ impl PairingMethod {
     /// `is_legacy` must be false as the security manager doesn't support legacy. It is only left
     /// here in case that changes (which is unlikely).
     fn determine_method(
-        initiator_oob_data: pairing::OOBDataFlag,
-        responder_oob_data: pairing::OOBDataFlag,
+        initiator_oob_data: pairing::OobDataFlag,
+        responder_oob_data: pairing::OobDataFlag,
         initiator_io_capability: pairing::IOCapability,
         responder_io_capability: pairing::IOCapability,
         is_legacy: bool,
     ) -> Self {
         use pairing::{
-            IOCapability::*, OOBDataFlag::AuthenticationDataFromRemoteDevicePresent as Present,
-            OOBDataFlag::AuthenticationDataNotPresent as Unavailable,
+            IOCapability::*, OobDataFlag::AuthenticationDataFromRemoteDevicePresent as Present,
+            OobDataFlag::AuthenticationDataNotPresent as Unavailable,
         };
 
         match (
@@ -700,6 +481,14 @@ impl PairingMethod {
             }
         }
     }
+
+    fn is_just_works(self) -> bool {
+        if let PairingMethod::JustWorks = self {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Data that is gathered in the process of pairing
@@ -728,23 +517,25 @@ struct PairingData {
     /// This will change multiple times for passkey, but is static for just works or number
     /// comparison
     peer_nonce: Option<u128>,
+    /// Responder Random
+    responder_random: u128,
+    /// Initiator random
+    initiator_random: u128,
     /// The public key received from the remote device
     peer_public_key: Option<toolbox::PubKey>,
     /// The Diffie-Hellman secret key generated via Elliptic Curve Crypto
     secret_key: Option<toolbox::DHSharedSecret>,
-    /// Responder pairing confirm
-    responder_pairing_confirm: Option<u128>,
+    /// The peers pairing confirm value
+    peer_confirm: Option<u128>,
     /// Mac Key
     mac_key: Option<u128>,
-    /// External OOB check
+    /// Passkey - A six digit number
+    passkey: Option<u32>,
+    /// Round of the passkey confirm checks.
     ///
-    /// This is only need for the externally provided OOB data method of a Security Manager. Because
-    /// the external process interrupts the natural sequence of pairing, this value must be provided
-    /// to make sure that the long term key calculation is not done before the confirm value sent
-    /// within the OOB data from the peer is validated. Its used as a check to verify that the user
-    /// has provided OOB data via the method `received_oob_data` and that the data was validated
-    /// before the nonce is sent to the peer device.
-    external_oob_confirm_valid: bool,
+    /// Passkey checks are done 20 times for each bit of the passkey (6 digits equates to 20 bits).
+    /// This is always a value between 0 and 20.
+    passkey_round: usize,
 }
 
 /// The identity address of an device
@@ -1231,21 +1022,51 @@ fn get_keys(ltk: bool, csrk: bool) -> &'static [pairing::KeyDistributions] {
 }
 
 /// Error for a Security Manager Builder
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum SecurityManagerBuilderError {
-    NoPairingMethodSet,
+#[derive(Copy, Clone, PartialEq)]
+pub struct SecurityManagerBuilderError;
+
+impl core::fmt::Debug for SecurityManagerBuilderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str("The Security Manager is configured with no pairing method")
+    }
 }
 
 impl core::fmt::Display for SecurityManagerBuilderError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            SecurityManagerBuilderError::NoPairingMethodSet => f.write_str(
-                "Security Manager is configured with no pairing method, if this \
-                is the intended operation then do not use a Security Manager",
-            ),
-        }
+        core::fmt::Debug::fmt(self, f)?;
+        f.write_str(", if this is the intended operation then do not use a Security Manager")
     }
 }
 
 #[cfg(feature = "std")]
 impl std::error::Error for SecurityManagerBuilderError {}
+
+/// Ability of the device for passkey entry
+#[derive(Copy, Clone)]
+enum PasskeyAbility {
+    None,
+    DisplayWithInput,
+    InputOnly,
+    DisplayOnly,
+}
+
+impl PasskeyAbility {
+    fn is_enabled(&self) -> bool {
+        if let PasskeyAbility::None = self {
+            false
+        } else {
+            true
+        }
+    }
+}
+
+/// Direction of Out Of Band Data
+///
+/// OOB data can be sent from either both Security Managers or just one of them. This is used to
+/// indicate the direction of which out of band data is sent between the two Security Managers.
+#[derive(Debug, Clone, Copy)]
+pub enum OobDirection {
+    OnlyResponderSendsOob,
+    OnlyInitiatorSendsOob,
+    BothSendOob,
+}

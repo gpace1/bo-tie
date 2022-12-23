@@ -412,6 +412,20 @@ impl PairingAddress {
     }
 }
 
+/// Method to generate a passkey
+///
+/// # Note
+/// This is not part of the Specification's 'toolbox' so its only visible to `bo-tie-sm`
+pub(crate) fn new_passkey() -> u32 {
+    use rand_core::{OsRng, RngCore};
+
+    let mut bytes = [0u8; 4];
+
+    OsRng.fill_bytes(&mut bytes);
+
+    <u32>::from_ne_bytes(bytes) % 1_000_000
+}
+
 /// Tests
 ///
 /// The much of the tests data can be retrieved from the end of the Security Manager specification,

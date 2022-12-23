@@ -249,16 +249,8 @@ impl IdentityAddressInformation {
         self.addr_type == AddressType::Public
     }
 
-    pub fn get_address(&self) -> crate::BluetoothDeviceAddress {
+    pub fn get_address(&self) -> BluetoothDeviceAddress {
         self.address
-    }
-
-    pub(super) fn as_blu_addr(&self) -> IdentityAddress {
-        if self.is_address_public() {
-            IdentityAddress::Public(self.get_address())
-        } else {
-            IdentityAddress::StaticRandom(self.get_address())
-        }
     }
 }
 
@@ -314,10 +306,6 @@ impl SigningInformation {
 
     pub fn get_signature_key(&self) -> u128 {
         self.signature_key
-    }
-
-    pub(super) fn to_new_csrk_key(&self) -> (u128, u32) {
-        (self.signature_key, 0)
     }
 }
 
