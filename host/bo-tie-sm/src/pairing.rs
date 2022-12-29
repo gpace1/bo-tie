@@ -4,7 +4,7 @@ use super::encrypt_info::AuthRequirements;
 use super::*;
 use bo_tie_util::buffer::stack::LinearBuffer;
 
-fn convert_io_cap(
+pub(crate) fn convert_io_cap(
     auth_req: &[encrypt_info::AuthRequirements],
     oob_flag: pairing::OobDataFlag,
     io_cap: pairing::IOCapability,
@@ -557,7 +557,7 @@ impl From<PairingRandom> for Command<PairingRandom> {
 #[derive(Debug, Clone, Copy)]
 pub enum PairingFailedReason {
     PasskeyEntryFailed,
-    OOBNotAvailable,
+    OobNotAvailable,
     AuthenticationRequirements,
     ConfirmValueFailed,
     PairingNotSupported,
@@ -566,7 +566,7 @@ pub enum PairingFailedReason {
     UnspecifiedReason,
     RepeatedAttempts,
     InvalidParameters,
-    DHKeyCheckFailed,
+    DhKeyCheckFailed,
     NumericComparisonFailed,
     BrEdrPairingInProgress,
     CrossTransportKeyDerivationGenerationNotAllowed,
@@ -576,7 +576,7 @@ impl PairingFailedReason {
     fn into_val(self) -> u8 {
         match self {
             PairingFailedReason::PasskeyEntryFailed => 0x1,
-            PairingFailedReason::OOBNotAvailable => 0x2,
+            PairingFailedReason::OobNotAvailable => 0x2,
             PairingFailedReason::AuthenticationRequirements => 0x3,
             PairingFailedReason::ConfirmValueFailed => 0x4,
             PairingFailedReason::PairingNotSupported => 0x5,
@@ -585,7 +585,7 @@ impl PairingFailedReason {
             PairingFailedReason::UnspecifiedReason => 0x8,
             PairingFailedReason::RepeatedAttempts => 0x9,
             PairingFailedReason::InvalidParameters => 0xa,
-            PairingFailedReason::DHKeyCheckFailed => 0xb,
+            PairingFailedReason::DhKeyCheckFailed => 0xb,
             PairingFailedReason::NumericComparisonFailed => 0xc,
             PairingFailedReason::BrEdrPairingInProgress => 0xd,
             PairingFailedReason::CrossTransportKeyDerivationGenerationNotAllowed => 0xe,
@@ -595,7 +595,7 @@ impl PairingFailedReason {
     fn try_from_val(val: u8) -> Result<Self, Error> {
         match val {
             0x1 => Ok(PairingFailedReason::PasskeyEntryFailed),
-            0x2 => Ok(PairingFailedReason::OOBNotAvailable),
+            0x2 => Ok(PairingFailedReason::OobNotAvailable),
             0x3 => Ok(PairingFailedReason::AuthenticationRequirements),
             0x4 => Ok(PairingFailedReason::ConfirmValueFailed),
             0x5 => Ok(PairingFailedReason::PairingNotSupported),
@@ -604,7 +604,7 @@ impl PairingFailedReason {
             0x8 => Ok(PairingFailedReason::UnspecifiedReason),
             0x9 => Ok(PairingFailedReason::RepeatedAttempts),
             0xa => Ok(PairingFailedReason::InvalidParameters),
-            0xb => Ok(PairingFailedReason::DHKeyCheckFailed),
+            0xb => Ok(PairingFailedReason::DhKeyCheckFailed),
             0xc => Ok(PairingFailedReason::NumericComparisonFailed),
             0xd => Ok(PairingFailedReason::BrEdrPairingInProgress),
             0xe => Ok(PairingFailedReason::CrossTransportKeyDerivationGenerationNotAllowed),
@@ -617,7 +617,7 @@ impl core::fmt::Display for PairingFailedReason {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             PairingFailedReason::PasskeyEntryFailed => f.write_str("passkey entry failed"),
-            PairingFailedReason::OOBNotAvailable => f.write_str("out of band data not available"),
+            PairingFailedReason::OobNotAvailable => f.write_str("out of band data not available"),
             PairingFailedReason::AuthenticationRequirements => f.write_str("authentication requirements not met"),
             PairingFailedReason::ConfirmValueFailed => f.write_str("confirm value check failed"),
             PairingFailedReason::PairingNotSupported => f.write_str("pairing not supported"),
@@ -626,7 +626,7 @@ impl core::fmt::Display for PairingFailedReason {
             PairingFailedReason::UnspecifiedReason => f.write_str("unspecified reason"),
             PairingFailedReason::RepeatedAttempts => f.write_str("too many attempts at pairing"),
             PairingFailedReason::InvalidParameters => f.write_str("invalid parameters"),
-            PairingFailedReason::DHKeyCheckFailed => f.write_str("Diffie Hellman key check failed"),
+            PairingFailedReason::DhKeyCheckFailed => f.write_str("Diffie Hellman key check failed"),
             PairingFailedReason::NumericComparisonFailed => f.write_str("numeric comparison failed"),
             PairingFailedReason::BrEdrPairingInProgress => f.write_str("BR/EDR pairing in progress"),
             PairingFailedReason::CrossTransportKeyDerivationGenerationNotAllowed => {
@@ -723,11 +723,11 @@ impl From<PairingPubKey> for Command<PairingPubKey> {
     }
 }
 
-pub struct PairingDHKeyCheck {
+pub struct PairingDhKeyCheck {
     check: u128,
 }
 
-impl CommandData for PairingDHKeyCheck {
+impl CommandData for PairingDhKeyCheck {
     fn into_command_format(self) -> LinearBuffer<65, u8> {
         LinearBuffer::try_from(*&self.check.to_le_bytes()).unwrap()
     }
@@ -738,7 +738,7 @@ impl CommandData for PairingDHKeyCheck {
 
             arr.copy_from_slice(icd);
 
-            Ok(PairingDHKeyCheck {
+            Ok(PairingDhKeyCheck {
                 check: <u128>::from_le_bytes(arr),
             })
         } else {
@@ -749,9 +749,9 @@ impl CommandData for PairingDHKeyCheck {
     }
 }
 
-impl PairingDHKeyCheck {
+impl PairingDhKeyCheck {
     pub fn new(check: u128) -> Self {
-        PairingDHKeyCheck { check }
+        PairingDhKeyCheck { check }
     }
 
     pub fn get_key_check(&self) -> u128 {
@@ -763,8 +763,8 @@ impl PairingDHKeyCheck {
     }
 }
 
-impl From<PairingDHKeyCheck> for Command<PairingDHKeyCheck> {
-    fn from(pkc: PairingDHKeyCheck) -> Self {
+impl From<PairingDhKeyCheck> for Command<PairingDhKeyCheck> {
+    fn from(pkc: PairingDhKeyCheck) -> Self {
         Command::new(CommandType::PairingDHKeyCheck, pkc)
     }
 }

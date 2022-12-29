@@ -109,13 +109,15 @@ use bo_tie_util::BluetoothDeviceAddress;
 
 macro_rules! error {
     ($connection_channel:ty) => {
-        crate::SecurityManagerError<bo_tie_l2cap::send_future::Error<<$connection_channel>::SendFutErr>>
+        crate::SecurityManagerError<bo_tie_l2cap::send_future::Error<
+            <$connection_channel as bo_tie_l2cap::ConnectionChannel>::SendFutErr>
+        >
     }
 }
 
 /// Used to generate the r value for passkey entry
 ///
-/// See rai/rbi toolbox function [`f4`]
+/// See rai/rbi in the toolbox function [`f4`]
 ///
 /// [`f4`]: toolbox::f4
 macro_rules! passkey_r {
@@ -128,9 +130,9 @@ macro_rules! passkey_r {
     };
 }
 
-/// A builder for a [`SlaveSecurityManager`]
+/// A builder for a [`SecurityManager`]
 ///
-/// This is used to construct a `SlaveSecurityManager`. However building requires the
+/// This is used to construct a `SecurityManager`. However building requires the
 ///
 /// ## Bonding
 /// By default, bonding is configured to be done with the peer device. If bonding support is not
@@ -230,11 +232,8 @@ impl SecurityManagerBuilder {
     /// Use GAP's Security Mode One for the Configuration of the Security Manager
     ///
     /// This method ensures that the Security Manager meets the requirements of the `level` for
-    /// Security Mode One.
-    ///
-    /// Security Mode One defines the requirements for authentication and encryption for data
-    /// transfer within a connection. This affects the pairing mode requirements of the Security
-    /// Manager for establishing encryption.
+    /// Security Mode One. Security Mode One defines the requirements for authentication and
+    /// encryption for data transfer within a connection.
     ///
     /// ### `Level1` and `Level2`
     /// Level one corresponds to no security and Level two corresponds to unauthenticated pairing.
@@ -245,14 +244,13 @@ impl SecurityManagerBuilder {
     /// If you only want to use `Level1`, then do not use a Security Manager.
     ///
     /// ### `Level3` and `Level4`
-    /// Level three and level four are equivalent for this implementation of a Security Manager, as
-    /// only Secure Connections is implemented. Level three requires authenticated pairing with
-    /// encryption, and level four requires the same security but only using LE Secure Connections.
+    /// Level three and level four are equivalent for this implementation of a Security Manager,
+    /// because only Secure Connections is implemented. Level three requires authenticated pairing
+    /// with encryption, and level four requires the same security but only using LE Secure
+    /// Connections.
     ///
     /// Both these enums disable 'just works'. This means that the method [`build`] will panic if
-    /// another pairing method is not enabled. Either [`enable_number_comparison`] or
-    /// [`enable_passcode_entry`] must be called on this builder whenever using `Level3` or
-    /// `Level4`.
+    /// another pairing method is not enabled.
     ///
     /// [`build`]: SecurityManagerBuilder::build
     /// [`enable_number_comparison`]: SecurityManagerBuilder::enable_number_comparison
@@ -269,7 +267,8 @@ impl SecurityManagerBuilder {
     /// Security Mode Two.
     ///
     /// Security Mode two defines the security aspects of signed data. For the Security Manager this
-    /// sets the requirements for how the Connection Signature Resolving Key (CSRK) is distributed
+    /// sets the requirements for how the Connection Signature Resolving Key (CSRK) is distributed.
+    /// **If a CSRK is not set to be sent or received
     ///
     /// ### Level 1
     /// No affect on the pairing requirements of the Security Manager.
@@ -888,7 +887,7 @@ impl SecurityManager {
     async fn p_command_not_supported<C>(
         &mut self,
         connection_channel: &C,
-        cmd: CommandType,
+        _cmd: CommandType,
     ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
@@ -896,7 +895,7 @@ impl SecurityManager {
         self.send_err(connection_channel, PairingFailedReason::CommandNotSupported)
             .await?;
 
-        Err(Error::IncorrectCommand(cmd).into())
+        Ok(Status::PairingFailed(PairingFailedReason::CommandNotSupported))
     }
 
     /// Process the pairing request
@@ -908,11 +907,11 @@ impl SecurityManager {
 
         let request = match pairing::PairingRequest::try_from_command_format(data) {
             Ok(request) => request,
-            Err(_) => {
+            Err(e) => {
                 self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
                     .await?;
 
-                return Err(Error::IncorrectCommand(CommandType::PairingPublicKey).into());
+                return Err(e.into());
             }
         };
 
@@ -951,8 +950,6 @@ impl SecurityManager {
 
             self.send(connection_channel, response).await?;
 
-            let (private_key, public_key) = toolbox::ecc_gen();
-
             if pairing_method.is_just_works() && !self.allow_just_works {
                 self.send_err(connection_channel, PairingFailedReason::AuthenticationRequirements)
                     .await?;
@@ -960,6 +957,8 @@ impl SecurityManager {
                 Ok(Status::PairingFailed(PairingFailedReason::AuthenticationRequirements))
             } else {
                 log::info!("(SM) pairing Method: {:?}", pairing_method);
+
+                let (private_key, public_key) = toolbox::ecc_gen();
 
                 self.pairing_data = Some(PairingData {
                     pairing_method,
@@ -974,6 +973,7 @@ impl SecurityManager {
                     responder_random: 0,
                     initiator_random: 0,
                     mac_key: None,
+                    ltk: None,
                     passkey: None,
                     peer_confirm: None,
                     passkey_round: 0,
@@ -1088,7 +1088,7 @@ impl SecurityManager {
                 self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
                     .await?;
 
-                Err(Error::IncorrectCommand(CommandType::PairingPublicKey).into())
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
@@ -1301,7 +1301,7 @@ impl SecurityManager {
     {
         log::info!("(SM) processing pairing dh key check");
 
-        let initiator_dh_key_check = match pairing::PairingDHKeyCheck::try_from_command_format(payload) {
+        let initiator_dh_key_check = match pairing::PairingDhKeyCheck::try_from_command_format(payload) {
             Ok(request) => request,
             Err(e) => {
                 self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
@@ -1313,7 +1313,6 @@ impl SecurityManager {
 
         match self.pairing_data {
             Some(PairingData {
-                ref pairing_method,
                 secret_key: Some(ref dh_key),
                 nonce,
                 peer_nonce: Some(ref peer_nonce),
@@ -1364,11 +1363,11 @@ impl SecurityManager {
                         a_addr,
                     );
 
-                    self.send(connection_channel, pairing::PairingDHKeyCheck::new(eb))
+                    self.send(connection_channel, pairing::PairingDhKeyCheck::new(eb))
                         .await?;
 
                     self.keys = super::Keys {
-                        is_authenticated: !pairing_method.is_just_works(),
+                        is_authenticated: !self.allow_just_works,
                         ltk: ltk.into(),
                         irk: None,
                         csrk: None,
@@ -1391,13 +1390,13 @@ impl SecurityManager {
 
                     Ok(Status::PairingComplete)
                 } else {
-                    self.send_err(connection_channel, PairingFailedReason::DHKeyCheckFailed)
+                    self.send_err(connection_channel, PairingFailedReason::DhKeyCheckFailed)
                         .await?;
 
                     log::trace!("(SM) received ea: {:x?}", received_ea);
                     log::trace!("(SM) calculated ea: {:x?}", ea);
 
-                    Ok(Status::PairingFailed(PairingFailedReason::DHKeyCheckFailed).into())
+                    Ok(Status::PairingFailed(PairingFailedReason::DhKeyCheckFailed).into())
                 }
             }
             _ => {
@@ -2078,5 +2077,23 @@ impl OutOfBandInput {
         } else {
             error!()
         }
+    }
+
+    /// Out of Band Data is Unavailable
+    ///
+    /// This method should be called whenever the OOB data cannot be acquired by this device.
+    pub async fn unavailable<C>(
+        self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .send_err(connection_channel, PairingFailedReason::OobNotAvailable)
+            .await?;
+
+        Ok(Status::PairingFailed(PairingFailedReason::OobNotAvailable))
     }
 }

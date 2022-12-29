@@ -99,31 +99,61 @@ use bo_tie_sm::responder::SecurityManagerBuilder;
 use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
 };
+use crate::encrypt_info::AuthRequirements;
 use crate::l2cap::ConnectionChannel;
-use crate::oob::sealed_receiver_type::OobReceiverTypeVariant;
-use crate::oob::{ExternalOobReceiver, OobDirection, OobReceiverType};
-use crate::{EnabledBondingKeysBuilder, IdentityAddress};
+use crate::pairing::{IOCapability, KeyDistributions, PairingFailedReason};
+use crate::{
+    EnabledBondingKeysBuilder, IdentityAddress, OobDirection, PasskeyAbility, PasskeyDirection, SecurityManagerError,
+};
 use alloc::vec::Vec;
 use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_util::BluetoothDeviceAddress;
 
-pub struct SecurityManagerBuilder<S, R> {
-    io_capabilities: pairing::IOCapability,
+macro_rules! error {
+    ($connection_channel:ty) => {
+        crate::SecurityManagerError<bo_tie_l2cap::send_future::Error<
+            <$connection_channel as bo_tie_l2cap::ConnectionChannel>::SendFutErr>
+        >
+    }
+}
+
+/// Used to generate the r value for passkey entry
+///
+/// See rai/rbi in the toolbox function [`f4`]
+///
+/// [`f4`]: toolbox::f4
+macro_rules! passkey_r {
+    ($passkey:expr, $passkey_round:expr) => {
+        if 0 == $passkey & (1 << $passkey_round) {
+            0x80
+        } else {
+            0x81
+        }
+    };
+}
+
+pub struct SecurityManagerBuilder {
     encryption_key_min: usize,
     encryption_key_max: usize,
-    remote_address: crate::BluetoothDeviceAddress,
-    this_address: crate::BluetoothDeviceAddress,
+    remote_address: BluetoothDeviceAddress,
+    this_address: BluetoothDeviceAddress,
     remote_address_is_random: bool,
     this_address_is_random: bool,
+    enable_just_works: bool,
+    enable_number_comparison: bool,
+    enable_passkey: PasskeyAbility,
+    oob: Option<OobDirection>,
+    can_bond: bool,
     distribute_irk: bool,
     distribute_csrk: bool,
     accept_irk: bool,
     accept_csrk: bool,
     prior_keys: Option<super::Keys>,
-    oob_sender: S,
-    oob_receiver: R,
+    assert_check_mode_one: Option<bo_tie_gap::security::LeSecurityModeOne>,
+    assert_check_mode_two: Option<bo_tie_gap::security::LeSecurityModeTwo>,
 }
 
-impl SecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupported> {
+impl SecurityManagerBuilder {
     /// Create a new `MasterSecurityManagerBuilder`
     pub fn new(
         connected_device_address: crate::BluetoothDeviceAddress,
@@ -132,25 +162,29 @@ impl SecurityManagerBuilder<crate::oob::Unsupported, crate::oob::Unsupported> {
         is_this_device_address_random: bool,
     ) -> Self {
         Self {
-            io_capabilities: pairing::IOCapability::NoInputNoOutput,
             encryption_key_min: super::ENCRYPTION_KEY_MAX_SIZE,
             encryption_key_max: super::ENCRYPTION_KEY_MAX_SIZE,
             remote_address: connected_device_address,
             this_address: this_device_address,
             remote_address_is_random: is_connected_devices_address_random,
             this_address_is_random: is_this_device_address_random,
-            distribute_irk: false,
+            enable_just_works: true,
+            enable_number_comparison: false,
+            enable_passkey: PasskeyAbility::None,
+            oob: None,
+            can_bond: true,
+            distribute_irk: true,
             distribute_csrk: false,
             accept_irk: true,
-            accept_csrk: true,
+            accept_csrk: false,
             prior_keys: None,
-            oob_sender: (),
-            oob_receiver: (),
+            assert_check_mode_one: None,
+            assert_check_mode_two: None,
         }
     }
 }
 
-impl<S, R> SecurityManagerBuilder<S, R> {
+impl SecurityManagerBuilder {
     /// Set the keys to the peer device if it is already paired
     ///
     /// This assigns the keys that were previously generated after a successful pair and bonding.
@@ -167,14 +201,175 @@ impl<S, R> SecurityManagerBuilder<S, R> {
         }
     }
 
-    /// Set the bonding keys to be distributed by the initiator
+    /// Use GAP's Security Mode One for the Configuration of the Security Manager
     ///
-    /// This is used to specify within the pairing request packet what bonding keys are going to be
-    /// distributed by the initiator security manager.
+    /// This method ensures that the Security Manager meets the requirements of the `level` for
+    /// Security Mode One. Security Mode One defines the requirements for authentication and
+    /// encryption for data transfer within a connection.
+    ///
+    /// ### `Level1` and `Level2`
+    /// Level one corresponds to no security and Level two corresponds to unauthenticated pairing.
+    /// As far as creating a Security Manager is concerned these levels are equivalent (level one
+    /// just means that use of a Security Manager is optional). When using either enum the Security
+    /// Manager will be configured to allow just works pairing.
+    ///
+    /// If you only want to use `Level1`, then do not use a Security Manager.
+    ///
+    /// ### `Level3` and `Level4`
+    /// Level three and level four are equivalent for this implementation of a Security Manager,
+    /// because only Secure Connections is implemented. Level three requires authenticated pairing
+    /// with encryption, and level four requires the same security but only using LE Secure
+    /// Connections.
+    ///
+    /// Both these enums disable 'just works'. This means that the method [`build`] will panic if
+    /// another pairing method is not enabled.
+    ///
+    /// [`build`]: SecurityManagerBuilder::build
+    /// [`enable_number_comparison`]: SecurityManagerBuilder::enable_number_comparison
+    /// [`enable_passcode_entry`]: SecurityManagerBuilder::enable_passcode_entry
+    /// [`enable_number_comparison`]
+    pub fn ensure_security_mode_one(mut self, level: bo_tie_gap::security::LeSecurityModeOne) -> Self {
+        self.assert_check_mode_one = level.into();
+        self
+    }
+
+    /// Use GAP's Security Mode Two for the Configuration the Security Manager
+    ///
+    /// This method ensures that the Security Manager meets the requirements fo the `level` for
+    /// Security Mode Two.
+    ///
+    /// Security Mode two defines the security aspects of signed data. For the Security Manager this
+    /// sets the requirements for how the Connection Signature Resolving Key (CSRK) is distributed.
+    ///
+    /// ### Level 1
+    /// No affect on the pairing requirements of the Security Manager.
+    ///
+    /// ### Level 2
+    /// If the CSRK is configured to be sent by the method [`sent_bonding_keys`] or received by
+    /// [`accepted_bonding_keys`], the pairing method 'just works' will be disabled. Either
+    /// [`enable_number_comparison`] or [`enable_passcode_entry`] be called to set the pairing
+    /// method, or the method [`build`] will panic.
+    ///
+    /// If a CSRK is neither sent nor accepted, then this level has no affect on the pairing
+    /// requirements of the Security Manager.
+    ///
+    /// [`sent_bonding_keys`]: SecurityManagerBuilder::sent_bonding_keys
+    /// [`accepted_bonding_keys`]: SecurityManagerBuilder::accepted_bonding_keys
+    /// [`enable_number_comparison`]: SecurityManagerBuilder::enable_number_comparison
+    /// [`enable_passcode_entry`]: SecurityManagerBuilder::enable_passcode_entry
+    /// [`build`]: SecurityManagerBuilder::build
+    pub fn ensure_security_mode_two(mut self, mode: bo_tie_gap::security::LeSecurityModeTwo) -> Self {
+        self.assert_check_mode_two = mode.into();
+        self
+    }
+
+    /// Disable 'Just Works' Pairing
+    ///
+    /// Just works pairing requires no authentication to establish encryption. Disabling 'just
+    /// works' requires the enabling of either passkey or number comparison pairing (see
+    /// [`enable_number_comparison`] or [`enable_passcode_entry`]).
+    ///
+    /// [`enable_number_comparison`]: SecurityManagerBuilder::enable_number_comparison
+    /// [`enable_passcode_entry`]: SecurityManagerBuilder::enable_passcode_entry
+    pub fn disable_just_works(mut self) -> Self {
+        self.enable_just_works = false;
+        self
+    }
+
+    /// Enable 'Number Comparison' Pairing.
+    ///
+    /// Number Comparison requires the Bluetooth application user to confirm that numbers displayed
+    /// on both devices are equivalent. This should only be enabled if this device can display six
+    /// digits (base 10) and has some way for the user input the equivalent of 'yes' and 'no'.
+    pub fn enable_number_comparison(mut self) -> Self {
+        self.enable_number_comparison = true;
+        self
+    }
+
+    /// Enable 'Passkey Entry' Pairing.
+    ///
+    /// This enabled passkey entry for a device that can both display and input six digits
+    /// (base 10). Calling this means passkey entry is enabled for pairing where one device
+    /// displays the passkey and the other device has the user inputs the passkey.
+    ///
+    /// # Notes
+    /// * If the initiator has the ability to input a passkey, then this device will be used to
+    ///   display the passkey.
+    /// * This method overwrites the configuration set by [`enable_passkey_entry`] and
+    ///   [`enable_passkey_display`]
+    ///
+    /// [`enable_passkey_entry`]: SecurityManagerBuilder::enable_passkey_entry
+    /// [`enable_passkey_display`]: SecurityManagerBuilder::enable_passkey_display
+    pub fn enable_passkey(mut self) -> Self {
+        self.enable_passkey = PasskeyAbility::DisplayWithInput;
+        self
+    }
+
+    /// Enable 'Passkey Entry' Pairing.
+    ///
+    /// Enable the input of a passkey `entry`. This should be used whenever a passkey can be entered
+    /// but six digits (base 10) cannot be displayed.
     ///
     /// # Note
-    /// By default no bonding keys are distributed by this initiator. This method does not need to
-    /// be called if the default key configuration is desired.
+    /// This method overwrites the configuration set by [`enable_passkey`] and
+    /// [`enable_passkey_display`]
+    ///
+    /// [`enable_passkey`]: SecurityManagerBuilder::enable_passkey
+    /// [`enable_passkey_display`]: SecurityManagerBuilder::enable_passkey_display
+    pub fn enable_passkey_entry(mut self) -> Self {
+        self.enable_passkey = PasskeyAbility::InputOnly;
+        self
+    }
+
+    /// Enable 'Passkey Entry' Pairing.
+    ///
+    /// Enable the display of a passkey `entry`. This should be used whenever six digits (base 10)
+    /// can be displayed but digits cannot be input by the user.
+    ///
+    /// # Note
+    /// This method overwrites the configuration set by [`enable_passkey_entry`] and
+    /// [`enable_passkey_display`]
+    ///
+    /// [`enable_passkey_entry`]: SecurityManagerBuilder::enable_passkey_entry
+    /// [`enable_passkey_display`]: SecurityManagerBuilder::enable_passkey_display
+    pub fn enable_passkey_display(mut self) -> Self {
+        self.enable_passkey = PasskeyAbility::DisplayOnly;
+        self
+    }
+
+    /// Enable `Out of Band` Pairing
+    ///
+    /// This will enable the usage of out of band (OOB) pairing. The input `direction` is used for
+    /// indicating the direction that OOB data can be sent.
+    pub fn enable_oob(mut self, direction: OobDirection) -> Self {
+        self.oob = Some(direction);
+        self
+    }
+
+    /// Disable Bonding
+    ///
+    /// This creates a Security Manager that will not bond with the peer device after pairing is
+    /// completed. Configuration set by [`sent_bonding_keys`] and [`accepted_bonding_keys`] will be
+    /// ignored.
+    ///
+    /// [`sent_bonding_keys`]: SecurityManagerBuilder::sent_bonding_keys
+    /// [`accepted_bonding_keys`]: SecurityManagerBuilder::accepted_bonding_keys
+    pub fn disable_bonding(mut self) -> Self {
+        self.can_bond = false;
+        self
+    }
+
+    /// Set the bonding keys to be distributed by the responder
+    ///
+    /// When this method is called, the default configuration for key distribution is overwritten to
+    /// disable the distribution of all bonding keys. The return must then be used to selectively
+    /// enable what keys are sent by the security manager when bonding.
+    ///
+    /// By default only the Identity Resolving Key (IRK) is distributed to the initiator. This
+    /// method does not need to be called if the default key configuration is desired.
+    ///
+    /// # Note
+    /// This method has no affect if the Security Manager is built without bonding support.
     pub fn sent_bonding_keys<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
@@ -191,12 +386,15 @@ impl<S, R> SecurityManagerBuilder<S, R> {
 
     /// Set the bonding keys to be accepted by this initiator
     ///
-    /// This is used to specify within the pairing request packet what bonding keys can be received
-    /// by the initiator security manager.
+    /// When this method is called, the default configuration for key distribution is overwritten to
+    /// not accept all bonding all keys. The return must then be used to selectively enable
+    /// what keys are sent by the security manager when bonding.
+    ///
+    /// By default only the Identity Resolving Key (IRK) is accepted from the initiator. This
+    /// method does not need to be called if the default key configuration is desired.
     ///
     /// # Note
-    /// By default all bonding keys are accepted by this initiator. This method does not need to
-    /// be called if the default key configuration is desired.
+    /// This method has no affect if the Security Manager is built without bonding support.
     pub fn accepted_bonding_keys<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
@@ -211,163 +409,100 @@ impl<S, R> SecurityManagerBuilder<S, R> {
         self
     }
 
-    /// Set the out of band sender
+    /// Create the Authentication Requirements
     ///
-    /// This method should only be called if this security manager is to support the sending of
-    /// pairing data through an out of band method. `out of band` means any method outside of the
-    /// Bluetooth connection for pairing done by a security manager. It is up to the user or the two
-    /// pairing devices to decide what that entails.
-    ///
-    /// The out of band `sender` is a function that returns a future. The implementation of that
-    /// function and future are left to the user of this security manager.
-    ///
-    /// ```
-    /// # use bo_tie_util::BluetoothDeviceAddress;
-    /// # let this_addr = BluetoothDeviceAddress::zeroed();
-    /// # let remote_addr = BluetoothDeviceAddress::zeroed();
-    /// # let security_manager_builder = bo_tie_sm::initiator::SecurityManagerBuilder::new(this_addr, remote_addr, false, false);
-    /// # async fn send_over_oob(a: &[u8]) { panic!("{:?}", a)}
-    ///
-    /// security_manager_builder.set_oob_sender(|pairing_data: &[u8]| async move {
-    ///     let _p = pairing_data;
-    /// })
-    /// # .build();
-    /// ```
-    pub fn set_oob_sender<'a, S2, F>(self, sender: S2) -> SecurityManagerBuilder<S2, R>
-    where
-        S2: FnMut(&'a [u8]) -> F,
-        F: core::future::Future + 'a,
+    /// # Panic
+    /// If the user disallows "just works" and no other paring method can be used.
+    fn create_auth_req(
+        &self,
+    ) -> Result<LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>, crate::SecurityManagerBuilderError>
     {
-        SecurityManagerBuilder {
-            io_capabilities: self.io_capabilities,
-            encryption_key_min: self.encryption_key_min,
-            encryption_key_max: self.encryption_key_max,
-            remote_address: self.remote_address,
-            this_address: self.this_address,
-            remote_address_is_random: self.remote_address_is_random,
-            this_address_is_random: self.this_address_is_random,
-            distribute_irk: self.distribute_irk,
-            distribute_csrk: self.distribute_csrk,
-            accept_irk: self.accept_irk,
-            accept_csrk: self.accept_csrk,
-            prior_keys: self.prior_keys,
-            oob_sender: sender,
-            oob_receiver: self.oob_receiver,
+        let mut auth_req = LinearBuffer::new();
+
+        // mandatory as only Secure Connections (not legacy) is supported
+        auth_req.try_push(AuthRequirements::Sc).unwrap();
+
+        if self.can_bond {
+            auth_req.try_push(AuthRequirements::Bonding).unwrap();
         }
+
+        if self.enable_number_comparison || self.enable_passkey.is_enabled() || self.oob.is_some() {
+            auth_req.try_push(AuthRequirements::ManInTheMiddleProtection).unwrap();
+        } else if !self.enable_just_works {
+            return Err(crate::SecurityManagerBuilderError);
+        }
+
+        if self.enable_passkey.is_enabled() {
+            auth_req.try_push(AuthRequirements::KeyPress).unwrap();
+        }
+
+        Ok(auth_req)
     }
 
-    /// Set the out of band receiver
+    /// Create the [`SecurityManager`]
     ///
-    /// This method should only be called if this security manager is to support the reception of
-    /// pairing data through an out of band method.`out of band` means any method outside of the
-    /// Bluetooth connection for pairing done by a security manager. It is up to the user or the two
-    /// pairing devices to decide what that entails.
+    /// This will create a `SecurityManager`.
     ///
-    /// The out of band `receiver` is a function that returns a future. The implementation of that
-    /// function and future are left to the user of this security manager.
-    ///
-    /// ```
-    /// # use bo_tie_util::BluetoothDeviceAddress;
-    /// # let this_addr = BluetoothDeviceAddress::zeroed();
-    /// # let remote_addr = BluetoothDeviceAddress::zeroed();
-    /// # let security_manager_builder = bo_tie_sm::initiator::SecurityManagerBuilder::new(this_addr, remote_addr, false, false);
-    /// # async fn receive_from_oob() -> Vec<u8> { Vec::new()}
-    ///
-    /// security_manager_builder.set_oob_receiver(|| async {
-    ///     receive_from_oob().await
-    /// })
-    /// # .build();
-    /// ```
-    ///
-    /// # External to the Security Manager Out of Band Data.
-    /// Sometimes the infrastructure for receiving out of band data is not available when a security
-    /// manager is created. The marker type [`ExternalOobReceiver`] may be used as the `receiver` to
-    /// indicate that the out of band data must be set by the method [`received_oob_data`]. This is
-    /// not the ideal method of integrating OOB into the security manager as there is a number of
-    /// strict requirements for using that method.
-    ///
-    /// The main reason why using `ExternalOobReceiver` is not recommended as the approach shown in
-    /// the example is a set it and forget it approach.
-    ///
-    /// [`ExternalOobReceiver`]: crate::oob::ExternalOobReceiver
-    /// [`received_oob_data`]: MasterSecurityManager::received_oob_data
-    pub fn set_oob_receiver<R2>(self, receiver: R2) -> SecurityManagerBuilder<S, R2>
-    where
-        R2: OobReceiverType,
-    {
-        SecurityManagerBuilder {
-            io_capabilities: self.io_capabilities,
-            encryption_key_min: self.encryption_key_min,
-            encryption_key_max: self.encryption_key_max,
-            remote_address: self.remote_address,
-            this_address: self.this_address,
-            remote_address_is_random: self.remote_address_is_random,
-            this_address_is_random: self.this_address_is_random,
-            distribute_irk: self.distribute_irk,
-            distribute_csrk: self.distribute_csrk,
-            accept_irk: self.accept_irk,
-            accept_csrk: self.accept_csrk,
-            prior_keys: self.prior_keys,
-            oob_sender: self.oob_sender,
-            oob_receiver: receiver,
-        }
+    /// # Panic
+    /// `build` will panic if the configuration does not enable any form of pairing.
+    pub fn build(self) -> SecurityManager {
+        self.try_build().unwrap()
     }
 
-    /// Create the `MasterSecurityManager`
+    /// Try to create the `SlaveSecurityManager`
     ///
-    /// # Note
-    /// This will create a `MasterSecurityManager` that does not support the out of band pairing
-    /// method.
-    pub fn build<'a>(self) -> SecurityManager<S, R>
-    where
-        S: OutOfBandSend<'a>,
-        R: OobReceiverType,
-    {
-        let auth_req = LinearBuffer::new();
+    /// This equivalent to [`build`] except an error is returned instead of panicking.
+    pub fn try_build(self) -> Result<SecurityManager, crate::SecurityManagerBuilderError> {
+        let initiator_key_distribution = super::get_keys(self.accept_irk, self.accept_csrk);
 
-        let initiator_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
+        let responder_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
 
-        let responder_key_distribution = super::get_keys(self.accept_irk, self.accept_csrk);
+        let io_capability = match (self.enable_number_comparison, self.enable_passkey) {
+            (_, PasskeyAbility::DisplayWithInput) => IOCapability::KeyboardDisplay,
+            (true, _) => IOCapability::DisplayWithYesOrNo,
+            (false, PasskeyAbility::DisplayOnly) => IOCapability::DisplayOnly,
+            (false, PasskeyAbility::InputOnly) => IOCapability::KeyboardOnly,
+            (false, PasskeyAbility::None) => IOCapability::NoInputNoOutput,
+        };
 
-        let pairing_request = pairing::PairingRequest::new(
-            self.io_capabilities,
-            if R::can_receive() {
-                pairing::OOBDataFlag::AuthenticationDataFromRemoteDevicePresent
-            } else {
-                pairing::OOBDataFlag::AuthenticationDataNotPresent
-            },
+        if !self.enable_just_works && io_capability.no_io_capability() {
+            return Err(crate::SecurityManagerBuilderError);
+        }
+
+        let auth_req = self.create_auth_req()?;
+
+        Ok(SecurityManager {
+            io_capability,
+            oob: self.oob,
             auth_req,
-            self.encryption_key_max,
-            initiator_key_distribution,
-            responder_key_distribution,
-        );
-
-        SecurityManager {
+            allow_just_works: self.enable_just_works,
             encryption_key_size_min: self.encryption_key_min,
             encryption_key_size_max: self.encryption_key_max,
-            oob_send: self.oob_sender,
-            oob_receive: self.oob_receiver,
-            pairing_request,
-            initiator_address: self.this_address,
-            responder_address: self.remote_address,
-            initiator_address_is_random: self.this_address_is_random,
-            responder_address_is_random: self.remote_address_is_random,
+            initiator_key_distribution,
+            responder_key_distribution,
+            initiator_address: self.remote_address,
+            responder_address: self.this_address,
+            initiator_address_is_random: self.remote_address_is_random,
+            responder_address_is_random: self.this_address_is_random,
             pairing_data: None,
             keys: self.prior_keys,
             link_encrypted: false,
             pairing_expected_cmd: None,
-        }
+        })
     }
 }
 
-pub struct SecurityManager<S, R> {
-    oob_send: S,
-    oob_receive: R,
-    pairing_request: pairing::PairingRequest,
+pub struct SecurityManager {
+    io_capability: IOCapability,
+    oob: Option<OobDirection>,
+    auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
+    allow_just_works: bool,
     encryption_key_size_min: usize,
     encryption_key_size_max: usize,
-    initiator_address: crate::BluetoothDeviceAddress,
-    responder_address: crate::BluetoothDeviceAddress,
+    initiator_key_distribution: &'static [KeyDistributions],
+    responder_key_distribution: &'static [KeyDistributions],
+    initiator_address: BluetoothDeviceAddress,
+    responder_address: BluetoothDeviceAddress,
     initiator_address_is_random: bool,
     responder_address_is_random: bool,
     pairing_data: Option<PairingData>,
@@ -381,12 +516,12 @@ macro_rules! check_channel_id_and {
         if $data.get_channel_id() == super::L2CAP_CHANNEL_ID {
             $job
         } else {
-            Err(Error::IncorrectL2capChannelId)
+            Err(Error::IncorrectL2capChannelId.into())
         }
     };
 }
 
-impl<S, R> SecurityManager<S, R> {
+impl SecurityManager {
     /// Indicate if the connection is encrypted
     ///
     /// This is used to indicate to the `MasterSecurityManager` that it is safe to send a Key to the
@@ -402,10 +537,8 @@ impl<S, R> SecurityManager<S, R> {
     pub fn get_keys(&self) -> Option<&super::Keys> {
         self.keys.as_ref()
     }
-}
 
-impl<S, R> SecurityManager<S, R> {
-    async fn send<C, Cmd, P>(&self, connection_channel: &C, command: Cmd) -> Result<(), Error>
+    async fn send<C, Cmd, P>(&self, connection_channel: &C, command: Cmd) -> Result<(), error!(C)>
     where
         C: ConnectionChannel,
         Cmd: Into<Command<P>>,
@@ -418,18 +551,16 @@ impl<S, R> SecurityManager<S, R> {
         connection_channel
             .send(acl_data)
             .await
-            .map_err(|e| Error::DataSend(alloc::format!("{:?}", e)))
+            .map_err(|e| SecurityManagerError::Sender(e))
     }
 
-    async fn send_err<C>(
-        &mut self,
-        connection_channel: &C,
-        fail_reason: pairing::PairingFailedReason,
-    ) -> Result<(), Error>
+    async fn send_err<C>(&mut self, connection_channel: &C, fail_reason: PairingFailedReason) -> Result<(), error!(C)>
     where
         C: ConnectionChannel,
     {
         self.pairing_data = None;
+
+        self.pairing_expected_cmd = None;
 
         self.send(connection_channel, pairing::PairingFailed::new(fail_reason))
             .await
@@ -445,7 +576,7 @@ impl<S, R> SecurityManager<S, R> {
     /// The IRK is returned if it was successfully sent to the other device.
     ///
     /// [`set_encrypted`]: bo_tie_sm::initiator::SecurityManager::set_encrypted
-    pub async fn send_irk<C, Irk>(&mut self, connection_channel: &C, irk: Irk) -> Result<u128, Error>
+    pub async fn send_irk<C, Irk>(&mut self, connection_channel: &C, irk: Irk) -> Result<u128, error!(C)>
     where
         C: ConnectionChannel,
         Irk: Into<Option<u128>>,
@@ -465,7 +596,7 @@ impl<S, R> SecurityManager<S, R> {
 
             Ok(irk)
         } else {
-            Err(Error::UnknownIfLinkIsEncrypted)
+            Err(Error::UnknownIfLinkIsEncrypted.into())
         }
     }
 
@@ -484,7 +615,7 @@ impl<S, R> SecurityManager<S, R> {
     /// sign counter within the CSRK will always be 0.
     ///
     /// [`set_encrypted`]: bo_tie_sm::initiator::SecurityManager::set_encrypted
-    pub async fn send_csrk<C, Csrk>(&mut self, connection_channel: &C, csrk: Csrk) -> Result<u128, Error>
+    pub async fn send_csrk<C, Csrk>(&mut self, connection_channel: &C, csrk: Csrk) -> Result<u128, error!(C)>
     where
         C: ConnectionChannel,
         Csrk: Into<Option<u128>>,
@@ -504,7 +635,7 @@ impl<S, R> SecurityManager<S, R> {
 
             Ok(csrk)
         } else {
-            Err(Error::UnknownIfLinkIsEncrypted)
+            Err(Error::UnknownIfLinkIsEncrypted.into())
         }
     }
 
@@ -523,10 +654,10 @@ impl<S, R> SecurityManager<S, R> {
     /// message to the peer device.
     ///
     /// [`set_encrypted`]: crate::sm::initiator::SecurityManager::set_encrypted
-    pub async fn send_identity<C, I>(&mut self, connection_channel: &C, identity: I) -> Result<(), Error>
+    pub async fn send_identity<C, I>(&mut self, connection_channel: &C, identity: I) -> Result<(), error!(C)>
     where
         C: ConnectionChannel,
-        I: Into<Option<crate::IdentityAddress>>,
+        I: Into<Option<IdentityAddress>>,
     {
         let identity = match identity.into() {
             Some(identity) => identity,
@@ -539,9 +670,9 @@ impl<S, R> SecurityManager<S, R> {
                     identity
                 } else {
                     if self.responder_address_is_random {
-                        crate::IdentityAddress::StaticRandom(self.responder_address)
+                        IdentityAddress::StaticRandom(self.responder_address)
                     } else {
-                        crate::IdentityAddress::Public(self.responder_address)
+                        IdentityAddress::Public(self.responder_address)
                     }
                 }
             }
@@ -551,8 +682,8 @@ impl<S, R> SecurityManager<S, R> {
             self.send(
                 connection_channel,
                 match identity {
-                    crate::IdentityAddress::Public(addr) => encrypt_info::IdentityAddressInformation::new_pub(addr),
-                    crate::IdentityAddress::StaticRandom(addr) => {
+                    IdentityAddress::Public(addr) => encrypt_info::IdentityAddressInformation::new_pub(addr),
+                    IdentityAddress::StaticRandom(addr) => {
                         encrypt_info::IdentityAddressInformation::new_static_rand(addr)
                     }
                 },
@@ -569,78 +700,124 @@ impl<S, R> SecurityManager<S, R> {
 
             Ok(())
         } else {
-            Err(Error::UnknownIfLinkIsEncrypted)
+            Err(Error::UnknownIfLinkIsEncrypted.into())
         }
     }
-}
 
-impl<S, R> SecurityManager<S, R>
-where
-    S: for<'i> OutOfBandSend<'i>,
-    R: OobReceiverType,
-{
     /// Send the Pairing Request to the slave device
     ///
     /// This sends the pairing request security manage PDU to the slave which will initiate the
     /// pairing process
-    async fn send_pairing_request<C>(&mut self, connection_channel: &C) -> Result<(), Error>
+    async fn send_pairing_request<C>(&mut self, connection_channel: &C) -> Result<(), error!(C)>
     where
         C: ConnectionChannel,
     {
         self.pairing_data = None;
 
-        self.send(connection_channel, self.pairing_request.clone()).await
+        let oob_data_flag = match self.oob {
+            Some(OobDirection::BothSendOob | OobDirection::OnlyInitiatorSendsOob) => {
+                pairing::OobDataFlag::AuthenticationDataFromRemoteDevicePresent
+            }
+            _ => pairing::OobDataFlag::AuthenticationDataNotPresent,
+        };
+
+        let pairing_request = pairing::PairingRequest::new(
+            self.io_capability,
+            oob_data_flag,
+            self.auth_req.clone(),
+            self.encryption_key_size_max,
+            self.initiator_key_distribution,
+            self.responder_key_distribution,
+        );
+
+        self.send(connection_channel, pairing_request).await
     }
 
-    async fn process_pairing_response<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<(), Error>
+    async fn process_pairing_response<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
-        let response = pairing::PairingResponse::try_from_command_format(payload)?;
+        let response = match pairing::PairingResponse::try_from_command_format(payload) {
+            Ok(response) => response,
+            Err(e) => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                return Err(e.into());
+            }
+        };
 
         if response.get_max_encryption_size() < self.encryption_key_size_min {
-            self.send_err(connection_channel, pairing::PairingFailedReason::EncryptionKeySize)
+            self.send_err(connection_channel, PairingFailedReason::EncryptionKeySize)
                 .await?;
 
-            Err(Error::PairingFailed(pairing::PairingFailedReason::EncryptionKeySize))
+            Ok(Status::PairingFailed(PairingFailedReason::EncryptionKeySize))
         } else {
+            let oob_data_flag = match self.oob {
+                Some(OobDirection::BothSendOob | OobDirection::OnlyInitiatorSendsOob) => {
+                    pairing::OobDataFlag::AuthenticationDataFromRemoteDevicePresent
+                }
+                _ => pairing::OobDataFlag::AuthenticationDataNotPresent,
+            };
+
             let pairing_method = PairingMethod::determine_method(
-                self.pairing_request.get_oob_data_flag(),
+                oob_data_flag,
                 response.get_oob_data_flag(),
-                self.pairing_request.get_io_capability(),
+                self.io_capability,
                 response.get_io_capability(),
                 false,
             );
 
-            let initiator_io_cap = self.pairing_request.get_io_cap();
-            let responder_io_cap = response.get_io_cap();
+            if pairing_method.is_just_works() && !self.allow_just_works {
+                self.send_err(connection_channel, PairingFailedReason::AuthenticationRequirements)
+                    .await?;
 
-            let (private_key, public_key) = toolbox::ecc_gen();
+                Ok(Status::PairingFailed(PairingFailedReason::AuthenticationRequirements))
+            } else {
+                log::info!("(SM) pairing Method: {:?}", pairing_method);
 
-            self.pairing_data = Some(PairingData {
-                pairing_method,
-                public_key,
-                private_key: Some(private_key),
-                initiator_io_cap,
-                responder_io_cap,
-                nonce: toolbox::nonce(),
-                peer_public_key: None,
-                secret_key: None,
-                peer_nonce: None,
-                responder_pairing_confirm: None,
-                mac_key: None,
-                external_oob_confirm_valid: false,
-            });
+                let initiator_io_cap = pairing::convert_io_cap(&self.auth_req, oob_data_flag, self.io_capability);
+                let responder_io_cap = response.get_io_cap();
 
-            Ok(())
+                let (private_key, public_key) = toolbox::ecc_gen();
+
+                self.pairing_data = Some(PairingData {
+                    pairing_method,
+                    public_key,
+                    private_key: Some(private_key),
+                    initiator_io_cap,
+                    responder_io_cap,
+                    nonce: toolbox::nonce(),
+                    peer_public_key: None,
+                    secret_key: None,
+                    peer_nonce: None,
+                    responder_random: 0,
+                    mac_key: None,
+                    ltk: None,
+                    passkey: None,
+                    initiator_random: 0,
+                    peer_confirm: None,
+                    passkey_round: 0,
+                });
+
+                self.pairing_expected_cmd = CommandType::PairingPublicKey.into();
+
+                self.send_pairing_pub_key(connection_channel).await?;
+
+                Ok(Status::None)
+            }
         }
     }
 
     /// Send the pairing pub key
     ///
-    /// After the pairing pub key PDU is sent to the slave, a `ResponseProcessor` is returned that
-    /// can be used to process the acl data returned by the server.
-    async fn send_pairing_pub_key<C>(&mut self, connection_channel: &C) -> Result<(), Error>
+    /// This must be called only after the pairing response is received from the responder Security
+    /// Manager.
+    ///
+    /// # Panic
+    /// This will panic if the pairing data has not already been created and the public/private keys
+    /// were not generated.
+    async fn send_pairing_pub_key<C>(&mut self, connection_channel: &C) -> Result<(), error!(C)>
     where
         C: ConnectionChannel,
     {
@@ -661,33 +838,52 @@ where
 
                 Ok(())
             }
-            _ => Err(Error::IncorrectCommand(CommandType::PairingPublicKey)),
+            _ => unreachable!(),
         }
     }
 
-    async fn process_responder_pub_key<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<(), Error>
+    /// Process the responders public key
+    ///
+    /// This should be received after this sends its public key to the responder Security Manager.
+    ///
+    /// # Error
+    /// If this is received out of the expected order.
+    ///
+    /// # Panic
+    /// This will panic  
+    async fn process_responder_pub_key<C>(
+        &mut self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
-        let pub_key = pairing::PairingPubKey::try_from_command_format(payload);
+        let peer_pub_key = match pairing::PairingPubKey::try_from_command_format(payload) {
+            Ok(public_key) => public_key,
+            Err(e) => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
 
-        match (&pub_key, &mut self.pairing_data) {
-            (
-                Ok(peer_pub_key_pdu),
-                Some(PairingData {
-                    private_key: private_key @ Some(_),
-                    peer_public_key,
-                    secret_key,
-                    ..
-                }),
-            ) => {
-                let remote_pub_key = match toolbox::PubKey::try_from_command_format(&peer_pub_key_pdu.get_key()) {
+                return Err(e.into());
+            }
+        };
+
+        match self.pairing_data {
+            Some(PairingData {
+                pairing_method,
+                ref mut private_key,
+                ref mut peer_public_key,
+                ref mut secret_key,
+                ..
+            }) => {
+                let remote_pub_key = match toolbox::PubKey::try_from_command_format(&peer_pub_key.get_key()) {
                     Ok(k) => k,
                     Err(e) => {
-                        self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
+                        self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
                             .await?;
 
-                        return Err(e);
+                        return Err(e.into());
                     }
                 };
 
@@ -697,178 +893,263 @@ where
 
                 *peer_public_key = remote_pub_key.into();
 
-                Ok(())
+                match pairing_method {
+                    PairingMethod::JustWorks | PairingMethod::NumbComp => {
+                        self.pairing_expected_cmd = CommandType::PairingConfirm.into();
+
+                        Ok(Status::None)
+                    }
+                    PairingMethod::Oob(direction) => {
+                        self.pairing_expected_cmd = None;
+
+                        match direction {
+                            OobDirection::OnlyInitiatorSendsOob => {
+                                Ok(Status::OutOfBandOutput(OutOfBandOutput::new(self)))
+                            }
+                            OobDirection::OnlyResponderSendsOob => Ok(Status::OutOfBandInput(OutOfBandInput)),
+                            OobDirection::BothSendOob => {
+                                Ok(Status::OutOfBandInputOutput(OutOfBandInput, OutOfBandOutput::new(self)))
+                            }
+                        }
+                    }
+                    PairingMethod::PassKeyEntry(direction) => match direction {
+                        PasskeyDirection::ResponderDisplaysInitiatorInputs => {
+                            self.pairing_expected_cmd = None;
+
+                            let input = PasskeyInput::new(self, connection_channel).await?;
+
+                            Ok(Status::PasskeyInput(input))
+                        }
+                        PasskeyDirection::InitiatorAndResponderInput => {
+                            self.pairing_expected_cmd = CommandType::PairingKeyPressNotification.into();
+
+                            let input = PasskeyInput::new(self, connection_channel).await?;
+
+                            Ok(Status::PasskeyInput(input))
+                        }
+                        PasskeyDirection::InitiatorDisplaysResponderInputs => {
+                            self.pairing_expected_cmd = CommandType::PairingKeyPressNotification.into();
+
+                            Ok(Status::PasskeyOutput(PasskeyOutput::new(self)))
+                        }
+                    },
+                }
             }
             _ => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
                     .await?;
 
-                Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    /// Wait for responder check
-    async fn process_responder_commitment<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<(), Error>
-    where
-        C: ConnectionChannel,
-    {
-        match (
-            &pairing::PairingConfirm::try_from_command_format(payload),
-            &mut self.pairing_data,
-        ) {
-            (
-                Ok(responder_confirm),
-                Some(PairingData {
-                    pairing_method: PairingMethod::JustWorks,
-                    responder_pairing_confirm,
-                    ..
-                }),
-            )
-            | (
-                Ok(responder_confirm),
-                Some(PairingData {
-                    pairing_method: PairingMethod::NumbComp,
-                    responder_pairing_confirm,
-                    ..
-                }),
-            ) => {
-                *responder_pairing_confirm = responder_confirm.get_value().into();
-
-                log::trace!("(SM) responder Commitment: {:?}", responder_confirm.get_value());
-
-                Ok(())
-            }
-            (Err(_), _) => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
-                    .await?;
-
-                Err(Error::Value)
-            }
-            _ => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
-                    .await?;
-
-                Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
-            }
-        }
-    }
-
-    /// Send the Nonce
+    /// Process the responders confirm
     ///
-    /// # Panics
-    /// This will panic if the pairing response has not been received yet
-    async fn send_pairing_random<C>(&mut self, connection_channel: &C) -> Result<(), Error>
+    /// When this is received depends on the pairing procedure (in phase 2).
+    /// * For just works or number comparison this is received after the responder Security
+    ///   Manager sends its public key.
+    /// * For Passkey this is received after this Security Manager sends its confirm, and this is
+    ///   done twenty times (as the passkey process repeats twenty times).
+    /// * This is **not** received with out of band pairing
+    ///
+    /// # Panic
+    /// This will panic if pairing data is not set.
+    async fn process_responder_confirm<C>(
+        &mut self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
+        let responder_confirm = match pairing::PairingConfirm::try_from_command_format(payload) {
+            Ok(public_key) => public_key,
+            Err(e) => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                return Err(e.into());
+            }
+        };
+
         match self.pairing_data {
-            Some(PairingData { nonce, .. }) => {
+            Some(PairingData {
+                pairing_method: PairingMethod::JustWorks | PairingMethod::NumbComp | PairingMethod::PassKeyEntry(_),
+                ref mut peer_confirm,
+                nonce,
+                ..
+            }) => {
+                *peer_confirm = responder_confirm.get_value().into();
+
                 log::trace!("(SM) initiator nonce: {:?}", nonce);
+
+                self.pairing_expected_cmd = CommandType::PairingRandom.into();
 
                 self.send(connection_channel, pairing::PairingRandom::new(nonce))
                     .await?;
 
-                Ok(())
+                Ok(Status::None)
             }
-            _ => return Err(Error::UnsupportedFeature),
+            _ => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason).into())
+            }
         }
     }
 
-    async fn process_responder_random<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<(), Error>
+    /// Process the Responders Nonce
+    ///
+    /// This is received after this Security Manager sends its nonce to the responding Security
+    /// Manager, for every pairing method. For passkey though, this is received twenty times.
+    ///
+    /// # Return
+    /// A status is returned as pairing can fail. The status returned is either `None` or
+    /// `PairingFailed(PairingFailedReason::ConfirmValueFailed)`.
+    async fn process_responder_random<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
         let responder_nonce = match pairing::PairingRandom::try_from_command_format(payload) {
             Ok(pairing_random) => pairing_random.get_value(),
-            _ => {
+            Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
                     .await?;
 
-                return Err(Error::Value);
+                return Err(e.into());
             }
         };
 
         log::trace!("(SM) responder Nonce: {:?}", responder_nonce);
 
-        match &mut self.pairing_data {
+        match self.pairing_data {
             Some(PairingData {
-                pairing_method: PairingMethod::JustWorks | PairingMethod::NumbComp,
-                peer_nonce,
-                peer_public_key: Some(peer_public_key),
-                public_key,
-                responder_pairing_confirm: Some(responder_confirm),
+                pairing_method: PairingMethod::JustWorks,
+                ref mut peer_nonce,
+                peer_public_key: Some(ref peer_public_key),
+                ref public_key,
+                peer_confirm: Some(responder_confirm),
                 ..
             }) => {
-                let initiator_confirm = toolbox::f4(
-                    GetXOfP256Key::x(peer_public_key),
-                    GetXOfP256Key::x(public_key),
-                    responder_nonce,
-                    0,
-                );
+                let pka = GetXOfP256Key::x(public_key);
 
-                *peer_nonce = responder_nonce.into();
+                let pkb = GetXOfP256Key::x(peer_public_key);
 
-                if *responder_confirm == initiator_confirm {
-                    Ok(())
+                let calculated_confirm = toolbox::f4(pka, pkb, responder_nonce, 0);
+
+                if responder_confirm == calculated_confirm {
+                    *peer_nonce = responder_nonce.into();
+
+                    self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
+
+                    self.send_initiator_dh_key_check(connection_channel).await
                 } else {
-                    let reason = pairing::PairingFailedReason::ConfirmValueFailed;
+                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
+                        .await?;
 
-                    self.send_err(connection_channel, reason).await?;
-
-                    Err(Error::PairingFailed(reason))
+                    Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
                 }
             }
             Some(PairingData {
-                pairing_method:
-                    PairingMethod::Oob(OobDirection::OnlyResponderSendsOob) | PairingMethod::Oob(OobDirection::BothSendOob),
-                external_oob_confirm_valid,
+                pairing_method: PairingMethod::NumbComp,
+                nonce,
+                ref mut peer_nonce,
+                peer_public_key: Some(ref peer_public_key),
+                ref public_key,
+                peer_confirm: Some(responder_confirm),
                 ..
-            }) if OobReceiverTypeVariant::External == R::receiver_type() && !*external_oob_confirm_valid => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::OOBNotAvailable)
-                    .await?;
+            }) => {
+                let pka = GetXOfP256Key::x(public_key);
 
-                Err(Error::ExternalOobNotProvided)
+                let pkb = GetXOfP256Key::x(peer_public_key);
+
+                let calculated_confirm = toolbox::f4(pka, pkb, responder_nonce, 0);
+
+                if responder_confirm == calculated_confirm {
+                    *peer_nonce = responder_nonce.into();
+
+                    let na = nonce;
+
+                    let nb = responder_nonce;
+
+                    let v = toolbox::g2(pka, pkb, na, nb);
+
+                    Ok(Status::NumberComparison(NumberComparison::new(v)))
+                } else {
+                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
+                        .await?;
+
+                    Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
+                }
             }
             Some(PairingData {
-                peer_nonce,
-                pairing_method: PairingMethod::Oob(_),
+                pairing_method: PairingMethod::PassKeyEntry(_),
+                ref mut peer_nonce,
+                peer_public_key: Some(ref peer_public_key),
+                ref public_key,
+                peer_confirm: Some(responder_confirm),
+                passkey: Some(passkey),
+                ref mut passkey_round,
                 ..
             }) => {
                 *peer_nonce = responder_nonce.into();
 
-                Ok(())
+                let pka = GetXOfP256Key::x(public_key);
+
+                let pkb = GetXOfP256Key::x(peer_public_key);
+
+                let r = passkey_r!(passkey, *passkey_round);
+
+                if responder_confirm == toolbox::f4(pkb, pka, responder_nonce, r) {
+                    *passkey_round += 1;
+
+                    if *passkey_round < 20 {
+                        self.send_passkey_confirm(connection_channel).await
+                    } else {
+                        self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
+
+                        self.send_initiator_dh_key_check(connection_channel).await
+                    }
+                } else {
+                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
+                        .await?;
+
+                    Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
+                }
+            }
+            Some(PairingData {
+                pairing_method: PairingMethod::Oob(_),
+                ref mut peer_nonce,
+                ..
+            }) => {
+                *peer_nonce = responder_nonce.into();
+
+                self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
+
+                self.send_initiator_dh_key_check(connection_channel).await
             }
             _ => {
-                let reason = pairing::PairingFailedReason::UnspecifiedReason;
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
 
-                self.send_err(connection_channel, reason).await?;
-
-                Err(Error::PairingFailed(reason))
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    async fn send_initiator_dh_key_check<C>(&mut self, connection_channel: &C) -> Result<(), Error>
+    async fn send_initiator_dh_key_check<C>(&mut self, connection_channel: &C) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
-        let ltk = match self.pairing_data {
+        match self.pairing_data {
             Some(PairingData {
-                pairing_method: PairingMethod::JustWorks,
                 secret_key: Some(ref dh_key),
-                ref nonce,
+                nonce,
                 peer_nonce: Some(ref peer_nonce),
-                ref initiator_io_cap,
-                ref mut mac_key,
-                ..
-            })
-            | Some(PairingData {
-                pairing_method: PairingMethod::NumbComp,
-                secret_key: Some(ref dh_key),
-                ref nonce,
-                peer_nonce: Some(ref peer_nonce),
-                ref initiator_io_cap,
+                initiator_io_cap,
+                responder_random,
                 ref mut mac_key,
                 ..
             }) => {
@@ -876,367 +1157,183 @@ where
 
                 let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
 
-                let (gen_mac_key, ltk) = toolbox::f5(*dh_key, *nonce, *peer_nonce, a_addr.clone(), b_addr.clone());
+                log::trace!("(SM) secret key: {:x?}", dh_key);
+                log::trace!("(SM) remote nonce: {:x?}", peer_nonce);
+                log::trace!("(SM) this nonce: {:x?}", nonce);
+                log::trace!("(SM) remote address: {:x?}", a_addr);
+                log::trace!("(SM) this address: {:x?}", b_addr);
 
-                let ea = toolbox::f6(gen_mac_key, *nonce, *peer_nonce, 0, *initiator_io_cap, a_addr, b_addr);
+                let (gen_mac_key, ltk) = toolbox::f5(*dh_key, nonce, *peer_nonce, a_addr.clone(), b_addr.clone());
+
+                log::trace!("(SM) mac_key: {:x?}", gen_mac_key);
+                log::trace!("(SM) ltk: {:x?}", ltk);
+                log::trace!("(SM) initiator_io_cap: {:x?}", initiator_io_cap);
+
+                let ea = toolbox::f6(
+                    gen_mac_key,
+                    nonce,
+                    *peer_nonce,
+                    responder_random,
+                    initiator_io_cap,
+                    a_addr,
+                    b_addr,
+                );
+
+                let mut keys = crate::Keys::new();
+
+                keys.ltk = Some(ltk);
+
+                self.keys = Some(keys);
 
                 *mac_key = gen_mac_key.into();
 
-                self.send(connection_channel, pairing::PairingDHKeyCheck::new(ea))
+                self.send(connection_channel, pairing::PairingDhKeyCheck::new(ea))
                     .await?;
 
-                ltk
+                Ok(Status::None)
             }
-            _ => return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason)),
-        };
+            _ => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
 
-        self.keys = Some(super::Keys {
-            is_authenticated: todo!(),
-            ltk: ltk.into(),
-            csrk: None,
-            irk: None,
-            peer_csrk: None,
-            peer_irk: None,
-            peer_identity: if self.responder_address_is_random {
-                IdentityAddress::StaticRandom(self.responder_address)
-            } else {
-                IdentityAddress::Public(self.responder_address)
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
-            .into(),
-            identity: if self.initiator_address_is_random {
-                IdentityAddress::StaticRandom(self.initiator_address)
-            } else {
-                IdentityAddress::Public(self.initiator_address)
-            }
-            .into(),
-        });
-
-        Ok(())
+        }
     }
 
-    async fn process_responder_dh_key_check<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<(), Error>
+    async fn process_responder_dh_key_check<C>(
+        &mut self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
-        let eb = match pairing::PairingDHKeyCheck::try_from_command_format(payload) {
+        let eb = match pairing::PairingDhKeyCheck::try_from_command_format(payload) {
+            Ok(dh_key_check) => dh_key_check,
+            Err(e) => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                return Err(e.into());
+            }
+        };
+
+        match self.pairing_data.take() {
+            Some(PairingData {
+                nonce,
+                peer_nonce: Some(peer_nonce),
+                responder_io_cap,
+                initiator_random,
+                mac_key: Some(mac_key),
+                ltk: ltk @ Some(_),
+                ..
+            }) => {
+                let a_addr = toolbox::PairingAddress::new(&self.initiator_address, self.initiator_address_is_random);
+
+                let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
+
+                let calc_eb = toolbox::f6(
+                    mac_key,
+                    peer_nonce,
+                    nonce,
+                    initiator_random,
+                    responder_io_cap,
+                    b_addr,
+                    a_addr,
+                );
+
+                if eb.get_key_check() == calc_eb {
+                    self.keys = Some(crate::Keys {
+                        is_authenticated: !self.allow_just_works,
+                        ltk,
+                        csrk: None,
+                        irk: None,
+                        identity: if self.responder_address_is_random {
+                            IdentityAddress::StaticRandom(self.responder_address)
+                        } else {
+                            IdentityAddress::Public(self.responder_address)
+                        }
+                        .into(),
+                        peer_csrk: None,
+                        peer_irk: None,
+                        peer_identity: if self.initiator_address_is_random {
+                            IdentityAddress::StaticRandom(self.initiator_address)
+                        } else {
+                            IdentityAddress::Public(self.initiator_address)
+                        }
+                        .into(),
+                    });
+
+                    self.pairing_expected_cmd = None;
+
+                    Ok(Status::PairingComplete)
+                } else {
+                    self.send_err(connection_channel, PairingFailedReason::DhKeyCheckFailed)
+                        .await?;
+
+                    Ok(Status::PairingFailed(PairingFailedReason::DhKeyCheckFailed))
+                }
+            }
+            _ => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
+            }
+        }
+    }
+
+    async fn process_keypress<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        let kp = match pairing::KeyPressNotification::try_from_command_format(payload) {
             Ok(responder_confirm) => responder_confirm,
             Err(e) => {
                 self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
                     .await?;
 
-                return Err(e);
+                return Err(e.into());
             }
         };
 
-        let check = match self.pairing_data {
-            Some(PairingData {
-                pairing_method: PairingMethod::JustWorks,
-                ref nonce,
-                peer_nonce: Some(ref peer_nonce),
-                ref responder_io_cap,
-                mac_key: Some(ref mac_key),
-                ..
-            })
-            | Some(PairingData {
-                pairing_method: PairingMethod::NumbComp,
-                ref nonce,
-                peer_nonce: Some(ref peer_nonce),
-                ref responder_io_cap,
-                mac_key: Some(ref mac_key),
-                ..
-            }) => {
-                let a_addr = toolbox::PairingAddress::new(&self.initiator_address, self.initiator_address_is_random);
-
-                let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
-
-                let calc_eb = toolbox::f6(*mac_key, *peer_nonce, *nonce, 0, *responder_io_cap, b_addr, a_addr);
-
-                eb.get_key_check() == calc_eb
-            }
+        match kp {
+            pairing::KeyPressNotification::PasskeyEntryCompleted => self.send_passkey_confirm(connection_channel).await,
+            pairing::KeyPressNotification::PasskeyEntryStarted => Ok(Status::None),
             _ => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
-                    .await?;
-
-                return Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason));
-            }
-        };
-
-        if check {
-            Ok(())
-        } else {
-            self.send_err(connection_channel, pairing::PairingFailedReason::DHKeyCheckFailed)
-                .await?;
-
-            Err(Error::PairingFailed(pairing::PairingFailedReason::DHKeyCheckFailed))
-        }
-    }
-
-    /// Send the OOB confirm information
-    ///
-    /// This will create the confirm information and send the information to the responder if the
-    /// sender function was set. If no sender was set, this method does nothing.
-    ///
-    /// # Notes
-    /// * This method does nothing if OOB sending is not enabled.
-    /// * The information generated is wrapped in a OOB data block and then sent to the initiator.
-    ///
-    /// # Panic
-    /// This method will panic if the pairing information and public keys were not already generated
-    /// in the pairing process.
-    async fn send_oob(&mut self) {
-        use bo_tie_gap::assigned::{
-            le_device_address::LeDeviceAddress, le_role::LeRole, sc_confirm_value::ScConfirmValue,
-            sc_random_value::ScRandomValue, Sequence,
-        };
-
-        if S::can_send() {
-            let data = &mut [0u8; LeDeviceAddress::STRUCT_SIZE
-                + LeRole::STRUCT_SIZE
-                + ScRandomValue::STRUCT_SIZE
-                + ScConfirmValue::STRUCT_SIZE];
-
-            let ra = toolbox::rand_u128();
-
-            let paring_data = self.pairing_data.as_ref().unwrap();
-
-            let pka = GetXOfP256Key::x(&paring_data.public_key);
-
-            let address = LeDeviceAddress::from(self.initiator_address);
-
-            let role = LeRole::OnlyCentral;
-
-            let random = ScRandomValue::new(ra);
-
-            let confirm = ScConfirmValue::new(toolbox::f4(pka, pka, ra, 0));
-
-            let mut sequence = Sequence::new(data);
-
-            sequence.try_add(&address).unwrap();
-            sequence.try_add(&role).unwrap();
-            sequence.try_add(&random).unwrap();
-            sequence.try_add(&confirm).unwrap();
-
-            self.oob_send.send(sequence.into_inner()).await;
-        }
-    }
-
-    /// Receive OOB information from the responder
-    ///
-    /// This will await for the OOB data block containing the initiator's confirm information and
-    /// return a boolean indicating if the information was verified. If no receive function was set,
-    /// this method will return true.
-    ///
-    /// # Error
-    /// An error is returned if the initiator's random and confirm values cannot be converted
-    ///
-    /// # Panic
-    /// This method will panic if the pairing information and public keys were not already generated
-    /// in the pairing process.
-    async fn receive_oob(&mut self) -> bool {
-        use core::borrow::Borrow;
-
-        let data = self.oob_receive.receive().await;
-
-        self.process_received_oob(data.borrow())
-    }
-
-    /// Process the received OOB
-    ///
-    /// This will check the OOB to determine the validity of the raw data and the confirm within the
-    /// raw data. True is returned if everything within `raw` is validated.
-    fn process_received_oob(&self, raw: &[u8]) -> bool {
-        use bo_tie_gap::assigned::{sc_confirm_value, sc_random_value, AssignedTypes, EirOrAdIterator, TryFromStruct};
-
-        let mut rb = None;
-        let mut cb = None;
-
-        for ad in EirOrAdIterator::new(raw).silent() {
-            const RANDOM_TYPE: u8 = AssignedTypes::LESecureConnectionsRandomValue.val();
-            const CONFIRM_TYPE: u8 = AssignedTypes::LESecureConnectionsConfirmationValue.val();
-
-            match ad.get_type() {
-                RANDOM_TYPE => rb = sc_random_value::ScRandomValue::try_from_struct(ad).ok(),
-                CONFIRM_TYPE => cb = sc_confirm_value::ScConfirmValue::try_from_struct(ad).ok(),
-                _ => (),
+                /* todo: reset security manager timeout */
+                Ok(Status::None)
             }
         }
-
-        if let (Some(rb), Some(ca)) = (rb, cb) {
-            let paring_data = self.pairing_data.as_ref().unwrap();
-
-            let pkb = GetXOfP256Key::x(paring_data.peer_public_key.as_ref().unwrap());
-
-            if ca.0 == toolbox::f4(pkb, pkb, rb.0, 0) {
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
     }
 
-    /// Receive OOB information by its type
+    /// Begin Pairing to the Peripheral
     ///
-    /// This will do one of two things depending on the type of receiver.
-    ///
-    /// For the `Internal` type of receiver it will await the data and send the nonce once it
-    /// receives and validated the OOB data.
-    ///
-    /// For the `External` it will just return Ok as the user needs to provide the OOB data with
-    /// the method `received_oob_data`.
-    ///
-    /// The method returns true if oob data is expected to be received externally from this
-    /// security manager.
-    ///
-    /// # Panic
-    /// This method will panic if `DoesNotExist` is the receiver type or `pairing_data` is `None`
-    async fn by_oob_receiver_type<C>(&mut self, connection_channel: &C) -> Result<bool, Error>
+    /// This begins the pairing process by sending the request for the peripheral's pairing
+    /// information. This function is required to be called before `continue_pairing` can be used to
+    /// process and send further Security Manager PDU's to the slave.
+    pub async fn start_pairing<C>(&mut self, connection_channel: &C) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
-        match R::receiver_type() {
-            OobReceiverTypeVariant::Internal => {
-                let confirm_result = self.receive_oob().await;
+        self.pairing_expected_cmd = CommandType::PairingResponse.into();
 
-                self.oob_confirm_result(connection_channel, confirm_result)
-                    .await
-                    .map(|_| true)
-            }
-            OobReceiverTypeVariant::External => Ok(false),
-            OobReceiverTypeVariant::DoesNotExist => unreachable!(),
-        }
-    }
+        self.send_pairing_request(connection_channel).await?;
 
-    /// Function for the validation result of the confirm value with an OOB data.
-    ///
-    /// # Note
-    /// If the `confirm_result` is true then this device's nonce is sent to the responder.
-    ///
-    /// # Panic
-    /// Member `pairing_data` must be `Some(_)`.
-    async fn oob_confirm_result<C>(&mut self, connection_channel: &C, confirm_result: bool) -> Result<(), Error>
-    where
-        C: ConnectionChannel,
-    {
-        if confirm_result {
-            match self.pairing_data {
-                Some(PairingData {
-                    nonce,
-                    ref mut external_oob_confirm_valid,
-                    ..
-                }) => {
-                    *external_oob_confirm_valid = true;
-
-                    self.send(connection_channel, pairing::PairingRandom::new(nonce)).await
-                }
-                None => unreachable!("Pairing Data cannot be None"),
-            }
-        } else {
-            self.send_err(connection_channel, pairing::PairingFailedReason::ConfirmValueFailed)
-                .await
-        }
-    }
-
-    /// Deal with the oob confirm values
-    ///
-    /// This will return true if once the oob confirm value step is completed. False is only
-    /// returned when OOB data is to be externally set by the user.
-    async fn oob_confirm<C>(&mut self, connection_channel: &C, oob_direction: OobDirection) -> Result<bool, Error>
-    where
-        C: ConnectionChannel,
-    {
-        match oob_direction {
-            OobDirection::OnlyInitiatorSendsOob => {
-                self.send_oob().await;
-                Ok(true)
-            }
-            OobDirection::OnlyResponderSendsOob => self.by_oob_receiver_type(connection_channel).await,
-            OobDirection::BothSendOob => {
-                self.send_oob().await;
-
-                self.by_oob_receiver_type(connection_channel).await
-            }
-        }
-    }
-
-    /// Pair to the slave device
-    ///
-    /// This will start and complete the pairing process to the slave device. Unlike the methods
-    /// `start_pairing` and `continue_pairing`, once this has been polled to completion either the
-    /// slave device has paired to this device or pairing has failed. The consequence of this is
-    /// that it will hold the l2cap connection channel until the pairing process is completed (or
-    /// failed). Any received data received that is not part of the security manager specification
-    /// are returned along the the generated keys (the long term key) once pairing is completed
-    pub async fn pair<C>(
-        &mut self,
-        connection_channel: &mut C,
-    ) -> (
-        Result<&mut super::Keys, Error>,
-        Vec<crate::l2cap::BasicInfoFrame<Vec<u8>>>,
-    )
-    where
-        C: ConnectionChannel,
-    {
-        use crate::l2cap::ConnectionChannelExt;
-
-        let mut other_data = alloc::vec::Vec::new();
-
-        if let Err(e) = self.start_pairing(connection_channel).await {
-            return (Err(e), other_data);
-        }
-
-        'outer: loop {
-            match connection_channel.receive_b_frame().await {
-                Err(e) => return (Err(super::Error::ACLData(e)), other_data),
-                Ok(acl_data_vec) => {
-                    for (index, acl_data) in acl_data_vec.iter().enumerate() {
-                        match acl_data.get_channel_id() {
-                            super::L2CAP_CHANNEL_ID => {
-                                match self.continue_pairing(connection_channel, acl_data).await {
-                                    Err(e) => return (Err(e), other_data),
-                                    Ok(true) => {
-                                        other_data.extend_from_slice(&acl_data_vec[(index + 1)..]);
-
-                                        break 'outer;
-                                    }
-                                    Ok(false) => (),
-                                }
-                            }
-                            _ => other_data.push(acl_data.clone()),
-                        }
-                    }
-                }
-            }
-        }
-
-        (Ok(self.keys.as_mut().unwrap()), other_data)
-    }
-
-    /// Start pairing
-    ///
-    /// Initiate the pairing process and sends the request for the slave's pairing information.
-    /// This function is required to be called before `continue_pairing` can be used to process
-    /// and send further Security Manager PDU's to the slave.
-    pub async fn start_pairing<C>(&mut self, connection_channel: &C) -> Result<(), Error>
-    where
-        C: ConnectionChannel,
-    {
-        self.pairing_expected_cmd = super::CommandType::PairingResponse.into();
-
-        self.send_pairing_request(connection_channel).await
+        Ok(Status::None)
     }
 
     /// Continue Pairing
     ///
-    /// This is used to continue pairing until pairing is either complete or fails. It must be
-    /// called for every received Security Manager ACL data. True is returned once pairing is
-    /// completed.
+    /// This is used to continue pairing until pairing is either complete, fails, or user input
+    /// is required for authentication. It must be called for every received Security Manager ACL
+    /// data. The returned `Status` is used to indicate the next step in the procedure.
     pub async fn continue_pairing<C>(
         &mut self,
         connection_channel: &C,
         acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
-    ) -> Result<bool, Error>
+    ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
@@ -1245,9 +1342,11 @@ where
 
             match CommandType::try_from_val(d_type[0]) {
                 Ok(CommandType::PairingFailed) => {
+                    self.pairing_data = None;
+
                     self.pairing_expected_cmd = super::CommandType::PairingFailed.into();
 
-                    Err(Error::PairingFailed(
+                    Ok(Status::PairingFailed(
                         pairing::PairingFailed::try_from_command_format(payload)?.get_reason(),
                     ))
                 }
@@ -1256,104 +1355,48 @@ where
                     self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
                         .await?;
 
-                    Err(Error::IncorrectCommand(cmd))
+                    Err(Error::IncorrectCommand {
+                        expected: self.pairing_expected_cmd,
+                        received: cmd,
+                    }
+                    .into())
                 }
                 Err(e) => {
                     self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
                         .await?;
 
-                    Err(e)
+                    Err(e.into())
                 }
             }
         })
     }
 
-    async fn next_step<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<bool, Error>
+    async fn next_step<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
-        match self.pairing_expected_cmd {
-            Some(CommandType::PairingResponse) => {
-                match self.process_pairing_response(connection_channel, payload).await {
-                    Ok(_) => {
-                        self.pairing_expected_cmd = CommandType::PairingPublicKey.into();
-
-                        match self.send_pairing_pub_key(connection_channel).await {
-                            Ok(_) => Ok(false),
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(e) => self.step_err(e),
-                }
-            }
-            Some(CommandType::PairingPublicKey) => {
-                match self.process_responder_pub_key(connection_channel, payload).await {
-                    Ok(_) => match self.pairing_data.as_ref().unwrap().pairing_method {
-                        PairingMethod::JustWorks | PairingMethod::NumbComp => {
-                            self.pairing_expected_cmd = super::CommandType::PairingConfirm.into();
-
-                            Ok(false)
-                        }
-                        PairingMethod::Oob(direction) => {
-                            if self.oob_confirm(connection_channel, direction).await? {
-                                self.pairing_expected_cmd = super::CommandType::PairingRandom.into();
-                            } else {
-                                self.pairing_expected_cmd = None;
-                            }
-
-                            Ok(true)
-                        }
-                        PairingMethod::PassKeyEntry => unimplemented!(),
-                    },
-                    Err(e) => self.step_err(e),
-                }
-            }
-            Some(CommandType::PairingConfirm) => {
-                match self.process_responder_commitment(connection_channel, payload).await {
-                    Ok(_) => {
-                        self.pairing_expected_cmd = CommandType::PairingRandom.into();
-
-                        match self.send_pairing_random(connection_channel).await {
-                            Ok(_) => Ok(false),
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(e) => self.step_err(e),
-                }
-            }
-            Some(CommandType::PairingRandom) => {
-                match self.process_responder_random(connection_channel, payload).await {
-                    Ok(_) => {
-                        self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
-
-                        match self.send_initiator_dh_key_check(connection_channel).await {
-                            Ok(_) => Ok(false),
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(e) => self.step_err(e),
-                }
-            }
+        let status_rslt = match self.pairing_expected_cmd {
+            Some(CommandType::PairingKeyPressNotification) => self.process_keypress(connection_channel, payload).await,
+            Some(CommandType::PairingResponse) => self.process_pairing_response(connection_channel, payload).await,
+            Some(CommandType::PairingPublicKey) => self.process_responder_pub_key(connection_channel, payload).await,
+            Some(CommandType::PairingConfirm) => self.process_responder_confirm(connection_channel, payload).await,
+            Some(CommandType::PairingRandom) => self.process_responder_random(connection_channel, payload).await,
             Some(CommandType::PairingDHKeyCheck) => {
-                self.pairing_expected_cmd = None;
-
-                self.process_responder_dh_key_check(connection_channel, payload)
-                    .await
-                    .map(|_| true)
+                self.process_responder_dh_key_check(connection_channel, payload).await
             }
             _ => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
                     .await?;
 
-                Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
-        }
-    }
+        };
 
-    fn step_err(&mut self, e: Error) -> Result<bool, Error> {
-        self.pairing_expected_cmd = None;
+        if let Ok(Status::PairingFailed(_)) | Err(_) = status_rslt {
+            self.pairing_expected_cmd = None;
+        };
 
-        Err(e)
+        status_rslt
     }
 
     /// Process "bonding" packets
@@ -1400,55 +1443,43 @@ where
     /// * [`IdentityInformation`](super::CommandType::IdentityInformation)
     /// * [`IdentityAddressInformation`](super::CommandType::IdentityAddressInformation)
     /// * [`SigningInformation`](super::CommandType::SigningInformation)
-    pub async fn process_bonding<C>(
-        &mut self,
-        connection_channel: &C,
-        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
-    ) -> Result<Option<&super::Keys>, Error>
-    where
-        C: ConnectionChannel,
-    {
-        macro_rules! bonding_key {
-            ($this:expr, $payload:expr, $key:ident, $key_type:ident, $get_key_method:ident) => {
-                match (
-                    self.link_encrypted,
-                    $this.keys.is_some(),
-                    encrypt_info::$key_type::try_from_command_format($payload),
-                ) {
-                    (true, true, Ok(packet)) => {
-                        let keys = $this.keys.as_mut().unwrap();
+    pub async fn process_bonding(&mut self, acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>) -> Result<bool, Error> {
+        macro_rules! set_peer_key {
+            ($this:expr, $key_val: expr, $key:ident) => {
+                match ($this.link_encrypted, $this.keys.is_some()) {
+                    (true, true) => {
+                        *$this.keys.as_mut().and_then(|keys| keys.$key.as_mut()).unwrap() = $key_val;
 
-                        keys.$key = Some(packet.$get_key_method());
+                        for key_kind in $this.responder_key_distribution {
+                            match key_kind {
+                                $crate::pairing::KeyDistributions::EncKey => (),
+                                $crate::pairing::KeyDistributions::IdKey => {
+                                    if $this
+                                        .keys
+                                        .as_ref()
+                                        .and_then(|keys| keys.peer_irk.as_ref())
+                                        .is_none()
+                                    {
+                                        return Ok(false);
+                                    }
+                                }
+                                $crate::pairing::KeyDistributions::SignKey => {
+                                    if $this
+                                        .keys
+                                        .as_ref()
+                                        .and_then(|keys| keys.peer_csrk.as_ref())
+                                        .is_none()
+                                    {
+                                        return Ok(false);
+                                    }
+                                }
+                            }
+                        }
 
-                        Ok(Some(keys))
+                        Ok(true)
                     }
-                    (false, _, _) => {
-                        self.send_err(
-                            connection_channel,
-                            pairing::PairingFailedReason::UnspecifiedReason,
-                        )
-                        .await?;
-
-                        Err(Error::UnknownIfLinkIsEncrypted)
-                    }
-                    (_, false, _) => {
-                        self.send_err(
-                            connection_channel,
-                            pairing::PairingFailedReason::UnspecifiedReason,
-                        )
-                        .await?;
-
-                        Err(Error::OperationRequiresPairing)
-                    }
-                    (_, _, Err(e)) => {
-                        self.send_err(
-                            connection_channel,
-                            pairing::PairingFailedReason::UnspecifiedReason,
-                        )
-                        .await?;
-
-                        Err(e)
-                    }
+                    (false, _) => Err(Error::UnknownIfLinkIsEncrypted.into()),
+                    (_, false) => Err(Error::OperationRequiresPairing.into()),
                 }
             };
         }
@@ -1458,106 +1489,669 @@ where
 
             match CommandType::try_from_val(d_type[0])? {
                 CommandType::IdentityInformation => {
-                    bonding_key!(self, payload, ltk, IdentityInformation, get_irk)
+                    let irk = encrypt_info::IdentityInformation::try_from_command_format(payload)?.get_irk();
+
+                    set_peer_key!(self, irk, peer_irk)
                 }
                 CommandType::SigningInformation => {
-                    bonding_key!(self, payload, csrk, SigningInformation, to_new_csrk_key)
+                    let csrk = encrypt_info::SigningInformation::try_from_command_format(payload)?.get_signature_key();
+
+                    set_peer_key!(self, (csrk, 0), peer_csrk)
                 }
                 CommandType::IdentityAddressInformation => {
-                    bonding_key!(self, payload, peer_identity, IdentityAddressInformation, as_blu_addr)
+                    let identity = encrypt_info::IdentityAddressInformation::try_from_command_format(payload)?.into();
+
+                    set_peer_key!(self, identity, peer_identity)
                 }
-                CommandType::SecurityRequest => Ok(None),
-                c => Err(Error::IncorrectCommand(c)),
+                c => Err(Error::IncorrectCommand {
+                    expected: None,
+                    received: c,
+                }
+                .into()),
             }
         })
     }
-}
 
-impl<S> SecurityManager<S, ExternalOobReceiver>
-where
-    S: for<'i> OutOfBandSend<'i>,
-{
-    /// Set the received out of band data
-    ///
-    /// This method is required to be called when the OOB receiver type is `ExternalOobReceiver`.
-    /// Obviously it is not needed if the receiver type something other than `ExternalOobReceiver`
-    /// because you cannot call this method.
-    ///
-    /// This method is tricky as it may only be called at the correct time during the pairing
-    /// process with OOB, although the method
-    /// does make this easier. If [`expecting_oob_data`] any other pairing process is being used, or
-    /// this is called at the incorrect time, pairing is canceled and must be restarted by the
-    /// responder. The responder is also sent the error `OobNotAvailable`.
-    ///
-    /// This method must be called after the responder's pairing public key message is *processed*
-    /// but before the pairing random message is *processed*. Note *processed*, it is ok for this
-    /// device to receive the pairing random message, but do not call the method until after this
-    /// method is called. The easiest way to know when this occurs is to call the method
-    /// `expecting_oob_data` after processing every security manager message, although this
-    /// procedure can be stopped after this method is called.
-    ///
-    /// # Note
-    /// The error `ConfirmValueFailed` can also be returned, but that means that the method was
-    /// called at the correct time, just that pairing was going to fail because of the confirm value
-    /// check failing.
-    ///
-    /// [`expecting_oob_data`]:  SecurityManager::expecting_oob_data
-    /// [`process_command`]: SecurityManager::continue_pairing
-    pub async fn received_oob_data<C>(&mut self, connection_channel: &C, data: Vec<u8>) -> Result<(), Error>
+    async fn process_number_comparison<C>(
+        &mut self,
+        connection_channel: &C,
+        accepted: bool,
+    ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
     {
-        match (&mut self.pairing_expected_cmd, &self.pairing_data) {
-            (
-                expected_command @ None,
+        if accepted {
+            self.send_err(connection_channel, PairingFailedReason::NumericComparisonFailed)
+                .await?;
+
+            Ok(Status::PairingFailed(PairingFailedReason::NumericComparisonFailed))
+        } else {
+            match &self.pairing_data {
                 Some(PairingData {
-                    pairing_method:
-                        PairingMethod::Oob(OobDirection::BothSendOob)
-                        | PairingMethod::Oob(OobDirection::OnlyResponderSendsOob),
-                    private_key: Some(_),
-                    peer_public_key: Some(_),
-                    secret_key: Some(_),
-                    peer_nonce: None,
-                    external_oob_confirm_valid: false,
+                    pairing_method: PairingMethod::NumbComp,
                     ..
-                }),
-            ) => {
-                *expected_command = super::CommandType::PairingRandom.into();
+                }) => self.send_initiator_dh_key_check(connection_channel).await,
+                _ => {
+                    self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                        .await?;
 
-                self.oob_confirm_result(connection_channel, self.process_received_oob(&data))
-                    .await
-            }
-            _ => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::OOBNotAvailable)
-                    .await?;
-
-                Err(Error::PairingFailed(pairing::PairingFailedReason::UnspecifiedReason))
+                    Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
+                }
             }
         }
     }
 
-    /// Query the security manager if it is expecting some received OOB data
-    ///
-    /// This can be used to find the correct time to call the method `received_oob_data`. It is
-    /// recommended to call this after every processed security manager message to know the
-    /// correct time to call `received_oob_data`.
-    pub fn expecting_oob_data(&self) -> bool {
-        match (&self.pairing_expected_cmd, &self.pairing_data) {
-            (
-                None,
-                Some(PairingData {
-                    pairing_method:
-                        PairingMethod::Oob(OobDirection::BothSendOob)
-                        | PairingMethod::Oob(OobDirection::OnlyResponderSendsOob),
-                    private_key: Some(_),
-                    peer_public_key: Some(_),
-                    secret_key: Some(_),
-                    peer_nonce: None,
-                    external_oob_confirm_valid: false,
-                    ..
-                }),
-            ) => true,
-            _ => false,
+    async fn process_input_passkey<C>(&mut self, connection_channel: &C, passkey_val: u32) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        match self.pairing_data {
+            Some(PairingData { ref mut passkey, .. }) => {
+                *passkey = passkey_val.into();
+
+                self.send_passkey_confirm(connection_channel).await
+            }
+            _ => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
+            }
         }
+    }
+
+    async fn process_input_oob<C>(
+        &mut self,
+        connection_channel: &C,
+        _address: BluetoothDeviceAddress,
+        random: u128,
+        confirm: u128,
+    ) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        match self.pairing_data {
+            Some(PairingData {
+                peer_public_key: Some(ref peer_public_key),
+                ref mut nonce,
+                ..
+            }) => {
+                let pkb = GetXOfP256Key::x(peer_public_key);
+
+                if confirm == toolbox::f4(pkb, pkb, random, 0) {
+                    *nonce = toolbox::nonce();
+
+                    let pairing_random = pairing::PairingRandom::new(*nonce);
+
+                    self.send(connection_channel, pairing_random).await?;
+
+                    self.pairing_expected_cmd = CommandType::PairingRandom.into();
+
+                    Ok(Status::None)
+                } else {
+                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
+                        .await?;
+
+                    Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
+                }
+            }
+            _ => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
+            }
+        }
+    }
+
+    async fn send_passkey_confirm<C>(&mut self, connection_channel: &C) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        match self.pairing_data {
+            Some(PairingData {
+                ref public_key,
+                peer_public_key: Some(ref peer_public_key),
+                ref mut nonce,
+                passkey: Some(passkey),
+                passkey_round,
+                ..
+            }) => {
+                let pka = GetXOfP256Key::x(public_key);
+
+                let pkb = GetXOfP256Key::x(peer_public_key);
+
+                *nonce = toolbox::nonce();
+
+                let ra0 = passkey_r!(passkey, passkey_round);
+
+                let confirm = pairing::PairingConfirm::new(toolbox::f4(pka, pkb, *nonce, ra0));
+
+                self.send(connection_channel, confirm).await?;
+
+                self.pairing_expected_cmd = CommandType::PairingConfirm.into();
+
+                Ok(Status::None)
+            }
+            _ => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
+            }
+        }
+    }
+}
+
+pub enum Status {
+    None,
+    PairingFailed(PairingFailedReason),
+    PairingComplete,
+    BondingComplete,
+    NumberComparison(NumberComparison),
+    PasskeyInput(PasskeyInput),
+    PasskeyOutput(PasskeyOutput),
+    OutOfBandInput(OutOfBandInput),
+    OutOfBandOutput(OutOfBandOutput),
+    OutOfBandInputOutput(OutOfBandInput, OutOfBandOutput),
+}
+
+/// User Input and Output for Number Comparison
+///
+/// This is returned by [`process_command`] when the Security Manager reaches the point in pairing
+/// where it requires the application user to perform number comparison.
+///
+/// The value can be shown to the application user via the implementation of `Display`.
+///
+/// [`process`]: SecurityManager::process
+pub struct NumberComparison {
+    val: u32,
+}
+
+impl NumberComparison {
+    fn new(val: u32) -> Self {
+        // displayed values are only 6 digits
+        let val = val % 1_000_000;
+
+        Self { val }
+    }
+
+    /// Yes Confirmation From the Application User
+    ///
+    /// This should be called once the user has confirmed the number comparison value.
+    pub async fn yes<C>(
+        self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .process_number_comparison(connection_channel, true)
+            .await
+    }
+
+    /// Yes Confirmation From the Application User
+    ///
+    /// This should be called once the user has denied the validity of the number comparison value.
+    pub async fn no<C>(
+        self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .process_number_comparison(connection_channel, false)
+            .await
+    }
+}
+
+impl core::fmt::Display for NumberComparison {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{:06}", self.val)
+    }
+}
+
+/// Passkey Input
+///
+/// This is returned by the Security Manager's [`process_command`] method when it requires a passkey
+/// input from the application user.
+pub struct PasskeyInput([char; 6], usize);
+
+impl PasskeyInput {
+    /// Create a new `PasscodeInput`
+    ///
+    /// This sends the keypress notification *passkey entry started* before a `PasscodeInput` is
+    /// returned.
+    async fn new<C>(security_manager: &mut SecurityManager, connection_channel: &C) -> Result<Self, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .send(connection_channel, pairing::KeyPressNotification::PasskeyEntryStarted)
+            .await?;
+
+        Ok(Self(Default::default(), 0))
+    }
+
+    /// Get the number of digits
+    ///
+    /// This returns the number of digits that are currently within this `PasscodeInput`.
+    pub fn count(&self) -> usize {
+        self.1
+    }
+
+    /// Add a Character to the Passkey
+    ///
+    /// This adds a digit character to the passkey. The `security_manager` will send a keypress
+    /// notification to the peer device's Security Manager containing *passkey digit entered*.
+    ///
+    /// # Errors
+    /// 1) `digit` must be a base 10 digit character and there must be less than six digits within
+    ///    this passcode.
+    /// 2) The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    ///    notification because.
+    pub async fn add<C>(
+        &mut self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+        digit: char,
+    ) -> Result<(), PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        if self.1 >= 6 {
+            Err(PasscodeInputError::TooManyDigits)
+        } else if !digit.is_digit(10) {
+            Err(PasscodeInputError::NotADigit)
+        } else {
+            self.0[self.1] = digit;
+
+            self.1 += 1;
+
+            security_manager
+                .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
+                .await?;
+
+            Ok(())
+        }
+    }
+
+    /// Insert a Character Into the Passkey
+    ///
+    /// This inserts a digit character to the passkey. The digit is inserted at the position
+    /// `index`. `index` must less than or equal to the current number of passkey digits within this
+    /// `PasskeyInput`. The `security_manager` will send a keypress notification to the peer
+    /// device's Security Manager containing *passkey digit entered*.
+    ///
+    /// # Errors
+    /// 1) `digit` must be a base 10 digit character and there must be less than six digits within
+    ///    this passcode.
+    /// 2) `index` must be a valid position to insert `digit` into the passcode.
+    /// 3) The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    ///    notification because.
+    pub async fn insert<C>(
+        &mut self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+        digit: char,
+        index: usize,
+    ) -> Result<(), PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        if self.1 >= 6 {
+            Err(PasscodeInputError::TooManyDigits)
+        } else if !digit.is_digit(10) {
+            Err(PasscodeInputError::NotADigit)
+        } else if index > self.1 {
+            Err(PasscodeInputError::IndexOutOfBounds)
+        } else {
+            self.1 += 1;
+
+            self.0[index..self.1].rotate_right(1);
+
+            self.0[index] = digit;
+
+            security_manager
+                .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitEntered)
+                .await?;
+
+            Ok(())
+        }
+    }
+
+    /// Remove a Character From the Passkey
+    ///
+    /// This is used to remove a character from the passkey. This should be called whenever the user
+    /// deletes a single character of the passkey. `index` is the position of the digit that was
+    /// deleted by the user. The `security_manager` will send a keypress notification to the peer
+    /// device's Security Manager containing *passkey digit erased*.
+    ///
+    /// # Errors
+    /// 1) 'index' must be a valid position to remove a `digit` of the passcode
+    /// 2) The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    ///    notification because.
+    pub async fn remove<C>(
+        &mut self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+        index: usize,
+    ) -> Result<(), PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        if index >= self.1 {
+            Err(PasscodeInputError::IndexOutOfBounds)
+        } else {
+            self.0[index..self.1].rotate_left(1);
+
+            self.1 -= 1;
+
+            security_manager
+                .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
+                .await?;
+
+            Ok(())
+        }
+    }
+
+    /// Clear the passcode
+    ///
+    /// All digits within this `PasscodeInput` are cleared. The `security_manager` will send a
+    /// keypress notification to the peer device's Security Manager containing *passkey cleared*.
+    ///
+    /// # Error
+    /// The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    /// notification because.
+    pub async fn clear<C>(
+        &mut self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<(), PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        self.0 = Default::default();
+        self.1 = 0;
+
+        security_manager
+            .send(connection_channel, pairing::KeyPressNotification::PasskeyCleared)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Complete the passcode
+    ///
+    /// After the user has entered in all six digits and is satisfied with the input, this method
+    /// is used to complete the passcode entry. The `security_manager` will send a keypress
+    /// notification to the peer device's Security Manager containing *passkey completed*.
+    pub async fn complete<C>(
+        self,
+        security_manger: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        if self.1 != 6 {
+            Err(PasscodeInputError::NotComplete)
+        } else {
+            let mut passkey_val = 0;
+            let mut mul = 100_000;
+
+            for i in 0..6 {
+                passkey_val += self.0[i].to_digit(10).unwrap() * mul;
+
+                mul /= 10;
+            }
+
+            security_manger
+                .send(connection_channel, pairing::KeyPressNotification::PasskeyEntryCompleted)
+                .await?;
+
+            security_manger
+                .process_input_passkey(connection_channel, passkey_val)
+                .await
+                .map_err(|e| PasscodeInputError::SecurityManager(e))
+        }
+    }
+}
+
+pub enum PasscodeInputError<E> {
+    SecurityManager(E),
+    TooManyDigits,
+    NotADigit,
+    IndexOutOfBounds,
+    NotComplete,
+}
+
+impl<E> From<E> for PasscodeInputError<E> {
+    fn from(e: E) -> Self {
+        Self::SecurityManager(e)
+    }
+}
+
+/// Passcode Output
+///
+/// This is returned by the Security Manager's [`process_command`] method when a passkey is to be
+/// displayed on this device to the application user.
+pub struct PasskeyOutput(u32);
+
+impl PasskeyOutput {
+    /// Create a new `PasskeyOutput`
+    ///
+    /// # Panic
+    /// Pairing data must exist
+    fn new(security_manager: &mut SecurityManager) -> PasskeyOutput {
+        let passkey = toolbox::new_passkey();
+
+        security_manager.pairing_data.as_mut().unwrap().passkey = Some(passkey);
+
+        PasskeyOutput(passkey)
+    }
+}
+
+impl core::fmt::Display for PasskeyOutput {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "{:06}", self.0)
+    }
+}
+
+/// Out of Band Output
+///
+/// This is output that is to be sent through the out of band medium to the peer's Security Manager.
+/// It contains the minimum required Security Manager types that must be sent to the peer's Security
+/// Manager. More types can be added by pushing the type to this Out of Band input, but there is a
+/// total buffer limit of 64 bytes.
+///
+/// The out of band data always contains the Security Manager types for the Bluetooth address, a
+/// random, and a confirm value. Legacy pairing is not implemented so out of band data within an
+/// `OutOfBandOutput` will always be these values by default (in legacy pairing the out of band
+/// data is just the temporary key).
+///
+/// # Security Manager Type and Structures
+/// A security manager types and structures are no different from the advertising data types and
+/// structures listed within the assigned types and Core Specification Supplement.
+///
+/// # Note
+/// The method used for sending out of band data may have requirements for Security Manager types
+/// that are not included in the default out of band output. For example [`NFC`] requires the
+/// Bluetooth device address and role data types to be part of the Oot of band data.
+///
+/// [`NFC`]: https://members.nfc-forum.org/apps/group_public/download.php/18688/NFCForum-AD-BTSSP_1_1.pdf
+pub struct OutOfBandOutput([u8; 64], usize);
+
+impl OutOfBandOutput {
+    /// Create a new `OutOfBandOutput`
+    ///
+    /// # Panic
+    /// This will panic if `security_manager` is not ready to create the out of band data
+    fn new(security_manager: &mut SecurityManager) -> Self {
+        use bo_tie_gap::assigned::{
+            le_device_address::LeDeviceAddress, sc_confirm_value::ScConfirmValue, sc_random_value::ScRandomValue,
+            Sequence,
+        };
+
+        let mut data = [0u8; 64];
+
+        let pairing_data = security_manager.pairing_data.as_mut().unwrap();
+
+        let rb = toolbox::rand_u128();
+
+        pairing_data.responder_random = rb;
+
+        let pkb = GetXOfP256Key::x(&pairing_data.public_key);
+
+        let address = LeDeviceAddress::from(security_manager.responder_address);
+
+        let random = ScRandomValue::new(rb);
+
+        let confirm = ScConfirmValue::new(toolbox::f4(pkb, pkb, rb, 0));
+
+        let mut sequence = Sequence::new(&mut data);
+
+        sequence.try_add(&address).unwrap();
+        sequence.try_add(&random).unwrap();
+        sequence.try_add(&confirm).unwrap();
+
+        let len = sequence.count();
+
+        Self(data, len)
+    }
+
+    /// Add the role security manager structure to the out of band data
+    ///
+    /// This is not necessary as far as the Security Manager, but it may be necessary for the
+    /// transport that the out of band data is sent through. This is the most commonly required
+    /// Security Manager structure so it gets its own method.
+    ///
+    /// # Error
+    /// There must be enough room within the buffer otherwise an error is returned. The value of the
+    /// error is the size of the role Security Manager structure.
+    pub fn add_role(&mut self) -> Result<(), usize> {
+        let mut sequence = self.as_sequence();
+
+        let role = bo_tie_gap::assigned::le_role::LeRole::OnlyPeripheral;
+
+        sequence
+            .try_add(&role)
+            .map_err(|_| bo_tie_gap::assigned::le_role::LeRole::STRUCT_SIZE)
+    }
+
+    /// Get this `OutOfBandOutput` as a [`Sequence`]
+    ///
+    /// A sequence can be used to add more security manager types to the out of band output.
+    ///
+    /// [`Sequence`]: bo_tie_gap::assigned::Sequence
+    pub fn as_sequence(&mut self) -> bo_tie_gap::assigned::Sequence<'_> {
+        bo_tie_gap::assigned::Sequence::new(&mut self.0[self.1..])
+    }
+
+    /// Convert the underlying buffer to a `SequenceVec`
+    ///
+    /// This is necessary if there needs to be more than 64 bytes of data within the out of band
+    /// output. A `SequenceVec` can contain
+    pub fn to_sequence_vec(self) -> bo_tie_gap::assigned::SequenceVec {
+        bo_tie_gap::assigned::SequenceVec::from(self.0)
+    }
+}
+
+impl core::ops::Deref for OutOfBandOutput {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0[..self.1]
+    }
+}
+
+/// Out of Band Input
+///
+/// This is a marker type for inputting out of band data from the peer device's Security Manager
+/// into this Security Manager.
+pub struct OutOfBandInput;
+
+impl OutOfBandInput {
+    /// Input the Out of Band Data into the Security Manager
+    pub async fn input_oob<C>(
+        self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+        oob_data: &[u8],
+    ) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        use bo_tie_gap::assigned::{
+            le_device_address, sc_confirm_value, sc_random_value, AssignedTypes, TryFromStruct,
+        };
+
+        macro_rules! error {
+            () => {{
+                security_manager
+                    .send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                return Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason));
+            }};
+        }
+
+        let mut address = None;
+        let mut random = None;
+        let mut confirm = None;
+
+        for rslt_struct in bo_tie_gap::assigned::EirOrAdIterator::new(oob_data) {
+            match rslt_struct {
+                Ok(sm_struct) => {
+                    if sm_struct.is_assigned_type(AssignedTypes::LEBluetoothDeviceAddress) {
+                        match le_device_address::LeDeviceAddress::try_from_struct(sm_struct) {
+                            Ok(sm_address) => address = sm_address.into_inner().into(),
+                            Err(_) => error!(),
+                        }
+                    } else if sm_struct.is_assigned_type(AssignedTypes::LESecureConnectionsRandomValue) {
+                        match sc_random_value::ScRandomValue::try_from_struct(sm_struct) {
+                            Ok(sm_random) => random = sm_random.into_inner().into(),
+                            Err(_) => error!(),
+                        }
+                    } else if sm_struct.is_assigned_type(AssignedTypes::LESecureConnectionsConfirmationValue) {
+                        match sc_confirm_value::ScConfirmValue::try_from_struct(sm_struct) {
+                            Ok(sm_confirm) => confirm = sm_confirm.into_inner().into(),
+                            Err(_) => error!(),
+                        }
+                    }
+                }
+                Err(_) => error!(),
+            }
+        }
+
+        if let (Some(address), Some(random), Some(confirm)) = (address, random, confirm) {
+            security_manager
+                .process_input_oob(connection_channel, address, random, confirm)
+                .await
+        } else {
+            error!()
+        }
+    }
+
+    /// Out of Band Data is Unavailable
+    ///
+    /// This method should be called whenever the OOB data cannot be acquired by this device.
+    pub async fn unavailable<C>(
+        self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .send_err(connection_channel, PairingFailedReason::OobNotAvailable)
+            .await?;
+
+        Ok(Status::PairingFailed(PairingFailedReason::OobNotAvailable))
     }
 }

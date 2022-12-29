@@ -154,7 +154,10 @@ pub enum Error {
     /// Incorrect Value
     Value,
     /// Incorrect Security Manager Command
-    IncorrectCommand(CommandType),
+    IncorrectCommand {
+        expected: Option<CommandType>,
+        received: CommandType,
+    },
     /// Feature is unsupported
     UnsupportedFeature,
     /// The operation required encryption, but it is unknown if the connection is encrypted. The
@@ -174,7 +177,15 @@ impl core::fmt::Display for Error {
             Error::Size => f.write_str("size"),
             Error::Format => f.write_str("format"),
             Error::Value => f.write_str("value"),
-            Error::IncorrectCommand(c) => write!(f, "incorrect command: {}", c),
+            Error::IncorrectCommand { expected, received } => {
+                write!(f, "incorrect command: {received}")?;
+
+                if let Some(expected) = expected {
+                    write!(f, ", expected command: {expected}")
+                } else {
+                    f.write_str(" as no command was expected")
+                }
+            }
             Error::UnsupportedFeature => f.write_str("unsupported feature"),
             Error::UnknownIfLinkIsEncrypted => f.write_str("unknown if connection is encrypted"),
             Error::IncorrectL2capChannelId => {
@@ -384,14 +395,14 @@ where
 ///
 /// Either both devices enter a passkey or one device displays the passkey and the other device
 /// enters the passkey.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum PasskeyDirection {
     ResponderDisplaysInitiatorInputs,
     InitiatorDisplaysResponderInputs,
     InitiatorAndResponderInput,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum PairingMethod {
     /// Out of Bound
     Oob(OobDirection),
@@ -528,7 +539,14 @@ struct PairingData {
     /// The peers pairing confirm value
     peer_confirm: Option<u128>,
     /// Mac Key
+    ///
+    /// The initiator needs to hold the mac key until the responder sends its dh-key check.
     mac_key: Option<u128>,
+    /// Long term key
+    ///
+    /// This is the unvalidated LTK held by the initiator until the dh-key check is send by the
+    /// responder.
+    ltk: Option<u128>,
     /// Passkey - A six digit number
     passkey: Option<u32>,
     /// Round of the passkey confirm checks.
@@ -1064,7 +1082,7 @@ impl PasskeyAbility {
 ///
 /// OOB data can be sent from either both Security Managers or just one of them. This is used to
 /// indicate the direction of which out of band data is sent between the two Security Managers.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OobDirection {
     OnlyResponderSendsOob,
     OnlyInitiatorSendsOob,
