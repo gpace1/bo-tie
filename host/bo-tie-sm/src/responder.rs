@@ -1067,9 +1067,13 @@ impl SecurityManager {
                         Ok(Status::OutOfBandInput(OutOfBandInput))
                     }
                     PairingMethod::PassKeyEntry(direction) => match direction {
-                        PasskeyDirection::InitiatorDisplaysResponderInputs
-                        | PasskeyDirection::InitiatorAndResponderInput => {
-                            let passkey_input = PasskeyInput::new(self, connection_channel).await?;
+                        PasskeyDirection::InitiatorDisplaysResponderInputs => {
+                            let passkey_input = PasskeyInput::new(self, connection_channel, false).await?;
+
+                            Ok(Status::PasskeyInput(passkey_input))
+                        }
+                        PasskeyDirection::InitiatorAndResponderInput => {
+                            let passkey_input = PasskeyInput::new(self, connection_channel, true).await?;
 
                             Ok(Status::PasskeyInput(passkey_input))
                         }
@@ -1673,14 +1677,18 @@ impl core::fmt::Display for NumberComparison {
 ///
 /// This is returned by the Security Manager's [`process_command`] method when it requires a passkey
 /// input from the application user.
-pub struct PasskeyInput([char; 6], usize);
+pub struct PasskeyInput([char; 6], usize, bool);
 
 impl PasskeyInput {
     /// Create a new `PasscodeInput`
     ///
     /// This sends the keypress notification *passkey entry started* before a `PasscodeInput` is
     /// returned.
-    async fn new<C>(security_manager: &mut SecurityManager, connection_channel: &C) -> Result<Self, error!(C)>
+    async fn new<C>(
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+        both_enter: bool,
+    ) -> Result<Self, error!(C)>
     where
         C: ConnectionChannel,
     {
@@ -1688,7 +1696,14 @@ impl PasskeyInput {
             .process_input(connection_channel, Input::passkey_start())
             .await?;
 
-        Ok(Self(Default::default(), 0))
+        Ok(Self(Default::default(), 0, both_enter))
+    }
+
+    /// Check if the Application User is to input a passkey on both devices
+    ///
+    /// This is a check to see if the user will need to input the same passkey on both devices.
+    pub fn is_passkey_input_on_both(&self) -> bool {
+        self.2
     }
 
     /// Get the number of digits
@@ -1870,8 +1885,96 @@ impl PasskeyInput {
                 .map_err(|e| PasscodeInputError::SecurityManager(e))
         }
     }
+
+    /// Write the Passcode to this input.
+    ///
+    /// When the user is able to easily manipulate a passcode it can be easier to set the entire
+    /// passcode instead of dealing with individual digits. The application should still send
+    /// keypress notifications with the method [`send_notification`].
+    ///
+    /// [`send_notification`]: PasskeyInput::send_notification
+    pub fn write(&mut self, passcode: [char; 6]) -> Result<(), PasscodeInputError<()>> {
+        if passcode.iter().find(|key| !key.is_digit(10)).is_some() {
+            Err(PasscodeInputError::NotADigit)
+        } else {
+            self.0 = passcode;
+            self.1 = 6;
+            Ok(())
+        }
+    }
+
+    /// Send a keystroke entry notification
+    ///
+    /// This will send a keystroke entry notification without adding a digit to this `PasskeyInput`
+    pub async fn send_key_entry<C>(
+        &self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .process_input(connection_channel, Input::passkey_enter())
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))
+    }
+
+    /// Send a keystroke erase notification
+    ///
+    /// This will send a keystroke erase notification without removing a digit to this `PasskeyInput`
+    pub async fn send_key_erase<C>(
+        &self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .process_input(connection_channel, Input::passkey_erase())
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))
+    }
+
+    /// Send a keystroke erase notification
+    ///
+    /// This will send a keystroke clear notification without clearing a digit to this `PasskeyInput`
+    pub async fn send_key_clear<C>(
+        &self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .process_input(connection_channel, Input::passkey_clear())
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))
+    }
+
+    /// Passkey failure
+    ///
+    /// This sends the passkey entry failed error to the device
+    pub async fn fail<C>(
+        self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager
+            .send_err(connection_channel, PairingFailedReason::PasskeyEntryFailed)
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))?;
+
+        Ok(Status::PairingFailed(PairingFailedReason::PasskeyEntryFailed))
+    }
 }
 
+#[derive(Debug)]
 pub enum PasscodeInputError<E> {
     SecurityManager(E),
     TooManyDigits,
@@ -1885,6 +1988,24 @@ impl<E> From<E> for PasscodeInputError<E> {
         Self::SecurityManager(e)
     }
 }
+
+impl<E> core::fmt::Display for PasscodeInputError<E>
+where
+    E: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            PasscodeInputError::SecurityManager(e) => core::fmt::Display::fmt(e, f),
+            PasscodeInputError::TooManyDigits => f.write_str("too many digits"),
+            PasscodeInputError::NotADigit => f.write_str("character(s) other than digits in passkey"),
+            PasscodeInputError::IndexOutOfBounds => f.write_str("index out of bounds"),
+            PasscodeInputError::NotComplete => f.write_str("not complete"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E> std::error::Error for PasscodeInputError<E> where E: std::error::Error {}
 
 /// Passcode Output
 ///
