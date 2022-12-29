@@ -232,10 +232,10 @@ async fn wait_for_connection<H: HostChannelEnds>(
     connection
 }
 
-async fn on_encryption_change<C, S, R, Q>(
+async fn on_encryption_change<C, Q>(
     ed: &bo_tie::hci::events::parameters::EncryptionChangeV1Data,
     le_connection_channel: &C,
-    security_manager: &mut bo_tie::host::sm::responder::SecurityManager<S, R>,
+    security_manager: &mut bo_tie::host::sm::responder::SecurityManager,
     gatt_server: &mut bo_tie::host::gatt::Server<Q>,
 ) where
     C: bo_tie::host::l2cap::ConnectionChannel,
@@ -322,6 +322,8 @@ where
     } else {
         // !!! The security manager must be set to distribute and accept bonding keys !!!
         security_manager_builder
+            .enable_number_comparison()
+            .enable_passkey()
             .sent_bonding_keys(|sent| sent.enable_irk())
             .accepted_bonding_keys(|accepted| accepted.enable_irk())
             .build()
