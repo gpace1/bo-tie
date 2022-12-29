@@ -3,6 +3,7 @@
 mod io;
 
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
+use bo_tie::host::sm::responder::Status;
 use bo_tie::host::sm::Keys;
 
 #[derive(Clone, Copy)]
@@ -329,6 +330,9 @@ where
             .build()
     };
 
+    let mut number_comparison = None;
+    let mut passkey_input = None;
+
     loop {
         tokio::select! {
             l2cap_packets = le_connection_channel.receive_b_frame() => {
@@ -341,15 +345,26 @@ where
                                 .unwrap()
                         }
                         ChannelIdentifier::Le(LeUserChannelIdentifier::SecurityManagerProtocol) => {
-                            security_manager
+                            match security_manager
                                 .process_command(&le_connection_channel, &packet)
                                 .await
-                                .unwrap();
+                                .unwrap()
+                            {
+                                Status::NumberComparison(n) => number_comparison = Some(n),
+                                Status::PasskeyInput(i) => {
+                                    io::passkey_input_message(&i);
+
+                                    passkey_input = Some(i)
+                                }
+                                Status::PasskeyOutput(o) => io::display_passkey_output(o),
+                                _ => (),
+                            }
                         }
                         _ => println!("received unexpected channel identifier"),
                     }
                 }
-            }
+            },
+
             event_data = event_receiver.recv() => match event_data {
                 Some(EventsData::EncryptionChangeV1(ed) )=> {
                     on_encryption_change(&ed, &le_connection_channel, &mut security_manager, &mut gatt_server).await;
@@ -361,6 +376,41 @@ where
                 }
                 Some(EventsData::DisconnectionComplete(_)) | None => break,
                 _ => unreachable!(),
+            },
+
+            is_accepted = io::number_comparison(&mut number_comparison) => if is_accepted {
+                number_comparison
+                    .take()
+                    .unwrap()
+                    .yes(&mut security_manager, &le_connection_channel)
+                    .await
+                    .unwrap();
+            } else {
+                number_comparison
+                    .take()
+                    .unwrap()
+                    .no(&mut security_manager, &le_connection_channel)
+                    .await
+                    .unwrap();
+            },
+
+            keypress = io::keypress(passkey_input.is_none()) => match keypress {
+                bo_tie::host::sm::pairing::KeyPressNotification::PasskeyDigitEntered => {
+                    passkey_input.as_mut().unwrap().send_key_entry(&mut security_manager, &le_connection_channel).await.unwrap();
+                },
+                bo_tie::host::sm::pairing::KeyPressNotification::PasskeyDigitErased => {
+                    passkey_input.as_mut().unwrap().send_key_erase(&mut security_manager, &le_connection_channel).await.unwrap();
+                },
+                bo_tie::host::sm::pairing::KeyPressNotification::PasskeyEntryCompleted => {
+                    if let Some(input) = io::read_passkey() {
+                        passkey_input.as_mut().unwrap().write(input).unwrap();
+
+                        passkey_input.take().unwrap().complete(&mut security_manager, &le_connection_channel).await.unwrap();
+                    } else {
+                        passkey_input.take().unwrap().fail(&mut security_manager, &le_connection_channel).await.unwrap();
+                    }
+                }
+                _ => unreachable!()
             }
         }
     }
