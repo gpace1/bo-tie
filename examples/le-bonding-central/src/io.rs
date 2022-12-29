@@ -55,12 +55,12 @@ macro_rules! ok_or_return {
 }
 
 struct InputTaskCallback<T> {
-    task_success: oneshot::Receiver<T>,
+    task_success: oneshot::Receiver<crossterm::Result<T>>,
     task_cancel: Option<mpsc::SyncSender<()>>,
 }
 
 impl<T> InputTaskCallback<T> {
-    fn new(task_done: oneshot::Receiver<T>, task_cancel: mpsc::SyncSender<()>) -> Self {
+    fn new(task_done: oneshot::Receiver<crossterm::Result<T>>, task_cancel: mpsc::SyncSender<()>) -> Self {
         InputTaskCallback {
             task_success: task_done.into(),
             task_cancel: task_cancel.into(),
@@ -69,7 +69,7 @@ impl<T> InputTaskCallback<T> {
 }
 
 impl<T: Unpin> std::future::Future for InputTaskCallback<T> {
-    type Output = Result<T, oneshot::error::RecvError>;
+    type Output = Result<crossterm::Result<T>, oneshot::error::RecvError>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context) -> std::task::Poll<Self::Output> {
         let this = self.get_mut();
