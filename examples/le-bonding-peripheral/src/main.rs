@@ -2,7 +2,6 @@
 
 mod io;
 
-use bo_tie::hci::events::LeMetaData;
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
 use bo_tie::host::sm::responder::Status;
 use bo_tie::host::sm::Keys;
