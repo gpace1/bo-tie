@@ -538,6 +538,8 @@ where
 
         let ed = EventsData::try_from_packet(data).map_err(|e| SendError::<R>::InvalidHciEventData(e))?;
 
+        log::info!("(HCI) received event {}", ed.get_event_name());
+
         match &ed {
             EventsData::CommandComplete(data) => {
                 let skip = core::mem::take(&mut self.skip_cmd_response);
