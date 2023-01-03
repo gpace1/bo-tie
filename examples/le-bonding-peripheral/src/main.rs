@@ -2,6 +2,7 @@
 
 mod io;
 
+use bo_tie::hci::events::LeMetaData;
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
 use bo_tie::host::sm::responder::Status;
 use bo_tie::host::sm::Keys;
@@ -51,7 +52,7 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
     hi.mask_events([
-        Events::LeMeta(LeMeta::EnhancedConnectionComplete),
+        Events::LeMeta(LeMeta::ConnectionComplete),
         Events::DisconnectionComplete,
     ])
     .await

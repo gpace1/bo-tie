@@ -111,7 +111,7 @@ async fn connect<H: HostChannelEnds>(
     create_connection::send(hi, connection_parameters).await.unwrap();
 
     if let Next::NewConnection(connection) = hi.next().await.unwrap() {
-        // disable the LE Connection Complete event but keep Disconnection Complete enabled
+        // disable the LE Connection Complete events but keep Disconnection Complete enabled
         hi.mask_events([Events::DisconnectionComplete]).await.unwrap();
 
         connection.try_into_le().expect("failed to create connection")
