@@ -477,7 +477,7 @@ where
     H: HostChannelEnds,
 {
     /// Default Event Mask
-    const DEFAULT_EVENT_MASK: &'static [events::Events] = &[
+    pub const DEFAULT_EVENT_MASK: &'static [events::Events] = &[
         events::Events::InquiryComplete,
         events::Events::InquiryResult,
         events::Events::ConnectionComplete,
