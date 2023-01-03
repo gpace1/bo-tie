@@ -476,51 +476,6 @@ impl<H> Host<H>
 where
     H: HostChannelEnds,
 {
-    /// Default Event Mask
-    pub const DEFAULT_EVENT_MASK: &'static [events::Events] = &[
-        events::Events::InquiryComplete,
-        events::Events::InquiryResult,
-        events::Events::ConnectionComplete,
-        events::Events::ConnectionRequest,
-        events::Events::DisconnectionComplete,
-        events::Events::AuthenticationComplete,
-        events::Events::RemoteNameRequestComplete,
-        events::Events::EncryptionChangeV1,
-        events::Events::ChangeConnectionLinkKeyComplete,
-        events::Events::LinkKeyTypeChanged,
-        events::Events::ReadRemoteSupportedFeaturesComplete,
-        events::Events::ReadRemoteVersionInformationComplete,
-        events::Events::QosSetupComplete,
-        events::Events::CommandComplete,
-        events::Events::CommandStatus,
-        events::Events::HardwareError,
-        events::Events::FlushOccurred,
-        events::Events::RoleChange,
-        events::Events::NumberOfCompletedPackets,
-        events::Events::ModeChange,
-        events::Events::ReturnLinkKeys,
-        events::Events::PinCodeRequest,
-        events::Events::LinkKeyRequest,
-        events::Events::LinkKeyNotification,
-        events::Events::LoopbackCommand,
-        events::Events::DataBufferOverflow,
-        events::Events::MaxSlotsChange,
-        events::Events::ReadClockOffsetComplete,
-        events::Events::ConnectionPacketTypeChanged,
-        events::Events::QosViolation,
-        events::Events::PageScanRepetitionModeChange,
-        events::Events::FlowSpecificationComplete,
-        events::Events::InquiryResultWithRssi,
-        events::Events::ReadRemoteExtendedFeaturesComplete,
-        events::Events::SynchronousConnectionComplete,
-        events::Events::SynchronousConnectionChanged,
-        events::Events::LeMeta(events::LeMeta::ConnectionComplete),
-        events::Events::LeMeta(events::LeMeta::AdvertisingReport),
-        events::Events::LeMeta(events::LeMeta::ConnectionUpdateComplete),
-        events::Events::LeMeta(events::LeMeta::ReadRemoteFeaturesComplete),
-        events::Events::LeMeta(events::LeMeta::LongTermKeyRequest),
-    ];
-
     /// Initialize the host
     ///
     /// This is generally called as part of the driver implementation.
@@ -1575,4 +1530,76 @@ impl<C: ConnectionChannelEnds> ConnectionEventReceiver<C> {
             bo_tie_hci_util::ToConnectionEventIntraMessage::RoutedEvent(ed) => ed,
         })
     }
+}
+
+/// An Iterator over the Default Masked Events
+///
+/// This is intended to be used with the method [`mask_events`] to reset the event mask to its
+/// default. The default mask is the events that are mask upon reset of the Bluetooth Controller.
+///
+/// [`mask_events`]: Host::mask_events
+#[derive(Default, Copy, Clone)]
+pub struct DefaultEventMask(usize);
+
+impl Iterator for DefaultEventMask {
+    type Item = &'static events::Events;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = Self::DEFAULT_EVENT_MASK.get(self.0)?;
+
+        self.0 += 1;
+
+        Some(next)
+    }
+}
+
+impl DefaultEventMask {
+    pub fn new() -> Self {
+        DefaultEventMask::default()
+    }
+
+    /// Default Event Mask
+    const DEFAULT_EVENT_MASK: &'static [events::Events] = &[
+        events::Events::InquiryComplete,
+        events::Events::InquiryResult,
+        events::Events::ConnectionComplete,
+        events::Events::ConnectionRequest,
+        events::Events::DisconnectionComplete,
+        events::Events::AuthenticationComplete,
+        events::Events::RemoteNameRequestComplete,
+        events::Events::EncryptionChangeV1,
+        events::Events::ChangeConnectionLinkKeyComplete,
+        events::Events::LinkKeyTypeChanged,
+        events::Events::ReadRemoteSupportedFeaturesComplete,
+        events::Events::ReadRemoteVersionInformationComplete,
+        events::Events::QosSetupComplete,
+        events::Events::CommandComplete,
+        events::Events::CommandStatus,
+        events::Events::HardwareError,
+        events::Events::FlushOccurred,
+        events::Events::RoleChange,
+        events::Events::NumberOfCompletedPackets,
+        events::Events::ModeChange,
+        events::Events::ReturnLinkKeys,
+        events::Events::PinCodeRequest,
+        events::Events::LinkKeyRequest,
+        events::Events::LinkKeyNotification,
+        events::Events::LoopbackCommand,
+        events::Events::DataBufferOverflow,
+        events::Events::MaxSlotsChange,
+        events::Events::ReadClockOffsetComplete,
+        events::Events::ConnectionPacketTypeChanged,
+        events::Events::QosViolation,
+        events::Events::PageScanRepetitionModeChange,
+        events::Events::FlowSpecificationComplete,
+        events::Events::InquiryResultWithRssi,
+        events::Events::ReadRemoteExtendedFeaturesComplete,
+        events::Events::SynchronousConnectionComplete,
+        events::Events::SynchronousConnectionChanged,
+        events::Events::LeMeta(events::LeMeta::ConnectionComplete),
+        events::Events::LeMeta(events::LeMeta::AdvertisingReport),
+        events::Events::LeMeta(events::LeMeta::ConnectionUpdateComplete),
+        events::Events::LeMeta(events::LeMeta::ReadRemoteFeaturesComplete),
+        events::Events::LeMeta(events::LeMeta::LongTermKeyRequest),
+    ];
 }
