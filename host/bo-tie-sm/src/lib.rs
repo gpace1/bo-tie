@@ -933,10 +933,7 @@ impl SecurityManagerKeys {
     /// *probably* not needed. Most controllers can handle resolving a private address for a single
     /// connectible device. See the HCI methods within the module
     /// [`privacy`](crate::hci::le::privacy).
-    pub fn resolve_rpa_itr(
-        &self,
-        addr: crate::BluetoothDeviceAddress,
-    ) -> impl core::iter::Iterator<Item = Option<Keys>> + '_ {
+    pub fn resolve_rpa_itr(&self, addr: BluetoothDeviceAddress) -> impl Iterator<Item = Option<Keys>> + '_ {
         let hash = [addr[0], addr[1], addr[2]];
         let prand = [addr[3], addr[4], addr[5]];
 
