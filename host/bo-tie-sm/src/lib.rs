@@ -554,6 +554,17 @@ struct PairingData {
     /// Passkey checks are done 20 times for each bit of the passkey (6 digits equates to 20 bits).
     /// This is always a value between 0 and 20.
     passkey_round: usize,
+    /// Number comparison validation
+    ///
+    /// Used by the responder to check if number comparison has completed on this device by the
+    /// user before validating the initiators DH Key check value and then sending its DH Key check
+    /// value. Not used by other authentications.
+    number_comp_validated: bool,
+    /// Initiators DHKey Check value
+    ///
+    /// Used to store the initiators DH Key check if it is received before number comparison is
+    /// validated on this device.
+    initiator_dh_key_check: Option<u128>,
 }
 
 /// The identity address of an device

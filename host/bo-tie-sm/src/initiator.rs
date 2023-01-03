@@ -798,6 +798,8 @@ impl SecurityManager {
                     initiator_random: 0,
                     peer_confirm: None,
                     passkey_round: 0,
+                    number_comp_validated: false,
+                    initiator_dh_key_check: None,
                 });
 
                 self.pairing_expected_cmd = CommandType::PairingPublicKey.into();

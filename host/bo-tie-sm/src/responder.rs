@@ -795,6 +795,22 @@ impl SecurityManager {
 
             Ok(Status::PairingFailed(PairingFailedReason::NumericComparisonFailed))
         } else {
+            match self.pairing_data {
+                Some(PairingData {
+                    number_comp_validated: false,
+                    initiator_dh_key_check: Some(initiator_dh_key_check),
+                    ..
+                }) => {
+                    self.send_dh_key_check(connection_channel, initiator_dh_key_check)
+                        .await?;
+                }
+                Some(PairingData {
+                    ref mut number_comp_validated,
+                    ..
+                }) => *number_comp_validated = true,
+                _ => unreachable!(),
+            }
+
             Ok(Status::None)
         }
     }
@@ -977,6 +993,8 @@ impl SecurityManager {
                     passkey: None,
                     peer_confirm: None,
                     passkey_round: 0,
+                    number_comp_validated: false,
+                    initiator_dh_key_check: None,
                 });
 
                 Ok(Status::None)
@@ -1317,6 +1335,32 @@ impl SecurityManager {
 
         match self.pairing_data {
             Some(PairingData {
+                pairing_method: PairingMethod::NumbComp,
+                number_comp_validated: false,
+                initiator_dh_key_check: ref mut peer_dh_key_check,
+                ..
+            }) => {
+                *peer_dh_key_check = initiator_dh_key_check.get_key_check().into();
+
+                Ok(Status::None)
+            }
+            _ => {
+                self.send_dh_key_check(connection_channel, initiator_dh_key_check.get_key_check())
+                    .await
+            }
+        }
+    }
+
+    async fn send_dh_key_check<C>(
+        &mut self,
+        connection_channel: &C,
+        initiator_dh_key_check: u128,
+    ) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        match self.pairing_data {
+            Some(PairingData {
                 secret_key: Some(ref dh_key),
                 nonce,
                 peer_nonce: Some(ref peer_nonce),
@@ -1352,9 +1396,7 @@ impl SecurityManager {
                     b_addr.clone(),
                 );
 
-                let received_ea = initiator_dh_key_check.get_key_check();
-
-                if received_ea == ea {
+                if initiator_dh_key_check == ea {
                     log::trace!("(SM) responder_io_cap: {:x?}", responder_io_cap);
 
                     let eb = toolbox::f6(
@@ -1397,7 +1439,7 @@ impl SecurityManager {
                     self.send_err(connection_channel, PairingFailedReason::DhKeyCheckFailed)
                         .await?;
 
-                    log::trace!("(SM) received ea: {:x?}", received_ea);
+                    log::trace!("(SM) received ea: {:x?}", initiator_dh_key_check);
                     log::trace!("(SM) calculated ea: {:x?}", ea);
 
                     Ok(Status::PairingFailed(PairingFailedReason::DhKeyCheckFailed).into())
