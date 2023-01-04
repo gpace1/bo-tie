@@ -149,9 +149,9 @@ where
     {
         match packet {
             HciPacket::Command(_) => Err(SendError::<R>::InvalidHciPacket(HciPacketType::Command)),
-            HciPacket::Acl(packet) => self.send_acl(packet).await.map_err(|e| e.into()),
+            HciPacket::Acl(packet) => self.send_acl(packet).await,
             HciPacket::Sco(_packet) => Err(SendError::<R>::Unimplemented("HCI SCO packets are unimplemented")),
-            HciPacket::Event(packet) => self.maybe_send_event(packet).await.map_err(|e| e.into()),
+            HciPacket::Event(packet) => self.maybe_send_event(packet).await,
             HciPacket::Iso(_packet) => Err(SendError::<R>::Unimplemented("HCI SCO packets are unimplemented")),
         }
     }
