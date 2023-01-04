@@ -1015,7 +1015,7 @@ pub struct Connection<C> {
     ends: C,
 }
 
-impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
+impl<C> Connection<C> {
     fn new(buffer_header_size: usize, buffer_tail_size: usize, hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
         let bounded = false;
 
@@ -1107,6 +1107,13 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
         self.bounded = false
     }
 
+    /// Convert this into its inner channel ends
+    pub fn into_inner(self) -> C {
+        self.ends
+    }
+}
+
+impl<C: ConnectionChannelEnds> Connection<C> {
     /// Try to create an `LeL2cap`
     ///
     /// An `LeL2cap` implements [`ConnectionChannel`] for a Bluetooth LE connection. A connection
@@ -1174,11 +1181,6 @@ impl<C: bo_tie_hci_util::ConnectionChannelEnds> Connection<C> {
         self.ends
             .take_event_receiver()
             .map(|r| ConnectionEventReceiver::<C>::new(r))
-    }
-
-    /// Convert this into its inner channel ends
-    pub fn into_inner(self) -> C {
-        self.ends
     }
 }
 
