@@ -801,7 +801,7 @@ impl SecurityManager {
                     initiator_dh_key_check: Some(initiator_dh_key_check),
                     ..
                 }) => {
-                    self.send_dh_key_check(connection_channel, initiator_dh_key_check)
+                    self.check_and_send_dh_key_check(connection_channel, initiator_dh_key_check)
                         .await?;
                 }
                 Some(PairingData {
@@ -1345,13 +1345,13 @@ impl SecurityManager {
                 Ok(Status::None)
             }
             _ => {
-                self.send_dh_key_check(connection_channel, initiator_dh_key_check.get_key_check())
+                self.check_and_send_dh_key_check(connection_channel, initiator_dh_key_check.get_key_check())
                     .await
             }
         }
     }
 
-    async fn send_dh_key_check<C>(
+    async fn check_and_send_dh_key_check<C>(
         &mut self,
         connection_channel: &C,
         initiator_dh_key_check: u128,
