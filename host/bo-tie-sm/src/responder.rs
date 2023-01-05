@@ -1187,7 +1187,7 @@ impl SecurityManager {
     {
         log::info!("(SM) processing pairing random");
 
-        let initiator_random = match pairing::PairingRandom::try_from_command_format(payload) {
+        let initiator_nonce = match pairing::PairingRandom::try_from_command_format(payload) {
             Ok(request) => request,
             Err(e) => {
                 self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
@@ -1204,7 +1204,7 @@ impl SecurityManager {
                 nonce,
                 ..
             }) => {
-                *peer_nonce = initiator_random.get_value().into();
+                *peer_nonce = initiator_nonce.get_value().into();
 
                 self.send(connection_channel, pairing::PairingRandom::new(nonce))
                     .await?;
@@ -1219,7 +1219,7 @@ impl SecurityManager {
                 peer_public_key: Some(peer_public_key),
                 ..
             }) => {
-                let initiator_nonce = initiator_random.get_value();
+                let initiator_nonce = initiator_nonce.get_value();
 
                 *peer_nonce = initiator_nonce.into();
 
@@ -1251,7 +1251,7 @@ impl SecurityManager {
                 peer_confirm: Some(peer_confirm),
                 ..
             }) => {
-                let initiator_nonce = initiator_random.get_value();
+                let initiator_nonce = initiator_nonce.get_value();
 
                 *peer_nonce = initiator_nonce.into();
 
