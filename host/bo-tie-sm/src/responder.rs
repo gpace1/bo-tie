@@ -1382,17 +1382,19 @@ impl SecurityManager {
                     (initiator_random, responder_random)
                 };
 
-                log::trace!("(SM) secret key: {:x?}", dh_key);
-                log::trace!("(SM) remote nonce: {:x?}", peer_nonce);
-                log::trace!("(SM) this nonce: {:x?}", nonce);
-                log::trace!("(SM) remote address: {:x?}", a_addr);
-                log::trace!("(SM) this address: {:x?}", b_addr);
-
                 let (mac_key, ltk) = toolbox::f5(*dh_key, *peer_nonce, nonce, a_addr.clone(), b_addr.clone());
 
+                log::trace!("(SM) initiator address: {:x?}", a_addr);
+                log::trace!("(SM) responder address: {:x?}", b_addr);
+                log::trace!("(SM) initiator IOcap: {:x?}", initiator_io_cap);
+                log::trace!("(SM) responder IOcap: {:x?}", responder_io_cap);
+                log::trace!("(SM) initiator nonce: {:x}", peer_nonce);
+                log::trace!("(SM) responder nonce: {:x}", nonce);
+                log::trace!("(SM) initiator random: {:x}", ra);
+                log::trace!("(SM) responder random: {:x}", rb);
+                log::trace!("(SM) secret key: {:x?}", dh_key);
                 log::trace!("(SM) mac_key: {:x?}", mac_key);
                 log::trace!("(SM) ltk: {:x?}", ltk);
-                log::trace!("(SM) initiator_io_cap: {:x?}", initiator_io_cap);
 
                 let ea = toolbox::f6(
                     mac_key,
