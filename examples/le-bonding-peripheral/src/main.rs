@@ -217,8 +217,9 @@ where
         security_manager_builder.set_already_paired(keys).unwrap().build()
     } else {
         security_manager_builder
-            .enable_number_comparison()
-            .enable_passkey()
+            //.enable_number_comparison()
+            //.enable_passkey()
+            .enable_passkey_display()
             .sent_bonding_keys(|sent| sent.enable_irk())
             .accepted_bonding_keys(|accepted| accepted.enable_irk())
             .build()
@@ -244,19 +245,26 @@ where
                                 .await
                                 .unwrap()
                             {
-                                Status::NumberComparison(n) => number_comparison = Some(n),
+                                Status::NumberComparison(n) => {
+                                    println!(
+                                        "To proceed with pairing, compare this number ({n}) with \
+                                        the number displayed on the other device"
+                                    );
+                                    println!("Does {n} match the number on the other device? \
+                                        [y/n]"
+                                    );
+
+                                    number_comparison = Some(n);
+                                },
                                 Status::PasskeyInput(i) => {
                                     io::passkey_input_message(&i);
 
                                     passkey_input = Some(i)
                                 }
                                 Status::PasskeyOutput(o) => io::display_passkey_output(o),
-                                Status::BondingComplete => {
-                                    println!(
-                                        "irk: {:#x}, peer irk: {:#x}",
-                                        security_manager.get_keys().unwrap().get_irk().unwrap(),
-                                        security_manager.get_keys().unwrap().get_peer_irk().unwrap()
-                                    );
+                                Status::PairingFailed(_) => {
+                                    number_comparison = None;
+                                    passkey_input = None;
                                 }
                                 _ => (),
                             }

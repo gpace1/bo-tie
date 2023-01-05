@@ -114,13 +114,7 @@ fn await_input() -> impl std::future::Future<Output = String> {
 
 /// Number Comparison
 pub async fn number_comparison(number_comparison: &mut Option<bo_tie::host::sm::responder::NumberComparison>) -> bool {
-    if let Some(number_comp) = number_comparison.as_mut() {
-        println!(
-            "To proceed with pairing, compare this number ({number_comp}) with the number \
-            displayed on the other device"
-        );
-        println!("Does {number_comp} match the number on the other device? [y/n]");
-
+    if let Some(_) = number_comparison.as_mut() {
         let input = await_input().await;
 
         if "y" == input.to_lowercase() || "yes" == input.to_lowercase() {
