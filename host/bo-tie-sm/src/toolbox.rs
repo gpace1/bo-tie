@@ -121,14 +121,14 @@ pub fn c1(
 fn c1_p1(pres: [u8; 7], preq: [u8; 7], iat: bool, rat: bool) -> u128 {
     let mut ret = 0;
 
-    // byte 0 of the return is the rat
-    ret |= if rat { 1 } else { 0 };
+    // byte 0 of the return is the iat
+    ret |= if iat { 1 } else { 0 };
 
-    // byte 1 of the return is the iat
-    ret |= if iat { 1 } else { 0 } << (1 * 8);
+    // byte 1 of the return is the rat
+    ret |= if rat { 1 } else { 0 } << (1 * 8);
 
     // bytes 2..9 of the return is the preq
-    preq.into_iter().enumerate().fold(ret, |mut preq_p1, (cnt, byte)| {
+    ret |= preq.into_iter().enumerate().fold(ret, |mut preq_p1, (cnt, byte)| {
         preq_p1 |= (byte as u128) << ((2 + cnt) * 8);
         preq_p1
     });
@@ -137,9 +137,7 @@ fn c1_p1(pres: [u8; 7], preq: [u8; 7], iat: bool, rat: bool) -> u128 {
     pres.into_iter().enumerate().fold(ret, |mut pres_p1, (cnt, byte)| {
         pres_p1 |= (byte as u128) << ((9 + cnt) * 8);
         pres_p1
-    });
-
-    ret
+    })
 }
 
 /// Part 2 of method [`c1`]
@@ -147,8 +145,8 @@ fn c1_p2(ia: &[u8; 6], ra: &[u8; 6]) -> u128 {
     // ia and ib are concatenated together and
     // padded with zeros to form the return
 
-    ia.iter()
-        .chain(ra.iter())
+    ra.iter()
+        .chain(ia.iter())
         .copied()
         .enumerate()
         .fold(0, |mut ret, (cnt, byte)| {
@@ -158,6 +156,11 @@ fn c1_p2(ia: &[u8; 6], ra: &[u8; 6]) -> u128 {
 }
 
 /// Phase 2 (LE legacy) short term key (STK) function
+///
+/// # Inputs
+/// k: Temporary Key
+/// r1: responder random
+/// r2: initiator random
 pub fn s1(k: u128, r1: u128, r2: u128) -> u128 {
     let r1_p = (0x0000_0000_0000_0000_FFFF_FFFF_FFFF_FFFF & r1) << 64;
     let r2_p = 0x0000_0000_0000_0000_FFFF_FFFF_FFFF_FFFF & r2;
@@ -523,9 +526,9 @@ mod tests {
         let ia = BluetoothDeviceAddress([0xA6, 0xA5, 0xA4, 0xA3, 0xA2, 0xA1]); // 0xA1A2A3A4A5A6
         let ra = BluetoothDeviceAddress([0xB6, 0xB5, 0xB4, 0xB3, 0xB2, 0xB1]); // 0xB1B2B3B4B5B6
 
-        assert_eq!(0x05000800000302070710000001010001, c1_p1(pres, preq, iat, rat));
+        assert_eq!(0x05000800000302070710000001010001, c1_p1(pres, preq, iat, rat),);
 
-        assert_eq!(0x00000000A1A2A3A4A5A6B1B2B3B4B5B6, c1_p2(&ia.0, &ra.0));
+        assert_eq!(0x00000000A1A2A3A4A5A6B1B2B3B4B5B6, c1_p2(&ia.0, &ra.0),);
 
         assert_eq!(
             0x1e1e3fef878988ead2a74dc5bef13b86u128,
