@@ -155,6 +155,64 @@ impl From<IntervalRange<u16>> for IntervalRange<core::time::Duration> {
     }
 }
 
+/// Error for Trying to Create an Interval From a Raw Value
+///
+/// This is returned as the error for the method `try_from_raw` of any interval type.
+pub struct TryFromRawIntervalError {
+    pub low: u16,
+    pub hi: u16,
+    pub of: &'static str,
+    pub val: u16,
+}
+
+impl core::fmt::Debug for TryFromRawIntervalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(
+            f,
+            "raw value of {} for {} is out of range ({}..={})",
+            self.val, self.of, self.low, self.hi
+        )
+    }
+}
+
+impl core::fmt::Display for TryFromRawIntervalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Debug::fmt(self, f)
+    }
+}
+
+/// Error for Trying to Create an Interval From a Raw Value
+///
+/// This is returned as the error for the method `try_from_duration` of any interval type.
+pub struct TryFromDurationIntervalError {
+    pub low: core::time::Duration,
+    pub hi: core::time::Duration,
+    pub of: &'static str,
+    pub val: core::time::Duration,
+}
+
+impl core::fmt::Debug for TryFromDurationIntervalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(
+            f,
+            "duration value of {} (micro seconds) for {} is out of range ({}ms..={}ms)",
+            self.val.as_micros(),
+            self.of,
+            self.low.as_micros(),
+            self.hi.as_micros()
+        )
+    }
+}
+
+impl core::fmt::Display for TryFromDurationIntervalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Debug::fmt(self, f)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for TryFromDurationIntervalError {}
+
 #[macro_export]
 macro_rules! make_interval {
     ( $(#[ $expl:meta ])*
@@ -188,14 +246,19 @@ macro_rules! make_interval {
             /// or the value is less than
             #[doc = core::stringify!($raw_low)]
             /// .
-            pub fn try_from_raw( raw: u16 ) -> Result<Self, &'static str> {
+            pub fn try_from_raw( raw: u16 ) -> Result<Self, alloc::string::String> {
                 if $name::RAW_RANGE.contains(&raw) {
                     Ok($name{
                         interval: raw,
                     })
                 }
                 else {
-                    Err(concat!("Raw value out of range: ", $raw_low, "..=", $raw_hi))
+                    Err($crate::le::TryFromRawIntervalError {
+                        low: $raw_low,
+                        hi: $raw_hi,
+                        of: core::stringify!($name),
+                        val: raw
+                    }.to_string())
                 }
             }
 
@@ -203,7 +266,7 @@ macro_rules! make_interval {
             ///
             /// # Error
             /// the value is out of bounds.
-            pub fn try_from_duration( duration: core::time::Duration ) -> Result<Self, &'static str>
+            pub fn try_from_duration( duration: core::time::Duration ) -> Result<Self, alloc::string::String>
             {
                 let duration_range = $crate::le::IntervalRange::<core::time::Duration>::from($name::RAW_RANGE);
 
@@ -214,11 +277,12 @@ macro_rules! make_interval {
                     })
                 }
                 else {
-                    Err(concat!("Duration out of range: ",
-                        stringify!( ($raw_low * $micro_sec_conv) ),
-                        "us..=",
-                        stringify!( ($raw_hi * $micro_sec_conv) ),
-                        "us"))
+                    Err($crate::le::TryFromDurationIntervalError{
+                        low: core::time::Duration::from_micros($raw_low * $micro_sec_conv),
+                        hi: core::time::Duration::from_micros($raw_hi * $micro_sec_conv),
+                        of: core::stringify!($name),
+                        val: duration,
+                    }.to_string())
                 }
             }
 
@@ -238,7 +302,7 @@ macro_rules! make_interval {
         }
 
         impl TryFrom<u16> for $name {
-            type Error = &'static str;
+            type Error = alloc::string::String;
 
             fn try_from(v: u16) -> Result<Self, Self::Error> {
                 $name::try_from_raw(v)
@@ -246,7 +310,7 @@ macro_rules! make_interval {
         }
 
         impl TryFrom<core::time::Duration> for $name {
-            type Error = &'static str;
+            type Error = alloc::string::String;
 
             fn try_from(duration: core::time::Duration) -> Result<Self, Self::Error> {
                 Self::try_from_duration(duration)
