@@ -460,7 +460,7 @@ macro_rules! events_markup {
             /// input is used to determine the LeMeta sub event otherwise input `sub_event` is
             /// ignored.
             pub fn try_from_event_codes<S>(event: u8, sub_event: S)
-            -> core::result::Result<crate::events::$EnumName, EventError>
+            -> core::result::Result<$crate::events::$EnumName, EventError>
             where
                 S: Into<Option<u8>>
             {
@@ -495,7 +495,7 @@ macro_rules! events_markup {
             }
         }
 
-        impl crate::events::$EnumDataName {
+        impl $crate::events::$EnumDataName {
 
             pub fn get_event_name(&self) -> $EnumName {
                 #[cfg(not(test))]
@@ -527,7 +527,7 @@ macro_rules! events_markup {
                 let mut packet = data;
 
                 // packet[2] is the LeMeta specific sub event code if the event is LeMeta
-                let event_code = crate::events::$EnumName::try_from_event_codes(
+                let event_code = $crate::events::$EnumName::try_from_event_codes(
                     chew!(packet), // chew "removes" the first byte from packet
                     packet.get(1).cloned().unwrap_or_default()
                 )?;
@@ -536,9 +536,14 @@ macro_rules! events_markup {
                 let event_len = chew!(packet).into();
 
                 match event_code {
-                    $( crate::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
+                    $( $crate::events::$EnumName::$name $( ( $(put_!($enum_val)),* ) )* =>
                         Ok(crate::events::$EnumDataName::$name(
-                            crate::events::$data::<$( $type ),*>::try_from( &packet[..event_len] )?)),
+                            $crate::events::$data::<$( $type ),*>::try_from( &packet[..event_len] )
+                                .map_err(|e| EventError {
+                                    for_event: Some(event_code),
+                                    reason: EventErrorReason::Error(e),
+                                })?
+                        )),
                     )*
                 }
             }
@@ -769,15 +774,6 @@ impl From<EventCodeError> for EventError {
         EventError {
             for_event: None,
             reason: EventErrorReason::EventCode(ec),
-        }
-    }
-}
-
-impl From<alloc::string::String> for EventError {
-    fn from(s: alloc::string::String) -> EventError {
-        EventError {
-            for_event: None,
-            reason: EventErrorReason::Error(s),
         }
     }
 }
