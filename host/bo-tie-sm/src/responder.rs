@@ -1137,29 +1137,39 @@ impl SecurityManager {
                 ref mut peer_confirm,
                 ref public_key,
                 peer_public_key: Some(ref peer_public_key),
-                nonce,
+                ref mut nonce,
                 passkey: Some(passkey),
                 passkey_round,
                 ..
             }) => {
-                // Only the passkey pairing method has a confirm values PDU sent by the initiator
-                let confirm = initiator_confirm.get_value();
+                if passkey_round < 20 {
+                    // Only the passkey pairing method has a confirm values PDU sent by the initiator
+                    let confirm = initiator_confirm.get_value();
 
-                *peer_confirm = Some(confirm);
+                    *peer_confirm = Some(confirm);
 
-                let pka = GetXOfP256Key::x(peer_public_key);
+                    let pka = GetXOfP256Key::x(peer_public_key);
 
-                let pkb = GetXOfP256Key::x(public_key);
+                    let pkb = GetXOfP256Key::x(public_key);
 
-                let nb = nonce;
+                    let nb = toolbox::nonce();
 
-                let rb = passkey_r!(passkey, passkey_round);
+                    let rb = passkey_r!(passkey, passkey_round);
 
-                let cb = toolbox::f4(pkb, pka, nb, rb);
+                    let cb = toolbox::f4(pkb, pka, nb, rb);
 
-                self.send(connection_channel, pairing::PairingConfirm::new(cb)).await?;
+                    *nonce = nb;
 
-                Ok(Status::None)
+                    self.send(connection_channel, pairing::PairingConfirm::new(cb)).await?;
+
+                    Ok(Status::None)
+                } else {
+                    // only 20 rounds should be done
+                    self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                        .await?;
+
+                    Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
+                }
             }
             Some(PairingData {
                 pairing_method: PairingMethod::JustWorks | PairingMethod::NumbComp | PairingMethod::Oob(_),
@@ -1247,7 +1257,7 @@ impl SecurityManager {
                 public_key,
                 peer_public_key: Some(peer_public_key),
                 passkey: Some(passkey),
-                passkey_round,
+                ref mut passkey_round,
                 peer_confirm: Some(peer_confirm),
                 ..
             }) => {
@@ -1261,23 +1271,13 @@ impl SecurityManager {
 
                 let na = initiator_nonce;
 
-                let rb = passkey_r!(passkey, passkey_round);
+                let rb = passkey_r!(passkey, *passkey_round);
 
-                if passkey_round >= 20 {
-                    // only 20 rounds should be done
-                    self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                        .await?;
+                if peer_confirm == toolbox::f4(pka, pkb, na, rb) {
+                    *passkey_round += 1;
 
-                    Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
-                } else if peer_confirm == toolbox::f4(pka, pkb, na, rb) {
                     self.send(connection_channel, pairing::PairingRandom::new(nonce))
                         .await?;
-
-                    // rust borrow checker...
-                    self.pairing_data.as_mut().unwrap().nonce = toolbox::nonce();
-
-                    // rust borrow checker...
-                    self.pairing_data.as_mut().unwrap().passkey_round += 1;
 
                     Ok(Status::None)
                 } else {
@@ -1388,13 +1388,13 @@ impl SecurityManager {
                 log::trace!("(SM) responder address: {:x?}", b_addr);
                 log::trace!("(SM) initiator IOcap: {:x?}", initiator_io_cap);
                 log::trace!("(SM) responder IOcap: {:x?}", responder_io_cap);
-                log::trace!("(SM) initiator nonce: {:x}", peer_nonce);
-                log::trace!("(SM) responder nonce: {:x}", nonce);
-                log::trace!("(SM) initiator random: {:x}", ra);
-                log::trace!("(SM) responder random: {:x}", rb);
-                log::trace!("(SM) secret key: {:x?}", dh_key);
-                log::trace!("(SM) mac_key: {:x?}", mac_key);
-                log::trace!("(SM) ltk: {:x?}", ltk);
+                log::trace!("(SM) initiator nonce: {:032x}", peer_nonce);
+                log::trace!("(SM) responder nonce: {:032x}", nonce);
+                log::trace!("(SM) initiator random: {:032x}", ra);
+                log::trace!("(SM) responder random: {:032x}", rb);
+                log::trace!("(SM) DH shared secret: {:x?}", dh_key);
+                log::trace!("(SM) mac_key: {:#032x}", mac_key);
+                log::trace!("(SM) long term key: {:#032x}", ltk);
 
                 let ea = toolbox::f6(
                     mac_key,
