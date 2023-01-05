@@ -234,8 +234,9 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddres
 
     let key_t = aes_cmac_generate(SALT, &w);
 
-    // Because of the order in which in the message to the aes_cmac function, the following values
+    // Because of the the aes_cmac function, the following values
     // need to be in big endian order.
+
     let key_id = [0x62, 0x74, 0x6c, 0x65];
 
     let length = [0x01, 0x00];
