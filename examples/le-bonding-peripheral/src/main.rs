@@ -1,7 +1,9 @@
 #![doc = include_str!("../README.md")]
 
 mod io;
+mod privacy;
 
+use crate::privacy::host_privacy::RpaInterval;
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
 use bo_tie::host::sm::responder::Status;
 use bo_tie::host::sm::Keys;
@@ -14,16 +16,7 @@ struct AddressInfo {
 
 enum AdvertisingType {
     Undirected(&'static str, AddressInfo),
-    Resolvable(Keys),
-}
-
-impl AdvertisingType {
-    fn get_keys(&self) -> Option<Keys> {
-        match self {
-            AdvertisingType::Resolvable(keys) => keys.clone().into(),
-            _ => None,
-        }
-    }
+    Resolvable(privacy::Privacy),
 }
 
 /// Starting advertising
@@ -38,17 +31,13 @@ impl AdvertisingType {
 /// in its connection initiation message (for itself). This means that only the bonded devices will
 /// be allowed by the controller to form a Connection as both the central and peripheral must be
 /// able to resolve each other's addresses.
-async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &AdvertisingType) {
+async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &mut AdvertisingType) -> Option<RpaInterval> {
     use bo_tie::hci::commands::le::OwnAddressType;
     use bo_tie::hci::commands::le::{
         set_advertising_data, set_advertising_enable, set_advertising_parameters, set_random_address,
     };
     use bo_tie::hci::events::{Events, LeMeta};
     use bo_tie::host::gap::assigned;
-
-    let mut adv_data = set_advertising_data::AdvertisingData::new();
-
-    let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
     hi.mask_events([
         Events::LeMeta(LeMeta::ConnectionComplete),
@@ -57,8 +46,14 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
     .await
     .unwrap();
 
+    let mut timeout_interval = None;
+
     match ty {
         AdvertisingType::Undirected(local_name, address_info) => {
+            let mut adv_data = set_advertising_data::AdvertisingData::new();
+
+            let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
+
             let mut adv_flags = assigned::flags::Flags::new();
 
             adv_flags
@@ -80,131 +75,26 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertisin
             };
 
             set_random_address::send(hi, address_info.address).await.unwrap();
+
+            set_advertising_data::send(hi, adv_data).await.unwrap();
+
+            set_advertising_parameters::send(hi, adv_prams).await.unwrap();
         }
-        AdvertisingType::Resolvable(keys) => {
-            let identity = keys.get_identity().unwrap().get_address();
+        AdvertisingType::Resolvable(privacy) => {
+            // For purposes of this example this timeout is very fast,
+            // the default timeout of 900 seconds is perfectly fine.
+            timeout_interval = privacy.set_timeout(hi, std::time::Duration::from_secs(900)).await;
 
-            set_random_address::send(hi, identity).await.unwrap();
-
-            use_resolving_list(hi, keys).await;
-
-            // If the peer has given its IRK then advertising
-            // will be directed, if it has not then advertising
-            // is undirected. This is so the identity address
-            // of this device is not exposed.
-            if keys.get_peer_irk().is_some() {
-                adv_prams.advertising_type =
-                    set_advertising_parameters::AdvertisingType::ConnectableLowDutyCycleDirectedAdvertising;
-            } else {
-                adv_prams.advertising_type =
-                    set_advertising_parameters::AdvertisingType::ConnectableAndScannableUndirectedAdvertising;
-            }
-
-            // This is directed advertising so the peer identity address is needed.
-            adv_prams.peer_address = keys.get_peer_identity().unwrap().get_address();
-
-            adv_prams.peer_address_type = if keys.get_peer_identity().unwrap().is_public() {
-                set_advertising_parameters::PeerAddressType::PublicAddress
-            } else {
-                set_advertising_parameters::PeerAddressType::RandomAddress
-            };
-
-            // this is the key for advertising with a resolvable private address
-            adv_prams.own_address_type = OwnAddressType::RpaFromLocalIrkOrRandomAddress;
+            privacy.set_advertising_configuration(hi).await
         }
     }
 
-    set_advertising_data::send(hi, adv_data).await.unwrap();
-
-    set_advertising_parameters::send(hi, adv_prams).await.unwrap();
-
     set_advertising_enable::send(hi, true).await.unwrap();
+
+    timeout_interval
 }
 
-/// Use the resolving list
-///
-/// This is required to ensure 'Network Privacy' with the Controller. It adds the information within
-/// `keys` to the Controller's resolving list and sets the privacy mode to network privacy (note:
-/// this is the default privacy of the controller).
-async fn use_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
-    use bo_tie::hci::commands::le::{
-        add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
-        set_resolvable_private_address_timeout, PeerIdentityAddressType,
-    };
-
-    let peer_identity_address_type = if keys.get_peer_identity().unwrap().is_public() {
-        PeerIdentityAddressType::PublicIdentityAddress
-    } else {
-        PeerIdentityAddressType::RandomStaticIdentityAddress
-    };
-
-    let peer_identity_address = keys.get_peer_identity().unwrap().get_address();
-
-    // The peer may have or may not have sent an IRK.
-    let peer_irk = keys.get_peer_irk().unwrap_or_default();
-
-    let local_irk = keys.get_irk().unwrap();
-
-    let parameter = add_device_to_resolving_list::Parameter {
-        peer_identity_address_type,
-        peer_identity_address,
-        peer_irk,
-        local_irk,
-    };
-
-    add_device_to_resolving_list::send(hi, parameter).await.unwrap();
-
-    // The default mode of `NetworkPrivacy` is recommended to
-    // be used over `DevicePrivacy` but no all test apps (like
-    // nRF connect) support `NetworkPrivacy` mode.
-    let privacy_mode = set_privacy_mode::PrivacyMode::NetworkPrivacy;
-
-    let parameter = set_privacy_mode::Parameter {
-        peer_identity_address_type,
-        peer_identity_address,
-        privacy_mode,
-    };
-
-    // this is a 5.0+ command so it may not be available,
-    // but that is fine as 4.2 only supports the equivalent
-    // of NetworkPrivacy.
-    set_privacy_mode::send(hi, parameter).await.ok();
-
-    // This isn't totally necessary for this example as
-    // the client is going to reconnect right away, but
-    // most applications should use this command.
-    set_resolvable_private_address_timeout::send(hi, std::time::Duration::from_secs(60 * 4))
-        .await
-        .unwrap();
-
-    // This is only needed if the peer sent an IRK
-    set_address_resolution_enable::send(hi, true).await.unwrap();
-}
-
-async fn remove_from_resolving_list<H: HostChannelEnds>(hi: &mut Host<H>, keys: &Keys) {
-    use bo_tie::hci::commands::le::{
-        remove_device_from_resolving_list, set_address_resolution_enable, PeerIdentityAddressType,
-    };
-
-    set_address_resolution_enable::send(hi, false).await.unwrap();
-
-    let peer_identity_address_type = if keys.get_peer_identity().unwrap().is_public() {
-        PeerIdentityAddressType::PublicIdentityAddress
-    } else {
-        PeerIdentityAddressType::RandomStaticIdentityAddress
-    };
-
-    let peer_identity_address = keys.get_peer_identity().unwrap().get_address();
-
-    let parameter = remove_device_from_resolving_list::Parameter {
-        peer_identity_address_type,
-        peer_identity_address,
-    };
-
-    remove_device_from_resolving_list::send(hi, parameter).await.unwrap();
-}
-
-async fn stop_advertising<H: HostChannelEnds>(hi: &mut Host<H>, ty: &AdvertisingType) {
+async fn stop_advertising<H: HostChannelEnds>(hi: &mut Host<H>) {
     // This does not panic as some times Controllers do not
     // like for the current advertising state to be written
     // to the controller (btw there is no Spec. reason for
@@ -213,21 +103,26 @@ async fn stop_advertising<H: HostChannelEnds>(hi: &mut Host<H>, ty: &Advertising
     bo_tie::hci::commands::le::set_advertising_enable::send(hi, false)
         .await
         .ok();
-
-    if let AdvertisingType::Resolvable(keys) = ty {
-        remove_from_resolving_list(hi, keys).await;
-    }
 }
 
 async fn wait_for_connection<H: HostChannelEnds>(
     hi: &mut Host<H>,
+    advertising_type: &AdvertisingType,
 ) -> bo_tie::hci::Connection<H::ConnectionChannelEnds> {
     use bo_tie::hci::Next;
 
-    let connection = if let Next::NewConnection(connection) = hi.next().await.unwrap() {
-        connection
-    } else {
-        unreachable!("unexpected disconnect event?")
+    let connection = loop {
+        if let Next::NewConnection(connection) = hi.next().await.unwrap() {
+            if let AdvertisingType::Resolvable(privacy) = advertising_type {
+                if let Some(connection) = privacy.validate(connection) {
+                    break connection;
+                } else {
+                    println!("invalid device tried connect")
+                }
+            } else {
+                break connection;
+            }
+        }
     };
 
     connection
@@ -321,7 +216,6 @@ where
         // no pairing (and bonding) is to be done as the keys were already generate
         security_manager_builder.set_already_paired(keys).unwrap().build()
     } else {
-        // !!! The security manager must be set to distribute and accept bonding keys !!!
         security_manager_builder
             .enable_number_comparison()
             .enable_passkey()
@@ -357,6 +251,13 @@ where
                                     passkey_input = Some(i)
                                 }
                                 Status::PasskeyOutput(o) => io::display_passkey_output(o),
+                                Status::BondingComplete => {
+                                    println!(
+                                        "irk: {:#x}, peer irk: {:#x}",
+                                        security_manager.get_keys().unwrap().get_irk().unwrap(),
+                                        security_manager.get_keys().unwrap().get_peer_irk().unwrap()
+                                    );
+                                }
                                 _ => (),
                             }
                         }
@@ -487,9 +388,13 @@ async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Opt
 async fn exit_example<H: HostChannelEnds>(
     host: &mut Host<H>,
     connection_handle: Option<ConnectionHandle>,
-    adv_ty: &AdvertisingType,
+    advertising_type: &mut AdvertisingType,
 ) {
-    stop_advertising(host, adv_ty).await;
+    stop_advertising(host).await;
+
+    if let AdvertisingType::Resolvable(privacy) = advertising_type {
+        privacy.clear_resolving_list(host).await;
+    }
 
     disconnect(host, connection_handle).await;
 }
@@ -554,13 +459,27 @@ async fn main() {
 
     let mut opt_connection_handle = None;
 
+    let mut keys = None;
+
     let task = async {
         'task: loop {
-            advertising_setup(&mut host, &advertising_type).await;
+            let mut opt_adv_interval = advertising_setup(&mut host, &mut advertising_type).await;
 
-            let connection = wait_for_connection(&mut host).await;
+            let connection = loop {
+                tokio::select! {
+                    connection = wait_for_connection(&mut host, &advertising_type) => {
+                        opt_connection_handle = connection.get_handle().into();
+                        break connection;
+                    },
 
-            opt_connection_handle = connection.get_handle().into();
+                    rpa_regen = async { match opt_adv_interval.as_mut() {
+                        Some(adv_interval) => adv_interval.tick().await,
+                        None => std::future::pending().await,
+                    }} => {
+                        rpa_regen.regen(&mut host).await
+                    },
+                }
+            };
 
             // Unmask the 'LE connection complete' event as it is
             // no longer needed and enable the LongTermKeyRequest
@@ -573,49 +492,56 @@ async fn main() {
             .await
             .unwrap();
 
-            stop_advertising(&mut host, &advertising_type).await;
+            stop_advertising(&mut host).await;
 
             let (ltk_sender, mut ltk_receiver) = tokio::sync::mpsc::channel(1);
 
-            let handle = tokio::spawn(server_loop(
+            let mut handle = tokio::spawn(server_loop(
                 connection,
                 ltk_sender,
                 example_name,
                 own_address_info,
-                advertising_type.get_keys(),
+                keys,
             ));
 
-            let keys = tokio::select!(
-                opt_rslt_keys = handle => {
-                    opt_connection_handle = None;
+            keys = loop {
+                tokio::select!(
+                    opt_rslt_keys = &mut handle => {
+                        opt_connection_handle = None;
 
-                    match opt_rslt_keys.unwrap() {
-                        Ok(keys) => keys,
-                        Err(e) => {
-                            println!("{}", e);
-                            break 'task;
+                        match opt_rslt_keys.unwrap() {
+                            Ok(keys) => break Some(keys),
+                            Err(e) => {
+                                println!("{}", e);
+                                break 'task;
+                            }
                         }
-                    }
-                }
+                    },
 
-                _ = async { loop {
-                    if let Some(opt_ltk) = ltk_receiver.recv().await {
+                    opt_ltk = async { match ltk_receiver.recv().await {
+                        Some(opt_ltk) => opt_ltk,
+                        // None here means that `handle` will poll to completion soon
+                        None => std::future::pending().await,
+                    }} => {
                         on_ltk_request_event(
                             &mut host,
                             opt_connection_handle.unwrap(),
                             opt_ltk
                         ).await
-                    } else {
-                        // this may be reached if the `handle` is not polled first
-                        core::future::pending::<()>().await;
-                    }
-                }} => unreachable!(),
-            );
+                    },
+                )
+            };
 
             println!("client disconnected and is bonded, beginning private directed advertising");
 
-            // set advertising to directed
-            advertising_type = AdvertisingType::Resolvable(keys);
+            let mut privacy = privacy::Privacy::new(&mut host).await;
+
+            privacy
+                .add_device_to_resolving_list(&mut host, keys.as_ref().unwrap())
+                .await;
+
+            // set advertising to private
+            advertising_type = AdvertisingType::Resolvable(privacy);
         }
     };
 
@@ -624,5 +550,5 @@ async fn main() {
         _ = exit_sig => (),
     );
 
-    exit_example(&mut host, opt_connection_handle, &advertising_type).await;
+    exit_example(&mut host, opt_connection_handle, &mut advertising_type).await;
 }
