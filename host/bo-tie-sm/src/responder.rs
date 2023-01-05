@@ -836,15 +836,15 @@ impl SecurityManager {
                     PairingMethod::Oob(OobDirection::BothSendOob) | PairingMethod::Oob(OobDirection::OnlyInitiatorSendsOob),
                 peer_public_key: Some(ref peer_public_key),
                 ref mut nonce,
+                ref mut initiator_random,
                 ..
             }) => {
-                // Note: rb (a.k.a. PairingData::responder_random) is already
-                // zero if direction is OnlyInitiatorSendsOob
-
                 let pka = GetXOfP256Key::x(peer_public_key);
 
                 if confirm == toolbox::f4(pka, pka, random, 0) {
                     *nonce = toolbox::nonce();
+
+                    *initiator_random = random;
 
                     Ok(Status::None)
                 } else {
@@ -1361,6 +1361,7 @@ impl SecurityManager {
     {
         match self.pairing_data {
             Some(PairingData {
+                pairing_method,
                 secret_key: Some(ref dh_key),
                 nonce,
                 peer_nonce: Some(ref peer_nonce),
@@ -1368,11 +1369,18 @@ impl SecurityManager {
                 responder_io_cap,
                 responder_random,
                 initiator_random,
+                passkey,
                 ..
             }) => {
                 let a_addr = toolbox::PairingAddress::new(&self.initiator_address, self.initiator_address_is_random);
 
                 let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
+
+                let (ra, rb) = if let (PairingMethod::PassKeyEntry(_), Some(passkey)) = (pairing_method, passkey) {
+                    (passkey as u128, passkey as u128)
+                } else {
+                    (initiator_random, responder_random)
+                };
 
                 log::trace!("(SM) secret key: {:x?}", dh_key);
                 log::trace!("(SM) remote nonce: {:x?}", peer_nonce);
@@ -1390,7 +1398,7 @@ impl SecurityManager {
                     mac_key,
                     *peer_nonce,
                     nonce,
-                    initiator_random,
+                    rb,
                     initiator_io_cap,
                     a_addr.clone(),
                     b_addr.clone(),
@@ -1399,15 +1407,7 @@ impl SecurityManager {
                 if initiator_dh_key_check == ea {
                     log::trace!("(SM) responder_io_cap: {:x?}", responder_io_cap);
 
-                    let eb = toolbox::f6(
-                        mac_key,
-                        nonce,
-                        *peer_nonce,
-                        responder_random,
-                        responder_io_cap,
-                        b_addr,
-                        a_addr,
-                    );
+                    let eb = toolbox::f6(mac_key, nonce, *peer_nonce, ra, responder_io_cap, b_addr, a_addr);
 
                     self.send(connection_channel, pairing::PairingDhKeyCheck::new(eb))
                         .await?;
