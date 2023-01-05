@@ -526,7 +526,16 @@ macro_rules! events_markup {
 
                 let mut packet = data;
 
-                // packet[2] is the LeMeta specific sub event code if the event is LeMeta
+                if packet[0] == 0xFF {
+                    let e = VendorSpecificEvent::new(packet);
+
+                    return Err(EventError {
+                        for_event: None,
+                        reason: EventErrorReason::VendorSpecificEvent(e)
+                    })
+                }
+
+                // packet[2] is the LeMeta specific sub event code (if the event is LeMeta)
                 let event_code = $crate::events::$EnumName::try_from_event_codes(
                     chew!(packet), // chew "removes" the first byte from packet
                     packet.get(1).cloned().unwrap_or_default()
@@ -784,6 +793,7 @@ enum EventErrorReason {
     Error(alloc::string::String),
     EventCode(EventCodeError),
     MissingSubEventCode,
+    VendorSpecificEvent(VendorSpecificEvent),
 }
 
 impl core::fmt::Display for EventErrorReason {
@@ -792,6 +802,7 @@ impl core::fmt::Display for EventErrorReason {
             EventErrorReason::Error(reason) => core::fmt::Display::fmt(reason, f),
             EventErrorReason::EventCode(code) => core::fmt::Display::fmt(code, f),
             EventErrorReason::MissingSubEventCode => f.write_str("missing sub event code"),
+            EventErrorReason::VendorSpecificEvent(e) => core::fmt::Display::fmt(e, f),
         }
     }
 }
@@ -830,3 +841,53 @@ impl core::fmt::Display for EventCodeError {
         }
     }
 }
+
+/// Vendor Specific Event
+///
+/// Vendors are allowed to send specific events of their choosing when using the event opcode 0xFF.
+/// These events are out of scope of this library and cannot be processed by it.
+pub struct VendorSpecificEvent {
+    len: usize,
+    payload: [u8; 16],
+}
+
+impl VendorSpecificEvent {
+    fn new(packet: &[u8]) -> Self {
+        debug_assert_eq!(0xFF, packet[0]);
+
+        let len = packet[1] as usize;
+
+        let mut payload = [0u8; 16];
+
+        payload[..len].copy_from_slice(&packet[2..core::cmp::min(len + 2, 18)]);
+
+        VendorSpecificEvent { len, payload }
+    }
+}
+
+impl core::fmt::Debug for VendorSpecificEvent {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "[255 (event code), {} (length)", self.len)?;
+
+        for i in 0..self.len {
+            write!(f, ", {}", self.payload[i])?;
+        }
+
+        if self.len == 16 {
+            f.write_str(", ...]")
+        } else {
+            f.write_str("]")
+        }
+    }
+}
+
+impl core::fmt::Display for VendorSpecificEvent {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str("vendor specific event: ")?;
+
+        core::fmt::Display::fmt(self, f)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for VendorSpecificEvent {}
