@@ -19,6 +19,7 @@ use bo_tie_util::buffer::stack::LinearBuffer;
 pub use bo_tie_util::cryptography::{
     aes_cmac_generate, aes_cmac_verify, ah, e, ecc_gen, ecdh, nonce, rand_u128, PriKey, PubKey,
 };
+use bo_tie_util::BluetoothDeviceAddress;
 
 /// The identifier for an uncompressed public key
 const UNCOMPRESSED_PUB_KEY_TYPE: u8 = 0x4;
@@ -91,40 +92,69 @@ impl super::CommandData for PubKey {
 /// Phase 2 (LE legacy) confirm value function
 ///
 /// # Inputs
-/// - K: AES key
-/// - r: plain text
-/// - pres: 7 bytes
-/// - preq: 7 bytes
-/// - iat: 1 bit, mapped to a boolean
-/// - ia: 6 bytes
-/// - rat: 1 bit, mapped to a boolean
-/// - ra: 6 bytes
-///
-/// ## Note
-/// All inputs are masked down to the size stated above
-pub fn c1(k: u128, r: u128, pres: u128, preq: u128, iat: bool, ia: u128, rat: bool, ra: u128) -> u128 {
+/// - K: Temporary Key
+/// - r: 128 bit random
+/// - pres: pairing request command
+/// - preq: pairing response command
+/// - iat: true if the initiating device's address is random, false if it is public
+/// - ia: initiators Bluetooth address
+/// - rat: true if the responding device's address is random, false if it is public
+/// - ra: responders Bluetooth address
+pub fn c1(
+    k: u128,
+    r: u128,
+    pres: [u8; 7],
+    preq: [u8; 7],
+    iat: bool,
+    ia: BluetoothDeviceAddress,
+    rat: bool,
+    ra: BluetoothDeviceAddress,
+) -> u128 {
     let p1 = c1_p1(pres, preq, iat, rat);
 
-    let p2 = c1_p2(ia, ra);
+    let p2 = c1_p2(&ia.0, &ra.0);
 
     e(k, e(k, r ^ p1) ^ p2)
 }
 
-fn c1_p1(pres: u128, preq: u128, iat: bool, rat: bool) -> u128 {
-    let iat_p = if iat { 1 } else { 0 };
-    let rat_p = (if rat { 1 } else { 0 }) << (1 * 8);
+/// Part 1 of method [`c1`]
+fn c1_p1(pres: [u8; 7], preq: [u8; 7], iat: bool, rat: bool) -> u128 {
+    let mut ret = 0;
 
-    let pres_m = (0xFF_FFFF_FFFF_FFFF & pres) << (9 * 8);
-    let preq_m = (0xFF_FFFF_FFFF_FFFF & preq) << (2 * 8);
+    // byte 0 of the return is the rat
+    ret |= if rat { 1 } else { 0 };
 
-    pres_m | preq_m | rat_p | iat_p
+    // byte 1 of the return is the iat
+    ret |= if iat { 1 } else { 0 } << (1 * 8);
+
+    // bytes 2..9 of the return is the preq
+    preq.into_iter().enumerate().fold(ret, |mut preq_p1, (cnt, byte)| {
+        preq_p1 |= (byte as u128) << ((2 + cnt) * 8);
+        preq_p1
+    });
+
+    // bytes 9..16 of the return is the pres
+    pres.into_iter().enumerate().fold(ret, |mut pres_p1, (cnt, byte)| {
+        pres_p1 |= (byte as u128) << ((9 + cnt) * 8);
+        pres_p1
+    });
+
+    ret
 }
 
-fn c1_p2(ia: u128, ra: u128) -> u128 {
-    let ia_p = (0xFFFF_FFFF_FFFF & ia) << (6 * 8);
-    let ra_p = 0xFFFF_FFFF_FFFF & ra;
+/// Part 2 of method [`c1`]
+fn c1_p2(ia: &[u8; 6], ra: &[u8; 6]) -> u128 {
+    // ia and ib are concatenated together and
+    // padded with zeros to form the return
 
-    ia_p | ra_p
+    ia.iter()
+        .chain(ra.iter())
+        .copied()
+        .enumerate()
+        .fold(0, |mut ret, (cnt, byte)| {
+            ret |= (byte as u128) << cnt * 8;
+            ret
+        })
 }
 
 /// Phase 2 (LE legacy) short term key (STK) function
@@ -219,14 +249,14 @@ pub fn f4(u: [u8; 32], v: [u8; 32], x: u128, z: u8) -> u128 {
 /// needs to be mapped as follows:
 ///
 /// * w:  The shared secret Diffie-Hellman key generated during LE Secure Connections pairing phase 2
-/// * n1: A randomly generated number sent from the master device to the slave
-/// * n2: A randomly generated number sent from the slave device to the master
-/// * a1: The device address of the *master* (in little endian order) with the most significant byte
-///       of a1 equal to 0x0 if the address is a public address, or equal to 0x1 if the address is a
-///       random address.
-/// * a2: The device address of the *slave* (in little endian order) with the most significant byte
-///       of a2 equal to 0x0 if the address is a public address, or equal to 0x1 if the address is a
-///       random address.
+/// * n1: A randomly generated number sent from the central device to the peripheral
+/// * n2: A randomly generated number sent from the peripheral device to the central
+/// * a1: The device address of the *central* with a byte inserted at the front. This inserted
+///       byte is equal to 0x0 if the address is a public address, or it is equal to 0x1 if the
+///       address is a random address.
+/// * a2: The device address of the *peripheral* with a byte inserted at the front. This inserted
+///       byte is equal to 0x0 if the address is a public address, or it is equal to 0x1 if the
+///       address is a random address.
 ///
 /// The returned value is ( MacKey , LTK )
 pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddress) -> (u128, u128) {
@@ -291,12 +321,12 @@ pub fn f5(w: [u8; 32], n1: u128, n2: u128, a1: PairingAddress, a2: PairingAddres
 /// * IOcapB is the capabilities of the slave
 /// * ra is a 6-digit passkey value represented in 128-bits
 /// * rb is a 6-digit passkey value represented in 128-bits
-/// * A is the device address of the *master* (in little endian order) with the most significant
-///     byte of a1 equal to 0x0 if the address is a public address, or equal to 0x1 if the address
-///     is a random address
-/// * B is the device address of the *slave* (in little endian order) with the most significant byte
-///     of a2 equal to 0x0 if the address is a public address, or equal to 0x1 if the address is a
-///     random address.
+/// * A is the device address of the *central* with a byte inserted at the front. This inserted
+///     byte is equal to 0x0 if the address is a public address, or it is equal to 0x1 if the
+///     address is a random address.
+/// * B is the device address of the *peripheral* with a byte inserted at the front. This inserted
+///     byte is equal to 0x0 if the address is a public address, or it is equal to 0x1 if the
+///     address is a random address.
 ///
 /// # Models Numeric Comparison or Just Works
 ///
@@ -486,16 +516,16 @@ mod tests {
     fn c1_test() {
         let k = 0;
         let r = 0x5783D52156AD6F0E6388274EC6702EE0;
-        let pres = 0x05000800000302;
-        let preq = 0x07071000000101;
+        let pres = [0x02, 0x03, 0x00, 0x00, 0x08, 0x00, 0x05]; // 0x05000800000302
+        let preq = [0x01, 0x01, 0x00, 0x00, 0x10, 0x07, 0x07]; // 0x07071000000101
         let iat = true;
         let rat = false;
-        let ia = 0xA1A2A3A4A5A6;
-        let ra = 0xB1B2B3B4B5B6;
+        let ia = BluetoothDeviceAddress([0xA6, 0xA5, 0xA4, 0xA3, 0xA2, 0xA1]); // 0xA1A2A3A4A5A6
+        let ra = BluetoothDeviceAddress([0xB6, 0xB5, 0xB4, 0xB3, 0xB2, 0xB1]); // 0xB1B2B3B4B5B6
 
         assert_eq!(0x05000800000302070710000001010001, c1_p1(pres, preq, iat, rat));
 
-        assert_eq!(0x00000000A1A2A3A4A5A6B1B2B3B4B5B6, c1_p2(ia, ra));
+        assert_eq!(0x00000000A1A2A3A4A5A6B1B2B3B4B5B6, c1_p2(&ia.0, &ra.0));
 
         assert_eq!(
             0x1e1e3fef878988ead2a74dc5bef13b86u128,

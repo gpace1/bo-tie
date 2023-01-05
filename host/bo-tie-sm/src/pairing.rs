@@ -281,11 +281,31 @@ impl PairingRequest {
         self.responder_key_distribution = dist_gen_types
     }
 
+    /// Get the pres
+    ///
+    /// This returns the value for the `pres` input of the [`c1`] toolbox function.
+    ///
+    /// [`c1`]: toolbox::c1
+    pub fn get_pres(&self) -> [u8; 7] {
+        let mut ret = [0u8; 7];
+
+        ret[0] = CommandType::PairingRequest.into_val();
+        ret[1] = self.get_io_capability().into_val();
+        ret[2] = self.get_oob_data_flag().into_val();
+        ret[3] = AuthRequirements::make_auth_req_val(self.get_auth_req());
+        ret[4] = self.get_max_encryption_size() as u8;
+        ret[5] = KeyDistributions::make_key_dist_val(self.get_initiator_key_distribution());
+        ret[6] = KeyDistributions::make_key_dist_val(self.get_responder_key_distribution());
+
+        ret
+    }
+
     /// Get the IOcap (not the IO capabilities)
     ///
-    /// This is the IOcapA/IOcapB value that is used as part of the ['f6'](crate::sm::toolbox::f6)
-    /// toolbox function.
-    pub(super) fn get_io_cap(&self) -> [u8; 3] {
+    /// This is the IOcapA/IOcapB value that is used as part of the ['f6'] toolbox function.
+    ///
+    /// [`f6`] crate::sm::toolbox::f6
+    pub fn get_io_cap(&self) -> [u8; 3] {
         self.io_cap_f6.clone()
     }
 }
@@ -447,11 +467,31 @@ impl PairingResponse {
         self.responder_key_distribution = dist_gen_types
     }
 
+    /// Get the preq
+    ///
+    /// This returns the value for the `preq` input of the [`c1`] toolbox function.
+    ///
+    /// [`c1`]: toolbox::c1
+    pub fn get_preq(&self) -> [u8; 7] {
+        let mut ret = [0u8; 7];
+
+        ret[0] = CommandType::PairingResponse.into_val();
+        ret[1] = self.get_io_capability().into_val();
+        ret[2] = self.get_oob_data_flag().into_val();
+        ret[3] = AuthRequirements::make_auth_req_val(self.get_auth_req());
+        ret[4] = self.get_max_encryption_size() as u8;
+        ret[5] = KeyDistributions::make_key_dist_val(self.get_initiator_key_distribution());
+        ret[6] = KeyDistributions::make_key_dist_val(self.get_responder_key_distribution());
+
+        ret
+    }
+
     /// Get the IOcap (not the IO capabilities)
     ///
-    /// This is the IOcapA/IOcapB value that is used as part of the ['f6'](crate::sm::toolbox::f6)
-    /// toolbox function.
-    pub(super) fn get_io_cap(&self) -> [u8; 3] {
+    /// This is the IOcapA/IOcapB value that is used as part of the ['f6'] toolbox function.
+    ///
+    /// [`f6`]: crate::sm::toolbox::f6
+    pub fn get_io_cap(&self) -> [u8; 3] {
         self.io_cap_f6.clone()
     }
 }
