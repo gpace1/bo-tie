@@ -742,7 +742,7 @@ impl SecurityManager {
             Input::Passkey(k, passkey) => {
                 self.p_input_keypress_notification(connection_channel, k).await?;
 
-                Ok(self.p_input_passkey(passkey))
+                Ok(self.p_input_passkey(connection_channel, passkey).await?)
             }
             Input::YesNoInput(yes_no) => self.p_input_number_comparison(connection_channel, yes_no).await,
             Input::OutOfBand {
@@ -771,13 +771,51 @@ impl SecurityManager {
     }
 
     /// Process the user's passkey
-    pub fn p_input_passkey(&mut self, passkey_val: u32) -> Status {
+    pub async fn p_input_passkey<C>(&mut self, connection_channel: &C, passkey_val: u32) -> Result<Status, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
         match self.pairing_data {
-            Some(PairingData { ref mut passkey, .. }) => *passkey = Some(passkey_val),
-            _ => (),
-        }
+            Some(PairingData {
+                ref public_key,
+                peer_public_key: Some(ref peer_public_key),
+                peer_confirm: Some(_),
+                ref mut nonce,
+                ref mut passkey,
+                passkey_round,
+                ..
+            }) => {
+                // The initiator has already sent its first confirm,
+                // so this responder needs to send its first confirm.
 
-        Status::None
+                let pka = GetXOfP256Key::x(peer_public_key);
+
+                let pkb = GetXOfP256Key::x(public_key);
+
+                let nb = toolbox::nonce();
+
+                let rb = passkey_r!(passkey_val, passkey_round);
+
+                let cb = toolbox::f4(pkb, pka, nb, rb);
+
+                *nonce = nb;
+
+                *passkey = passkey_val.into();
+
+                self.send(connection_channel, pairing::PairingConfirm::new(cb)).await?;
+
+                Ok(Status::None)
+            }
+            Some(PairingData { ref mut passkey, .. }) => {
+                // Wait for the initiator to send a confirm, the
+                // method p_process_confirm will process it.
+
+                *passkey = passkey_val.into();
+
+                Ok(Status::None)
+            }
+            _ => Err(Error::Invalid.into()),
+        }
     }
 
     /// Process input of number comparison
@@ -803,15 +841,19 @@ impl SecurityManager {
                 }) => {
                     self.check_and_send_dh_key_check(connection_channel, initiator_dh_key_check)
                         .await?;
+
+                    Ok(Status::None)
                 }
                 Some(PairingData {
                     ref mut number_comp_validated,
                     ..
-                }) => *number_comp_validated = true,
-                _ => unreachable!(),
-            }
+                }) => {
+                    *number_comp_validated = true;
 
-            Ok(Status::None)
+                    Ok(Status::None)
+                }
+                _ => Err(Error::Invalid.into()),
+            }
         }
     }
 
@@ -931,6 +973,22 @@ impl SecurityManager {
             }
         };
 
+        log::info!(
+            "(SM) received pairing request:\n    \
+                io capability: {:?}\n    \
+                oob data flag: {:?}\n    \
+                auth req: {:?}\n    \
+                maximum encryption size: {:?}\n    \
+                initiator key distribution: {:?}\n    \
+                responder key distribution: {:?}\n    ",
+            request.get_io_capability(),
+            request.get_oob_data_flag(),
+            request.get_auth_req(),
+            request.get_max_encryption_size(),
+            request.get_initiator_key_distribution(),
+            request.get_responder_key_distribution(),
+        );
+
         if request.get_max_encryption_size() < self.encryption_key_size_min {
             self.send_err(connection_channel, PairingFailedReason::EncryptionKeySize)
                 .await?;
@@ -963,6 +1021,22 @@ impl SecurityManager {
 
             let initiator_io_cap = request.get_io_cap();
             let responder_io_cap = response.get_io_cap();
+
+            log::info!(
+                "(SM) sending pairing response:\n    \
+                    io capability: {:?}\n    \
+                    oob data flag: {:?}\n    \
+                    auth req: {:?}\n    \
+                    maximum encryption size: {:?}\n    \
+                    initiator key distribution: {:?}\n    \
+                    responder key distribution: {:?}\n    ",
+                response.get_io_capability(),
+                response.get_oob_data_flag(),
+                response.get_auth_req(),
+                response.get_max_encryption_size(),
+                response.get_initiator_key_distribution(),
+                response.get_responder_key_distribution(),
+            );
 
             self.send(connection_channel, response).await?;
 
@@ -1039,8 +1113,6 @@ impl SecurityManager {
                 };
 
                 let remote_public_key = initiator_pub_key.get_key();
-
-                log::trace!("(SM) remote public key: {:x?}", remote_public_key.as_ref());
 
                 let peer_pub_key = match toolbox::PubKey::try_from_command_format(&remote_public_key) {
                     Ok(k) => k,
@@ -1133,6 +1205,18 @@ impl SecurityManager {
 
         match self.pairing_data {
             Some(PairingData {
+                pairing_method:
+                    PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorAndResponderInput)
+                    | PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs),
+                passkey: None,
+                ref mut peer_confirm,
+                ..
+            }) => {
+                *peer_confirm = initiator_confirm.get_value().into();
+
+                Ok(Status::None)
+            }
+            Some(PairingData {
                 pairing_method: PairingMethod::PassKeyEntry(_),
                 ref mut peer_confirm,
                 ref public_key,
@@ -1144,9 +1228,7 @@ impl SecurityManager {
             }) => {
                 if passkey_round < 20 {
                     // Only the passkey pairing method has a confirm values PDU sent by the initiator
-                    let confirm = initiator_confirm.get_value();
-
-                    *peer_confirm = Some(confirm);
+                    *peer_confirm = Some(initiator_confirm.get_value());
 
                     let pka = GetXOfP256Key::x(peer_public_key);
 

@@ -169,6 +169,8 @@ pub enum Error {
     ACLData(l2cap::BasicFrameError<core::convert::Infallible>), // temporarily using infallible
     /// The operation requires this device to be paired with the connected device.
     OperationRequiresPairing,
+    /// The input or operation is no longer valid to the scope of pairing
+    Invalid,
 }
 
 impl core::fmt::Display for Error {
@@ -193,6 +195,7 @@ impl core::fmt::Display for Error {
             }
             Error::ACLData(e) => write!(f, "invalid ACL basic frame: {}", e),
             Error::OperationRequiresPairing => f.write_str("operation requires pairing"),
+            Error::Invalid => f.write_str("the operation is no longer valid"),
         }
     }
 }
