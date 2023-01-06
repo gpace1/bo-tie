@@ -214,8 +214,3 @@ pub fn process_passkey(input: Vec<char>) -> Option<[char; 6]> {
         None
     }
 }
-
-/// Display the passkey output
-pub fn display_passkey_output(passkey_output: bo_tie::host::sm::responder::PasskeyOutput) {
-    println!("enter this passkey on the other device: {passkey_output}")
-}

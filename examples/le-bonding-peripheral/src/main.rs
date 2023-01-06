@@ -260,7 +260,9 @@ where
 
                                     passkey_input = Some(i)
                                 }
-                                Status::PasskeyOutput(o) => io::display_passkey_output(o),
+                                Status::PasskeyOutput(o) => {
+                                   println!("enter this passkey on the other device: {o}")
+                                },
                                 Status::PairingFailed(reason) => {
                                     eprintln!("pairing failed: {reason}");
                                     number_comparison = None;
