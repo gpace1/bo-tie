@@ -1,6 +1,4 @@
 //! IO with the user
-
-use bo_tie::host::sm::pairing::KeyPressNotification;
 use std::sync::mpsc;
 use tokio::sync::oneshot;
 
@@ -130,50 +128,40 @@ pub async fn number_comparison(number_comparison: &mut Option<bo_tie::host::sm::
     }
 }
 
-fn await_keystroke() -> impl std::future::Future<Output = KeyPressNotification> {
+fn await_passkey() -> impl std::future::Future<Output = Vec<char>> {
     use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 
-    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<KeyPressNotification>>();
+    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<Vec<char>>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
-    std::thread::spawn(move || loop {
-        if ok_or_return!(poll(core::time::Duration::from_millis(50)), input_sender) {
-            match ok_or_return!(read(), input_sender) {
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char(_),
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    input_sender
-                        .send(Ok(KeyPressNotification::PasskeyDigitEntered))
-                        .unwrap();
-                    break;
+    std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+
+        loop {
+            if ok_or_return!(poll(core::time::Duration::from_millis(50)), input_sender) {
+                match ok_or_return!(read(), input_sender) {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(digit),
+                        ..
+                    }) => {
+                        buffer.push(digit);
+                    }
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) => {
+                        input_sender.send(Ok(buffer)).unwrap();
+                        break;
+                    }
+                    _ => continue,
                 }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    input_sender
-                        .send(Ok(KeyPressNotification::PasskeyEntryCompleted))
-                        .unwrap();
-                    break;
-                }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Backspace,
-                    kind: KeyEventKind::Press,
-                    ..
-                }) => {
-                    input_sender
-                        .send(Ok(KeyPressNotification::PasskeyDigitEntered))
-                        .unwrap();
-                    break;
-                }
-                _ => continue,
+            } else if let Ok(_) = cancel_receiver.try_recv() {
+                break;
             }
-        } else if let Ok(_) = cancel_receiver.try_recv() {
-            break;
         }
+
+        crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags).unwrap();
     });
 
     async move {
@@ -199,27 +187,27 @@ pub fn passkey_input_message(passkey_input: &bo_tie::host::sm::responder::Passke
 ///
 /// # `inactive`
 /// input `inactive` is used to turn keypress into a
-pub async fn keypress(inactive: bool) -> KeyPressNotification {
+pub async fn get_passkey(inactive: bool) -> Vec<char> {
     if inactive {
         core::future::pending().await
     } else {
-        await_keystroke().await
+        await_passkey().await
     }
 }
 
 /// Read the passkey
-pub fn read_passkey() -> Option<[char; 6]> {
-    let input = String::new();
-
-    if input.chars().count() == 6 && input.chars().all(|c| c.is_digit(10)) {
+pub fn process_passkey(input: Vec<char>) -> Option<[char; 6]> {
+    if input.len() == 6 && input.iter().all(|c| c.is_digit(10)) {
         let mut passkey: [char; 6] = Default::default();
 
-        passkey.iter_mut().zip(input.chars()).for_each(|(c, d)| *c = d);
+        passkey.iter_mut().zip(input.into_iter()).for_each(|(c, d)| *c = d);
 
         Some(passkey)
     } else {
+        let passkey = input.into_iter().collect::<String>();
+
         println!(
-            "passkey {input} is not a valid passkey. A passkey must consist of exactly six \
+            "passkey {passkey} is not a valid passkey. A passkey must consist of exactly six \
             digits"
         );
 

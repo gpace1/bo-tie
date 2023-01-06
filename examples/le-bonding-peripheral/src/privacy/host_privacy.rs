@@ -88,8 +88,6 @@ async fn set_advertising_parameters_private<H: HostChannelEnds>(host: &mut Host<
 
     let peer_address = BluetoothDeviceAddress::new_resolvable(peer_irk);
 
-    println!("own address: {own_address}, peer address: {peer_address}");
-
     adv_prams.peer_address = peer_address;
 
     adv_prams.advertising_type =
@@ -132,8 +130,6 @@ pub struct RegenRpa {
 impl RegenRpa {
     pub async fn regen<H: HostChannelEnds>(self, host: &mut Host<H>) {
         use bo_tie::hci::commands::le::set_advertising_enable;
-
-        println!("regen");
 
         set_advertising_enable::send(host, false).await.unwrap();
 

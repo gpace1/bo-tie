@@ -117,7 +117,7 @@ async fn wait_for_connection<H: HostChannelEnds>(
                 if let Some(connection) = privacy.validate(connection) {
                     break connection;
                 } else {
-                    println!("invalid device tried connect")
+                    println!("an invalid device tried to connect")
                 }
             } else {
                 break connection;
@@ -217,9 +217,8 @@ where
         security_manager_builder.set_already_paired(keys).unwrap().build()
     } else {
         security_manager_builder
-            //.enable_number_comparison()
-            //.enable_passkey()
-            .enable_passkey_display()
+            .enable_number_comparison()
+            .enable_passkey()
             .sent_bonding_keys(|sent| sent.enable_irk())
             .accepted_bonding_keys(|accepted| accepted.enable_irk())
             .build()
@@ -262,10 +261,12 @@ where
                                     passkey_input = Some(i)
                                 }
                                 Status::PasskeyOutput(o) => io::display_passkey_output(o),
-                                Status::PairingFailed(_) => {
+                                Status::PairingFailed(reason) => {
+                                    eprintln!("pairing failed: {reason}");
                                     number_comparison = None;
                                     passkey_input = None;
                                 }
+                                Status::BondingComplete => println!("bonding complete"),
                                 _ => (),
                             }
                         }
@@ -303,24 +304,13 @@ where
                     .unwrap();
             },
 
-            keypress = io::keypress(passkey_input.is_none()) => match keypress {
-                bo_tie::host::sm::pairing::KeyPressNotification::PasskeyDigitEntered => {
-                    passkey_input.as_mut().unwrap().send_key_entry(&mut security_manager, &le_connection_channel).await.unwrap();
-                },
-                bo_tie::host::sm::pairing::KeyPressNotification::PasskeyDigitErased => {
-                    passkey_input.as_mut().unwrap().send_key_erase(&mut security_manager, &le_connection_channel).await.unwrap();
-                },
-                bo_tie::host::sm::pairing::KeyPressNotification::PasskeyEntryCompleted => {
-                    if let Some(input) = io::read_passkey() {
-                        passkey_input.as_mut().unwrap().write(input).unwrap();
+            passkey = io::get_passkey(passkey_input.is_none()) => if let Some(input) = io::process_passkey(passkey) {
+                passkey_input.as_mut().unwrap().write(input).unwrap();
 
-                        passkey_input.take().unwrap().complete(&mut security_manager, &le_connection_channel).await.unwrap();
-                    } else {
-                        passkey_input.take().unwrap().fail(&mut security_manager, &le_connection_channel).await.unwrap();
-                    }
-                }
-                _ => unreachable!()
-            }
+                passkey_input.take().unwrap().complete(&mut security_manager, &le_connection_channel).await.unwrap();
+            } else {
+                passkey_input.take().unwrap().fail(&mut security_manager, &le_connection_channel).await.unwrap();
+            },
         }
     }
 
