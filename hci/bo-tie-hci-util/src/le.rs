@@ -584,10 +584,10 @@ impl ConnectionIntervalBounds {
     /// # Errors
     /// An error is returned if `min` or `max` cannot be converted into a `ConnectionInterval` or
     /// `min` is greater than `max`
-    pub fn try_from_bounds<A, B>(min: A, max: B) -> Result<Self, &'static str>
+    pub fn try_from_bounds<A, B>(min: A, max: B) -> Result<Self, alloc::string::String>
     where
-        A: TryInto<ConnectionInterval, Error = &'static str>,
-        B: TryInto<ConnectionInterval, Error = &'static str>,
+        A: TryInto<ConnectionInterval, Error = alloc::string::String>,
+        B: TryInto<ConnectionInterval, Error = alloc::string::String>,
     {
         let min = min.try_into()?;
         let max = max.try_into()?;
@@ -595,7 +595,7 @@ impl ConnectionIntervalBounds {
         if min.get_raw_val() <= max.get_raw_val() {
             Ok(Self { min, max })
         } else {
-            Err("'min' is greater than 'max'")
+            Err("'min' is greater than 'max'".to_string())
         }
     }
 
@@ -612,10 +612,10 @@ impl ConnectionIntervalBounds {
 
 impl<A, B> TryFrom<(A, B)> for ConnectionIntervalBounds
 where
-    A: TryInto<ConnectionInterval, Error = &'static str>,
-    B: TryInto<ConnectionInterval, Error = &'static str>,
+    A: TryInto<ConnectionInterval, Error = alloc::string::String>,
+    B: TryInto<ConnectionInterval, Error = alloc::string::String>,
 {
-    type Error = &'static str;
+    type Error = alloc::string::String;
 
     fn try_from((min, max): (A, B)) -> Result<Self, Self::Error> {
         Self::try_from_bounds(min, max)
