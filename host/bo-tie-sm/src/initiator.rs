@@ -639,6 +639,15 @@ impl SecurityManager {
         }
     }
 
+    /// Creating a Pairing Instance Identifier
+    ///
+    /// This returns a unique identifier used for a single pairing execution.
+    fn new_instance() -> usize {
+        static INSTANCE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+        INSTANCE.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Send the identity address to the peer Device.
     ///
     /// This will send the `identity` address of this device to the peer Device if the internal
@@ -782,6 +791,7 @@ impl SecurityManager {
                 let (private_key, public_key) = toolbox::ecc_gen();
 
                 self.pairing_data = Some(PairingData {
+                    instance: Self::new_instance(),
                     pairing_method,
                     public_key,
                     private_key: Some(private_key),
@@ -1078,7 +1088,7 @@ impl SecurityManager {
 
                     let v = toolbox::g2(pka, pkb, na, nb);
 
-                    Ok(Status::NumberComparison(NumberComparison::new(v)))
+                    Ok(Status::NumberComparison(NumberComparison::new(self, v)))
                 } else {
                     self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
                         .await?;
@@ -1658,6 +1668,45 @@ pub enum Status {
     OutOfBandInputOutput(OutOfBandInput, OutOfBandOutput),
 }
 
+macro_rules! security_manager_check {
+    ($sm:expr, $instance:expr) => {
+        match $sm.pairing_data.as_ref() {
+            None => return Err(InputError::NotPairing.into()),
+            Some(pd) => {
+                if pd.instance != $instance {
+                    return Err(InputError::InstanceNoLongerValid.into());
+                }
+            }
+        }
+    };
+}
+
+/// Input related error
+///
+/// Returned as part of the error type for methods of the user input authentication types.
+#[derive(Debug)]
+enum InputError<E> {
+    NotPairing,
+    InstanceNoLongerValid,
+    SecurityManager(E),
+}
+
+impl<E> core::fmt::Display for InputError<E>
+where
+    E: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            InputError::NotPairing => f.write_str("devices are no longer pairing"),
+            InputError::InstanceNoLongerValid => f.write_str("used by a prior pairing attempt"),
+            InputError::SecurityManager(e) => core::fmt::Display::fmt(e, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E> std::error::Error for InputError<E> where E: std::error::Error {}
+
 /// User Input and Output for Number Comparison
 ///
 /// This is returned by [`process_command`] when the Security Manager reaches the point in pairing
@@ -1665,17 +1714,34 @@ pub enum Status {
 ///
 /// The value can be shown to the application user via the implementation of `Display`.
 ///
+/// ## Pairing Process Instanced
+/// A `NumberComparison` is tied to a single pairing instance. If pairing fails or stops for any
+/// reason, then the `NumberComparison` that was created for it should be dropped. Methods [`yes`]
+/// and [`no`] will return an error if the specific pairing process that created a
+/// `NumberComparison` is no longer executing.
+///
 /// [`process`]: SecurityManager::process
+/// [`yes`]: NumberComparison::yes
+/// [`no`]: NumberComparison::no
 pub struct NumberComparison {
+    instance: usize,
     val: u32,
 }
 
 impl NumberComparison {
-    fn new(val: u32) -> Self {
+    /// Create a new `NumberComparison`
+    ///
+    /// Input `val` is the passcode value to be displayed to application user.
+    ///
+    /// # Panic
+    /// `security_manager` must have its field `pairing_data` as `Some(_)`
+    fn new(security_manager: &SecurityManager, val: u32) -> Self {
+        let instance = security_manager.pairing_data.as_ref().unwrap().instance;
+
         // displayed values are only 6 digits
         let val = val % 1_000_000;
 
-        Self { val }
+        Self { instance, val }
     }
 
     /// Yes Confirmation From the Application User
@@ -1685,13 +1751,16 @@ impl NumberComparison {
         self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, NumberComparisonError<error!(C)>>
     where
         C: ConnectionChannel,
     {
+        security_manager_check!(security_manager, self.instance);
+
         security_manager
             .process_number_comparison(connection_channel, true)
             .await
+            .map_err(|e| InputError::SecurityManager(e).into())
     }
 
     /// Yes Confirmation From the Application User
@@ -1701,13 +1770,16 @@ impl NumberComparison {
         self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, NumberComparisonError<error!(C)>>
     where
         C: ConnectionChannel,
     {
+        security_manager_check!(security_manager, self.instance);
+
         security_manager
             .process_number_comparison(connection_channel, false)
             .await
+            .map_err(|e| InputError::SecurityManager(e).into())
     }
 }
 
@@ -1717,33 +1789,93 @@ impl core::fmt::Display for NumberComparison {
     }
 }
 
+/// Error for [`NumberComparison`]
+///
+/// This is returned by the methods [`yes`] and [`no`] of `NumberComparison`
+///
+/// [`yes`]: NumberComparison::yes
+/// [`no`]: NumberComparison::no
+pub struct NumberComparisonError<E>(InputError<E>);
+
+impl<E> core::fmt::Debug for NumberComparisonError<E>
+where
+    E: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl<E> core::fmt::Display for NumberComparisonError<E>
+where
+    E: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match &self.0 {
+            InputError::InstanceNoLongerValid => f.write_str(
+                "this instance of a \
+                `NumberComparison` no longer valid and it should be dropped",
+            ),
+            _ => core::fmt::Display::fmt(&self.0, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E> std::error::Error for NumberComparisonError<E> where E: std::error::Error {}
+
+impl<E> From<InputError<E>> for NumberComparisonError<E> {
+    fn from(e: InputError<E>) -> Self {
+        NumberComparisonError(e)
+    }
+}
+
 /// Passkey Input
 ///
 /// This is returned by the Security Manager's [`process_command`] method when it requires a passkey
 /// input from the application user.
-pub struct PasskeyInput([char; 6], usize);
+///
+/// ## Pairing Process Instanced
+/// A `PasskeyInput` is tied to a single pairing instance. If pairing fails or stops for any
+/// reason, then the `PasskeyInput` that was created for it should be dropped. Methods of a
+/// `PasskeyInput` will return an error if the specific pairing process that created a
+/// `PasskeyInput` is no longer executing.
+pub struct PasskeyInput {
+    instance: usize,
+    passkey: [char; 6],
+    key_count: usize,
+}
 
 impl PasskeyInput {
     /// Create a new `PasscodeInput`
     ///
     /// This sends the keypress notification *passkey entry started* before a `PasscodeInput` is
     /// returned.
+    ///
+    /// # Panic
+    /// `security_manager` must have its field `pairing_data` as `Some(_)`
     async fn new<C>(security_manager: &mut SecurityManager, connection_channel: &C) -> Result<Self, error!(C)>
     where
         C: ConnectionChannel,
     {
+        let instance = security_manager.pairing_data.as_ref().unwrap().instance;
+
         security_manager
             .send(connection_channel, pairing::KeyPressNotification::PasskeyEntryStarted)
             .await?;
 
-        Ok(Self(Default::default(), 0))
+        Ok(Self {
+            instance,
+            passkey: Default::default(),
+            key_count: 0,
+        })
     }
 
     /// Get the number of digits
     ///
     /// This returns the number of digits that are currently within this `PasscodeInput`.
     pub fn count(&self) -> usize {
-        self.1
+        self.key_count
     }
 
     /// Add a Character to the Passkey
@@ -1765,18 +1897,21 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        if self.1 >= 6 {
+        security_manager_check!(security_manager, self.instance);
+
+        if self.key_count >= 6 {
             Err(PasscodeInputError::TooManyDigits)
         } else if !digit.is_digit(10) {
             Err(PasscodeInputError::NotADigit)
         } else {
-            self.0[self.1] = digit;
+            self.passkey[self.key_count] = digit;
 
-            self.1 += 1;
+            self.key_count += 1;
 
             security_manager
                 .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
-                .await?;
+                .await
+                .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
             Ok(())
         }
@@ -1805,22 +1940,25 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        if self.1 >= 6 {
+        security_manager_check!(security_manager, self.instance);
+
+        if self.key_count >= 6 {
             Err(PasscodeInputError::TooManyDigits)
         } else if !digit.is_digit(10) {
             Err(PasscodeInputError::NotADigit)
-        } else if index > self.1 {
+        } else if index > self.key_count {
             Err(PasscodeInputError::IndexOutOfBounds)
         } else {
-            self.1 += 1;
+            self.key_count += 1;
 
-            self.0[index..self.1].rotate_right(1);
+            self.passkey[index..self.key_count].rotate_right(1);
 
-            self.0[index] = digit;
+            self.passkey[index] = digit;
 
             security_manager
                 .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitEntered)
-                .await?;
+                .await
+                .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
             Ok(())
         }
@@ -1846,16 +1984,19 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        if index >= self.1 {
+        security_manager_check!(security_manager, self.instance);
+
+        if index >= self.key_count {
             Err(PasscodeInputError::IndexOutOfBounds)
         } else {
-            self.0[index..self.1].rotate_left(1);
+            self.passkey[index..self.key_count].rotate_left(1);
 
-            self.1 -= 1;
+            self.key_count -= 1;
 
             security_manager
                 .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
-                .await?;
+                .await
+                .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
             Ok(())
         }
@@ -1877,12 +2018,15 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        self.0 = Default::default();
-        self.1 = 0;
+        security_manager_check!(security_manager, self.instance);
+
+        self.passkey = Default::default();
+        self.key_count = 0;
 
         security_manager
             .send(connection_channel, pairing::KeyPressNotification::PasskeyCleared)
-            .await?;
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
         Ok(())
     }
@@ -1894,47 +2038,176 @@ impl PasskeyInput {
     /// notification to the peer device's Security Manager containing *passkey completed*.
     pub async fn complete<C>(
         self,
-        security_manger: &mut SecurityManager,
+        security_manager: &mut SecurityManager,
         connection_channel: &C,
     ) -> Result<Status, PasscodeInputError<error!(C)>>
     where
         C: ConnectionChannel,
     {
-        if self.1 != 6 {
+        security_manager_check!(security_manager, self.instance);
+
+        if self.key_count != 6 {
             Err(PasscodeInputError::NotComplete)
         } else {
             let mut passkey_val = 0;
             let mut mul = 100_000;
 
             for i in 0..6 {
-                passkey_val += self.0[i].to_digit(10).unwrap() * mul;
+                passkey_val += self.passkey[i].to_digit(10).unwrap() * mul;
 
                 mul /= 10;
             }
 
-            security_manger
+            security_manager
                 .send(connection_channel, pairing::KeyPressNotification::PasskeyEntryCompleted)
-                .await?;
+                .await
+                .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
-            security_manger
+            security_manager
                 .process_input_passkey(connection_channel, passkey_val)
                 .await
                 .map_err(|e| PasscodeInputError::SecurityManager(e))
         }
     }
+
+    /// Write the Passcode to this input.
+    ///
+    /// When the user is able to easily manipulate a passcode it can be easier to set the entire
+    /// passcode instead of dealing with individual digits. The application should still send
+    /// keypress notifications with the method [`send_notification`].
+    ///
+    /// [`send_notification`]: PasskeyInput::send_notification
+    pub fn write(&mut self, passcode: [char; 6]) -> Result<(), PasscodeInputError<()>> {
+        if passcode.iter().find(|key| !key.is_digit(10)).is_some() {
+            Err(PasscodeInputError::NotADigit)
+        } else {
+            self.passkey = passcode;
+            self.key_count = 6;
+            Ok(())
+        }
+    }
+
+    /// Send a keystroke entry notification
+    ///
+    /// This will send a keystroke entry notification without adding a digit to this `PasskeyInput`
+    pub async fn send_key_entry<C>(
+        &self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<(), PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager_check!(security_manager, self.instance);
+
+        security_manager
+            .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitEntered)
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))
+    }
+
+    /// Send a keystroke erase notification
+    ///
+    /// This will send a keystroke erase notification without removing a digit to this `PasskeyInput`
+    pub async fn send_key_erase<C>(
+        &self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<(), PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager_check!(security_manager, self.instance);
+
+        security_manager
+            .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))?;
+
+        Ok(())
+    }
+
+    /// Send a keystroke erase notification
+    ///
+    /// This will send a keystroke clear notification without clearing a digit to this `PasskeyInput`
+    pub async fn send_key_clear<C>(
+        &self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<(), PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager_check!(security_manager, self.instance);
+
+        security_manager
+            .send(connection_channel, pairing::KeyPressNotification::PasskeyCleared)
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))
+    }
+
+    /// Passkey failure
+    ///
+    /// This sends the passkey entry failed error to the device
+    pub async fn fail<C>(
+        self,
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    where
+        C: ConnectionChannel,
+    {
+        security_manager_check!(security_manager, self.instance);
+
+        security_manager
+            .send_err(connection_channel, PairingFailedReason::PasskeyEntryFailed)
+            .await
+            .map_err(|e| PasscodeInputError::SecurityManager(e))?;
+
+        Ok(Status::PairingFailed(PairingFailedReason::PasskeyEntryFailed))
+    }
 }
 
+/// Error for [`PasskeyInput`]
+///
+/// This is error returned by methods of `PasskeyInput`
+#[derive(Debug)]
 pub enum PasscodeInputError<E> {
+    InstanceNoLongerValid,
     SecurityManager(E),
     TooManyDigits,
     NotADigit,
     IndexOutOfBounds,
+    NotPairing,
     NotComplete,
 }
 
-impl<E> From<E> for PasscodeInputError<E> {
-    fn from(e: E) -> Self {
-        Self::SecurityManager(e)
+impl<E> core::fmt::Display for PasscodeInputError<E>
+where
+    E: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match &self {
+            PasscodeInputError::InstanceNoLongerValid => {
+                f.write_str("this instance of a `PasscodeInput` no longer valid and it should be dropped")
+            }
+            PasscodeInputError::SecurityManager(e) => core::fmt::Display::fmt(e, f),
+            PasscodeInputError::TooManyDigits => f.write_str("too many digits"),
+            PasscodeInputError::NotADigit => f.write_str("character(s) other than digits in passkey"),
+            PasscodeInputError::IndexOutOfBounds => f.write_str("index out of bounds"),
+            PasscodeInputError::NotPairing => f.write_str("the security manager is no longer pairing"),
+            PasscodeInputError::NotComplete => f.write_str("not complete"),
+        }
+    }
+}
+
+impl<E> From<InputError<E>> for PasscodeInputError<E> {
+    fn from(e: InputError<E>) -> Self {
+        match e {
+            InputError::NotPairing => Self::NotPairing,
+            InputError::InstanceNoLongerValid => Self::InstanceNoLongerValid,
+            InputError::SecurityManager(e) => Self::SecurityManager(e),
+        }
     }
 }
 

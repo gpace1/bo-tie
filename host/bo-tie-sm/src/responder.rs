@@ -520,6 +520,7 @@ impl SecurityManagerBuilder {
     }
 }
 
+/// A Security Manager for a Peripheral Device
 pub struct SecurityManager {
     io_capability: IOCapability,
     oob: Option<OobDirection>,
@@ -731,28 +732,61 @@ impl SecurityManager {
             .await
     }
 
+    /// Creating a Pairing Instance Identifier
+    ///
+    /// This returns a unique identifier used for a single pairing execution.
+    fn new_instance() -> usize {
+        static INSTANCE: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+        INSTANCE.fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Process an input to the Security Manager
     ///
-    async fn process_input<C>(&mut self, connection_channel: &C, input: Input) -> Result<Status, error!(C)>
+    async fn process_input<C>(
+        &mut self,
+        instance: usize,
+        connection_channel: &C,
+        input: Input,
+    ) -> Result<Status, InputError<error!(C)>>
     where
         C: ConnectionChannel,
     {
+        if self.pairing_data.is_none() {
+            return Err(InputError::NotPairing);
+        }
+
+        if !self
+            .pairing_data
+            .as_ref()
+            .map(|pd| pd.instance == instance)
+            .unwrap_or_default()
+        {
+            return Err(InputError::InvalidInstance);
+        }
+
         match input {
-            Input::KeyPressNotification(k) => self.p_input_keypress_notification(connection_channel, k).await,
+            Input::KeyPressNotification(k) => self
+                .p_input_keypress_notification(connection_channel, k)
+                .await
+                .map_err(|e| InputError::from(e)),
             Input::Passkey(k, passkey) => {
                 self.p_input_keypress_notification(connection_channel, k).await?;
 
                 Ok(self.p_input_passkey(connection_channel, passkey).await?)
             }
-            Input::YesNoInput(yes_no) => self.p_input_number_comparison(connection_channel, yes_no).await,
+            Input::YesNoInput(yes_no) => self
+                .p_input_number_comparison(connection_channel, yes_no)
+                .await
+                .map_err(|e| InputError::from(e)),
             Input::OutOfBand {
                 address,
                 random,
                 confirm,
-            } => {
-                self.p_input_out_of_band(connection_channel, address, random, confirm)
-                    .await
-            }
+            } => self
+                .p_input_out_of_band(connection_channel, address, random, confirm)
+                .await
+                .map_err(|e| InputError::from(e)),
         }
     }
 
@@ -1051,6 +1085,7 @@ impl SecurityManager {
                 let (private_key, public_key) = toolbox::ecc_gen();
 
                 self.pairing_data = Some(PairingData {
+                    instance: Self::new_instance(),
                     pairing_method,
                     public_key,
                     private_key: Some(private_key),
@@ -1100,6 +1135,7 @@ impl SecurityManager {
                 ref mut private_key,
                 ref mut peer_public_key,
                 ref mut secret_key,
+                instance,
                 ..
             }) => {
                 let raw_pub_key = {
@@ -1150,11 +1186,12 @@ impl SecurityManager {
                     PairingMethod::Oob(OobDirection::OnlyResponderSendsOob) => {
                         Ok(Status::OutOfBandOutput(OutOfBandOutput::new(self)))
                     }
-                    PairingMethod::Oob(OobDirection::BothSendOob) => {
-                        Ok(Status::OutOfBandInputOutput(OutOfBandInput, OutOfBandOutput::new(self)))
-                    }
+                    PairingMethod::Oob(OobDirection::BothSendOob) => Ok(Status::OutOfBandInputOutput(
+                        OutOfBandInput::new(instance),
+                        OutOfBandOutput::new(self),
+                    )),
                     PairingMethod::Oob(OobDirection::OnlyInitiatorSendsOob) => {
-                        Ok(Status::OutOfBandInput(OutOfBandInput))
+                        Ok(Status::OutOfBandInput(OutOfBandInput::new(instance)))
                     }
                     PairingMethod::PassKeyEntry(direction) => match direction {
                         PasskeyDirection::InitiatorDisplaysResponderInputs => {
@@ -1328,7 +1365,7 @@ impl SecurityManager {
 
                 let vb = toolbox::g2(pka, pkb, na, nb);
 
-                let number_comparison = NumberComparison::new(vb);
+                let number_comparison = NumberComparison::new(self, vb);
 
                 Ok(Status::NumberComparison(number_comparison))
             }
@@ -1744,6 +1781,38 @@ pub enum Status {
     OutOfBandInputOutput(OutOfBandInput, OutOfBandOutput),
 }
 
+/// Error returned by method [`process_input`]
+///
+/// [`process_input`]: SecurityManager::process_input
+#[derive(Debug)]
+enum InputError<E> {
+    NotPairing,
+    InvalidInstance,
+    SecurityManager(E),
+}
+
+impl<E> From<E> for InputError<E> {
+    fn from(e: E) -> Self {
+        InputError::SecurityManager(e)
+    }
+}
+
+impl<E> core::fmt::Display for InputError<E>
+where
+    E: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            InputError::NotPairing => f.write_str("the devices are no longer pairing"),
+            InputError::InvalidInstance => f.write_str("used by a prior pairing attempt"),
+            InputError::SecurityManager(e) => core::fmt::Display::fmt(e, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E> std::error::Error for InputError<E> where E: std::error::Error {}
+
 /// User Input and Output for Number Comparison
 ///
 /// This is returned by [`process_command`] when the Security Manager reaches the point in pairing
@@ -1751,17 +1820,32 @@ pub enum Status {
 ///
 /// The value can be shown to the application user via the implementation of `Display`.
 ///
+/// ## Pairing Process Instanced
+/// A `NumberComparison` is tied to a single pairing instance. If pairing fails or stops for any
+/// reason, then the `NumberComparison` that was created for it should be dropped. Methods [`yes`]
+/// and [`no`] will return an error if the specific pairing process that created a
+/// `NumberComparison` is no longer executing.
+///
 /// [`process`]: SecurityManager::process
+/// [`yes`]: NumberComparison::yes
+/// [`no`]: NumberComparison::no
 pub struct NumberComparison {
+    instance: usize,
     val: u32,
 }
 
 impl NumberComparison {
-    fn new(val: u32) -> Self {
+    /// Create a new `NumberComparison`
+    ///
+    /// # Panic
+    /// Field `pairing_data` of the `security_manager` must be `Some(_)`
+    fn new(security_manager: &SecurityManager, val: u32) -> Self {
+        let instance = security_manager.pairing_data.as_ref().unwrap().instance;
+
         // displayed values are only 6 digits
         let val = val % 1_000_000;
 
-        Self { val }
+        Self { instance, val }
     }
 
     /// Yes Confirmation From the Application User
@@ -1771,11 +1855,14 @@ impl NumberComparison {
         self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, NumberComparisonError<error!(C)>>
     where
         C: ConnectionChannel,
     {
-        security_manager.process_input(connection_channel, Input::yes()).await
+        security_manager
+            .process_input(self.instance, connection_channel, Input::yes())
+            .await
+            .map_err(|e| NumberComparisonError::from(e))
     }
 
     /// Yes Confirmation From the Application User
@@ -1785,11 +1872,14 @@ impl NumberComparison {
         self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, NumberComparisonError<error!(C)>>
     where
         C: ConnectionChannel,
     {
-        security_manager.process_input(connection_channel, Input::no()).await
+        security_manager
+            .process_input(self.instance, connection_channel, Input::no())
+            .await
+            .map_err(|e| NumberComparisonError::from(e))
     }
 }
 
@@ -1799,11 +1889,57 @@ impl core::fmt::Display for NumberComparison {
     }
 }
 
+/// Error for [`NumberComparison`]
+///
+/// This is returned by the methods [`yes`] and [`no`] of `NumberComparison`
+///
+/// [`yes`]: NumberComparison::yes
+/// [`no`]: NumberComparison::no
+pub struct NumberComparisonError<E>(InputError<E>);
+
+impl<E> core::fmt::Debug for NumberComparisonError<E>
+where
+    E: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl<E> core::fmt::Display for NumberComparisonError<E>
+where
+    E: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E> std::error::Error for NumberComparisonError<E> where E: std::error::Error {}
+
+impl<E> From<InputError<E>> for NumberComparisonError<E> {
+    fn from(e: InputError<E>) -> Self {
+        NumberComparisonError(e)
+    }
+}
+
 /// Passkey Input
 ///
 /// This is returned by the Security Manager's [`process_command`] method when it requires a passkey
 /// input from the application user.
-pub struct PasskeyInput([char; 6], usize, bool);
+///
+/// ## Pairing Process Instanced
+/// A `PasskeyInput` is tied to a single pairing instance. If pairing fails or stops for any
+/// reason, then the `PasskeyInput` that was created for it should be dropped. Methods of a
+/// `PasskeyInput` will return an error if the specific pairing process that created a
+/// `PasskeyInput` is no longer executing.
+pub struct PasskeyInput {
+    instance: usize,
+    passkey: [char; 6],
+    key_count: usize,
+    both: bool,
+}
 
 impl PasskeyInput {
     /// Create a new `PasscodeInput`
@@ -1818,25 +1954,36 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        security_manager
-            .process_input(connection_channel, Input::passkey_start())
-            .await?;
+        let instance = security_manager.pairing_data.as_ref().unwrap().instance;
 
-        Ok(Self(Default::default(), 0, both_enter))
+        security_manager
+            .process_input(instance, connection_channel, Input::passkey_start())
+            .await
+            .map_err(|e| match e {
+                InputError::SecurityManager(e) => e,
+                _ => unreachable!(),
+            })?;
+
+        Ok(Self {
+            instance,
+            passkey: Default::default(),
+            key_count: 0,
+            both: both_enter,
+        })
     }
 
     /// Check if the Application User is to input a passkey on both devices
     ///
     /// This is a check to see if the user will need to input the same passkey on both devices.
     pub fn is_passkey_input_on_both(&self) -> bool {
-        self.2
+        self.both
     }
 
     /// Get the number of digits
     ///
     /// This returns the number of digits that are currently within this `PasscodeInput`.
     pub fn count(&self) -> usize {
-        self.1
+        self.key_count
     }
 
     /// Add a Character to the Passkey
@@ -1858,17 +2005,17 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        if self.1 >= 6 {
+        if self.key_count >= 6 {
             Err(PasscodeInputError::TooManyDigits)
         } else if !digit.is_digit(10) {
             Err(PasscodeInputError::NotADigit)
         } else {
-            self.0[self.1] = digit;
+            self.passkey[self.key_count] = digit;
 
-            self.1 += 1;
+            self.key_count += 1;
 
             security_manager
-                .process_input(connection_channel, Input::passkey_enter())
+                .process_input(self.instance, connection_channel, Input::passkey_enter())
                 .await?;
 
             Ok(())
@@ -1898,21 +2045,21 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        if self.1 >= 6 {
+        if self.key_count >= 6 {
             Err(PasscodeInputError::TooManyDigits)
         } else if !digit.is_digit(10) {
             Err(PasscodeInputError::NotADigit)
-        } else if index > self.1 {
+        } else if index > self.key_count {
             Err(PasscodeInputError::IndexOutOfBounds)
         } else {
-            self.1 += 1;
+            self.key_count += 1;
 
-            self.0[index..self.1].rotate_right(1);
+            self.passkey[index..self.key_count].rotate_right(1);
 
-            self.0[index] = digit;
+            self.passkey[index] = digit;
 
             security_manager
-                .process_input(connection_channel, Input::passkey_enter())
+                .process_input(self.instance, connection_channel, Input::passkey_enter())
                 .await?;
 
             Ok(())
@@ -1939,15 +2086,15 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        if index >= self.1 {
+        if index >= self.key_count {
             Err(PasscodeInputError::IndexOutOfBounds)
         } else {
-            self.0[index..self.1].rotate_left(1);
+            self.passkey[index..self.key_count].rotate_left(1);
 
-            self.1 -= 1;
+            self.key_count -= 1;
 
             security_manager
-                .process_input(connection_channel, Input::passkey_erase())
+                .process_input(self.instance, connection_channel, Input::passkey_erase())
                 .await?;
 
             Ok(())
@@ -1970,11 +2117,11 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        self.0 = Default::default();
-        self.1 = 0;
+        self.passkey = Default::default();
+        self.key_count = 0;
 
         security_manager
-            .process_input(connection_channel, Input::passkey_clear())
+            .process_input(self.instance, connection_channel, Input::passkey_clear())
             .await?;
 
         Ok(())
@@ -1993,22 +2140,22 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
-        if self.1 != 6 {
+        if self.key_count != 6 {
             Err(PasscodeInputError::NotComplete)
         } else {
             let mut passkey_val = 0;
             let mut mul = 100_000;
 
             for i in 0..6 {
-                passkey_val += self.0[i].to_digit(10).unwrap() * mul;
+                passkey_val += self.passkey[i].to_digit(10).unwrap() * mul;
 
                 mul /= 10;
             }
 
             security_manger
-                .process_input(connection_channel, Input::passkey_complete(passkey_val))
+                .process_input(self.instance, connection_channel, Input::passkey_complete(passkey_val))
                 .await
-                .map_err(|e| PasscodeInputError::SecurityManager(e))
+                .map_err(|e| PasscodeInputError::from(e))
         }
     }
 
@@ -2023,8 +2170,8 @@ impl PasskeyInput {
         if passcode.iter().find(|key| !key.is_digit(10)).is_some() {
             Err(PasscodeInputError::NotADigit)
         } else {
-            self.0 = passcode;
-            self.1 = 6;
+            self.passkey = passcode;
+            self.key_count = 6;
             Ok(())
         }
     }
@@ -2036,14 +2183,15 @@ impl PasskeyInput {
         &self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    ) -> Result<(), PasscodeInputError<error!(C)>>
     where
         C: ConnectionChannel,
     {
         security_manager
-            .process_input(connection_channel, Input::passkey_enter())
+            .process_input(self.instance, connection_channel, Input::passkey_enter())
             .await
-            .map_err(|e| PasscodeInputError::SecurityManager(e))
+            .map_err(|e| PasscodeInputError::from(e))
+            .map(|_| ())
     }
 
     /// Send a keystroke erase notification
@@ -2053,14 +2201,15 @@ impl PasskeyInput {
         &self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    ) -> Result<(), PasscodeInputError<error!(C)>>
     where
         C: ConnectionChannel,
     {
         security_manager
-            .process_input(connection_channel, Input::passkey_erase())
+            .process_input(self.instance, connection_channel, Input::passkey_erase())
             .await
-            .map_err(|e| PasscodeInputError::SecurityManager(e))
+            .map_err(|e| PasscodeInputError::from(e))
+            .map(|_| ())
     }
 
     /// Send a keystroke erase notification
@@ -2070,14 +2219,15 @@ impl PasskeyInput {
         &self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, PasscodeInputError<error!(C)>>
+    ) -> Result<(), PasscodeInputError<error!(C)>>
     where
         C: ConnectionChannel,
     {
         security_manager
-            .process_input(connection_channel, Input::passkey_clear())
+            .process_input(self.instance, connection_channel, Input::passkey_clear())
             .await
-            .map_err(|e| PasscodeInputError::SecurityManager(e))
+            .map_err(|e| PasscodeInputError::from(e))
+            .map(|_| ())
     }
 
     /// Passkey failure
@@ -2091,6 +2241,15 @@ impl PasskeyInput {
     where
         C: ConnectionChannel,
     {
+        if !security_manager
+            .pairing_data
+            .as_ref()
+            .map(|pd| pd.instance == self.instance)
+            .unwrap_or_default()
+        {
+            return Err(PasscodeInputError::InstanceNoLongerValid);
+        }
+
         security_manager
             .send_err(connection_channel, PairingFailedReason::PasskeyEntryFailed)
             .await
@@ -2102,10 +2261,12 @@ impl PasskeyInput {
 
 #[derive(Debug)]
 pub enum PasscodeInputError<E> {
+    InstanceNoLongerValid,
     SecurityManager(E),
     TooManyDigits,
     NotADigit,
     IndexOutOfBounds,
+    NotPairing,
     NotComplete,
 }
 
@@ -2121,11 +2282,26 @@ where
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
+            PasscodeInputError::InstanceNoLongerValid => f.write_str(
+                "this instance of a `PairingInput` is no longer valid and it \
+                should be dropped",
+            ),
             PasscodeInputError::SecurityManager(e) => core::fmt::Display::fmt(e, f),
             PasscodeInputError::TooManyDigits => f.write_str("too many digits"),
             PasscodeInputError::NotADigit => f.write_str("character(s) other than digits in passkey"),
             PasscodeInputError::IndexOutOfBounds => f.write_str("index out of bounds"),
+            PasscodeInputError::NotPairing => f.write_str("the security manager is no longer pairing"),
             PasscodeInputError::NotComplete => f.write_str("not complete"),
+        }
+    }
+}
+
+impl<E> From<InputError<E>> for PasscodeInputError<E> {
+    fn from(e: InputError<E>) -> Self {
+        match e {
+            InputError::NotPairing => PasscodeInputError::NotPairing,
+            InputError::InvalidInstance => PasscodeInputError::InstanceNoLongerValid,
+            InputError::SecurityManager(e) => PasscodeInputError::SecurityManager(e),
         }
     }
 }
@@ -2262,16 +2438,22 @@ impl core::ops::Deref for OutOfBandOutput {
 ///
 /// This is a marker type for inputting out of band data from the peer device's Security Manager
 /// into this Security Manager.
-pub struct OutOfBandInput;
+pub struct OutOfBandInput {
+    instance: usize,
+}
 
 impl OutOfBandInput {
+    fn new(instance: usize) -> Self {
+        Self { instance }
+    }
+
     /// Input the Out of Band Data into the Security Manager
     pub async fn input_oob<C>(
         self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
         oob_data: &[u8],
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, OutOfBandInputError<error!(C)>>
     where
         C: ConnectionChannel,
     {
@@ -2283,7 +2465,8 @@ impl OutOfBandInput {
             () => {{
                 security_manager
                     .send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                    .await
+                    .map_err(|e| OutOfBandInputError(InputError::SecurityManager(e)))?;
 
                 return Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason));
             }};
@@ -2320,7 +2503,10 @@ impl OutOfBandInput {
         if address.is_some() && random.is_some() && confirm.is_some() {
             let input = Input::oob_data(address.unwrap(), random.unwrap(), confirm.unwrap());
 
-            security_manager.process_input(connection_channel, input).await
+            security_manager
+                .process_input(self.instance, connection_channel, input)
+                .await
+                .map_err(|e| OutOfBandInputError(e))
         } else {
             error!()
         }
@@ -2333,14 +2519,45 @@ impl OutOfBandInput {
         self,
         security_manager: &mut SecurityManager,
         connection_channel: &C,
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, OutOfBandInputError<error!(C)>>
     where
         C: ConnectionChannel,
     {
         security_manager
             .send_err(connection_channel, PairingFailedReason::OobNotAvailable)
-            .await?;
+            .await
+            .map_err(|e| OutOfBandInputError(InputError::SecurityManager(e)))?;
 
         Ok(Status::PairingFailed(PairingFailedReason::OobNotAvailable))
     }
 }
+
+/// Error for [`OutOfBandInput`]
+pub struct OutOfBandInputError<E>(InputError<E>);
+
+impl<E> core::fmt::Debug for OutOfBandInputError<E>
+where
+    E: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl<E> core::fmt::Display for OutOfBandInputError<E>
+where
+    E: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self.0 {
+            InputError::InvalidInstance => f.write_str(
+                "this instance of a `OutOfBandInputError` is no longer valid and it \
+                should be dropped",
+            ),
+            _ => core::fmt::Display::fmt(&self.0, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E> std::error::Error for OutOfBandInputError<E> where E: std::error::Error {}
