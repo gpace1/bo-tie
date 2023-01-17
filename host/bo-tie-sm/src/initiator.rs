@@ -1417,20 +1417,13 @@ impl SecurityManager {
     /// established between it and this device. After pairing is completed, any received security
     /// manager packets need to be processed by this method.
     ///
-    /// This method is used for processing bonding packets, and assuming the peer device is working
-    /// correctly it will only send bonding information when the link is encrypted. **But this
-    /// method will return errors when processing those methods if this Security Manager's internal
-    /// encryption flag is not set via the method
-    /// [`set_encrypted`](MasterSecurityManager::set_encrypted)**. Once this flag is set all
-    /// security manager packets with bonding information can be process by this method.
+    /// This method is used for processing bonding packets, but only when the link is encrypted. The
+    /// method [`set_encrypted`] needs to be called to indicate the link is encrypted before this
+    /// method can be called without it returning an error.
     ///
     /// # Return
-    /// When a packet contains either a key or the identity address, this information is stored
-    /// within the security manager, and a reference to these set of keys is returned.
-    ///
-    /// If the peer device sends a [`SecurityRequest`](super::CommandType::PairingRequest) message,
-    /// this method will process it and return `None` (the internal encryption flag is not checked
-    /// for this specific message).
+    /// The return is boolean to indicate that bonding is completed. `true` is returned once all
+    /// keys of the peer device are received as determined by the pairing request/response exchange.
     ///
     /// # Errors
     ///
@@ -1438,23 +1431,39 @@ impl SecurityManager {
     /// An error is always returned if any of the pairing specific or legacy key Security Manager
     /// messages are processed by this method (only secure connections is supported by this
     /// library). Trying to process any of following will always cause an error to be returned.
-    /// * [`PairingRequest`](super::CommandType::PairingRequest)
-    /// * [`PairingResponse`](super::CommandType::PairingResponse)
-    /// * [`PairingConfirm`](super::CommandType::PairingConfirm)
-    /// * [`PairingRandom`](super::CommandType::PairingRandom)
-    /// * [`PairingFailed`](super::CommandType::PairingFailed)
-    /// * [`EncryptionInformation`](super::CommandType::EncryptionInformation)
-    /// * [`MasterIdentification`](super::CommandType::MasterIdentification)
-    /// * [`PairingPublicKey`](super::CommandType::PairingPublicKey)
-    /// * [`PairingDHKeyCheck`](super::CommandType::PairingDHKeyCheck)
-    /// * [`PairingKeyPressNotification`](super::CommandType::PairingKeyPressNotification)
+    /// * [`set_encrypted`]
+    /// * [`PairingRequest`]
+    /// * [`PairingResponse`]
+    /// * [`PairingConfirm`]
+    /// * [`PairingRandom`]
+    /// * [`PairingFailed`]
+    /// * [`EncryptionInformation`]
+    /// * [`MasterIdentification`]
+    /// * [`PairingPublicKey`]
+    /// * [`PairingDHKeyCheck`]
+    /// * [`SecurityRequest`]
     ///
     /// ### Require Encryption
     /// The following Security Manager messages will have this method return an error unless the
-    /// internal encryption flag is set.
-    /// * [`IdentityInformation`](super::CommandType::IdentityInformation)
-    /// * [`IdentityAddressInformation`](super::CommandType::IdentityAddressInformation)
-    /// * [`SigningInformation`](super::CommandType::SigningInformation)
+    /// internal encryption flag is set with method `set_encrypted`.
+    /// * [`IdentityInformation`]
+    /// * [`IdentityAddressInformation`]
+    /// * [`SigningInformation`]
+    ///
+    /// [`set_encrypted`]: SecurityManager::set_encrypted
+    /// [`PairingRequest`]: CommandType::PairingRequest
+    /// [`PairingResponse`]: CommandType::PairingResponse
+    /// [`PairingConfirm`]: CommandType::PairingConfirm
+    /// [`PairingRandom`]: CommandType::PairingRandom
+    /// [`PairingFailed`]: CommandType::PairingFailed
+    /// [`EncryptionInformation`]: CommandType::EncryptionInformation
+    /// [`MasterIdentification`]: CommandType::MasterIdentification
+    /// [`PairingPublicKey`]: CommandType::PairingPublicKey
+    /// [`PairingDHKeyCheck`]: CommandType::PairingDHKeyCheck
+    /// [`PairingKeyPressNotification`]: CommandType::PairingKeyPressNotification
+    /// [`IdentityInformation`]: CommandType::IdentityInformation
+    /// [`IdentityAddressInformation`]: CommandType::IdentityAddressInformation
+    /// [`SigningInformation`]: CommandType::SigningInformation
     pub async fn process_bonding(&mut self, acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>) -> Result<bool, Error> {
         macro_rules! set_peer_key {
             ($this:expr, $key_val: expr, $key:ident) => {
