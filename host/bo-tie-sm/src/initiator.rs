@@ -928,14 +928,14 @@ impl SecurityManager {
                         PasskeyDirection::ResponderDisplaysInitiatorInputs => {
                             self.pairing_expected_cmd = None;
 
-                            let input = PasskeyInput::new(self, connection_channel).await?;
+                            let input = PasskeyInput::new(self, connection_channel, false).await?;
 
                             Ok(Status::PasskeyInput(input))
                         }
                         PasskeyDirection::InitiatorAndResponderInput => {
                             self.pairing_expected_cmd = CommandType::PairingKeyPressNotification.into();
 
-                            let input = PasskeyInput::new(self, connection_channel).await?;
+                            let input = PasskeyInput::new(self, connection_channel, true).await?;
 
                             Ok(Status::PasskeyInput(input))
                         }
@@ -1853,6 +1853,7 @@ pub struct PasskeyInput {
     instance: usize,
     passkey: [char; 6],
     key_count: usize,
+    both: bool,
 }
 
 impl PasskeyInput {
@@ -1863,7 +1864,11 @@ impl PasskeyInput {
     ///
     /// # Panic
     /// `security_manager` must have its field `pairing_data` as `Some(_)`
-    async fn new<C>(security_manager: &mut SecurityManager, connection_channel: &C) -> Result<Self, error!(C)>
+    async fn new<C>(
+        security_manager: &mut SecurityManager,
+        connection_channel: &C,
+        both_enter: bool,
+    ) -> Result<Self, error!(C)>
     where
         C: ConnectionChannel,
     {
@@ -1877,7 +1882,15 @@ impl PasskeyInput {
             instance,
             passkey: Default::default(),
             key_count: 0,
+            both: both_enter,
         })
+    }
+
+    /// Check if the Application User is to input a passkey on both devices
+    ///
+    /// This is a check to see if the user will need to input the same passkey on both devices.
+    pub fn is_passkey_input_on_both(&self) -> bool {
+        self.both
     }
 
     /// Get the number of digits
