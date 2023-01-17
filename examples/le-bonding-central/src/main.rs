@@ -176,24 +176,69 @@ where
 }
 
 /// Pair with a connected device
-async fn pair<C, S, R>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager<S, R>) -> u128
+async fn pair<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> u128
 where
     C: bo_tie::host::l2cap::ConnectionChannel,
-    S: for<'a> bo_tie::host::sm::oob::OutOfBandSend<'a>,
-    R: bo_tie::host::sm::oob::OobReceiverType,
 {
     use bo_tie::host::l2cap::ConnectionChannelExt;
+    use bo_tie::host::sm::initiator::Status;
+
+    let mut number_comparison = None;
+    let mut passkey_input = None;
 
     sm.start_pairing(connection_channel).await.unwrap();
 
     'outer: loop {
-        for basic_frame in connection_channel.receive_b_frame().await.unwrap() {
-            // All data that is not Security Manager related is ignored for this example
-            if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
-                if sm.continue_pairing(connection_channel, &basic_frame).await.unwrap() {
-                    break 'outer sm.get_keys().unwrap().get_ltk().unwrap();
+        tokio::select! {
+            frames = connection_channel.receive_b_frame() => for basic_frame in frames.unwrap() {
+                // All data that is not Security Manager related is ignored for this example, the
+                // peripheral device should not be sending anything to this device other than
+                // Security Manager packets.
+                if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
+                    match sm.continue_pairing(connection_channel, &basic_frame).await.unwrap() {
+                        Status::PairingComplete => {
+                            break 'outer sm.get_keys().unwrap().get_ltk().unwrap()
+                        },
+                        Status::NumberComparison(n) => {
+                            println!(
+                                "To proceed with pairing, compare this number ({n}) with the \
+                                number displayed on the other device"
+                            );
+                            println!("Does {n} match the number on the other device? [y/n]");
+
+                            number_comparison = Some(n);
+                        },
+                        Status::PasskeyOutput(o) => {
+                            println!("enter this passkey on the other device: {o}")
+                        },
+                        Status::PasskeyInput(i) => {
+                            io::passkey_input_message(&i);
+
+                            passkey_input = Some(i);
+                        },
+                        Status::PairingFailed(reason) => {
+                            eprintln!("pairing failed: {reason}");
+                            number_comparison = None;
+                            passkey_input = None;
+                        },
+                        _ => (),
+                    }
                 }
-            }
+            },
+
+            is_accepted = io::number_comparison(&mut number_comparison) => if is_accepted {
+                number_comparison.take().unwrap().yes(sm, connection_channel).await.unwrap();
+            } else {
+                number_comparison.take().unwrap().no(sm, connection_channel).await.unwrap();
+            },
+
+            passkey = io::get_passkey(passkey_input.is_none()) => if let Some(input) = io::process_passkey(passkey) {
+                passkey_input.as_mut().unwrap().write(input).unwrap();
+
+                passkey_input.take().unwrap().complete(sm, connection_channel).await.unwrap();
+            } else {
+                passkey_input.take().unwrap().fail(sm, connection_channel).await.unwrap();
+            },
         }
     }
 }
@@ -250,11 +295,9 @@ async fn encrypt<H: HostChannelEnds>(
 ///
 /// # Note
 /// This must be called after method `encrypt`
-async fn bond<C, S, R>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager<S, R>)
+async fn bond<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager)
 where
     C: bo_tie::host::l2cap::ConnectionChannel,
-    S: for<'a> bo_tie::host::sm::oob::OutOfBandSend<'a>,
-    R: bo_tie::host::sm::oob::OobReceiverType,
 {
     use bo_tie::host::l2cap::ConnectionChannelExt;
 
@@ -264,16 +307,14 @@ where
         for basic_frame in connection_channel.receive_b_frame().await.unwrap() {
             // All data that is not Security Manager related is ignored for this example
             if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
-                if let Some(keys) = sm.process_bonding(connection_channel, &basic_frame).await.unwrap() {
-                    if keys.get_peer_irk().is_some() && keys.get_peer_identity().is_some() {
-                        // once the peripheral has sent its bonding
-                        // information then this bonding information
-                        // is sent to the device.
+                if sm.process_bonding(&basic_frame).await.unwrap() {
+                    // once the peripheral has sent its bonding
+                    // information then this bonding information
+                    // is sent to the device.
 
-                        sm.send_irk(connection_channel, None).await.unwrap();
-                        sm.send_identity(connection_channel, None).await.unwrap();
-                        break 'outer;
-                    }
+                    sm.send_irk(connection_channel, None).await.unwrap();
+                    sm.send_identity(connection_channel, None).await.unwrap();
+                    break 'outer;
                 }
             }
         }

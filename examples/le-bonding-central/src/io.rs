@@ -302,3 +302,145 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
             .expect("cannot read input")
     }
 }
+
+fn await_input() -> impl std::future::Future<Output = String> {
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
+
+    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<String>>();
+    let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
+
+    let mut input = String::new();
+
+    std::thread::spawn(move || loop {
+        if ok_or_return!(poll(core::time::Duration::from_millis(50)), input_sender) {
+            match ok_or_return!(read(), input_sender) {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char(key),
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => input.push(key),
+                Event::Key(KeyEvent {
+                    code: KeyCode::Enter, ..
+                }) => {
+                    input_sender.send(Ok(input)).unwrap();
+                    break;
+                }
+                _ => continue,
+            }
+        } else if let Ok(_) = cancel_receiver.try_recv() {
+            break;
+        }
+    });
+
+    async move {
+        InputTaskCallback::new(input_receiver, cancel_sender)
+            .await
+            .expect("cannot read input")
+            .expect("crossterm error")
+    }
+}
+
+/// Number Comparison
+pub async fn number_comparison(number_comparison: &mut Option<bo_tie::host::sm::initiator::NumberComparison>) -> bool {
+    if let Some(_) = number_comparison.as_mut() {
+        let input = await_input().await;
+
+        if "y" == input.to_lowercase() || "yes" == input.to_lowercase() {
+            true
+        } else if "n" == input.to_lowercase() || "no" == input.to_lowercase() {
+            false
+        } else {
+            println!("invalid input, defaulting to rejecting number comparison");
+            false
+        }
+    } else {
+        std::future::pending().await
+    }
+}
+
+fn await_passkey() -> impl std::future::Future<Output = Vec<char>> {
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
+
+    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<Vec<char>>>();
+    let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
+
+    std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+
+        loop {
+            if ok_or_return!(poll(core::time::Duration::from_millis(50)), input_sender) {
+                match ok_or_return!(read(), input_sender) {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char(digit),
+                        ..
+                    }) => {
+                        buffer.push(digit);
+                    }
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) => {
+                        input_sender.send(Ok(buffer)).unwrap();
+                        break;
+                    }
+                    _ => continue,
+                }
+            } else if let Ok(_) = cancel_receiver.try_recv() {
+                break;
+            }
+        }
+
+        crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags).unwrap();
+    });
+
+    async move {
+        InputTaskCallback::new(input_receiver, cancel_sender)
+            .await
+            .expect("cannot read input")
+            .expect("crossterm error")
+    }
+}
+
+/// Message to the user about how the passkey should be entered
+pub fn passkey_input_message(passkey_input: &bo_tie::host::sm::initiator::PasskeyInput) {
+    if passkey_input.is_passkey_input_on_both() {
+        println!("create a six digit passkey and enter it into both devices")
+    } else {
+        println!("enter the six digit passkey displayed on the other device")
+    }
+}
+
+/// Await for key presses from the user
+///
+/// This will await for a keypresses from the user until the user presses enter.
+///
+/// # `inactive`
+/// input `inactive` is used to turn keypress into a
+pub async fn get_passkey(inactive: bool) -> Vec<char> {
+    if inactive {
+        core::future::pending().await
+    } else {
+        await_passkey().await
+    }
+}
+
+/// Read the passkey
+pub fn process_passkey(input: Vec<char>) -> Option<[char; 6]> {
+    if input.len() == 6 && input.iter().all(|c| c.is_digit(10)) {
+        let mut passkey: [char; 6] = Default::default();
+
+        passkey.iter_mut().zip(input.into_iter()).for_each(|(c, d)| *c = d);
+
+        Some(passkey)
+    } else {
+        let passkey = input.into_iter().collect::<String>();
+
+        println!(
+            "passkey {passkey} is not a valid passkey. A passkey must consist of exactly six \
+            digits"
+        );
+
+        None
+    }
+}
