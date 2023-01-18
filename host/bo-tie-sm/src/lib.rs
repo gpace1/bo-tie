@@ -487,7 +487,7 @@ impl PairingMethod {
             (_, _, KeyboardDisplay, KeyboardOnly, _) => {
                 PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
             }
-            (_, _, KeyboardDisplay, NoInputNoOutput, _) => PairingMethod::NumbComp,
+            (_, _, KeyboardDisplay, NoInputNoOutput, _) => PairingMethod::JustWorks,
             (_, _, KeyboardDisplay, KeyboardDisplay, false) => PairingMethod::NumbComp,
             (_, _, KeyboardDisplay, KeyboardDisplay, true) => {
                 PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
