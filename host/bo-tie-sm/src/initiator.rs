@@ -1541,23 +1541,23 @@ impl SecurityManager {
     where
         C: ConnectionChannel,
     {
-        if accepted {
+        if !accepted {
             self.send_err(connection_channel, PairingFailedReason::NumericComparisonFailed)
                 .await?;
 
-            Ok(Status::PairingFailed(PairingFailedReason::NumericComparisonFailed))
-        } else {
-            match &self.pairing_data {
-                Some(PairingData {
-                    pairing_method: PairingMethod::NumbComp,
-                    ..
-                }) => self.send_initiator_dh_key_check(connection_channel).await,
-                _ => {
-                    self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                        .await?;
+            return Ok(Status::PairingFailed(PairingFailedReason::NumericComparisonFailed));
+        }
 
-                    Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
-                }
+        match &self.pairing_data {
+            Some(PairingData {
+                pairing_method: PairingMethod::NumbComp,
+                ..
+            }) => self.send_initiator_dh_key_check(connection_channel).await,
+            _ => {
+                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .await?;
+
+                Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
