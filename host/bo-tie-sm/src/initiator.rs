@@ -1049,7 +1049,7 @@ impl SecurityManager {
 
                 let pkb = GetXOfP256Key::x(peer_public_key);
 
-                let calculated_confirm = toolbox::f4(pka, pkb, responder_nonce, 0);
+                let calculated_confirm = toolbox::f4(pkb, pka, responder_nonce, 0);
 
                 if responder_confirm == calculated_confirm {
                     *peer_nonce = responder_nonce.into();
@@ -1077,7 +1077,7 @@ impl SecurityManager {
 
                 let pkb = GetXOfP256Key::x(peer_public_key);
 
-                let calculated_confirm = toolbox::f4(pka, pkb, responder_nonce, 0);
+                let calculated_confirm = toolbox::f4(pkb, pka, responder_nonce, 0);
 
                 if responder_confirm == calculated_confirm {
                     *peer_nonce = responder_nonce.into();
