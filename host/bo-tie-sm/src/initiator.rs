@@ -994,7 +994,7 @@ impl SecurityManager {
             }) => {
                 *peer_confirm = responder_confirm.get_value().into();
 
-                log::trace!("(SM) initiator nonce: {:?}", nonce);
+                log::trace!("(SM) initiator nonce: {:#x}", nonce);
 
                 self.pairing_expected_cmd = CommandType::PairingRandom.into();
 
@@ -1034,7 +1034,7 @@ impl SecurityManager {
             }
         };
 
-        log::trace!("(SM) responder Nonce: {:?}", responder_nonce);
+        log::trace!("(SM) responder nonce: {:#x}", responder_nonce);
 
         match self.pairing_data {
             Some(PairingData {
