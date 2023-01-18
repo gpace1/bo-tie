@@ -436,8 +436,8 @@ impl PairingMethod {
         match (
             initiator_oob_data,
             responder_oob_data,
-            responder_io_capability,
             initiator_io_capability,
+            responder_io_capability,
             is_legacy,
         ) {
             (Present, Present, _, _, _) => PairingMethod::Oob(OobDirection::BothSendOob),
@@ -446,46 +446,46 @@ impl PairingMethod {
             (_, _, DisplayOnly, DisplayOnly, _) => PairingMethod::JustWorks,
             (_, _, DisplayOnly, DisplayWithYesOrNo, _) => PairingMethod::JustWorks,
             (_, _, DisplayOnly, KeyboardOnly, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
             }
             (_, _, DisplayOnly, NoInputNoOutput, _) => PairingMethod::JustWorks,
             (_, _, DisplayOnly, KeyboardDisplay, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
             }
             (_, _, DisplayWithYesOrNo, DisplayOnly, _) => PairingMethod::JustWorks,
             (_, _, DisplayWithYesOrNo, DisplayWithYesOrNo, false) => PairingMethod::NumbComp,
             (_, _, DisplayWithYesOrNo, DisplayWithYesOrNo, true) => PairingMethod::JustWorks,
             (_, _, DisplayWithYesOrNo, KeyboardOnly, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
             }
             (_, _, DisplayWithYesOrNo, NoInputNoOutput, _) => PairingMethod::JustWorks,
             (_, _, DisplayWithYesOrNo, KeyboardDisplay, false) => PairingMethod::NumbComp,
             (_, _, DisplayWithYesOrNo, KeyboardDisplay, true) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
             }
             (_, _, KeyboardOnly, DisplayOnly, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
             }
             (_, _, KeyboardOnly, DisplayWithYesOrNo, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
             }
             (_, _, KeyboardOnly, KeyboardOnly, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorAndResponderInput)
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
             }
             (_, _, KeyboardOnly, NoInputNoOutput, _) => PairingMethod::JustWorks,
             (_, _, KeyboardOnly, KeyboardDisplay, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
             }
             (_, _, NoInputNoOutput, _, _) => PairingMethod::JustWorks,
             (_, _, KeyboardDisplay, DisplayOnly, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
             }
             (_, _, KeyboardDisplay, DisplayWithYesOrNo, false) => PairingMethod::NumbComp,
             (_, _, KeyboardDisplay, DisplayWithYesOrNo, true) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
             }
             (_, _, KeyboardDisplay, KeyboardOnly, _) => {
-                PairingMethod::PassKeyEntry(PasskeyDirection::ResponderDisplaysInitiatorInputs)
+                PairingMethod::PassKeyEntry(PasskeyDirection::InitiatorDisplaysResponderInputs)
             }
             (_, _, KeyboardDisplay, NoInputNoOutput, _) => PairingMethod::JustWorks,
             (_, _, KeyboardDisplay, KeyboardDisplay, false) => PairingMethod::NumbComp,
