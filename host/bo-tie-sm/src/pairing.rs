@@ -7,7 +7,7 @@ use bo_tie_util::buffer::stack::LinearBuffer;
 pub(crate) fn convert_io_cap(
     auth_req: &[encrypt_info::AuthRequirements],
     oob_flag: pairing::OobDataFlag,
-    io_cap: pairing::IOCapability,
+    io_cap: pairing::IoCapability,
 ) -> [u8; 3] {
     [
         encrypt_info::AuthRequirements::make_auth_req_val(auth_req),
@@ -17,8 +17,8 @@ pub(crate) fn convert_io_cap(
 }
 
 /// The IO Capabilities of a device as it relates to the pairing method
-#[derive(Debug, Clone, Copy)]
-pub enum IOCapability {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IoCapability {
     /// The device only contains a display
     DisplayOnly,
     /// The device contains a display with a method for the user to enter yes or no
@@ -31,30 +31,30 @@ pub enum IOCapability {
     KeyboardDisplay,
 }
 
-impl IOCapability {
+impl IoCapability {
     pub(crate) fn into_val(self) -> u8 {
         match self {
-            IOCapability::DisplayOnly => 0x0,
-            IOCapability::DisplayWithYesOrNo => 0x1,
-            IOCapability::KeyboardOnly => 0x2,
-            IOCapability::NoInputNoOutput => 0x3,
-            IOCapability::KeyboardDisplay => 0x4,
+            IoCapability::DisplayOnly => 0x0,
+            IoCapability::DisplayWithYesOrNo => 0x1,
+            IoCapability::KeyboardOnly => 0x2,
+            IoCapability::NoInputNoOutput => 0x3,
+            IoCapability::KeyboardDisplay => 0x4,
         }
     }
 
     fn try_from_val(val: u8) -> Result<Self, Error> {
         match val {
-            0x0 => Ok(IOCapability::DisplayOnly),
-            0x1 => Ok(IOCapability::DisplayWithYesOrNo),
-            0x2 => Ok(IOCapability::KeyboardOnly),
-            0x3 => Ok(IOCapability::NoInputNoOutput),
-            0x4 => Ok(IOCapability::KeyboardDisplay),
+            0x0 => Ok(IoCapability::DisplayOnly),
+            0x1 => Ok(IoCapability::DisplayWithYesOrNo),
+            0x2 => Ok(IoCapability::KeyboardOnly),
+            0x3 => Ok(IoCapability::NoInputNoOutput),
+            0x4 => Ok(IoCapability::KeyboardDisplay),
             _ => Err(Error::Value),
         }
     }
 
     pub fn no_io_capability(self) -> bool {
-        if let IOCapability::NoInputNoOutput = self {
+        if let IoCapability::NoInputNoOutput = self {
             true
         } else {
             false
@@ -130,7 +130,7 @@ const MAX_ENCRYPTION_SIZE_RANGE: core::ops::RangeInclusive<usize> = 7..=16;
 
 #[derive(Clone)]
 pub struct PairingRequest {
-    io_capability: IOCapability,
+    io_capability: IoCapability,
     oob_data_flag: OobDataFlag,
     auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
     max_encryption_size: usize,
@@ -165,7 +165,7 @@ impl CommandData for PairingRequest {
         log::trace!("(SM) received pairing request: {:x?}", icd);
         if icd.len() == 6 {
             Ok(Self {
-                io_capability: IOCapability::try_from_val(icd[0])?,
+                io_capability: IoCapability::try_from_val(icd[0])?,
                 oob_data_flag: OobDataFlag::try_from_val(icd[1])?,
                 auth_req: AuthRequirements::from_val(icd[2]),
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
@@ -187,7 +187,7 @@ impl CommandData for PairingRequest {
 
 impl PairingRequest {
     pub fn new(
-        io_capability: IOCapability,
+        io_capability: IoCapability,
         oob_data_flag: OobDataFlag,
         auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
         max_encryption_size: usize,
@@ -205,7 +205,7 @@ impl PairingRequest {
         }
     }
 
-    pub fn get_io_capability(&self) -> IOCapability {
+    pub fn get_io_capability(&self) -> IoCapability {
         self.io_capability
     }
 
@@ -230,7 +230,7 @@ impl PairingRequest {
     }
 
     /// Set the input and output capabilities of the device
-    pub fn set_io_capability(&mut self, io_cap: IOCapability) {
+    pub fn set_io_capability(&mut self, io_cap: IoCapability) {
         self.io_capability = io_cap;
     }
 
@@ -317,7 +317,7 @@ impl From<PairingRequest> for Command<PairingRequest> {
 }
 
 pub struct PairingResponse {
-    io_capability: IOCapability,
+    io_capability: IoCapability,
     oob_data_flag: OobDataFlag,
     auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
     max_encryption_size: usize,
@@ -351,7 +351,7 @@ impl CommandData for PairingResponse {
     fn try_from_command_format(icd: &[u8]) -> Result<Self, Error> {
         if icd.len() == 6 {
             Ok(Self {
-                io_capability: IOCapability::try_from_val(icd[0])?,
+                io_capability: IoCapability::try_from_val(icd[0])?,
                 oob_data_flag: OobDataFlag::try_from_val(icd[1])?,
                 auth_req: AuthRequirements::from_val(icd[2]),
                 max_encryption_size: if MAX_ENCRYPTION_SIZE_RANGE.contains(&(icd[3] as usize)) {
@@ -373,7 +373,7 @@ impl CommandData for PairingResponse {
 
 impl PairingResponse {
     pub fn new(
-        io_capability: IOCapability,
+        io_capability: IoCapability,
         oob_data_flag: OobDataFlag,
         auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
         max_encryption_size: usize,
@@ -391,7 +391,7 @@ impl PairingResponse {
         }
     }
 
-    pub fn get_io_capability(&self) -> IOCapability {
+    pub fn get_io_capability(&self) -> IoCapability {
         self.io_capability
     }
 
@@ -416,7 +416,7 @@ impl PairingResponse {
     }
 
     /// Set the input and output capabilities of the device
-    pub fn set_io_capability(&mut self, io_cap: IOCapability) {
+    pub fn set_io_capability(&mut self, io_cap: IoCapability) {
         self.io_capability = io_cap;
     }
 

@@ -97,7 +97,7 @@ use bo_tie_sm::responder::SecurityManagerBuilder;
 
 use crate::encrypt_info::AuthRequirements;
 use crate::l2cap::ConnectionChannel;
-use crate::pairing::{IOCapability, KeyDistributions, KeyPressNotification, PairingFailedReason};
+use crate::pairing::{IoCapability, KeyDistributions, KeyPressNotification, PairingFailedReason};
 use crate::OobDirection;
 use crate::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, EnabledBondingKeysBuilder, Error, GetXOfP256Key,
@@ -487,11 +487,11 @@ impl SecurityManagerBuilder {
         let responder_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
 
         let io_capability = match (self.enable_number_comparison, self.enable_passkey) {
-            (_, PasskeyAbility::DisplayWithInput) => IOCapability::KeyboardDisplay,
-            (true, _) => IOCapability::DisplayWithYesOrNo,
-            (false, PasskeyAbility::DisplayOnly) => IOCapability::DisplayOnly,
-            (false, PasskeyAbility::InputOnly) => IOCapability::KeyboardOnly,
-            (false, PasskeyAbility::None) => IOCapability::NoInputNoOutput,
+            (_, PasskeyAbility::DisplayWithInput) => IoCapability::KeyboardDisplay,
+            (true, _) => IoCapability::DisplayWithYesOrNo,
+            (false, PasskeyAbility::DisplayOnly) => IoCapability::DisplayOnly,
+            (false, PasskeyAbility::InputOnly) => IoCapability::KeyboardOnly,
+            (false, PasskeyAbility::None) => IoCapability::NoInputNoOutput,
         };
 
         if !self.enable_just_works && io_capability.no_io_capability() {
@@ -522,7 +522,7 @@ impl SecurityManagerBuilder {
 
 /// A Security Manager for a Peripheral Device
 pub struct SecurityManager {
-    io_capability: IOCapability,
+    io_capability: IoCapability,
     oob: Option<OobDirection>,
     auth_req: LinearBuffer<{ AuthRequirements::full_depth() }, AuthRequirements>,
     allow_just_works: bool,
