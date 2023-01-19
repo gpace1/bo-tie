@@ -379,8 +379,6 @@ impl<T> BasicInfoFrame<T> {
     pub const HEADER_SIZE: usize = 4;
 
     /// Create a new `BasicInfoFrame`
-    ///
-    /// The channel identifier field
     pub fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
         BasicInfoFrame { channel_id, payload }
     }
