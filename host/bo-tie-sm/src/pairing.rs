@@ -68,7 +68,7 @@ impl IoCapability {
 /// `AuthenticationDataNotPresent` means that authentication data cannot be received and
 /// `AuthenticationDataFromRemoteDevicePresent` means that authentication data can be received. This
 /// flag is used internally within the security manager.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OobDataFlag {
     AuthenticationDataNotPresent,
     AuthenticationDataFromRemoteDevicePresent,
