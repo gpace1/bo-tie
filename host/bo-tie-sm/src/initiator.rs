@@ -1157,39 +1157,43 @@ impl SecurityManager {
     {
         match self.pairing_data {
             Some(PairingData {
+                pairing_method,
                 secret_key: Some(ref dh_key),
                 nonce,
                 peer_nonce: Some(ref peer_nonce),
                 initiator_io_cap,
+                responder_io_cap,
+                initiator_random,
                 responder_random,
                 ref mut mac_key,
+                passkey,
                 ..
             }) => {
                 let a_addr = toolbox::PairingAddress::new(&self.initiator_address, self.initiator_address_is_random);
 
                 let b_addr = toolbox::PairingAddress::new(&self.responder_address, self.responder_address_is_random);
 
-                log::trace!("(SM) secret key: {:x?}", dh_key);
-                log::trace!("(SM) remote nonce: {:x?}", peer_nonce);
-                log::trace!("(SM) this nonce: {:x?}", nonce);
-                log::trace!("(SM) remote address: {:x?}", a_addr);
-                log::trace!("(SM) this address: {:x?}", b_addr);
+                let (ra, rb) = if let (PairingMethod::PassKeyEntry(_), Some(passkey)) = (pairing_method, passkey) {
+                    (passkey as u128, passkey as u128)
+                } else {
+                    (initiator_random, responder_random)
+                };
 
                 let (gen_mac_key, ltk) = toolbox::f5(*dh_key, nonce, *peer_nonce, a_addr.clone(), b_addr.clone());
 
-                log::trace!("(SM) mac_key: {:x?}", gen_mac_key);
-                log::trace!("(SM) ltk: {:x?}", ltk);
-                log::trace!("(SM) initiator_io_cap: {:x?}", initiator_io_cap);
+                log::trace!("(SM) initiator address: {:x?}", a_addr);
+                log::trace!("(SM) responder address: {:x?}", b_addr);
+                log::trace!("(SM) initiator IOcap: {:x?}", initiator_io_cap);
+                log::trace!("(SM) responder IOcap: {:x?}", responder_io_cap);
+                log::trace!("(SM) initiator nonce: {:032x}", nonce);
+                log::trace!("(SM) responder nonce: {:032x}", peer_nonce);
+                log::trace!("(SM) initiator random: {:032x}", ra);
+                log::trace!("(SM) responder random: {:032x}", rb);
+                log::trace!("(SM) DH shared secret: {:x?}", dh_key);
+                log::trace!("(SM) mac_key: {:#032x}", gen_mac_key);
+                log::trace!("(SM) long term key: {:#032x}", ltk);
 
-                let ea = toolbox::f6(
-                    gen_mac_key,
-                    nonce,
-                    *peer_nonce,
-                    responder_random,
-                    initiator_io_cap,
-                    a_addr,
-                    b_addr,
-                );
+                let ea = toolbox::f6(gen_mac_key, nonce, *peer_nonce, rb, initiator_io_cap, a_addr, b_addr);
 
                 let mut keys = crate::Keys::new();
 
