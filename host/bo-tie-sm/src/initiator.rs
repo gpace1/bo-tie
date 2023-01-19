@@ -1327,8 +1327,10 @@ impl SecurityManager {
     /// Begin Pairing to the Peripheral
     ///
     /// This begins the pairing process by sending the request for the peripheral's pairing
-    /// information. This function is required to be called before `continue_pairing` can be used to
+    /// information. This function is required to be called before [`continue_pairing`] can be used to
     /// process and send further Security Manager PDU's to the slave.
+    ///
+    /// [`continue_pairing`]: SecurityManager::continue_pairing
     pub async fn start_pairing<C>(&mut self, connection_channel: &C) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
