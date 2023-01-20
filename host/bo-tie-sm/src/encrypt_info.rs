@@ -252,6 +252,13 @@ impl IdentityAddressInformation {
     pub fn get_address(&self) -> BluetoothDeviceAddress {
         self.address
     }
+
+    pub fn as_identity(&self) -> IdentityAddress {
+        match self.addr_type {
+            AddressType::Public => IdentityAddress::Public(self.address),
+            AddressType::StaticRandom => IdentityAddress::StaticRandom(self.address),
+        }
+    }
 }
 
 impl From<IdentityAddressInformation> for IdentityAddress {
