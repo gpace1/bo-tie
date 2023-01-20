@@ -1054,8 +1054,6 @@ impl SecurityManager {
                 if responder_confirm == calculated_confirm {
                     *peer_nonce = responder_nonce.into();
 
-                    self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
-
                     self.send_initiator_dh_key_check(connection_channel).await
                 } else {
                     self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
@@ -1199,6 +1197,8 @@ impl SecurityManager {
                 *ltk = gen_ltk.into();
 
                 *mac_key = gen_mac_key.into();
+
+                self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
 
                 self.send(connection_channel, pairing::PairingDhKeyCheck::new(ea))
                     .await?;
@@ -2683,8 +2683,6 @@ mod tests {
         let eb = toolbox::f6(mac_key, nb, na, 0, io_cap_b, b, a);
 
         responder_channel.send(Command::new(CommandType::PairingDHKeyCheck, PairingDhKeyCheck::new(eb)));
-
-        //continue_pairing!(security_manager, initiator_channel);
 
         continue_pairing!(security_manager, initiator_channel);
 
