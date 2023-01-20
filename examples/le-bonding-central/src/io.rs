@@ -9,38 +9,10 @@
 //!
 //! [`crossterm`]: https://docs.rs/crossterm/latest/crossterm/
 
-use crossterm::cursor;
+use crossterm::event::KeyModifiers;
 use std::ops::RangeInclusive;
 use std::sync::mpsc;
 use tokio::sync::oneshot;
-
-/// Spawn a task for handling terminal I/O
-macro_rules! term_raw_mode_task {
-    ($sender:expr, $($job:tt)*) => {
-        std::thread::spawn(move || {
-            macro_rules! ok_or_break {
-                ($result:expr) => {
-                    match $result {
-                        Ok(v) => v,
-                        Err(e) => {
-                            $sender.send(Err(e)).unwrap();
-                            break;
-                        }
-                    }
-                };
-            }
-
-            if let Err(e) = crossterm::terminal::enable_raw_mode() {
-                $sender.send(Err(e)).unwrap();
-                return
-            }
-
-            $($job)*
-
-            crossterm::terminal::disable_raw_mode().unwrap()
-        })
-    };
-}
 
 macro_rules! ok_or_return {
     ($result:expr, $sender:expr) => {
@@ -93,7 +65,7 @@ impl<T> Drop for InputTaskCallback<T> {
 
 #[cfg(any(unix, windows))]
 pub fn exit_signal() -> impl std::future::Future {
-    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 
     let (ctrl_c_sender, ctrl_c_receiver) = oneshot::channel::<crossterm::Result<()>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
@@ -124,66 +96,47 @@ pub fn exit_signal() -> impl std::future::Future {
     }
 }
 
-/// Process an advertising result
+/// Print an advertising result
 #[cfg(any(unix, windows))]
 pub fn on_advertising_result(number: usize, name: &str) {
-    use std::io::Write;
-
-    let mut stdout = std::io::stdout();
-
-    crossterm::execute!(stdout, cursor::MoveToColumn(0)).unwrap();
-
-    write!(stdout, "{}) {}", number, name).unwrap();
-
-    stdout.flush().unwrap();
-
-    if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
-        crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
-    }
-
-    crossterm::execute!(stdout, cursor::MoveDown(1), cursor::MoveToColumn(0)).unwrap();
+    println!("{}) {}", number, name);
 }
 
 /// Create a future for detection of the escape key
 #[cfg(any(unix, windows))]
-pub fn detect_escape() -> impl std::future::Future<Output = bool> {
-    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+pub fn detect_enter() -> impl std::future::Future<Output = bool> {
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent};
 
-    println!("press the escape key to stop scanning");
+    println!("press enter to stop scanning");
 
     let (sender, receiver) = oneshot::channel::<crossterm::Result<bool>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
-    term_raw_mode_task!(
-        sender,
-        loop {
-            if ok_or_break!(poll(std::time::Duration::from_millis(50))) {
-                match ok_or_break!(read()) {
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Esc,
-                        kind: KeyEventKind::Press,
-                        ..
-                    }) => {
-                        sender.send(Ok(true)).unwrap();
-                        break;
-                    }
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers: KeyModifiers::CONTROL,
-                        ..
-                    }) => {
-                        sender.send(Ok(false)).unwrap();
-                        break;
-                    }
-                    _ => continue,
-                }
-            } else {
-                if let Ok(_) = cancel_receiver.try_recv() {
+    std::thread::spawn(move || loop {
+        if ok_or_return!(poll(std::time::Duration::from_millis(50)), sender) {
+            match ok_or_return!(read(), sender) {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Enter, ..
+                }) => {
+                    sender.send(Ok(true)).unwrap();
                     break;
                 }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                }) => {
+                    sender.send(Ok(false)).unwrap();
+                    break;
+                }
+                _ => continue,
+            }
+        } else {
+            if let Ok(_) = cancel_receiver.try_recv() {
+                break;
             }
         }
-    );
+    });
 
     async move {
         InputTaskCallback::new(receiver, cancel_sender)
@@ -200,8 +153,7 @@ pub fn detect_escape() -> impl std::future::Future {
 
 #[cfg(any(unix, windows))]
 pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<Output = Option<usize>> {
-    use crossterm::cursor::{MoveDown, MoveToColumn};
-    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
     use std::io::Write;
 
     println!("input the number of the device to connect to");
@@ -209,91 +161,52 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
     let (sender, receiver) = oneshot::channel::<crossterm::Result<Option<usize>>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
-    term_raw_mode_task!(sender,
-        let mut buffer = String::new();
+    let mut message = String::new();
 
-        macro_rules! output_buffer {
-            () => {{
-                let mut stdout = std::io::stdout();
-
-                crossterm::execute!(&mut stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine), MoveToColumn(0)).unwrap();
-
-                write!(&mut stdout, "{}", buffer).unwrap();
-
-                stdout.flush().unwrap();
-            }}
-        }
-
-        loop {
-            if ok_or_break!(poll(std::time::Duration::from_millis(50))) {
-                match ok_or_break!(read()) {
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers: KeyModifiers::CONTROL,
-                        ..
-                    }) => {
-                        sender.send(Ok(None)).unwrap();
-                        break;
-                    },
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Char(c),
-                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                        ..
-                    }) => {
-                        buffer.push(c);
-
-                        output_buffer!()
-                    },
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Backspace,
-                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                        ..
-                    }) => {
-                        buffer.pop();
-
-                        output_buffer!()
-                    }
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Enter,
-                        kind: KeyEventKind::Press,
-                        ..
-                    }) => {
-                        let mut stdout = std::io::stdout();
-
-                        if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
-                            crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
-                        }
-
-                        ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
-
-                        if let Ok(value) = buffer.parse() {
-                            if range.contains(&value) {
-                                sender.send(Ok(Some(value))).unwrap();
-                                break;
-                            }
-                        }
-
-                        buffer.clear();
-
-                        write!(stdout, "please enter a valid number between {} and {}", range.start(), range.end()).unwrap();
-
-                        stdout.flush().unwrap();
-
-                        if crossterm::terminal::size().unwrap().1 - 1 == cursor::position().unwrap().1 {
-                            crossterm::execute!(stdout, crossterm::terminal::ScrollUp(1)).unwrap();
-                        }
-
-                        ok_or_break!(crossterm::execute!(stdout, MoveDown(1), MoveToColumn(0)));
-                    }
-                    _ => continue,
-                }
-            } else {
-                if let Ok(_) = cancel_receiver.try_recv() {
+    std::thread::spawn(move || loop {
+        if ok_or_return!(poll(std::time::Duration::from_millis(50)), sender) {
+            match ok_or_return!(read(), sender) {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                    ..
+                }) => {
+                    sender.send(Ok(None)).unwrap();
                     break;
                 }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char(char),
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    message.push(char);
+                }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Enter, ..
+                }) => match <usize>::from_str_radix(&message, 10) {
+                    Ok(val) if range.contains(&val) => {
+                        sender.send(Ok(Some(val))).unwrap();
+                        break;
+                    }
+                    _ => {
+                        message.clear();
+                        write!(
+                            std::io::stdout(),
+                            "please enter a valid number between {} and {}",
+                            range.start(),
+                            range.end()
+                        )
+                        .unwrap()
+                    }
+                },
+                _ => continue,
+            }
+        } else {
+            if let Ok(_) = cancel_receiver.try_recv() {
+                break;
             }
         }
-    );
+    });
 
     async move {
         InputTaskCallback::new(receiver, cancel_sender)
@@ -303,28 +216,38 @@ pub fn select_device(range: RangeInclusive<usize>) -> impl std::future::Future<O
     }
 }
 
-fn await_input() -> impl std::future::Future<Output = String> {
+fn await_yes_no_input() -> impl std::future::Future<Output = Option<String>> {
     use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 
-    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<String>>();
+    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<Option<String>>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
     let mut input = String::new();
 
     std::thread::spawn(move || loop {
         if ok_or_return!(poll(core::time::Duration::from_millis(50)), input_sender) {
-            match ok_or_return!(read(), input_sender) {
+            let event = ok_or_return!(read(), input_sender);
+            match event {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) => {
+                    input_sender.send(Ok(None)).unwrap();
+                    break;
+                }
+                Event::Key(KeyEvent {
+                    code: KeyCode::Enter, ..
+                }) => {
+                    input_sender.send(Ok(Some(input))).unwrap();
+                    break;
+                }
                 Event::Key(KeyEvent {
                     code: KeyCode::Char(key),
                     kind: KeyEventKind::Press,
                     ..
                 }) => input.push(key),
-                Event::Key(KeyEvent {
-                    code: KeyCode::Enter, ..
-                }) => {
-                    input_sender.send(Ok(input)).unwrap();
-                    break;
-                }
                 _ => continue,
             }
         } else if let Ok(_) = cancel_receiver.try_recv() {
@@ -341,27 +264,23 @@ fn await_input() -> impl std::future::Future<Output = String> {
 }
 
 /// Number Comparison
-pub async fn number_comparison(number_comparison: &mut Option<bo_tie::host::sm::initiator::NumberComparison>) -> bool {
-    if let Some(_) = number_comparison.as_mut() {
-        let input = await_input().await;
+async fn number_comparison_input() -> Option<bool> {
+    let input = await_yes_no_input().await?;
 
-        if "y" == input.to_lowercase() || "yes" == input.to_lowercase() {
-            true
-        } else if "n" == input.to_lowercase() || "no" == input.to_lowercase() {
-            false
-        } else {
-            println!("invalid input, defaulting to rejecting number comparison");
-            false
-        }
+    if "y" == input.to_lowercase() || "yes" == input.to_lowercase() {
+        Some(true)
+    } else if "n" == input.to_lowercase() || "no" == input.to_lowercase() {
+        Some(false)
     } else {
-        std::future::pending().await
+        println!("invalid input '{}', defaulting to rejecting number comparison", input);
+        Some(false)
     }
 }
 
-fn await_passkey() -> impl std::future::Future<Output = Vec<char>> {
+fn await_passkey() -> impl std::future::Future<Output = Option<Vec<char>>> {
     use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 
-    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<Vec<char>>>();
+    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<Option<Vec<char>>>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
     std::thread::spawn(move || {
@@ -370,6 +289,15 @@ fn await_passkey() -> impl std::future::Future<Output = Vec<char>> {
         loop {
             if ok_or_return!(poll(core::time::Duration::from_millis(50)), input_sender) {
                 match ok_or_return!(read(), input_sender) {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) => {
+                        input_sender.send(Ok(None)).unwrap();
+                        break;
+                    }
                     Event::Key(KeyEvent {
                         code: KeyCode::Char(digit),
                         ..
@@ -381,7 +309,7 @@ fn await_passkey() -> impl std::future::Future<Output = Vec<char>> {
                         kind: KeyEventKind::Press,
                         ..
                     }) => {
-                        input_sender.send(Ok(buffer)).unwrap();
+                        input_sender.send(Ok(Some(buffer))).unwrap();
                         break;
                     }
                     _ => continue,
@@ -411,20 +339,6 @@ pub fn passkey_input_message(passkey_input: &bo_tie::host::sm::initiator::Passke
     }
 }
 
-/// Await for key presses from the user
-///
-/// This will await for a keypresses from the user until the user presses enter.
-///
-/// # `inactive`
-/// input `inactive` is used to turn keypress into a
-pub async fn get_passkey(inactive: bool) -> Vec<char> {
-    if inactive {
-        core::future::pending().await
-    } else {
-        await_passkey().await
-    }
-}
-
 /// Read the passkey
 pub fn process_passkey(input: Vec<char>) -> Option<[char; 6]> {
     if input.len() == 6 && input.iter().all(|c| c.is_digit(10)) {
@@ -442,5 +356,40 @@ pub fn process_passkey(input: Vec<char>) -> Option<[char; 6]> {
         );
 
         None
+    }
+}
+
+/// User Authentication (or exit)
+pub enum UserAuthentication {
+    NumberComparison(bool),
+    PasskeyInput(Vec<char>),
+    Exit,
+}
+
+/// Await for Authentication from the user
+///
+/// When the user needs to either confirm a number comparison or enter a passkey, this will await
+/// the input from the user
+///
+/// # Note
+/// This also awaits for 'ctrl-c' keypress from the user
+pub async fn user_authentication_input(
+    number_comparison: &Option<bo_tie::host::sm::initiator::NumberComparison>,
+    passkey_input: &Option<bo_tie::host::sm::initiator::PasskeyInput>,
+) -> UserAuthentication {
+    match (number_comparison, passkey_input) {
+        (None, None) => {
+            exit_signal().await;
+            UserAuthentication::Exit
+        }
+        (Some(_), None) => match number_comparison_input().await {
+            Some(accepted) => UserAuthentication::NumberComparison(accepted),
+            None => UserAuthentication::Exit,
+        },
+        (None, Some(_)) => match await_passkey().await {
+            Some(passkey) => UserAuthentication::PasskeyInput(passkey),
+            None => UserAuthentication::Exit,
+        },
+        (Some(_), Some(_)) => unreachable!(),
     }
 }

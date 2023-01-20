@@ -176,7 +176,7 @@ where
 }
 
 /// Pair with a connected device
-async fn pair<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> u128
+async fn pair<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> Option<u128>
 where
     C: bo_tie::host::l2cap::ConnectionChannel,
 {
@@ -197,7 +197,7 @@ where
                 if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
                     match sm.continue_pairing(connection_channel, &basic_frame).await.unwrap() {
                         Status::PairingComplete => {
-                            break 'outer sm.get_keys().unwrap().get_ltk().unwrap()
+                            break 'outer sm.get_keys().unwrap().get_ltk().unwrap().into()
                         },
                         Status::NumberComparison(n) => {
                             println!(
@@ -226,19 +226,23 @@ where
                 }
             },
 
-            is_accepted = io::number_comparison(&mut number_comparison) => if is_accepted {
-                number_comparison.take().unwrap().yes(sm, connection_channel).await.unwrap();
-            } else {
-                number_comparison.take().unwrap().no(sm, connection_channel).await.unwrap();
-            },
-
-            passkey = io::get_passkey(passkey_input.is_none()) => if let Some(input) = io::process_passkey(passkey) {
+            user_auth = io::user_authentication_input(&number_comparison, &passkey_input) => {
+                match user_auth {
+                    io::UserAuthentication::NumberComparison(is_accepted) => if is_accepted {
+                        number_comparison.take().unwrap().yes(sm, connection_channel).await.unwrap();
+                    } else {
+                        number_comparison.take().unwrap().no(sm, connection_channel).await.unwrap();
+                    },
+                    io::UserAuthentication::PasskeyInput(passkey) =>if let Some(input) = io::process_passkey(passkey) {
                 passkey_input.as_mut().unwrap().write(input).unwrap();
 
                 passkey_input.take().unwrap().complete(sm, connection_channel).await.unwrap();
             } else {
                 passkey_input.take().unwrap().fail(sm, connection_channel).await.unwrap();
             },
+                    io::UserAuthentication::Exit => break None,
+                }
+            }
         }
     }
 }
@@ -513,7 +517,7 @@ async fn main() -> Result<(), &'static str> {
 
     println!("scanning for connectible devices with a complete local name");
 
-    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_escape)
+    let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_enter)
         .await
         .unwrap();
 
@@ -545,17 +549,38 @@ async fn main() -> Result<(), &'static str> {
 
     println!("pairing and bonding with {}", report.1);
 
+    let this_address = bo_tie::hci::commands::info_params::read_bd_addr::send(&mut host)
+        .await
+        .unwrap();
+
+    println!("this address: {}, report address: {}", this_address, report.0.address);
+
     let mut security_manager = bo_tie::host::sm::initiator::SecurityManagerBuilder::new(
         report.0.address,
-        bo_tie::hci::commands::info_params::read_bd_addr::send(&mut host)
-            .await
-            .unwrap(),
+        this_address,
         !report.0.address_type.is_public(),
         false,
     )
+    .enable_number_comparison()
     .build();
 
-    let long_term_key = await_or_exit!(host, connection, pair(&mut connection, &mut security_manager));
+    let long_term_key = loop {
+        tokio::select! {
+            next = host.next() => {
+                if let bo_tie::hci::Next::Event(bo_tie::hci::events::EventsData::DisconnectionComplete(_)) = next.unwrap() {
+                    return Err("peer device disconnected")
+                }
+            }
+            ret = pair(&mut connection, &mut security_manager) => match ret {
+                None => {
+                    disconnect(&mut host, connection.get_handle()).await;
+
+                    return Ok(());
+                }
+                Some(ltk) => break ltk,
+            }
+        }
+    };
 
     println!("pairing completed");
 
@@ -587,7 +612,7 @@ async fn main() -> Result<(), &'static str> {
 
                 return Ok(())
             }
-            _ = io::detect_escape() => (),
+            _ = io::detect_enter() => (),
         }
 
         println!(
