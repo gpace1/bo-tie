@@ -1166,6 +1166,7 @@ impl SecurityManager {
                 initiator_random,
                 responder_random,
                 ref mut mac_key,
+                ref mut ltk,
                 passkey,
                 ..
             }) => {
@@ -1179,7 +1180,7 @@ impl SecurityManager {
                     (initiator_random, responder_random)
                 };
 
-                let (gen_mac_key, ltk) = toolbox::f5(*dh_key, nonce, *peer_nonce, a_addr.clone(), b_addr.clone());
+                let (gen_mac_key, gen_ltk) = toolbox::f5(*dh_key, nonce, *peer_nonce, a_addr.clone(), b_addr.clone());
 
                 log::trace!("(SM) initiator address: {:x?}", a_addr);
                 log::trace!("(SM) responder address: {:x?}", b_addr);
@@ -1191,15 +1192,11 @@ impl SecurityManager {
                 log::trace!("(SM) responder random: {:032x}", rb);
                 log::trace!("(SM) DH shared secret: {:x?}", dh_key);
                 log::trace!("(SM) mac_key: {:#032x}", gen_mac_key);
-                log::trace!("(SM) long term key: {:#032x}", ltk);
+                log::trace!("(SM) long term key: {:#032x}", gen_ltk);
 
                 let ea = toolbox::f6(gen_mac_key, nonce, *peer_nonce, rb, initiator_io_cap, a_addr, b_addr);
 
-                let mut keys = crate::Keys::new();
-
-                keys.ltk = Some(ltk);
-
-                self.keys = Some(keys);
+                *ltk = gen_ltk.into();
 
                 *mac_key = gen_mac_key.into();
 
@@ -2456,5 +2453,241 @@ impl OutOfBandInput {
             .await?;
 
         Ok(Status::PairingFailed(PairingFailedReason::OobNotAvailable))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::encrypt_info::AuthRequirements;
+    use crate::initiator::SecurityManagerBuilder;
+    use crate::pairing::{
+        IoCapability, OobDataFlag, PairingConfirm, PairingDhKeyCheck, PairingPubKey, PairingRandom, PairingRequest,
+        PairingResponse,
+    };
+    use crate::toolbox::PairingAddress;
+    use crate::{toolbox, Command, CommandData, CommandType, GetXOfP256Key};
+    use bo_tie_l2cap::{send_future::Error, BasicFrameError, BasicInfoFrame, ConnectionChannel, L2capFragment};
+    use bo_tie_util::buffer::TryExtend;
+    use bo_tie_util::BluetoothDeviceAddress;
+    use std::future::Future;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+
+    #[cfg(feature = "std")]
+    struct InitiatorChannel {
+        sender: UnboundedSender<Vec<u8>>,
+        receiver: UnboundedReceiver<Vec<u8>>,
+    }
+
+    #[cfg(feature = "std")]
+    impl ConnectionChannel for InitiatorChannel {
+        type SendBuffer = Vec<u8>;
+        type SendFut<'a> = impl Future<Output = Result<(), Error<Self::SendFutErr>>> where Self: 'a;
+        type SendFutErr = usize;
+        type RecvBuffer = Vec<u8>;
+        type RecvFut<'a> = impl Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>> + 'a where Self: 'a,;
+
+        fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+            self.sender.send(data.into()).unwrap();
+
+            async { Ok(()) }
+        }
+
+        fn set_mtu(&mut self, _: u16) {
+            ()
+        }
+
+        fn get_mtu(&self) -> usize {
+            512
+        }
+
+        fn max_mtu(&self) -> usize {
+            512
+        }
+
+        fn min_mtu(&self) -> usize {
+            512
+        }
+
+        fn receive(&mut self) -> Self::RecvFut<'_> {
+            async {
+                self.receiver
+                    .recv()
+                    .await
+                    .map(|data| Ok(L2capFragment::new(true, data)))
+            }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    struct ResponderChannel {
+        sender: UnboundedSender<Vec<u8>>,
+        receiver: UnboundedReceiver<Vec<u8>>,
+    }
+
+    #[cfg(feature = "std")]
+    impl ResponderChannel {
+        fn receive<T: CommandData>(&mut self) -> T {
+            let pairing_request_raw = self.receiver.try_recv().expect("expected message");
+
+            let pairing_request_l2cap = BasicInfoFrame::<Vec<u8>>::try_from_slice(&pairing_request_raw).unwrap();
+
+            // first byte is skipped as it is assumed to be packet 'code'
+            T::try_from_command_format(&pairing_request_l2cap.get_payload()[1..]).unwrap()
+        }
+
+        fn send<T: CommandData>(&mut self, command: Command<T>) {
+            let payload = command.into_command_format();
+
+            let basic_frame = BasicInfoFrame::new(payload, crate::L2CAP_CHANNEL_ID);
+
+            self.sender.send(basic_frame.into()).unwrap();
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn create_channels() -> (InitiatorChannel, ResponderChannel) {
+        let from_initiator = unbounded_channel();
+        let to_initiator = unbounded_channel();
+
+        let initiator_channel = InitiatorChannel {
+            sender: from_initiator.0,
+            receiver: to_initiator.1,
+        };
+
+        let responder_channel = ResponderChannel {
+            sender: to_initiator.0,
+            receiver: from_initiator.1,
+        };
+
+        (initiator_channel, responder_channel)
+    }
+
+    macro_rules! continue_pairing {
+        ($security_manager:expr, $channel:expr) => {{
+            let b_frame = bo_tie_l2cap::ConnectionChannelExt::receive_b_frame(&mut $channel)
+                .await
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+
+            match $security_manager.continue_pairing(&$channel, &b_frame).await.unwrap() {
+                crate::initiator::Status::PairingFailed(reason) => panic!("pairing failed: {}", reason),
+                _ => (),
+            }
+        }};
+    }
+
+    #[cfg(feature = "std")]
+    #[tokio::test]
+    async fn just_works_pairing() {
+        let initiator_address = BluetoothDeviceAddress([0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        let responder_address = BluetoothDeviceAddress::new_random_static();
+
+        let a = PairingAddress::new(&initiator_address, false);
+        let b = PairingAddress::new(&responder_address, true);
+
+        let (mut initiator_channel, mut responder_channel) = create_channels();
+
+        let mut security_manager = SecurityManagerBuilder::new(responder_address, initiator_address, true, false)
+            .disable_bonding()
+            .build();
+
+        security_manager.start_pairing(&initiator_channel).await.unwrap();
+
+        let pairing_request: PairingRequest = responder_channel.receive();
+
+        assert_eq!(pairing_request.get_io_capability(), IoCapability::NoInputNoOutput);
+        assert_eq!(
+            pairing_request.get_oob_data_flag(),
+            OobDataFlag::AuthenticationDataNotPresent
+        );
+        assert_eq!(pairing_request.get_auth_req(), &[AuthRequirements::Sc]);
+
+        let pairing_response = PairingResponse::new(
+            IoCapability::NoInputNoOutput,
+            OobDataFlag::AuthenticationDataNotPresent,
+            [AuthRequirements::Sc].into(),
+            16,
+            &[],
+            &[],
+        );
+
+        let io_cap_a = pairing_request.get_io_cap();
+
+        let io_cap_b = pairing_response.get_io_cap();
+
+        responder_channel.send(Command::new(CommandType::PairingResponse, pairing_response));
+
+        continue_pairing!(security_manager, initiator_channel);
+
+        let pairing_public_key: PairingPubKey = responder_channel.receive();
+
+        let initiator_public_key = toolbox::PubKey::try_from_command_format(&pairing_public_key.get_key()).unwrap();
+
+        let (responder_private_key, responder_public_key) = toolbox::ecc_gen();
+
+        let shared_secret = toolbox::ecdh(responder_private_key, &initiator_public_key);
+
+        let responder_key_bytes = responder_public_key.clone().into_command_format();
+
+        let mut responder_raw_public_key = [0u8; 64];
+
+        responder_raw_public_key.copy_from_slice(&responder_key_bytes);
+
+        responder_channel.send(Command::new(
+            CommandType::PairingPublicKey,
+            PairingPubKey::new(responder_raw_public_key),
+        ));
+
+        continue_pairing!(security_manager, initiator_channel);
+
+        assert_eq!(
+            shared_secret,
+            security_manager.pairing_data.as_ref().unwrap().secret_key.unwrap()
+        );
+
+        let nb = toolbox::nonce();
+
+        let pka = GetXOfP256Key::x(&initiator_public_key);
+
+        let pkb = GetXOfP256Key::x(&responder_public_key);
+
+        let cb = toolbox::f4(pkb, pka, nb, 0);
+
+        responder_channel.send(Command::new(CommandType::PairingConfirm, PairingConfirm::new(cb)));
+
+        continue_pairing!(security_manager, initiator_channel);
+
+        let initiator_random: PairingConfirm = responder_channel.receive();
+
+        let na = initiator_random.get_value();
+
+        responder_channel.send(Command::new(CommandType::PairingRandom, PairingRandom::new(nb)));
+
+        continue_pairing!(security_manager, initiator_channel);
+
+        let dh_key_check: PairingDhKeyCheck = responder_channel.receive();
+
+        let ea = dh_key_check.get_key_check();
+
+        let (mac_key, ltk) = toolbox::f5(shared_secret, na, nb, a, b);
+
+        assert_eq!(
+            mac_key,
+            security_manager.pairing_data.as_ref().unwrap().mac_key.unwrap()
+        );
+
+        assert_eq!(ea, toolbox::f6(mac_key, na, nb, 0, io_cap_a, a, b));
+
+        let eb = toolbox::f6(mac_key, nb, na, 0, io_cap_b, b, a);
+
+        responder_channel.send(Command::new(CommandType::PairingDHKeyCheck, PairingDhKeyCheck::new(eb)));
+
+        //continue_pairing!(security_manager, initiator_channel);
+
+        continue_pairing!(security_manager, initiator_channel);
+
+        assert_eq!(security_manager.keys.and_then(|keys| keys.ltk).unwrap(), ltk)
     }
 }

@@ -16,6 +16,7 @@ serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 bo-tie-l2cap = { path = "../bo-tie-l2cap", features = ["std"] }
+tokio = {version = "1", features = ["sync", "rt", "macros"]}
 
 [features]
 std = []
