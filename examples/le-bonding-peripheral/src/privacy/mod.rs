@@ -19,7 +19,7 @@
 //! if the Controller supports the feature. The most likely reason for not having LE Privacy is that
 //! device was grandfathered from Bluetooth 4.0 (or is a 4.0 or 4.1 device). Lots of devices say
 //! they are 5.X compliant whereby they were a 4.0 chip that met the minimum requirements for
-//! compliance of 4.2 or greater versions of Bluetooth (Privacy as a Controller feature was added in
+//! compliance of 5.X or greater versions of Bluetooth (Privacy as a Controller feature was added in
 //! Bluetooth version 4.2).   
 //!
 //! Setting up the Controller to enable privacy requires the minimum of the commands
@@ -38,9 +38,9 @@
 //! (vol 6, part B, section 1.3.2) need to be implemented by the Host.
 //!
 //! ### Resolving
-//! A resolvable private address has two part. The first half of the address is called a `prand` and
-//! the last half is the `hash`. `prand` is randomly generated but the `hash` is generated using an
-//! identity resolving key and the [`ah`] function. The peer device will use the same identity
+//! A resolvable private address has two parts. The first half of the address is called a `prand`
+//! and the last half is the `hash`. `prand` is randomly generated but the `hash` is generated using
+//! an identity resolving key and the [`ah`] function. The peer device will use the same identity
 //! resolving key to check if the `hash` was generated from the `prand` in the address. This
 //! authenticates the address and the central device can then use a previously generated long term
 //! key to initiate encryption.
