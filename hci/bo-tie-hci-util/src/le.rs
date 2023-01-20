@@ -376,6 +376,15 @@ pub struct ConnectionEventLength {
     pub maximum: u16,
 }
 
+impl ConnectionEventLength {
+    pub fn new(min: u16, max: u16) -> Self {
+        ConnectionEventLength {
+            minimum: min,
+            maximum: max,
+        }
+    }
+}
+
 impl Default for ConnectionEventLength {
     fn default() -> Self {
         Self {
