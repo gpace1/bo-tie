@@ -428,7 +428,7 @@ pub fn g2(u: [u8; 32], v: [u8; 32], x: u128, y: u128) -> u32 {
 }
 
 /// A structure used to create the address structures used in pairing function [`f5`] and [`f6`]
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct PairingAddress([u8; 7]);
 
 impl PairingAddress {
