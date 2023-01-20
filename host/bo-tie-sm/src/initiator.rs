@@ -1472,7 +1472,7 @@ impl SecurityManager {
             ($this:expr, $key_val: expr, $key:ident) => {
                 match ($this.link_encrypted, $this.keys.is_some()) {
                     (true, true) => {
-                        *$this.keys.as_mut().and_then(|keys| keys.$key.as_mut()).unwrap() = $key_val;
+                        $this.keys.as_mut().unwrap().$key = $key_val.into();
 
                         for key_kind in $this.responder_key_distribution {
                             match key_kind {
@@ -1523,7 +1523,8 @@ impl SecurityManager {
                     set_peer_key!(self, (csrk, 0), peer_csrk)
                 }
                 CommandType::IdentityAddressInformation => {
-                    let identity = encrypt_info::IdentityAddressInformation::try_from_command_format(payload)?.into();
+                    let identity =
+                        encrypt_info::IdentityAddressInformation::try_from_command_format(payload)?.as_identity();
 
                     set_peer_key!(self, identity, peer_identity)
                 }
