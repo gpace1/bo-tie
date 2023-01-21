@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 mod io;
+mod privacy;
 
 use bo_tie::hci::{Host, HostChannelEnds, Next};
 
@@ -106,7 +107,7 @@ async fn connect<H: HostChannelEnds>(
         report.address,
         Default::default(),
         TryFrom::try_from((Duration::from_millis(10), Duration::from_millis(40))).unwrap(),
-        TryFrom::try_from(0).unwrap(),
+        TryFrom::try_from(1).unwrap(),
         TryFrom::try_from(Duration::from_secs(5)).unwrap(),
         Default::default(),
     );
@@ -165,7 +166,7 @@ where
     use bo_tie::hci::commands::link_control::disconnect;
     use bo_tie::hci::events::Events;
 
-    host.mask_events(core::iter::empty::<Events>()).await.unwrap();
+    host.mask_events([Events::DisconnectionComplete]).await.unwrap();
 
     let disconnection_parameters = disconnect::DisconnectParameters {
         connection_handle,
@@ -173,6 +174,9 @@ where
     };
 
     disconnect::send(host, disconnection_parameters).await.unwrap();
+
+    // Await for the disconnection complete event
+    host.next().await.unwrap();
 }
 
 /// Pair with a connected device
@@ -218,8 +222,7 @@ where
                         },
                         Status::PairingFailed(reason) => {
                             eprintln!("pairing failed: {reason}");
-                            number_comparison = None;
-                            passkey_input = None;
+                            return None;
                         },
                         _ => (),
                     }
@@ -256,13 +259,9 @@ async fn encrypt<H: HostChannelEnds>(
     use bo_tie::hci::commands::le::enable_encryption;
     use bo_tie::hci::events::{Events, EventsData};
 
-    host.mask_events([
-        Events::DisconnectionComplete,
-        Events::EncryptionChangeV1,
-        Events::EncryptionChangeV2,
-    ])
-    .await
-    .unwrap();
+    host.mask_events([Events::DisconnectionComplete, Events::EncryptionChangeV1])
+        .await
+        .unwrap();
 
     let parameter = enable_encryption::Parameter::new_sc(connection_handle, long_term_key);
 
@@ -276,18 +275,10 @@ async fn encrypt<H: HostChannelEnds>(
                 .is_aes_ccm()
                 .then_some(())
                 .expect("encryption failed"),
-            EventsData::EncryptionChangeV2(e) => e
-                .encryption_enabled
-                .get_for_le()
-                .is_aes_ccm()
-                .then_some(())
-                .expect("encryption failed"),
-            EventsData::DisconnectionComplete(d) => {
-                if d.connection_handle == connection_handle {
-                    return Err("peer device disconnected".into());
-                }
+            EventsData::DisconnectionComplete(_) => {
+                return Err("peer device disconnected".into());
             }
-            _ => unreachable!(),
+            e => unreachable!("unexpected event: {:?}", e),
         },
         _ => unreachable!(),
     };
@@ -299,7 +290,7 @@ async fn encrypt<H: HostChannelEnds>(
 ///
 /// # Note
 /// This must be called after method `encrypt`
-async fn bond<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager)
+async fn bond<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> Option<()>
 where
     C: bo_tie::host::l2cap::ConnectionChannel,
 {
@@ -318,7 +309,7 @@ where
 
                     sm.send_irk(connection_channel, None).await.unwrap();
                     sm.send_identity(connection_channel, None).await.unwrap();
-                    break 'outer;
+                    break 'outer Some(());
                 }
             }
         }
@@ -378,82 +369,23 @@ where
 ///
 /// Once bonding is completed, the peer device needs to be added to both the filter list and
 /// resolving list.
-async fn setup_reconnect<H: HostChannelEnds>(host: &mut Host<H>, keys: &bo_tie::host::sm::Keys) {
-    use bo_tie::hci::commands::le::{
-        add_device_to_filter_list, add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
-        FilterListAddressType, PeerIdentityAddressType,
-    };
+async fn setup_reconnect<H: HostChannelEnds>(
+    host: &mut Host<H>,
+    privacy: &mut privacy::Privacy,
+    keys: &bo_tie::host::sm::Keys,
+) {
+    privacy.clear_resolving_list(host).await;
 
-    let peer_identity_info = keys.get_peer_identity().unwrap();
-
-    let filter_list_address_type = if peer_identity_info.is_public() {
-        FilterListAddressType::PublicDeviceAddress
-    } else {
-        FilterListAddressType::RandomDeviceAddress
-    };
-
-    let peer_identity_address_type = if peer_identity_info.is_public() {
-        PeerIdentityAddressType::PublicIdentityAddress
-    } else {
-        PeerIdentityAddressType::RandomStaticIdentityAddress
-    };
-
-    let resolving_list_parameters = add_device_to_resolving_list::Parameter {
-        peer_identity_address_type,
-        peer_identity_address: peer_identity_info.get_address(),
-        local_irk: keys.get_irk().unwrap(),
-        peer_irk: keys.get_irk().unwrap(),
-    };
-
-    let privacy_mode_parameters = set_privacy_mode::Parameter {
-        peer_identity_address_type,
-        peer_identity_address: peer_identity_info.get_address(),
-        privacy_mode: set_privacy_mode::PrivacyMode::NetworkPrivacy,
-    };
-
-    add_device_to_filter_list::send(host, filter_list_address_type, peer_identity_info.get_address())
-        .await
-        .unwrap();
-
-    add_device_to_resolving_list::send(host, resolving_list_parameters)
-        .await
-        .unwrap();
-
-    set_address_resolution_enable::send(host, true).await.unwrap();
-
-    set_privacy_mode::send(host, privacy_mode_parameters).await.unwrap();
+    privacy.add_device_to_resolving_list(host, keys).await;
 }
 
-async fn reconnect<H: HostChannelEnds>(host: &mut Host<H>) -> bo_tie::hci::LeL2cap<H::ConnectionChannelEnds> {
-    use bo_tie::hci::commands::le::{create_connection, OwnAddressType};
-    use bo_tie::hci::events::{Events, LeMeta};
-    use std::time::Duration;
+async fn reconnect<H: HostChannelEnds>(
+    host: &mut Host<H>,
+    privacy: &mut privacy::Privacy,
+) -> bo_tie::hci::LeL2cap<H::ConnectionChannelEnds> {
+    let connection = privacy.reconnect(host).await;
 
-    let create_connection_parameters = create_connection::ConnectionParameters::new_with_filter_list(
-        Default::default(),
-        Default::default(),
-        OwnAddressType::RpaFromLocalIrkOrPublicAddress,
-        TryFrom::try_from((Duration::from_millis(10), Duration::from_millis(40))).unwrap(),
-        TryFrom::try_from(0).unwrap(),
-        TryFrom::try_from(Duration::from_secs(5)).unwrap(),
-        Default::default(),
-    );
-
-    host.mask_events([
-        Events::LeMeta(LeMeta::ConnectionComplete),
-        Events::DisconnectionComplete,
-    ])
-    .await
-    .unwrap();
-
-    create_connection::send(host, create_connection_parameters)
-        .await
-        .unwrap();
-
-    match host.next().await.unwrap() {
-        Next::NewConnection(connection) => connection.try_into_le().unwrap(),
-        _ => unreachable!(),
-    }
+    connection.try_into_le().unwrap()
 }
 
 #[cfg(target_os = "linux")]
@@ -472,7 +404,7 @@ macro_rules! create_hci {
     };
 }
 
-macro_rules! await_or_exit {
+macro_rules! await_or_disconnect {
     ($host:expr, $connection:expr, $task:expr) => {
         loop {
             tokio::select! {
@@ -481,12 +413,38 @@ macro_rules! await_or_exit {
                         return Err("peer device disconnected")
                     }
                 }
+
+                ret = $task => match ret {
+                    None => {
+                        disconnect(&mut $host, $connection.get_handle()).await;
+
+                        return Ok(());
+                    }
+                    Some(val) => break val,
+                },
+            }
+        }
+    };
+}
+
+macro_rules! await_or_exit {
+    ($host:expr, $connection:expr, $task:expr) => {
+        loop {
+            tokio::select! {
+                ret = $task => match ret {
+                    Err(e) => {
+                        disconnect(&mut $host, $connection.get_handle()).await;
+
+                        return Err(e);
+                    }
+                    Ok(val) => break val,
+                },
+
                 _ = io::exit_signal() => {
                     disconnect(&mut $host, $connection.get_handle()).await;
 
                     return Ok(())
                 }
-                ret = $task => break ret
             }
         }
     };
@@ -553,8 +511,6 @@ async fn main() -> Result<(), &'static str> {
         .await
         .unwrap();
 
-    println!("this address: {}, report address: {}", this_address, report.0.address);
-
     let mut security_manager = bo_tie::host::sm::initiator::SecurityManagerBuilder::new(
         report.0.address,
         this_address,
@@ -564,35 +520,25 @@ async fn main() -> Result<(), &'static str> {
     .enable_number_comparison()
     .build();
 
-    let long_term_key = loop {
-        tokio::select! {
-            next = host.next() => {
-                if let bo_tie::hci::Next::Event(bo_tie::hci::events::EventsData::DisconnectionComplete(_)) = next.unwrap() {
-                    return Err("peer device disconnected")
-                }
-            }
-            ret = pair(&mut connection, &mut security_manager) => match ret {
-                None => {
-                    disconnect(&mut host, connection.get_handle()).await;
-
-                    return Ok(());
-                }
-                Some(ltk) => break ltk,
-            }
-        }
-    };
+    let long_term_key = await_or_disconnect!(host, connection, pair(&mut connection, &mut security_manager));
 
     println!("pairing completed");
 
-    encrypt(&mut host, connection.get_handle(), long_term_key).await?;
+    await_or_exit!(
+        host,
+        connection,
+        encrypt(&mut host, connection.get_handle(), long_term_key)
+    );
 
     println!("encryption established");
 
-    await_or_exit!(host, connection, bond(&mut connection, &mut security_manager));
+    await_or_disconnect!(host, connection, bond(&mut connection, &mut security_manager));
 
     println!("bonding completed");
 
-    setup_reconnect(&mut host, security_manager.get_keys().unwrap()).await;
+    let mut privacy = privacy::Privacy::new(&mut host).await;
+
+    setup_reconnect(&mut host, &mut privacy, security_manager.get_keys().unwrap()).await;
 
     loop {
         host.mask_events([bo_tie::hci::events::Events::DisconnectionComplete])
@@ -621,7 +567,7 @@ async fn main() -> Result<(), &'static str> {
         );
 
         tokio::select! {
-            new_conneciton = reconnect(&mut host) => connection = new_conneciton,
+            new_conneciton = reconnect(&mut host, &mut privacy) => connection = new_conneciton,
             _ = io::exit_signal() => {
                 cancel_connect(&mut host).await;
 
