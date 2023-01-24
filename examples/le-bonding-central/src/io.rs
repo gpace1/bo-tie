@@ -107,8 +107,6 @@ pub fn on_advertising_result(number: usize, name: &str) {
 pub fn detect_enter() -> impl std::future::Future<Output = bool> {
     use crossterm::event::{poll, read, Event, KeyCode, KeyEvent};
 
-    println!("press enter to stop scanning");
-
     let (sender, receiver) = oneshot::channel::<crossterm::Result<bool>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 

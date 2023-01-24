@@ -474,6 +474,7 @@ async fn main() -> Result<(), &'static str> {
     let mut host = Host::init(host_ends).await.expect("failed to initialize host");
 
     println!("scanning for connectible devices with a complete local name");
+    println!("press enter to stop scanning");
 
     let mut responses = scan_for_devices(&mut host, io::on_advertising_result, io::detect_enter)
         .await
@@ -547,18 +548,19 @@ async fn main() -> Result<(), &'static str> {
 
         query_gatt_services(&mut connection).await;
 
-        println!("press 'escape' to disconnect peripheral device");
+        println!("press 'enter' to disconnect peripheral device and reconnect using 'privacy'");
 
         tokio::select! {
             _ = host.next() => {
                 println!("peer device disconnected")
             },
-            _ = io::exit_signal() => {
+            is_enter = io::detect_enter() => if is_enter {
+                disconnect(&mut host, connection.get_handle()).await;
+            } else { // this branch is ctrl-c
                 disconnect(&mut host, connection.get_handle()).await;
 
                 return Ok(())
             }
-            _ = io::detect_enter() => (),
         }
 
         println!(

@@ -124,7 +124,7 @@ impl HostPrivacy {
             report.address_type,
             report.address,
             OwnAddressType::RandomDeviceAddress,
-            ConnectionIntervalBounds::try_from_bounds(Duration::from_millis(100), Duration::from_secs(200)).unwrap(),
+            ConnectionIntervalBounds::try_from_bounds(Duration::from_millis(100), Duration::from_millis(200)).unwrap(),
             ConnectionLatency::try_from(10).unwrap(),
             SupervisionTimeout::try_from(Duration::from_secs(5)).unwrap(),
             ConnectionEventLength::new(0, 10),
