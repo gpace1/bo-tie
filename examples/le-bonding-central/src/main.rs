@@ -576,5 +576,7 @@ async fn main() -> Result<(), &'static str> {
                 return Ok(())
             }
         }
+
+        println!("reconnected");
     }
 }
