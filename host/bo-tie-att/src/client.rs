@@ -118,7 +118,7 @@ where
         if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
             self.0(acl_data.get_payload())
         } else {
-            Err(super::Error::IncorrectChannelId)
+            Err(super::Error::IncorrectChannelId(acl_data.get_channel_id()))
         }
     }
 }
@@ -232,7 +232,7 @@ impl ConnectClient {
         if self.skipped_mtu_request {
             Ok(Client::new())
         } else if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
-            Err(super::Error::IncorrectChannelId.into())
+            Err(super::Error::IncorrectChannelId(response.get_channel_id()).into())
         } else if ServerPduName::ExchangeMTUResponse.is_convertible_from(response.get_payload()) {
             self.process_mtu_response(connection_channel, response.get_payload())
         } else if ServerPduName::ErrorResponse.is_convertible_from(response.get_payload()) {

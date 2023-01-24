@@ -590,7 +590,7 @@ where
                     Err(super::Error::Empty)
                 }
             }
-            _ => Err(super::Error::IncorrectChannelId),
+            _ => Err(super::Error::IncorrectChannelId(acl_packet.get_channel_id())),
         }
     }
 
