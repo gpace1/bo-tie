@@ -671,11 +671,17 @@ impl SecurityManager {
                 {
                     identity
                 } else {
-                    if self.responder_address_is_random {
+                    let address = if self.responder_address_is_random {
                         crate::IdentityAddress::StaticRandom(self.responder_address)
                     } else {
                         crate::IdentityAddress::Public(self.responder_address)
+                    };
+
+                    if let Some(keys) = self.keys.as_mut() {
+                        keys.identity = Some(address);
                     }
+
+                    address
                 }
             }
         };
@@ -1539,19 +1545,9 @@ impl SecurityManager {
                         irk: None,
                         csrk: None,
                         peer_irk: None,
-                        peer_identity: if self.initiator_address_is_random {
-                            super::IdentityAddress::StaticRandom(self.initiator_address)
-                        } else {
-                            super::IdentityAddress::Public(self.initiator_address)
-                        }
-                        .into(),
+                        peer_identity: None,
                         peer_csrk: None,
-                        identity: if self.responder_address_is_random {
-                            super::IdentityAddress::StaticRandom(self.responder_address)
-                        } else {
-                            super::IdentityAddress::Public(self.responder_address)
-                        }
-                        .into(),
+                        identity: None,
                     }
                     .into();
 
@@ -1613,7 +1609,11 @@ impl SecurityManager {
             if let Some(ref mut keys) = self.keys {
                 keys.peer_irk = Some(identity_info.get_irk());
 
-                if self.initiator_key_distribution.contains(&KeyDistributions::SignKey) && keys.peer_csrk.is_none() {
+                if keys.peer_identity.is_none() {
+                    Ok(Status::None)
+                } else if self.initiator_key_distribution.contains(&KeyDistributions::SignKey)
+                    && keys.peer_csrk.is_none()
+                {
                     Ok(Status::None)
                 } else {
                     Ok(Status::BondingComplete)
@@ -1652,8 +1652,10 @@ impl SecurityManager {
             if let Some(ref mut keys) = self.keys {
                 keys.peer_identity = Some(identity_addr_info.into());
 
-                if self.initiator_key_distribution.contains(&KeyDistributions::IdKey)
-                    || self.initiator_key_distribution.contains(&KeyDistributions::SignKey)
+                if self.initiator_key_distribution.contains(&KeyDistributions::IdKey) && keys.peer_irk.is_none() {
+                    Ok(Status::None)
+                } else if self.initiator_key_distribution.contains(&KeyDistributions::SignKey)
+                    && keys.peer_csrk.is_none()
                 {
                     Ok(Status::None)
                 } else {
@@ -1693,7 +1695,13 @@ impl SecurityManager {
             if let Some(ref mut keys) = self.keys {
                 keys.peer_csrk = Some((signing_info.get_signature_key(), 0));
 
-                Ok(Status::BondingComplete)
+                if self.initiator_key_distribution.contains(&KeyDistributions::IdKey)
+                    && (keys.peer_irk.is_none() || keys.peer_identity.is_none())
+                {
+                    Ok(Status::None)
+                } else {
+                    Ok(Status::BondingComplete)
+                }
             } else {
                 self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
                     .await?;

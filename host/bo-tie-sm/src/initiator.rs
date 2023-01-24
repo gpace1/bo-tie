@@ -1262,20 +1262,10 @@ impl SecurityManager {
                         ltk,
                         csrk: None,
                         irk: None,
-                        identity: if self.responder_address_is_random {
-                            IdentityAddress::StaticRandom(self.responder_address)
-                        } else {
-                            IdentityAddress::Public(self.responder_address)
-                        }
-                        .into(),
+                        identity: None,
                         peer_csrk: None,
                         peer_irk: None,
-                        peer_identity: if self.initiator_address_is_random {
-                            IdentityAddress::StaticRandom(self.initiator_address)
-                        } else {
-                            IdentityAddress::Public(self.initiator_address)
-                        }
-                        .into(),
+                        peer_identity: None,
                     });
 
                     self.pairing_expected_cmd = None;
@@ -1483,6 +1473,11 @@ impl SecurityManager {
                                         .as_ref()
                                         .and_then(|keys| keys.peer_irk.as_ref())
                                         .is_none()
+                                        || $this
+                                            .keys
+                                            .as_ref()
+                                            .and_then(|keys| keys.peer_identity.as_ref())
+                                            .is_none()
                                     {
                                         return Ok(false);
                                     }
