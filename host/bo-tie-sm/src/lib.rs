@@ -1054,7 +1054,7 @@ impl DistributedBondingKeysBuilder {
     /// can be used to set the IRK and Identity Address, or use default values for these identity
     /// information. The default IRK is a randomly generated key, and the default Identity Address
     /// is the address of this device used to build the Security Manager.
-    pub fn enable_id(&mut self) -> EnabledIdKeysBuilder<'_> {
+    pub fn enable_id(mut self) -> EnabledIdKeysBuilder {
         self.id = true;
         EnabledIdKeysBuilder(self)
     }
@@ -1063,9 +1063,9 @@ impl DistributedBondingKeysBuilder {
     ///
     /// When this is called, this device will distribute a Connection Signature Resolving Key (CSRK)
     /// during the key distribution of bonding. The returned
-    pub fn enable_sign(&mut self) -> &mut Self {
+    pub fn enable_sign(mut self) -> EnabledSigningKeyBuilder {
         self.signing = true;
-        self
+        EnabledSigningKeyBuilder(self)
     }
 
     /// Check if any key is sent
@@ -1113,15 +1113,16 @@ impl LocalDistributedKeys {
 /// This is returned by the method [`enable_id`] of `EnabledBondingKeysBuilder`.
 ///
 /// [`enable_id`]: DistributedBondingKeysBuilder::enable_id
-pub struct EnabledIdKeysBuilder<'a>(&'a mut DistributedBondingKeysBuilder);
+#[repr(transparent)]
+pub struct EnabledIdKeysBuilder(DistributedBondingKeysBuilder);
 
-impl<'a> EnabledIdKeysBuilder<'a> {
+impl EnabledIdKeysBuilder {
     /// Set the Identity Resolving Key (IRK)
     ///
     /// This will set the IRK that will be sent to the other device during bonding.
     ///
     /// If this method is not called then a randomly generated IRK will be sent to the peer device.
-    pub fn set_irk(self, irk: u128) -> Self {
+    pub fn set_irk(mut self, irk: u128) -> Self {
         self.0.irk = Some(irk);
         self
     }
@@ -1133,33 +1134,51 @@ impl<'a> EnabledIdKeysBuilder<'a> {
     ///
     /// If this method is not called then the address of this devices used during pairing will be
     /// the identity address.
-    pub fn set_identity(self, identity: IdentityAddress) -> Self {
+    pub fn set_identity(mut self, identity: IdentityAddress) -> Self {
         self.0.identity = Some(identity);
         self
     }
 
     /// Finish configuring the Identity Keys
-    pub fn done(self) -> &'a mut DistributedBondingKeysBuilder {
+    pub fn done(self) -> DistributedBondingKeysBuilder {
         self.0
     }
 }
 
-pub struct EnabledSigningKeyBuilder<'a>(&'a mut DistributedBondingKeysBuilder);
+impl From<EnabledIdKeysBuilder> for DistributedBondingKeysBuilder {
+    fn from(builder: EnabledIdKeysBuilder) -> Self {
+        builder.done()
+    }
+}
 
-impl<'a> EnabledSigningKeyBuilder<'a> {
+/// Enabled Signing Keys Builder
+///
+/// This is returned by the method [`enable_sign`] of `EnabledBondingKeysBuilder`.
+///
+/// [`enable_sign`]: DistributedBondingKeysBuilder::enable_sign
+#[repr(transparent)]
+pub struct EnabledSigningKeyBuilder(DistributedBondingKeysBuilder);
+
+impl EnabledSigningKeyBuilder {
     /// Set the Connection Signature Resolving Key (CSRK)
     ///
     /// This will set the (CSRK) that will be sent to the other device during bonding.
     ///
     /// If this method is not called then a randomly generated CSRK will be sent to the peer device.
-    pub fn set_csrk(self, csrk: u128) -> Self {
+    pub fn set_csrk(mut self, csrk: u128) -> Self {
         self.0.csrk = Some(csrk);
         self
     }
 
     /// Finish configuring the Signing Key
-    pub fn done(self) -> &'a mut DistributedBondingKeysBuilder {
+    pub fn done(self) -> DistributedBondingKeysBuilder {
         self.0
+    }
+}
+
+impl From<EnabledSigningKeyBuilder> for DistributedBondingKeysBuilder {
+    fn from(builder: EnabledSigningKeyBuilder) -> Self {
+        builder.done()
     }
 }
 
@@ -1181,7 +1200,7 @@ impl AcceptedBondingKeysBuilder {
     ///
     /// This enables this Security Manager to accept a Identity Resolving Key (IRK) followed by an
     /// Identity Address from the peer device's Security Manager.
-    pub fn enable_id(&mut self) -> &mut Self {
+    pub fn enable_id(mut self) -> Self {
         self.id = true;
         self
     }
@@ -1190,7 +1209,7 @@ impl AcceptedBondingKeysBuilder {
     ///
     /// This enables this Security Manager to accept a Connection Signature Resolving Key (CSRK)
     /// from the peer device's Security Manager.
-    pub fn enable_signing(&mut self) -> &mut Self {
+    pub fn enable_signing(mut self) -> Self {
         self.signing = true;
         self
     }

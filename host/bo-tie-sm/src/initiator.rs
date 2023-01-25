@@ -179,9 +179,7 @@ impl SecurityManagerBuilder {
             assert_check_mode_two: None,
         }
     }
-}
 
-impl SecurityManagerBuilder {
     /// Set the keys to the peer device if it is already paired
     ///
     /// This assigns the keys that were previously generated after a successful pair and bonding.
@@ -365,15 +363,31 @@ impl SecurityManagerBuilder {
     /// By default only the Identity Resolving Key (IRK) is distributed to the initiator. This
     /// method does not need to be called if the default key configuration is desired.
     ///
-    /// # Note
-    /// This method has no affect if the Security Manager is built without bonding support.
-    pub fn distributed_bonding_keys<F>(mut self, f: F) -> Self
+    /// ```
+    /// # use bo_tie_sm::IdentityAddress;
+    /// # use bo_tie_sm::initiator::SecurityManagerBuilder;
+    /// # use bo_tie_util::BluetoothDeviceAddress;
+    /// # let connected_device_address = BluetoothDeviceAddress::zeroed();
+    /// # let this_device_address = BluetoothDeviceAddress::zeroed();
+    /// # let this_identity_address = IdentityAddress::StaticRandom(BluetoothDeviceAddress::zeroed());
+    /// # let this_static_irk = 0;
+    /// # let mut security_manager_builder = SecurityManagerBuilder::new(connected_device_address, this_device_address, true, true);
+    /// security_manager_builder.distributed_bonding_keys(|sent|
+    ///     sent.enable_id()
+    ///         .set_identity(this_identity_address)
+    ///         .set_irk(this_static_irk)
+    ///         .done()
+    /// );
+    /// ```
+    /// This method has no affect if the Security Manager is built with [`disable_bonding`].
+    ///
+    /// [`disable_bonding`]: SecurityManagerBuilder::disable_bonding
+    pub fn distributed_bonding_keys<F, T>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut DistributedBondingKeysBuilder),
+        F: FnOnce(DistributedBondingKeysBuilder) -> T,
+        T: Into<DistributedBondingKeysBuilder>,
     {
-        self.distributed_bonding_keys = DistributedBondingKeysBuilder::new();
-
-        f(&mut self.distributed_bonding_keys);
+        self.distributed_bonding_keys = f(DistributedBondingKeysBuilder::new()).into();
 
         self
     }
@@ -387,15 +401,29 @@ impl SecurityManagerBuilder {
     /// By default only the Identity Resolving Key (IRK) is accepted from the initiator. This
     /// method does not need to be called if the default key configuration is desired.
     ///
+    /// ```
+    /// # use bo_tie_sm::IdentityAddress;
+    /// # use bo_tie_sm::initiator::SecurityManagerBuilder;
+    /// # use bo_tie_util::BluetoothDeviceAddress;
+    /// # let connected_device_address = BluetoothDeviceAddress::zeroed();
+    /// # let this_device_address = BluetoothDeviceAddress::zeroed();
+    /// # let this_identity_address = IdentityAddress::StaticRandom(BluetoothDeviceAddress::zeroed());
+    /// # let mut security_manager_builder = SecurityManagerBuilder::new(connected_device_address, this_device_address, true, true);
+    /// security_manager_builder.accepted_bonding_keys(|accepted| accepted.enable_id());
+    /// ```
+    /// This method has no affect if the Security Manager is built with [`disable_bonding`].
+    ///
     /// # Note
-    /// This method has no affect if the Security Manager is built without bonding support.
-    pub fn accepted_bonding_keys<F>(mut self, f: F) -> Self
+    /// The return of `F` has no effect on the distributed keys nor the construction of the
+    /// Security Manager. It is only there to make the closure `f` "cleaner" to implement.
+    ///
+    /// [`disable_bonding`]: SecurityManagerBuilder::disable_bonding
+    pub fn accepted_bonding_keys<F, T>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut AcceptedBondingKeysBuilder),
+        F: FnOnce(AcceptedBondingKeysBuilder) -> T,
+        T: Into<AcceptedBondingKeysBuilder>,
     {
-        self.accepted_bonding_keys = AcceptedBondingKeysBuilder::new();
-
-        f(&mut self.accepted_bonding_keys);
+        self.accepted_bonding_keys = f(AcceptedBondingKeysBuilder::new()).into();
 
         self
     }
