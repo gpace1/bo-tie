@@ -1262,7 +1262,7 @@ impl SecurityManager {
             }
         };
 
-        match self.pairing_data.take() {
+        match self.pairing_data {
             Some(PairingData {
                 nonce,
                 peer_nonce: Some(peer_nonce),
