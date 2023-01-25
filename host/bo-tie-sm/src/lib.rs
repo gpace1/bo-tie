@@ -121,6 +121,7 @@ use alloc::vec::Vec;
 pub use bo_tie_l2cap as l2cap;
 pub use bo_tie_util::BluetoothDeviceAddress;
 
+use crate::pairing::KeyDistributions;
 use l2cap::BasicInfoFrame;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -573,6 +574,10 @@ struct PairingData {
     /// Used to store the initiators DH Key check if it is received before number comparison is
     /// validated on this device.
     initiator_dh_key_check: Option<u128>,
+    /// Bonding keys to be sent to the peer Security Manager
+    sent_bonding_keys: &'static [pairing::KeyDistributions],
+    /// Bonding keys to be received from the peer Security Manager
+    recv_bonding_keys: &'static [pairing::KeyDistributions],
 }
 
 /// The identity address of an device
@@ -1019,39 +1024,180 @@ impl GetXOfP256Key for [u8; 64] {
     }
 }
 
-/// Bonding keys enabled by a Security Manager
-pub struct EnabledBondingKeysBuilder {
-    irk: bool,
-    csrk: bool,
+/// Builder for Bonding keys distributed by a Security Manager
+///
+/// This is used to set what keys are distributed during the building process of a Security Manager.
+#[derive(Clone, Copy)]
+pub struct DistributedBondingKeysBuilder {
+    id: bool,
+    signing: bool,
+    irk: Option<u128>,
+    identity: Option<IdentityAddress>,
+    csrk: Option<u128>,
 }
 
-impl EnabledBondingKeysBuilder {
+impl DistributedBondingKeysBuilder {
     fn new() -> Self {
-        EnabledBondingKeysBuilder {
-            irk: false,
-            csrk: false,
+        DistributedBondingKeysBuilder {
+            id: false,
+            signing: false,
+            irk: None,
+            identity: None,
+            csrk: None,
         }
     }
 
-    /// Enable the distribution of the identity resolving key
-    pub fn enable_irk(&mut self) -> &mut Self {
-        self.irk = true;
-        self
+    /// Enable the distribution of the identity resolving bonding information
+    ///
+    /// When this is called, this device will distribute an Identity Resolving Key (IRK) and an
+    /// Identity Address during the key distribution of bonding. The returned `EnabledIdKeyBuilder`
+    /// can be used to set the IRK and Identity Address, or use default values for these identity
+    /// information. The default IRK is a randomly generated key, and the default Identity Address
+    /// is the address of this device used to build the Security Manager.
+    pub fn enable_id(&mut self) -> EnabledIdKeysBuilder<'_> {
+        self.id = true;
+        EnabledIdKeysBuilder(self)
     }
 
     /// Enable the distribution of the connection signature resolving key
-    pub fn enable_csrk(&mut self) -> &mut Self {
-        self.csrk = true;
+    ///
+    /// When this is called, this device will distribute a Connection Signature Resolving Key (CSRK)
+    /// during the key distribution of bonding. The returned
+    pub fn enable_sign(&mut self) -> &mut Self {
+        self.signing = true;
         self
+    }
+
+    /// Check if any key is sent
+    fn any(&self) -> bool {
+        self.id || self.signing
+    }
+
+    /// Get the keys distributed by this Security Manager
+    fn into_keys(self, default_identity: IdentityAddress) -> LocalDistributedKeys {
+        let (irk, identity) = if self.id {
+            let irk = self.irk.unwrap_or_else(|| toolbox::rand_u128());
+            let identity = self.identity.unwrap_or(default_identity);
+
+            (Some(irk), Some(identity))
+        } else {
+            (None, None)
+        };
+
+        let csrk = if self.signing {
+            let csrk = self.csrk.unwrap_or_else(|| toolbox::rand_u128());
+
+            Some(csrk)
+        } else {
+            None
+        };
+
+        LocalDistributedKeys { irk, identity, csrk }
     }
 }
 
-fn get_keys(ltk: bool, csrk: bool) -> &'static [pairing::KeyDistributions] {
-    match (ltk, csrk) {
-        (true, true) => &[pairing::KeyDistributions::IdKey, pairing::KeyDistributions::SignKey],
-        (true, false) => &[pairing::KeyDistributions::IdKey],
-        (false, true) => &[pairing::KeyDistributions::SignKey],
-        (false, false) => &[],
+struct LocalDistributedKeys {
+    irk: Option<u128>,
+    identity: Option<IdentityAddress>,
+    csrk: Option<u128>,
+}
+
+impl LocalDistributedKeys {
+    fn get_sc_distribution(&self) -> &'static [pairing::KeyDistributions] {
+        KeyDistributions::sc_distribution(self.irk.is_some() && self.identity.is_some(), self.csrk.is_some())
+    }
+}
+
+/// Enabled Identity Keys Builder
+///
+/// This is returned by the method [`enable_id`] of `EnabledBondingKeysBuilder`.
+///
+/// [`enable_id`]: DistributedBondingKeysBuilder::enable_id
+pub struct EnabledIdKeysBuilder<'a>(&'a mut DistributedBondingKeysBuilder);
+
+impl<'a> EnabledIdKeysBuilder<'a> {
+    /// Set the Identity Resolving Key (IRK)
+    ///
+    /// This will set the IRK that will be sent to the other device during bonding.
+    ///
+    /// If this method is not called then a randomly generated IRK will be sent to the peer device.
+    pub fn set_irk(self, irk: u128) -> Self {
+        self.0.irk = Some(irk);
+        self
+    }
+
+    /// Set the identity address
+    ///
+    /// This sets the address that will be sent as the identity address to the peer device during
+    /// bonding.
+    ///
+    /// If this method is not called then the address of this devices used during pairing will be
+    /// the identity address.
+    pub fn set_identity(self, identity: IdentityAddress) -> Self {
+        self.0.identity = Some(identity);
+        self
+    }
+
+    /// Finish configuring the Identity Keys
+    pub fn done(self) -> &'a mut DistributedBondingKeysBuilder {
+        self.0
+    }
+}
+
+pub struct EnabledSigningKeyBuilder<'a>(&'a mut DistributedBondingKeysBuilder);
+
+impl<'a> EnabledSigningKeyBuilder<'a> {
+    /// Set the Connection Signature Resolving Key (CSRK)
+    ///
+    /// This will set the (CSRK) that will be sent to the other device during bonding.
+    ///
+    /// If this method is not called then a randomly generated CSRK will be sent to the peer device.
+    pub fn set_csrk(self, csrk: u128) -> Self {
+        self.0.csrk = Some(csrk);
+        self
+    }
+
+    /// Finish configuring the Signing Key
+    pub fn done(self) -> &'a mut DistributedBondingKeysBuilder {
+        self.0
+    }
+}
+
+/// Builder for Bonding Keys Accepted by a Security Manager
+pub struct AcceptedBondingKeysBuilder {
+    id: bool,
+    signing: bool,
+}
+
+impl AcceptedBondingKeysBuilder {
+    fn new() -> Self {
+        let id = false;
+        let signing = false;
+
+        AcceptedBondingKeysBuilder { id, signing }
+    }
+
+    /// Allow the Security Manager to accept identity address information
+    ///
+    /// This enables this Security Manager to accept a Identity Resolving Key (IRK) followed by an
+    /// Identity Address from the peer device's Security Manager.
+    pub fn enable_id(&mut self) -> &mut Self {
+        self.id = true;
+        self
+    }
+
+    /// Allow the Security Manager to accept signing information
+    ///
+    /// This enables this Security Manager to accept a Connection Signature Resolving Key (CSRK)
+    /// from the peer device's Security Manager.
+    pub fn enable_signing(&mut self) -> &mut Self {
+        self.signing = true;
+        self
+    }
+
+    /// Check if any key is accepted
+    pub fn any(&self) -> bool {
+        self.id || self.signing
     }
 }
 

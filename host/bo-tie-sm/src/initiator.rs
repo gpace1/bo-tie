@@ -54,7 +54,7 @@ use bo_tie_sm::responder::SecurityManagerBuilder;
 //! // create a security manager that will send an
 //! // IRK and CSRK during bonding but only accept
 //! // an IRK from the initiator.
-//! security_manager_builder.sent_bonding_keys(|keys| {
+//! security_manager_builder.distributed_bonding_keys(|keys| {
 //!     keys.enable_irk();
 //!     keys.enable_csrk();
 //! })
@@ -103,7 +103,8 @@ use crate::encrypt_info::AuthRequirements;
 use crate::l2cap::ConnectionChannel;
 use crate::pairing::{IoCapability, KeyDistributions, PairingFailedReason};
 use crate::{
-    EnabledBondingKeysBuilder, IdentityAddress, OobDirection, PasskeyAbility, PasskeyDirection, SecurityManagerError,
+    AcceptedBondingKeysBuilder, DistributedBondingKeysBuilder, IdentityAddress, LocalDistributedKeys, OobDirection,
+    PasskeyAbility, PasskeyDirection, SecurityManagerError,
 };
 use alloc::vec::Vec;
 use bo_tie_util::buffer::stack::LinearBuffer;
@@ -144,10 +145,8 @@ pub struct SecurityManagerBuilder {
     enable_passkey: PasskeyAbility,
     oob: Option<OobDirection>,
     can_bond: bool,
-    distribute_irk: bool,
-    distribute_csrk: bool,
-    accept_irk: bool,
-    accept_csrk: bool,
+    distributed_bonding_keys: DistributedBondingKeysBuilder,
+    accepted_bonding_keys: AcceptedBondingKeysBuilder,
     prior_keys: Option<super::Keys>,
     assert_check_mode_one: Option<bo_tie_gap::security::LeSecurityModeOne>,
     assert_check_mode_two: Option<bo_tie_gap::security::LeSecurityModeTwo>,
@@ -156,8 +155,8 @@ pub struct SecurityManagerBuilder {
 impl SecurityManagerBuilder {
     /// Create a new `MasterSecurityManagerBuilder`
     pub fn new(
-        connected_device_address: crate::BluetoothDeviceAddress,
-        this_device_address: crate::BluetoothDeviceAddress,
+        connected_device_address: BluetoothDeviceAddress,
+        this_device_address: BluetoothDeviceAddress,
         is_connected_devices_address_random: bool,
         is_this_device_address_random: bool,
     ) -> Self {
@@ -173,10 +172,8 @@ impl SecurityManagerBuilder {
             enable_passkey: PasskeyAbility::None,
             oob: None,
             can_bond: true,
-            distribute_irk: true,
-            distribute_csrk: false,
-            accept_irk: true,
-            accept_csrk: false,
+            distributed_bonding_keys: DistributedBondingKeysBuilder::new(),
+            accepted_bonding_keys: AcceptedBondingKeysBuilder::new(),
             prior_keys: None,
             assert_check_mode_one: None,
             assert_check_mode_two: None,
@@ -245,7 +242,7 @@ impl SecurityManagerBuilder {
     /// No affect on the pairing requirements of the Security Manager.
     ///
     /// ### Level 2
-    /// If the CSRK is configured to be sent by the method [`sent_bonding_keys`] or received by
+    /// If the CSRK is configured to be sent by the method [`distributed_bonding_keys`] or received by
     /// [`accepted_bonding_keys`], the pairing method 'just works' will be disabled. Either
     /// [`enable_number_comparison`] or [`enable_passcode_entry`] be called to set the pairing
     /// method, or the method [`build`] will panic.
@@ -253,7 +250,7 @@ impl SecurityManagerBuilder {
     /// If a CSRK is neither sent nor accepted, then this level has no affect on the pairing
     /// requirements of the Security Manager.
     ///
-    /// [`sent_bonding_keys`]: SecurityManagerBuilder::sent_bonding_keys
+    /// [`distributed_bonding_keys`]: SecurityManagerBuilder::distributed_bonding_keys
     /// [`accepted_bonding_keys`]: SecurityManagerBuilder::accepted_bonding_keys
     /// [`enable_number_comparison`]: SecurityManagerBuilder::enable_number_comparison
     /// [`enable_passcode_entry`]: SecurityManagerBuilder::enable_passcode_entry
@@ -349,10 +346,10 @@ impl SecurityManagerBuilder {
     /// Disable Bonding
     ///
     /// This creates a Security Manager that will not bond with the peer device after pairing is
-    /// completed. Configuration set by [`sent_bonding_keys`] and [`accepted_bonding_keys`] will be
+    /// completed. Configuration set by [`distributed_bonding_keys`] and [`accepted_bonding_keys`] will be
     /// ignored.
     ///
-    /// [`sent_bonding_keys`]: SecurityManagerBuilder::sent_bonding_keys
+    /// [`distributed_bonding_keys`]: SecurityManagerBuilder::distributed_bonding_keys
     /// [`accepted_bonding_keys`]: SecurityManagerBuilder::accepted_bonding_keys
     pub fn disable_bonding(mut self) -> Self {
         self.can_bond = false;
@@ -370,16 +367,13 @@ impl SecurityManagerBuilder {
     ///
     /// # Note
     /// This method has no affect if the Security Manager is built without bonding support.
-    pub fn sent_bonding_keys<F>(mut self, f: F) -> Self
+    pub fn distributed_bonding_keys<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
+        F: FnOnce(&mut DistributedBondingKeysBuilder),
     {
-        let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
+        self.distributed_bonding_keys = DistributedBondingKeysBuilder::new();
 
-        f(&mut enabled_bonding_keys);
-
-        self.distribute_irk = enabled_bonding_keys.irk;
-        self.distribute_csrk = enabled_bonding_keys.csrk;
+        f(&mut self.distributed_bonding_keys);
 
         self
     }
@@ -397,14 +391,11 @@ impl SecurityManagerBuilder {
     /// This method has no affect if the Security Manager is built without bonding support.
     pub fn accepted_bonding_keys<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut EnabledBondingKeysBuilder) -> &mut EnabledBondingKeysBuilder,
+        F: FnOnce(&mut AcceptedBondingKeysBuilder),
     {
-        let mut enabled_bonding_keys = EnabledBondingKeysBuilder::new();
+        self.accepted_bonding_keys = AcceptedBondingKeysBuilder::new();
 
-        f(&mut enabled_bonding_keys);
-
-        self.accept_irk = enabled_bonding_keys.irk;
-        self.accept_csrk = enabled_bonding_keys.csrk;
+        f(&mut self.accepted_bonding_keys);
 
         self
     }
@@ -422,7 +413,7 @@ impl SecurityManagerBuilder {
         // mandatory as only Secure Connections (not legacy) is supported
         auth_req.try_push(AuthRequirements::Sc).unwrap();
 
-        if self.can_bond {
+        if self.can_bond && (self.accepted_bonding_keys.any() || self.distributed_bonding_keys.any()) {
             auth_req.try_push(AuthRequirements::Bonding).unwrap();
         }
 
@@ -453,9 +444,14 @@ impl SecurityManagerBuilder {
     ///
     /// This equivalent to [`build`] except an error is returned instead of panicking.
     pub fn try_build(self) -> Result<SecurityManager, crate::SecurityManagerBuilderError> {
-        let initiator_key_distribution = super::get_keys(self.accept_irk, self.accept_csrk);
+        let initiator_key_distribution = self.distributed_bonding_keys.into_keys(if self.this_address_is_random {
+            IdentityAddress::StaticRandom(self.this_address)
+        } else {
+            IdentityAddress::Public(self.this_address)
+        });
 
-        let responder_key_distribution = super::get_keys(self.distribute_irk, self.distribute_csrk);
+        let responder_key_distribution =
+            KeyDistributions::sc_distribution(self.accepted_bonding_keys.id, self.accepted_bonding_keys.signing);
 
         let io_capability = match (self.enable_number_comparison, self.enable_passkey) {
             (_, PasskeyAbility::DisplayWithInput) => IoCapability::KeyboardDisplay,
@@ -499,7 +495,7 @@ pub struct SecurityManager {
     allow_just_works: bool,
     encryption_key_size_min: usize,
     encryption_key_size_max: usize,
-    initiator_key_distribution: &'static [KeyDistributions],
+    initiator_key_distribution: LocalDistributedKeys,
     responder_key_distribution: &'static [KeyDistributions],
     initiator_address: BluetoothDeviceAddress,
     responder_address: BluetoothDeviceAddress,
@@ -524,9 +520,9 @@ macro_rules! check_channel_id_and {
 impl SecurityManager {
     /// Indicate if the connection is encrypted
     ///
-    /// This is used to indicate to the `MasterSecurityManager` that it is safe to send a Key to the
-    /// peer device. This is a deliberate extra step to ensure that the functions `send_irk`,
-    /// `send_csrk`, `send_pub_addr`, and `send_rand_addr` are only used when the link is encrypted.
+    /// This is used to indicate to this Security Manager that the link between the two devices is
+    /// encrypted. The link must be encrypted using the long term key generated through pairing
+    /// or another key with the same size and authentication.
     pub fn set_encrypted(&mut self, is_encrypted: bool) {
         self.link_encrypted = is_encrypted
     }
@@ -735,7 +731,7 @@ impl SecurityManager {
             oob_data_flag,
             self.auth_req.clone(),
             self.encryption_key_size_max,
-            self.initiator_key_distribution,
+            self.initiator_key_distribution.get_sc_distribution(),
             self.responder_key_distribution,
         );
 
@@ -790,6 +786,10 @@ impl SecurityManager {
 
                 let (private_key, public_key) = toolbox::ecc_gen();
 
+                let sent_bonding_keys = response.get_initiator_key_distribution();
+
+                let recv_bonding_keys = response.get_responder_key_distribution();
+
                 self.pairing_data = Some(PairingData {
                     instance: Self::new_instance(),
                     pairing_method,
@@ -810,6 +810,8 @@ impl SecurityManager {
                     passkey_round: 0,
                     number_comp_validated: false,
                     initiator_dh_key_check: None,
+                    sent_bonding_keys,
+                    recv_bonding_keys,
                 });
 
                 self.pairing_expected_cmd = CommandType::PairingPublicKey.into();
@@ -1414,11 +1416,13 @@ impl SecurityManager {
     /// method [`set_encrypted`] needs to be called to indicate the link is encrypted before this
     /// method can be called without it returning an error.
     ///
-    /// # Return
-    /// The return is boolean to indicate that bonding is completed. `true` is returned once all
-    /// keys of the peer device are received as determined by the pairing request/response exchange.
+    /// Once all bonding key information is received from the responding Security Manager, this
+    /// method will send the bonding keys of this Security Manager to the peer device. *After all
+    /// bonding keys are sent by this Security Manager, `process_bonding` will return true to
+    /// indicate bonding has finished*.
     ///
     /// # Errors
+    /// This method can only process Security Manager commands containing Bonding information.
     ///
     /// ### Always Errors
     /// An error is always returned if any of the pairing specific or legacy key Security Manager
@@ -1457,15 +1461,29 @@ impl SecurityManager {
     /// [`IdentityInformation`]: CommandType::IdentityInformation
     /// [`IdentityAddressInformation`]: CommandType::IdentityAddressInformation
     /// [`SigningInformation`]: CommandType::SigningInformation
-    pub async fn process_bonding(&mut self, acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>) -> Result<bool, Error> {
+    pub async fn process_bonding<C>(
+        &mut self,
+        connection_channel: &C,
+        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
+    ) -> Result<bool, error!(C)>
+    where
+        C: ConnectionChannel,
+    {
         macro_rules! set_peer_key {
             ($this:expr, $key_val: expr, $key:ident) => {
                 match ($this.link_encrypted, $this.keys.is_some()) {
                     (true, true) => {
                         $this.keys.as_mut().unwrap().$key = $key_val.into();
 
-                        for key_kind in $this.responder_key_distribution {
+                        for key_kind in $this
+                            .pairing_data
+                            .as_ref()
+                            .map(|pd| pd.recv_bonding_keys)
+                            .into_iter()
+                            .flatten()
+                        {
                             match key_kind {
+                                $crate::pairing::KeyDistributions::LinkKey => unimplemented!(),
                                 $crate::pairing::KeyDistributions::EncKey => (),
                                 $crate::pairing::KeyDistributions::IdKey => {
                                     if $this
@@ -1494,6 +1512,8 @@ impl SecurityManager {
                                 }
                             }
                         }
+
+                        $this.send_bonding_keys(connection_channel).await?;
 
                         Ok(true)
                     }
@@ -1530,6 +1550,32 @@ impl SecurityManager {
                 .into()),
             }
         })
+    }
+
+    async fn send_bonding_keys<C>(&mut self, connection_channel: &C) -> Result<(), error!(C)>
+    where
+        C: ConnectionChannel,
+    {
+        match self.pairing_data {
+            Some(PairingData { sent_bonding_keys, .. }) => {
+                if sent_bonding_keys.contains(&KeyDistributions::IdKey) {
+                    let irk = self.initiator_key_distribution.irk.unwrap();
+                    let identity = self.initiator_key_distribution.identity.unwrap();
+
+                    self.send_irk(connection_channel, irk).await?;
+                    self.send_identity(connection_channel, identity).await?;
+                }
+
+                if sent_bonding_keys.contains(&KeyDistributions::SignKey) {
+                    let csrk = self.initiator_key_distribution.csrk.unwrap();
+
+                    self.send_csrk(connection_channel, csrk).await?;
+                }
+
+                Ok(())
+            }
+            _ => Err(Error::OperationRequiresPairing.into()),
+        }
     }
 
     async fn process_number_comparison<C>(
