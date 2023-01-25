@@ -130,6 +130,7 @@ impl KeyDistributions {
             0x3 => &[Self::EncKey, Self::IdKey],
             0x2 => &[Self::IdKey],
             0x1 => &[Self::EncKey],
+            0x0 => &[],
             _ => unreachable!(),
         }
     }
@@ -185,8 +186,6 @@ impl KeyDistributions {
         } else {
             &[]
         };
-
-        println!("a: {:?}, b: {:?}, intersect: {:?}", a, b, ks);
 
         ks
     }
