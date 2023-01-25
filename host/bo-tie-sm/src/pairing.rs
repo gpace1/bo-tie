@@ -100,7 +100,7 @@ pub enum KeyDistributions {
     EncKey,
     IdKey,
     SignKey,
-    // LinkKey, // LinkKey is unsupported because BR/EDR is unsupported
+    LinkKey, // LinkKey is unsupported because BR/EDR is unsupported
 }
 
 impl KeyDistributions {
@@ -109,19 +109,95 @@ impl KeyDistributions {
             KeyDistributions::EncKey => val | (1 << 0),
             KeyDistributions::IdKey => val | (1 << 1),
             KeyDistributions::SignKey => val | (1 << 2),
+            KeyDistributions::LinkKey => val | (1 << 3),
         })
     }
 
     fn from_val(val: u8) -> &'static [Self] {
-        match (1 == val & (0x1 << 0), 1 == val & (0x1 << 1), 1 == val & (0x1 << 2)) {
-            (true, true, true) => &[Self::EncKey, Self::IdKey, Self::SignKey],
-            (true, true, false) => &[Self::EncKey, Self::IdKey],
-            (true, false, true) => &[Self::EncKey, Self::SignKey],
-            (true, false, false) => &[Self::EncKey],
-            (false, true, true) => &[Self::IdKey, Self::SignKey],
-            (false, true, false) => &[Self::IdKey],
-            (false, false, true) => &[Self::SignKey],
-            (false, false, false) => &[],
+        match val & 0xf {
+            0xf => &[Self::EncKey, Self::IdKey, Self::SignKey, Self::LinkKey],
+            0xe => &[Self::IdKey, Self::SignKey, Self::LinkKey],
+            0xd => &[Self::EncKey, Self::SignKey, Self::LinkKey],
+            0xc => &[Self::SignKey, Self::LinkKey],
+            0xb => &[Self::EncKey, Self::IdKey, Self::LinkKey],
+            0xa => &[Self::IdKey, Self::LinkKey],
+            0x9 => &[Self::EncKey, Self::LinkKey],
+            0x8 => &[Self::LinkKey],
+            0x7 => &[Self::EncKey, Self::IdKey, Self::SignKey],
+            0x6 => &[Self::IdKey, Self::SignKey],
+            0x5 => &[Self::EncKey, Self::SignKey],
+            0x4 => &[Self::SignKey],
+            0x3 => &[Self::EncKey, Self::IdKey],
+            0x2 => &[Self::IdKey],
+            0x1 => &[Self::EncKey],
+            _ => unreachable!(),
+        }
+    }
+
+    /// Intersect two `KeyDistributions` slices
+    pub(crate) fn intersect(a: &[Self], b: &[Self]) -> &'static [Self] {
+        use KeyDistributions::*;
+
+        let ks: &[Self] = if a.contains(&EncKey) && b.contains(&EncKey) {
+            if a.contains(&IdKey) && b.contains(&IdKey) {
+                if a.contains(&SignKey) && b.contains(&SignKey) {
+                    if a.contains(&LinkKey) && b.contains(&LinkKey) {
+                        &[EncKey, IdKey, SignKey, LinkKey]
+                    } else {
+                        &[EncKey, IdKey, SignKey]
+                    }
+                } else if a.contains(&LinkKey) && b.contains(&LinkKey) {
+                    &[EncKey, IdKey, LinkKey]
+                } else {
+                    &[EncKey, IdKey]
+                }
+            } else if a.contains(&SignKey) && b.contains(&SignKey) {
+                if a.contains(&LinkKey) && b.contains(&LinkKey) {
+                    &[EncKey, SignKey, LinkKey]
+                } else {
+                    &[EncKey, SignKey]
+                }
+            } else if a.contains(&LinkKey) && b.contains(&LinkKey) {
+                &[EncKey, LinkKey]
+            } else {
+                &[EncKey]
+            }
+        } else if a.contains(&IdKey) && b.contains(&IdKey) {
+            if a.contains(&SignKey) && b.contains(&SignKey) {
+                if a.contains(&LinkKey) && b.contains(&LinkKey) {
+                    &[IdKey, SignKey, LinkKey]
+                } else {
+                    &[IdKey, SignKey]
+                }
+            } else if a.contains(&LinkKey) && b.contains(&LinkKey) {
+                &[IdKey, LinkKey]
+            } else {
+                &[IdKey]
+            }
+        } else if a.contains(&SignKey) && b.contains(&SignKey) {
+            if a.contains(&LinkKey) && b.contains(&LinkKey) {
+                &[SignKey, LinkKey]
+            } else {
+                &[SignKey]
+            }
+        } else if a.contains(&LinkKey) && b.contains(&LinkKey) {
+            &[LinkKey]
+        } else {
+            &[]
+        };
+
+        println!("a: {:?}, b: {:?}, intersect: {:?}", a, b, ks);
+
+        ks
+    }
+
+    /// Convert booleans into a Key Distribution for Secure Connections Bonding.
+    pub(crate) fn sc_distribution(id: bool, sign: bool) -> &'static [KeyDistributions] {
+        match (id, sign) {
+            (true, true) => &[KeyDistributions::IdKey, KeyDistributions::SignKey],
+            (true, false) => &[KeyDistributions::IdKey],
+            (false, true) => &[KeyDistributions::SignKey],
+            (false, false) => &[],
         }
     }
 }
@@ -221,11 +297,11 @@ impl PairingRequest {
         self.max_encryption_size
     }
 
-    pub fn get_initiator_key_distribution(&self) -> &[KeyDistributions] {
+    pub fn get_initiator_key_distribution(&self) -> &'static [KeyDistributions] {
         &self.initiator_key_distribution
     }
 
-    pub fn get_responder_key_distribution(&self) -> &[KeyDistributions] {
+    pub fn get_responder_key_distribution(&self) -> &'static [KeyDistributions] {
         &self.responder_key_distribution
     }
 
@@ -407,11 +483,11 @@ impl PairingResponse {
         self.max_encryption_size
     }
 
-    pub fn get_initiator_key_distribution(&self) -> &[KeyDistributions] {
+    pub fn get_initiator_key_distribution(&self) -> &'static [KeyDistributions] {
         &self.initiator_key_distribution
     }
 
-    pub fn get_responder_key_distribution(&self) -> &[KeyDistributions] {
+    pub fn get_responder_key_distribution(&self) -> &'static [KeyDistributions] {
         &self.responder_key_distribution
     }
 
