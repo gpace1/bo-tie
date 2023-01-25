@@ -204,7 +204,7 @@ where
         security_manager_builder
             .enable_number_comparison()
             .enable_passkey()
-            .distributed_bonding_keys(|sent| sent.enable_id().done())
+            .distributed_bonding_keys(|sent| sent.enable_id())
             .accepted_bonding_keys(|accepted| accepted.enable_id())
             .build()
     };

@@ -515,6 +515,8 @@ async fn main() -> Result<(), &'static str> {
         !report.0.address_type.is_public(),
         false,
     )
+    .distributed_bonding_keys(|sent| sent.enable_id())
+    .accepted_bonding_keys(|accepted| accepted.enable_id())
     .enable_number_comparison()
     .build();
 
