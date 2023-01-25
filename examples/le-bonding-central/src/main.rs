@@ -302,13 +302,10 @@ where
         for basic_frame in connection_channel.receive_b_frame().await.unwrap() {
             // All data that is not Security Manager related is ignored for this example
             if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
-                if sm.process_bonding(&basic_frame).await.unwrap() {
+                if sm.process_bonding(connection_channel, &basic_frame).await.unwrap() {
                     // once the peripheral has sent its bonding
                     // information then this bonding information
                     // is sent to the device.
-
-                    sm.send_irk(connection_channel, None).await.unwrap();
-                    sm.send_identity(connection_channel, None).await.unwrap();
                     break 'outer Some(());
                 }
             }

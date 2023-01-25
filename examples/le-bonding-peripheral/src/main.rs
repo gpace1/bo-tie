@@ -148,15 +148,8 @@ async fn on_encryption_change<C, Q>(
             EncryptionKeySize::Bits128,
         )));
 
-        // Send the local IRK if has not been sent yet.
         if let None = security_manager.get_keys().unwrap().get_irk() {
-            // Distribute the identity resolving key and identity
-            // address.
-            security_manager.send_irk(le_connection_channel, None).await.unwrap();
-            security_manager
-                .send_identity(le_connection_channel, None)
-                .await
-                .unwrap();
+            security_manager.start_bonding(le_connection_channel).await.unwrap();
         }
     } else {
         gatt_server.revoke_permissions_of_client(AttributePermissions::Read(AttributeRestriction::Encryption(
@@ -211,8 +204,8 @@ where
         security_manager_builder
             .enable_number_comparison()
             .enable_passkey()
-            .sent_bonding_keys(|sent| sent.enable_irk())
-            .accepted_bonding_keys(|accepted| accepted.enable_irk())
+            .distributed_bonding_keys(|sent| sent.enable_id().done())
+            .accepted_bonding_keys(|accepted| accepted.enable_id())
             .build()
     };
 
