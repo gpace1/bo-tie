@@ -666,65 +666,6 @@ impl Keys {
         Keys::default()
     }
 
-    /// Compare entries by the peer keys irk and addr
-    fn cmp_entry_by_keys<'a, I, A>(&self, peer_irk: I, peer_addr: A) -> core::cmp::Ordering
-    where
-        I: Into<Option<&'a u128>> + 'a,
-        A: Into<Option<&'a IdentityAddress>> + 'a,
-    {
-        use core::cmp::Ordering;
-
-        match (
-            self.peer_irk.as_ref(),
-            peer_irk.into(),
-            self.peer_identity.as_ref(),
-            peer_addr.into(),
-        ) {
-            (Some(this), Some(other), _, _) => this.cmp(other),
-            (Some(_), None, _, _) => Ordering::Less,
-            (None, Some(_), _, _) => Ordering::Greater,
-            (None, None, Some(this), Some(other)) => this.cmp(other),
-            (None, None, Some(_), None) => Ordering::Less,
-            (None, None, None, Some(_)) => Ordering::Greater,
-            (None, None, None, None) => Ordering::Equal,
-        }
-    }
-
-    /// Compare two Keys
-    ///
-    /// This can be used for sorting entries by the peer IRK and peer addresses. This is *not* the
-    /// same as the
-    /// [partial_cmp](https://doc.rust-lang.org/std/cmp/trait.PartialOrd.html#tymethod.partial_cmp)
-    /// implementation for `PartialOrd` as that implementation uses all keys in a `Keys` to
-    /// perform a comparison.
-    ///
-    /// The comparison has precedence to the peer IRK. If both `self` and `other` contain an IRK for
-    /// the peer value, then the result of comparing those two IRKs is returned. When `self` has an
-    /// peer IRK and `other` does not, `Less` is returned. Likewise `Greater` is
-    /// returned when `self` does not have a peer IRK and `other` does.
-    ///
-    /// If neither `self` nor `other` have a peer IRK then the same ordering calculation is made
-    /// with the peer addresses. If both have an address then the comparison result is returned. If
-    /// `self` has an address but `other` does not then `Less` is returned. If `self` does not have
-    /// a peer address but `other` does have a peer address, `Greater` is returned.
-    ///
-    /// If both `self` and `other` do not have a peer IRK nor a peer Address, `Equal` is returned.
-    ///
-    /// This chart may provide a better explanation of the returned comparison.
-    ///
-    /// | `self` IRK | `other` IRK | `self` address | `other` address |  return  |
-    /// |:----------:|:-----------:|:--------------:|:---------------:|:--------:|
-    /// |   Some(A)  |   Some(B)   |        -       |        -        | A.cmp(B) |
-    /// |   Some(A)  |     None    |        -       |        -        |   Less   |
-    /// |    None    |   Some(B)   |        -       |        -        |  Greater |
-    /// |    None    |     None    |     Some(C)    |     Some(D)     | C.cmp(D) |
-    /// |    None    |     None    |     Some(C)    |       None      |   Less   |
-    /// |    None    |     None    |      None      |     Some(D)     |  Greater |
-    /// |    None    |     None    |      None      |       None      |   Equal  |
-    pub fn compare_keys(&self, other: &Self) -> core::cmp::Ordering {
-        self.cmp_entry_by_keys(other.peer_irk.as_ref(), other.peer_identity.as_ref())
-    }
-
     /// Check if these keys were generated with an authenticated device
     pub fn is_authenticated(&self) -> bool {
         self.is_authenticated
