@@ -2,15 +2,12 @@
 
 use crate::characteristic::{AddCharacteristicComponent, VecArray};
 use bo_tie_att::server::{AccessValue, ServerAttributes};
-use bo_tie_att::{Attribute, AttributePermissions};
+use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
 use bo_tie_util::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 
 /// UUID of a server configuration descriptor
 pub(crate) const TYPE: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0x2903);
-
-/// Default permissions of an server configuration descriptor
-const DEFAULT_PERMISSIONS: [AttributePermissions; 6] = bo_tie_att::FULL_READ_PERMISSIONS;
 
 /// Builder of a server configuration descriptor
 #[derive(Clone)]
@@ -51,20 +48,17 @@ impl<A> ServerConfigurationBuilder<SetPermissions<A>> {
     /// Set the write attribute restrictions
     ///
     /// This sets restrictions for writing the server configuration *for this client only*.
-    pub fn set_permissions<P>(self, permissions: P) -> ServerConfigurationBuilder<Complete<A>>
+    pub fn set_permissions<R>(self, restrictions: R) -> ServerConfigurationBuilder<Complete<A>>
     where
-        P: Borrow<[AttributePermissions]>,
+        R: Borrow<[AttributeRestriction]>,
     {
-        let mut attribute_permissions: LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions> =
-            LinearBuffer::new();
+        let mut write_restrictions = LinearBuffer::new();
 
-        unique_only!(attribute_permissions, permissions.borrow());
-
-        unique_only_owned!(attribute_permissions, DEFAULT_PERMISSIONS);
+        unique_only!(write_restrictions, restrictions.borrow());
 
         let current = Complete {
             config: self.current.config,
-            permissions: attribute_permissions,
+            write_restrictions,
         };
 
         ServerConfigurationBuilder { current }
@@ -72,7 +66,7 @@ impl<A> ServerConfigurationBuilder<SetPermissions<A>> {
 }
 
 impl AddCharacteristicComponent for ServerConfigurationBuilder<SetConfiguration> {
-    fn push_to(self, _: &mut ServerAttributes) -> bool {
+    fn push_to(self, _: &mut ServerAttributes, _: &[AttributeRestriction]) -> bool {
         false
     }
 }
@@ -81,8 +75,14 @@ impl<A> AddCharacteristicComponent for ServerConfigurationBuilder<Complete<A>>
 where
     A: AccessValue<ReadValue = ServerConfiguration, WriteValue = ServerConfiguration> + 'static,
 {
-    fn push_to(self, sa: &mut ServerAttributes) -> bool {
-        let attribute = Attribute::new(TYPE, self.current.permissions, self.current.config);
+    fn push_to(self, sa: &mut ServerAttributes, restrictions: &[AttributeRestriction]) -> bool {
+        let mut attribute_permission = LinearBuffer::<{ AttributePermissions::full_depth() }, _>::new();
+
+        map_restrictions!(self.current.write_restrictions => Write => attribute_permission);
+
+        map_restrictions!(restrictions => Read => attribute_permission);
+
+        let attribute = Attribute::new(TYPE, attribute_permission, self.current.config);
 
         sa.push_accessor(attribute);
 
@@ -110,7 +110,7 @@ pub struct SetPermissions<A> {
 #[derive(Clone)]
 pub struct Complete<A> {
     config: A,
-    permissions: LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions>,
+    write_restrictions: LinearBuffer<{ AttributeRestriction::full_depth() }, AttributeRestriction>,
 }
 
 /// The server configuration descriptor value

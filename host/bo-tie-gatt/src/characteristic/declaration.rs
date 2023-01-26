@@ -2,15 +2,13 @@
 
 use crate::characteristic::{AddCharacteristicComponent, Properties};
 use bo_tie_att::server::ServerAttributes;
-use bo_tie_att::{Attribute, AttributePermissions, FULL_READ_PERMISSIONS};
+use bo_tie_att::Attribute;
 use bo_tie_host_util::Uuid;
 use bo_tie_util::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 
 /// UUID for a characteristic declaration
 pub(crate) const TYPE: Uuid = Uuid::from_u16(0x2803);
-
-const PERMISSIONS: [AttributePermissions; 6] = FULL_READ_PERMISSIONS;
 
 /// A constructor of a Characteristic Declaration
 ///
@@ -90,14 +88,16 @@ impl DeclarationBuilder<TrueComplete> {
 }
 
 impl AddCharacteristicComponent for DeclarationBuilder<TrueComplete> {
-    fn push_to(self, sa: &mut ServerAttributes) -> bool {
+    fn push_to(self, sa: &mut ServerAttributes, restrictions: &[crate::att::AttributeRestriction]) -> bool {
         let declaration = Declaration {
             properties: self.current.properties,
             value_handle: self.current.value_handle,
             uuid: self.current.uuid,
         };
 
-        let attribute = Attribute::new(TYPE, PERMISSIONS, declaration);
+        let attribute_permissions = map_restrictions!(restrictions => Read);
+
+        let attribute = Attribute::new(TYPE, attribute_permissions, declaration);
 
         sa.push(attribute);
 

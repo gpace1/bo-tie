@@ -13,9 +13,6 @@ use core::task::{Context, Poll};
 /// UUID of a client configuration descriptor
 pub(crate) const TYPE: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(2902);
 
-/// Default permissions of an client configuration descriptor
-const DEFAULT_PERMISSIONS: [AttributePermissions; 6] = bo_tie_att::FULL_READ_PERMISSIONS;
-
 type ClientConfigVec = VecArray<{ ClientConfiguration::full_depth() }, ClientConfiguration>;
 
 /// Constructor of the client configuration descriptor
@@ -23,7 +20,7 @@ pub struct ClientConfigurationBuilder<T> {
     enabled_config: LinearBuffer<{ ClientConfiguration::full_depth() }, ClientConfiguration>,
     init_config: LinearBuffer<{ ClientConfiguration::full_depth() }, ClientConfiguration>,
     on_write: T,
-    permissions: LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions>,
+    write_restrictions: LinearBuffer<{ AttributeRestriction::full_depth() }, AttributeRestriction>,
 }
 
 impl ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
@@ -32,7 +29,7 @@ impl ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
             enabled_config: LinearBuffer::new(),
             init_config: LinearBuffer::new(),
             on_write: ReadOnlyClientConfiguration,
-            permissions: LinearBuffer::new(),
+            write_restrictions: LinearBuffer::new(),
         }
     }
 }
@@ -78,21 +75,24 @@ impl<T> ClientConfigurationBuilder<T> {
     ///
     /// Whenever a client writes to this descriptor, this `callback` will be called. Calling this
     /// method also enables adding the write attribute permissions to this descriptor. By default,
-    /// writes are permitted only to clients that are either authenticated or authorized, but
-    /// these restrictions can be changed by calling the method [`set_write_restrictions`].
+    /// writes are permitted only to clients that have been granted a write permission with either
+    /// the restriction [authenticated] or [authorized]. If these restrictions are not appropriate
+    /// to the application can be changed by calling the method [`set_write_restrictions`].
     ///
+    /// [`Authenticated`]: AttributeRestriction::Authentication
+    /// [`Authorized`]: AttributeRestriction::Authorization
     /// [`set_write_restrictions`]: ClientConfigurationBuilder::set_write_restrictions
     pub fn set_write_callback<Fun, Fut>(mut self, callback: Fun) -> ClientConfigurationBuilder<Fun>
     where
         Fun: FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
         Fut: Future + Send + Sync,
     {
-        if self.permissions.len() == 0 {
-            self.permissions
-                .try_push(AttributePermissions::Write(AttributeRestriction::Authentication))
+        if self.write_restrictions.len() == 0 {
+            self.write_restrictions
+                .try_push(AttributeRestriction::Authentication)
                 .unwrap();
-            self.permissions
-                .try_push(AttributePermissions::Write(AttributeRestriction::Authorization))
+            self.write_restrictions
+                .try_push(AttributeRestriction::Authorization)
                 .unwrap();
         }
 
@@ -100,7 +100,7 @@ impl<T> ClientConfigurationBuilder<T> {
             enabled_config: self.enabled_config,
             init_config: self.init_config,
             on_write: callback,
-            permissions: self.permissions,
+            write_restrictions: self.write_restrictions,
         }
     }
 
@@ -115,21 +115,16 @@ impl<T> ClientConfigurationBuilder<T> {
     where
         R: Borrow<[AttributeRestriction]>,
     {
-        let attribute_permissions = restrictions
-            .borrow()
-            .iter()
-            .map(|restriction| AttributePermissions::Write(*restriction));
+        self.write_restrictions.clear();
 
-        self.permissions.clear();
-
-        unique_only_owned!(self.permissions, attribute_permissions);
+        unique_only!(self.write_restrictions, restrictions.borrow());
 
         self
     }
 }
 
 impl AddCharacteristicComponent for ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
-    fn push_to(self, _: &mut ServerAttributes) -> bool {
+    fn push_to(self, _: &mut ServerAttributes, _: &[AttributeRestriction]) -> bool {
         false
     }
 }
@@ -139,8 +134,10 @@ where
     Fun: for<'a> FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
     Fut: Future + Send + Sync,
 {
-    fn push_to(mut self, sa: &mut ServerAttributes) -> bool {
+    fn push_to(self, sa: &mut ServerAttributes, restrictions: &[AttributeRestriction]) -> bool {
         let mut init_config: ClientConfigVec = VecArray(LinearBuffer::new());
+
+        let mut attribute_permissions = LinearBuffer::<{ AttributePermissions::full_depth() }, _>::new();
 
         for config in self.enabled_config.iter() {
             if self.init_config.contains(config) {
@@ -148,9 +145,9 @@ where
             }
         }
 
-        for permission in DEFAULT_PERMISSIONS {
-            self.permissions.try_push(permission).unwrap();
-        }
+        map_restrictions!(self.write_restrictions => Write => attribute_permissions);
+
+        map_restrictions!(restrictions => Read => attribute_permissions);
 
         let value = ClientConfigurationAccessor {
             config_mask: self.enabled_config,
@@ -158,7 +155,7 @@ where
             write_callback: self.on_write,
         };
 
-        let attribute = Attribute::new(TYPE, self.permissions, value);
+        let attribute = Attribute::new(TYPE, attribute_permissions, value);
 
         sa.push_accessor(attribute);
 

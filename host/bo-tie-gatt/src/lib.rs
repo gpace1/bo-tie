@@ -25,12 +25,69 @@ macro_rules! unique_only_owned {
     };
 }
 
+macro_rules! map_restrictions {
+    ( $restrictions:expr => Read ) => {{
+        let mut permissions = bo_tie_util::buffer::stack::LinearBuffer::<
+            { bo_tie_att::AttributeRestriction::full_depth() },
+            bo_tie_att::AttributePermissions,
+        >::new();
+
+        map_restrictions!($restrictions => Read => permissions);
+
+        permissions
+    }};
+    ( $restrictions:expr => Write ) => {{
+        let mut permissions = bo_tie_util::buffer::stack::LinearBuffer::<
+            { bo_tie_att::AttributeRestriction::full_depth() },
+            bo_tie_att::AttributePermissions,
+        >::new();
+
+        map_restrictions!($restrictions => Write => permissions)
+    }};
+    ( $restrictions:expr => Read & Write ) => {{
+        let mut permissions = bo_tie_util::buffer::stack::LinearBuffer::<
+            { bo_tie_att::AttributePermissions::full_depth() },
+            bo_tie_att::AttributePermissions,
+        >::new();
+
+        map_restrictions!($restrictions => Read & Write => permissions);
+
+        permissions
+    }};
+    ( $restrictions:expr => Read => $permissions:expr) => {{
+        for restriction in $restrictions.iter() {
+            $permissions
+                .try_push(bo_tie_att::AttributePermissions::Read(*restriction))
+                .unwrap();
+        }
+    }};
+    ( $restrictions:expr => Write => $permissions:expr) => {{
+        for restriction in $restrictions.iter() {
+            $permissions
+                .try_push(bo_tie_att::AttributePermissions::Write(*restriction))
+                .unwrap();
+        }
+    }};
+    ( $restrictions:expr => Read & Write => $permissions:expr) => {{
+        for restriction in $restrictions.iter() {
+            $permissions
+                .try_push(bo_tie_att::AttributePermissions::Read(*restriction))
+                .unwrap();
+        }
+
+        for restriction in $restrictions.iter() {
+            $permissions
+                .try_push(bo_tie_att::AttributePermissions::Write(*restriction))
+                .unwrap();
+        }
+    }};
+}
+
 pub mod characteristic;
 
 use alloc::vec::Vec;
 
 pub use bo_tie_att as att;
-use bo_tie_att::AttributePermissions;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::ConnectionChannel;
@@ -105,8 +162,6 @@ impl att::TransferFormatInto for ServiceInclude {
 
 impl ServiceInclude {
     const TYPE: Uuid = Uuid::from_u16(0x2802);
-
-    const PERMISSIONS: [att::AttributePermissions; 6] = att::FULL_READ_PERMISSIONS;
 }
 
 /// Construct a GATT Service.
@@ -131,8 +186,8 @@ pub struct ServiceBuilder<'a> {
     service_uuid: Uuid,
     is_primary: bool,
     server_builder: &'a mut ServerBuilder,
-    default_permissions: Option<LinearBuffer<12, att::AttributePermissions>>,
     definition_handle: Option<u16>,
+    access_restrictions: LinearBuffer<{ att::AttributeRestriction::full_depth() }, att::AttributeRestriction>,
 }
 
 // Unfortunately this cannot be made into a method as the borrow checker would trip when this was
@@ -155,14 +210,53 @@ macro_rules! make_service {
 }
 
 impl<'a> ServiceBuilder<'a> {
+    const DEFAULT_RESTRICTIONS: [att::AttributeRestriction; att::AttributeRestriction::full_depth()] = [
+        att::AttributeRestriction::None,
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128),
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits192),
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits256),
+        att::AttributeRestriction::Authorization,
+        att::AttributeRestriction::Authentication,
+    ];
+
     fn new(server_builder: &'a mut ServerBuilder, service_uuid: Uuid, is_primary: bool) -> Self {
+        let access_restrictions = Self::DEFAULT_RESTRICTIONS.into();
+
         ServiceBuilder {
             service_uuid,
             is_primary,
             server_builder,
-            default_permissions: None,
             definition_handle: None,
+            access_restrictions,
         }
+    }
+
+    /// Set the Access Restriction to this Service
+    ///
+    /// Permissions can be set for the characteristic values, but the rest of the characteristics
+    /// descriptors of the service are readable or writeable by default by the connected device. In
+    /// order to restrict access to these descriptors this method must be called to set the
+    /// attribute restriction for them. The default restriction is replaced with the input
+    /// restrictions and the operation of reading or writing to the descriptor requires the client
+    /// to be [*given*] the permission containing the restriction.
+    ///
+    /// This affects all the service definition and characteristics, but not retroactively. If this
+    /// is called after say [`set_service_definition`], then the service definition
+    ///
+    /// The main reason to use `gatekeep` is to ensure that the client is either encrypted,
+    /// authenticated and/or authorized to access the GAP service.
+    ///
+    /// [*given*]: bo_tie_att::server::Server::give_permissions_to_client
+    fn set_access_restriction(mut self, restrictions: &[att::AttributeRestriction]) -> Self {
+        self.access_restrictions.clear();
+
+        for restriction in restrictions {
+            if !self.access_restrictions.contains(restriction) {
+                self.access_restrictions.try_push(*restriction).unwrap();
+            }
+        }
+
+        self
     }
 
     /// Set the service definition into the server attributes
@@ -232,29 +326,6 @@ impl<'a> ServiceBuilder<'a> {
         // handle are the same
         make_service!(self, self.definition_handle.unwrap())
     }
-
-    /// Set the permissions for exposing the service
-    ///
-    /// In order to prevent services from being discoverable from unwanted Clients, a service may
-    /// have attribute permissions applied to have the GATT server to act as a 'gatekeeper' to it
-    /// (or a bouncer for a more modern day metaphor). If a client has not been granted any of the
-    /// permissions within `permissions` they cannot discover this service or anything inside it.
-    ///
-    /// # Note
-    /// No exposure protection is applied to this service if `permissions` is empty
-    pub fn gatekeeper_permissions<P>(mut self, permissions: P) -> Self
-    where
-        P: core::borrow::Borrow<[AttributePermissions]>,
-    {
-        let mut default_permissions: LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions> =
-            LinearBuffer::new();
-
-        unique_only!(default_permissions, permissions.borrow().iter());
-
-        self.default_permissions = default_permissions.into();
-
-        self
-    }
 }
 
 /// Add Include Definition(s) to the service
@@ -290,7 +361,9 @@ impl<'a> IncludesAdder<'a> {
             short_service_type: service_record.record.service_uuid.try_into().ok(),
         };
 
-        let attribute = att::Attribute::new(ServiceInclude::TYPE, ServiceInclude::PERMISSIONS, include);
+        let permissions = map_restrictions!(self.service_builder.access_restrictions => Read);
+
+        let attribute = att::Attribute::new(ServiceInclude::TYPE, permissions, include);
 
         self.end_group_handle = self.service_builder.server_builder.attributes.push(attribute);
 
@@ -489,7 +562,7 @@ struct ServiceGroupData {
 }
 
 pub struct GapServiceBuilder<'a> {
-    service_permissions: Option<&'a [att::AttributePermissions]>,
+    access_restrictions: &'a [att::AttributeRestriction],
     device_name: &'a str,
     device_name_permissions: &'a [att::AttributePermissions],
     device_appearance: u16,
@@ -528,22 +601,15 @@ impl<'a> GapServiceBuilder<'a> {
         D: Into<Option<&'a str>>,
         A: Into<Option<u16>>,
     {
+        let access_restrictions = &ServiceBuilder::DEFAULT_RESTRICTIONS;
+
         GapServiceBuilder {
-            service_permissions: None,
+            access_restrictions,
             device_name: device_name.into().unwrap_or(""),
             device_name_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
             device_appearance: appearance.into().unwrap_or(Self::UNKNOWN_APPEARANCE),
             device_appearance_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
         }
-    }
-
-    /// Set the service permissions
-    ///
-    /// This will be used as the permissions for all attributes of the GAP service.
-    pub fn set_permissions(&mut self, permissions: &'a [att::AttributePermissions]) {
-        self.service_permissions = permissions.into();
-        self.device_name_permissions = permissions;
-        self.device_appearance_permissions = permissions;
     }
 
     /// Set the attribute permissions for the device name characteristic
@@ -556,11 +622,28 @@ impl<'a> GapServiceBuilder<'a> {
         self.device_appearance_permissions = permissions
     }
 
+    /// Set Access to the GAP service
+    ///
+    /// Permissions can be set for the characteristic values, but the rest of the characteristics
+    /// descriptors of the GAP service are readable by default by the connected device. In order to
+    /// 'gatekeep' access to these descriptors this method must be called to set the attribute
+    /// restriction for them. The default restriction is replaced with `restriction` and the
+    /// operation of reading or writing to the descriptor requires the client to be [*given*] the
+    /// permission containing the restriction.
+    ///
+    /// This affects the permissions of all characteristics within the Service.
+    ///
+    /// [*given*]: bo_tie_att::server::Server::give_permissions_to_client
+    pub fn set_access_restrictions(&mut self, restrictions: &'a [att::AttributeRestriction]) {
+        self.access_restrictions = restrictions;
+    }
+
     fn into_gatt_service(self) -> ServerBuilder {
         let mut server_builder = ServerBuilder::new_empty();
 
         server_builder
             .new_service(Self::GAP_SERVICE_TYPE, true)
+            .set_access_restriction(self.access_restrictions)
             .add_characteristics()
             .new_characteristic(|characteristic| {
                 characteristic
@@ -591,18 +674,6 @@ impl<'a> GapServiceBuilder<'a> {
             .finish_service();
 
         server_builder
-    }
-}
-
-impl Default for GapServiceBuilder<'_> {
-    fn default() -> Self {
-        GapServiceBuilder {
-            service_permissions: None,
-            device_name: "",
-            device_appearance: GapServiceBuilder::UNKNOWN_APPEARANCE,
-            device_name_permissions: GapServiceBuilder::DEFAULT_ATTRIBUTE_PERMISSIONS,
-            device_appearance_permissions: GapServiceBuilder::DEFAULT_ATTRIBUTE_PERMISSIONS,
-        }
     }
 }
 

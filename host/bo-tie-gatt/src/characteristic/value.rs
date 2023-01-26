@@ -3,7 +3,7 @@
 use crate::characteristic::AddCharacteristicComponent;
 use bo_tie_att::server::access_value::Trivial;
 use bo_tie_att::server::{AccessValue, Comparable, ServerAttributes};
-use bo_tie_att::{Attribute, AttributePermissions, TransferFormatInto, TransferFormatTryFrom};
+use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction, TransferFormatInto, TransferFormatTryFrom};
 use bo_tie_host_util::Uuid;
 use bo_tie_util::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
@@ -106,7 +106,7 @@ where
     A::ReadValue: TransferFormatInto + Comparable,
     A::WriteValue: TransferFormatTryFrom,
 {
-    fn push_to(self, sa: &mut ServerAttributes) -> bool {
+    fn push_to(self, sa: &mut ServerAttributes, _: &[AttributeRestriction]) -> bool {
         let attribute = Attribute::new(
             self.current.characteristic_uuid,
             self.current.permissions,

@@ -494,6 +494,8 @@ where
     pub(crate) fn complete_characteristic(mut self) -> super::CharacteristicAdder<'a> {
         let server_attributes = &mut self.characteristic_adder.service_builder.server_builder.attributes;
 
+        let service_restrictions = &self.characteristic_adder.service_builder.access_restrictions;
+
         let declaration_builder = self
             .declaration_builder
             .set_value_handle(server_attributes.next_handle() + 1);
@@ -504,23 +506,35 @@ where
 
         let mut att_count = 2;
 
-        assert!(declaration_builder.push_to(server_attributes));
+        assert!(declaration_builder.push_to(server_attributes, service_restrictions));
 
-        assert!(value_builder.push_to(server_attributes));
+        assert!(value_builder.push_to(server_attributes, service_restrictions));
 
-        if self.extended_properties_builder.push_to(server_attributes) {
+        if self
+            .extended_properties_builder
+            .push_to(server_attributes, service_restrictions)
+        {
             att_count += 1
         }
 
-        if self.user_description_builder.push_to(server_attributes) {
+        if self
+            .user_description_builder
+            .push_to(server_attributes, service_restrictions)
+        {
             att_count += 1
         }
 
-        if self.client_configuration_builder.push_to(server_attributes) {
+        if self
+            .client_configuration_builder
+            .push_to(server_attributes, service_restrictions)
+        {
             att_count += 1
         }
 
-        if self.server_configuration_builder.push_to(server_attributes) {
+        if self
+            .server_configuration_builder
+            .push_to(server_attributes, service_restrictions)
+        {
             att_count += 1
         }
 
@@ -532,7 +546,11 @@ where
 
 /// A trait for adding characteristic component to a list of attributes
 pub trait AddCharacteristicComponent {
-    fn push_to(self, sa: &mut bo_tie_att::server::ServerAttributes) -> bool;
+    fn push_to(
+        self,
+        sa: &mut bo_tie_att::server::ServerAttributes,
+        restrictions: &[crate::att::AttributeRestriction],
+    ) -> bool;
 }
 
 /// GATT Characteristic information

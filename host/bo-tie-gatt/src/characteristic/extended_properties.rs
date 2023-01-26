@@ -2,16 +2,13 @@
 
 use crate::characteristic::{AddCharacteristicComponent, VecArray};
 use bo_tie_att::server::ServerAttributes;
-use bo_tie_att::{Attribute, AttributePermissions};
+use bo_tie_att::Attribute;
 use bo_tie_host_util::Uuid;
 use bo_tie_util::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 
 /// UUID of an extended properties descriptor
 pub(crate) const TYPE: Uuid = Uuid::from_u16(0x2900);
-
-/// Permissions of an extended properties descriptor
-const PERMISSIONS: [AttributePermissions; 6] = bo_tie_att::FULL_READ_PERMISSIONS;
 
 /// A constructor of a Characteristic extended properties descriptor declaration
 ///
@@ -46,14 +43,16 @@ impl ExtendedPropertiesBuilder<SetExtendedProperties> {
 }
 
 impl AddCharacteristicComponent for ExtendedPropertiesBuilder<SetExtendedProperties> {
-    fn push_to(self, _: &mut ServerAttributes) -> bool {
+    fn push_to(self, _: &mut ServerAttributes, _: &[crate::att::AttributeRestriction]) -> bool {
         false
     }
 }
 
 impl AddCharacteristicComponent for ExtendedPropertiesBuilder<Complete> {
-    fn push_to(self, sa: &mut ServerAttributes) -> bool {
-        let attribute = Attribute::new(TYPE, PERMISSIONS, VecArray(self.current.extended_properties));
+    fn push_to(self, sa: &mut ServerAttributes, restrictions: &[crate::att::AttributeRestriction]) -> bool {
+        let attribute_permissions = map_restrictions!(restrictions => Read);
+
+        let attribute = Attribute::new(TYPE, attribute_permissions, VecArray(self.current.extended_properties));
 
         sa.push(attribute);
 

@@ -125,7 +125,7 @@ impl<S> UserDescriptionBuilder<SetReadOnlyPermissions<S>> {
 }
 
 impl AddCharacteristicComponent for UserDescriptionBuilder<SetDescription> {
-    fn push_to(self, _: &mut ServerAttributes) -> bool {
+    fn push_to(self, _: &mut ServerAttributes, _: &[AttributeRestriction]) -> bool {
         false
     }
 }
@@ -136,7 +136,7 @@ where
     A::ReadValue: Borrow<str>,
     A::WriteValue: From<alloc::string::String>,
 {
-    fn push_to(self, sa: &mut ServerAttributes) -> bool {
+    fn push_to(self, sa: &mut ServerAttributes, _: &[AttributeRestriction]) -> bool {
         match self.current {
             Complete::ReadWrite {
                 description,
@@ -158,7 +158,7 @@ where
     S: AccessReadOnly + 'static,
     S::Value: Borrow<str>,
 {
-    fn push_to(self, sa: &mut ServerAttributes) -> bool {
+    fn push_to(self, sa: &mut ServerAttributes, _: &[AttributeRestriction]) -> bool {
         match self.current {
             Complete::ReadOnly {
                 description,
