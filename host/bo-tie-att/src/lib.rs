@@ -137,8 +137,18 @@ impl Borrow<[AttributePermissions]> for &AttributePermissions {
     }
 }
 
+/// Full restrictions
+pub const FULL_RESTRICTIONS: [AttributeRestriction; AttributeRestriction::full_depth()] = [
+    AttributeRestriction::None,
+    AttributeRestriction::Encryption(EncryptionKeySize::Bits128),
+    AttributeRestriction::Encryption(EncryptionKeySize::Bits192),
+    AttributeRestriction::Encryption(EncryptionKeySize::Bits256),
+    AttributeRestriction::Authentication,
+    AttributeRestriction::Authorization,
+];
+
 /// Full read-only permissions
-pub const FULL_READ_PERMISSIONS: [AttributePermissions; 6] = [
+pub const FULL_READ_PERMISSIONS: [AttributePermissions; AttributePermissions::full_depth() / 2] = [
     AttributePermissions::Read(AttributeRestriction::None),
     AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
     AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
@@ -148,7 +158,7 @@ pub const FULL_READ_PERMISSIONS: [AttributePermissions; 6] = [
 ];
 
 /// Full write-only permissions
-pub const FULL_WRITE_PERMISSIONS: [AttributePermissions; 6] = [
+pub const FULL_WRITE_PERMISSIONS: [AttributePermissions; AttributePermissions::full_depth() / 2] = [
     AttributePermissions::Write(AttributeRestriction::None),
     AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
     AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
@@ -158,7 +168,7 @@ pub const FULL_WRITE_PERMISSIONS: [AttributePermissions; 6] = [
 ];
 
 /// Full permissions for read and write
-pub const FULL_PERMISSIONS: [AttributePermissions; 12] = [
+pub const FULL_PERMISSIONS: [AttributePermissions; AttributePermissions::full_depth()] = [
     AttributePermissions::Read(AttributeRestriction::None),
     AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits128)),
     AttributePermissions::Read(AttributeRestriction::Encryption(EncryptionKeySize::Bits192)),
