@@ -714,7 +714,7 @@ impl<'a> GapServiceBuilder<'a> {
         self.preferred_connection_read_restrictions = restrictions;
     }
 
-    /// Add the Characteristic for the *Central* to indicate it Supports Private Address Resolution
+    /// Add the Characteristic for the *Central* to indicate it supports Private Address Resolution
     ///
     /// This adds the characteristic to indicate that the central device supports private address
     /// resolution. This characteristic is mandatory for the device in the central role if it
