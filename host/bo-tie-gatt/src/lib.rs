@@ -85,8 +85,6 @@ macro_rules! map_restrictions {
 
 pub mod characteristic;
 
-use alloc::vec::Vec;
-
 pub use bo_tie_att as att;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
@@ -680,10 +678,10 @@ impl<'a> GapServiceBuilder<'a> {
     ///
     /// | Parameters | Description | Value |
     /// |------------|-------------|-------|
-    /// |interval_min| The minimum connection interval | 7.5ms to 4s and a multiple of 1.25ms |
-    /// |interval_max| The maximum connection interval | 7.5ms to 4s and a multiple of 1.25ms<br/>Must be greater than interval_min |
+    /// |interval_min| The minimum connection interval | between 7.5ms to 4s and a multiple of 1.25ms |
+    /// |interval_max| The maximum connection interval | between 7.5ms to 4s and a multiple of 1.25ms<br/>Must be greater than interval_min |
     /// |latency| The peripheral latency | *subrate_factor * (latency + 1) < 500*<br/>and<br/>*subrate_factor * (latency + 1) < timeout / 2* |
-    /// |timeout| The supervision timeout | *(latency + 1) * subrate_factor * interval_max * 2*<br/>a multiple of 10ms |
+    /// |timeout| The supervision timeout | greater than *(latency + 1) * subrate_factor * interval_max * 2* |
     ///
     /// `restrictions` is the client restrictions for reading the preferred connection parameters.
     /// An input of `None` is equivalent to having full read permissions.
