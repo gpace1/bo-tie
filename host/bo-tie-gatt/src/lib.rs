@@ -234,9 +234,9 @@ impl<'a> ServiceBuilder<'a> {
     /// Set the Access Restriction to this Service
     ///
     /// Permissions can be set for the characteristic values, but the rest of the characteristics
-    /// descriptors of the service are readable or writeable by default by the connected device. In
-    /// order to restrict access to these descriptors this method must be called to set the
-    /// attribute restriction for them. The default restriction is replaced with the input
+    /// descriptors of the service are readable or writeable by default to the connected device. In
+    /// order to restrict access to these descriptors this method must be called change the default
+    /// read permissions. The default restriction is replaced with the input
     /// restrictions and the operation of reading or writing to the descriptor requires the client
     /// to be [*given*] the permission containing the restriction.
     ///
@@ -601,13 +601,16 @@ impl<'a> GapServiceBuilder<'a> {
     const RESOLVABLE_PRIVATE_ADDRESS_ONLY_TYPE: Uuid = Uuid::from_u16(0x2aa6);
 
     /// Default attribute permissions
-    const DEFAULT_NAME_PERMISSIONS: &'static [att::AttributeRestriction] = &[
-        att::AttributeRestriction::Authorization,
-        att::AttributeRestriction::Authentication,
-        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128),
-        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits192),
-        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits256),
-    ];
+    // This is a reference to an array (instead of a slice) so that it errors if the types
+    // AttributeRestriction or EncryptionKeySize has enums added to them.
+    const DEFAULT_NAME_PERMISSIONS: &'static [att::AttributeRestriction; att::AttributeRestriction::full_depth() - 1] =
+        &[
+            att::AttributeRestriction::Authorization,
+            att::AttributeRestriction::Authentication,
+            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128),
+            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits192),
+            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits256),
+        ];
 
     /// Default Appearance
     pub const UNKNOWN_APPEARANCE: u16 = 0;
@@ -638,7 +641,7 @@ impl<'a> GapServiceBuilder<'a> {
         }
     }
 
-    /// Indicate that the Device as Discoverable
+    /// Indicate that the Device is Discoverable
     ///
     /// This is a shortcut for changing the Attribute Permissions of the device name Characteristic
     /// to be readable for any connected device.
