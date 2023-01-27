@@ -8,6 +8,7 @@
 pub(crate) mod client_config;
 pub(crate) mod declaration;
 pub(crate) mod extended_properties;
+pub(crate) mod gap;
 pub(crate) mod server_config;
 pub(crate) mod user_description;
 pub(crate) mod value;

@@ -561,12 +561,24 @@ struct ServiceGroupData {
     service_uuid: Uuid,
 }
 
+/// A Constructor of the GAP Service
+///
+/// This is used to construct the GAP Service. This service is unique as the characteristics are
+/// also unique to it. Per the Specification, every GAT server is required to have the GAP service,
+/// so this is often the starting point in constructing a GATT [`Server`].
+///
+/// A [`ServerBuilder`] can be constructed from a `GapServiceBuilder` with the method
 pub struct GapServiceBuilder<'a> {
     access_restrictions: &'a [att::AttributeRestriction],
     device_name: &'a str,
-    device_name_permissions: &'a [att::AttributePermissions],
+    device_name_read_restrictions: &'a [att::AttributeRestriction],
+    device_name_write_restrictions: &'a [att::AttributeRestriction],
     device_appearance: u16,
-    device_appearance_permissions: &'a [att::AttributePermissions],
+    device_appearance_write_restrictions: &'a [att::AttributeRestriction],
+    preferred_connection_parameters: Option<characteristic::gap::PreferredConnectionParameters>,
+    preferred_connection_read_restrictions: &'a [att::AttributeRestriction],
+    central_address_resolution: Option<bool>,
+    add_rpa_only_characteristic: bool,
 }
 
 impl<'a> GapServiceBuilder<'a> {
@@ -579,14 +591,23 @@ impl<'a> GapServiceBuilder<'a> {
     /// Device Appearance Characteristic UUID
     const DEVICE_APPEARANCE_TYPE: Uuid = Uuid::from_u16(0x2a01);
 
+    /// Peripheral Preferred Connection Parameters UUID
+    const PERIPHERAL_PREFERRED_CONNECTION_PARAMETERS_TYPE: Uuid = Uuid::from_u16(0x2a04);
+
+    /// Central Address Resolution Uuid
+    const CENTRAL_ADDRESS_RESOLUTION_TYPE: Uuid = Uuid::from_u16(0x2aa6);
+
+    /// Resolvable Private Address Only Uuid
+    const RESOLVABLE_PRIVATE_ADDRESS_ONLY_TYPE: Uuid = Uuid::from_u16(0x2aa6);
+
     /// Default attribute permissions
-    const DEFAULT_ATTRIBUTE_PERMISSIONS: &'static [att::AttributePermissions] = &att::FULL_READ_PERMISSIONS;
-
-    /// Device Name characteristic properties
-    const DEVICE_NAME_PROPERTIES: &'static [characteristic::Properties] = &[characteristic::Properties::Read];
-
-    /// Device Appearance characteristic properties
-    const DEVICE_APPEARANCE_PROPERTIES: &'static [characteristic::Properties] = &[characteristic::Properties::Read];
+    const DEFAULT_NAME_PERMISSIONS: &'static [att::AttributeRestriction] = &[
+        att::AttributeRestriction::Authorization,
+        att::AttributeRestriction::Authentication,
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128),
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits192),
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits256),
+    ];
 
     /// Default Appearance
     pub const UNKNOWN_APPEARANCE: u16 = 0;
@@ -606,42 +627,203 @@ impl<'a> GapServiceBuilder<'a> {
         GapServiceBuilder {
             access_restrictions,
             device_name: device_name.into().unwrap_or(""),
-            device_name_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
+            device_name_read_restrictions: Self::DEFAULT_NAME_PERMISSIONS,
+            device_name_write_restrictions: &[],
             device_appearance: appearance.into().unwrap_or(Self::UNKNOWN_APPEARANCE),
-            device_appearance_permissions: Self::DEFAULT_ATTRIBUTE_PERMISSIONS,
+            device_appearance_write_restrictions: &[],
+            preferred_connection_parameters: None,
+            preferred_connection_read_restrictions: &[],
+            central_address_resolution: None,
+            add_rpa_only_characteristic: false,
         }
     }
 
-    /// Set the attribute permissions for the device name characteristic
-    pub fn set_name_permissions(&mut self, permissions: &'a [att::AttributePermissions]) {
-        self.device_name_permissions = permissions
+    /// Indicate that the Device as Discoverable
+    ///
+    /// This is a shortcut for changing the Attribute Permissions of the device name Characteristic
+    /// to be readable for any connected device.
+    pub fn device_is_discoverable(&mut self) {
+        self.device_name_read_restrictions = &[
+            att::AttributeRestriction::None,
+            att::AttributeRestriction::Authorization,
+            att::AttributeRestriction::Authentication,
+            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128),
+            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits192),
+            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits256),
+        ];
     }
 
-    /// Set the attribute permissions for the device appearance characteristic
-    pub fn set_appearance_permissions(&mut self, permissions: &'a [att::AttributePermissions]) {
-        self.device_appearance_permissions = permissions
+    /// Enable the Device Name to be Written to
+    ///
+    /// This enables writing to the device name vale. This method takes a list of restrictions for
+    /// the client to be able to write the device name.
+    pub fn enable_device_name_write(&mut self, restrictions: &'a [att::AttributeRestriction]) {
+        self.device_name_write_restrictions = restrictions;
     }
 
-    /// Set Access to the GAP service
+    /// Enable the Device Appearance to be Written to
     ///
-    /// Permissions can be set for the characteristic values, but the rest of the characteristics
-    /// descriptors of the GAP service are readable by default by the connected device. In order to
-    /// 'gatekeep' access to these descriptors this method must be called to set the attribute
-    /// restriction for them. The default restriction is replaced with `restriction` and the
-    /// operation of reading or writing to the descriptor requires the client to be [*given*] the
-    /// permission containing the restriction.
-    ///
-    /// This affects the permissions of all characteristics within the Service.
-    ///
-    /// [*given*]: bo_tie_att::server::Server::give_permissions_to_client
-    pub fn set_access_restrictions(&mut self, restrictions: &'a [att::AttributeRestriction]) {
-        self.access_restrictions = restrictions;
+    /// This enables writing to the device appearance value. This method takes a list of
+    /// restrictions for the client to be able to write the device name.
+    pub fn enable_appearance_write(&mut self, restrictions: &'a [att::AttributeRestriction]) {
+        self.device_appearance_write_restrictions = restrictions;
     }
 
-    fn into_gatt_service(self) -> ServerBuilder {
+    /// Add the Preferred Connection Parameters
+    ///
+    /// This adds the optional characteristic for the preferred connection parameters. This
+    /// characteristic is only optional for the device in the *peripheral* role, the *central*
+    /// device shall not have this characteristic.
+    ///
+    /// | Parameters | Description | Value |
+    /// |------------|-------------|-------|
+    /// |interval_min| The minimum connection interval | 7.5ms to 4s and a multiple of 1.25ms |
+    /// |interval_max| The maximum connection interval | 7.5ms to 4s and a multiple of 1.25ms<br/>Must be greater than interval_min |
+    /// |latency| The peripheral latency | *subrate_factor * (latency + 1) < 500*<br/>and<br/>*subrate_factor * (latency + 1) < timeout / 2* |
+    /// |timeout| The supervision timeout | *(latency + 1) * subrate_factor * interval_max * 2*<br/>a multiple of 10ms |
+    ///
+    /// `restrictions` is the client restrictions for reading the preferred connection parameters.
+    /// An input of `None` is equivalent to having full read permissions.
+    pub fn add_preferred_connection_parameters<R>(
+        &mut self,
+        interval_min: core::time::Duration,
+        interval_max: core::time::Duration,
+        latency: u16,
+        timeout: core::time::Duration,
+        restrictions: R,
+    ) where
+        R: Into<Option<&'a [att::AttributeRestriction]>>,
+    {
+        let interval_min = interval_min.as_millis() * 1000 / 1250;
+        let interval_max = interval_max.as_millis() * 1000 / 1250;
+        let timeout = timeout.as_millis() / 10;
+
+        self.preferred_connection_parameters = characteristic::gap::PreferredConnectionParameters {
+            interval_min: interval_min as u16,
+            interval_max: interval_max as u16,
+            latency,
+            timeout: timeout as u16,
+        }
+        .into();
+
+        let restrictions = restrictions.into().unwrap_or(&att::FULL_RESTRICTIONS);
+
+        self.preferred_connection_read_restrictions = restrictions;
+    }
+
+    /// Add the Characteristic for the *Central* to indicate it Supports Private Address Resolution
+    ///
+    /// This adds the characteristic to indicate that the central device supports private address
+    /// resolution. This characteristic is mandatory for the device in the central role if it
+    /// supports 'privacy'. It is optional for the central to have this characteristic if 'privacy'
+    /// is not supported, but if it is used then the input `supported` must be false.
+    ///
+    /// If `supported` is `false` then the central does not support address resolution, if the input
+    /// is `true` the the central supports address resolution. The `restrictions` are the client
+    /// restrictions for reading the characteristic value.
+    pub fn add_central_rpa_support(&mut self, supported: bool) {
+        self.central_address_resolution = Some(supported);
+    }
+
+    /// Add the Characteristic to indicate that this device will only use Resolvable Private
+    /// Addresses.
+    ///
+    /// This adds the optional characteristic to mark that this device will only use resolvable
+    /// private addresses after bonding with the connected device.
+    ///
+    /// # Note
+    /// This can only be added if the device support 'Privacy'.
+    pub fn add_rpa_only(&mut self) {
+        self.add_rpa_only_characteristic = true;
+    }
+
+    fn get_device_name_properties(&self) -> &'static [characteristic::Properties] {
+        match (
+            self.device_name_read_restrictions.len(),
+            self.device_name_write_restrictions.len(),
+        ) {
+            (0, 0) => &[],
+            (_, 0) => &[characteristic::Properties::Read],
+            (0, _) => &[characteristic::Properties::Write],
+            (_, _) => &[characteristic::Properties::Read, characteristic::Properties::Write],
+        }
+    }
+
+    fn create_device_name_permissions(&self) -> impl core::borrow::Borrow<[att::AttributePermissions]> {
+        let mut device_name_permissions =
+            LinearBuffer::<{ att::AttributePermissions::full_depth() }, att::AttributePermissions>::new();
+
+        unique_only_owned!(
+            device_name_permissions,
+            self.device_name_read_restrictions
+                .iter()
+                .map(|restriction| att::AttributePermissions::Read(*restriction))
+        );
+
+        unique_only_owned!(
+            device_name_permissions,
+            self.device_name_write_restrictions
+                .iter()
+                .map(|restriction| att::AttributePermissions::Write(*restriction))
+        );
+
+        device_name_permissions
+    }
+
+    fn get_device_appearance_properties(&self) -> &'static [characteristic::Properties] {
+        if self.device_appearance_write_restrictions.len() != 0 {
+            &[characteristic::Properties::Read, characteristic::Properties::Write]
+        } else {
+            &[characteristic::Properties::Read]
+        }
+    }
+
+    fn create_device_appearance_permissions(&self) -> impl core::borrow::Borrow<[att::AttributePermissions]> {
+        let mut appearance_permissions =
+            LinearBuffer::<{ att::AttributePermissions::full_depth() }, att::AttributePermissions>::new();
+
+        for permission in att::FULL_READ_PERMISSIONS {
+            appearance_permissions.try_push(permission).unwrap();
+        }
+
+        unique_only_owned!(
+            appearance_permissions,
+            self.device_appearance_write_restrictions
+                .iter()
+                .map(|restriction| att::AttributePermissions::Write(*restriction))
+        );
+
+        appearance_permissions
+    }
+
+    fn get_preferred_connection_parameters_properties(&self) -> &'static [characteristic::Properties] {
+        if self.preferred_connection_read_restrictions.len() != 0 {
+            &[characteristic::Properties::Read]
+        } else {
+            &[]
+        }
+    }
+
+    fn create_preferred_connection_parameter_permissions(
+        &self,
+    ) -> impl core::borrow::Borrow<[att::AttributePermissions]> {
+        let mut permissions =
+            LinearBuffer::<{ att::AttributeRestriction::full_depth() }, att::AttributePermissions>::new();
+
+        unique_only_owned!(
+            permissions,
+            self.preferred_connection_read_restrictions
+                .iter()
+                .map(|restriction| att::AttributePermissions::Read(*restriction))
+        );
+
+        permissions
+    }
+
+    fn into_gatt_service(mut self) -> ServerBuilder {
         let mut server_builder = ServerBuilder::new_empty();
 
-        server_builder
+        let mut characteristic_adder = server_builder
             .new_service(Self::GAP_SERVICE_TYPE, true)
             .set_access_restriction(self.access_restrictions)
             .add_characteristics()
@@ -649,29 +831,76 @@ impl<'a> GapServiceBuilder<'a> {
                 characteristic
                     .set_declaration(|declaration| {
                         declaration
-                            .set_properties(Self::DEVICE_NAME_PROPERTIES)
+                            .set_properties(self.get_device_name_properties())
                             .set_uuid(Self::DEVICE_NAME_TYPE)
                     })
                     .set_value(|value| {
                         value
                             .set_value(alloc::string::String::from(self.device_name))
-                            .set_permissions(self.device_name_permissions)
+                            .set_permissions(self.create_device_name_permissions())
                     })
             })
             .new_characteristic(|characteristic| {
                 characteristic
                     .set_declaration(|declaration| {
                         declaration
-                            .set_properties(Self::DEVICE_APPEARANCE_PROPERTIES)
+                            .set_properties(self.get_device_appearance_properties())
                             .set_uuid(Self::DEVICE_APPEARANCE_TYPE)
                     })
                     .set_value(|value| {
                         value
                             .set_value(self.device_appearance)
-                            .set_permissions(self.device_appearance_permissions)
+                            .set_permissions(self.create_device_appearance_permissions())
                     })
-            })
-            .finish_service();
+            });
+
+        if let Some(connection_parameters) = self.preferred_connection_parameters.take() {
+            characteristic_adder = characteristic_adder.new_characteristic(|characteristic| {
+                characteristic
+                    .set_declaration(|declaration| {
+                        declaration
+                            .set_properties(self.get_preferred_connection_parameters_properties())
+                            .set_uuid(Self::PERIPHERAL_PREFERRED_CONNECTION_PARAMETERS_TYPE)
+                    })
+                    .set_value(|value| {
+                        value
+                            .set_value(connection_parameters)
+                            .set_permissions(self.create_preferred_connection_parameter_permissions())
+                    })
+            });
+        }
+
+        if let Some(central_address_resolution) = self.central_address_resolution.take() {
+            characteristic_adder = characteristic_adder.new_characteristic(|characteristic| {
+                characteristic
+                    .set_declaration(|declaration| {
+                        declaration
+                            .set_properties([characteristic::Properties::Read])
+                            .set_uuid(Self::CENTRAL_ADDRESS_RESOLUTION_TYPE)
+                    })
+                    .set_value(|value_builder| {
+                        let value: u8 = if central_address_resolution { 1 } else { 0 };
+
+                        value_builder
+                            .set_value(value)
+                            .set_permissions(att::FULL_READ_PERMISSIONS)
+                    })
+            });
+        }
+
+        if self.add_rpa_only_characteristic {
+            characteristic_adder = characteristic_adder.new_characteristic(|characteristic| {
+                characteristic
+                    .set_declaration(|declaration| {
+                        declaration
+                            .set_properties([characteristic::Properties::Read])
+                            .set_uuid(Self::RESOLVABLE_PRIVATE_ADDRESS_ONLY_TYPE)
+                    })
+                    .set_value(|value| value.set_value(0u8).set_permissions(att::FULL_READ_PERMISSIONS))
+            });
+        }
+
+        characteristic_adder.finish_service();
 
         server_builder
     }
