@@ -740,7 +740,7 @@ impl Eq for Keys {}
 
 impl PartialOrd for Keys {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        self.compare_keys(&other).into()
+        self.get_peer_identity().partial_cmp(&other.get_peer_identity())
     }
 }
 
@@ -759,76 +759,103 @@ impl core::hash::Hash for Keys {
     }
 }
 
-/// The Bonding Keys "database"
+/// A Very Simple Bonding Keys "database"
 ///
 /// This is a simple `database` for storing bonding information of previously bonded devices. It is
-/// just a vector of `Keys`s sorted by the identity address. `Keys`s without an identity
-/// address are also resolvable but only if they contain an identity resolving key (IRK).
+/// just a vector of [`Keys`]s sorted by peer identity addresses.
 ///
-/// # Panics
-/// Trying to add `Keys`s without an identity address or identity resolving key will incur a
-/// panic.
+/// This 'database' is nothing more than an over-glorified sorted vector of `Keys`.
+///
+/// # Note
+/// Since the peer identity address is optionally contained within a [`Keys`], one entry within
+/// the 'database' is allowed to not contain a peer identity address.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-struct KeyDB {
+pub struct KeyDB {
     entries: Vec<Keys>,
 }
 
 impl KeyDB {
     /// Create a new `KeyDB` from a vector of `Keys`
-    fn new(mut entries: Vec<Keys>) -> Self {
-        entries.sort_by(|rhs, lhs| rhs.compare_keys(lhs));
+    pub fn new(mut entries: Vec<Keys>) -> Self {
+        entries.sort();
 
         Self { entries }
     }
 
-    /// Get the keys associated with the provided `irk` and/or `address`.
+    /// Get the keys associated with the input peer identity address.
     ///
-    /// Return the keys associated with the specified `irk` and/or `address`. `None` is
-    /// returned if there is no entry associated with the given keys.
-    fn get<'s, 'a, I, A>(&'s self, irk: I, address: A) -> Option<&'s Keys>
+    /// If `identity` is `None` then the keys associated to no peer device are returned, if there
+    /// are any.
+    pub fn get<I, A>(&self, peer_identity: A) -> Option<&Keys>
     where
-        I: Into<Option<&'a u128>>,
-        A: Into<Option<&'a IdentityAddress>>,
+        I: core::borrow::Borrow<IdentityAddress>,
+        A: Into<Option<I>>,
     {
-        let i = irk.into();
-        let a = address.into();
-        let entries = &self.entries;
+        let identity = peer_identity.into();
+
+        let borrowed = identity.as_ref().map(|identity| identity.borrow());
 
         self.entries
-            .binary_search_by(|entry| entry.cmp_entry_by_keys(i, a))
+            .binary_search_by(|entry| entry.peer_identity.as_ref().cmp(&borrowed))
             .ok()
-            .map_or(None, |idx| entries.get(idx))
+            .and_then(|idx| self.entries.get(idx))
+    }
+
+    /// Get a mutable reference to the keys associated with the input peer identity address.
+    ///
+    /// If `identity` is `None` then the keys associated to no peer device are returned, if there
+    /// are any.
+    pub fn get_mut<I, A>(&mut self, peer_identity: A) -> Option<&mut Keys>
+    where
+        I: core::borrow::Borrow<IdentityAddress>,
+        A: Into<Option<I>>,
+    {
+        let identity = peer_identity.into();
+
+        let borrowed = identity.as_ref().map(|identity| identity.borrow());
+
+        self.entries
+            .binary_search_by(|entry| entry.peer_identity.as_ref().cmp(&borrowed))
+            .ok()
+            .and_then(|idx| self.entries.get_mut(idx))
     }
 
     /// Add the keys with the provided Keys
     ///
-    /// This will override keys that have the same identity address and IRK.
-    fn add(&mut self, entry: Keys) {
-        match self.entries.binary_search_by(|in_entry| in_entry.compare_keys(&entry)) {
-            Ok(idx) => self.entries[idx] = entry,
-            Err(idx) => self.entries.insert(idx, entry),
+    /// Keys are sorted by the peer identity. In order for `keys` to be added, the peer identity
+    /// must be unique to all other keys within this `KeyDB`. If `keys` contains a peer identity
+    /// address that is already within this `KeyDB` then false is returned. True is returned if the
+    /// keys were successfully added. Use method [`get_mut`] to overwrite keys within a `KeyDb`.
+    ///
+    /// [`get_mut`]: KeyDB::get_mut
+    pub fn add(&mut self, keys: Keys) -> bool {
+        if let Err(idx) = self.entries.binary_search_by(|keys| keys.cmp(&keys)) {
+            self.entries.insert(idx, keys);
+            true
+        } else {
+            false
         }
     }
 
-    fn iter(&self) -> impl core::iter::Iterator<Item = &Keys> {
+    /// Iterate through the keys of a `KeyDB`
+    pub fn iter(&self) -> impl Iterator<Item = &Keys> {
         self.entries.iter()
     }
 
-    fn remove<'a, I, A>(&'a mut self, irk: I, address: A) -> bool
+    /// Remove the keys associated to a peer
+    pub fn remove<I, A>(&mut self, peer_identity: A) -> Option<Keys>
     where
-        I: Into<Option<&'a u128>>,
-        A: Into<Option<&'a IdentityAddress>>,
+        I: core::borrow::Borrow<IdentityAddress>,
+        A: Into<Option<I>>,
     {
-        let i = irk.into();
-        let a = address.into();
+        let identity = peer_identity.into();
+
+        let borrowed = identity.as_ref().map(|identity| identity.borrow());
 
         self.entries
-            .binary_search_by(|entry| entry.cmp_entry_by_keys(i, a))
+            .binary_search_by(|entry| entry.peer_identity.as_ref().cmp(&borrowed))
             .ok()
-            .map_or(false, |idx| {
-                self.entries.remove(idx);
-                true
-            })
+            .map(|idx| self.entries.remove(idx))
     }
 }
 
@@ -839,115 +866,30 @@ impl Default for KeyDB {
     }
 }
 
-/// A simple Security Manager keys database
-///
-/// A `SecurityManagerKeys` contains a database of encryption keys for with previously bonded
-/// devices. Its main purpose is for saving bonding information and to retrieve the correct
-/// encryption keys upon successful identification of the peer device.
-///
-/// This 'database' is nothing more than a glorified list of `Keys`
-/// sorted using the
-/// [compare_entry](crate::sm::Keys::compare_keys)
-/// method.
-#[derive(Default)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct SecurityManagerKeys {
-    keys_db: KeyDB,
+impl IntoIterator for KeyDB {
+    type Item = Keys;
+    type IntoIter = alloc::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.into_iter()
+    }
 }
 
-impl SecurityManagerKeys {
-    pub fn new(keys: Vec<Keys>) -> Self {
-        SecurityManagerKeys {
-            keys_db: KeyDB::new(keys),
-        }
+impl<'a> IntoIterator for &'a KeyDB {
+    type Item = &'a Keys;
+    type IntoIter = core::slice::Iter<'a, Keys>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
     }
+}
 
-    /// Get an iterator over the keys
-    pub fn iter(&self) -> impl Iterator<Item = &Keys> {
-        self.keys_db.iter()
-    }
+impl<'a> IntoIterator for &'a mut KeyDB {
+    type Item = &'a mut Keys;
+    type IntoIter = core::slice::IterMut<'a, Keys>;
 
-    /// Returns an iterator to resolve a resolvable private address from all peer devices'
-    /// Identity Resolving Key (IRK) in the keys database.
-    ///
-    /// The return is an iterator that will try to resolve `addr` with a known peer IRK on each
-    /// iteration. If the address is resolved by a peer's IRK, the `Keys` that contains the
-    /// matching IRK is returned. The easiest way to use this function is to just combine it with
-    /// the [`find_map`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find_map)
-    /// iterator method.
-    /// ```
-    /// # let security_manager = bo_tie_sm::SecurityManagerKeys::default();
-    /// # let resolvable_private_address = bo_tie_util::BluetoothDeviceAddress::zeroed();
-    ///
-    /// security_manager.resolve_rpa_itr(resolvable_private_address).find_map(|keys_opt| keys_opt);
-    /// ```
-    ///
-    /// # Note
-    /// If you know the identity address of the device to be connected, then this method is
-    /// *probably* not needed. Most controllers can handle resolving a private address for a single
-    /// connectible device. See the HCI methods within the module
-    /// [`privacy`](crate::hci::le::privacy).
-    pub fn resolve_rpa_itr(&self, addr: BluetoothDeviceAddress) -> impl Iterator<Item = Option<Keys>> + '_ {
-        let hash = [addr[0], addr[1], addr[2]];
-        let prand = [addr[3], addr[4], addr[5]];
-
-        self.keys_db
-            .entries
-            .iter()
-            .take_while(|e| e.peer_irk.is_some())
-            .map(move |e| {
-                e.peer_irk.and_then(|irk| {
-                    if toolbox::ah(irk, prand) == hash {
-                        Some(e.clone())
-                    } else {
-                        None
-                    }
-                })
-            })
-    }
-
-    /// Add (or replace) keys in the database
-    ///
-    /// This will add the keys to the database **if** input `keys` contains a peer identity
-    /// resolving key or a peer address. If there is a `Keys` in the database that contains
-    /// the same peer IRK and peer address, that entry is overwritten.
-    ///
-    /// This function will return true if `keys` was added to the database.
-    pub fn add_keys(&mut self, keys: Keys) -> bool {
-        match keys {
-            Keys { peer_irk: Some(_), .. }
-            | Keys {
-                peer_identity: Some(_), ..
-            } => {
-                self.keys_db.add(keys);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Remove keys in the database
-    ///
-    /// Removes the entry that matches `keys` in the database
-    pub fn remove_keys(&mut self, keys: &Keys) -> bool {
-        self.keys_db.remove(keys.peer_irk.as_ref(), keys.peer_identity.as_ref())
-    }
-
-    /// Get a specific `Keys` from its peer IRK and peer Address
-    pub fn get_keys<I, A>(&self, peer_irk: I, peer_addr: A, peer_addr_is_pub: bool) -> Option<&Keys>
-    where
-        I: Into<Option<u128>>,
-        A: Into<Option<crate::BluetoothDeviceAddress>>,
-    {
-        let peer_addr = peer_addr.into().map(|addr| {
-            if peer_addr_is_pub {
-                IdentityAddress::Public(addr)
-            } else {
-                IdentityAddress::StaticRandom(addr)
-            }
-        });
-
-        self.keys_db.get(peer_irk.into().as_ref(), peer_addr.as_ref())
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter_mut()
     }
 }
 
