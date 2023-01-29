@@ -963,7 +963,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// let server = server_builder.make_server(NoQueuedWrites);
 /// ```
 pub struct ServerBuilder {
-    primary_services: Vec<ServiceGroupData>,
+    primary_services: alloc::vec::Vec<ServiceGroupData>,
     attributes: att::server::ServerAttributes,
 }
 
@@ -973,7 +973,7 @@ impl ServerBuilder {
     /// This creates a `ServerBuilder` without the specification required GAP service.
     pub fn new_empty() -> Self {
         Self {
-            primary_services: Vec::new(),
+            primary_services: alloc::vec::Vec::new(),
             attributes: att::server::ServerAttributes::new(),
         }
     }
@@ -1014,7 +1014,7 @@ impl From<GapServiceBuilder<'_>> for ServerBuilder {
 }
 
 pub struct Server<Q> {
-    primary_services: Vec<ServiceGroupData>,
+    primary_services: alloc::vec::Vec<ServiceGroupData>,
     server: att::server::Server<Q>,
 }
 
@@ -1034,7 +1034,7 @@ where
     pub async fn process_acl_data<C>(
         &mut self,
         connection_channel: &mut C,
-        acl_data: &l2cap::BasicInfoFrame<Vec<u8>>,
+        acl_data: &l2cap::BasicInfoFrame<alloc::vec::Vec<u8>>,
     ) -> Result<(), att::ConnectionError<C>>
     where
         C: ConnectionChannel,
