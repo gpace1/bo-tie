@@ -62,9 +62,8 @@ impl HostPrivacy {
     /// Configure advertising when the host is performing Privacy
     pub async fn set_advertising_parameters<H: HostChannelEnds>(&mut self, host: &mut Host<H>) {
         let this_irk = self.resolving_list.unwrap().irk;
-        let peer_irk = self.resolving_list.unwrap().peer_irk;
 
-        set_advertising_parameters_private(host, this_irk, peer_irk).await
+        set_advertising_parameters_private(host, this_irk).await
     }
 
     /// Validate the Connection
@@ -79,16 +78,12 @@ impl HostPrivacy {
     }
 }
 
-async fn set_advertising_parameters_private<H: HostChannelEnds>(host: &mut Host<H>, this_irk: u128, peer_irk: u128) {
+async fn set_advertising_parameters_private<H: HostChannelEnds>(host: &mut Host<H>, this_irk: u128) {
     use bo_tie::hci::commands::le::{set_advertising_parameters, set_random_address, OwnAddressType};
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
     let own_address = BluetoothDeviceAddress::new_resolvable(this_irk);
-
-    let peer_address = BluetoothDeviceAddress::new_resolvable(peer_irk);
-
-    adv_prams.peer_address = peer_address;
 
     adv_prams.advertising_type =
         set_advertising_parameters::AdvertisingType::ConnectableAndScannableUndirectedAdvertising;
@@ -133,7 +128,7 @@ impl RegenRpa {
 
         set_advertising_enable::send(host, false).await.unwrap();
 
-        set_advertising_parameters_private(host, self.irk, self.peer_irk).await;
+        set_advertising_parameters_private(host, self.irk).await;
 
         set_advertising_enable::send(host, true).await.unwrap();
     }
