@@ -178,7 +178,7 @@ pub struct SecurityManagerBuilder {
 }
 
 impl SecurityManagerBuilder {
-    /// Create a new `SlaveSecurityManagerBuilder`
+    /// Create a new `SecurityManagerBuilder`
     pub fn new(
         connected_device_address: BluetoothDeviceAddress,
         this_device_address: BluetoothDeviceAddress,
@@ -204,23 +204,65 @@ impl SecurityManagerBuilder {
             assert_check_mode_two: None,
         }
     }
-}
 
-impl SecurityManagerBuilder {
-    /// Set the keys to the peer device if it is already paired
+    /// Create a new `SecurityManagerBuilder` to a device already paired
     ///
     /// This assigns the keys that were previously generated. When created, the Security Manager
     /// will be able to return these keys even when pairing has not occurred during the current
     /// connection.
     ///
-    /// # Note
     /// No verification is done for `keys`. It is assumed the keys were generated and are valid for
-    /// the peer device.
-    pub fn set_already_paired(mut self, keys: super::Keys) -> Result<Self, &'static str> {
+    /// the peer device. All forms of pairing is disabled and new long term keys should be randomly
+    /// generated and exchanged under encryption. If encryption cannot be established, or the long
+    /// term key does not meed the required security method [`new`] must be used to construct a
+    /// `SecurityManagerBuilder` as the long term key is considered invalid and thus void (reasons
+    /// for this could be that the long term key is not authenticated, its encryption key size is
+    /// too small, or it was generated using legacy pairing when secure connections is required).
+    ///
+    /// # Error
+    /// Input `keys` must contain a long term key.
+    pub fn new_already_paired(keys: super::Keys) -> Result<Self, &'static str> {
         if keys.get_ltk().is_some() {
-            self.prior_keys = Some(keys);
+            let remote_address = keys
+                .get_peer_identity()
+                .map(|identity| identity.get_address())
+                .unwrap_or(BluetoothDeviceAddress::zeroed());
 
-            Ok(self)
+            let this_address = keys
+                .get_identity()
+                .map(|identity| identity.get_address())
+                .unwrap_or(BluetoothDeviceAddress::zeroed());
+
+            let remote_address_is_random = keys
+                .get_peer_identity()
+                .map(|identity| identity.is_random())
+                .unwrap_or_default();
+
+            let this_address_is_random = keys
+                .get_identity()
+                .map(|identity| identity.is_random())
+                .unwrap_or_default();
+
+            let prior_keys = Some(keys);
+
+            Ok(Self {
+                encryption_key_min: super::ENCRYPTION_KEY_MAX_SIZE,
+                encryption_key_max: super::ENCRYPTION_KEY_MAX_SIZE,
+                remote_address,
+                this_address,
+                remote_address_is_random,
+                this_address_is_random,
+                enable_just_works: false,
+                enable_number_comparison: false,
+                enable_passkey: PasskeyAbility::None,
+                oob: None,
+                can_bond: true,
+                distributed_bonding_keys: DistributedBondingKeysBuilder::new(),
+                accepted_bonding_keys: AcceptedBondingKeysBuilder::new(),
+                prior_keys,
+                assert_check_mode_one: None,
+                assert_check_mode_two: None,
+            })
         } else {
             Err("missing long term key")
         }

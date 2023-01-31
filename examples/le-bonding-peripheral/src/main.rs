@@ -190,23 +190,23 @@ where
 
     gatt_server.give_permissions_to_client(att::AttributePermissions::Read(att::AttributeRestriction::None));
 
-    let security_manager_builder = sm::responder::SecurityManagerBuilder::new(
-        peer_address.address,
-        own_address.address,
-        !peer_address.is_pub,
-        !own_address.is_pub,
-    );
-
     let mut security_manager = if let Some(keys) = bonding_keys {
         // no pairing (and bonding) is to be done as the keys were already generate
-        security_manager_builder.set_already_paired(keys).unwrap().build()
-    } else {
-        security_manager_builder
-            .enable_number_comparison()
-            .enable_passkey()
-            .distributed_bonding_keys(|sent| sent.enable_id())
-            .accepted_bonding_keys(|accepted| accepted.enable_id())
+        sm::responder::SecurityManagerBuilder::new_already_paired(keys)
+            .unwrap()
             .build()
+    } else {
+        sm::responder::SecurityManagerBuilder::new(
+            peer_address.address,
+            own_address.address,
+            !peer_address.is_pub,
+            !own_address.is_pub,
+        )
+        .enable_number_comparison()
+        .enable_passkey()
+        .distributed_bonding_keys(|sent| sent.enable_id())
+        .accepted_bonding_keys(|accepted| accepted.enable_id())
+        .build()
     };
 
     let mut number_comparison = None;
