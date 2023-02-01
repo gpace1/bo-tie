@@ -289,13 +289,11 @@ pub mod set_advertising_data {
             AdvertisingData::default()
         }
 
-        /// Add an ADStruct to the advertising data
-        ///
-        /// Returns self if the data was added to the advertising data
+        /// Add an AD Struct to the advertising data
         ///
         /// # Error
-        /// 'data' in its transmission form was too large for remaining free space in
-        /// the advertising data.
+        /// An error is returned if input `data` in its AD structure form was too large for the
+        /// remaining free space in the advertising data.
         #[cfg(feature = "gap")]
         pub fn try_push<T>(&mut self, data: T) -> Result<(), ConvertError>
         where
@@ -305,10 +303,7 @@ pub mod set_advertising_data {
                 .map(|ad_struct| self.length += ad_struct.size())
         }
 
-        /// Get the remaining amount of space available for ADStructures
-        ///
-        /// Use this to get the remaining space that can be sent in an advertising
-        /// packet.
+        /// Get the remaining space available within the advertising data
         pub fn remaining_space(&self) -> usize {
             self.payload.len() - self.length as usize
         }
