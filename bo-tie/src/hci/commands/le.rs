@@ -14,5 +14,7 @@ pub use bo_tie_hci_host::commands::le::groups::privacy::*;
 #[doc(inline)]
 pub use bo_tie_hci_host::commands::le::groups::receiver::*;
 #[doc(inline)]
+pub use bo_tie_hci_host::commands::le::groups::scannable_advertisements::*;
+#[doc(inline)]
 pub use bo_tie_hci_host::commands::le::groups::transmitter::*;
 pub use bo_tie_hci_util::le::*;
