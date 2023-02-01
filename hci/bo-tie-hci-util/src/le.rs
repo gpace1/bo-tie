@@ -253,12 +253,14 @@ macro_rules! make_interval {
                     })
                 }
                 else {
-                    Err($crate::le::TryFromRawIntervalError {
+                    let err = $crate::le::TryFromRawIntervalError {
                         low: $raw_low,
                         hi: $raw_hi,
                         of: core::stringify!($name),
                         val: raw
-                    }.to_string())
+                    };
+
+                    Err(alloc::string::ToString::to_string(&err))
                 }
             }
 
@@ -277,12 +279,14 @@ macro_rules! make_interval {
                     })
                 }
                 else {
-                    Err($crate::le::TryFromDurationIntervalError{
+                    let err = $crate::le::TryFromDurationIntervalError{
                         low: core::time::Duration::from_micros($raw_low * $micro_sec_conv),
                         hi: core::time::Duration::from_micros($raw_hi * $micro_sec_conv),
                         of: core::stringify!($name),
                         val: duration,
-                    }.to_string())
+                    };
+
+                    Err(alloc::string::ToString::to_string(&err))
                 }
             }
 
@@ -604,7 +608,7 @@ impl ConnectionIntervalBounds {
         if min.get_raw_val() <= max.get_raw_val() {
             Ok(Self { min, max })
         } else {
-            Err("'min' is greater than 'max'".to_string())
+            Err("'min' is greater than 'max'".into())
         }
     }
 

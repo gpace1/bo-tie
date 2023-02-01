@@ -10,4 +10,5 @@ pub mod encryption;
 pub mod mandatory;
 pub mod privacy;
 pub mod receiver;
+pub mod scannable_advertisements;
 pub mod transmitter;
