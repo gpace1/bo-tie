@@ -160,8 +160,6 @@ fn await_passkey() -> impl std::future::Future<Output = Vec<char>> {
                 break;
             }
         }
-
-        crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags).unwrap();
     });
 
     async move {
