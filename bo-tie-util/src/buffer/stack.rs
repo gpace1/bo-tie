@@ -240,6 +240,57 @@ impl<T, const SIZE: usize> Drop for LinearBuffer<SIZE, T> {
     }
 }
 
+impl<T, const SIZE: usize> IntoIterator for LinearBuffer<SIZE, T> {
+    type Item = T;
+    type IntoIter = LinearBufferIter<SIZE, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LinearBufferIter::new(self)
+    }
+}
+
+/// An iterator for a [`LinearBuffer`]
+///
+/// This can be created from the implementation of `IntoIterator` for `LinearBuffer`.
+pub struct LinearBufferIter<const SIZE: usize, T> {
+    index: usize,
+    linear_buffer: LinearBuffer<SIZE, T>,
+}
+
+impl<const SIZE: usize, T> LinearBufferIter<SIZE, T> {
+    fn new(linear_buffer: LinearBuffer<SIZE, T>) -> Self {
+        let index = 0;
+
+        LinearBufferIter { index, linear_buffer }
+    }
+}
+
+impl<const SIZE: usize, T> Iterator for LinearBufferIter<SIZE, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index != self.linear_buffer.count {
+            let next = replace(&mut self.linear_buffer.buffer[self.index], MaybeUninit::uninit());
+
+            self.index += 1;
+
+            unsafe { Some(next.assume_init()) }
+        } else {
+            None
+        }
+    }
+}
+
+impl<const SIZE: usize, T> Drop for LinearBufferIter<SIZE, T> {
+    fn drop(&mut self) {
+        for is_init in self.linear_buffer.buffer[self.index..self.linear_buffer.count].iter_mut() {
+            unsafe { is_init.assume_init_drop() }
+        }
+
+        self.linear_buffer.count = 0;
+    }
+}
+
 /// Error from a `LinearBuffer`
 #[derive(Debug)]
 pub enum LinearBufferError {
@@ -1451,6 +1502,35 @@ mod test {
         l.try_push(2).unwrap_err();
 
         l.try_extend_from_slice(&[2, 3]).unwrap_err();
+    }
+
+    #[test]
+    fn liner_buffer_iter() {
+        let msg_1 = "linear_buffer_iter";
+
+        let mut liner_buffer = LinearBuffer::<32, char>::new();
+
+        for character in msg_1.chars() {
+            liner_buffer.try_push(character).unwrap();
+        }
+
+        let message: String = liner_buffer.into_iter().collect();
+
+        assert_eq!(msg_1, &message);
+
+        let msg_2 = "reti_reffub_renil";
+
+        let mut linear_buffer = LinearBuffer::<32, char>::new();
+
+        for character in msg_2.chars() {
+            linear_buffer.try_push(character).unwrap();
+        }
+
+        drop(linear_buffer.into_iter());
+
+        let linear_buffer = LinearBuffer::<32, char>::new();
+
+        drop(linear_buffer);
     }
 
     #[test]
