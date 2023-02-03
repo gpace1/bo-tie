@@ -631,20 +631,45 @@ where
 
     /// Send out a notification
     ///
-    /// The attribute at the given handle will be sent out in the notification.
+    /// The attribute value at the given handle will be sent out as a notification.
     ///
-    /// If the handle doesn't exist, then the notification isn't sent and false is returned
-    pub async fn send_notification(&self, handle: u16) -> bool {
-        match self
-            .attributes
-            .get(handle)
-            .map(|att| att.get_value().notification(handle))
-        {
-            Some(f) => {
-                f.await;
-                true
+    /// # Return
+    /// If the handle doesn't exist, then the notification isn't sent and false is returned.
+    pub async fn send_notification<C>(&self, connection_channel: &C, handle: u16) -> Result<bool, ConnectionError<C>>
+    where
+        C: ConnectionChannel,
+    {
+        match self.attributes.get(handle).map(|att| att) {
+            Some(attribute) => {
+                let notification = pdu::handle_value_notification(handle, attribute.get_value().read().await);
+
+                self.send_pdu(connection_channel, notification).await?;
+
+                Ok(true)
             }
-            None => false,
+            None => Ok(false),
+        }
+    }
+
+    /// Send out an indication
+    ///
+    /// The attribute value at the given handle will be sent out as a notification.
+    ///
+    /// # Return
+    /// If the handle doesn't exist, then the notification isn't sent and false is returned.
+    pub async fn send_indication<C>(&self, connection_channel: &C, handle: u16) -> Result<bool, ConnectionError<C>>
+    where
+        C: ConnectionChannel,
+    {
+        match self.attributes.get(handle).map(|att| att) {
+            Some(attribute) => {
+                let notification = pdu::handle_value_indication(handle, attribute.get_value().read().await);
+
+                self.send_pdu(connection_channel, notification).await?;
+
+                Ok(true)
+            }
+            None => Ok(false),
         }
     }
 
@@ -1968,14 +1993,6 @@ trait ServerAttribute: core::any::Any {
     /// This will create a read response PDU in its transfer bytes format.
     fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>>;
 
-    /// Generate a 'Notification'
-    ///
-    /// This creates a notification PDU in its transfer bytes format.
-    ///
-    /// # Panic
-    /// This should panic if the attribute has not been assigned a handle
-    fn notification(&self, handle: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>>;
-
     /// Generate a 'Read by Type Response'
     ///
     /// This creates a
@@ -2023,13 +2040,6 @@ where
 
     fn read_response(&self) -> PinnedFuture<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
         Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
-    }
-
-    fn notification(&self, handle: u16) -> PinnedFuture<pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
-        Box::pin(
-            self.0
-                .read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v))),
-        )
     }
 
     fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
@@ -2085,13 +2095,6 @@ where
 
     fn read_response(&self) -> PinnedFuture<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
         Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
-    }
-
-    fn notification(&self, handle: u16) -> PinnedFuture<pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
-        Box::pin(
-            self.0
-                .read_and(move |v| pdu::handle_value_notification(handle, TransferFormatInto::into(v))),
-        )
     }
 
     fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
@@ -2198,14 +2201,6 @@ impl ServerAttribute for ReservedHandle {
             log::error!("(ATT) client tried to read the reserved handle for a read response");
 
             pdu::read_response(Vec::new())
-        })
-    }
-
-    fn notification(&self, _: u16) -> PinnedFuture<'_, pdu::Pdu<pdu::HandleValueNotification<Vec<u8>>>> {
-        Box::pin(async {
-            log::error!("(ATT) client tried to used the reserved handle as a notification");
-
-            pdu::handle_value_notification(0, Vec::new())
         })
     }
 
