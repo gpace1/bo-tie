@@ -308,54 +308,14 @@ where
         }
     }
 
-    /// Get the Attributes of the server
+    /// Get a reference to the attributes of the server
     pub fn get_attributes(&self) -> &ServerAttributes {
         &self.attributes
     }
 
-    /// Push an attribute
-    ///
-    /// The attribute is added to the end of the list of attributes on the server.
-    ///
-    /// This is equivalent to the method [`ServerAttributes::push`]
-    pub fn push<V>(&mut self, attribute: super::Attribute<V>) -> u16
-    where
-        V: TransferFormatTryFrom + TransferFormatInto + PartialEq + Unpin + Send + Sync + 'static,
-    {
-        self.attributes.push(attribute)
-    }
-
-    /// Push an attribute with a borrowed value
-    ///
-    /// The attribute is added to the end of the list of attributes on the server.
-    ///
-    /// This is equivalent to the method [`ServerAttributes::push_borrowed`]
-    pub fn push_borrowed<D>(&mut self, attribute: super::Attribute<D>) -> u16
-    where
-        D: core::ops::Deref + From<<D::Target as ToOwned>::Owned> + Unpin + Send + Sync + 'static,
-        D::Target: TransferFormatInto + ToOwned + Comparable + Send + Sync,
-        <D::Target as ToOwned>::Owned: TransferFormatTryFrom + Unpin + Send + Sync,
-    {
-        self.attributes.push_borrowed(attribute)
-    }
-
-    /// Push an attribute whose value is wrapped by an accessor
-    ///
-    /// The attribute is added to the end of the list of attributes on the server.
-    ///
-    /// This is equivalent to the method [`ServerAttributes::push_accessor`]
-    pub fn push_accessor<A>(&mut self, attribute: super::Attribute<A>) -> u16
-    where
-        A: AccessValue + 'static,
-        A::ReadValue: TransferFormatInto + Comparable,
-        A::WriteValue: TransferFormatTryFrom,
-    {
-        self.attributes.push_accessor(attribute)
-    }
-
-    /// Return the next unused handle
-    pub fn next_handle(&self) -> u16 {
-        self.attributes.count() as u16
+    /// Get a mutable reference to the attributes of the server
+    pub fn get_mut_attributes(&mut self) -> &mut ServerAttributes {
+        &mut self.attributes
     }
 
     /// Give a permission to the client
@@ -750,8 +710,7 @@ where
         .await
     }
 
-    /// Get an arc clone to an attribute value
-    fn get_att(&self, handle: u16) -> Result<&super::Attribute<Box<dyn ServerAttribute + Send + Sync>>, pdu::Error> {
+    fn get_att(&self, handle: u16) -> Result<&super::Attribute<Box<dyn ServerAttributeValue>>, pdu::Error> {
         if pdu::is_valid_handle(handle) {
             self.attributes.get(handle).ok_or(pdu::Error::InvalidHandle)
         } else {
@@ -759,11 +718,7 @@ where
         }
     }
 
-    /// Get a arc to an attribute value
-    fn get_att_mut(
-        &mut self,
-        handle: u16,
-    ) -> Result<&mut super::Attribute<Box<dyn ServerAttribute + Send + Sync>>, pdu::Error> {
+    fn get_att_mut(&mut self, handle: u16) -> Result<&mut super::Attribute<Box<dyn ServerAttributeValue>>, pdu::Error> {
         if pdu::is_valid_handle(handle) {
             self.attributes.get_mut(handle).ok_or(pdu::Error::InvalidHandle)
         } else {
@@ -789,7 +744,7 @@ where
     /// invalid.
     async fn read_att_and<'s, F, A, O>(&'s self, handle: u16, job: F) -> Result<O, pdu::Error>
     where
-        F: FnOnce(&'s (dyn ServerAttribute + Send + Sync)) -> A + 's,
+        F: FnOnce(&'s dyn ServerAttributeValue) -> A + 's,
         A: Future<Output = O> + 's,
     {
         let attribute = self.get_att(handle)?;
@@ -1513,8 +1468,11 @@ where
     }
 }
 
+/// Attributes of a [`Server`]
+///
+/// This contains the attributes that are within the server.
 pub struct ServerAttributes {
-    attributes: Vec<super::Attribute<Box<dyn ServerAttribute + Send + Sync>>>,
+    attributes: Vec<super::Attribute<Box<dyn ServerAttributeValue>>>,
 }
 
 impl ServerAttributes {
@@ -1657,7 +1615,7 @@ attributes.push_accessor(device_name);
             ty: attribute.ty,
             handle: Some(handle),
             permissions: attribute.permissions,
-            value: Box::from(AccessibleValue(attribute.value)) as Box<dyn ServerAttribute + Send + Sync + 'static>,
+            value: Box::from(AccessibleValue(attribute.value)) as Box<dyn ServerAttributeValue>,
         };
 
         self.attributes.push(pushed_att);
@@ -1731,7 +1689,7 @@ attributes.push_read_only(device_name);
             ty: attribute.ty,
             handle: Some(handle),
             permissions: attribute.permissions,
-            value: Box::from(ReadOnly(attribute.value)) as Box<dyn ServerAttribute + Send + Sync + 'static>,
+            value: Box::from(ReadOnly(attribute.value)) as Box<dyn ServerAttributeValue>,
         };
 
         self.attributes.push(pushed_att);
@@ -1818,7 +1776,7 @@ attributes.push_read_only(device_name);
     /// Get attribute with the given handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
-    fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttribute + Send + Sync>>> {
+    fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttributeValue>>> {
         match handle {
             0 => None,
             h => self.attributes.get(<usize>::from(h)),
@@ -1828,11 +1786,37 @@ attributes.push_read_only(device_name);
     /// Get a mutable reference to the attribute with the given handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
-    fn get_mut(&mut self, handle: u16) -> Option<&mut super::Attribute<Box<dyn ServerAttribute + Send + Sync>>> {
+    fn get_mut(&mut self, handle: u16) -> Option<&mut super::Attribute<Box<dyn ServerAttributeValue>>> {
         match handle {
             0 => None,
             h => self.attributes.get_mut(<usize>::from(h)),
         }
+    }
+
+    /// Get a reference to the value of an attribute at the given handle
+    ///
+    /// A reference is returned if there is an attribute at `handle` within this `ServerAttributes`
+    /// and `T` is the correct type for the attribute value.
+    ///
+    /// # Note
+    /// The list of attributes starts at one, a handle of 0 will always return `None`.
+    pub fn get_value<T: core::any::Any>(&self, handle: u16) -> Option<&T> {
+        self.attributes
+            .get(<usize>::from(handle))
+            .and_then(|attribute| attribute.get_value().as_any().downcast_ref())
+    }
+
+    /// Get a mutable reference to the value of an attribute at the given handle
+    ///
+    /// A mutable reference is returned if there is an attribute at `handle` within this
+    /// `ServerAttributes` and `T` is the correct type for the attribute value.
+    ///
+    /// # Note
+    /// The list of attributes starts at one, a handle of 0 will always return `None`.
+    pub fn get_mut_value<T: core::any::Any>(&mut self, handle: u16) -> Option<&mut T> {
+        self.attributes
+            .get_mut(<usize>::from(handle))
+            .and_then(|attribute| attribute.get_mut_value().as_mut_any().downcast_mut())
     }
 }
 
@@ -1878,8 +1862,8 @@ pub trait AccessValue: Send + Sync {
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_>;
 }
 
-/// Extension method for `ServerAttributeValue`
-trait ServerAttributeValueExt: AccessValue {
+/// Extension method for `AccessValue`
+trait AccessValueExt: AccessValue {
     /// Read the value and call `f` with a reference to it.
     fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
     where
@@ -1894,7 +1878,7 @@ trait ServerAttributeValueExt: AccessValue {
     }
 }
 
-impl<S: AccessValue> ServerAttributeValueExt for S {}
+impl<S: AccessValue> AccessValueExt for S {}
 
 /// Future for reading the value and performing an operation
 struct ReadAnd<R, F> {
@@ -1962,12 +1946,18 @@ trait AccessReadOnlyExt: AccessReadOnly {
 
 impl<T: AccessReadOnly> AccessReadOnlyExt for T {}
 
+/// An attribute value of a `Server`
+///
+trait ServerAttributeValue: ServerAttribute + Send + Sync {}
+
+impl<T> ServerAttributeValue for T where T: ServerAttribute + Send + Sync {}
+
 /// A server attribute
 ///
 /// A `ServerAttribute` is an attribute that has been added to the `ServerAttributes`. These
 /// functions are designed to abstract away from the type of the attribute value so a
 /// `ServerAttributes` can have a list of boxed `dyn ServerAttribute`.
-trait ServerAttribute {
+trait ServerAttribute: core::any::Any {
     /// Read the data
     ///
     /// The returned data is in its transfer format
@@ -2010,6 +2000,12 @@ trait ServerAttribute {
 
     /// Compare the value with the data received from the interface
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool>;
+
+    /// Get an reference to self as a `dyn Any`
+    fn as_any(&self) -> &dyn core::any::Any;
+
+    /// Get a mutable reference to self as a `dyn Any`
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any;
 }
 
 /// Wrapper type for an type that implements [`AccessValue`]
@@ -2062,6 +2058,14 @@ where
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
         Box::pin(async move { self.read().await.cmp_tf_data(raw) })
     }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        &self.0
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        &mut self.0
+    }
 }
 
 /// Wrapper around a type that implements `AccessReadOnly`
@@ -2111,6 +2115,14 @@ where
 
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool> {
         Box::pin(async move { self.read().await.cmp_tf_data(raw) })
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        &self.0
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        &mut self.0
     }
 }
 
@@ -2168,9 +2180,9 @@ impl_ro_cmp_for_int_slices!(f32, f64, i8, i16, i32, i64, i128, isize, u8, u16, u
 /// handle when creating a new Attribute Bearer
 struct ReservedHandle;
 
-impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttribute + Send + Sync>> {
+impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttributeValue>> {
     fn from(_: ReservedHandle) -> Self {
-        super::Attribute::new(crate::Uuid::from_u128(0u128), Vec::new(), Box::new(ReservedHandle))
+        super::Attribute::new(crate::Uuid::from_u128(0u128), [], Box::new(ReservedHandle))
     }
 }
 
@@ -2222,6 +2234,14 @@ impl ServerAttribute for ReservedHandle {
 
     fn cmp_value_to_raw_transfer_format(&self, _: &[u8]) -> PinnedFuture<'_, bool> {
         Box::pin(async { false })
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        self
     }
 }
 
