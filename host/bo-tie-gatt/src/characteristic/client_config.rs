@@ -51,9 +51,9 @@ impl<T> ClientConfigurationBuilder<T> {
         self
     }
 
-    /// Set the initial initial configuration
+    /// Set the initial configuration
     ///
-    /// This will set the client configuration upon creation of the ATT server.
+    /// This will set the initial client configuration upon creation of the ATT server.
     ///
     /// # Note
     /// If any config parameters within the input are not enabled by [`set_config`], they are
