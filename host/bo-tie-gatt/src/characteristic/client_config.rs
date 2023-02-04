@@ -23,24 +23,24 @@ pub struct ClientConfigurationBuilder<T> {
     write_restrictions: LinearBuffer<{ AttributeRestriction::full_depth() }, AttributeRestriction>,
 }
 
-impl ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
+impl ClientConfigurationBuilder<SetClientConfiguration> {
     pub(crate) fn new() -> Self {
         ClientConfigurationBuilder {
             enabled_config: LinearBuffer::new(),
             init_config: LinearBuffer::new(),
-            on_write: ReadOnlyClientConfiguration,
+            on_write: SetClientConfiguration,
             write_restrictions: LinearBuffer::new(),
         }
     }
 }
 
-impl<T> ClientConfigurationBuilder<T> {
+impl ClientConfigurationBuilder<SetClientConfiguration> {
     /// Set the configuration that the client can enabled
     ///
     /// The client will be able to set these client configuration parameters (if the client has
     /// write access). The client will get an error if it tries to write any configuration not
     /// within `config`.
-    pub fn set_config<C>(mut self, config: C) -> Self
+    pub fn set_config<C>(mut self, config: C) -> ClientConfigurationBuilder<ReadOnlyClientConfiguration>
     where
         C: Borrow<[ClientConfiguration]>,
     {
@@ -48,9 +48,16 @@ impl<T> ClientConfigurationBuilder<T> {
 
         unique_only!(self.enabled_config, config.borrow());
 
-        self
+        ClientConfigurationBuilder {
+            enabled_config: self.enabled_config,
+            init_config: self.init_config,
+            on_write: ReadOnlyClientConfiguration,
+            write_restrictions: self.write_restrictions,
+        }
     }
+}
 
+impl ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
     /// Set the initial configuration
     ///
     /// This will set the initial client configuration upon creation of the ATT server.
@@ -103,14 +110,17 @@ impl<T> ClientConfigurationBuilder<T> {
             write_restrictions: self.write_restrictions,
         }
     }
+}
 
+impl<Fun, Fut> ClientConfigurationBuilder<Fun>
+where
+    Fun: FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
+    Fut: Future + Send + Sync,
+{
     /// Set the restrictions for writing to the client configuration
     ///
     /// By default, writes are allowed only for authenticated and authorized clients. This method
-    /// is used to customize the restrictions from their default. This method has no effect on the
-    /// permissions if method [`set_write_callback`] is not also called.
-    ///
-    /// [`set_write_callback`]: ClientConfigurationBuilder::set_write_callback
+    /// is used to customize the restrictions from their default.
     pub fn set_write_restrictions<R>(mut self, restrictions: R) -> Self
     where
         R: Borrow<[AttributeRestriction]>,
@@ -123,9 +133,37 @@ impl<T> ClientConfigurationBuilder<T> {
     }
 }
 
-impl AddCharacteristicComponent for ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
+impl AddCharacteristicComponent for ClientConfigurationBuilder<SetClientConfiguration> {
     fn push_to(self, _: &mut ServerAttributes, _: &[AttributeRestriction]) -> bool {
         false
+    }
+}
+
+impl AddCharacteristicComponent for ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
+    fn push_to(self, sa: &mut ServerAttributes, restrictions: &[AttributeRestriction]) -> bool {
+        let mut init_config: ClientConfigVec = VecArray(LinearBuffer::new());
+
+        let mut attribute_permissions = LinearBuffer::<{ AttributePermissions::full_depth() }, _>::new();
+
+        for config in self.enabled_config.iter() {
+            if self.init_config.contains(config) {
+                init_config.0.try_push(*config).unwrap();
+            }
+        }
+
+        map_restrictions!(restrictions => Read => attribute_permissions);
+
+        let value = ClientConfigurationAccessor {
+            config_mask: self.enabled_config,
+            config: init_config,
+            write_callback: self.on_write,
+        };
+
+        let attribute = Attribute::new(TYPE, attribute_permissions, value);
+
+        sa.push_accessor(attribute);
+
+        true
     }
 }
 
@@ -162,6 +200,9 @@ where
         true
     }
 }
+
+/// Marker type for an unused client configuration
+pub struct SetClientConfiguration;
 
 /// Marker type for a client configuration that is read only
 pub struct ReadOnlyClientConfiguration;
@@ -346,4 +387,16 @@ impl bo_tie_att::TransferFormatInto for ClientConfiguration {
 
         into_ret.copy_from_slice(&val.to_le_bytes())
     }
+}
+
+/// A trait to mark that the client configuration characteristic is complete
+pub trait ClientConfigComplete {}
+
+impl ClientConfigComplete for ReadOnlyClientConfiguration {}
+
+impl<Fun, Fut> ClientConfigComplete for Fun
+where
+    Fun: for<'a> FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
+    Fut: Future + Send + Sync,
+{
 }
