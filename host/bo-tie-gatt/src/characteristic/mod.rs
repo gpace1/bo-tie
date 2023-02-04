@@ -5,6 +5,7 @@
 //!
 //! [`ServerBuilder`]: crate::ServerBuilder
 
+pub(crate) mod aggregate_format;
 pub(crate) mod client_config;
 pub(crate) mod declaration;
 pub(crate) mod extended_properties;
@@ -33,6 +34,7 @@ use bo_tie_util::buffer::stack::LinearBuffer;
 /// [`AccessReadOnly`]: bo_tie_att::server::AccessReadOnly
 #[derive(Clone, PartialEq)]
 pub struct VecArray<const SIZE: usize, T>(pub LinearBuffer<SIZE, T>);
+
 /// Characteristic Properties
 ///
 /// These are the properties that are part of the Characteristic Declaration
@@ -107,7 +109,7 @@ impl<'a>
         value::SetValue,
         extended_properties::SetExtendedProperties,
         user_description::SetDescription,
-        client_config::ReadOnlyClientConfiguration,
+        client_config::SetClientConfiguration,
         server_config::SetConfiguration,
     >
 {
@@ -152,8 +154,9 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// # let characteristic_builder = characteristic_builder.set_value(|b| b.set_value(1234).set_permissions([]));
     ///
     /// characteristic_builder.set_declaration(|declaration_builder| {
-    ///     declaration_builder.set_properties([Properties::Read, Properties::Write])
-    ///     .set_uuid(0x1234u16)
+    ///     declaration_builder
+    ///         .set_properties([Properties::Read, Properties::Write])
+    ///         .set_uuid(0x1234u16)
     /// })
     /// # });
     /// ```
@@ -383,9 +386,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// ```
     pub fn set_client_configuration<F, T>(self, f: F) -> CharacteristicBuilder<'a, D, V, E, U, T, S>
     where
-        F: FnOnce(
-            ClientConfigurationBuilder<client_config::ReadOnlyClientConfiguration>,
-        ) -> ClientConfigurationBuilder<T>,
+        F: FnOnce(ClientConfigurationBuilder<client_config::SetClientConfiguration>) -> ClientConfigurationBuilder<T>,
     {
         let client_configuration_builder = f(ClientConfigurationBuilder::new());
 
@@ -497,6 +498,8 @@ where
     pub(crate) fn complete_characteristic(mut self) -> super::CharacteristicAdder<'a> {
         let server_attributes = &mut self.characteristic_adder.service_builder.server_builder.attributes;
 
+        let mut record = CharacteristicRecord::new();
+
         let service_restrictions = &self.characteristic_adder.service_builder.access_restrictions;
 
         let declaration_builder = self
@@ -509,6 +512,10 @@ where
 
         let mut att_count = 2;
 
+        record.declaration_handle = self.characteristic_adder.end_group_handle + 1;
+
+        record.value_handle = self.characteristic_adder.end_group_handle + 2;
+
         assert!(declaration_builder.push_to(server_attributes, service_restrictions));
 
         assert!(value_builder.push_to(server_attributes, service_restrictions));
@@ -517,31 +524,43 @@ where
             .extended_properties_builder
             .push_to(server_attributes, service_restrictions)
         {
-            att_count += 1
+            att_count += 1;
+
+            record.extended_properties_handle = att_count.into();
         }
 
         if self
             .user_description_builder
             .push_to(server_attributes, service_restrictions)
         {
-            att_count += 1
+            att_count += 1;
+
+            record.user_description_handle = att_count.into();
         }
 
         if self
             .client_configuration_builder
             .push_to(server_attributes, service_restrictions)
         {
-            att_count += 1
+            att_count += 1;
+
+            record.client_configuration_handle = att_count.into();
         }
 
         if self
             .server_configuration_builder
             .push_to(server_attributes, service_restrictions)
         {
-            att_count += 1
+            att_count += 1;
+
+            record.server_configuration_handle = att_count.into();
         }
 
         self.characteristic_adder.end_group_handle += att_count;
+
+        record.end_handle = self.characteristic_adder.end_group_handle;
+
+        self.characteristic_adder.last_characteristic = record.into();
 
         self.characteristic_adder
     }
@@ -690,5 +709,102 @@ impl<'a> Iterator for CharacteristicsIter<'a> {
         }
 
         None
+    }
+}
+
+/// The record of the characteristic
+///
+/// This contains the meta information about a single characteristic.
+pub struct CharacteristicRecord {
+    declaration_handle: u16,
+    value_handle: u16,
+    extended_properties_handle: Option<u16>,
+    user_description_handle: Option<u16>,
+    client_configuration_handle: Option<u16>,
+    server_configuration_handle: Option<u16>,
+    presentation_format_handle: Option<u16>,
+    aggregate_format_handle: Option<u16>,
+    end_handle: u16,
+}
+
+impl CharacteristicRecord {
+    fn new() -> Self {
+        CharacteristicRecord {
+            declaration_handle: 0,
+            value_handle: 0,
+            extended_properties_handle: None,
+            user_description_handle: None,
+            client_configuration_handle: None,
+            server_configuration_handle: None,
+            presentation_format_handle: None,
+            aggregate_format_handle: None,
+            end_handle: 0,
+        }
+    }
+
+    /// Get the handle that starts this characteristic
+    ///
+    /// # Note
+    /// This is the same handle as the characteristic declaration
+    #[inline]
+    pub fn get_start_handle(&self) -> u16 {
+        self.get_declaration_handle()
+    }
+
+    /// Get the handle of the last attribute in this characteristic
+    pub fn get_ending_handle(&self) -> u16 {
+        self.end_handle
+    }
+
+    /// Get the handle of the characteristic declaration
+    pub fn get_declaration_handle(&self) -> u16 {
+        self.declaration_handle
+    }
+
+    /// Get the handle of the characteristic value declaration
+    pub fn get_value_handle(&self) -> u16 {
+        self.value_handle
+    }
+
+    /// Get the handle of the extended properties characteristic descriptor
+    ///
+    /// This is an optional descriptor, so if it does not exist `None` is returned
+    pub fn get_extended_properties_handle(&self) -> Option<u16> {
+        self.extended_properties_handle
+    }
+
+    /// Get the handle of the user description characteristic descriptor
+    ///
+    /// This is an optional descriptor, so if it does not exist `None` is returned.
+    pub fn get_user_description_handle(&self) -> Option<u16> {
+        self.user_description_handle
+    }
+
+    /// Get the handle of the client configuration characteristic descriptor
+    ///
+    /// This is an optional descriptor, so if it does not exist `None` is returned.
+    pub fn get_client_configuration_handle(&self) -> Option<u16> {
+        self.client_configuration_handle
+    }
+
+    /// Get the handle of the server configuration characteristic descriptor
+    ///
+    /// This is an optional descriptor, so if it does not exist `None` is returned.
+    pub fn get_server_configuration_handle(&self) -> Option<u16> {
+        self.user_description_handle
+    }
+
+    /// Get the handle of the presentation format characteristic descriptor
+    ///
+    /// This is an optional descriptor, so if it does not exist `None` is returned.
+    pub fn get_presentation_format_handle(&self) -> Option<u16> {
+        self.presentation_format_handle
+    }
+
+    /// Get the handle of the aggregate format characteristic descriptor
+    ///
+    /// This is an optional descriptor, so if it does not exist `None` is returned.
+    pub fn get_aggregate_format_handle(&self) -> Option<u16> {
+        self.aggregate_format_handle
     }
 }

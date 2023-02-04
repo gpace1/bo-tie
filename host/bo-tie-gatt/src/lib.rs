@@ -85,6 +85,7 @@ macro_rules! map_restrictions {
 
 pub mod characteristic;
 
+use crate::characteristic::gatt::HashValue;
 pub use bo_tie_att as att;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
@@ -352,11 +353,21 @@ impl<'a> IncludesAdder<'a> {
     /// This takes a reference to the service to include with an optional permissions for the
     /// include definition. If no permissions are given, then it uses the default permissions of the
     /// this service (not the service being included) for the include declaration.
-    pub fn include_service(mut self, service_record: ServiceRecord) -> Self {
+    ///
+    /// # Panic
+    /// The `service` must be within the same server as this includes definition
+    pub fn include_service(mut self, service: Service<'_>) -> Self {
+        let service_ptr = service.server_attributes as *const _;
+        let builder_ptr = &self.service_builder.server_builder.attributes as *const _;
+
+        if service_ptr != builder_ptr {
+            panic!("cannot add service from a different GATT server")
+        }
+
         let include = ServiceInclude {
-            service_handle: service_record.record.service_handle,
-            end_group_handle: service_record.record.end_group_handle,
-            short_service_type: service_record.record.service_uuid.try_into().ok(),
+            service_handle: service.get_handle(),
+            end_group_handle: service.get_end_group_handle(),
+            short_service_type: service.get_uuid().try_into().ok(),
         };
 
         let permissions = map_restrictions!(self.service_builder.access_restrictions => Read);
@@ -398,6 +409,7 @@ impl<'a> IncludesAdder<'a> {
 pub struct CharacteristicAdder<'a> {
     service_builder: ServiceBuilder<'a>,
     end_group_handle: u16,
+    last_characteristic: Option<characteristic::CharacteristicRecord>,
 }
 
 impl<'a> CharacteristicAdder<'a> {
@@ -405,6 +417,7 @@ impl<'a> CharacteristicAdder<'a> {
         CharacteristicAdder {
             service_builder,
             end_group_handle,
+            last_characteristic: None,
         }
     }
 
@@ -420,7 +433,7 @@ impl<'a> CharacteristicAdder<'a> {
                 characteristic::value::SetValue,
                 characteristic::extended_properties::SetExtendedProperties,
                 characteristic::user_description::SetDescription,
-                characteristic::client_config::ReadOnlyClientConfiguration,
+                characteristic::client_config::SetClientConfiguration,
                 characteristic::server_config::SetConfiguration,
             >,
         ) -> characteristic::CharacteristicBuilder<
@@ -442,7 +455,15 @@ impl<'a> CharacteristicAdder<'a> {
         f(characteristic::CharacteristicBuilder::new(self)).complete_characteristic()
     }
 
+    /// Get the record of the lastly created characteristic
+    ///
+    /// This returns the record of the last characteristic created by this `CharacteristicAdder`
+    pub fn get_last_record(&self) -> Option<&characteristic::CharacteristicRecord> {
+        self.last_characteristic.as_ref()
+    }
+
     /// Finish the service
+    #[must_use]
     pub fn finish_service(self) -> Service<'a> {
         make_service!(self.service_builder, self.end_group_handle)
     }
@@ -965,6 +986,7 @@ impl<'a> GapServiceBuilder<'a> {
 pub struct ServerBuilder {
     primary_services: alloc::vec::Vec<ServiceGroupData>,
     attributes: att::server::ServerAttributes,
+    gatt_service_info: Option<GattServiceInfo>,
 }
 
 impl ServerBuilder {
@@ -975,15 +997,73 @@ impl ServerBuilder {
         Self {
             primary_services: alloc::vec::Vec::new(),
             attributes: att::server::ServerAttributes::new(),
+            gatt_service_info: None,
         }
     }
 
     /// Construct a new service
+    ///
+    /// This is used to add a service to the Server. A services consists of a declaration, included
+    /// services, and a number of characteristics. The return is a `ServiceBuilder` designed to walk
+    /// through the process of setting up the new service within the attributes of the (to be)
+    /// constructed GATT server.
+    ///
+    /// # Service Including
+    /// Services may be included after they are put within
+    /// ```
+    /// # use bo_tie_gatt::characteristic::Properties;
+    /// # use bo_tie_gatt::ServerBuilder;
+    /// # use bo_tie_host_util::Uuid;
+    /// # use bo_tie_gatt::att::FULL_READ_PERMISSIONS;
+    /// # let mut server_builder = ServerBuilder::new_empty();
+    /// # let service_uuid = Uuid::from_u128(12345678);
+    /// # let characteristic_uuid = Uuid::from_u128(0xfffff);
+    /// # let value = 1234;
+    ///
+    /// let service_reference = server_builder.new_service(service_uuid, false)
+    ///     .add_characteristics()
+    ///     .new_characteristic(|characteristic_builder| {
+    ///         characteristic_builder.set_declaration(|declaration_builder| {
+    ///             declaration_builder
+    ///                 .set_properties([Properties::Read])
+    ///                 .set_uuid(characteristic_uuid)
+    ///         })
+    ///         .set_value(|value_builder| {
+    ///             value_builder
+    ///                 .set_value(value)
+    ///                 .set_permissions(FULL_READ_PERMISSIONS)
+    ///         })
+    ///     })
+    ///     .finish_service();
+    ///
+    /// server_builder.new_service(service_uuid_2, true)
+    ///     .into_includes_adder()
+    ///     .include_service(service_reference)
+    ///     .finish_service();
+    /// ```
     pub fn new_service<U>(&mut self, service_uuid: U, is_primary: bool) -> ServiceBuilder<'_>
     where
         U: Into<Uuid>,
     {
         ServiceBuilder::new(self, service_uuid.into(), is_primary)
+    }
+
+    /// Construct the Generic Attribute Profile Service
+    ///
+    /// This is a specific service defined within the Bluetooth Specification. This service's
+    /// characteristics relate to the state of the
+    ///
+    /// # Panic
+    /// This method can only be called once to construct the GATT Service
+    pub fn new_gatt_service<F>(&mut self, f: F)
+    where
+        F: FnOnce(GattServiceBuilder<'_>) -> GattServiceBuilder<'_>,
+    {
+        let builder = GattServiceBuilder::new(self);
+
+        let gatt_info = f(builder).build();
+
+        self.gatt_service_info = gatt_info.into();
     }
 
     /// Get all the attributes of the server
@@ -994,10 +1074,18 @@ impl ServerBuilder {
     /// Make an server
     ///
     /// Construct an server from the server builder.
-    pub fn make_server<Q>(self, queue_writer: Q) -> Server<Q>
+    pub fn make_server<Q>(mut self, queue_writer: Q) -> Server<Q>
     where
         Q: att::server::QueuedWriter,
     {
+        let gatt_info = if let Some(info) = self.gatt_service_info {
+            info
+        } else {
+            GattServiceBuilder::new(&mut self).build()
+        };
+
+        gatt_info.initiate_database_hash(&mut self.attributes);
+
         let server = att::server::Server::new(Some(self.attributes), queue_writer);
 
         Server {
@@ -1506,6 +1594,175 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
                 }
             }
         }
+    }
+}
+
+/// The GATT Service Builder
+///
+/// The GATT service provides information on the client of the state of the GATT Server.
+pub struct GattServiceBuilder<'a> {
+    characteristic_adder: CharacteristicAdder<'a>,
+    service_changed: Option<u16>,
+    client_features: bool,
+    database_hash: Option<u16>,
+    server_supported_features: bool,
+}
+
+impl<'a> GattServiceBuilder<'a> {
+    /// Create a new `GattServiceBuilder`
+    fn new(server_builder: &'a mut ServerBuilder) -> Self {
+        const UUID: Uuid = Uuid::from_u16(0x1801);
+
+        let characteristic_adder = server_builder.new_service(UUID, true).add_characteristics();
+
+        GattServiceBuilder {
+            characteristic_adder,
+            service_changed: None,
+            client_features: false,
+            database_hash: None,
+            server_supported_features: false,
+        }
+    }
+
+    /// Add the service changed characteristic
+    ///
+    /// This characteristic is an indication only characteristic that is used to update the client
+    /// that the services on the server has changed.
+    pub fn add_service_changed(mut self) -> Self {
+        const UUID: Uuid = Uuid::from_u16(0x2A05);
+
+        const PERMISSIONS: [att::AttributePermissions; 0] = [];
+
+        const PROPERTIES: [characteristic::Properties; 1] = [characteristic::Properties::Indicate];
+
+        self.characteristic_adder = self.characteristic_adder.new_characteristic(|builder| {
+            builder
+                .set_declaration(|builder| builder.set_properties(PROPERTIES).set_uuid(UUID))
+                .set_value(|value| value.set_value(()).set_permissions(PERMISSIONS))
+        });
+
+        self.service_changed = self
+            .characteristic_adder
+            .get_last_record()
+            .map(|record| record.get_value_handle());
+
+        self
+    }
+
+    /// todo: Add the client supported features characteristic
+    ///
+    /// # Panic
+    /// This method is not implemented yet
+    pub fn add_client_supported_features(mut self) -> Self {
+        todo!()
+    }
+
+    /// Add the database hash
+    ///
+    /// This has is automatically generated upon creating of of the GATT server.
+    #[cfg(feature = "cryptography")]
+    pub fn add_database_hash(mut self) -> Self {
+        const UUID: Uuid = Uuid::from_u16(0x2B2A);
+
+        const PERMISSIONS: [att::AttributePermissions; att::AttributePermissions::full_depth() / 2] =
+            att::FULL_READ_PERMISSIONS;
+
+        const PROPERTIES: [characteristic::Properties; 1] = [characteristic::Properties::Read];
+
+        let temp_val = characteristic::gatt::HashValue::all_zero();
+
+        self.characteristic_adder = self.characteristic_adder.new_characteristic(|builder| {
+            builder
+                .set_declaration(|builder| builder.set_properties(PROPERTIES).set_uuid(UUID))
+                .set_value(|value| value.set_value(temp_val).set_permissions(PERMISSIONS))
+        });
+
+        self.database_hash = self
+            .characteristic_adder
+            .get_last_record()
+            .map(|record| record.get_value_handle());
+
+        self
+    }
+
+    /// Add the GATT server supported features
+    pub fn add_server_supported_features<T>(mut self, features: T) -> Self
+    where
+        T: core::borrow::Borrow<[characteristic::gatt::ServerFeatures]>,
+    {
+        const UUID: Uuid = Uuid::from_u16(0x2803);
+
+        const PERMISSIONS: [att::AttributePermissions; att::AttributePermissions::full_depth() / 2] =
+            att::FULL_READ_PERMISSIONS;
+
+        const PROPERTIES: [characteristic::Properties; 1] = [characteristic::Properties::Read];
+
+        let mut list = characteristic::gatt::ServerFeaturesList::new();
+
+        unique_only!(list.features, features.borrow());
+
+        self.characteristic_adder = self.characteristic_adder.new_characteristic(|builder| {
+            builder
+                .set_declaration(|builder| builder.set_properties(PROPERTIES).set_uuid(UUID))
+                .set_value(|value| value.set_value(list).set_permissions(PERMISSIONS))
+        });
+
+        self
+    }
+
+    fn build(self) -> GattServiceInfo {
+        self.characteristic_adder.finish_service();
+
+        GattServiceInfo {
+            _service_change_handle: self.service_changed,
+            database_hash_handle: self.database_hash,
+        }
+    }
+}
+
+/// Information for setting up the GATT service
+///
+/// This is used for generating the GATT service information that needs to be part of the server.
+struct GattServiceInfo {
+    _service_change_handle: Option<u16>,
+    database_hash_handle: Option<u16>,
+}
+
+impl GattServiceInfo {
+    /// Initiate the GATT database hash characteristic
+    ///
+    /// This will initiate the database hash if the user has added the database hash characteristic.
+    /// This should be called once the server is created, and every time the anything in the server
+    /// changes except for a characteristic value.
+    ///
+    /// If there is no GATT database hash, then this is effectively a no-op.
+    fn initiate_database_hash(&self, server_attributes: &mut att::server::ServerAttributes) {
+        use characteristic::gatt::HashValue;
+
+        if let Some(handle) = self.database_hash_handle {
+            let hash = HashValue::generate(server_attributes);
+
+            *server_attributes.get_mut_value::<HashValue>(handle).unwrap() = hash;
+        }
+    }
+
+    /// Remove a Service
+    ///
+    /// Removing a service is a complicated thing and requires the database hash to be updated and
+    /// the service change indication, if either of those are in the server.
+    fn _remove_service<C>(
+        &mut self,
+        _service: ServiceRecord,
+        _connection_channel: &C,
+        _server_attributes: &mut att::server::ServerAttributes,
+    ) {
+        todo!()
+
+        // Removing a service means that all other services "behind" (the starting handle was larger
+        // than the removed service's ending handle) must be moved. Its a similar operation to how
+        // 'remove' works for `vec`. If the GATT service happens to be one of those services, then
+        // the handle values for `service_changed_handle` and `database_hash_handle` will need to be
+        // updated too if they currently exist.
     }
 }
 

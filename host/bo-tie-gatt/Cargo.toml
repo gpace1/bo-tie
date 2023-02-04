@@ -21,6 +21,7 @@ uuid-crate = ["bo-tie-att/uuid-crate"]
 tokio = ["bo-tie-att/tokio"]
 futures-rs = ["bo-tie-att/futures-rs"]
 async-std = ["bo-tie-att/async-std"]
+cryptography = ["bo-tie-util/cryptography"]
 
 [package.metadata.docs.rs]
 all-features = true
