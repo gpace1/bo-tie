@@ -85,7 +85,6 @@ macro_rules! map_restrictions {
 
 pub mod characteristic;
 
-use crate::characteristic::gatt::HashValue;
 pub use bo_tie_att as att;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
@@ -184,7 +183,7 @@ impl ServiceInclude {
 pub struct ServiceBuilder<'a> {
     service_uuid: Uuid,
     is_primary: bool,
-    server_builder: &'a mut ServerBuilder,
+    attributes: &'a mut att::server::ServerAttributes,
     definition_handle: Option<u16>,
     access_restrictions: LinearBuffer<{ att::AttributeRestriction::full_depth() }, att::AttributeRestriction>,
 }
@@ -224,7 +223,7 @@ impl<'a> ServiceBuilder<'a> {
         ServiceBuilder {
             service_uuid,
             is_primary,
-            server_builder,
+            attributes: &mut server_builder.attributes,
             definition_handle: None,
             access_restrictions,
         }
@@ -264,7 +263,6 @@ impl<'a> ServiceBuilder<'a> {
     /// handle to it.
     fn set_service_definition(&mut self) {
         self.definition_handle = self
-            .server_builder
             .attributes
             .push(att::Attribute::new(
                 if self.is_primary {
@@ -358,7 +356,7 @@ impl<'a> IncludesAdder<'a> {
     /// The `service` must be within the same server as this includes definition
     pub fn include_service(mut self, service: Service<'_>) -> Self {
         let service_ptr = service.server_attributes as *const _;
-        let builder_ptr = &self.service_builder.server_builder.attributes as *const _;
+        let builder_ptr = &self.service_builder.attributes as *const _;
 
         if service_ptr != builder_ptr {
             panic!("cannot add service from a different GATT server")
@@ -374,7 +372,7 @@ impl<'a> IncludesAdder<'a> {
 
         let attribute = att::Attribute::new(ServiceInclude::TYPE, permissions, include);
 
-        self.end_group_handle = self.service_builder.server_builder.attributes.push(attribute);
+        self.end_group_handle = self.service_builder.attributes.push(attribute);
 
         self
     }

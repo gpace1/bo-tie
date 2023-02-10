@@ -496,7 +496,7 @@ where
     /// # Panic
     /// If any of the required builder methods were not called this will panic
     pub(crate) fn complete_characteristic(mut self) -> super::CharacteristicAdder<'a> {
-        let server_attributes = &mut self.characteristic_adder.service_builder.server_builder.attributes;
+        let server_attributes = &mut self.characteristic_adder.service_builder.attributes;
 
         let mut record = CharacteristicRecord::new();
 
