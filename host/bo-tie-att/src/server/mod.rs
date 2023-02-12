@@ -1798,7 +1798,7 @@ attributes.push_read_only(device_name);
         self.attributes.len()
     }
 
-    /// Get attribute with the given handle
+    /// Get the attribute at the provided handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
     fn get(&self, handle: u16) -> Option<&super::Attribute<Box<dyn ServerAttributeValue>>> {
@@ -1808,7 +1808,7 @@ attributes.push_read_only(device_name);
         }
     }
 
-    /// Get a mutable reference to the attribute with the given handle
+    /// Get a mutable reference to the attribute at the provided handle
     ///
     /// This returns `None` if the handle is 0 or not in attributes
     fn get_mut(&mut self, handle: u16) -> Option<&mut super::Attribute<Box<dyn ServerAttributeValue>>> {
