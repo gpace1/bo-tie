@@ -125,7 +125,7 @@ impl HashValue {
         HashValue(0)
     }
 
-    pub(crate) fn generate(server_attributes: &att::server::ServerAttributes) -> Self {
+    pub(crate) fn generate(server_attributes: &crate::att::server::ServerAttributes) -> Self {
         use crate::characteristic;
         use crate::characteristic::extended_properties::ExtendedProperties;
         use crate::characteristic::VecArray;
@@ -181,8 +181,8 @@ impl HashValue {
                 }
 
                 match attribute_info.get_uuid() {
-                    &ServiceDefinition::PRIMARY_SERVICE_TYPE => extend_hash_att_val!(Uuid),
-                    &ServiceDefinition::SECONDARY_SERVICE_TYPE => extend_hash_att_val!(Uuid),
+                    &ServiceDefinition::PRIMARY_SERVICE_TYPE => extend_hash_att_val!(crate::Uuid),
+                    &ServiceDefinition::SECONDARY_SERVICE_TYPE => extend_hash_att_val!(crate::Uuid),
                     &ServiceInclude::TYPE => extend_hash_att_val!(crate::ServiceInclude),
                     &characteristic::declaration::TYPE => extend_hash_att_val!(super::declaration::Declaration),
                     &characteristic::extended_properties::TYPE => {
