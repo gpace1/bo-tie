@@ -167,7 +167,7 @@ impl<T: Unpin + From<O>, O: Unpin> Future for OwnedWriteReady<'_, T, O> {
 #[cfg(feature = "tokio")]
 impl<V> AccessValue for std::sync::Arc<tokio::sync::Mutex<V>>
 where
-    V: Unpin + Send + Sync,
+    V: Unpin + Send + Sync + 'static,
 {
     type ReadValue = V;
     type ReadGuard<'a> = tokio::sync::MutexGuard<'a, V> where V: 'a;
@@ -197,7 +197,7 @@ where
 #[cfg(feature = "tokio")]
 impl<V> AccessValue for std::sync::Arc<tokio::sync::RwLock<V>>
 where
-    V: Unpin + Send + Sync,
+    V: Unpin + Send + Sync + 'static,
 {
     type ReadValue = V;
     type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V> where V: 'a;
@@ -249,7 +249,7 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwL
 #[cfg(feature = "futures-rs")]
 impl<V> AccessValue for std::sync::Arc<futures::lock::Mutex<V>>
 where
-    V: Unpin + Send + Sync,
+    V: Unpin + Send + Sync + 'static,
 {
     type ReadValue = V;
     type ReadGuard<'a> = futures::lock::MutexGuard<'a, V> where Self: 'a;
@@ -306,7 +306,7 @@ impl<V> Future for Write<futures::lock::MutexLockFuture<'_, V>, V> {
 #[cfg(feature = "async-std")]
 impl<V> AccessValue for std::sync::Arc<async_std::sync::Mutex<V>>
 where
-    V: Unpin + Send + Sync,
+    V: Unpin + Send + Sync + 'static,
 {
     type ReadValue = V;
     type ReadGuard<'a> = async_std::sync::MutexGuard<'a, V> where Self: 'a;
@@ -334,7 +334,7 @@ where
 #[cfg(feature = "async-std")]
 impl<V> AccessValue for std::sync::Arc<async_std::sync::RwLock<V>>
 where
-    V: Unpin + Send + Sync,
+    V: Unpin + Send + Sync + 'static,
 {
     type ReadValue = V;
     type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V> where Self: 'a;
