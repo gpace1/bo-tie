@@ -1549,9 +1549,9 @@ impl ServerAttributes {
     /// This will push the attribute onto the list of server attributes and return the handle for
     /// the attribute.
     ///
-    /// The main usage of `push_borrowed` is to use a dynamically sized type when the attribute is
-    /// read and use an 'owned' type when the attribute is written. The generic parameter `D` must
-    /// be able to be converted from the owned type.
+    /// The main usage of `push_borrowed` is to use a reference to a dynamically sized type when the
+    /// attribute is read and use an 'owned' type when the attribute is written. The generic
+    /// parameter `D` must be able to be converted from the owned type.
     ///
     /// ```
     /// use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
@@ -1822,7 +1822,6 @@ attributes.push_read_only(device_name);
     ///
     /// A reference is returned if there is an attribute at `handle` within this `ServerAttributes`
     /// and `T` is the correct type for the attribute value.
-    ///
     /// # Note
     /// The list of attributes starts at one, a handle of 0 will always return `None`.
     pub fn get_value<T: core::any::Any>(&self, handle: u16) -> Option<&T> {
@@ -1885,6 +1884,10 @@ pub trait AccessValue: Send + Sync {
     fn read(&self) -> Self::Read<'_>;
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_>;
+
+    fn as_any(&self) -> &dyn core::any::Any;
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any;
 }
 
 /// Extension method for `AccessValue`
@@ -2070,11 +2073,11 @@ where
     }
 
     fn as_any(&self) -> &dyn core::any::Any {
-        &self.0
+        self.0.as_any()
     }
 
     fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
-        &mut self.0
+        self.0.as_mut_any()
     }
 }
 

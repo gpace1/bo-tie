@@ -1,6 +1,7 @@
 //! Implementations of the `AccessValue` trait
 
 use crate::server::{AccessReadOnly, AccessValue};
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -13,10 +14,21 @@ use std::task::{Context, Poll};
 ///
 /// [`ServerAttributes`]: super::ServerAttributes
 /// [`Server`]: super::Server
-pub struct Trivial<V: ?Sized>(pub V);
+pub(crate) struct Trivial<V: ?Sized>(pub V);
 
-/// The trivial implementation for ServerAttributeValue
-impl<V: Unpin + Send + Sync> AccessValue for Trivial<V> {
+/// The trivially accessible value
+///
+/// A `Trivial` should be used whenever the value is not shared between other Attribute Server
+/// instances and there is no special requirements for reading and/or writing the value.  
+///
+/// # Attribute Value Access
+/// When directly accessing the value of an attribute containing a `Trivial`, the methods
+/// [`get_value`] and [`get_mut_value`] of `ServerAttributes` should use the type `V` instead of
+/// `Trivial<V>`.
+///
+/// [`get_value`]: crate::server::ServerAttributes::get_value
+/// [`get_mut_value`]: crate::server::ServerAttributes::get_mut_value
+impl<V: Unpin + Send + Sync + 'static> AccessValue for Trivial<V> {
     type ReadValue = V;
     type ReadGuard<'a> = &'a V where V: 'a;
     type Read<'a> = ReadReady<&'a V> where Self: 'a;
@@ -29,6 +41,14 @@ impl<V: Unpin + Send + Sync> AccessValue for Trivial<V> {
 
     fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
         WriteReady::new(&mut self.0, val)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        &self.0
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        &mut self.0
     }
 }
 
@@ -43,7 +63,7 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for Trivial<V> {
 }
 
 /// A copy on write accessor
-pub struct CowAccess<D>(pub D);
+pub(crate) struct CowAccess<D>(pub D);
 
 impl<D> AccessValue for CowAccess<D>
 where
@@ -63,6 +83,14 @@ where
 
     fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
         OwnedWriteReady::new(&mut self.0, val)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        &self.0
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        &mut self.0
     }
 }
 
@@ -149,6 +177,14 @@ where
             *self.lock().await = v;
         })
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[cfg(feature = "tokio")]
@@ -170,6 +206,14 @@ where
         Box::pin(async move {
             *tokio::sync::RwLock::write(self).await = v;
         })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
@@ -212,6 +256,14 @@ where
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
         Write(self.lock(), Some(v))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
@@ -262,6 +314,14 @@ where
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
         Box::pin(async move { *self.lock().await = v })
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 #[cfg(feature = "async-std")]
@@ -281,6 +341,14 @@ where
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
         Box::pin(async move { *async_std::sync::RwLock::write(self).await = v })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
