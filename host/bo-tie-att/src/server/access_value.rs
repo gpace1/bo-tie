@@ -8,13 +8,20 @@ use std::task::{Context, Poll};
 
 /// The trivial implementation of [`AccessValue`] or [`AccessReadOnly`]
 ///
-/// When adding attributes to a [`ServerAttributes`] or a [`Server`] via the method `push` or
-/// `push_read_only`, the  attribute value is wrapped within a `Trivial` before being added to the
-/// list of attributes.
+/// This is the trivial implementation of an `AccessValue`. The implementations of the `Read` and
+/// `Write` types directly read and write to the inner value without any extra logic. `Trivial` is
+/// intended to be used where attribute values are unique to a single [`Server`].
 ///
-/// [`ServerAttributes`]: super::ServerAttributes
-/// [`Server`]: super::Server
-pub(crate) struct Trivial<V: ?Sized>(pub V);
+/// # Downcasting
+/// The implementation of `as_any` and `as_mut_any` return a reference to the inner value instead
+/// of a `Trivial<V>`. When calling the methods [`get_value`] and [`get_mut_value`] of
+/// `ServerAttributes`, use `V` for the generic `T` instead of `Trivial<V>`.
+///
+/// [`Server`]: crate::server::Server
+/// [`Attribute`]: crate::Attribute
+/// [`get_value`]: crate::server::ServerAttributes::get_value
+/// [`get_mut_value`]: crate::server::ServerAttributes::get_mut_value
+pub struct Trivial<V: ?Sized>(pub V);
 
 /// The trivially accessible value
 ///

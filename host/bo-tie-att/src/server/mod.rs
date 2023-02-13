@@ -2083,6 +2083,11 @@ where
 
 /// Wrapper around a type that implements `AccessReadOnly`
 ///
+/// # Downcasting
+/// The methods `as_any` and `as_mut_any` always return a reference to the inner value of
+/// `ReadAccess`. The type used for downcasting the return of these methods is `R` and not
+/// `ReadOnly<R>`.
+///
 /// # Note
 /// This type must only be used with read only attribute permissions.
 struct ReadOnly<R: AccessReadOnly>(R);
