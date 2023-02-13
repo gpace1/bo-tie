@@ -2,9 +2,7 @@
 //!
 //! These are the characteristics of the GATT Attribute profile.
 
-use crate::att;
 use bo_tie_att::{TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
-use bo_tie_host_util::Uuid;
 use bo_tie_util::buffer::stack::LinearBuffer;
 
 /// The Value of the Service Changed Characteristic
@@ -201,6 +199,7 @@ impl HashValue {
     }
 }
 
+#[cfg(feature = "cryptography")]
 impl TransferFormatInto for HashValue {
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
@@ -211,6 +210,7 @@ impl TransferFormatInto for HashValue {
     }
 }
 
+#[cfg(feature = "cryptography")]
 impl TransferFormatTryFrom for HashValue {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
     where

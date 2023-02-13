@@ -25,7 +25,7 @@ server out of specification) and creating a server builder from it.
  let mut server_builder = ServerBuilder::from(gap_service);
 
  // Adding battery service (that always reports 70%)
- server_builder.new_service(0x190Fu16, true)
+ server_builder.new_service(0x190Fu16)
     .add_characteristics()
     .new_characteristic(|characteristic_builder| {
         characteristic_builder

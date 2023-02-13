@@ -48,7 +48,7 @@ impl<A> ServerConfigurationBuilder<SetPermissions<A>> {
     /// Set the write attribute restrictions
     ///
     /// This sets restrictions for writing the server configuration *for this client only*.
-    pub fn set_permissions<R>(self, restrictions: R) -> ServerConfigurationBuilder<Complete<A>>
+    pub fn set_write_restrictions<R>(self, restrictions: R) -> ServerConfigurationBuilder<Complete<A>>
     where
         R: Borrow<[AttributeRestriction]>,
     {

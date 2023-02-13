@@ -25,16 +25,6 @@ impl UserDescriptionBuilder<SetDescription> {
         }
     }
 
-    /// Make the user description read-only
-    ///
-    /// This allows for `&'static str` and other immutable types to be used for the user
-    /// description.
-    pub fn read_only(self) -> UserDescriptionBuilder<SetReadOnlyDescription> {
-        UserDescriptionBuilder {
-            current: SetReadOnlyDescription,
-        }
-    }
-
     /// Set the user description
     pub fn set_description<S>(self, description: S) -> UserDescriptionBuilder<SetPermissions<Trivial<S>>>
     where
@@ -60,6 +50,18 @@ impl UserDescriptionBuilder<SetDescription> {
 
         UserDescriptionBuilder { current }
     }
+
+    /// Set a read-only description
+    ///
+    /// This allows for `&'static str` and other immutable types to be used as the user description.
+    pub fn set_read_only_description<S>(self, description: S) -> UserDescriptionBuilder<SetReadOnlyPermissions<S>>
+    where
+        S: Borrow<str> + Send + Sync + 'static,
+    {
+        let current = SetReadOnlyPermissions { description };
+
+        UserDescriptionBuilder { current }
+    }
 }
 
 impl<A> UserDescriptionBuilder<SetPermissions<A>> {
@@ -76,20 +78,6 @@ impl<A> UserDescriptionBuilder<SetPermissions<A>> {
         let current = Complete::ReadWrite {
             description: self.current.description,
             permissions: attribute_permissions,
-        };
-
-        UserDescriptionBuilder { current }
-    }
-}
-
-impl UserDescriptionBuilder<SetReadOnlyDescription> {
-    /// Set a description that can only be read from by a Client
-    pub fn set_read_only_description<S>(self, description: S) -> UserDescriptionBuilder<SetReadOnlyPermissions<S>>
-    where
-        S: Borrow<str> + Send + Sync + 'static,
-    {
-        let current = SetReadOnlyPermissions {
-            description: Trivial(description),
         };
 
         UserDescriptionBuilder { current }
@@ -116,7 +104,7 @@ impl<S> UserDescriptionBuilder<SetReadOnlyPermissions<S>> {
         unique_only_owned!(permissions, attribute_permissions);
 
         let current = Complete::ReadOnly {
-            description: RoUserDescription(self.current.description),
+            description: RoUserDescription(Trivial(self.current.description)),
             permissions,
         };
 
@@ -187,18 +175,11 @@ pub struct SetDescription;
 
 /// `UserDescriptionBuilder` marker type
 ///
-/// This marker type is used for enabling the method [`UserDescriptionBuilder::set_permissions`].
-///
-/// [`UserDescriptionBuilder::set_permissions`]: UserDescriptionBuilder::<SetReadOnlyDescription>::set_permissions
-pub struct SetReadOnlyDescription;
-
-/// `UserDescriptionBuilder` marker type
-///
 /// This marker type is used for enabling the method [`UserDescriptionBuilder::set_read_only_restrictions`].
 ///
 /// [`UserDescriptionBuilder::set_read_only_restrictions`]: UserDescriptionBuilder::<SetReadOnlyPermissions>::set_read_only_restrictions
 pub struct SetReadOnlyPermissions<S> {
-    description: Trivial<S>,
+    description: S,
 }
 
 /// `UserDescriptionBuilder` marker type
@@ -232,7 +213,7 @@ pub struct UserDescription<A>(A);
 
 impl<A> AccessValue for UserDescription<A>
 where
-    A: AccessValue,
+    A: AccessValue + 'static,
     A::ReadValue: Borrow<str>,
     A::WriteValue: From<alloc::string::String>,
 {
@@ -248,6 +229,14 @@ where
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
         self.0.write(<A::WriteValue as From<alloc::string::String>>::from(v))
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        self
     }
 }
 

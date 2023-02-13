@@ -228,11 +228,19 @@ impl AccessValue for ClientConfigurationAccessor<ReadOnlyClientConfiguration> {
     fn write(&mut self, client_config: Self::WriteValue) -> Self::Write<'_> {
         WriteReady::new(&mut self.config, client_config)
     }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        self
+    }
 }
 
 impl<Fun, Fut> AccessValue for ClientConfigurationAccessor<Fun>
 where
-    Fun: for<'z> FnMut(SetClientConfig) -> Fut + Send + Sync,
+    Fun: FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
     Fut: Future + Send + Sync,
 {
     type ReadValue = ClientConfigVec;
@@ -251,6 +259,14 @@ where
             future: None,
             value: Some(config),
         }
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        self
     }
 }
 

@@ -200,6 +200,7 @@ macro_rules! make_service {
     ($this:expr, $end_service_handle:expr) => {{
         let service = Service::new(
             $this.source.attributes,
+            $this.is_primary,
             $this.definition_handle.unwrap(),
             $end_service_handle,
             $this.service_uuid,
@@ -397,19 +398,22 @@ impl<'a> IncludesAdder<'a> {
 
     /// Include another service
     ///
-    /// This takes a reference to the service to include with an optional permissions for the
-    /// include definition. If no permissions are given, then it uses the default permissions of the
-    /// this service (not the service being included) for the include declaration.
+    /// This takes a record to the service to include with an optional permissions for the
+    /// include definition. The service must be within the same server as this include definition.
+    /// The information within the record is checked to see if the information within it is still
+    /// valid.
     ///
-    /// # Panic
-    /// The `service` must be within the same server as this includes definition
-    pub fn include_service(mut self, service: Service<'_>) -> Self {
-        let service_ptr = service.server_attributes as *const _;
-        let builder_ptr = self.service_builder.source.attributes as *const _;
-
-        if service_ptr != builder_ptr {
-            panic!("cannot add service from a different GATT server")
-        }
+    /// After the information within the service record is validated an includes definition is added
+    /// to the service for the information within the service record.
+    ///
+    /// # Error
+    /// The `service_record` was not within the same server as this includes definition, or the
+    /// information within the service record is no longer valid.
+    ///
+    /// If an error occurs then an includes definition is not added to the server for the provided
+    /// `service_record`.
+    pub fn include_service(mut self, service_record: ServiceRecord) -> Result<Self, IncludeServiceError> {
+        let service = Service::get_service(self.service_builder.source.attributes, service_record)?;
 
         let include = ServiceInclude {
             service_handle: service.get_handle(),
@@ -423,7 +427,7 @@ impl<'a> IncludesAdder<'a> {
 
         self.end_group_handle = self.service_builder.source.attributes.push(attribute);
 
-        self
+        Ok(self)
     }
 
     /// Add characteristics to the server
@@ -443,6 +447,39 @@ impl<'a> IncludesAdder<'a> {
     /// any). There will be no characteristics added to the service.
     pub fn finish_service(self) -> Service<'a> {
         make_service!(self.service_builder, self.end_group_handle)
+    }
+}
+
+#[derive(Debug)]
+pub enum IncludeServiceError {
+    ServiceDoesNotExist,
+    ServiceInformationPrimaryStatusDoesNotMatch,
+    ServiceUuidDoesNotMatch,
+}
+
+impl core::fmt::Display for IncludeServiceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            IncludeServiceError::ServiceDoesNotExist => f.write_str("no service exists for this service record"),
+            IncludeServiceError::ServiceInformationPrimaryStatusDoesNotMatch => unreachable!(),
+            IncludeServiceError::ServiceUuidDoesNotMatch => {
+                f.write_str("the UUID of the service does not match the UUID within the service record")
+            }
+        }
+    }
+}
+
+impl From<ServiceRecordError> for IncludeServiceError {
+    fn from(value: ServiceRecordError) -> Self {
+        match value {
+            ServiceRecordError::InvalidType => IncludeServiceError::ServiceDoesNotExist,
+            ServiceRecordError::InvalidHandle => IncludeServiceError::ServiceDoesNotExist,
+            ServiceRecordError::InvalidValue => unreachable!(),
+            ServiceRecordError::InvalidPrimaryStatus => {
+                IncludeServiceError::ServiceInformationPrimaryStatusDoesNotMatch
+            }
+            ServiceRecordError::InvalidServiceUuid => IncludeServiceError::ServiceUuidDoesNotMatch,
+        }
     }
 }
 
@@ -528,12 +565,14 @@ pub struct Service<'a> {
 
 impl<'a> Service<'a> {
     fn new(
-        server_attributes: &'a crate::att::server::ServerAttributes,
+        server_attributes: &'a att::server::ServerAttributes,
+        is_primary: bool,
         service_handle: u16,
         end_group_handle: u16,
         service_uuid: Uuid,
     ) -> Self {
         let group_data = ServiceGroupData {
+            is_primary,
             service_handle,
             end_group_handle,
             service_uuid,
@@ -570,7 +609,7 @@ impl<'a> Service<'a> {
     /// the location of the service.
     pub fn as_record(&self) -> ServiceRecord {
         ServiceRecord {
-            record: self.group_data,
+            group_data: self.group_data,
         }
     }
 
@@ -582,6 +621,49 @@ impl<'a> Service<'a> {
             self.group_data.end_group_handle,
         )
     }
+
+    /// Try to get a `Service` for the provided record
+    ///
+    /// If there is a service at `handle` it is returned.
+    ///
+    /// # Error
+    /// Information within `record` did not match the information within the server.
+    fn get_service(
+        attributes: &att::server::ServerAttributes,
+        record: ServiceRecord,
+    ) -> Result<Service<'_>, ServiceRecordError> {
+        let attribute_info = attributes
+            .get_info(record.group_data.service_handle)
+            .ok_or(ServiceRecordError::InvalidHandle)?;
+
+        let is_primary = if *attribute_info.get_uuid() == ServiceDefinition::PRIMARY_SERVICE_TYPE {
+            true
+        } else if *attribute_info.get_uuid() == ServiceDefinition::SECONDARY_SERVICE_TYPE {
+            false
+        } else {
+            return Err(ServiceRecordError::InvalidType);
+        };
+
+        if record.is_primary() != is_primary {
+            return Err(ServiceRecordError::InvalidPrimaryStatus);
+        }
+
+        let service_uuid: Uuid = *attributes
+            .get_value(record.group_data.service_handle)
+            .ok_or(ServiceRecordError::InvalidValue)?;
+
+        if service_uuid != record.get_uuid() {
+            return Err(ServiceRecordError::InvalidServiceUuid);
+        }
+
+        Ok(Service::new(
+            attributes,
+            is_primary,
+            record.group_data.service_handle,
+            record.group_data.end_group_handle,
+            record.group_data.service_uuid,
+        ))
+    }
 }
 
 /// A service record
@@ -589,27 +671,42 @@ impl<'a> Service<'a> {
 /// This contains the information of a [`Service`] without the reference to its location.
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub struct ServiceRecord {
-    record: ServiceGroupData,
+    group_data: ServiceGroupData,
 }
 
 impl ServiceRecord {
+    /// Check if the service is a primary service
+    pub fn is_primary(&self) -> bool {
+        self.group_data.is_primary
+    }
+
     /// Get the service UUID
     pub fn get_uuid(&self) -> Uuid {
-        self.record.service_uuid
+        self.group_data.service_uuid
     }
 
     /// Get the handle group range
     ///
     /// This returns the range of Attribute handles used by this service
     pub fn get_range(&self) -> core::ops::RangeInclusive<u16> {
-        self.record.service_handle..=self.record.end_group_handle
+        self.group_data.service_handle..=self.group_data.end_group_handle
     }
 }
 
 impl From<Service<'_>> for ServiceRecord {
     fn from(s: Service<'_>) -> Self {
-        ServiceRecord { record: s.group_data }
+        ServiceRecord {
+            group_data: s.group_data,
+        }
     }
+}
+
+enum ServiceRecordError {
+    InvalidType,
+    InvalidValue,
+    InvalidHandle,
+    InvalidPrimaryStatus,
+    InvalidServiceUuid,
 }
 
 /// Group data about a service
@@ -618,6 +715,7 @@ impl From<Service<'_>> for ServiceRecord {
 /// with a attribute group related request from the Server.
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
 struct ServiceGroupData {
+    is_primary: bool,
     /// The handle of the Service declaration attribute.
     service_handle: u16,
     /// The handle of the last attribute in the service.
@@ -1010,7 +1108,7 @@ impl<'a> GapServiceBuilder<'a> {
 ///
 /// let mut server_builder = ServerBuilder::from(gap_service);
 ///
-/// server_builder.new_service(SERVICE_UUID, true)
+/// server_builder.new_service(SERVICE_UUID)
 ///     .add_characteristics()
 ///     .new_characteristic(|characteristic_builder| {
 ///         characteristic_builder
@@ -1062,11 +1160,12 @@ impl ServerBuilder {
     /// # use bo_tie_host_util::Uuid;
     /// # use bo_tie_gatt::att::FULL_READ_PERMISSIONS;
     /// # let mut server_builder = ServerBuilder::new_empty();
-    /// # let service_uuid = Uuid::from_u128(12345678);
+    /// # let service_uuid_1 = Uuid::from_u128(12345678);
+    /// # let service_uuid_2 = Uuid::from_u128(87654321);
     /// # let characteristic_uuid = Uuid::from_u128(0xfffff);
     /// # let value = 1234;
     ///
-    /// let service_reference = server_builder.new_service(service_uuid)
+    /// let service_reference = server_builder.new_service(service_uuid_1)
     ///     .add_characteristics()
     ///     .new_characteristic(|characteristic_builder| {
     ///         characteristic_builder.set_declaration(|declaration_builder| {
@@ -1080,12 +1179,14 @@ impl ServerBuilder {
     ///                 .set_permissions(FULL_READ_PERMISSIONS)
     ///         })
     ///     })
-    ///     .finish_service();
+    ///     .finish_service()
+    ///     .as_record();
     ///
     /// server_builder.new_service(service_uuid_2)
     ///     .make_secondary()
     ///     .into_includes_adder()
     ///     .include_service(service_reference)
+    ///     .unwrap()
     ///     .finish_service();
     /// ```
     pub fn new_service<U>(&mut self, service_uuid: U) -> ServiceBuilder<'_>
@@ -1136,6 +1237,7 @@ impl ServerBuilder {
             GattServiceBuilder::new(&mut self).build()
         };
 
+        #[cfg(feature = "cryptography")]
         gatt_service_info.initiate_database_hash(&mut self.attributes);
 
         let server = att::server::Server::new(Some(self.attributes), queue_writer);
@@ -1638,8 +1740,8 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
         }
     }
 
-    /// Send the *Read By Group Type Request*
-    async fn send_request(
+    /// Send the *Read By Group Type Request* for primary services
+    async fn send_request_for_primary_services(
         &mut self,
     ) -> Result<
         Option<impl bo_tie_att::client::ResponseProcessor<Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>>,
@@ -1685,12 +1787,12 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
 
     /// Query the next Service
     ///
-    /// This will return the next service on the Server. If there is no more services then `None`
-    /// is returned.
+    /// This will return the next primary service on the Server. If there is no more services then
+    /// `None` is returned.
     pub async fn query_next(&mut self) -> Result<Option<ServiceRecord>, bo_tie_att::ConnectionError<C>> {
         loop {
             if self.iter.is_none() {
-                let response = match self.send_request().await? {
+                let response = match self.send_request_for_primary_services().await? {
                     None => break Ok(None),
                     Some(processor) => match self.await_response(processor).await {
                         Ok(None) => {
@@ -1711,6 +1813,7 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
                 None => self.iter = None,
                 Some(group_data) => {
                     let record = ServiceGroupData {
+                        is_primary: true,
                         service_handle: group_data.get_handle(),
                         end_group_handle: group_data.get_end_group_handle(),
                         service_uuid: *group_data.get_data(),
@@ -1718,7 +1821,7 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
 
                     self.handle = group_data.get_end_group_handle().checked_add(1).unwrap_or(<u16>::MAX);
 
-                    break Ok(Some(ServiceRecord { record }));
+                    break Ok(Some(ServiceRecord { group_data: record }));
                 }
             }
         }
@@ -1884,6 +1987,7 @@ impl GattServiceInfo {
     /// changes except for a characteristic value.
     ///
     /// If there is no GATT database hash, then this is effectively a no-op.
+    #[cfg(feature = "cryptography")]
     fn initiate_database_hash(&self, server_attributes: &mut att::server::ServerAttributes) {
         use characteristic::gatt::HashValue;
 
@@ -1900,6 +2004,7 @@ mod tests {
 
     use super::*;
     use crate::att::server::NoQueuedWrites;
+    use crate::characteristic::CharacteristicBuilder;
     use crate::l2cap::{ConnectionChannel, L2capFragment, MinimumMtu};
     use crate::Uuid;
     use att::TransferFormatInto;
@@ -1943,12 +2048,11 @@ mod tests {
 
         let mut gap_service = GapServiceBuilder::new(None, None);
 
-        gap_service.set_permissions(test_att_permissions);
-
         let mut server_builder = ServerBuilder::from(gap_service);
 
         let test_service_1 = server_builder
-            .new_service(Uuid::from_u16(0x1234), false)
+            .new_service(Uuid::from_u16(0x1234))
+            .make_secondary()
             .add_characteristics()
             .new_characteristic(|characteristic_builder| {
                 characteristic_builder
@@ -1976,17 +2080,17 @@ mod tests {
                     .set_server_configuration(|| {
                         characteristic::ServerConfigurationBuilder::new()
                             .set_config(Trivial(characteristic::ServerConfiguration::new()))
-                            .set_permissions([AttributePermissions::Read(AttributeRestriction::None)])
+                            .set_write_restrictions([AttributeRestriction::None])
                     })
             })
-            .finish_service();
-
-        let service_1_record = test_service_1.as_record();
+            .finish_service()
+            .as_record();
 
         let _test_service_2 = server_builder
-            .new_service(Uuid::from_u16(0x3456), true)
+            .new_service(Uuid::from_u16(0x3456))
             .into_includes_adder()
-            .include_service(service_1_record)
+            .include_service(test_service_1)
+            .unwrap()
             .finish_service();
 
         let server = server_builder.make_server(NoQueuedWrites);
@@ -2056,7 +2160,7 @@ mod tests {
         let second_test_uuid = Uuid::from(0x1001u128);
 
         server_builder
-            .new_service(first_test_uuid, true)
+            .new_service(first_test_uuid)
             .add_characteristics()
             .new_characteristic(|characteristic_builder| {
                 characteristic_builder
@@ -2074,7 +2178,7 @@ mod tests {
             .finish_service();
 
         server_builder
-            .new_service(second_test_uuid, true)
+            .new_service(second_test_uuid)
             .add_characteristics()
             .new_characteristic(|characteristic_builder| {
                 characteristic_builder
