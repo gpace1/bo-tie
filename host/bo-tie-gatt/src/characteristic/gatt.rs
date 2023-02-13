@@ -2,14 +2,9 @@
 //!
 //! These are the characteristics of the GATT Attribute profile.
 
-use crate::characteristic::Properties;
-use crate::{att, CharacteristicAdder, Server, ServiceInclude};
-use bo_tie_att::server::QueuedWriter;
-use bo_tie_att::{
-    AttributePermissions, TransferFormatError, TransferFormatInto, TransferFormatTryFrom, FULL_PERMISSIONS,
-};
+use crate::att;
+use bo_tie_att::{TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use bo_tie_host_util::Uuid;
-use bo_tie_l2cap::ConnectionChannel;
 use bo_tie_util::buffer::stack::LinearBuffer;
 
 /// The Value of the Service Changed Characteristic
@@ -50,36 +45,24 @@ impl TransferFormatTryFrom for ServiceChangedValue {
 }
 
 /// Client Supported Features Characteristic
-#[derive(PartialEq, bo_tie_macros::DepthCount)]
+#[derive(Copy, Clone, PartialEq, bo_tie_macros::DepthCount)]
 pub enum ClientFeatures {
     RobustCaching,
     EnhancedAttBearer,
     MultipleHandleValueNotifications,
 }
 
-impl ClientFeatures {
-    const UUID: Uuid = Uuid::from_u16(0x2B29);
-
-    const PERMISSIONS: [AttributePermissions; AttributePermissions::full_depth()] = FULL_PERMISSIONS;
-
-    const PROPERTIES: [Properties; 2] = [Properties::Read, Properties::Write];
-
-    pub fn make_characteristic(adder: CharacteristicAdder<'_>) -> CharacteristicAdder<'_> {
-        adder.new_characteristic(|builder| {
-            builder
-                .set_declaration(|builder| builder.set_properties(Self::PROPERTIES).set_uuid(Self::UUID))
-                .set_value(|value| {
-                    value
-                        .set_value(ClientFeaturesValue::default())
-                        .set_permissions(Self::PERMISSIONS)
-                })
-        })
-    }
+#[derive(Default, PartialEq)]
+pub(crate) struct ClientFeaturesValue {
+    features: LinearBuffer<{ ClientFeatures::full_depth() }, ClientFeatures>,
 }
 
-#[derive(Default, PartialEq)]
-struct ClientFeaturesValue {
-    features: LinearBuffer<{ ClientFeatures::full_depth() }, ClientFeatures>,
+impl ClientFeaturesValue {
+    pub(crate) fn add_feature(&mut self, feature: ClientFeatures) {
+        if !self.features.contains(&feature) {
+            self.features.try_push(feature).unwrap();
+        }
+    }
 }
 
 impl TransferFormatInto for ClientFeaturesValue {
@@ -97,6 +80,8 @@ impl TransferFormatInto for ClientFeaturesValue {
                 ClientFeatures::MultipleHandleValueNotifications => bit_field |= 1 << 2,
             }
         }
+
+        into_ret[0] = bit_field;
     }
 }
 
@@ -144,7 +129,6 @@ impl HashValue {
 
     pub(crate) fn generate(server_attributes: &att::server::ServerAttributes) -> Self {
         use crate::characteristic;
-        use crate::characteristic::declaration::Declaration;
         use crate::characteristic::extended_properties::ExtendedProperties;
         use crate::characteristic::VecArray;
         use crate::{ServiceDefinition, ServiceInclude};

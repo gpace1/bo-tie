@@ -2,6 +2,7 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
+extern crate core;
 
 /// macro to ensure that `$to` is filled only with unique items of `$from`.
 macro_rules! unique_only {
@@ -162,6 +163,11 @@ impl ServiceInclude {
     const TYPE: Uuid = Uuid::from_u16(0x2802);
 }
 
+struct ServiceBuilderSource<'a> {
+    primary_services: &'a mut alloc::vec::Vec<ServiceGroupData>,
+    attributes: &'a mut att::server::ServerAttributes,
+}
+
 /// Construct a GATT Service.
 ///
 /// Every service contains a service definition characteristic with a number of other optional
@@ -183,7 +189,7 @@ impl ServiceInclude {
 pub struct ServiceBuilder<'a> {
     service_uuid: Uuid,
     is_primary: bool,
-    attributes: &'a mut att::server::ServerAttributes,
+    source: ServiceBuilderSource<'a>,
     definition_handle: Option<u16>,
     access_restrictions: LinearBuffer<{ att::AttributeRestriction::full_depth() }, att::AttributeRestriction>,
 }
@@ -193,14 +199,14 @@ pub struct ServiceBuilder<'a> {
 macro_rules! make_service {
     ($this:expr, $end_service_handle:expr) => {{
         let service = Service::new(
-            &$this.server_builder.attributes,
+            $this.source.attributes,
             $this.definition_handle.unwrap(),
             $end_service_handle,
             $this.service_uuid,
         );
 
         if $this.is_primary {
-            $this.server_builder.primary_services.push(service.group_data)
+            $this.source.primary_services.push(service.group_data)
         }
 
         service
@@ -217,13 +223,15 @@ impl<'a> ServiceBuilder<'a> {
         att::AttributeRestriction::Authentication,
     ];
 
-    fn new(server_builder: &'a mut ServerBuilder, service_uuid: Uuid, is_primary: bool) -> Self {
+    fn new(source: ServiceBuilderSource<'a>, service_uuid: Uuid) -> Self {
         let access_restrictions = Self::DEFAULT_RESTRICTIONS.into();
+
+        let is_primary = true;
 
         ServiceBuilder {
             service_uuid,
             is_primary,
-            attributes: &mut server_builder.attributes,
+            source,
             definition_handle: None,
             access_restrictions,
         }
@@ -263,6 +271,7 @@ impl<'a> ServiceBuilder<'a> {
     /// handle to it.
     fn set_service_definition(&mut self) {
         self.definition_handle = self
+            .source
             .attributes
             .push(att::Attribute::new(
                 if self.is_primary {
@@ -274,6 +283,12 @@ impl<'a> ServiceBuilder<'a> {
                 self.service_uuid,
             ))
             .into();
+    }
+
+    /// Make this Service a 'secondary' service
+    pub fn make_secondary(mut self) -> Self {
+        self.is_primary = false;
+        self
     }
 
     /// Start including other services
@@ -325,6 +340,40 @@ impl<'a> ServiceBuilder<'a> {
     }
 }
 
+/// Adder of Services to a Server
+///
+/// See method [`add_services`] of `Server`
+///
+/// [`add_services`]: Server::add_services
+pub struct ServicesAdder<'a> {
+    primary_services: &'a mut alloc::vec::Vec<ServiceGroupData>,
+    attributes: &'a mut att::server::ServerAttributes,
+}
+
+impl<'a> ServicesAdder<'a> {
+    fn new(
+        primary_services: &'a mut alloc::vec::Vec<ServiceGroupData>,
+        attributes: &'a mut att::server::ServerAttributes,
+    ) -> Self {
+        ServicesAdder {
+            primary_services,
+            attributes,
+        }
+    }
+
+    /// Add a Single Service
+    ///
+    /// This returns a [`ServerBuilder`] to construct the new service to be added to the Server.
+    pub fn add(&mut self, service_uuid: Uuid) -> ServiceBuilder<'_> {
+        let source = ServiceBuilderSource {
+            primary_services: self.primary_services,
+            attributes: self.attributes,
+        };
+
+        ServiceBuilder::new(source, service_uuid)
+    }
+}
+
 /// Add Include Definition(s) to the service
 ///
 /// The service that will contain the include definition(s) is the same service that was initially
@@ -356,7 +405,7 @@ impl<'a> IncludesAdder<'a> {
     /// The `service` must be within the same server as this includes definition
     pub fn include_service(mut self, service: Service<'_>) -> Self {
         let service_ptr = service.server_attributes as *const _;
-        let builder_ptr = &self.service_builder.attributes as *const _;
+        let builder_ptr = self.service_builder.source.attributes as *const _;
 
         if service_ptr != builder_ptr {
             panic!("cannot add service from a different GATT server")
@@ -372,7 +421,7 @@ impl<'a> IncludesAdder<'a> {
 
         let attribute = att::Attribute::new(ServiceInclude::TYPE, permissions, include);
 
-        self.end_group_handle = self.service_builder.attributes.push(attribute);
+        self.end_group_handle = self.service_builder.source.attributes.push(attribute);
 
         self
     }
@@ -461,7 +510,6 @@ impl<'a> CharacteristicAdder<'a> {
     }
 
     /// Finish the service
-    #[must_use]
     pub fn finish_service(self) -> Service<'a> {
         make_service!(self.service_builder, self.end_group_handle)
     }
@@ -844,7 +892,7 @@ impl<'a> GapServiceBuilder<'a> {
         let mut server_builder = ServerBuilder::new_empty();
 
         let mut characteristic_adder = server_builder
-            .new_service(Self::GAP_SERVICE_TYPE, true)
+            .new_service(Self::GAP_SERVICE_TYPE)
             .set_access_restriction(self.access_restrictions)
             .add_characteristics()
             .new_characteristic(|characteristic| {
@@ -1018,7 +1066,7 @@ impl ServerBuilder {
     /// # let characteristic_uuid = Uuid::from_u128(0xfffff);
     /// # let value = 1234;
     ///
-    /// let service_reference = server_builder.new_service(service_uuid, false)
+    /// let service_reference = server_builder.new_service(service_uuid)
     ///     .add_characteristics()
     ///     .new_characteristic(|characteristic_builder| {
     ///         characteristic_builder.set_declaration(|declaration_builder| {
@@ -1034,16 +1082,22 @@ impl ServerBuilder {
     ///     })
     ///     .finish_service();
     ///
-    /// server_builder.new_service(service_uuid_2, true)
+    /// server_builder.new_service(service_uuid_2)
+    ///     .make_secondary()
     ///     .into_includes_adder()
     ///     .include_service(service_reference)
     ///     .finish_service();
     /// ```
-    pub fn new_service<U>(&mut self, service_uuid: U, is_primary: bool) -> ServiceBuilder<'_>
+    pub fn new_service<U>(&mut self, service_uuid: U) -> ServiceBuilder<'_>
     where
         U: Into<Uuid>,
     {
-        ServiceBuilder::new(self, service_uuid.into(), is_primary)
+        let source = ServiceBuilderSource {
+            primary_services: &mut self.primary_services,
+            attributes: &mut self.attributes,
+        };
+
+        ServiceBuilder::new(source, service_uuid.into())
     }
 
     /// Construct the Generic Attribute Profile Service
@@ -1076,19 +1130,20 @@ impl ServerBuilder {
     where
         Q: att::server::QueuedWriter,
     {
-        let gatt_info = if let Some(info) = self.gatt_service_info {
+        let gatt_service_info = if let Some(info) = self.gatt_service_info {
             info
         } else {
             GattServiceBuilder::new(&mut self).build()
         };
 
-        gatt_info.initiate_database_hash(&mut self.attributes);
+        gatt_service_info.initiate_database_hash(&mut self.attributes);
 
         let server = att::server::Server::new(Some(self.attributes), queue_writer);
 
         Server {
             primary_services: self.primary_services,
             server,
+            gatt_service_info,
         }
     }
 }
@@ -1102,6 +1157,7 @@ impl From<GapServiceBuilder<'_>> for ServerBuilder {
 pub struct Server<Q> {
     primary_services: alloc::vec::Vec<ServiceGroupData>,
     server: att::server::Server<Q>,
+    gatt_service_info: GattServiceInfo,
 }
 
 impl<Q> Server<Q>
@@ -1409,6 +1465,59 @@ where
             }
         }
     }
+
+    /// Add Services to the Server
+    ///
+    /// Services can be added to the Server if it has the service changed characteristic. Services
+    /// cannot be added
+    ///
+    /// This takes a connection channel and closure. The connection channel is used to send the
+    /// indication to the Client that the services have changed. The closure is used to add the
+    /// Services to the Server.
+    ///
+    /// The closure takes a `ServiceAdder` which should be used to add a number of services to the
+    ///
+    /// # Note
+    /// An indication is not sent to the ATT client if no services are added.
+    pub async fn add_services<C, F>(&mut self, connection_channel: &C, f: F) -> Result<(), AddServicesError<C>>
+    where
+        C: ConnectionChannel,
+        F: for<'a> FnOnce(ServicesAdder<'a>),
+    {
+        let service_changed_handle = if let Some(handle) = self.gatt_service_info.service_change_handle {
+            handle
+        } else {
+            return Err(AddServicesError::NoServicesChangedCharacteristic);
+        };
+
+        let starting_handle = self.server.get_attributes().next_handle();
+
+        f(ServicesAdder::new(
+            &mut self.primary_services,
+            self.server.get_mut_attributes(),
+        ));
+
+        // this will not panic. Besides the reserved attribute, the GATT
+        // service and service changed characteristic are within the server.
+        let ending_handle = self.server.get_attributes().next_handle() - 1;
+
+        if starting_handle > ending_handle {
+            // no services were added
+            return Ok(());
+        }
+
+        let service_changed = characteristic::gatt::ServiceChangedValue {
+            starting_handle,
+            ending_handle,
+        };
+
+        let indication = att::pdu::handle_value_indication(service_changed_handle, service_changed);
+
+        self.server
+            .send_pdu(connection_channel, indication)
+            .await
+            .map_err(|e| AddServicesError::ConnectionError(e))
+    }
 }
 
 impl<Q> AsRef<att::server::Server<Q>> for Server<Q> {
@@ -1436,6 +1545,27 @@ impl<Q> core::ops::DerefMut for Server<Q> {
         self.as_mut()
     }
 }
+
+#[derive(Debug)]
+pub enum AddServicesError<C: ConnectionChannel> {
+    NoServicesChangedCharacteristic,
+    ConnectionError(att::ConnectionError<C>),
+}
+
+impl<C: core::fmt::Display + ConnectionChannel> core::fmt::Display for AddServicesError<C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            AddServicesError::NoServicesChangedCharacteristic => f.write_str(
+                "services cannot be added as the server was built without the \
+                    Service Changed Characteristic of the GATT Service",
+            ),
+            AddServicesError::ConnectionError(c) => core::fmt::Display::fmt(c, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<C: std::error::Error + ConnectionChannel> std::error::Error for AddServicesError<C> {}
 
 /// A GATT client
 ///
@@ -1601,9 +1731,7 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
 pub struct GattServiceBuilder<'a> {
     characteristic_adder: CharacteristicAdder<'a>,
     service_changed: Option<u16>,
-    client_features: bool,
     database_hash: Option<u16>,
-    server_supported_features: bool,
 }
 
 impl<'a> GattServiceBuilder<'a> {
@@ -1611,21 +1739,19 @@ impl<'a> GattServiceBuilder<'a> {
     fn new(server_builder: &'a mut ServerBuilder) -> Self {
         const UUID: Uuid = Uuid::from_u16(0x1801);
 
-        let characteristic_adder = server_builder.new_service(UUID, true).add_characteristics();
+        let characteristic_adder = server_builder.new_service(UUID).add_characteristics();
 
         GattServiceBuilder {
             characteristic_adder,
             service_changed: None,
-            client_features: false,
             database_hash: None,
-            server_supported_features: false,
         }
     }
 
     /// Add the service changed characteristic
     ///
     /// This characteristic is an indication only characteristic that is used to update the client
-    /// that the services on the server has changed.
+    /// that the services on the server has changed. This
     pub fn add_service_changed(mut self) -> Self {
         const UUID: Uuid = Uuid::from_u16(0x2A05);
 
@@ -1647,15 +1773,38 @@ impl<'a> GattServiceBuilder<'a> {
         self
     }
 
-    /// todo: Add the client supported features characteristic
+    /// Add the client supported features Characteristic
     ///
-    /// # Panic
-    /// This method is not implemented yet
-    pub fn add_client_supported_features(mut self) -> Self {
-        todo!()
+    /// This Characteristic must be added if this device supports both the Client and Server
+    /// Attribute Protocol roles.
+    pub fn add_client_supported_features<T, B>(mut self, features: T) -> Self
+    where
+        T: IntoIterator<Item = B>,
+        B: core::borrow::Borrow<characteristic::gatt::ClientFeatures>,
+    {
+        const UUID: Uuid = Uuid::from_u16(0x2B29);
+
+        const PERMISSIONS: [att::AttributePermissions; att::AttributePermissions::full_depth()] = att::FULL_PERMISSIONS;
+
+        const PROPERTIES: [characteristic::Properties; 2] =
+            [characteristic::Properties::Read, characteristic::Properties::Write];
+
+        let mut list = characteristic::gatt::ClientFeaturesValue::default();
+
+        for feature in features {
+            list.add_feature(*feature.borrow())
+        }
+
+        self.characteristic_adder = self.characteristic_adder.new_characteristic(|builder| {
+            builder
+                .set_declaration(|builder| builder.set_properties(PROPERTIES).set_uuid(UUID))
+                .set_value(|value| value.set_value(list).set_permissions(PERMISSIONS))
+        });
+
+        self
     }
 
-    /// Add the database hash
+    /// Add the database hash Characteristic
     ///
     /// This has is automatically generated upon creating of of the GATT server.
     #[cfg(feature = "cryptography")]
@@ -1683,7 +1832,7 @@ impl<'a> GattServiceBuilder<'a> {
         self
     }
 
-    /// Add the GATT server supported features
+    /// Add the GATT server supported features Characteristic
     pub fn add_server_supported_features<T>(mut self, features: T) -> Self
     where
         T: core::borrow::Borrow<[characteristic::gatt::ServerFeatures]>,
@@ -1712,7 +1861,7 @@ impl<'a> GattServiceBuilder<'a> {
         self.characteristic_adder.finish_service();
 
         GattServiceInfo {
-            _service_change_handle: self.service_changed,
+            service_change_handle: self.service_changed,
             database_hash_handle: self.database_hash,
         }
     }
@@ -1721,8 +1870,9 @@ impl<'a> GattServiceBuilder<'a> {
 /// Information for setting up the GATT service
 ///
 /// This is used for generating the GATT service information that needs to be part of the server.
+#[derive(Default)]
 struct GattServiceInfo {
-    _service_change_handle: Option<u16>,
+    service_change_handle: Option<u16>,
     database_hash_handle: Option<u16>,
 }
 
@@ -1742,25 +1892,6 @@ impl GattServiceInfo {
 
             *server_attributes.get_mut_value::<HashValue>(handle).unwrap() = hash;
         }
-    }
-
-    /// Remove a Service
-    ///
-    /// Removing a service is a complicated thing and requires the database hash to be updated and
-    /// the service change indication, if either of those are in the server.
-    fn _remove_service<C>(
-        &mut self,
-        _service: ServiceRecord,
-        _connection_channel: &C,
-        _server_attributes: &mut att::server::ServerAttributes,
-    ) {
-        todo!()
-
-        // Removing a service means that all other services "behind" (the starting handle was larger
-        // than the removed service's ending handle) must be moved. Its a similar operation to how
-        // 'remove' works for `vec`. If the GATT service happens to be one of those services, then
-        // the handle values for `service_changed_handle` and `database_hash_handle` will need to be
-        // updated too if they currently exist.
     }
 }
 

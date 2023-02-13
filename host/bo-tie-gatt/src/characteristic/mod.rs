@@ -496,15 +496,18 @@ where
     /// # Panic
     /// If any of the required builder methods were not called this will panic
     pub(crate) fn complete_characteristic(mut self) -> super::CharacteristicAdder<'a> {
-        let server_attributes = &mut self.characteristic_adder.service_builder.attributes;
-
         let mut record = CharacteristicRecord::new();
 
         let service_restrictions = &self.characteristic_adder.service_builder.access_restrictions;
 
-        let declaration_builder = self
-            .declaration_builder
-            .set_value_handle(server_attributes.next_handle() + 1);
+        let declaration_builder = self.declaration_builder.set_value_handle(
+            self.characteristic_adder
+                .service_builder
+                .source
+                .attributes
+                .next_handle()
+                + 1,
+        );
 
         let characteristic_uuid = declaration_builder.get_uuid();
 
@@ -516,41 +519,47 @@ where
 
         record.value_handle = self.characteristic_adder.end_group_handle + 2;
 
-        assert!(declaration_builder.push_to(server_attributes, service_restrictions));
+        assert!(declaration_builder.push_to(
+            self.characteristic_adder.service_builder.source.attributes,
+            service_restrictions
+        ));
 
-        assert!(value_builder.push_to(server_attributes, service_restrictions));
+        assert!(value_builder.push_to(
+            self.characteristic_adder.service_builder.source.attributes,
+            service_restrictions
+        ));
 
-        if self
-            .extended_properties_builder
-            .push_to(server_attributes, service_restrictions)
-        {
+        if self.extended_properties_builder.push_to(
+            self.characteristic_adder.service_builder.source.attributes,
+            service_restrictions,
+        ) {
             att_count += 1;
 
             record.extended_properties_handle = att_count.into();
         }
 
-        if self
-            .user_description_builder
-            .push_to(server_attributes, service_restrictions)
-        {
+        if self.user_description_builder.push_to(
+            self.characteristic_adder.service_builder.source.attributes,
+            service_restrictions,
+        ) {
             att_count += 1;
 
             record.user_description_handle = att_count.into();
         }
 
-        if self
-            .client_configuration_builder
-            .push_to(server_attributes, service_restrictions)
-        {
+        if self.client_configuration_builder.push_to(
+            self.characteristic_adder.service_builder.source.attributes,
+            service_restrictions,
+        ) {
             att_count += 1;
 
             record.client_configuration_handle = att_count.into();
         }
 
-        if self
-            .server_configuration_builder
-            .push_to(server_attributes, service_restrictions)
-        {
+        if self.server_configuration_builder.push_to(
+            self.characteristic_adder.service_builder.source.attributes,
+            service_restrictions,
+        ) {
             att_count += 1;
 
             record.server_configuration_handle = att_count.into();
