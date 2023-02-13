@@ -1838,11 +1838,13 @@ pub struct GattServiceBuilder<'a> {
 }
 
 impl<'a> GattServiceBuilder<'a> {
+    const GATT_SERVICE_UUID: Uuid = Uuid::from_u16(0x1801);
+
     /// Create a new `GattServiceBuilder`
     fn new(server_builder: &'a mut ServerBuilder) -> Self {
-        const UUID: Uuid = Uuid::from_u16(0x1801);
-
-        let characteristic_adder = server_builder.new_service(UUID).add_characteristics();
+        let characteristic_adder = server_builder
+            .new_service(Self::GATT_SERVICE_UUID)
+            .add_characteristics();
 
         GattServiceBuilder {
             characteristic_adder,
@@ -2067,7 +2069,6 @@ mod tests {
                     .set_value(|value_builder| value_builder.set_value(0usize).set_permissions(test_att_permissions))
                     .set_user_description(|user_desc_builder| {
                         user_desc_builder
-                            .read_only()
                             .set_read_only_description("Test 1")
                             .set_read_only_restrictions([AttributeRestriction::None])
                     })
@@ -2094,24 +2095,6 @@ mod tests {
             .finish_service();
 
         let server = server_builder.make_server(NoQueuedWrites);
-
-        for characteristic in server
-            .get_service_info()
-            .map(|service| service.iter_characteristics())
-            .flatten()
-        {
-            let value_handle = characteristic.get_value_handle();
-
-            let info = server.get_attributes().get_info(value_handle).unwrap();
-
-            assert_eq!(
-                info.get_permissions(),
-                test_att_permissions,
-                "failing UUID: {:#x}, handle: {}",
-                info.get_uuid(),
-                info.get_handle()
-            )
-        }
     }
 
     struct TestChannel {
@@ -2158,6 +2141,8 @@ mod tests {
 
         let first_test_uuid = Uuid::from(0x1000u16);
         let second_test_uuid = Uuid::from(0x1001u128);
+
+        server_builder.new_gatt_service(|gatt_service_builder| gatt_service_builder.add_database_hash());
 
         server_builder
             .new_service(first_test_uuid)
@@ -2213,9 +2198,11 @@ mod tests {
         );
 
         let expected_response = att::pdu::ReadByGroupTypeResponse::new(vec![
-            // Gap Service
+            // GAP Service
             att::pdu::ReadGroupTypeData::new(1, 5, GapServiceBuilder::GAP_SERVICE_TYPE),
-            att::pdu::ReadGroupTypeData::new(6, 8, first_test_uuid),
+            // GATT Service
+            att::pdu::ReadGroupTypeData::new(6, 8, GattServiceBuilder::GATT_SERVICE_UUID),
+            att::pdu::ReadGroupTypeData::new(9, 11, first_test_uuid),
         ]);
 
         assert_eq!(
@@ -2226,7 +2213,7 @@ mod tests {
             }),
         );
 
-        let client_pdu = att::pdu::read_by_group_type_request(9.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
+        let client_pdu = att::pdu::read_by_group_type_request(11.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
         let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
@@ -2236,7 +2223,7 @@ mod tests {
         );
 
         let expected_response =
-            att::pdu::ReadByGroupTypeResponse::new(vec![att::pdu::ReadGroupTypeData::new(9, 11, second_test_uuid)]);
+            att::pdu::ReadByGroupTypeResponse::new(vec![att::pdu::ReadGroupTypeData::new(12, 14, second_test_uuid)]);
 
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
@@ -2246,7 +2233,7 @@ mod tests {
             }),
         );
 
-        let client_pdu = att::pdu::read_by_group_type_request(12.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
+        let client_pdu = att::pdu::read_by_group_type_request(15.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
         let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 

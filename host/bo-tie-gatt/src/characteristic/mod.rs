@@ -323,7 +323,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// #    .set_value(|v| v.set_value(0u16).set_permissions([]));
     ///
     /// characteristic_builder.set_user_description(|user_desc_builder| {
-    ///     user_desc_builder.read_only()
+    ///     user_desc_builder
     ///         .set_read_only_description("My Services Characteristic")
     ///         .set_read_only_restrictions([AttributeRestriction::None])
     /// })
