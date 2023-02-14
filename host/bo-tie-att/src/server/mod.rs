@@ -294,15 +294,27 @@ where
     /// attributes of the server are optionally initialized with input `server_attributes`, and the
     /// `queued_writer` is the manager for queued writes. If `server_attributes` is set to `None`
     /// then a server with no attributes is created.
+    ///
+    /// This client will be given the permissions
+    /// `AttributePermissions::Read(AttributeRestriction::None)`, and
+    /// `AttributePermissions::Write(AttributeRestriction::None)`. These permissions can be revoked
+    /// via the method [`revoke_permissions_of_client`].
+    ///
+    /// [`revoke_permissions_of_client`]: Server::revoke_permissions_of_client
     pub fn new<A>(server_attributes: A, queued_writer: Q) -> Self
     where
         A: Into<Option<ServerAttributes>>,
     {
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
+        let given_permissions = alloc::vec![
+            AttributePermissions::Read(AttributeRestriction::None),
+            AttributePermissions::Write(AttributeRestriction::None),
+        ];
+
         Self {
             attributes,
-            given_permissions: Vec::new(),
+            given_permissions,
             blob_data: None,
             queued_writer,
         }
