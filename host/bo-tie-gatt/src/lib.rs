@@ -1387,7 +1387,6 @@ where
                             && service_data.service_uuid.can_be_16_bit()
                             && <usize>::from(service_data.service_handle) >= self.start_handle
                             && <usize>::from(service_data.service_handle) <= self.ending_handle
-                            && self.server.rbgt_permission_check(service_data).is_ok()
                         {
                             self.shortcut = self.shortcut + cnt;
 
@@ -1485,9 +1484,7 @@ where
                                     att::client::ClientPduName::ReadByGroupTypeRequest,
                                     e,
                                 )
-                                .await?;
-
-                            Err(e.into())
+                                .await
                         }
                         // try 128 bit UUIDs
                         Ok(false) => match list_128.has_any() {
@@ -1507,12 +1504,7 @@ where
                                         att::client::ClientPduName::ReadByGroupTypeRequest,
                                         att::pdu::Error::AttributeNotFound,
                                     )
-                                    .await?;
-
-                                // This does not return an error as it may
-                                // be part of the normal operation of service
-                                // discovery.
-                                Ok(())
+                                    .await
                             }
                             Err(e) => {
                                 self.server
@@ -1522,9 +1514,7 @@ where
                                         att::client::ClientPduName::ReadByGroupTypeRequest,
                                         e,
                                     )
-                                    .await?;
-
-                                Err(e.into())
+                                    .await
                             }
                         },
                     }
@@ -1536,9 +1526,7 @@ where
                             att::client::ClientPduName::ReadByGroupTypeRequest,
                             att::pdu::Error::UnlikelyError,
                         )
-                        .await?;
-
-                    Err(att::pdu::Error::UnlikelyError.into())
+                        .await
                 }
             }
             Ok(att::pdu::TypeRequest { handle_range, .. }) => {
@@ -1549,9 +1537,7 @@ where
                         att::client::ClientPduName::ReadByGroupTypeRequest,
                         att::pdu::Error::UnsupportedGroupType,
                     )
-                    .await?;
-
-                Err(att::pdu::Error::UnsupportedGroupType.into())
+                    .await
             }
             _ => {
                 self.server
@@ -1561,9 +1547,7 @@ where
                         att::client::ClientPduName::ReadByGroupTypeRequest,
                         att::pdu::Error::UnlikelyError,
                     )
-                    .await?;
-
-                Err(att::pdu::Error::UnlikelyError.into())
+                    .await
             }
         }
     }
