@@ -40,7 +40,7 @@ serde = ["bo-tie-util/serde", "bo-tie-sm/serde"]
 #
 # These are subject to change and code enabled by these features may not be "additive" (see: https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
 unstable = [
-    "bo-tie-hci-util/unstable", "bo-tie-hci-host/unstable", "bo-tie-hci-interface/unstable"
+    "bo-tie-hci-util/unstable", "bo-tie-hci-host/unstable", "bo-tie-hci-interface/unstable", "bo-tie-gatt/unstable"
 ]
 
 
