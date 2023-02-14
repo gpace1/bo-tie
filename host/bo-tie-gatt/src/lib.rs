@@ -733,7 +733,6 @@ struct ServiceGroupData {
 ///
 /// A [`ServerBuilder`] can be constructed from a `GapServiceBuilder` with the method
 pub struct GapServiceBuilder<'a> {
-    access_restrictions: &'a [att::AttributeRestriction],
     device_name: &'a str,
     device_name_read_restrictions: &'a [att::AttributeRestriction],
     device_name_write_restrictions: &'a [att::AttributeRestriction],
@@ -789,10 +788,7 @@ impl<'a> GapServiceBuilder<'a> {
         D: Into<Option<&'a str>>,
         A: Into<Option<u16>>,
     {
-        let access_restrictions = &ServiceBuilder::DEFAULT_RESTRICTIONS;
-
         GapServiceBuilder {
-            access_restrictions,
             device_name: device_name.into().unwrap_or(""),
             device_name_read_restrictions: Self::DEFAULT_NAME_PERMISSIONS,
             device_name_write_restrictions: &[],
@@ -992,7 +988,6 @@ impl<'a> GapServiceBuilder<'a> {
 
         let mut characteristic_adder = server_builder
             .new_service(Self::GAP_SERVICE_TYPE)
-            .set_access_restriction(self.access_restrictions)
             .add_characteristics()
             .new_characteristic(|characteristic| {
                 characteristic
