@@ -22,6 +22,7 @@ tokio = ["bo-tie-att/tokio"]
 futures-rs = ["bo-tie-att/futures-rs"]
 async-std = ["bo-tie-att/async-std"]
 cryptography = ["bo-tie-util/cryptography"]
+unstable = []
 
 [package.metadata.docs.rs]
 all-features = true

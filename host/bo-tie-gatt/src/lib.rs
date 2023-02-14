@@ -254,6 +254,7 @@ impl<'a> ServiceBuilder<'a> {
     /// authenticated and/or authorized to access the GAP service.
     ///
     /// [*given*]: bo_tie_att::server::Server::give_permissions_to_client
+    #[cfg(feature = "unstable")]
     fn set_access_restriction(mut self, restrictions: &[att::AttributeRestriction]) -> Self {
         self.access_restrictions.clear();
 
