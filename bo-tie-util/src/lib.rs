@@ -305,6 +305,14 @@ impl TryFrom<&str> for BluetoothDeviceAddress {
     }
 }
 
+impl core::str::FromStr for BluetoothDeviceAddress {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        TryFrom::try_from(s)
+    }
+}
+
 impl Display for BluetoothDeviceAddress {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(
