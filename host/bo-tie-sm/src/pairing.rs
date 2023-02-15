@@ -751,6 +751,7 @@ impl core::fmt::Display for PairingFailedReason {
     }
 }
 
+/// The Pairing Failed Command
 pub struct PairingFailed {
     reason: PairingFailedReason,
 }
@@ -778,16 +779,40 @@ impl CommandData for PairingFailed {
 }
 
 impl PairingFailed {
+    /// Create a new `PairingFailed`
     pub fn new(reason: PairingFailedReason) -> Self {
         Self { reason }
     }
 
+    /// Get the reason for why pairing failed
     pub fn get_reason(&self) -> PairingFailedReason {
         self.reason
     }
 
+    /// Set the reason for why pairing failed
     pub fn set_reason(&mut self, reason: PairingFailedReason) {
         self.reason = reason
+    }
+
+    /// Send a `PairingFailed`
+    ///
+    /// This can be useful when a Security Manager is not implemented. Otherwise it is best to let
+    /// a security manager handle sending of `PairingFailed` commands to the other device.
+    ///
+    /// ```
+    ///
+    /// ```
+    pub async fn send<C>(self, connection_channel: &C) -> Result<(), bo_tie_l2cap::send_future::Error<C::SendFutErr>>
+    where
+        C: bo_tie_l2cap::ConnectionChannel,
+    {
+        let command: Command<_> = self.into();
+
+        let data = command.into_command_format();
+
+        let b_frame = BasicInfoFrame::new(data.to_vec(), L2CAP_CHANNEL_ID);
+
+        connection_channel.send(b_frame).await
     }
 }
 
