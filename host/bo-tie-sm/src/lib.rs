@@ -311,14 +311,9 @@ impl core::fmt::Display for CommandType {
     }
 }
 
-impl core::convert::TryFrom<&'_ BasicInfoFrame<Vec<u8>>> for CommandType {
+impl TryFrom<&'_ BasicInfoFrame<Vec<u8>>> for CommandType {
     type Error = Error;
 
-    /// Try to get the CommandType from ACLData
-    ///
-    /// This rigidly checks the ACLData to get the CommandType. If the channel identifier is
-    /// incorrect, the payload does not have a valid value for the command field, or the payload
-    /// length is incorrect, an error is returned.
     fn try_from(acl_data: &'_ BasicInfoFrame<Vec<u8>>) -> Result<Self, Self::Error> {
         if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
             return Err(Error::IncorrectL2capChannelId);
