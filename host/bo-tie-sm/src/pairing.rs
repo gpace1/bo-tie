@@ -800,7 +800,46 @@ impl PairingFailed {
     /// a security manager handle sending of `PairingFailed` commands to the other device.
     ///
     /// ```
+    /// # use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ChannelIdentifier, ConnectionChannelExt, L2capFragment, LeUserChannelIdentifier};
+    /// # use bo_tie_l2cap::send_future::Error;
+    /// # use bo_tie_sm::L2CAP_CHANNEL_ID;
+    /// # use bo_tie_util::buffer::de_vec::DeVec;
+    /// # use bo_tie_util::buffer::TryExtend;
+    /// # use bo_tie_sm::pairing::{PairingFailed, PairingFailedReason};
+    /// # struct CC;
+    /// # impl bo_tie_l2cap::ConnectionChannel for CC {
+    /// #    type SendBuffer = DeVec<u8>;
+    /// #    type SendFut<'a> = std::future::Ready<Result<(), Error<Self::SendFutErr>>>;
+    /// #    type SendFutErr = usize;
+    /// #    type RecvBuffer = DeVec<u8>;
+    /// #    type RecvFut<'a> = std::future::Pending<Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>>;
+    /// #    fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {unimplemented!()}
+    /// #    fn set_mtu(&mut self, mtu: u16) {unimplemented!()}
+    /// #    fn get_mtu(&self) -> usize {unimplemented!()}
+    /// #    fn max_mtu(&self) -> usize {unimplemented!()}
+    /// #    fn min_mtu(&self) -> usize {unimplemented!()}
+    /// #    fn receive(&mut self) -> Self::RecvFut<'_> {unimplemented!()}
+    /// # }
+    /// # let mut connection_channel = CC;
+    /// # async {
+    /// let sm_channel_id = L2CAP_CHANNEL_ID;
     ///
+    /// for frame in connection_channel.receive_b_frame().await.unwrap() {
+    ///
+    ///     if frame.get_channel_id() == sm_channel_id {
+    ///         // send an error as this device does
+    ///         // not support a security manager.
+    ///
+    ///         let reason = PairingFailedReason::PairingNotSupported;
+    ///
+    ///         let command = PairingFailed::new(reason);
+    ///
+    ///         command.send(&connection_channel).await.unwrap()
+    ///     } else {
+    ///         /* process other channel */
+    ///     }
+    /// }
+    /// # };
     /// ```
     pub async fn send<C>(self, connection_channel: &C) -> Result<(), bo_tie_l2cap::send_future::Error<C::SendFutErr>>
     where
