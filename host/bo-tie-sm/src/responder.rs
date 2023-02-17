@@ -1669,8 +1669,6 @@ impl SecurityManager {
                 );
 
                 if initiator_dh_key_check == ea {
-                    log::trace!("(SM) responder_io_cap: {:x?}", responder_io_cap);
-
                     let eb = toolbox::f6(mac_key, nonce, *peer_nonce, ra, responder_io_cap, b_addr, a_addr);
 
                     self.send(connection_channel, pairing::PairingDhKeyCheck::new(eb))
