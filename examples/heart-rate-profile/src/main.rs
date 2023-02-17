@@ -1,438 +1,601 @@
-use bo_tie::gap::assigned;
-use bo_tie::hci;
-use bo_tie::hci::{
-    events,
-    le::transmitter::{set_advertising_data, set_advertising_enable, set_advertising_parameters},
-};
-use std::sync::{
-    atomic::{AtomicU16, AtomicU8, Ordering},
-    Arc,
-};
+mod advertise;
+mod connection;
+mod io;
+mod security;
+mod server;
 
-/// 0xFFFF is a reserved value as of the Bluetooth Spec. v5, so it isn't a valid value sent
-/// from the controller to the user.
-const INVALID_CONNECTION_HANDLE: u16 = 0xFFFF;
+use crate::io::{ConnectedStatus, UserInOut};
+use crate::security::SecurityStage;
+use crate::server::HeartRateMeasurementArc;
+use bo_tie::hci::channel::SendAndSyncSafeHostChannelEnds;
+use bo_tie::hci::commands::le::long_term_key_request_negative_reply;
+use bo_tie::hci::commands::link_control::disconnect;
+use bo_tie::hci::events::{Events, LeMeta};
+use bo_tie::hci::{Connection, ConnectionHandle, Host, HostChannelEnds, Next};
+use bo_tie::BluetoothDeviceAddress;
 
-#[derive(Default)]
-struct AsyncLock(futures::lock::Mutex<()>);
+const EXAMPLE_NAME: &'static str = "heart rate profile example";
 
-impl<'a> bo_tie::hci::AsyncLock<'a> for AsyncLock {
-    type Guard = futures::lock::MutexGuard<'a, ()>;
-    type Locker = futures::lock::MutexLockFuture<'a, ()>;
-
-    fn lock(&'a self) -> Self::Locker {
-        self.0.lock()
-    }
+#[cfg(target_os = "linux")]
+macro_rules! create_hci {
+    () => {
+        // By using `None` with bo_tie_linux::new, the first
+        // Bluetooth adapter found is the adapter that is used
+        bo_tie_linux::new(None)
+    };
 }
 
-/// Heart Rate Service
-///
-/// Everything in here is unique for creating the heart rate profile. The only reason it's in its
-/// own module is to differentiate the GATT server portion from the normal lE bluetooth setup.
-mod heart_rate_service {
-    use bo_tie::att::server::BasicQueuedWriter;
-    use bo_tie::gatt;
-    use bo_tie::l2cap;
+#[cfg(not(target_os = "linux"))]
+macro_rules! create_hci {
+    () => {
+        compile_error!("unsupported target for this example")
+    };
+}
 
-    pub const HEART_RATE_SERVICE_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0x180D);
+/// Handle to an active connection async task
+struct ConnectionTaskHandle {
+    hci_handle: ConnectionHandle,
+    join_handle: tokio::task::JoinHandle<()>,
+    to: tokio::sync::mpsc::UnboundedSender<MainToConnection>,
+    address: BluetoothDeviceAddress,
+    status: ConnectedStatus,
+}
 
-    pub mod characteristics {
-        use bo_tie::att;
-        use bo_tie::att::server::PinnedFuture;
-        use bo_tie::gatt;
-        use std::sync::{atomic, Arc};
+/// Messages sent from [`main`] to a connection
+#[derive(Debug)]
+enum MainToConnection {
+    Encryption(bool),
+    LtkRequest,
+    PairingAccepted,
+    PairingRejected,
+    AuthenticationInput(AuthenticationInput),
+    Exit, // synonymous to disconnect
+}
 
-        /// This is the UUID for the Heart Rate Measurement Characteristic
-        pub const HEART_RATE_MEASUREMENT_UUID: bo_tie::Uuid = bo_tie::Uuid::from_u16(0x2A37);
+#[derive(Debug)]
+pub enum AuthenticationInput {
+    Yes,
+    No,
+    Passkey([char; 6]),
+    Cancel,
+}
 
-        #[derive(PartialEq, Clone, Copy)]
-        pub struct HrsFlags {
-            value_is_16_bit: bool,
-            in_skin_contact: Option<bool>, // `None` if skin contact is not supported
-            energy_expended_status_support: bool,
-            rr_interval_is_included: bool,
-        }
+/// Message type sent from a connection to [`main`]
+#[derive(Debug)]
+struct ConnectionToMain {
+    handle: ConnectionHandle,
+    kind: ConnectionToMainMessage,
+}
 
-        impl HrsFlags {
-            /// Set the heart rate value format
-            ///
-            /// The format of the value can either be a UINT8 (U8) or UINT16 (U16). The default value is
-            /// U8
-            fn set_heart_rate_value_format(&self, flag: u8) -> u8 {
-                match self.value_is_16_bit {
-                    false => flag | (1 << 0),
-                    true => flag & !(1 << 0),
-                }
-            }
+#[derive(Debug)]
+enum ConnectionToMainMessage {
+    LongTermKey(Option<u128>),
+    Security(SecurityStage),
+}
 
-            /// Set the skin contact flag
-            fn set_skin_contact(&self, flag: u8) -> u8 {
-                match self.in_skin_contact {
-                    // in contact and skin contact supported
-                    Some(true) => flag | (3 << 1),
-
-                    // not in contact and skin contact supported
-                    Some(false) => flag & !(1 << 1) | (1 << 2),
-
-                    // skin contact not supported
-                    None => flag & !(3 << 1),
-                }
-            }
-
-            fn set_energy_expended_status(&self, flag: u8) -> u8 {
-                match self.energy_expended_status_support {
-                    true => flag | (1 << 3),
-                    false => flag | !(1 << 3),
-                }
-            }
-
-            fn set_include_rr_interval_field(&self, flag: u8) -> u8 {
-                match self.rr_interval_is_included {
-                    true => flag | (1 << 4),
-                    false => flag & !(1 << 4),
-                }
-            }
-        }
-
-        impl att::TransferFormatTryFrom for HrsFlags {
-            fn try_from(_: &[u8]) -> Result<Self, bo_tie::att::TransferFormatError> {
-                panic!("Tried to make Heart Rate Monitor data from raw data")
-            }
-        }
-
-        impl att::TransferFormatInto for HrsFlags {
-            fn len_of_into(&self) -> usize {
-                1
-            }
-
-            fn build_into_ret(&self, into_ret: &mut [u8]) {
-                into_ret[0] = self.set_heart_rate_value_format(
-                    self.set_skin_contact(self.set_energy_expended_status(self.set_include_rr_interval_field(0))),
-                );
-            }
-        }
-
-        /// Heart Rate Measurement data
-        ///
-        /// For this example, only the heart rate measurement data is included in the message sent to
-        /// the client. In this example, the server runs in a different thread from the thread that
-        /// generates the random heart rate data. Thus, the heart rate value is an atomic so that the
-        /// threads can run in sync.
-        ///
-        /// # Note
-        /// This size of this heart rate is only 1 byte
-        pub struct HeartRateMeasurement {
-            flags: HrsFlags,
-            val: Arc<atomic::AtomicU8>,
-        }
-
-        impl PartialEq<HrsData> for HeartRateMeasurement {
-            fn eq(&self, other: &HrsData) -> bool {
-                use std::sync::atomic::Ordering::Relaxed;
-
-                (self.flags == other.0) && (self.val.load(Relaxed) == other.1)
-            }
-        }
-
-        impl HeartRateMeasurement {
-            pub const GATT_PERMISSIONS: &'static [gatt::characteristic::Properties] =
-                &[gatt::characteristic::Properties::Notify];
-
-            pub const ATT_PERMISSIONS: &'static [att::AttributePermissions] =
-                &[att::AttributePermissions::Read(att::AttributeRestriction::None)];
-
-            pub fn new(init: Arc<atomic::AtomicU8>) -> Self {
-                HeartRateMeasurement {
-                    flags: HrsFlags {
-                        value_is_16_bit: false,
-                        in_skin_contact: None,
-                        energy_expended_status_support: false,
-                        rr_interval_is_included: false,
-                    },
-                    val: init.clone(),
-                }
-            }
-        }
-
-        #[derive(PartialEq)]
-        pub struct HrsData(HrsFlags, u8);
-
-        impl att::server::ServerAttributeValue for HeartRateMeasurement {
-            type Value = HrsData;
-
-            fn read_and<'a, F, T>(&'a self, f: F) -> PinnedFuture<'a, T>
-            where
-                F: FnOnce(&Self::Value) -> T + Unpin + 'a,
-            {
-                Box::pin(async move { f(&HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed))) })
-            }
-
-            fn write_val(&mut self, _: Self::Value) -> PinnedFuture<'_, ()> {
-                unreachable!("The user cannot write to the value")
-            }
-
-            fn eq<'a>(&'a self, other: &'a Self::Value) -> PinnedFuture<'a, bool> {
-                Box::pin(async move { &HrsData(self.flags, self.val.load(atomic::Ordering::Relaxed)) == other })
-            }
-        }
-
-        impl att::TransferFormatTryFrom for HrsData {
-            fn try_from(_: &[u8]) -> Result<Self, att::TransferFormatError> {
-                /* Return an error since writing cannot be done */
-                Err(att::TransferFormatError::from(
-                    "Cannot write Heart Rate Data".to_string(),
-                ))
-            }
-        }
-
-        impl att::TransferFormatInto for HrsData {
-            fn len_of_into(&self) -> usize {
-                if self.0.value_is_16_bit {
-                    2
-                } else {
-                    1
-                }
-            }
-
-            fn build_into_ret(&self, into_ret: &mut [u8]) {
-                self.0.build_into_ret(&mut into_ret[..1]);
-
-                if self.0.value_is_16_bit {
-                    unreachable!("16 bit heart rate value is not implemented")
-                } else {
-                    into_ret[1] = self.1;
-                }
-            }
-        }
-    }
-
-    /// Create the Heart Rate Measurement Server
-    ///
-    /// This creates an attribute protocol server that handles the 'serving' of the heart rate
-    /// data.
-    ///
-    /// To build a server, a connection channel (`connection_channel`) and the maximum transfer
-    /// unit (`mtu`, the maximum size of the data to be transferred) is required to create an
-    /// attribute server. The connection channel is created when a central is connected to a
-    /// peripheral; this example is the peripheral because it's a heart rate monitor.
-    pub fn build_server<C>(
-        measurement: characteristics::HeartRateMeasurement,
-        connection_chanel: &C,
-    ) -> gatt::Server<'_, C, bo_tie::att::server::BasicQueuedWriter>
+impl ConnectionToMain {
+    async fn process<H>(self, host: &mut Host<H>, uio: &mut UserInOut, hrp: &mut HeartRateProfile)
     where
-        C: l2cap::ConnectionChannel,
+        H: HostChannelEnds,
     {
-        let gsp = gatt::GapServiceBuilder::new("Heart Rate Example", 0);
+        match self.kind {
+            ConnectionToMainMessage::LongTermKey(opt_ltk) => {
+                hrp.on_long_term_key_response(host, self.handle, opt_ltk).await
+            }
+            ConnectionToMainMessage::Security(SecurityStage::AwaitUserAcceptPairingRequest) => {
+                if let Ok(index) = hrp
+                    .connections
+                    .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
+                {
+                    let address = hrp.connections[index].address;
+                    let handle = hrp.connections[index].hci_handle;
 
-        let mut server_builder = gatt::ServerBuilder::from(gsp);
+                    if let Err(index) = hrp
+                        .pairing
+                        .binary_search_by(|pairing_info| pairing_info.0.cmp(&address))
+                    {
+                        hrp.pairing.insert(index, (address, handle))
+                    }
 
-        server_builder
-            .new_service(HEART_RATE_SERVICE_UUID, true)
-            .add_characteristics()
-            .new_characteristic()
-            .set_properties(characteristics::HeartRateMeasurement::GATT_PERMISSIONS.to_vec())
-            .set_uuid(characteristics::HEART_RATE_MEASUREMENT_UUID)
-            .set_value(measurement)
-            .set_permissions(characteristics::HeartRateMeasurement::ATT_PERMISSIONS)
-            .set_client_configuration(
-                vec![gatt::characteristic::ClientConfiguration::Notification],
-                [].as_ref(),
-            )
-            .complete_characteristic()
-            .finish_service();
+                    uio.on_request_pairing(address).await.unwrap();
+                }
+            }
+            ConnectionToMainMessage::Security(SecurityStage::AuthenticationNumberComparison(num)) => {
+                uio.on_number_comparison(num).await.unwrap();
+            }
+            ConnectionToMainMessage::Security(SecurityStage::AuthenticationPasskeyInput) => {
+                uio.on_passkey_input().await.unwrap()
+            }
+            ConnectionToMainMessage::Security(SecurityStage::AuthenticationPasskeyOutput(passkey)) => {
+                uio.on_passkey_output(passkey).await.unwrap();
+            }
+            ConnectionToMainMessage::Security(SecurityStage::BondingComplete) => {
+                if let Ok(index) = hrp
+                    .connections
+                    .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
+                {
+                    let address = hrp.connections[index].address;
 
-        server_builder.make_server(connection_chanel, BasicQueuedWriter::new(2048))
-    }
-}
+                    uio.on_bonded(address).await.unwrap();
+                }
+            }
+            ConnectionToMainMessage::Security(SecurityStage::PairingComplete) => {
+                if let Ok(index) = hrp
+                    .connections
+                    .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
+                {
+                    let address = &hrp.connections[index].address;
 
-/// This sets up the advertising and waits for the connection complete event
-async fn advertise_setup<'a, M: Send + 'static>(
-    hi: &'a hci::Host<bo_tie_linux::LinuxInterface, M>,
-    local_name: &'a str,
-) {
-    let adv_name = assigned::local_name::LocalName::new(local_name, false);
+                    if let Ok(index) = hrp
+                        .pairing
+                        .binary_search_by(|pairing_info| pairing_info.0.cmp(&address))
+                    {
+                        hrp.pairing.remove(index);
+                    }
+                }
+            }
+            ConnectionToMainMessage::Security(SecurityStage::PairingFailed(reason)) => {
+                if let Ok(index) = hrp
+                    .connections
+                    .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
+                {
+                    let address = hrp.connections[index].address;
 
-    let mut adv_flags = assigned::flags::Flags::new();
+                    if let Err(index) = hrp
+                        .pairing
+                        .binary_search_by(|pairing_info| pairing_info.0.cmp(&address))
+                    {
+                        hrp.pairing.remove(index);
+                    }
 
-    // This is the flag specification for a LE-only, limited discoverable advertising
-    adv_flags
-        .get_core(assigned::flags::CoreFlags::LELimitedDiscoverableMode)
-        .enable();
-    adv_flags
-        .get_core(assigned::flags::CoreFlags::LEGeneralDiscoverableMode)
-        .disable();
-    adv_flags
-        .get_core(assigned::flags::CoreFlags::BREDRNotSupported)
-        .enable();
-    adv_flags
-        .get_core(assigned::flags::CoreFlags::ControllerSupportsSimultaniousLEAndBREDR)
-        .disable();
-    adv_flags
-        .get_core(assigned::flags::CoreFlags::HostSupportsSimultaniousLEAndBREDR)
-        .disable();
-
-    let mut adv_uuids = assigned::service_uuids::new_16(false);
-
-    adv_uuids.add(std::convert::TryFrom::try_from(heart_rate_service::HEART_RATE_SERVICE_UUID).unwrap());
-
-    let mut adv_data = set_advertising_data::AdvertisingData::new();
-
-    adv_data.try_push(adv_name).unwrap();
-    adv_data.try_push(adv_flags).unwrap();
-    adv_data.try_push(adv_uuids).unwrap();
-
-    set_advertising_enable::send(&hi, false).await.unwrap();
-
-    set_advertising_data::send(&hi, adv_data).await.unwrap();
-
-    let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
-
-    adv_prams.own_address_type = bo_tie::hci::le::common::OwnAddressType::RandomDeviceAddress;
-
-    set_advertising_parameters::send(&hi, adv_prams).await.unwrap();
-
-    set_advertising_enable::send(&hi, true).await.unwrap();
-}
-
-// For simplicity, I've left the a race condition in here. There could be a case where the
-// connection is made and the ConnectionComplete event isn't propagated & processed
-async fn wait_for_connection<M: Send + 'static>(
-    hi: &hci::Host<bo_tie_linux::LinuxInterface, M>,
-) -> Result<hci::events::LEConnectionCompleteData, impl std::fmt::Display> {
-    println!("Waiting for a connection (timeout is 60 seconds)");
-
-    let awaited_event = Some(events::Events::from(events::LeMeta::ConnectionComplete));
-
-    let evt_rsl = hi.wait_for_event(awaited_event).await;
-
-    set_advertising_enable::send(&hi, false).await.unwrap();
-
-    match evt_rsl {
-        Ok(event) => {
-            use bo_tie::hci::events::{EventsData, LeMetaData};
-
-            println!("Connection Made!");
-
-            if let EventsData::LeMeta(LeMetaData::ConnectionComplete(le_conn_comp_event)) = event {
-                Ok(le_conn_comp_event)
-            } else {
-                Err(format!("Received the incorrect event {:?}", event))
+                    uio.on_pairing_failed(address, reason).await.unwrap();
+                }
             }
         }
-        Err(e) => Err(format!("Timeout Occured: {:?}", e)),
     }
 }
 
-async fn disconnect<M: Send + 'static>(
-    hi: &hci::Host<bo_tie_linux::LinuxInterface, M>,
-    connection_handle: hci::common::ConnectionHandle,
-) {
-    use bo_tie::hci::le::connection::disconnect;
-
-    let prams = disconnect::DisconnectParameters {
-        connection_handle,
-        disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
-    };
-
-    disconnect::send(&hi, prams).await.expect("Failed to disconnect");
+struct HeartRateProfile {
+    keys_store: security::KeysStore,
+    heart_rate_measurement_arc: HeartRateMeasurementArc,
+    privacy: advertise::privacy::Privacy,
+    discoverable_address: Option<BluetoothDeviceAddress>,
+    connections: Vec<ConnectionTaskHandle>,
+    pairing: Vec<(BluetoothDeviceAddress, ConnectionHandle)>,
+    from_connection_sender: tokio::sync::mpsc::UnboundedSender<ConnectionToMain>,
+    from_connection_receiver: Option<tokio::sync::mpsc::UnboundedReceiver<ConnectionToMain>>,
 }
 
-fn handle_sig<M: Sync + Send + 'static>(
-    hi: Arc<hci::Host<bo_tie_linux::LinuxInterface, M>>,
-    raw_handle: Arc<AtomicU16>,
-) {
-    simple_signal::set_handler(&[simple_signal::Signal::Int, simple_signal::Signal::Term], move |_| {
-        // Cancel advertising if advertising (there is no consequence if not advertising)
-        futures::executor::block_on(set_advertising_enable::send(&hi, false)).unwrap();
+impl HeartRateProfile {
+    /// HCI events enabled for the heart rate profile
+    const ENABLED_EVENTS: [Events; 5] = [
+        Events::DisconnectionComplete,
+        Events::EncryptionChangeV1,
+        Events::LeMeta(LeMeta::ConnectionComplete),
+        Events::LeMeta(LeMeta::LongTermKeyRequest),
+        Events::LeMeta(LeMeta::RemoteConnectionParameterRequest),
+    ];
 
-        // todo fix the race condition where a connection is made but the handle hasn't been
-        // stored in raw_handle yet.
-        let handle_val = raw_handle.load(Ordering::SeqCst);
+    pub async fn new<H: HostChannelEnds>(host: &mut Host<H>) -> Self {
+        let privacy = advertise::privacy::Privacy::new(host).await;
 
-        if handle_val != INVALID_CONNECTION_HANDLE {
-            let handle = bo_tie::hci::common::ConnectionHandle::try_from(handle_val).expect("Incorrect Handle");
+        host.mask_events(Self::ENABLED_EVENTS).await.unwrap();
 
-            futures::executor::block_on(disconnect(&hi, handle));
+        let (keys_store, discoverable_address) = match security::KeysStore::load_keys() {
+            Some(keys) => (keys, None),
+            None => (
+                security::KeysStore::init(),
+                Some(BluetoothDeviceAddress::new_non_resolvable()),
+            ),
+        };
+
+        let heart_rate_measurement_arc = HeartRateMeasurementArc::new();
+
+        let connections = Vec::new();
+
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        let pairing = Vec::new();
+
+        Self {
+            keys_store,
+            heart_rate_measurement_arc,
+            privacy,
+            discoverable_address,
+            connections,
+            pairing,
+            from_connection_sender: sender,
+            from_connection_receiver: receiver.into(),
         }
-    });
-}
+    }
 
-fn main() {
-    use futures::executor;
+    pub fn take_connection_receiver(&mut self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnectionToMain>> {
+        self.from_connection_receiver.take()
+    }
 
-    use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
+    fn get_connection_task(&self, connection_handle: &ConnectionHandle) -> Option<&ConnectionTaskHandle> {
+        self.connections
+            .binary_search_by(|ct| ct.hci_handle.cmp(connection_handle))
+            .map(|index| &self.connections[index])
+            .ok()
+    }
 
-    TermLogger::init(
-        LevelFilter::Trace,
-        Config::default(),
-        TerminalMode::Mixed,
-        ColorChoice::Auto,
-    )
-    .unwrap();
+    async fn on_connection<H: SendAndSyncSafeHostChannelEnds>(
+        &mut self,
+        host: &mut Host<H>,
+        connection: Connection<H::SendAndSyncSafeConnectionChannelEnds>,
+        user_io: &mut io::UserInOut,
+    ) where
+        <H as SendAndSyncSafeHostChannelEnds>::SendAndSyncSafeConnectionChannelEnds: 'static,
+    {
+        use security::{ConnectionKind, Security};
 
-    let raw_connection_handle = Arc::new(AtomicU16::new(INVALID_CONNECTION_HANDLE));
+        let (security, status) = if let Some(identity) = self.privacy.validate(&connection) {
+            let keys = self.keys_store.get(identity).await.unwrap().clone();
 
-    let interface = executor::block_on(hci::Host::<_, AsyncLock>::new());
+            let security = Security::new(self.keys_store.clone(), ConnectionKind::Identified(keys));
 
-    handle_sig(interface.clone(), raw_connection_handle.clone());
+            let status = ConnectedStatus::Bonded;
 
-    // Its fine for the setup to be blocked on b/c its fast to the user
-    executor::block_on(advertise_setup(&interface, "HRS Example"));
+            (security, status)
+        } else if self.discoverable_address.is_some() {
+            let peer_address = connection.get_peer_address();
 
-    // Waiting for some bluetooth device to connect is slow, so the waiting for the future is done
-    // on a different thread.
-    match executor::block_on(wait_for_connection(&interface)) {
-        Ok(connection_complete_event) => {
-            use std::thread;
+            let is_random = connection.is_address_random();
 
-            let raw_handle = connection_complete_event.connection_handle.get_raw_handle();
+            let connection_kind = ConnectionKind::New {
+                peer_address,
+                is_random,
+            };
 
-            let connect_interval = connection_complete_event.connection_interval.as_duration();
+            let security = Security::new(self.keys_store.clone(), connection_kind);
 
-            raw_connection_handle.store(raw_handle, Ordering::SeqCst);
+            let status = ConnectedStatus::New;
 
-            let join_handle = thread::spawn(move || {
-                const AVERAGE_HEART_RATE: u8 = 70; // A number that seems reasonable
+            (security, status)
+        } else {
+            let disconnect_parameters = disconnect::DisconnectParameters {
+                connection_handle: connection.get_handle(),
+                disconnect_reason: disconnect::DisconnectReason::AuthenticationFailure,
+            };
 
-                let heart_rate = Arc::new(AtomicU8::new(AVERAGE_HEART_RATE));
+            disconnect::send(host, disconnect_parameters).await.unwrap();
 
-                let heart_rate_clone = heart_rate.clone();
+            user_io
+                .on_unauthenticated_connection(connection.get_peer_address())
+                .await
+                .unwrap();
 
-                let hrm = heart_rate_service::characteristics::HeartRateMeasurement::new(heart_rate.clone());
+            return;
+        };
 
-                let connection_channel = interface.flow_ctrl_channel(connection_complete_event.connection_handle, 512);
+        user_io
+            .on_connection(connection.get_peer_address(), status)
+            .await
+            .unwrap();
 
-                let server = heart_rate_service::build_server(hrm, &connection_channel);
+        let server = server::Server::new(self.heart_rate_measurement_arc.clone());
 
-                thread::spawn(move || {
-                    use rand::random;
+        let (to, from) = tokio::sync::mpsc::unbounded_channel();
 
-                    loop {
-                        // The simulated sensor measures the heart rate 10 times per second
-                        thread::sleep(std::time::Duration::from_millis(100));
+        let hci_handle = connection.get_handle();
 
-                        // Flutter the heart rate at AVERAGE_HEART_RATE +- 5;
-                        let hr = AVERAGE_HEART_RATE + (random::<u8>() % 11) - 5;
+        let address = connection.get_peer_address();
 
-                        heart_rate_clone.store(hr, Ordering::SeqCst);
-                    }
-                });
+        let le_l2cap = connection.try_into_le().unwrap();
 
-                loop {
-                    let hrs_value_handle = 3;
+        let connection_task =
+            connection::Connection::new(le_l2cap, security, server, self.from_connection_sender.clone()).run(from);
 
-                    assert!(executor::block_on(server.send_notification(hrs_value_handle)));
+        let join_handle = tokio::spawn(connection_task);
 
-                    thread::sleep(connect_interval)
+        let connection_handle = ConnectionTaskHandle {
+            hci_handle,
+            join_handle,
+            to,
+            address,
+            status,
+        };
+
+        match self.connections.binary_search_by(|c| c.hci_handle.cmp(&hci_handle)) {
+            Err(index) => self.connections.insert(index, connection_handle),
+            Ok(_) => panic!("handle for connection already associated with a connection task"),
+        };
+    }
+
+    async fn accept_pairing_from(&mut self, address: BluetoothDeviceAddress, user_io: &mut UserInOut) {
+        match self.pairing.binary_search_by(|pairing| pairing.0.cmp(&address)) {
+            Ok(index) => {
+                let handle = &self.pairing[index].1;
+
+                if let Ok(index) = self
+                    .connections
+                    .binary_search_by(|connection| connection.hci_handle.cmp(&handle))
+                {
+                    let message = MainToConnection::PairingAccepted;
+
+                    self.connections[index].to.send(message).unwrap();
+                } else {
+                    user_io.device_not_connected_for_pairing(address).await.unwrap();
                 }
-            });
-
-            println!("Device Connected, and heart rate service started! (use ctrl-c to disconnect and exit)");
-
-            join_handle.join().expect("Thread should not exit!");
-
-            panic!("Thread Ended!");
+            }
+            Err(_) => {
+                user_io.device_not_pairing(address).await.unwrap();
+            }
         }
-        Err(err) => println!("Error: {}", err),
-    };
+    }
+
+    async fn exit<H: HostChannelEnds>(&mut self, host: &mut Host<H>) {
+        for task in std::mem::take(&mut self.connections) {
+            task.to.send(MainToConnection::Exit).unwrap();
+
+            task.join_handle.await.unwrap();
+
+            let disconnect_parameters = disconnect::DisconnectParameters {
+                connection_handle: task.hci_handle,
+                disconnect_reason: disconnect::DisconnectReason::RemoteUserTerminatedConnection,
+            };
+
+            disconnect::send(host, disconnect_parameters).await.unwrap()
+        }
+    }
+
+    fn authentication_input(&mut self, address: &BluetoothDeviceAddress, ai: AuthenticationInput) {
+        if let Ok(index) = self
+            .pairing
+            .binary_search_by(|pairing_info| pairing_info.0.cmp(address))
+        {
+            let handle = &self.pairing[index].1;
+
+            let index = self
+                .connections
+                .binary_search_by(|connection| connection.hci_handle.cmp(handle))
+                .unwrap();
+
+            let message = MainToConnection::AuthenticationInput(ai);
+
+            self.connections[index].to.send(message).unwrap();
+        }
+    }
+
+    fn reject_all_pairing(&mut self) {
+        for pairing_info in core::mem::take(&mut self.pairing) {
+            if let Ok(index) = self
+                .connections
+                .binary_search_by(|connection| connection.hci_handle.cmp(&pairing_info.1))
+            {
+                self.connections[index]
+                    .to
+                    .send(MainToConnection::PairingRejected)
+                    .unwrap();
+            }
+        }
+    }
+
+    fn reject_pairing(&mut self, rejected: &[BluetoothDeviceAddress]) {
+        for reject in rejected {
+            if let Ok(index) = self
+                .pairing
+                .binary_search_by(|pairing_info| pairing_info.0.cmp(&reject))
+            {
+                let handle = &self.connections[index].hci_handle;
+
+                let index = self
+                    .connections
+                    .binary_search_by(|connection| connection.hci_handle.cmp(handle))
+                    .unwrap();
+
+                let message = MainToConnection::PairingRejected;
+
+                self.connections[index].to.send(message).unwrap();
+            }
+        }
+    }
+
+    pub async fn on_user_action<H: HostChannelEnds>(
+        &mut self,
+        host: &mut Host<H>,
+        user_action: io::UserAction,
+        user_io: &mut UserInOut,
+    ) {
+        match user_action {
+            io::UserAction::AdvertiseDiscoverable => advertise::discoverable_advertising_setup(host).await,
+            io::UserAction::AdvertisePrivate => self.privacy.start_private_advertising(host).await,
+            io::UserAction::NumberComparisonYes(address) => {
+                self.authentication_input(&address, AuthenticationInput::Yes)
+            }
+            io::UserAction::NumberComparisonNo(address) => self.authentication_input(&address, AuthenticationInput::No),
+            io::UserAction::PairingRejectAll => self.reject_all_pairing(),
+            io::UserAction::PairingReject(rejected) => self.reject_pairing(&rejected),
+            io::UserAction::PairingAccept(address) => self.accept_pairing_from(address, user_io).await,
+            io::UserAction::PasskeyInput(passkey, address) => {
+                self.authentication_input(&address, AuthenticationInput::Passkey(passkey))
+            }
+            io::UserAction::PasskeyCancel(address) => self.authentication_input(&address, AuthenticationInput::Cancel),
+            io::UserAction::StopAdvertising => advertise::disable_advertising(host).await,
+            io::UserAction::Exit => self.exit(host).await,
+        }
+    }
+
+    async fn on_disconnect(&mut self, connection_handle: ConnectionHandle) {
+        if let Ok(task) = self
+            .connections
+            .binary_search_by(|task| task.hci_handle.cmp(&connection_handle))
+            .map(|index| self.connections.remove(index))
+        {
+            task.to.send(MainToConnection::Exit).unwrap()
+        }
+    }
+
+    async fn on_encryption_change(
+        &self,
+        connection_handle: ConnectionHandle,
+        encryption_enabled: bo_tie::hci::events::parameters::EncryptionEnabled,
+    ) {
+        if let Some(task) = self.get_connection_task(&connection_handle) {
+            let encrypted = encryption_enabled.get_for_le().is_aes_ccm();
+
+            let msg = MainToConnection::Encryption(encrypted);
+
+            task.to.send(msg).unwrap()
+        }
+    }
+
+    async fn on_long_term_key_request<H: HostChannelEnds>(
+        &self,
+        host: &mut Host<H>,
+        connection_handle: ConnectionHandle,
+    ) {
+        if let Some(task) = self.get_connection_task(&connection_handle) {
+            task.to.send(MainToConnection::LtkRequest).unwrap();
+        } else {
+            long_term_key_request_negative_reply::send(host, connection_handle)
+                .await
+                .unwrap();
+
+            let disconnect_parameter = disconnect::DisconnectParameters {
+                connection_handle,
+                disconnect_reason: disconnect::DisconnectReason::RemoteDeviceTerminatedConnectionDueToPowerOff,
+            };
+
+            disconnect::send(host, disconnect_parameter).await.unwrap();
+        }
+    }
+
+    async fn on_long_term_key_response<H: HostChannelEnds>(
+        &self,
+        host: &mut Host<H>,
+        connection_handle: ConnectionHandle,
+        ltk: Option<u128>,
+    ) {
+        use bo_tie::hci::commands::le::long_term_key_request_reply;
+
+        match ltk {
+            None => {
+                long_term_key_request_negative_reply::send(host, connection_handle)
+                    .await
+                    .unwrap();
+            }
+            Some(ltk) => {
+                long_term_key_request_reply::send(host, connection_handle, ltk)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    async fn on_connection_parameters_request<H: HostChannelEnds>(
+        &self,
+        host: &mut Host<H>,
+        connection_parameters: bo_tie::hci::events::parameters::LeRemoteConnectionParameterRequestData,
+    ) {
+        use bo_tie::hci::commands::le::remote_connection_parameter_request_reply;
+
+        let parameters = remote_connection_parameter_request_reply::CommandParameters {
+            handle: connection_parameters.connection_handle,
+            interval_min: connection_parameters.minimum_interval,
+            interval_max: connection_parameters.maximum_interval,
+            latency: connection_parameters.latency,
+            timeout: connection_parameters.timeout,
+            ce_len: Default::default(),
+        };
+
+        remote_connection_parameter_request_reply::send(host, parameters)
+            .await
+            .unwrap();
+    }
+
+    pub async fn on_hci_next<H: SendAndSyncSafeHostChannelEnds>(
+        &mut self,
+        host: &mut Host<H>,
+        next: Next<H::ConnectionChannelEnds>,
+        user_io: &mut io::UserInOut,
+    ) where
+        <H as SendAndSyncSafeHostChannelEnds>::SendAndSyncSafeConnectionChannelEnds: 'static,
+    {
+        use bo_tie::hci::events::{EventsData, LeMetaData};
+
+        match next {
+            Next::Event(EventsData::DisconnectionComplete(d)) => self.on_disconnect(d.connection_handle).await,
+            Next::Event(EventsData::EncryptionChangeV1(e)) => {
+                self.on_encryption_change(e.connection_handle, e.encryption_enabled)
+                    .await
+            }
+            Next::Event(EventsData::EncryptionChangeV2(e)) => {
+                self.on_encryption_change(e.connection_handle, e.encryption_enabled)
+                    .await
+            }
+            Next::Event(EventsData::LeMeta(LeMetaData::LongTermKeyRequest(r))) => {
+                self.on_long_term_key_request(host, r.connection_handle).await
+            }
+            Next::Event(EventsData::LeMeta(LeMetaData::RemoteConnectionParameterRequest(c))) => {
+                self.on_connection_parameters_request(host, c).await
+            }
+            Next::Event(_) => unreachable!(),
+            Next::NewConnection(c) => self.on_connection(host, c, user_io).await,
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    #[cfg(feature = "log")]
+    {
+        use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
+
+        TermLogger::init(
+            LevelFilter::Trace,
+            Config::default(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        )
+        .unwrap();
+    }
+
+    let mut user_io = io::UserInOut::new();
+
+    let (ctrl_c_sender, mut ctrl_c_recv) = tokio::sync::mpsc::channel(1);
+
+    ctrlc::set_handler(move || {
+        ctrl_c_sender.try_send(()).ok();
+    })
+    .ok();
+
+    let (interface, host_ends) = create_hci!();
+
+    tokio::spawn(interface.run());
+
+    let host = &mut Host::init(host_ends).await.unwrap();
+
+    let mut hrp = HeartRateProfile::new(host).await;
+
+    let mut connection_receiver = hrp.take_connection_receiver().unwrap();
+
+    user_io.init_greeting().unwrap();
+
+    loop {
+        tokio::select! {
+            user_action = user_io.await_user() => {
+                let user_action = user_action.unwrap();
+
+                if let io::UserAction::Exit = user_action {
+                    break
+                }
+
+                hrp.on_user_action(host, user_action, &mut user_io).await;
+            },
+
+            host_next = host.next() => hrp.on_hci_next(host, host_next.unwrap(), &mut user_io).await,
+
+            message = connection_receiver.recv() => message.unwrap().process(host, &mut user_io, &mut hrp).await,
+
+            _ = ctrl_c_recv.recv() => break,
+        }
+    }
+
+    advertise::disable_advertising(host).await;
+
+    hrp.on_user_action(host, io::UserAction::Exit, &mut user_io).await;
+
+    user_io.shutdown_io().await.unwrap();
 }
