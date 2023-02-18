@@ -30,7 +30,10 @@ use bo_tie::hci::{Host, HostChannelEnds};
 use bo_tie::host::gap::assigned;
 use bo_tie::BluetoothDeviceAddress;
 
-pub async fn discoverable_advertising_setup<H: HostChannelEnds>(host: &mut Host<H>) {
+pub async fn discoverable_advertising_setup<H: HostChannelEnds>(
+    host: &mut Host<H>,
+    discoverable_address: BluetoothDeviceAddress,
+) {
     let adv_name = assigned::local_name::LocalName::new(crate::EXAMPLE_NAME, ["HRP example", "HRP"]);
 
     let mut adv_flags = assigned::flags::Flags::new();
@@ -56,15 +59,13 @@ pub async fn discoverable_advertising_setup<H: HostChannelEnds>(host: &mut Host<
 
     scan_data.try_push(adv_name).unwrap();
 
-    let address = BluetoothDeviceAddress::new_non_resolvable();
-
     // this may return an invalid error (set_advertising_enable should
     // not return an error here if the device supports LE transmission)
     // on some devices (because advertising is already be disabled),
     // so the result is okayed instead of unwrapped.
     set_advertising_enable::send(host, false).await.ok();
 
-    set_random_address::send(host, address).await.unwrap();
+    set_random_address::send(host, discoverable_address).await.unwrap();
 
     set_advertising_data::send(host, adv_data).await.unwrap();
 

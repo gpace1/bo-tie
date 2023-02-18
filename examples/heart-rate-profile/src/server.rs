@@ -115,16 +115,6 @@ impl Server {
 
         let server = server_builder.make_server(NoQueuedWrites);
 
-        println!("server:");
-        for service in server.get_service_info() {
-            println!(
-                "service: {:x}, handle: {}, end handle: {}",
-                service.get_uuid(),
-                service.get_handle(),
-                service.get_end_group_handle()
-            );
-        }
-
         Self {
             server,
             heart_rate_measurement,

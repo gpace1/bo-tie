@@ -145,11 +145,17 @@ impl KeysStore {
 /// The device is either a `New` device or an `Identified` device. `New` devices are devices that
 /// have not previously bonded and connect when the example is discoverable. An `Identified`
 /// connection is one where the peer device has connected with a resolved resolvable private
-/// address.  
+/// address.
+///
+/// For a newly connected device, the Security Manager requires the advertising address of this
+/// device and the address of the peer within the connection indication LE link layer packet. The
+/// advertising address is always random in this example, but the peer device may use a random
+/// address or its public address.
 pub enum ConnectionKind {
     New {
+        advertising_address: BluetoothDeviceAddress,
         peer_address: BluetoothDeviceAddress,
-        is_random: bool,
+        peer_is_random: bool,
     },
     Identified(Keys),
 }
@@ -180,11 +186,12 @@ impl Security {
     pub fn new(keys_store: KeysStore, connection: ConnectionKind) -> Self {
         let (security_manager, keys) = match connection {
             ConnectionKind::New {
+                advertising_address,
                 peer_address,
-                is_random,
+                peer_is_random,
             } => {
                 let security_manager =
-                    SecurityManagerBuilder::new(peer_address, KeysStore::IDENTITY.get_address(), is_random, true)
+                    SecurityManagerBuilder::new(peer_address, advertising_address, peer_is_random, true)
                         .disable_just_works()
                         .enable_number_comparison()
                         .enable_passkey()
@@ -237,15 +244,13 @@ impl Security {
     {
         use bo_tie::host::sm::CommandType;
 
-        if !self.is_encrypted {
-            if let Ok(CommandType::PairingRequest) = (&*pdu).try_into() {
-                let pairing_request =
-                    core::mem::replace(pdu, BasicInfoFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier));
+        if let Ok(CommandType::PairingRequest) = (&*pdu).try_into() {
+            let pairing_request =
+                core::mem::replace(pdu, BasicInfoFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier));
 
-                self.pairing_request = Some(pairing_request);
+            self.pairing_request = Some(pairing_request);
 
-                return Some(SecurityStage::AwaitUserAcceptPairingRequest);
-            }
+            return Some(SecurityStage::AwaitUserAcceptPairingRequest);
         }
 
         let status = self
@@ -254,7 +259,11 @@ impl Security {
             .await
             .unwrap();
 
-        self.process_status(status)
+        if let Ok(CommandType::PairingRequest) = (&*pdu).try_into() {
+            Some(SecurityStage::AwaitUserAcceptPairingRequest)
+        } else {
+            self.process_status(status)
+        }
     }
 
     fn process_status(&mut self, status: Status) -> Option<SecurityStage> {

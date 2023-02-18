@@ -42,7 +42,7 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
                     None => break, // connection closed
                 },
 
-                msg = from.recv() => if self.process_msg(msg.unwrap()).await { break },
+                msg = from.recv() => self.process_msg(msg.unwrap()).await,
             }
         }
     }
@@ -72,7 +72,7 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
         }
     }
 
-    async fn process_msg(&mut self, msg: MainToConnection) -> bool {
+    async fn process_msg(&mut self, msg: MainToConnection) {
         match msg {
             MainToConnection::Encryption(is_encrypted) => self.on_encryption(is_encrypted).await,
             MainToConnection::LtkRequest => self.on_ltk_request(),
@@ -83,10 +83,7 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
                     self.send_security_stage(security_stage)
                 }
             }
-            MainToConnection::Exit => return true,
         }
-
-        false
     }
 
     async fn on_encryption(&mut self, is_encrypted: bool) {

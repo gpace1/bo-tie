@@ -5,6 +5,7 @@
 //!
 //! Pairing authentication is dealt with in the [`authentication`] module.
 
+use bo_tie::hci::commands::opcodes::ControllerAndBaseband::Reset;
 use bo_tie::host::sm::pairing::PairingFailedReason;
 use bo_tie::BluetoothDeviceAddress;
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
@@ -105,8 +106,7 @@ impl UserInOut {
         },
         Command {
             name: "advertise",
-            description: "Enable or disable advertising. This command must be called with one of \
-                its sub commands.",
+            description: "Enable or disable advertising.",
             args_description: "",
             job: Self::find_sub_command,
             sub_commands: &[
@@ -151,8 +151,9 @@ impl UserInOut {
                 },
                 SubCommand {
                     name: "accept",
-                    description: "Accept a pairing request of a device.",
-                    args_description: "ADDRESS",
+                    description: "Accept a pairing request of a device. If argument ADDRESS is not \
+                        specified, the last device to request pairing is accepted.",
+                    args_description: "{ADDRESS}",
                     job: Self::pairing_accept,
                 },
             ],
@@ -342,33 +343,21 @@ impl UserInOut {
             Some(AuthenticationKind::NumberComparison) => {
                 write!(self.stdout, "[number-comparison")?;
 
-                crossterm::execute!(self.stdout, SetForegroundColor(Color::Yellow))?;
-
-                write!(self.stdout, " {} ", self.status.current_pair.unwrap())?;
-
-                crossterm::execute!(self.stdout, SetForegroundColor(ORANGE))?;
+                write!(self.stdout, " {}", self.status.current_pair.unwrap())?;
 
                 write!(self.stdout, "]")
             }
             Some(AuthenticationKind::PasskeyInput) => {
                 write!(self.stdout, "[passkey-input")?;
 
-                crossterm::execute!(self.stdout, SetForegroundColor(Color::Yellow))?;
-
-                write!(self.stdout, " {} ", self.status.current_pair.unwrap())?;
-
-                crossterm::execute!(self.stdout, SetForegroundColor(ORANGE))?;
+                write!(self.stdout, " {}", self.status.current_pair.unwrap())?;
 
                 write!(self.stdout, "]")
             }
             Some(AuthenticationKind::PasskeyOutput) => {
                 write!(self.stdout, "[passkey-output")?;
 
-                crossterm::execute!(self.stdout, SetForegroundColor(Color::Yellow))?;
-
-                write!(self.stdout, " {} ", self.status.current_pair.unwrap())?;
-
-                crossterm::execute!(self.stdout, SetForegroundColor(ORANGE))?;
+                write!(self.stdout, " {}", self.status.current_pair.unwrap())?;
 
                 write!(self.stdout, "]")
             }
@@ -383,7 +372,7 @@ impl UserInOut {
             Prompt::Authentication => self.prompt_authentication()?,
         }
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         write!(self.stdout, ">>> ")?;
 
@@ -391,6 +380,8 @@ impl UserInOut {
     }
 
     fn print_unknown_command(&mut self, input: &str) -> io::Result<()> {
+        self.status.next_prompt.repeat();
+
         crossterm::execute!(self.stdout, ResetColor)?;
 
         write!(self.stdout, "unknown command ")?;
@@ -399,7 +390,7 @@ impl UserInOut {
 
         writeln!(self.stdout, "{}", input)?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         write!(self.stdout, "for a list of commands type ")?;
 
@@ -430,7 +421,7 @@ impl UserInOut {
     ///
     /// The input currently entered by the user is taken and saved, the line is then cleared.
     async fn scrape_user_input(&mut self) -> io::Result<()> {
-        self.status.next_prompt.input_erased();
+        self.status.next_prompt.repeat();
 
         crossterm::terminal::enable_raw_mode()?;
 
@@ -443,7 +434,7 @@ impl UserInOut {
         let current = crossterm::cursor::position()?;
 
         crossterm::execute!(
-            io::stdout(),
+            self.stdout,
             crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
             crossterm::cursor::MoveTo(0, current.1)
         )?;
@@ -457,7 +448,7 @@ impl UserInOut {
     ///
     /// The input currently entered by the user is taken and dropped, the line is then cleared.
     async fn clear_user_input(&mut self) -> io::Result<()> {
-        self.status.next_prompt.input_erased();
+        self.status.next_prompt.repeat();
 
         crossterm::terminal::enable_raw_mode()?;
 
@@ -466,7 +457,7 @@ impl UserInOut {
         let current = crossterm::cursor::position()?;
 
         crossterm::execute!(
-            io::stdout(),
+            self.stdout,
             crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
             crossterm::cursor::MoveTo(0, current.1)
         )?;
@@ -477,6 +468,8 @@ impl UserInOut {
     }
 
     pub async fn on_connection(&mut self, address: BluetoothDeviceAddress, status: ConnectedStatus) -> io::Result<()> {
+        self.status.next_prompt.repeat();
+
         self.scrape_user_input().await?;
 
         match status {
@@ -510,15 +503,33 @@ impl UserInOut {
     /// server. Any other device will cause this method to be called and have the '<unauthenticated
     /// connected>' message appear.
     pub async fn on_unauthenticated_connection(&mut self, address: BluetoothDeviceAddress) -> io::Result<()> {
+        self.status.next_prompt.repeat();
+
         self.scrape_user_input().await?;
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Red))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Red))?;
 
         write!(self.stdout, "<unauthenticated connected>")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         writeln!(self.stdout, " {address} ...action taken: disconnected")?;
+
+        self.stdout.flush()
+    }
+
+    pub async fn on_disconnection(&mut self, address: BluetoothDeviceAddress) -> io::Result<()> {
+        self.status.next_prompt.repeat();
+
+        self.scrape_user_input().await?;
+
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Yellow))?;
+
+        write!(self.stdout, "<disconnected> ")?;
+
+        crossterm::execute!(self.stdout, ResetColor)?;
+
+        writeln!(self.stdout, " {address}")?;
 
         self.stdout.flush()
     }
@@ -526,13 +537,15 @@ impl UserInOut {
     pub async fn on_request_pairing(&mut self, address: BluetoothDeviceAddress) -> io::Result<()> {
         self.scrape_user_input().await?;
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Yellow))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Yellow))?;
 
-        writeln!(self.stdout, "<pairing request>")?;
+        write!(self.stdout, "<pairing request>")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
-        writeln!(self.stdout, "{address}")?;
+        writeln!(self.stdout, " {address}")?;
+
+        self.status.next_prompt.repeat();
 
         self.stdout.flush()
     }
@@ -544,13 +557,15 @@ impl UserInOut {
     ) -> io::Result<()> {
         self.scrape_user_input().await?;
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Red))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Red))?;
 
         write!(self.stdout, "<pairing failed>")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         writeln!(self.stdout, " {address} ...reason: {reason}")?;
+
+        self.status.next_prompt.repeat();
 
         self.stdout.flush()?;
 
@@ -558,63 +573,87 @@ impl UserInOut {
     }
 
     pub async fn on_number_comparison(&mut self, number: String) -> io::Result<()> {
+        self.status.authentication_kind = AuthenticationKind::NumberComparison.into();
+
         self.scrape_user_input().await?;
 
         self.status.next_prompt.prompt_authentication();
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Magenta))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Yellow))?;
 
         write!(self.stdout, "<authentication>")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         write!(self.stdout, " does ")?;
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Blue))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Blue))?;
 
         write!(self.stdout, "{number}")?;
 
-        writeln!(self.stdout, " match the number displayed on the other device? [Y/n]")?;
+        crossterm::execute!(self.stdout, ResetColor)?;
+
+        writeln!(self.stdout, " match the number displayed on the other device?")?;
+
+        self.status.next_prompt.repeat();
 
         self.stdout.flush()
     }
 
     pub async fn on_passkey_input(&mut self) -> io::Result<()> {
+        self.status.authentication_kind = AuthenticationKind::PasskeyInput.into();
+
         self.scrape_user_input().await?;
 
         self.status.next_prompt.prompt_authentication();
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Magenta))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Magenta))?;
 
         write!(self.stdout, "<authentication>")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         writeln!(self.stdout, " enter the passkey displayed on the other device")?;
+
+        self.status.next_prompt.repeat();
 
         self.stdout.flush()
     }
 
     pub async fn on_passkey_output(&mut self, passkey: String) -> io::Result<()> {
+        self.status.authentication_kind = AuthenticationKind::PasskeyOutput.into();
+
         self.scrape_user_input().await?;
 
         self.status.next_prompt.prompt_authentication();
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Magenta))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Magenta))?;
 
         write!(self.stdout, "<authentication>")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         write!(self.stdout, " enter the passkey ")?;
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Blue))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Blue))?;
 
         write!(self.stdout, "{passkey}")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         writeln!(self.stdout, " into the other device")?;
+
+        self.status.next_prompt.repeat();
+
+        self.stdout.flush()
+    }
+
+    pub async fn on_pairing_complete(&mut self) -> io::Result<()> {
+        self.clear_user_input().await?;
+
+        self.status.next_prompt.prompt_main();
+
+        self.status.authentication_kind.take();
 
         self.stdout.flush()
     }
@@ -622,13 +661,15 @@ impl UserInOut {
     pub async fn on_bonded(&mut self, address: BluetoothDeviceAddress) -> io::Result<()> {
         self.scrape_user_input().await?;
 
-        crossterm::execute!(io::stdout(), SetForegroundColor(Color::Green))?;
+        crossterm::execute!(self.stdout, SetForegroundColor(Color::Green))?;
 
         write!(self.stdout, "<bonded>")?;
 
-        crossterm::execute!(io::stdout(), ResetColor)?;
+        crossterm::execute!(self.stdout, ResetColor)?;
 
         writeln!(self.stdout, " {address}")?;
+
+        self.status.next_prompt.repeat();
 
         self.stdout.flush()
     }
@@ -699,6 +740,8 @@ impl UserInOut {
             self.print_command_help(command)?;
         }
 
+        self.status.next_prompt.repeat();
+
         self.stdout.flush()?;
 
         Ok(None)
@@ -706,6 +749,8 @@ impl UserInOut {
 
     fn find_sub_command(&mut self, command: &Command, input: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         crossterm::execute!(self.stdout, ResetColor)?;
+
+        self.status.next_prompt.repeat();
 
         macro_rules! help {
             () => {{
@@ -744,6 +789,8 @@ impl UserInOut {
 
     fn print_status(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         crossterm::execute!(self.stdout, ResetColor)?;
+
+        self.status.next_prompt.repeat();
 
         writeln!(self.stdout, "device status: ")?;
 
@@ -785,6 +832,8 @@ impl UserInOut {
     fn number_comparison_help(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         crossterm::execute!(self.stdout, ResetColor)?;
 
+        self.status.next_prompt.repeat();
+
         writeln!(self.stdout, "list of commands:\n")?;
 
         for command in Self::NUMBER_COMPARISON_COMMANDS {
@@ -799,6 +848,8 @@ impl UserInOut {
     fn number_comparison_yes(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         self.status.next_prompt.prompt_main();
 
+        self.status.next_prompt.repeat();
+
         let current = self.status.current_pair.take().unwrap();
 
         Ok(Some(UserAction::NumberComparisonYes(current)))
@@ -807,12 +858,16 @@ impl UserInOut {
     fn number_comparison_no(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         self.status.next_prompt.prompt_main();
 
+        self.status.authentication_kind.take();
+
         let current = self.status.current_pair.take().unwrap();
 
         Ok(Some(UserAction::NumberComparisonNo(current)))
     }
 
     fn passkey_input_help(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
+        self.status.next_prompt.repeat();
+
         crossterm::execute!(self.stdout, ResetColor)?;
 
         writeln!(self.stdout, "list of commands:\n")?;
@@ -827,6 +882,8 @@ impl UserInOut {
     }
 
     fn passkey_input_silly_help(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
+        self.status.next_prompt.repeat();
+
         crossterm::execute!(self.stdout, ResetColor)?;
 
         write!(self.stdout, "expected a six digit number like ")?;
@@ -847,6 +904,8 @@ impl UserInOut {
     fn passkey_cancel(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         self.status.next_prompt.prompt_main();
 
+        self.status.authentication_kind.take();
+
         let current = self.status.current_pair.take().unwrap();
 
         Ok(Some(UserAction::PasskeyCancel(current)))
@@ -854,7 +913,7 @@ impl UserInOut {
 
     async fn passkey_user_input(&mut self, passkey_str: &str) -> io::Result<Option<UserAction>> {
         if passkey_str.chars().count() == 6 && passkey_str.chars().all(|char| char.is_digit(10)) {
-            self.status.next_prompt.prompt_main();
+            self.status.next_prompt.repeat();
 
             let current = self.status.current_pair.take().unwrap();
 
@@ -868,6 +927,8 @@ impl UserInOut {
 
             Ok(None)
         } else if passkey_str.chars().count() != 6 {
+            self.status.next_prompt.repeat();
+
             self.scrape_user_input().await.unwrap();
 
             crossterm::execute!(self.stdout, ResetColor)?;
@@ -882,6 +943,8 @@ impl UserInOut {
 
             Ok(None)
         } else {
+            self.status.next_prompt.repeat();
+
             crossterm::execute!(self.stdout, ResetColor)?;
 
             writeln!(
@@ -896,33 +959,33 @@ impl UserInOut {
         }
     }
 
-    fn passkey_output_cancel(&mut self, _: &Command, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
+    fn advertise_discoverable(&mut self, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         self.status.next_prompt.prompt_main();
 
-        let current = self.status.current_pair.take().unwrap();
-
-        Ok(Some(UserAction::PasskeyCancel(current)))
-    }
-
-    fn advertise_discoverable(&mut self, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
         self.status.advertising_status = AdvertisingStatus::Discoverable;
 
         Ok(Some(UserAction::AdvertiseDiscoverable))
     }
 
     fn advertise_private(&mut self, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
+        self.status.next_prompt.prompt_main();
+
         self.status.advertising_status = AdvertisingStatus::Private;
 
         Ok(Some(UserAction::AdvertisePrivate))
     }
 
     fn advertise_off(&mut self, _: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
+        self.status.next_prompt.prompt_main();
+
         self.status.advertising_status = AdvertisingStatus::Off;
 
         Ok(Some(UserAction::StopAdvertising))
     }
 
     fn pairing_reject(&mut self, input: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
+        self.status.next_prompt.prompt_main();
+
         crossterm::execute!(self.stdout, ResetColor)?;
 
         let mut rejected = Vec::new();
@@ -951,10 +1014,14 @@ impl UserInOut {
     }
 
     fn pairing_accept(&mut self, input: &mut SplitWhitespace) -> io::Result<Option<UserAction>> {
+        self.status.next_prompt.prompt_main();
+
         if let Some(address) = input
             .next()
             .and_then(|input| input.parse::<BluetoothDeviceAddress>().ok())
         {
+            self.status.current_pair = address.into();
+
             Ok(Some(UserAction::PairingAccept(address)))
         } else {
             writeln!(
@@ -968,19 +1035,24 @@ impl UserInOut {
     }
 
     pub async fn device_not_pairing(&mut self, address: BluetoothDeviceAddress) -> io::Result<()> {
+        self.status.next_prompt.prompt_main();
+
         self.scrape_user_input().await?;
 
         crossterm::execute!(self.stdout, ResetColor)?;
 
         writeln!(
             self.stdout,
-            "cannot pair with device {address} because it is not or no longer trying to pair"
+            "Cannot pair with device {address} because it is either not pairing or no longer \
+            trying to pair."
         )?;
 
         self.stdout.flush()
     }
 
     pub async fn device_not_connected_for_pairing(&mut self, address: BluetoothDeviceAddress) -> io::Result<()> {
+        self.status.next_prompt.prompt_main();
+
         self.scrape_user_input().await?;
 
         crossterm::execute!(self.stdout, ResetColor)?;
@@ -1001,7 +1073,10 @@ impl UserInOut {
         let command = user_input.next();
 
         match command {
-            None | Some("") => Ok(None),
+            None | Some("") => {
+                self.status.next_prompt.repeat();
+                Ok(None)
+            }
             Some(cmd_name) => match of.iter().find(|cmd| cmd.name == cmd_name) {
                 None => {
                     self.print_unknown_command(cmd_name)?;
@@ -1042,7 +1117,10 @@ impl UserInOut {
         let command = user_input.next();
 
         match command {
-            None | Some("") => Ok(None),
+            None | Some("") => {
+                self.status.next_prompt.repeat();
+                Ok(None)
+            }
             Some(cmd_name) => match Self::PASSKEY_INPUT_COMMANDS.iter().find(|cmd| cmd.name == cmd_name) {
                 None => {
                     self.passkey_user_input(cmd_name).await?;
@@ -1087,6 +1165,13 @@ impl UserInOut {
                 break Ok(user_action);
             }
         }
+    }
+}
+
+impl Drop for UserInOut {
+    fn drop(&mut self) {
+        // just in case something weird happens
+        crossterm::terminal::disable_raw_mode().ok();
     }
 }
 
@@ -1145,7 +1230,7 @@ impl NextPrompt {
         }
     }
 
-    fn input_erased(&mut self) {
+    fn repeat(&mut self) {
         self.repeat = true
     }
 
