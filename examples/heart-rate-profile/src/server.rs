@@ -286,6 +286,8 @@ impl HeartRateMeasurementData {
 
 impl TransferFormatInto for HeartRateMeasurementData {
     fn len_of_into(&self) -> usize {
+        let flags_size = 1;
+
         let value_size = match self.value {
             HeartRateValue::Uint8(_) => 1,
             HeartRateValue::Uint16(_) => 2,
@@ -298,7 +300,7 @@ impl TransferFormatInto for HeartRateMeasurementData {
 
         let rr_intervals = self.rr_intervals.len() * 2;
 
-        let total_size = value_size + energy_expended_size + rr_intervals;
+        let total_size = flags_size + value_size + energy_expended_size + rr_intervals;
 
         std::cmp::min(self.mtu, total_size)
     }
