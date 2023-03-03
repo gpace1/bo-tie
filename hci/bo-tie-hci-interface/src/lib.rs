@@ -496,7 +496,11 @@ where
 
             let message = ToConnectionDataIntraMessage::Disconnect(error);
 
-            sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))?;
+            // It may be the case where the connection async task already
+            // disconnected. The controller can send an error like
+            // `Error::ConnectionTerminatedByLocalHost` where by the
+            // connection async task is closed.
+            sender.send(message).await.ok();
 
             self.channel_reserve
                 .try_remove(disconnect.connection_handle)
@@ -574,9 +578,7 @@ where
             EventsData::DisconnectionComplete(data) => {
                 self.parse_disconnect_event(data).await?;
 
-                self.event_routing(&ed)
-                    .await
-                    .map(|rout_to_host| rout_to_host.then_some(ed))
+                Ok(self.event_routing_policy.rout_to_host().then_some(ed))
             }
             _ => self
                 .event_routing(&ed)
