@@ -175,6 +175,8 @@ pub enum Error {
     OperationRequiresPairing,
     /// The input or operation is no longer valid to the scope of pairing
     Invalid,
+    /// The Security Manager is configured to not support pairing
+    PairingUnsupported,
 }
 
 impl core::fmt::Display for Error {
@@ -200,6 +202,7 @@ impl core::fmt::Display for Error {
             Error::ACLData(e) => write!(f, "invalid ACL basic frame: {}", e),
             Error::OperationRequiresPairing => f.write_str("operation requires pairing"),
             Error::Invalid => f.write_str("the operation is no longer valid"),
+            Error::PairingUnsupported => f.write_str("the Security Manager is not configured to support pairing"),
         }
     }
 }

@@ -536,11 +536,20 @@ impl SecurityManagerBuilder {
             (false, PasskeyAbility::None) => IoCapability::NoInputNoOutput,
         };
 
-        if !self.enable_just_works && io_capability.no_io_capability() {
+        if !self.enable_just_works && io_capability.no_io_capability() && self.prior_keys.is_none() {
             return Err(crate::SecurityManagerBuilderError);
         }
 
-        let auth_req = self.create_auth_req()?;
+        let auth_req = match self.create_auth_req() {
+            Ok(auth_req) => auth_req,
+            Err(e) => {
+                if self.prior_keys.is_none() {
+                    return Err(e);
+                } else {
+                    Default::default()
+                }
+            }
+        };
 
         Ok(SecurityManager {
             io_capability,
@@ -792,6 +801,10 @@ impl SecurityManager {
     where
         C: ConnectionChannel,
     {
+        if !self.allow_just_works && self.io_capability.no_io_capability() {
+            return Err(Error::PairingUnsupported.into());
+        }
+
         self.pairing_data = None;
 
         let oob_data_flag = match self.oob {

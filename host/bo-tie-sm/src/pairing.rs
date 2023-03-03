@@ -53,6 +53,7 @@ impl IoCapability {
         }
     }
 
+    /// Check if this device has no input or output capability for pairing
     pub fn no_io_capability(self) -> bool {
         if let IoCapability::NoInputNoOutput = self {
             true
