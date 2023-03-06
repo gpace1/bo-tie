@@ -131,8 +131,6 @@ pub struct SetValue;
 /// `ValueBuilder` marker type
 ///
 /// This marker type is used for enabling the method [`ValueBuilder::set_permissions`].
-///
-/// [`ValueBuilder::set_permissions`]: ValueBuilder::<SetPermissions>::set_permissions
 pub struct SetPermissions<V> {
     value: V,
 }

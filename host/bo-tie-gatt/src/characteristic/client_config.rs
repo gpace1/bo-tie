@@ -35,7 +35,7 @@ impl ClientConfigurationBuilder<SetClientConfiguration> {
 }
 
 impl ClientConfigurationBuilder<SetClientConfiguration> {
-    /// Set the configuration that the client can enabled
+    /// Set the configuration that can be enabled by the client
     ///
     /// The client will be able to set these client configuration parameters (if the client has
     /// write access). The client will get an error if it tries to write any configuration not
