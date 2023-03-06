@@ -235,6 +235,20 @@ impl core::fmt::Display for ErrorConversionError {
     }
 }
 
+impl TryFrom<u8> for ErrorConversionError {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, Self::Error> {
+        match val {
+            0x12..=0x7F => Ok(ErrorConversionError::Reserved(val)),
+            0x80..=0x9F => Ok(ErrorConversionError::ApplicationError(val)),
+            0xA0..=0xDF => Ok(ErrorConversionError::Reserved(val)),
+            0xE0..=0xFF => Ok(ErrorConversionError::CommonErrorCode(val)),
+            _ => Err(val),
+        }
+    }
+}
+
 /// The ATT Protocol errors
 ///
 /// These are the errors defined in the ATT Protocol. Higher layer protocols can define their own
