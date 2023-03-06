@@ -55,7 +55,6 @@ impl HostPrivacy {
         RpaInterval {
             interval: tokio::time::interval_at(tokio::time::Instant::now() + timeout, timeout),
             irk: info.irk,
-            peer_irk: info.peer_irk,
         }
     }
 
@@ -100,17 +99,13 @@ async fn set_advertising_parameters_private<H: HostChannelEnds>(host: &mut Host<
 pub struct RpaInterval {
     interval: tokio::time::Interval,
     irk: u128,
-    peer_irk: u128,
 }
 
 impl RpaInterval {
     pub async fn tick(&mut self) -> RegenRpa {
         self.interval.tick().await;
 
-        RegenRpa {
-            irk: self.irk,
-            peer_irk: self.peer_irk,
-        }
+        RegenRpa { irk: self.irk }
     }
 }
 
@@ -119,7 +114,6 @@ impl RpaInterval {
 /// This is returned by
 pub struct RegenRpa {
     irk: u128,
-    peer_irk: u128,
 }
 
 impl RegenRpa {
