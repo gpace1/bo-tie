@@ -126,7 +126,7 @@ async fn set_advertising_parameters_private<H: HostChannelEnds>(host: &mut Host<
 
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
-    let own_address = BluetoothDeviceAddress::new_resolvable(crate::security::KeysStore::IRK);
+    let own_address = BluetoothDeviceAddress::new_resolvable(crate::security::Store::IRK);
 
     adv_prams.advertising_type =
         set_advertising_parameters::AdvertisingType::ConnectableAndScannableUndirectedAdvertising;

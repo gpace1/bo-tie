@@ -215,7 +215,7 @@ impl ConnectionToMain {
 }
 
 struct HeartRateProfile {
-    keys_store: security::KeysStore,
+    keys_store: security::Store,
     heart_rate_measurement_arc: HeartRateMeasurementArc,
     privacy: advertise::privacy::Privacy,
     connections: Vec<ConnectionTaskHandle>,
@@ -241,14 +241,14 @@ impl HeartRateProfile {
 
         host.mask_events(Self::ENABLED_EVENTS).await.unwrap();
 
-        let (keys_store, advertising_kind) = match security::KeysStore::load_keys() {
+        let (keys_store, advertising_kind) = match security::Store::load_keys() {
             Some(keys) => {
                 if keys.is_empty().await {
                     to_ui.send(MainToUserInput::Mode(io::Mode::Silent)).unwrap();
 
                     (keys, advertise::Kind::Off)
                 } else {
-                    for keys in keys.get_all().await.iter() {
+                    for keys in keys.get_all_keys().await.iter() {
                         privacy.add_device_to_resolving_list(host, keys).await
                     }
 
@@ -259,7 +259,7 @@ impl HeartRateProfile {
                     (keys, advertise::Kind::Private)
                 }
             }
-            None => (security::KeysStore::init(), advertise::Kind::Off),
+            None => (security::Store::init(), advertise::Kind::Off),
         };
 
         let heart_rate_measurement_arc = HeartRateMeasurementArc::new();
@@ -307,7 +307,13 @@ impl HeartRateProfile {
         use security::{ConnectionKind, Security};
 
         if let Some(identity) = self.privacy.validate(&connection) {
-            let keys = self.keys_store.get(identity).await.unwrap().clone();
+            let bonded_info = self.keys_store.get(identity).await.unwrap();
+
+            let keys = *bonded_info.get_keys();
+
+            let is_notifications_enabled = bonded_info.is_notification_enabled();
+
+            drop(bonded_info);
 
             let security = Security::new(self.keys_store.clone(), ConnectionKind::Identified(keys));
 
@@ -317,7 +323,7 @@ impl HeartRateProfile {
                 .remove_device_from_resolving_list(host, &identity, false)
                 .await;
 
-            self.create_connection_task(connection, security, status);
+            self.create_connection_task(connection, security, status, is_notifications_enabled);
 
             let output = io::Output::on_connection(status);
 
@@ -337,7 +343,7 @@ impl HeartRateProfile {
 
             let status = connection::ConnectedStatus::New(peer_address);
 
-            self.create_connection_task(connection, security, status);
+            self.create_connection_task(connection, security, status, false);
 
             let output = io::Output::on_connection(status);
 
@@ -373,10 +379,11 @@ impl HeartRateProfile {
         connection: Connection<C>,
         security: security::Security,
         status: connection::ConnectedStatus,
+        is_notifications_enabled: bool,
     ) where
         C: SendAndSyncSafeConnectionChannelEnds + 'static,
     {
-        let server = server::Server::new(self.heart_rate_measurement_arc.clone());
+        let server = server::Server::new(self.heart_rate_measurement_arc.clone(), is_notifications_enabled);
 
         let (to, from) = tokio::sync::mpsc::unbounded_channel();
 
@@ -717,7 +724,7 @@ impl HeartRateProfile {
 
     async fn get_bonded_devices(&self) -> Vec<BluetoothDeviceAddress> {
         self.keys_store
-            .get_all()
+            .get_all_keys()
             .await
             .iter()
             .map(|keys| keys.get_peer_identity().unwrap().get_address())
@@ -732,6 +739,8 @@ impl HeartRateProfile {
 ///
 /// BTW I have not bothered to ensure this data makes any sense :).
 async fn gen_hart_rate_data(hrd: &HeartRateMeasurementArc) -> tokio::time::Sleep {
+    use rand::Rng;
+
     const BASE_HEART_RATE: u16 = 72;
 
     hrd.set_contact_status(server::ContactStatus::FullContact).await;
@@ -740,7 +749,7 @@ async fn gen_hart_rate_data(hrd: &HeartRateMeasurementArc) -> tokio::time::Sleep
 
     hrd.increase_energy_expended(2).await;
 
-    let interval = 700u16 + 200u16 % rand::random::<u16>();
+    let interval = 700u16 + 200u16 % rand::thread_rng().gen::<u16>();
 
     hrd.add_rr_interval(interval).await;
 

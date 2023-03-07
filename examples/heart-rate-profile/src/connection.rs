@@ -71,6 +71,10 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
                 _ = self.notification_interval.tick() => self.server.send_hrd_notification(&self.le_l2cap).await,
             }
         }
+
+        if let Some(mut bonding_info_guard) = self.security.get_bonding_info().await {
+            bonding_info_guard.set_notification_enabled(self.server.is_notifying())
+        }
     }
 
     fn send_security_stage(&self, security_stage: SecurityStage) {

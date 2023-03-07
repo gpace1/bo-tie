@@ -16,7 +16,7 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -64,8 +64,8 @@ impl Server {
         AttributePermissions::Write(AttributeRestriction::Encryption(EncryptionKeySize::Bits256)),
     ];
 
-    pub fn new(heart_rate_measurement: HeartRateMeasurementArc) -> Server {
-        let notify_hrd: Arc<AtomicBool> = Default::default();
+    pub fn new(heart_rate_measurement: HeartRateMeasurementArc, is_notifications_enabled: bool) -> Server {
+        let notify_hrd: Arc<AtomicBool> = Arc::new(AtomicBool::new(is_notifications_enabled));
 
         let mut gap_service = GapServiceBuilder::new(crate::EXAMPLE_NAME, APPEARANCE);
 
@@ -107,16 +107,29 @@ impl Server {
                     })
                     .set_client_configuration(|client_config| {
                         let notify_hrd = notify_hrd.clone();
+                        let local = local_heart_rate_measurement.clone();
+
+                        let init_config: &[ClientConfiguration] = if is_notifications_enabled {
+                            &[ClientConfiguration::Notification]
+                        } else {
+                            &[]
+                        };
 
                         client_config
                             .set_config([ClientConfiguration::Notification])
+                            .init_config(init_config)
                             .set_write_callback(move |client_config| {
-                                notify_hrd.store(
-                                    client_config.contains(&ClientConfiguration::Notification),
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
+                                let enable_notify = client_config.contains(&ClientConfiguration::Notification);
 
-                                std::future::ready(())
+                                notify_hrd.store(enable_notify, Ordering::Relaxed);
+
+                                let local = local.clone();
+
+                                async move {
+                                    if !enable_notify {
+                                        local.arc.lock().await.rr_offset = None
+                                    }
+                                }
                             })
                             .set_write_restrictions([AttributeRestriction::Encryption(EncryptionKeySize::Bits256)])
                     })
@@ -180,7 +193,7 @@ impl Server {
     /// This will send a notification to the Client containing the heart rate data **if** the client
     /// has enabled notifications for the heart rate data characteristic.
     pub async fn send_hrd_notification<C: bo_tie::host::l2cap::ConnectionChannel>(&mut self, channel: &C) {
-        if self.notify_hrd.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.notify_hrd.load(Ordering::Relaxed) {
             self.server.send_notification(channel, self.hrd_handle).await.unwrap();
         }
     }
@@ -208,6 +221,11 @@ impl Server {
     /// Revoke permissions to the client when unencrypted
     pub fn on_unencrypted(&mut self) {
         self.server.revoke_permissions_of_client(Self::ENCRYPTION_PERMISSIONS);
+    }
+
+    /// Check if notifications are being sent to the Client
+    pub fn is_notifying(&self) -> bool {
+        self.notify_hrd.load(Ordering::Relaxed)
     }
 }
 

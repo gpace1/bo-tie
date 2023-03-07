@@ -56,11 +56,45 @@ use bo_tie::BluetoothDeviceAddress;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct BondedDeviceInfo {
+    keys: Keys,
+    notifications_enabled: bool,
+}
+
+impl BondedDeviceInfo {
+    pub fn get_keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    pub fn is_notification_enabled(&self) -> bool {
+        self.notifications_enabled
+    }
+
+    pub fn set_notification_enabled(&mut self, is_enabled: bool) {
+        self.notifications_enabled = is_enabled
+    }
+}
+
+impl std::ops::Deref for BondedDeviceInfo {
+    type Target = Keys;
+
+    fn deref(&self) -> &Self::Target {
+        &self.keys
+    }
+}
+
+impl std::ops::DerefMut for BondedDeviceInfo {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.keys
+    }
+}
+
 /// Type for Storing the Security Manager Keys
 #[derive(Clone)]
-pub struct KeysStore(Arc<Mutex<Vec<Keys>>>);
+pub struct Store(Arc<Mutex<Vec<BondedDeviceInfo>>>);
 
-impl KeysStore {
+impl Store {
     /// This uses a single IRK for all devices that connect to it. This is not necessary to do, and
     /// unique IRK's could be distributed to each connected device instead of using a singular IRK.
     pub const IRK: u128 = 0x1e0777f16bc56c4eb20065118adae9bf;
@@ -79,7 +113,7 @@ impl KeysStore {
     ///
     /// This should only be called when `load_keys` returns false.
     pub fn init() -> Self {
-        KeysStore(Default::default())
+        Store(Default::default())
     }
 
     /// Load keys from 'heart-rate-profile.key' in the config dir
@@ -90,9 +124,9 @@ impl KeysStore {
         config_dir_path.push(Self::FILE_NAME);
 
         if let Ok(file) = std::fs::File::open(config_dir_path) {
-            let keys: Vec<Keys> = serde_yaml::from_reader(file).unwrap();
+            let info: Vec<BondedDeviceInfo> = serde_yaml::from_reader(file).unwrap();
 
-            Some(KeysStore(Arc::new(Mutex::new(keys))))
+            Some(Store(Arc::new(Mutex::new(info))))
         } else {
             None
         }
@@ -118,27 +152,36 @@ impl KeysStore {
     pub async fn add(&mut self, keys: Keys) {
         let mut guard = self.0.lock().await;
 
-        match guard.binary_search(&keys) {
+        match guard.binary_search_by(|entry| entry.keys.cmp(&keys)) {
             Ok(index) => {
-                *guard.get_mut(index).unwrap() = keys;
+                *guard.get_mut(index).unwrap() = BondedDeviceInfo {
+                    keys,
+                    notifications_enabled: false,
+                };
             }
             Err(index) => {
-                guard.insert(index, keys);
+                guard.insert(
+                    index,
+                    BondedDeviceInfo {
+                        keys,
+                        notifications_enabled: false,
+                    },
+                );
             }
         }
     }
 
-    pub async fn get(&self, peer: IdentityAddress) -> Option<tokio::sync::MappedMutexGuard<'_, Keys>> {
+    pub async fn get(&self, peer: IdentityAddress) -> Option<tokio::sync::MappedMutexGuard<'_, BondedDeviceInfo>> {
         let guard = self.0.lock().await;
 
         let index = guard
-            .binary_search_by(|keys| keys.get_peer_identity().cmp(&Some(peer)))
+            .binary_search_by(|entry| entry.keys.get_peer_identity().cmp(&Some(peer)))
             .ok()?;
 
-        tokio::sync::MutexGuard::map(guard, |keys| &mut keys[index]).into()
+        tokio::sync::MutexGuard::map(guard, |entries| &mut entries[index]).into()
     }
 
-    pub async fn get_all(&self) -> tokio::sync::MutexGuard<'_, Vec<Keys>> {
+    pub async fn get_all_keys(&self) -> tokio::sync::MutexGuard<'_, Vec<impl std::ops::DerefMut<Target = Keys>>> {
         self.0.lock().await
     }
 
@@ -150,7 +193,7 @@ impl KeysStore {
         let mut guard = self.0.lock().await;
 
         guard
-            .binary_search_by(|keys| keys.get_peer_identity().cmp(&Some(identity)))
+            .binary_search_by(|entry| entry.keys.get_peer_identity().cmp(&Some(identity)))
             .map(|index| guard.remove(index))
             .is_ok()
     }
@@ -186,7 +229,7 @@ pub enum ConnectionKind {
 /// `Security` is created and the lifetime of the `Security` will last until the
 pub struct Security {
     security_manager: SecurityManager,
-    keys_store: KeysStore,
+    store: Store,
     keys: Option<Keys>,
     is_encrypted: bool,
     pairing_request: Option<BasicInfoFrame<Vec<u8>>>,
@@ -203,7 +246,7 @@ impl Security {
     /// # Error
     /// If `discoverable_address` is `None` and either the peer address within `connection` is not
     /// resolvable or no address
-    pub fn new(keys_store: KeysStore, connection: ConnectionKind) -> Self {
+    pub fn new(keys_store: Store, connection: ConnectionKind) -> Self {
         let (security_manager, keys) = match connection {
             ConnectionKind::New {
                 advertising_address,
@@ -219,8 +262,8 @@ impl Security {
                         .distributed_bonding_keys(|distributed| {
                             distributed
                                 .enable_id()
-                                .set_irk(KeysStore::IRK)
-                                .set_identity(KeysStore::IDENTITY)
+                                .set_irk(Store::IRK)
+                                .set_identity(Store::IDENTITY)
                         })
                         .build();
 
@@ -241,7 +284,7 @@ impl Security {
 
         Security {
             security_manager,
-            keys_store,
+            store: keys_store,
             keys,
             is_encrypted,
             pairing_request,
@@ -291,9 +334,9 @@ impl Security {
             Status::BondingComplete => {
                 self.keys = self.security_manager.get_keys().copied();
 
-                self.keys_store.add(self.keys.unwrap()).await;
+                self.store.add(self.keys.unwrap()).await;
 
-                self.keys_store.save_keys().await;
+                self.store.save_keys().await;
 
                 let identity = self.keys.unwrap().get_peer_identity().unwrap();
 
@@ -425,6 +468,15 @@ impl Security {
                 self.process_status(status).await
             }
             _ => unreachable!("unexpected authentication"),
+        }
+    }
+
+    /// Get the bonding information
+    pub async fn get_bonding_info(&self) -> Option<tokio::sync::MappedMutexGuard<'_, BondedDeviceInfo>> {
+        if let Some(identity) = self.keys.and_then(|keys| keys.get_peer_identity()) {
+            self.store.get(identity).await
+        } else {
+            None
         }
     }
 }
