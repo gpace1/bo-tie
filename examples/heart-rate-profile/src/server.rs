@@ -118,6 +118,7 @@ impl Server {
 
                                 std::future::ready(())
                             })
+                            .set_write_restrictions([AttributeRestriction::Encryption(EncryptionKeySize::Bits256)])
                     })
             });
 
