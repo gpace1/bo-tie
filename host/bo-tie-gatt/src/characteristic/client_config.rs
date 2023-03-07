@@ -83,8 +83,9 @@ impl ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
     /// Whenever a client writes to this descriptor, this `callback` will be called. Calling this
     /// method also enables adding the write attribute permissions to this descriptor. By default,
     /// writes are permitted only to clients that have been granted a write permission with either
-    /// the restriction [authenticated] or [authorized]. If these restrictions are not appropriate
-    /// to the application can be changed by calling the method [`set_write_restrictions`].
+    /// the restriction [authenticated] or [authorized]. If these write restrictions are not
+    /// appropriate for the application they can be changed by calling the method
+    /// [`set_write_restrictions`].
     ///
     /// [`Authenticated`]: AttributeRestriction::Authentication
     /// [`Authorized`]: AttributeRestriction::Authorization
