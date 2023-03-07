@@ -506,7 +506,7 @@ impl TransferFormatInto for HeartRateMeasurement {
         while into_ret.len() >= 2 {
             // this unwrap cannot fail as into_ret is always
             // less than or equal to the transfer data size
-            rr_iter.next().unwrap().build_into_ret(&mut into_ret);
+            rr_iter.next().unwrap().build_into_ret(&mut into_ret[..2]);
 
             into_ret = &mut into_ret[2..];
         }
