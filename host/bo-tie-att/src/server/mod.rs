@@ -973,7 +973,7 @@ where
                 const SHORT_FORMAT: u8 = 1;
                 const LONG_FORMAT: u8 = 2;
 
-                into_ret[0] = if self.is_128_uuids { SHORT_FORMAT } else { LONG_FORMAT };
+                into_ret[0] = if self.is_128_uuids { LONG_FORMAT } else { SHORT_FORMAT };
 
                 iter_response!(self).fold(&mut into_ret[1..], |into_ret, attribute| {
                     attribute.get_handle().unwrap().build_into_ret(&mut into_ret[..2]);
