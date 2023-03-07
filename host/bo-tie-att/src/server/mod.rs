@@ -68,8 +68,8 @@ pub mod access_value;
 mod tests;
 
 use crate::{
-    client::ClientPduName, pdu, AttributePermissions, AttributeRestriction, ConnectionError, TransferFormatError,
-    TransferFormatInto, TransferFormatTryFrom,
+    client::ClientPduName, pdu, AttributePermissions, AttributeRestriction, ConnectionError, TransferFormatInto,
+    TransferFormatTryFrom,
 };
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
@@ -802,10 +802,7 @@ where
             Err(err.into())
         } else {
             match self.get_att_mut(handle) {
-                Ok(att) => match att.get_mut_value().try_set_value_from_transfer_format(intf_data).await {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e.pdu_err),
-                },
+                Ok(att) => att.get_mut_value().try_set_value_from_transfer_format(intf_data).await,
                 Err(_) => Err(pdu::Error::InvalidPDU.into()),
             }
         }
@@ -1889,7 +1886,7 @@ pub trait AccessValue: Send + Sync {
 
     type WriteValue: Unpin + Send + Sync;
 
-    type Write<'a>: Future + Send + Sync
+    type Write<'a>: Future<Output = Result<(), pdu::Error>> + Send + Sync
     where
         Self: 'a;
 
@@ -2025,7 +2022,7 @@ trait ServerAttribute: core::any::Any {
     fn try_set_value_from_transfer_format<'a>(
         &'a mut self,
         tf_data: &'a [u8],
-    ) -> PinnedFuture<'a, Result<(), super::TransferFormatError>>;
+    ) -> PinnedFuture<'a, Result<(), pdu::Error>>;
 
     /// The number of bytes in the interface format
     fn value_transfer_format_size(&self) -> PinnedFuture<'_, usize>;
@@ -2065,14 +2062,11 @@ where
         }))
     }
 
-    fn try_set_value_from_transfer_format<'a>(
-        &'a mut self,
-        raw: &'a [u8],
-    ) -> PinnedFuture<'a, Result<(), TransferFormatError>> {
+    fn try_set_value_from_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'a, Result<(), pdu::Error>> {
         Box::pin(async move {
-            self.0.write(TransferFormatTryFrom::try_from(raw)?).await;
-
-            Ok(())
+            self.0
+                .write(TransferFormatTryFrom::try_from(raw).map_err(|e| e.pdu_err)?)
+                .await
         })
     }
 
@@ -2125,10 +2119,7 @@ where
         }))
     }
 
-    fn try_set_value_from_transfer_format<'a>(
-        &'a mut self,
-        _: &'a [u8],
-    ) -> PinnedFuture<'a, Result<(), TransferFormatError>> {
+    fn try_set_value_from_transfer_format<'a>(&'a mut self, _: &'a [u8]) -> PinnedFuture<'a, Result<(), pdu::Error>> {
         unreachable!()
     }
 
@@ -2232,14 +2223,11 @@ impl ServerAttribute for ReservedHandle {
         })
     }
 
-    fn try_set_value_from_transfer_format(
-        &mut self,
-        _: &[u8],
-    ) -> PinnedFuture<'_, Result<(), super::TransferFormatError>> {
+    fn try_set_value_from_transfer_format(&mut self, _: &[u8]) -> PinnedFuture<'_, Result<(), pdu::Error>> {
         Box::pin(async {
             log::error!("(ATT) client tried to write to reserved attribute handle");
 
-            Err(TransferFormatError::from("ReservedHandle cannot be set from raw data"))
+            Err(pdu::Error::WriteNotPermitted)
         })
     }
 

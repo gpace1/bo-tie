@@ -281,7 +281,7 @@ where
     Fun: for<'z> FnMut(SetClientConfig) -> Fut + Send + Sync,
     Fut: Future + Send + Sync,
 {
-    type Output = Fut::Output;
+    type Output = Result<(), crate::att::pdu::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = unsafe { self.get_unchecked_mut() };
@@ -305,7 +305,7 @@ where
 
                     this.future = Some((this.accessor.write_callback)(callback_config))
                 }
-                Some(future) => break unsafe { Pin::new_unchecked(future).poll(cx) },
+                Some(future) => break unsafe { Pin::new_unchecked(future).poll(cx).map(|_| Ok(())) },
             }
         }
     }
