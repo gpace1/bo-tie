@@ -616,7 +616,7 @@ macro_rules! impl_transfer_format_for_number {
                 if raw.len() == core::mem::size_of::<$num>() {
                     let mut bytes = <[u8; core::mem::size_of::<$num>()]>::default();
 
-                    bytes.clone_from_slice(raw);
+                    bytes.copy_from_slice(raw);
 
                     Ok(Self::from_le_bytes(bytes))
                 } else {
