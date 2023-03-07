@@ -73,6 +73,8 @@ impl KeysStore {
 
     const FILE_NAME: &'static str = "heart-rate-profile.keys";
 
+    const DIR_NAME: &'static str = "bo-tie_hart-rate-profile_example";
+
     /// Initialize a `KeyStore`
     ///
     /// This should only be called when `load_keys` returns false.
@@ -84,6 +86,7 @@ impl KeysStore {
     pub fn load_keys() -> Option<Self> {
         let mut config_dir_path = dirs::config_dir().unwrap();
 
+        config_dir_path.push(Self::DIR_NAME);
         config_dir_path.push(Self::FILE_NAME);
 
         if let Ok(file) = std::fs::File::open(config_dir_path) {
@@ -99,6 +102,12 @@ impl KeysStore {
     pub async fn save_keys(&self) {
         let mut config_dir_path = dirs::config_dir().unwrap();
 
+        config_dir_path.push(Self::DIR_NAME);
+
+        if !config_dir_path.exists() {
+            std::fs::create_dir_all(config_dir_path.clone()).unwrap();
+        }
+
         config_dir_path.push(Self::FILE_NAME);
 
         let file = std::fs::File::create(config_dir_path).unwrap();
@@ -106,27 +115,17 @@ impl KeysStore {
         serde_yaml::to_writer(file, &*self.0.lock().await).unwrap();
     }
 
-    async fn add(&mut self, keys: Keys) -> Result<(), usize> {
+    pub async fn add(&mut self, keys: Keys) {
         let mut guard = self.0.lock().await;
 
         match guard.binary_search(&keys) {
-            Ok(index) => Err(index),
+            Ok(index) => {
+                *guard.get_mut(index).unwrap() = keys;
+            }
             Err(index) => {
                 guard.insert(index, keys);
-
-                Ok(())
             }
         }
-    }
-
-    async fn update(&mut self, keys: Keys) -> Result<(), usize> {
-        let mut guard = self.0.lock().await;
-
-        let index = guard.binary_search(&keys)?;
-
-        guard[index] = keys;
-
-        Ok(())
     }
 
     pub async fn get(&self, peer: IdentityAddress) -> Option<tokio::sync::MappedMutexGuard<'_, Keys>> {
@@ -137,6 +136,27 @@ impl KeysStore {
             .ok()?;
 
         tokio::sync::MutexGuard::map(guard, |keys| &mut keys[index]).into()
+    }
+
+    pub async fn get_all(&self) -> tokio::sync::MutexGuard<'_, Vec<Keys>> {
+        self.0.lock().await
+    }
+
+    pub async fn clear_all_keys(&self) {
+        self.0.lock().await.clear()
+    }
+
+    pub async fn delete_key(&self, identity: IdentityAddress) -> bool {
+        let mut guard = self.0.lock().await;
+
+        guard
+            .binary_search_by(|keys| keys.get_peer_identity().cmp(&Some(identity)))
+            .map(|index| guard.remove(index))
+            .is_ok()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.0.lock().await.is_empty()
     }
 }
 
@@ -262,15 +282,22 @@ impl Security {
         if let Ok(CommandType::PairingRequest) = (&*pdu).try_into() {
             Some(SecurityStage::AwaitUserAcceptPairingRequest)
         } else {
-            self.process_status(status)
+            self.process_status(status).await
         }
     }
 
-    fn process_status(&mut self, status: Status) -> Option<SecurityStage> {
+    async fn process_status(&mut self, status: Status) -> Option<SecurityStage> {
         match status {
             Status::BondingComplete => {
                 self.keys = self.security_manager.get_keys().copied();
-                Some(SecurityStage::BondingComplete)
+
+                self.keys_store.add(self.keys.unwrap()).await;
+
+                self.keys_store.save_keys().await;
+
+                let identity = self.keys.unwrap().get_peer_identity().unwrap();
+
+                Some(SecurityStage::BondingComplete(identity))
             }
             Status::PairingComplete => {
                 self.pairing_request.take();
@@ -380,12 +407,12 @@ impl Security {
             (AuthenticationInput::Yes, Some(Authentication::NumberComparison(n))) => {
                 let status = n.yes(&mut self.security_manager, connection_channel).await.unwrap();
 
-                self.process_status(status)
+                self.process_status(status).await
             }
             (AuthenticationInput::No, Some(Authentication::NumberComparison(n))) => {
                 let status = n.no(&mut self.security_manager, connection_channel).await.unwrap();
 
-                self.process_status(status)
+                self.process_status(status).await
             }
             (AuthenticationInput::Passkey(passkey), Some(Authentication::PasskeyInput(mut p))) => {
                 p.write(passkey).unwrap();
@@ -395,7 +422,7 @@ impl Security {
                     .await
                     .unwrap();
 
-                self.process_status(status)
+                self.process_status(status).await
             }
             _ => unreachable!("unexpected authentication"),
         }
@@ -408,9 +435,9 @@ pub enum SecurityStage {
     AuthenticationNumberComparison(String),
     AuthenticationPasskeyInput,
     AuthenticationPasskeyOutput(String),
-    BondingComplete,
+    BondingComplete(IdentityAddress),
     PairingComplete,
-    PairingFailed(bo_tie::host::sm::pairing::PairingFailedReason),
+    PairingFailed(PairingFailedReason),
 }
 
 enum Authentication {

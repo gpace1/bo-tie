@@ -3,25 +3,19 @@
 use bo_tie::hci::{Connection, Host, HostChannelEnds};
 use bo_tie::host::sm::{IdentityAddress, Keys};
 
-pub struct Controller {
-    peer_identity: Option<IdentityAddress>,
-}
+pub struct Controller;
 
 impl Controller {
     pub fn new() -> Self {
-        let peer_identity = None;
-
-        Controller { peer_identity }
+        Controller
     }
 
     /// Add a device to the resolving list when using the Bluetooth Controller for privacy
-    pub async fn add_device_resolving_list<H: HostChannelEnds>(&mut self, host: &mut Host<H>, keys: &Keys) {
+    pub async fn add_device_resolving_list<H: HostChannelEnds>(&self, host: &mut Host<H>, keys: &Keys) {
         use bo_tie::hci::commands::le::{
             add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
             set_resolvable_private_address_timeout, PeerIdentityAddressType,
         };
-
-        self.peer_identity = keys.get_peer_identity();
 
         let peer_identity_address_type = if keys.get_peer_identity().unwrap().is_public() {
             PeerIdentityAddressType::PublicIdentityAddress
@@ -29,7 +23,7 @@ impl Controller {
             PeerIdentityAddressType::RandomStaticIdentityAddress
         };
 
-        let peer_identity_address = self.peer_identity.unwrap().get_address();
+        let peer_identity_address = keys.get_peer_identity().unwrap().get_address();
 
         let peer_irk = keys.get_peer_irk().unwrap();
 
@@ -64,14 +58,34 @@ impl Controller {
         set_address_resolution_enable::send(host, true).await.unwrap();
     }
 
+    pub async fn remove_device_from_resolving_list<H: HostChannelEnds>(
+        &self,
+        host: &mut Host<H>,
+        identity: &IdentityAddress,
+    ) {
+        use bo_tie::hci::commands::le::remove_device_from_resolving_list::{self, Parameter};
+        use bo_tie::hci::commands::le::PeerIdentityAddressType;
+
+        let parameter = Parameter {
+            peer_identity_address_type: if identity.is_public() {
+                PeerIdentityAddressType::PublicIdentityAddress
+            } else {
+                PeerIdentityAddressType::RandomStaticIdentityAddress
+            },
+            peer_identity_address: identity.get_address(),
+        };
+
+        remove_device_from_resolving_list::send(host, parameter).await.unwrap();
+    }
+
     /// Clear the resolving list on the Controller
-    pub async fn clear_resolving_list<H: HostChannelEnds>(host: &mut Host<H>) {
+    pub async fn clear_resolving_list<H: HostChannelEnds>(&self, host: &mut Host<H>) {
         bo_tie::hci::commands::le::clear_resolving_list::send(host)
             .await
             .unwrap()
     }
 
-    pub async fn set_timeout<H: HostChannelEnds>(host: &mut Host<H>, timeout: std::time::Duration) {
+    pub async fn set_timeout<H: HostChannelEnds>(&self, host: &mut Host<H>, timeout: std::time::Duration) {
         bo_tie::hci::commands::le::set_resolvable_private_address_timeout::send(host, timeout)
             .await
             .unwrap();
@@ -104,7 +118,7 @@ impl Controller {
         set_advertising_enable::send(host, true).await.unwrap();
     }
 
-    pub fn get_identified<C>(connection: &Connection<C>) -> IdentityAddress {
+    pub fn get_identified<C>(&self, connection: &Connection<C>) -> IdentityAddress {
         if connection.is_address_random() {
             IdentityAddress::StaticRandom(connection.get_peer_address())
         } else {

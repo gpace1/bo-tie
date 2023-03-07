@@ -21,12 +21,6 @@ pub struct HostPrivacy {
 }
 
 impl HostPrivacy {
-    /// The maximum number of entries within the resolving list
-    ///
-    /// This example uses `None` as there is no limit, but for a more practical use case this should
-    /// be set to some value (if you want to re-use this code).
-    const MAX_COUNT: Option<usize> = None;
-
     pub fn new() -> Self {
         let resolving_list = Vec::new();
 
@@ -69,6 +63,23 @@ impl HostPrivacy {
         }
     }
 
+    /// Remove a device from the resolving list
+    ///
+    /// If `hard_remove` is false then device information is not actually removed, instead the
+    /// `connected` field is set to false.
+    pub fn remove_device_from_resolving_list(&mut self, identity: &IdentityAddress, hard_remove: bool) {
+        if !hard_remove {
+            self.set_connected(identity, false);
+        } else {
+            if let Ok(index) = self
+                .resolving_list
+                .binary_search_by(|entry| entry.peer_identity.cmp(identity))
+            {
+                self.resolving_list.remove(index);
+            }
+        }
+    }
+
     /// Clear the resolving list information in the Host
     pub fn clear_resolving_list(&mut self) {
         self.resolving_list.clear();
@@ -92,6 +103,7 @@ impl HostPrivacy {
     /// in the controller.
     pub fn validate_connection<C>(&mut self, connection: &Connection<C>) -> Option<IdentityAddress> {
         for info in self.resolving_list.iter_mut() {
+            // no need to currently connected devices
             if info.connected {
                 continue;
             }
@@ -104,15 +116,6 @@ impl HostPrivacy {
         }
 
         None
-    }
-
-    pub fn disconnect(&mut self, identity: IdentityAddress) {
-        if let Ok(index) = self
-            .resolving_list
-            .binary_search_by(|entry| entry.peer_identity.cmp(&identity))
-        {
-            self.resolving_list[index].connected = false
-        }
     }
 }
 

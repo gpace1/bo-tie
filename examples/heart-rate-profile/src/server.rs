@@ -2,12 +2,13 @@
 //!
 //! This example creates a GATT server with only the Heart Rate profile.
 
+use bo_tie::host::att::client::ClientPduName;
 use bo_tie::host::att::server::{AccessValue, NoQueuedWrites};
 use bo_tie::host::att::{
     AttributePermissions, AttributeRestriction, EncryptionKeySize, TransferFormatError, TransferFormatInto,
     TransferFormatTryFrom,
 };
-use bo_tie::host::gatt::characteristic::Properties;
+use bo_tie::host::gatt::characteristic::{ClientConfiguration, Properties};
 use bo_tie::host::gatt::{GapServiceBuilder, ServerBuilder};
 use bo_tie::host::l2cap::{LeU, MinimumMtu};
 use bo_tie::host::{gatt, Uuid};
@@ -15,6 +16,7 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -25,14 +27,16 @@ const APPEARANCE: u16 = 0x340;
 /// The server for example
 pub struct Server {
     server: gatt::Server<NoQueuedWrites>,
-    heart_rate_measurement: HeartRateMeasurementArc,
+    local_heart_rate_measurement: LocalHeartRateMeasurementArc,
+    hrd_handle: u16,
+    notify_hrd: Arc<AtomicBool>,
 }
 
 /**
   Service UUIDs
 */
 pub const HEART_RATE_SERVICE_UUID: Uuid = Uuid::from_u16(0x180D);
-const DEVICE_INFORMATION_SERVICE_UUID: Uuid = Uuid::from_u16(0x1809);
+const DEVICE_INFORMATION_SERVICE_UUID: Uuid = Uuid::from_u16(0x180a);
 
 /**
    Characteristic UUIDs for the Heart Rate Service
@@ -42,11 +46,17 @@ const DEVICE_INFORMATION_SERVICE_UUID: Uuid = Uuid::from_u16(0x1809);
 */
 const HEART_RATE_MEASUREMENT_UUID: Uuid = Uuid::from_u16(0x2A37);
 
+const HEART_RATE_CONTROL_POINT_UUID: Uuid = Uuid::from_u16(0x2a39);
+
 /**
    Characteristic UUIDs for the Device Information Service
 */
-// As per the specification for the Heart Rate Profile the Manufacture Name String is mandatory
-const MANUFACTURER_NAME_STRING_UUID: Uuid = Uuid::from_u16(0);
+const MANUFACTURER_NAME_STRING_UUID: Uuid = Uuid::from_u16(0x2A29);
+
+/**
+    Error Codes
+*/
+const CONTROL_POINT_NOT_SUPPORTED: u8 = 0x80;
 
 impl Server {
     const ENCRYPTION_PERMISSIONS: [AttributePermissions; 2] = [
@@ -55,6 +65,8 @@ impl Server {
     ];
 
     pub fn new(heart_rate_measurement: HeartRateMeasurementArc) -> Server {
+        let notify_hrd: Arc<AtomicBool> = Default::default();
+
         let mut gap_service = GapServiceBuilder::new(crate::EXAMPLE_NAME, APPEARANCE);
 
         // Connection interval of about half a second, the subrate
@@ -71,25 +83,64 @@ impl Server {
 
         let mut server_builder = ServerBuilder::from(gap_service);
 
+        let local_heart_rate_measurement = LocalHeartRateMeasurementArc::new(heart_rate_measurement);
+
+        server_builder.new_gatt_service(|gatt_service| gatt_service.add_database_hash());
+
         // add the service for heart rate measurement
-        server_builder
+        let heart_rate_characteristic_adder = server_builder
             .new_service(HEART_RATE_SERVICE_UUID)
             .add_characteristics()
             .new_characteristic(|heart_rate_measurement_characteristic| {
                 heart_rate_measurement_characteristic
                     .set_declaration(|declaration| {
                         declaration
-                            .set_properties([Properties::Read])
+                            .set_properties([Properties::Read, Properties::Notify])
                             .set_uuid(HEART_RATE_MEASUREMENT_UUID)
                     })
                     .set_value(|value| {
                         value
-                            .set_accessible_value(heart_rate_measurement.clone())
+                            .set_accessible_value(local_heart_rate_measurement.clone())
                             .set_permissions([AttributePermissions::Read(AttributeRestriction::Encryption(
                                 EncryptionKeySize::Bits256,
                             ))])
                     })
-                    .set_client_configuration(|client_config| client_config)
+                    .set_client_configuration(|client_config| {
+                        let notify_hrd = notify_hrd.clone();
+
+                        client_config
+                            .set_config([ClientConfiguration::Notification])
+                            .set_write_callback(move |client_config| {
+                                notify_hrd.store(
+                                    client_config.contains(&ClientConfiguration::Notification),
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+
+                                std::future::ready(())
+                            })
+                    })
+            });
+
+        let hrd_handle = heart_rate_characteristic_adder
+            .get_last_record()
+            .unwrap()
+            .get_value_handle();
+
+        heart_rate_characteristic_adder
+            .new_characteristic(|heart_rate_control_point_characteristic| {
+                heart_rate_control_point_characteristic
+                    .set_declaration(|declaration| {
+                        declaration
+                            .set_properties([Properties::Write])
+                            .set_uuid(HEART_RATE_CONTROL_POINT_UUID)
+                    })
+                    .set_value(|value| {
+                        value
+                            .set_accessible_value(ControlPoint::new(local_heart_rate_measurement.clone()))
+                            .set_permissions([AttributePermissions::Write(AttributeRestriction::Encryption(
+                                EncryptionKeySize::Bits256,
+                            ))])
+                    })
             })
             .finish_service();
 
@@ -117,16 +168,20 @@ impl Server {
 
         Self {
             server,
-            heart_rate_measurement,
+            local_heart_rate_measurement,
+            hrd_handle,
+            notify_hrd,
         }
     }
 
-    /// Get the Heart Rate Measurement Data
+    /// Send a Notification containing the heart rate data
     ///
-    /// This returns a `HeartRateMeasurement` which is a wrapper around an atomically counted
-    /// reference to the heart rate measurement data.
-    pub fn get_heart_rate_measurement_data(&self) -> HeartRateMeasurementArc {
-        self.heart_rate_measurement.clone()
+    /// This will send a notification to the Client containing the heart rate data **if** the client
+    /// has enabled notifications for the heart rate data characteristic.
+    pub async fn send_hrd_notification<C: bo_tie::host::l2cap::ConnectionChannel>(&mut self, channel: &C) {
+        if self.notify_hrd.load(std::sync::atomic::Ordering::Relaxed) {
+            self.server.send_notification(channel, self.hrd_handle).await.unwrap();
+        }
     }
 
     /// Process a L2CAP packet containing ATT protocol data
@@ -135,6 +190,12 @@ impl Server {
         channel: &mut C,
         packet: &bo_tie::host::l2cap::BasicInfoFrame<Vec<u8>>,
     ) {
+        if let Ok((ClientPduName::ExchangeMtuRequest, payload)) = self.server.parse_acl_packet(packet) {
+            let mtu: u16 = TransferFormatTryFrom::try_from(payload).unwrap();
+
+            self.local_heart_rate_measurement.set_mtu(mtu.into()).await
+        }
+
         self.server.process_acl_data(channel, packet).await.unwrap()
     }
 
@@ -154,7 +215,9 @@ impl Server {
 /// This is a shared counted reference to the data that in the GATT server for the heart rate
 /// measurement
 #[derive(Clone)]
-pub struct HeartRateMeasurementArc(Arc<Mutex<HeartRateMeasurementData>>);
+pub struct HeartRateMeasurementArc {
+    arc: Arc<Mutex<HeartRateMeasurementData>>,
+}
 
 impl HeartRateMeasurementArc {
     pub(crate) fn new() -> HeartRateMeasurementArc {
@@ -162,50 +225,75 @@ impl HeartRateMeasurementArc {
             value: HeartRateValue::Uint8(0),
             contact_status: ContactStatus::NoContact,
             energy_expended: EnergyExpended::Unavailable,
-            rr_intervals: VecDeque::new(),
-            mtu: LeU::MIN_MTU,
+            rr_atomic_offset: 0,
+            rr_intervals: VecDeque::with_capacity(HeartRateMeasurementData::MAXED_SAVED_RR_INTERVALS),
         };
 
         let shared = Arc::new(Mutex::new(data));
 
-        HeartRateMeasurementArc(shared)
+        HeartRateMeasurementArc { arc: shared }
     }
 
-    pub async fn set_heart_rate(&mut self, rate: u16) {
+    pub async fn set_heart_rate(&self, rate: u16) {
         let value = <u8 as TryFrom<u16>>::try_from(rate)
             .map(|rate| HeartRateValue::Uint8(rate))
             .unwrap_or(HeartRateValue::Uint16(rate));
 
-        self.0.lock().await.value = value;
+        self.arc.lock().await.value = value;
     }
 
-    pub async fn set_contact_status(&mut self, contact_status: ContactStatus) {
-        self.0.lock().await.contact_status = contact_status
+    pub async fn set_contact_status(&self, contact_status: ContactStatus) {
+        self.arc.lock().await.contact_status = contact_status
     }
 
-    pub async fn increase_energy_expended(&mut self, by: u16) {
-        let mut lock = self.0.lock().await;
+    pub async fn increase_energy_expended(&self, by: u16) {
+        let mut lock = self.arc.lock().await;
 
         if let EnergyExpended::KiloJoules(expended) = lock.energy_expended {
-            lock.energy_expended = match expended.checked_add(by) {
-                None => EnergyExpended::KiloJoules(<u16>::MAX),
-                Some(new_expended) => EnergyExpended::KiloJoules(new_expended),
-            }
+            lock.energy_expended = EnergyExpended::KiloJoules(expended.saturating_add(by));
         } else {
             lock.energy_expended = EnergyExpended::KiloJoules(by)
         }
     }
 
-    pub async fn reset_energy_expended(&mut self) {
-        self.0.lock().await.energy_expended = EnergyExpended::KiloJoules(0)
+    pub async fn reset_energy_expended(&self) {
+        self.arc.lock().await.energy_expended = EnergyExpended::KiloJoules(0)
     }
 
-    pub async fn disable_energy_expended(&mut self) {
-        self.0.lock().await.energy_expended = EnergyExpended::Unavailable
-    }
+    pub async fn add_rr_interval(&self, interval: u16) {
+        let mut guard = self.arc.lock().await;
 
-    pub async fn add_rr_interval(&mut self, interval: u16) {
-        self.0.lock().await.rr_intervals.push_back(interval)
+        guard.rr_atomic_offset = guard.rr_atomic_offset.wrapping_add(1);
+
+        if guard.rr_intervals.len() > HeartRateMeasurementData::MAXED_SAVED_RR_INTERVALS {
+            guard.rr_intervals.pop_front();
+        }
+
+        guard.rr_intervals.push_back(interval);
+    }
+}
+
+struct LocalHeartRateMeasurement {
+    rr_offset: Option<usize>,
+    mtu: usize,
+    shared: HeartRateMeasurementArc,
+}
+
+#[derive(Clone)]
+struct LocalHeartRateMeasurementArc {
+    arc: Arc<Mutex<LocalHeartRateMeasurement>>,
+}
+
+impl LocalHeartRateMeasurementArc {
+    fn new(shared: HeartRateMeasurementArc) -> Self {
+        let mtu = LeU::MIN_MTU;
+        let rr_offset = None;
+
+        let local = LocalHeartRateMeasurement { rr_offset, mtu, shared };
+
+        let arc = Arc::new(Mutex::new(local));
+
+        Self { arc }
     }
 
     /// Set the connection MTU
@@ -214,29 +302,36 @@ impl HeartRateMeasurementArc {
     /// the maximum size of an ATT PDU
     ///
     /// ['blobbed']: /bo_tie/host/att/server/index.html#data-blobbing
-    pub async fn set_mtu(&mut self, mtu: usize) {
-        assert!(
-            mtu >= LeU::MIN_MTU,
-            "`mtu` cannot be less than the minimum MTU for a LE-U connection"
-        );
-
-        self.0.lock().await.mtu = mtu;
+    async fn set_mtu(&mut self, mtu: usize) {
+        if mtu >= LeU::MIN_MTU {
+            self.arc.lock().await.mtu = mtu;
+        }
     }
 }
 
-impl AccessValue for HeartRateMeasurementArc {
-    type ReadValue = HeartRateMeasurementData;
-    type ReadGuard<'a> = tokio::sync::MutexGuard<'a, Self::ReadValue> where Self: 'a ;
+impl AccessValue for LocalHeartRateMeasurementArc {
+    type ReadValue = HeartRateMeasurement;
+    type ReadGuard<'a> = Box<Self::ReadValue>;
     type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a ;
     type WriteValue = ();
-    type Write<'a> = Pin<Box<dyn Future<Output=()> +  Send + Sync>> where Self: 'a ;
+    type Write<'a> = std::future::Pending<Result<(), bo_tie::host::att::pdu::Error>> where Self: 'a ;
 
     fn read(&self) -> Self::Read<'_> {
-        Box::pin(self.0.lock())
+        Box::pin(async {
+            let local = &mut *self.arc.lock().await;
+
+            let rr_offset = &mut local.rr_offset;
+
+            let global_lock = local.shared.arc.lock().await;
+
+            let measurement = global_lock.create_measurement(rr_offset, local.mtu);
+
+            Box::new(measurement)
+        })
     }
 
     fn write(&mut self, _: Self::WriteValue) -> Self::Write<'_> {
-        Box::pin(async { unreachable!() })
+        unreachable!()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -252,11 +347,67 @@ pub struct HeartRateMeasurementData {
     value: HeartRateValue,
     contact_status: ContactStatus,
     energy_expended: EnergyExpended,
+    rr_atomic_offset: usize,
     rr_intervals: VecDeque<u16>,
-    mtu: usize,
 }
 
 impl HeartRateMeasurementData {
+    const MAXED_SAVED_RR_INTERVALS: usize = 256;
+
+    fn create_measurement(&self, rr_local_offset: &mut Option<usize>, mtu: usize) -> HeartRateMeasurement {
+        let distance = match rr_local_offset {
+            Some(offset) => {
+                let mut distance = if self.rr_atomic_offset >= *offset {
+                    self.rr_atomic_offset - *offset
+                } else {
+                    <usize>::MAX - *offset + self.rr_atomic_offset
+                };
+
+                if distance > Self::MAXED_SAVED_RR_INTERVALS {
+                    *offset = self.rr_atomic_offset.wrapping_sub(Self::MAXED_SAVED_RR_INTERVALS);
+
+                    distance = Self::MAXED_SAVED_RR_INTERVALS
+                }
+
+                distance
+            }
+            None => {
+                *rr_local_offset = Some(self.rr_atomic_offset);
+
+                0
+            }
+        };
+
+        let ret = HeartRateMeasurement {
+            value: self.value,
+            contact_status: self.contact_status,
+            energy_expended: self.energy_expended,
+            rr_intervals: self
+                .rr_intervals
+                .iter()
+                .copied()
+                .skip(self.rr_intervals.len().wrapping_sub(distance))
+                .collect(),
+            mtu,
+        };
+
+        *rr_local_offset = (rr_local_offset.unwrap())
+            .wrapping_add(core::cmp::min(distance, ret.max_sent_rr_intervals()))
+            .into();
+
+        ret
+    }
+}
+
+struct HeartRateMeasurement {
+    value: HeartRateValue,
+    contact_status: ContactStatus,
+    energy_expended: EnergyExpended,
+    rr_intervals: Vec<u16>,
+    mtu: usize,
+}
+
+impl HeartRateMeasurement {
     fn make_flags(&self) -> u8 {
         let mut flags = 0u8;
 
@@ -282,9 +433,26 @@ impl HeartRateMeasurementData {
 
         flags
     }
+
+    /// Get the maximum number of rr intervals that can be sent in this measurement
+    fn max_sent_rr_intervals(&self) -> usize {
+        let flags_size = 1;
+
+        let value_size = match self.value {
+            HeartRateValue::Uint8(_) => 1,
+            HeartRateValue::Uint16(_) => 2,
+        };
+
+        let energy_expended_size = match self.energy_expended {
+            EnergyExpended::Unavailable => 0,
+            EnergyExpended::KiloJoules(_) => 2,
+        };
+
+        (self.mtu - (flags_size + value_size + energy_expended_size)) / core::mem::size_of::<u16>()
+    }
 }
 
-impl TransferFormatInto for HeartRateMeasurementData {
+impl TransferFormatInto for HeartRateMeasurement {
     fn len_of_into(&self) -> usize {
         let flags_size = 1;
 
@@ -344,7 +512,7 @@ impl TransferFormatInto for HeartRateMeasurementData {
     }
 }
 
-impl TransferFormatTryFrom for HeartRateMeasurementData {
+impl TransferFormatTryFrom for HeartRateMeasurement {
     fn try_from(_: &[u8]) -> Result<Self, TransferFormatError>
     where
         Self: Sized,
@@ -353,7 +521,7 @@ impl TransferFormatTryFrom for HeartRateMeasurementData {
     }
 }
 
-impl PartialEq for HeartRateMeasurementData {
+impl PartialEq for HeartRateMeasurement {
     fn eq(&self, _: &Self) -> bool {
         // it does not make sense that two heart rate
         // measurements should be "equal".
@@ -361,18 +529,73 @@ impl PartialEq for HeartRateMeasurementData {
     }
 }
 
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub enum HeartRateValue {
     Uint8(u8),
     Uint16(u16),
 }
 
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
 pub enum ContactStatus {
     NoContact,
     PoorContact,
     FullContact,
 }
 
+#[derive(Copy, Clone)]
+#[allow(dead_code)]
 enum EnergyExpended {
     Unavailable,
     KiloJoules(u16),
+}
+
+struct ControlPoint {
+    local: LocalHeartRateMeasurementArc,
+}
+
+impl ControlPoint {
+    fn new(local: LocalHeartRateMeasurementArc) -> Self {
+        Self { local }
+    }
+}
+
+impl AccessValue for ControlPoint {
+    type ReadValue = ();
+    type ReadGuard<'a> = &'a () where Self: 'a;
+    type Read<'a> = std::future::Pending<Self::ReadGuard<'a>> where Self: 'a;
+    type WriteValue = u8;
+    type Write<'a> = Pin<Box<dyn Future<Output = Result<(), bo_tie::host::att::pdu::Error>> + Send + Sync>>;
+
+    fn read(&self) -> Self::Read<'_> {
+        unreachable!()
+    }
+
+    fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
+        use bo_tie::host::att::pdu::{Error, ErrorConversionError};
+
+        if val == 0x1 {
+            let local = self.local.clone();
+
+            Box::pin(async move {
+                local.arc.lock().await.shared.reset_energy_expended().await;
+                Ok(())
+            })
+        } else {
+            Box::pin(async move {
+                Err(Error::Other(
+                    ErrorConversionError::try_from(CONTROL_POINT_NOT_SUPPORTED).unwrap(),
+                ))
+            })
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
+    }
 }

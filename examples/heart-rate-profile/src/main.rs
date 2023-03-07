@@ -4,13 +4,15 @@ mod io;
 mod security;
 mod server;
 
+use crate::io::MainToUserInput;
 use crate::security::SecurityStage;
 use crate::server::HeartRateMeasurementArc;
-use bo_tie::hci::channel::SendAndSyncSafeHostChannelEnds;
+use bo_tie::hci::channel::{SendAndSyncSafeConnectionChannelEnds, SendAndSyncSafeHostChannelEnds};
 use bo_tie::hci::commands::le::long_term_key_request_negative_reply;
 use bo_tie::hci::commands::link_control::disconnect;
 use bo_tie::hci::events::{Events, LeMeta};
 use bo_tie::hci::{Connection, ConnectionHandle, Host, HostChannelEnds, Next};
+use bo_tie::host::sm::IdentityAddress;
 use bo_tie::BluetoothDeviceAddress;
 
 const EXAMPLE_NAME: &'static str = "heart rate profile example";
@@ -36,8 +38,7 @@ struct ConnectionTaskHandle {
     hci_handle: ConnectionHandle,
     join_handle: tokio::task::JoinHandle<()>,
     to: tokio::sync::mpsc::UnboundedSender<MainToConnection>,
-    address: BluetoothDeviceAddress,
-    status: io::ConnectedStatus,
+    status: connection::ConnectedStatus,
 }
 
 /// Messages sent from [`main`] to a connection
@@ -72,8 +73,12 @@ enum ConnectionToMainMessage {
 }
 
 impl ConnectionToMain {
-    async fn process<H>(self, host: &mut Host<H>, uio: &mut io::UserInOut, hrp: &mut HeartRateProfile)
-    where
+    async fn process<H>(
+        self,
+        host: &mut Host<H>,
+        to_ui: std::sync::mpsc::Sender<MainToUserInput>,
+        hrp: &mut HeartRateProfile,
+    ) where
         H: HostChannelEnds,
     {
         match self.kind {
@@ -85,7 +90,7 @@ impl ConnectionToMain {
                     .connections
                     .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
                 {
-                    let address = hrp.connections[index].address;
+                    let address = hrp.connections[index].status.get_address();
                     let handle = hrp.connections[index].hci_handle;
 
                     if let Err(index) = hrp
@@ -95,30 +100,68 @@ impl ConnectionToMain {
                         hrp.pairing.insert(index, (address, handle))
                     }
 
-                    uio.on_request_pairing(address).await.unwrap();
+                    let pairing_devices = hrp.pairing.iter().map(|(address, _)| *address).collect::<Vec<_>>();
+
+                    to_ui.send(MainToUserInput::PairingDevices(pairing_devices)).unwrap();
+
+                    let output = io::Output::on_pairing_request(address);
+
+                    to_ui.send(MainToUserInput::Output(output)).unwrap();
                 }
             }
             ConnectionToMainMessage::Security(SecurityStage::AuthenticationNumberComparison(num)) => {
-                uio.on_number_comparison(num).await.unwrap();
+                if let Ok(index) = hrp
+                    .connections
+                    .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
+                {
+                    let handle = hrp.connections[index].hci_handle;
+
+                    hrp.authenticating = Some(handle);
+
+                    to_ui
+                        .send(MainToUserInput::Mode(io::Mode::NumberComparison(num)))
+                        .unwrap();
+                }
             }
             ConnectionToMainMessage::Security(SecurityStage::AuthenticationPasskeyInput) => {
-                uio.on_passkey_input().await.unwrap()
+                to_ui.send(MainToUserInput::Mode(io::Mode::PasskeyInput)).unwrap();
             }
             ConnectionToMainMessage::Security(SecurityStage::AuthenticationPasskeyOutput(passkey)) => {
-                uio.on_passkey_output(passkey).await.unwrap();
+                to_ui
+                    .send(MainToUserInput::Mode(io::Mode::PasskeyOutput(passkey)))
+                    .unwrap();
             }
-            ConnectionToMainMessage::Security(SecurityStage::BondingComplete) => {
+            ConnectionToMainMessage::Security(SecurityStage::BondingComplete(identity)) => {
                 if let Ok(index) = hrp
                     .connections
                     .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
                 {
                     let connection = &mut hrp.connections[index];
 
-                    connection.status = io::ConnectedStatus::Bonded;
+                    match connection.status {
+                        connection::ConnectedStatus::New(old_address) => {
+                            connection.status = connection::ConnectedStatus::Bonded(identity);
 
-                    let address = connection.address;
+                            let output = io::Output::on_bonding_complete(old_address, identity);
 
-                    uio.on_bonded(address).await.unwrap();
+                            to_ui.send(MainToUserInput::Output(output)).unwrap();
+                        }
+                        connection::ConnectedStatus::Bonded(old_identity) => {
+                            hrp.privacy
+                                .remove_device_from_resolving_list(host, &old_identity, true)
+                                .await;
+
+                            connection.status = connection::ConnectedStatus::Bonded(identity);
+
+                            let output = io::Output::on_identity_change(old_identity, identity);
+
+                            to_ui.send(MainToUserInput::Output(output)).unwrap();
+                        }
+                    }
+
+                    to_ui
+                        .send(MainToUserInput::BondedDevices(hrp.get_bonded_devices().await))
+                        .unwrap();
                 }
             }
             ConnectionToMainMessage::Security(SecurityStage::PairingComplete) => {
@@ -126,7 +169,7 @@ impl ConnectionToMain {
                     .connections
                     .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
                 {
-                    let address = &hrp.connections[index].address;
+                    let address = hrp.connections[index].status.get_address();
 
                     if let Ok(index) = hrp
                         .pairing
@@ -135,7 +178,13 @@ impl ConnectionToMain {
                         hrp.pairing.remove(index);
                     }
 
-                    uio.on_pairing_complete().await.unwrap();
+                    let pairing_devices = hrp.pairing.iter().map(|(address, _)| *address).collect::<Vec<_>>();
+
+                    to_ui.send(MainToUserInput::PairingDevices(pairing_devices)).unwrap();
+
+                    let output = io::Output::on_pairing_complete(address);
+
+                    to_ui.send(MainToUserInput::Output(output)).unwrap();
                 }
             }
             ConnectionToMainMessage::Security(SecurityStage::PairingFailed(reason)) => {
@@ -143,7 +192,7 @@ impl ConnectionToMain {
                     .connections
                     .binary_search_by(|connection| connection.hci_handle.cmp(&self.handle))
                 {
-                    let address = hrp.connections[index].address;
+                    let address = hrp.connections[index].status.get_address();
 
                     if let Err(index) = hrp
                         .pairing
@@ -152,7 +201,13 @@ impl ConnectionToMain {
                         hrp.pairing.remove(index);
                     }
 
-                    uio.on_pairing_failed(address, reason).await.unwrap();
+                    let pairing_devices = hrp.pairing.iter().map(|(address, _)| *address).collect::<Vec<_>>();
+
+                    to_ui.send(MainToUserInput::PairingDevices(pairing_devices)).unwrap();
+
+                    let output = io::Output::on_pairing_failed(address, reason);
+
+                    to_ui.send(MainToUserInput::Output(output)).unwrap();
                 }
             }
         }
@@ -163,34 +218,49 @@ struct HeartRateProfile {
     keys_store: security::KeysStore,
     heart_rate_measurement_arc: HeartRateMeasurementArc,
     privacy: advertise::privacy::Privacy,
-    discoverable_address: Option<BluetoothDeviceAddress>,
     connections: Vec<ConnectionTaskHandle>,
     pairing: Vec<(BluetoothDeviceAddress, ConnectionHandle)>,
+    authenticating: Option<ConnectionHandle>,
     from_connection_sender: tokio::sync::mpsc::UnboundedSender<ConnectionToMain>,
     from_connection_receiver: Option<tokio::sync::mpsc::UnboundedReceiver<ConnectionToMain>>,
+    advertising_kind: advertise::Kind,
 }
 
 impl HeartRateProfile {
     /// HCI events enabled for the heart rate profile
-    const ENABLED_EVENTS: [Events; 5] = [
+    const ENABLED_EVENTS: [Events; 4] = [
         Events::DisconnectionComplete,
         Events::EncryptionChangeV1,
         Events::LeMeta(LeMeta::ConnectionComplete),
         Events::LeMeta(LeMeta::LongTermKeyRequest),
-        Events::LeMeta(LeMeta::RemoteConnectionParameterRequest),
+        //Events::LeMeta(LeMeta::RemoteConnectionParameterRequest),
     ];
 
-    pub async fn new<H: HostChannelEnds>(host: &mut Host<H>) -> Self {
-        let privacy = advertise::privacy::Privacy::new(host).await;
+    pub async fn new<H: HostChannelEnds>(host: &mut Host<H>, to_ui: std::sync::mpsc::Sender<MainToUserInput>) -> Self {
+        let mut privacy = advertise::privacy::Privacy::new(host).await;
 
         host.mask_events(Self::ENABLED_EVENTS).await.unwrap();
 
-        let keys_store = match security::KeysStore::load_keys() {
-            Some(keys) => keys,
-            None => security::KeysStore::init(),
-        };
+        let (keys_store, advertising_kind) = match security::KeysStore::load_keys() {
+            Some(keys) => {
+                if keys.is_empty().await {
+                    to_ui.send(MainToUserInput::Mode(io::Mode::Silent)).unwrap();
 
-        let discoverable_address = None;
+                    (keys, advertise::Kind::Off)
+                } else {
+                    for keys in keys.get_all().await.iter() {
+                        privacy.add_device_to_resolving_list(host, keys).await
+                    }
+
+                    privacy.start_private_advertising(host).await;
+
+                    to_ui.send(MainToUserInput::Mode(io::Mode::Private)).unwrap();
+
+                    (keys, advertise::Kind::Private)
+                }
+            }
+            None => (security::KeysStore::init(), advertise::Kind::Off),
+        };
 
         let heart_rate_measurement_arc = HeartRateMeasurementArc::new();
 
@@ -200,15 +270,18 @@ impl HeartRateProfile {
 
         let pairing = Vec::new();
 
+        let authenticating = None;
+
         Self {
             keys_store,
             heart_rate_measurement_arc,
             privacy,
-            discoverable_address,
             connections,
             pairing,
+            authenticating,
             from_connection_sender: sender,
             from_connection_receiver: receiver.into(),
+            advertising_kind,
         }
     }
 
@@ -227,37 +300,54 @@ impl HeartRateProfile {
         &mut self,
         host: &mut Host<H>,
         connection: Connection<H::SendAndSyncSafeConnectionChannelEnds>,
-        user_io: &mut io::UserInOut,
+        to_ui: std::sync::mpsc::Sender<MainToUserInput>,
     ) where
         <H as SendAndSyncSafeHostChannelEnds>::SendAndSyncSafeConnectionChannelEnds: 'static,
     {
         use security::{ConnectionKind, Security};
 
-        let (security, status) = if let Some(identity) = self.privacy.validate(&connection) {
+        if let Some(identity) = self.privacy.validate(&connection) {
             let keys = self.keys_store.get(identity).await.unwrap().clone();
 
             let security = Security::new(self.keys_store.clone(), ConnectionKind::Identified(keys));
 
-            let status = io::ConnectedStatus::Bonded;
+            let status = connection::ConnectedStatus::Bonded(keys.get_peer_identity().unwrap());
 
-            (security, status)
-        } else if let Some(advertising_address) = self.discoverable_address {
+            self.privacy
+                .remove_device_from_resolving_list(host, &identity, false)
+                .await;
+
+            self.create_connection_task(connection, security, status);
+
+            let output = io::Output::on_connection(status);
+
+            to_ui.send(MainToUserInput::Output(output)).unwrap();
+        } else if let advertise::Kind::Discoverable(advertising_address) = self.advertising_kind {
             let peer_address = connection.get_peer_address();
 
-            let is_random = connection.is_address_random();
+            let peer_is_random = connection.is_address_random();
 
             let connection_kind = ConnectionKind::New {
                 advertising_address,
                 peer_address,
-                peer_is_random: is_random,
+                peer_is_random,
             };
 
             let security = Security::new(self.keys_store.clone(), connection_kind);
 
-            let status = io::ConnectedStatus::New;
+            let status = connection::ConnectedStatus::New(peer_address);
 
-            (security, status)
+            self.create_connection_task(connection, security, status);
+
+            let output = io::Output::on_connection(status);
+
+            to_ui.send(MainToUserInput::Output(output)).unwrap();
         } else {
+            // Note: this branch will (well... *should*) never be reached when
+            // the controller is handling privacy. When privacy is implemented
+            // by the host then there may be connections made to unauthenticated
+            // devices.
+
             let disconnect_parameters = disconnect::DisconnectParameters {
                 connection_handle: connection.get_handle(),
                 disconnect_reason: disconnect::DisconnectReason::AuthenticationFailure,
@@ -265,26 +355,32 @@ impl HeartRateProfile {
 
             disconnect::send(host, disconnect_parameters).await.unwrap();
 
-            user_io
-                .on_unauthenticated_connection(connection.get_peer_address())
-                .await
-                .unwrap();
+            let output = io::Output::on_unauthenticated_connection(connection.get_peer_address());
 
-            return;
+            to_ui.send(MainToUserInput::Output(output)).unwrap();
         };
 
-        user_io
-            .on_connection(connection.get_peer_address(), status)
-            .await
-            .unwrap();
+        // continue advertising, but in private mode
+        self.advertising_kind = advertise::Kind::Private;
 
+        self.privacy.start_private_advertising(host).await;
+
+        to_ui.send(MainToUserInput::Mode(io::Mode::Private)).unwrap();
+    }
+
+    fn create_connection_task<C>(
+        &mut self,
+        connection: Connection<C>,
+        security: security::Security,
+        status: connection::ConnectedStatus,
+    ) where
+        C: SendAndSyncSafeConnectionChannelEnds + 'static,
+    {
         let server = server::Server::new(self.heart_rate_measurement_arc.clone());
 
         let (to, from) = tokio::sync::mpsc::unbounded_channel();
 
         let hci_handle = connection.get_handle();
-
-        let address = connection.get_peer_address();
 
         let le_l2cap = connection.try_into_le().unwrap();
 
@@ -297,7 +393,6 @@ impl HeartRateProfile {
             hci_handle,
             join_handle,
             to,
-            address,
             status,
         };
 
@@ -307,7 +402,11 @@ impl HeartRateProfile {
         };
     }
 
-    async fn accept_pairing_from(&mut self, address: BluetoothDeviceAddress, user_io: &mut io::UserInOut) {
+    async fn accept_pairing_from(
+        &mut self,
+        address: BluetoothDeviceAddress,
+        to_ui: std::sync::mpsc::Sender<MainToUserInput>,
+    ) {
         match self.pairing.binary_search_by(|pairing| pairing.0.cmp(&address)) {
             Ok(index) => {
                 let handle = &self.pairing[index].1;
@@ -320,11 +419,15 @@ impl HeartRateProfile {
 
                     self.connections[index].to.send(message).unwrap();
                 } else {
-                    user_io.device_not_connected_for_pairing(address).await.unwrap();
+                    let output = io::Output::device_is_disconnected(address);
+
+                    to_ui.send(MainToUserInput::Output(output)).unwrap()
                 }
             }
             Err(_) => {
-                user_io.device_not_pairing(address).await.unwrap();
+                let output = io::Output::device_not_pairing(address);
+
+                to_ui.send(MainToUserInput::Output(output)).unwrap()
             }
         }
     }
@@ -342,21 +445,22 @@ impl HeartRateProfile {
         }
     }
 
-    fn authentication_input(&mut self, address: &BluetoothDeviceAddress, ai: AuthenticationInput) {
-        if let Ok(index) = self
-            .pairing
-            .binary_search_by(|pairing_info| pairing_info.0.cmp(address))
-        {
-            let handle = &self.pairing[index].1;
+    fn authentication_input(&mut self, ai: AuthenticationInput, to_ui: std::sync::mpsc::Sender<MainToUserInput>) {
+        let handle = self.authenticating.take().unwrap();
 
-            let index = self
-                .connections
-                .binary_search_by(|connection| connection.hci_handle.cmp(handle))
-                .unwrap();
+        let index = self
+            .connections
+            .binary_search_by(|connection| connection.hci_handle.cmp(&handle))
+            .unwrap();
 
-            let message = MainToConnection::AuthenticationInput(ai);
+        let message = MainToConnection::AuthenticationInput(ai);
 
-            self.connections[index].to.send(message).unwrap();
+        self.connections[index].to.send(message).unwrap();
+
+        match self.advertising_kind {
+            advertise::Kind::Off => to_ui.send(MainToUserInput::Mode(io::Mode::Silent)).unwrap(),
+            advertise::Kind::Discoverable(_) => to_ui.send(MainToUserInput::Mode(io::Mode::Discoverable)).unwrap(),
+            advertise::Kind::Private => to_ui.send(MainToUserInput::Mode(io::Mode::Private)).unwrap(),
         }
     }
 
@@ -397,59 +501,106 @@ impl HeartRateProfile {
     pub async fn on_user_action<H: HostChannelEnds>(
         &mut self,
         host: &mut Host<H>,
-        user_action: io::UserAction,
-        user_io: &mut io::UserInOut,
+        user_action: io::FromUserInput,
+        to_ui: std::sync::mpsc::Sender<MainToUserInput>,
+        timeout_tick: &mut advertise::privacy::TimeoutTick,
     ) {
         match user_action {
-            io::UserAction::AdvertiseDiscoverable => {
-                let discoverable_address = BluetoothDeviceAddress::new_non_resolvable();
+            io::FromUserInput::AdvertiseDiscoverable => {
+                self.advertising_kind = advertise::discoverable_advertising_setup(host).await;
 
-                self.discoverable_address = discoverable_address.into();
+                to_ui.send(MainToUserInput::Mode(io::Mode::Discoverable)).unwrap();
+            }
+            io::FromUserInput::AdvertisePrivate => {
+                *timeout_tick = self.privacy.set_timeout(host, None).await;
 
-                advertise::discoverable_advertising_setup(host, discoverable_address).await
-            }
-            io::UserAction::AdvertisePrivate => {
-                self.discoverable_address = None;
+                self.privacy.start_private_advertising(host).await;
 
-                self.privacy.start_private_advertising(host).await
-            }
-            io::UserAction::NumberComparisonYes(address) => {
-                self.authentication_input(&address, AuthenticationInput::Yes)
-            }
-            io::UserAction::NumberComparisonNo(address) => self.authentication_input(&address, AuthenticationInput::No),
-            io::UserAction::PairingRejectAll => self.reject_all_pairing(),
-            io::UserAction::PairingReject(rejected) => self.reject_pairing(&rejected),
-            io::UserAction::PairingAccept(address) => self.accept_pairing_from(address, user_io).await,
-            io::UserAction::PasskeyInput(passkey, address) => {
-                self.authentication_input(&address, AuthenticationInput::Passkey(passkey))
-            }
-            io::UserAction::PasskeyCancel(address) => self.authentication_input(&address, AuthenticationInput::Cancel),
-            io::UserAction::StopAdvertising => {
-                self.discoverable_address = None;
+                self.advertising_kind = advertise::Kind::Private;
 
-                advertise::disable_advertising(host).await
+                to_ui.send(MainToUserInput::Mode(io::Mode::Private)).unwrap();
             }
-            io::UserAction::Exit => self.exit(host).await,
+            io::FromUserInput::NumberComparisonYes => self.authentication_input(AuthenticationInput::Yes, to_ui),
+            io::FromUserInput::NumberComparisonNo => self.authentication_input(AuthenticationInput::No, to_ui),
+            io::FromUserInput::PairingRejectAll => self.reject_all_pairing(),
+            io::FromUserInput::PairingReject(rejected) => self.reject_pairing(&rejected),
+            io::FromUserInput::PairingAccept(address) => self.accept_pairing_from(address, to_ui).await,
+            io::FromUserInput::PasskeyInput(passkey) => {
+                self.authentication_input(AuthenticationInput::Passkey(passkey), to_ui)
+            }
+            io::FromUserInput::PasskeyCancel => self.authentication_input(AuthenticationInput::Cancel, to_ui),
+            io::FromUserInput::StopAdvertising => {
+                self.advertising_kind = advertise::Kind::Off;
+
+                advertise::disable_advertising(host).await;
+
+                to_ui.send(MainToUserInput::Mode(io::Mode::Silent)).unwrap();
+            }
+            io::FromUserInput::DeleteAllBonded => self.delete_all_bonded(host).await,
+            io::FromUserInput::DeleteBonded(address) => self.delete_bonded(host, address).await,
+            io::FromUserInput::Exit => self.exit(host).await,
         }
     }
 
-    async fn on_disconnect(&mut self, connection_handle: ConnectionHandle, user_io: &mut io::UserInOut) {
+    async fn delete_all_bonded<H: HostChannelEnds>(&mut self, host: &mut Host<H>) {
+        self.privacy.clear_resolving_list(host).await;
+
+        self.keys_store.clear_all_keys().await;
+
+        self.keys_store.save_keys().await;
+    }
+
+    async fn delete_bonded<H: HostChannelEnds>(&mut self, host: &mut Host<H>, address: BluetoothDeviceAddress) {
+        if self.keys_store.delete_key(IdentityAddress::Public(address)).await {
+            self.privacy
+                .remove_device_from_resolving_list(host, &IdentityAddress::Public(address), true)
+                .await;
+        } else {
+            self.keys_store.delete_key(IdentityAddress::StaticRandom(address)).await;
+
+            self.privacy
+                .remove_device_from_resolving_list(host, &IdentityAddress::StaticRandom(address), true)
+                .await;
+        }
+
+        self.keys_store.save_keys().await;
+    }
+
+    async fn on_disconnect<H: HostChannelEnds>(
+        &mut self,
+        host: &mut Host<H>,
+        connection_handle: ConnectionHandle,
+        to_ui: std::sync::mpsc::Sender<MainToUserInput>,
+    ) {
         if let Ok(index) = self
             .connections
             .binary_search_by(|task| task.hci_handle.cmp(&connection_handle))
         {
             let connection = self.connections.remove(index);
 
-            if let io::ConnectedStatus::New = connection.status {
-                if let Ok(index) = self
-                    .pairing
-                    .binary_search_by(|pairing_info| pairing_info.0.cmp(&connection.address))
-                {
-                    self.pairing.remove(index);
+            match connection.status {
+                connection::ConnectedStatus::New(address) => {
+                    if let Ok(index) = self
+                        .pairing
+                        .binary_search_by(|pairing_info| pairing_info.0.cmp(&address))
+                    {
+                        self.pairing.remove(index);
+
+                        let pairing_devices = self.pairing.iter().map(|(address, _)| *address).collect::<Vec<_>>();
+
+                        to_ui.send(MainToUserInput::PairingDevices(pairing_devices)).unwrap();
+                    }
+                }
+                connection::ConnectedStatus::Bonded(identity) => {
+                    let keys = self.keys_store.get(identity).await.unwrap();
+
+                    self.privacy.add_device_to_resolving_list(host, &*keys).await;
                 }
             }
 
-            user_io.on_disconnection(connection.address).await;
+            let output = io::Output::device_disconnected(connection.status.get_address());
+
+            to_ui.send(MainToUserInput::Output(output)).unwrap();
         }
     }
 
@@ -535,14 +686,16 @@ impl HeartRateProfile {
         &mut self,
         host: &mut Host<H>,
         next: Next<H::ConnectionChannelEnds>,
-        user_io: &mut io::UserInOut,
+        to_ui: std::sync::mpsc::Sender<MainToUserInput>,
     ) where
         <H as SendAndSyncSafeHostChannelEnds>::SendAndSyncSafeConnectionChannelEnds: 'static,
     {
         use bo_tie::hci::events::{EventsData, LeMetaData};
 
         match next {
-            Next::Event(EventsData::DisconnectionComplete(d)) => self.on_disconnect(d.connection_handle, user_io).await,
+            Next::Event(EventsData::DisconnectionComplete(d)) => {
+                self.on_disconnect(host, d.connection_handle, to_ui).await
+            }
             Next::Event(EventsData::EncryptionChangeV1(e)) => {
                 self.on_encryption_change(e.connection_handle, e.encryption_enabled)
                     .await
@@ -558,9 +711,40 @@ impl HeartRateProfile {
                 self.on_connection_parameters_request(host, c).await
             }
             Next::Event(_) => unreachable!(),
-            Next::NewConnection(c) => self.on_connection(host, c, user_io).await,
+            Next::NewConnection(c) => self.on_connection(host, c, to_ui).await,
         }
     }
+
+    async fn get_bonded_devices(&self) -> Vec<BluetoothDeviceAddress> {
+        self.keys_store
+            .get_all()
+            .await
+            .iter()
+            .map(|keys| keys.get_peer_identity().unwrap().get_address())
+            .collect()
+    }
+}
+
+/// A generator of random heart rate data
+///
+/// Normally data would be set after reading a sensor, but this is an example so the heart rate data
+/// is just generated.
+///
+/// BTW I have not bothered to ensure this data makes any sense :).
+async fn gen_hart_rate_data(hrd: &HeartRateMeasurementArc) -> tokio::time::Sleep {
+    const BASE_HEART_RATE: u16 = 72;
+
+    hrd.set_contact_status(server::ContactStatus::FullContact).await;
+
+    hrd.set_heart_rate(BASE_HEART_RATE).await;
+
+    hrd.increase_energy_expended(2).await;
+
+    let interval = 700u16 + 200u16 % rand::random::<u16>();
+
+    hrd.add_rr_interval(interval).await;
+
+    tokio::time::sleep(std::time::Duration::from_secs(interval.into()))
 }
 
 #[tokio::main]
@@ -578,14 +762,11 @@ async fn main() {
         .unwrap();
     }
 
-    let mut user_io = io::UserInOut::new();
+    let (mut user_io, mut from_ui) = io::UserInput::new();
 
-    let (ctrl_c_sender, mut ctrl_c_recv) = tokio::sync::mpsc::channel(1);
+    let to_ui = user_io.get_sender_to_ui();
 
-    ctrlc::set_handler(move || {
-        ctrl_c_sender.try_send(()).ok();
-    })
-    .ok();
+    user_io.set_with_ctrl('c', || Ok(true));
 
     let (interface, host_ends) = create_hci!();
 
@@ -593,35 +774,43 @@ async fn main() {
 
     let host = &mut Host::init(host_ends).await.unwrap();
 
-    let mut hrp = HeartRateProfile::new(host).await;
+    let mut hrp = HeartRateProfile::new(host, to_ui.clone()).await;
+
+    let mut gen_timer = Box::pin(gen_hart_rate_data(&hrp.heart_rate_measurement_arc).await);
 
     let mut connection_receiver = hrp.take_connection_receiver().unwrap();
 
-    user_io.init_greeting().unwrap();
+    user_io.set_bonded_devices(hrp.get_bonded_devices().await);
+
+    let ui_join_handle = user_io.spawn();
+
+    let mut timeout_ticker = advertise::privacy::TimeoutTick::default();
 
     loop {
         tokio::select! {
-            user_action = user_io.await_user() => {
-                let user_action = user_action.unwrap();
-
-                if let io::UserAction::Exit = user_action {
+            from_ui_msg = from_ui.recv() => if let Some(user_command) = from_ui_msg {
+                if let io::FromUserInput::Exit = user_command {
                     break
                 }
 
-                hrp.on_user_action(host, user_action, &mut user_io).await;
+                hrp.on_user_action(host, user_command, to_ui.clone(), &mut timeout_ticker).await;
+            } else {
+                break
             },
 
-            host_next = host.next() => hrp.on_hci_next(host, host_next.unwrap(), &mut user_io).await,
+            host_next = host.next() => hrp.on_hci_next(host, host_next.unwrap(), to_ui.clone()).await,
 
-            message = connection_receiver.recv() => message.unwrap().process(host, &mut user_io, &mut hrp).await,
+            message = connection_receiver.recv() => message.unwrap().process(host, to_ui.clone(), &mut hrp).await,
 
-            _ = ctrl_c_recv.recv() => break,
+            _ = &mut gen_timer => gen_timer = Box::pin(gen_hart_rate_data(&hrp.heart_rate_measurement_arc).await),
+
+            regen = timeout_ticker.tick() => regen.regen(host).await,
         }
     }
 
     advertise::disable_advertising(host).await;
 
-    hrp.on_user_action(host, io::UserAction::Exit, &mut user_io).await;
+    hrp.exit(host).await;
 
-    user_io.shutdown_io().await.unwrap();
+    ui_join_handle.exit();
 }

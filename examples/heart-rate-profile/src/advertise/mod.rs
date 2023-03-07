@@ -30,10 +30,9 @@ use bo_tie::hci::{Host, HostChannelEnds};
 use bo_tie::host::gap::assigned;
 use bo_tie::BluetoothDeviceAddress;
 
-pub async fn discoverable_advertising_setup<H: HostChannelEnds>(
-    host: &mut Host<H>,
-    discoverable_address: BluetoothDeviceAddress,
-) {
+pub async fn discoverable_advertising_setup<H: HostChannelEnds>(host: &mut Host<H>) -> Kind {
+    let discoverable_address = BluetoothDeviceAddress::new_non_resolvable();
+
     let adv_name = assigned::local_name::LocalName::new(crate::EXAMPLE_NAME, ["HRP example", "HRP"]);
 
     let mut adv_flags = assigned::flags::Flags::new();
@@ -78,8 +77,17 @@ pub async fn discoverable_advertising_setup<H: HostChannelEnds>(
     set_advertising_parameters::send(host, adv_prams).await.unwrap();
 
     set_advertising_enable::send(host, true).await.unwrap();
+
+    Kind::Discoverable(discoverable_address)
 }
 
 pub async fn disable_advertising<H: HostChannelEnds>(host: &mut Host<H>) {
     set_advertising_enable::send(host, false).await.ok();
+}
+
+#[derive(Copy, Clone)]
+pub enum Kind {
+    Off,
+    Discoverable(BluetoothDeviceAddress),
+    Private,
 }

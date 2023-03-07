@@ -10,25 +10,46 @@ use bo_tie::hci::{ConnectionChannelEnds, LeL2cap};
 use bo_tie::host::l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannelExt, LeUserChannelIdentifier};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+#[derive(Copy, Clone)]
+pub enum ConnectedStatus {
+    New(bo_tie::BluetoothDeviceAddress),
+    Bonded(bo_tie::host::sm::IdentityAddress),
+}
+
+impl ConnectedStatus {
+    pub fn get_address(&self) -> bo_tie::BluetoothDeviceAddress {
+        match self {
+            ConnectedStatus::New(address) => *address,
+            ConnectedStatus::Bonded(identity) => identity.get_address(),
+        }
+    }
+}
+
 pub(crate) struct Connection<C: ConnectionChannelEnds> {
     le_l2cap: LeL2cap<C>,
     security: Security,
     server: Server,
     to: UnboundedSender<ConnectionToMain>,
+    notification_interval: tokio::time::Interval,
 }
 
 impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
+    const NOTIFICATION_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
+
     pub fn new(
         le_l2cap: LeL2cap<C>,
         security: Security,
         server: Server,
         to: UnboundedSender<ConnectionToMain>,
     ) -> Self {
+        let notification_interval = tokio::time::interval(Self::NOTIFICATION_PERIOD);
+
         Self {
             le_l2cap,
             security,
             server,
             to,
+            notification_interval,
         }
     }
 
@@ -42,7 +63,12 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
                     None => break, // connection closed
                 },
 
-                msg = from.recv() => self.process_msg(msg.unwrap()).await,
+                opt_msg = from.recv() => match opt_msg {
+                    Some(message) => self.process_msg(message).await,
+                    None => break, // another way to know the connection closed
+                },
+
+                _ = self.notification_interval.tick() => self.server.send_hrd_notification(&self.le_l2cap).await,
             }
         }
     }

@@ -68,10 +68,22 @@ impl Privacy {
         }
     }
 
+    pub async fn remove_device_from_resolving_list<H: HostChannelEnds>(
+        &mut self,
+        host: &mut Host<H>,
+        identity: &IdentityAddress,
+        hard_remove: bool,
+    ) {
+        match &mut self.mode {
+            PrivacyMode::Controller(c) => c.remove_device_from_resolving_list(host, identity).await,
+            PrivacyMode::Host(h) => h.remove_device_from_resolving_list(identity, hard_remove),
+        }
+    }
+
     /// Clear all devices from the resolving list
     pub async fn clear_resolving_list<H: HostChannelEnds>(&mut self, host: &mut Host<H>) {
         match &mut self.mode {
-            PrivacyMode::Controller(_) => controller_privacy::Controller::clear_resolving_list(host).await,
+            PrivacyMode::Controller(c) => c.clear_resolving_list(host).await,
             PrivacyMode::Host(h) => h.clear_resolving_list(),
         }
     }
@@ -85,18 +97,24 @@ impl Privacy {
     /// [`host_regen_addresses`] must be called.
     ///
     /// [`host_regen_address`]: Privacy::host_regen_address
-    pub async fn set_timeout<H: HostChannelEnds>(
-        &mut self,
-        host: &mut Host<H>,
-        timeout: std::time::Duration,
-    ) -> Option<host_privacy::RpaInterval> {
-        match &mut self.mode {
-            PrivacyMode::Controller(_) => {
-                controller_privacy::Controller::set_timeout(host, timeout).await;
+    pub async fn set_timeout<H, T>(&mut self, host: &mut Host<H>, timeout: T) -> TimeoutTick
+    where
+        H: HostChannelEnds,
+        T: Into<Option<std::time::Duration>>,
+    {
+        let timeout = timeout.into().unwrap_or(std::time::Duration::from_secs(900));
 
-                None
+        match &mut self.mode {
+            PrivacyMode::Controller(c) => {
+                c.set_timeout(host, timeout).await;
+
+                TimeoutTick::default()
             }
-            PrivacyMode::Host(h) => Some(h.set_timeout(timeout)),
+            PrivacyMode::Host(h) => {
+                let tick = h.set_timeout(timeout).into();
+
+                TimeoutTick { tick }
+            }
         }
     }
 
@@ -118,7 +136,36 @@ impl Privacy {
     pub fn validate<C>(&mut self, connection: &Connection<C>) -> Option<IdentityAddress> {
         match &mut self.mode {
             PrivacyMode::Host(h) => h.validate_connection(connection),
-            PrivacyMode::Controller(_) => controller_privacy::Controller::get_identified(connection).into(),
+            PrivacyMode::Controller(c) => c.get_identified(connection).into(),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct TimeoutTick {
+    tick: Option<host_privacy::RpaInterval>,
+}
+
+impl TimeoutTick {
+    pub async fn tick(&mut self) -> RegenIrk {
+        match &mut self.tick {
+            Some(timout_tick) => {
+                let regen = timout_tick.tick().await;
+
+                RegenIrk { regen }
+            }
+            None => std::future::pending().await,
+        }
+    }
+}
+
+#[must_use]
+pub struct RegenIrk {
+    regen: host_privacy::RegenRpa,
+}
+
+impl RegenIrk {
+    pub async fn regen<H: HostChannelEnds>(self, host: &mut Host<H>) {
+        self.regen.regen(host).await
     }
 }
