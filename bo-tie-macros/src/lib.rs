@@ -111,7 +111,8 @@ pub fn display_hci_event(enumeration: TokenStream) -> TokenStream {
 /// ```
 ///
 /// ## Method from_depth
-/// This is used to get the enumeration permutation from the depth value.
+/// This is used to get the enumeration permutation from the depth value. `from_depth` will panic if
+/// the input is equal to or larger than the return of `full_depth`.
 ///
 /// ```
 /// # use bo_tie_macros::DepthCount;
