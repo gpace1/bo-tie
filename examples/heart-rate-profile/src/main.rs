@@ -744,7 +744,7 @@ async fn gen_hart_rate_data(hrd: &HeartRateMeasurementArc) -> tokio::time::Sleep
 
     hrd.add_rr_interval(interval).await;
 
-    tokio::time::sleep(std::time::Duration::from_secs(interval.into()))
+    tokio::time::sleep(std::time::Duration::from_millis(interval.into()))
 }
 
 #[tokio::main]
