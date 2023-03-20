@@ -175,7 +175,7 @@ where
 
     let peer_address = AddressInfo {
         address: connection.get_peer_address(),
-        is_pub: !connection.is_address_random(),
+        is_pub: !connection.is_peer_address_random(),
     };
 
     let mut event_receiver = connection.take_event_receiver().unwrap();

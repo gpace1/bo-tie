@@ -119,7 +119,7 @@ impl Controller {
     }
 
     pub fn get_identified<C>(&self, connection: &Connection<C>) -> IdentityAddress {
-        if connection.is_address_random() {
+        if connection.is_peer_address_random() {
             IdentityAddress::StaticRandom(connection.get_peer_address())
         } else {
             IdentityAddress::Public(connection.get_peer_address())

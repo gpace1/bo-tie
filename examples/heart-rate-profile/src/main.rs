@@ -331,7 +331,7 @@ impl HeartRateProfile {
         } else if let advertise::Kind::Discoverable(advertising_address) = self.advertising_kind {
             let peer_address = connection.get_peer_address();
 
-            let peer_is_random = connection.is_address_random();
+            let peer_is_random = connection.is_peer_address_random();
 
             let connection_kind = ConnectionKind::New {
                 advertising_address,

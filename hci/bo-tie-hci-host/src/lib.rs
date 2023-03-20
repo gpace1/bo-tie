@@ -1051,11 +1051,11 @@ impl<C> Connection<C> {
         }
     }
 
-    /// Check if the address is random
+    /// Check if the peer address is random
     ///
     /// # Note
     /// For a BR/EDR connection this function always returns false.
-    pub fn is_address_random(&self) -> bool {
+    pub fn is_peer_address_random(&self) -> bool {
         use events::parameters::LeConnectionAddressType;
         use le::AddressType;
 
