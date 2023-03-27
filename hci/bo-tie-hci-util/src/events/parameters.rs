@@ -642,10 +642,10 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum NewRole {
-    NowMaster,
-    NowSlave,
+    Central,
+    Peripheral,
 }
 
 impl NewRole {
@@ -653,8 +653,8 @@ impl NewRole {
         use self::NewRole::*;
 
         match raw {
-            0x00 => Ok(NowMaster),
-            0x01 => Ok(NowSlave),
+            0x00 => Ok(Central),
+            0x01 => Ok(Peripheral),
             _ => Err(alloc::format!("Unknown New Role: {}", raw)),
         }
     }
@@ -1762,7 +1762,7 @@ impl_try_from_for_raw_packet! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum LeRole {
     Central,
     Peripheral,
