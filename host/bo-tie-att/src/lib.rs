@@ -969,6 +969,7 @@ mod test {
         pin::Pin,
         task::{Context, Poll, Waker},
     };
+    use crate::server::ServerAttributes;
 
     struct TwoWayChannel {
         b1: Option<Vec<u8>>,
@@ -1169,7 +1170,7 @@ mod test {
         let task = async move {
             use AttributePermissions::*;
 
-            let mut server = server::Server::new(None, server::NoQueuedWrites);
+            let mut server_attributes = ServerAttributes::new();
 
             let attribute_0 = Attribute::new(
                 UUID_1,
@@ -1189,9 +1190,11 @@ mod test {
                 0i8,
             );
 
-            server.push(attribute_0); // has handle value of 1
-            server.push(attribute_1); // has handle value of 2
-            server.push(attribute_3); // has handle value of 3
+            server_attributes.push(attribute_0); // has handle value of 1
+            server_attributes.push(attribute_1); // has handle value of 2
+            server_attributes.push(attribute_3); // has handle value of 3
+
+            let mut server = Server::new(server_attributes, server::NoQueuedWrites);
 
             let client_permissions: &[AttributePermissions] =
                 &[Read(AttributeRestriction::None), Write(AttributeRestriction::None)];

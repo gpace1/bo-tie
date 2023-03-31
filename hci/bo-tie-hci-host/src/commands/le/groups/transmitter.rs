@@ -178,7 +178,6 @@ pub mod set_advertising_parameters {
     ///
     /// While most members are public, the only way to set the minimum and maximum
     /// advertising interval is through method calls.
-    #[cfg_attr(test, derive(Debug))]
     pub struct AdvertisingParameters<'a> {
         pub minimum_advertising_interval: AdvertisingInterval,
         pub maximum_advertising_interval: AdvertisingInterval,

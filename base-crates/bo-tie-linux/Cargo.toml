@@ -2,7 +2,7 @@
 name = "bo-tie-linux"
 version = "0.1.0"
 authors = ["gpace1 <33923139+gpace1@users.noreply.github.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 bo-tie-hci-host = { path = "../../hci/bo-tie-hci-host" }
