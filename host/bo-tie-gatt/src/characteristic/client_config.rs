@@ -92,8 +92,8 @@ impl ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
     /// [`set_write_restrictions`]: ClientConfigurationBuilder::set_write_restrictions
     pub fn set_write_callback<Fun, Fut>(mut self, callback: Fun) -> ClientConfigurationBuilder<Fun>
     where
-        Fun: FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
-        Fut: Future + Send + Sync,
+        Fun: FnMut(SetClientConfig) -> Fut + Send + 'static,
+        Fut: Future + Send,
     {
         if self.write_restrictions.len() == 0 {
             self.write_restrictions
@@ -115,8 +115,8 @@ impl ClientConfigurationBuilder<ReadOnlyClientConfiguration> {
 
 impl<Fun, Fut> ClientConfigurationBuilder<Fun>
 where
-    Fun: FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
-    Fut: Future + Send + Sync,
+    Fun: FnMut(SetClientConfig) -> Fut + Send + 'static,
+    Fut: Future + Send,
 {
     /// Set the restrictions for writing to the client configuration
     ///
@@ -170,8 +170,8 @@ impl AddCharacteristicComponent for ClientConfigurationBuilder<ReadOnlyClientCon
 
 impl<Fun, Fut> AddCharacteristicComponent for ClientConfigurationBuilder<Fun>
 where
-    Fun: for<'a> FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
-    Fut: Future + Send + Sync,
+    Fun: for<'a> FnMut(SetClientConfig) -> Fut + Send + 'static,
+    Fut: Future + Send,
 {
     fn push_to(self, sa: &mut ServerAttributes, restrictions: &[AttributeRestriction]) -> bool {
         let mut init_config: ClientConfigVec = VecArray(LinearBuffer::new());
@@ -241,8 +241,8 @@ impl AccessValue for ClientConfigurationAccessor<ReadOnlyClientConfiguration> {
 
 impl<Fun, Fut> AccessValue for ClientConfigurationAccessor<Fun>
 where
-    Fun: FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
-    Fut: Future + Send + Sync,
+    Fun: FnMut(SetClientConfig) -> Fut + Send + 'static,
+    Fut: Future + Send,
 {
     type ReadValue = ClientConfigVec;
     type ReadGuard<'a> = &'a ClientConfigVec where Self: 'a;
@@ -279,8 +279,8 @@ struct WriteAccessor<'a, Fun, Fut> {
 
 impl<Fun, Fut> Future for WriteAccessor<'_, Fun, Fut>
 where
-    Fun: for<'z> FnMut(SetClientConfig) -> Fut + Send + Sync,
-    Fut: Future + Send + Sync,
+    Fun: for<'z> FnMut(SetClientConfig) -> Fut + Send,
+    Fut: Future + Send,
 {
     type Output = Result<(), crate::att::pdu::Error>;
 
@@ -413,7 +413,7 @@ impl ClientConfigComplete for ReadOnlyClientConfiguration {}
 
 impl<Fun, Fut> ClientConfigComplete for Fun
 where
-    Fun: for<'a> FnMut(SetClientConfig) -> Fut + Send + Sync + 'static,
-    Fut: Future + Send + Sync,
+    Fun: for<'a> FnMut(SetClientConfig) -> Fut + Send + 'static,
+    Fut: Future + Send,
 {
 }

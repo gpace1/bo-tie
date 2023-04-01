@@ -38,7 +38,7 @@
 //! [`run`]: LinuxInterface::run
 //!
 
-use bo_tie_hci_util::channel::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
+use bo_tie_hci_util::channel::{SendSafeChannelReserve, SendSafeHostChannelEnds};
 use bo_tie_hci_util::{ChannelReserve, HciPacket};
 use std::error;
 use std::fmt;
@@ -331,16 +331,14 @@ impl<T: ChannelReserve> LinuxInterface<T> {
 fn from_adapter_id(
     adapter_id: usize,
 ) -> (
-    LinuxInterface<impl SendAndSyncSafeChannelReserve>,
-    impl SendAndSyncSafeHostChannelEnds,
+    LinuxInterface<impl SendSafeChannelReserve>,
+    impl SendSafeHostChannelEnds,
 ) {
     use nix::libc;
     use nix::sys::epoll::{epoll_create1, epoll_ctl, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
     use nix::sys::eventfd::{eventfd, EfdFlags};
     use nix::sys::signal::{SigSet, Signal};
     use nix::sys::signalfd::{signalfd, SfdFlags};
-
-    use std::convert::TryInto;
 
     let device_fd = unsafe {
         libc::socket(
@@ -462,8 +460,8 @@ impl<C> Drop for LinuxInterface<C> {
 pub fn new<T>(
     adapter_id: T,
 ) -> (
-    LinuxInterface<impl SendAndSyncSafeChannelReserve>,
-    impl SendAndSyncSafeHostChannelEnds,
+    LinuxInterface<impl SendSafeChannelReserve>,
+    impl SendSafeHostChannelEnds,
 )
 where
     T: Into<Option<usize>>,

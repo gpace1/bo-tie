@@ -42,7 +42,7 @@ impl ValueBuilder<SetValue> {
     /// Whenever a client reads or writes to this value it is directly read from or written to.
     pub fn set_value<V>(self, value: V) -> ValueBuilder<SetPermissions<Trivial<V>>>
     where
-        V: bo_tie_att::TransferFormatTryFrom + bo_tie_att::TransferFormatInto + PartialEq + Send + Sync + 'static,
+        V: bo_tie_att::TransferFormatTryFrom + bo_tie_att::TransferFormatInto + PartialEq + Send + 'static,
     {
         let current = SetPermissions { value: Trivial(value) };
 

@@ -127,7 +127,7 @@ fn is_send<T: Future + Send>(t: T) {}
 #[allow(dead_code)]
 fn send_test<C>(mut c: C)
 where
-    C: ConnectionChannel + Send + Sync,
+    C: ConnectionChannel + Send,
     <C::RecvBuffer as TryExtend<u8>>::Error: Send,
     C::SendFutErr: Send,
     for<'a> C::SendFut<'a>: Send,

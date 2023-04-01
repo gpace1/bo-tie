@@ -1583,9 +1583,9 @@ impl ServerAttributes {
     /// ```
     pub fn push_borrowed<D>(&mut self, attribute: super::Attribute<D>) -> u16
     where
-        D: core::ops::Deref + From<<D::Target as ToOwned>::Owned> + Unpin + Send + Sync + 'static,
+        D: core::ops::Deref + From<<D::Target as ToOwned>::Owned> + Unpin + Send + 'static,
         D::Target: TransferFormatInto + ToOwned + Comparable + Send + Sync,
-        <D::Target as ToOwned>::Owned: TransferFormatTryFrom + Unpin + Send + Sync,
+        <D::Target as ToOwned>::Owned: TransferFormatTryFrom + Unpin + Send,
     {
         let cow = super::Attribute {
             ty: attribute.ty,
@@ -1859,7 +1859,7 @@ impl Default for ServerAttributes {
     }
 }
 
-pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + Sync + 'a>>;
+pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + 'a>>;
 
 /// A value accessor
 ///
@@ -1873,20 +1873,20 @@ pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + Sync + 'a
 /// [async-std]: https://docs.rs/async-std/latest/async_std/index.html
 /// [futures]: https://docs.rs/futures/latest/futures/index.html
 /// [tokio]: https://docs.rs/tokio/latest/tokio/index.html
-pub trait AccessValue: Send + Sync {
-    type ReadValue: ?Sized + Send + Sync;
+pub trait AccessValue: Send {
+    type ReadValue: ?Sized + Send;
 
     type ReadGuard<'a>: core::ops::Deref<Target = Self::ReadValue>
     where
         Self: 'a;
 
-    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send + Sync
+    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send
     where
         Self: 'a;
 
-    type WriteValue: Unpin + Send + Sync;
+    type WriteValue: Unpin + Send;
 
-    type Write<'a>: Future<Output = Result<(), pdu::Error>> + Send + Sync
+    type Write<'a>: Future<Output = Result<(), pdu::Error>> + Send
     where
         Self: 'a;
 
@@ -1904,7 +1904,7 @@ trait AccessValueExt: AccessValue {
     /// Read the value and call `f` with a reference to it.
     fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
     where
-        F: FnOnce(&Self::ReadValue) -> T + Unpin + Send + Sync,
+        F: FnOnce(&Self::ReadValue) -> T + Unpin + Send,
     {
         let read = self.read();
 
@@ -1952,14 +1952,14 @@ where
 /// this*. This is because in order to compare
 ///
 /// [`TransferFormatTryFrom`]: crate::TransferFormatTryFrom
-pub trait AccessReadOnly: Send + Sync {
-    type Value: ?Sized + Send + Sync;
+pub trait AccessReadOnly: Send {
+    type Value: ?Sized + Send;
 
     type ReadGuard<'a>: core::ops::Deref<Target = Self::Value>
     where
         Self: 'a;
 
-    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send + Sync
+    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send
     where
         Self: 'a;
 
@@ -1970,7 +1970,7 @@ trait AccessReadOnlyExt: AccessReadOnly {
     /// Read the value and call `f` with a reference to it.
     fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
     where
-        F: FnOnce(&Self::Value) -> T + Unpin + Send + Sync,
+        F: FnOnce(&Self::Value) -> T + Unpin + Send,
     {
         let read = self.read();
 
@@ -1985,9 +1985,9 @@ impl<T: AccessReadOnly> AccessReadOnlyExt for T {}
 
 /// An attribute value of a `Server`
 ///
-trait ServerAttributeValue: ServerAttribute + Send + Sync {}
+trait ServerAttributeValue: ServerAttribute + Send {}
 
-impl<T> ServerAttributeValue for T where T: ServerAttribute + Send + Sync {}
+impl<T> ServerAttributeValue for T where T: ServerAttribute + Send {}
 
 /// A server attribute
 ///
@@ -2071,11 +2071,15 @@ where
     }
 
     fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
-        Box::pin(async move { self.0.read_and(|v: &A::ReadValue| v.len_of_into()).await })
+        let read_and_fut = self.0.read_and(|v: &A::ReadValue| v.len_of_into());
+
+        Box::pin(async move { read_and_fut.await })
     }
 
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
-        Box::pin(async move { self.read().await.cmp_tf_data(raw) })
+        let read_fut = self.read();
+
+        Box::pin(async { read_fut.await.cmp_tf_data(raw) })
     }
 
     fn as_any(&self) -> &dyn core::any::Any {
@@ -2124,11 +2128,15 @@ where
     }
 
     fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
-        Box::pin(async move { self.0.read_and(|v: &R::Value| v.len_of_into()).await })
+        let read_and_fut = self.0.read_and(|v: &R::Value| v.len_of_into());
+
+        Box::pin(async move { read_and_fut.await })
     }
 
     fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool> {
-        Box::pin(async move { self.read().await.cmp_tf_data(raw) })
+        let read_fut = self.read();
+
+        Box::pin(async move { read_fut.await.cmp_tf_data(raw) })
     }
 
     fn as_any(&self) -> &dyn core::any::Any {

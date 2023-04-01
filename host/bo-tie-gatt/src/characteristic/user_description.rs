@@ -28,7 +28,7 @@ impl UserDescriptionBuilder<SetDescription> {
     /// Set the user description
     pub fn set_description<S>(self, description: S) -> UserDescriptionBuilder<SetPermissions<Trivial<S>>>
     where
-        S: Borrow<str> + From<alloc::string::String> + Send + Sync,
+        S: Borrow<str> + From<alloc::string::String> + Send,
     {
         let current = SetPermissions {
             description: UserDescription(Trivial(description)),
@@ -56,7 +56,7 @@ impl UserDescriptionBuilder<SetDescription> {
     /// This allows for `&'static str` and other immutable types to be used as the user description.
     pub fn set_read_only_description<S>(self, description: S) -> UserDescriptionBuilder<SetReadOnlyPermissions<S>>
     where
-        S: Borrow<str> + Send + Sync + 'static,
+        S: Borrow<str> + Send + 'static,
     {
         let current = SetReadOnlyPermissions { description };
 

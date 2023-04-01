@@ -7,7 +7,7 @@ mod server;
 use crate::io::MainToUserInput;
 use crate::security::SecurityStage;
 use crate::server::HeartRateMeasurementArc;
-use bo_tie::hci::channel::{SendAndSyncSafeConnectionChannelEnds, SendAndSyncSafeHostChannelEnds};
+use bo_tie::hci::channel::{SendSafeConnectionChannelEnds, SendSafeHostChannelEnds};
 use bo_tie::hci::commands::le::long_term_key_request_negative_reply;
 use bo_tie::hci::commands::link_control::disconnect;
 use bo_tie::hci::events::{Events, LeMeta};
@@ -296,13 +296,13 @@ impl HeartRateProfile {
             .ok()
     }
 
-    async fn on_connection<H: SendAndSyncSafeHostChannelEnds>(
+    async fn on_connection<H: SendSafeHostChannelEnds>(
         &mut self,
         host: &mut Host<H>,
-        connection: Connection<H::SendAndSyncSafeConnectionChannelEnds>,
+        connection: Connection<H::SendSafeConnectionChannelEnds>,
         to_ui: std::sync::mpsc::Sender<MainToUserInput>,
     ) where
-        <H as SendAndSyncSafeHostChannelEnds>::SendAndSyncSafeConnectionChannelEnds: 'static,
+        <H as SendSafeHostChannelEnds>::SendSafeConnectionChannelEnds: 'static,
     {
         use security::{ConnectionKind, Security};
 
@@ -381,7 +381,7 @@ impl HeartRateProfile {
         status: connection::ConnectedStatus,
         is_notifications_enabled: bool,
     ) where
-        C: SendAndSyncSafeConnectionChannelEnds + 'static,
+        C: SendSafeConnectionChannelEnds + 'static,
     {
         let server = server::Server::new(self.heart_rate_measurement_arc.clone(), is_notifications_enabled);
 
@@ -689,13 +689,13 @@ impl HeartRateProfile {
             .unwrap();
     }
 
-    pub async fn on_hci_next<H: SendAndSyncSafeHostChannelEnds>(
+    pub async fn on_hci_next<H: SendSafeHostChannelEnds>(
         &mut self,
         host: &mut Host<H>,
         next: Next<H::ConnectionChannelEnds>,
         to_ui: std::sync::mpsc::Sender<MainToUserInput>,
     ) where
-        <H as SendAndSyncSafeHostChannelEnds>::SendAndSyncSafeConnectionChannelEnds: 'static,
+        <H as SendSafeHostChannelEnds>::SendSafeConnectionChannelEnds: 'static,
     {
         use bo_tie::hci::events::{EventsData, LeMetaData};
 

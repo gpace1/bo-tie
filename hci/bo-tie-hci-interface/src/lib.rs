@@ -151,7 +151,7 @@ where
             HciPacket::Command(_) => Err(SendError::<R>::InvalidHciPacket(HciPacketType::Command)),
             HciPacket::Acl(packet) => self.send_acl(packet).await,
             HciPacket::Sco(_packet) => Err(SendError::<R>::Unimplemented("HCI SCO packets are unimplemented")),
-            HciPacket::Event(packet) => self.maybe_send_event(packet).await,
+            HciPacket::Event(packet) => Ok(()), //self.maybe_send_event(packet).await,
             HciPacket::Iso(_packet) => Err(SendError::<R>::Unimplemented("HCI SCO packets are unimplemented")),
         }
     }
@@ -658,19 +658,18 @@ where
         let connection_handle =
             ConnectionHandle::try_from(raw_handle).map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
 
-        let reserve_ref = &self.channel_reserve;
-
         let id = TaskId::Connection(ConnectionChannel::Data(connection_handle));
 
-        let channel = reserve_ref
+        let mut buffer = self
+            .channel_reserve
             .get_channel(id)
             .and_then(|channel| match channel {
                 FromInterface::ConnectionData(channel) => Some(channel),
                 _ => None, // actually unreachable
             })
-            .ok_or_else(|| SendError::<R>::UnknownConnectionHandle(connection_handle))?;
-
-        let mut buffer = channel.take(0, 0).await;
+            .ok_or_else(|| SendError::<R>::UnknownConnectionHandle(connection_handle))?
+            .take(0, 0)
+            .await;
 
         buffer
             .try_extend(packet.iter().cloned())
@@ -678,11 +677,17 @@ where
 
         let message = ToConnectionDataIntraMessage::Acl(buffer).into();
 
-        channel
-            .get_sender()
-            .send(message)
-            .await
-            .map_err(|e| SendError::<R>::SenderError(e))
+        let mut sender = self
+            .channel_reserve
+            .get_channel(TaskId::Connection(ConnectionChannel::Data(connection_handle)))
+            .and_then(|channel| match channel {
+                FromInterface::ConnectionData(channel) => Some(channel),
+                _ => None, // actually unreachable
+            })
+            .ok_or_else(|| SendError::<R>::UnknownConnectionHandle(connection_handle))?
+            .get_sender();
+
+        sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
     }
 
     /// Parse the buffer information sent from the host async task
@@ -714,6 +719,58 @@ where
         self.channel_reserve.try_remove(handle).ok();
 
         self.skip_cmd_response = true;
+    }
+}
+
+impl<R> Interface<R>
+where
+    R: bo_tie_hci_util::channel::SendSafeChannelReserve,
+{
+    async fn s_send_acl(&mut self, packet: &[u8]) -> Result<(), SendError<R>> {
+        let raw_handle = <u16>::from_le_bytes([
+            *packet
+                .get(0)
+                .ok_or(SendError::<R>::InvalidHciPacket(HciPacketType::Acl))?,
+            // Only the first 4 bits are part of the handle
+            *packet
+                .get(1)
+                .ok_or(SendError::<R>::InvalidHciPacket(HciPacketType::Acl))?
+                & 0x0F,
+        ]);
+
+        let connection_handle =
+            ConnectionHandle::try_from(raw_handle).map_err(|_| SendError::<R>::InvalidConnectionHandle)?;
+
+        let id = TaskId::Connection(ConnectionChannel::Data(connection_handle));
+
+        let mut buffer = self
+            .channel_reserve
+            .get_channel(id)
+            .and_then(|channel| match channel {
+                FromInterface::ConnectionData(channel) => Some(channel),
+                _ => None, // actually unreachable
+            })
+            .ok_or_else(|| SendError::<R>::UnknownConnectionHandle(connection_handle))?
+            .take(0, 0)
+            .await;
+
+        buffer
+            .try_extend(packet.iter().cloned())
+            .map_err(|e| SendError::<R>::BufferExtendOfToConnection(e))?;
+
+        let message = ToConnectionDataIntraMessage::Acl(buffer).into();
+
+        let mut sender = self
+            .channel_reserve
+            .get_channel(TaskId::Connection(ConnectionChannel::Data(connection_handle)))
+            .and_then(|channel| match channel {
+                FromInterface::ConnectionData(channel) => Some(channel),
+                _ => None, // actually unreachable
+            })
+            .ok_or_else(|| SendError::<R>::UnknownConnectionHandle(connection_handle))?
+            .get_sender();
+
+        sender.send(message).await.map_err(|e| SendError::<R>::SenderError(e))
     }
 }
 

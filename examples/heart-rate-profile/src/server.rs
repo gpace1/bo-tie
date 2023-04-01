@@ -331,7 +331,7 @@ impl LocalHeartRateMeasurementArc {
 impl AccessValue for LocalHeartRateMeasurementArc {
     type ReadValue = HeartRateMeasurement;
     type ReadGuard<'a> = Box<Self::ReadValue>;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + Sync + 'a>> where Self: 'a ;
+    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a ;
     type WriteValue = ();
     type Write<'a> = std::future::Pending<Result<(), bo_tie::host::att::pdu::Error>> where Self: 'a ;
 
@@ -585,7 +585,7 @@ impl AccessValue for ControlPoint {
     type ReadGuard<'a> = &'a () where Self: 'a;
     type Read<'a> = std::future::Pending<Self::ReadGuard<'a>> where Self: 'a;
     type WriteValue = u8;
-    type Write<'a> = Pin<Box<dyn Future<Output = Result<(), bo_tie::host::att::pdu::Error>> + Send + Sync>>;
+    type Write<'a> = Pin<Box<dyn Future<Output = Result<(), bo_tie::host::att::pdu::Error>> + Send>>;
 
     fn read(&self) -> Self::Read<'_> {
         unreachable!()

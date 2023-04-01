@@ -2,7 +2,7 @@
 //!
 //! [tokio]: tokio
 
-use crate::impl_trait_ext::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
+use crate::impl_trait_ext::{SendSafeChannelReserve, SendSafeHostChannelEnds};
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
@@ -90,7 +90,7 @@ where
 pub fn tokio_unbounded(
     front_size: usize,
     tail_size: usize,
-) -> (impl SendAndSyncSafeChannelReserve, impl SendAndSyncSafeHostChannelEnds) {
+) -> (impl SendSafeChannelReserve, impl SendSafeHostChannelEnds) {
     use tokio::sync::mpsc::unbounded_channel;
 
     super::ChannelReserveBuilder::new(front_size, tail_size)

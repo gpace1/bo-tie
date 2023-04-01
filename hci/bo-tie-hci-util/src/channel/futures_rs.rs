@@ -2,7 +2,7 @@
 //!
 //! [futures-rs]: futures
 
-use crate::impl_trait_ext::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
+use crate::impl_trait_ext::{SendSafeChannelReserve, SendSafeHostChannelEnds};
 use futures::channel::mpsc;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -52,7 +52,7 @@ where
 pub fn futures_unbounded(
     front_size: usize,
     tail_size: usize,
-) -> (impl SendAndSyncSafeChannelReserve, impl SendAndSyncSafeHostChannelEnds) {
+) -> (impl SendSafeChannelReserve, impl SendSafeHostChannelEnds) {
     use futures::channel::mpsc::unbounded;
 
     super::ChannelReserveBuilder::new(front_size, tail_size)
