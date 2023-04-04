@@ -284,6 +284,180 @@ pub struct Server<Q> {
     queued_writer: Q,
 }
 
+/// Validate the permissions of the attribute
+///
+/// This is used to validate a list of possible permissions required to perform an operation.
+/// The `att` and client need to share at least one of the permissions in `permissions` for
+/// this function to return without an error.
+///
+/// If there is a permission issue, an error corresponding to the missing permission is
+/// returned. This error will be the first permission in `permissions` that is also a part of
+/// the permission list for the attribute. If the attribute does not have any of the permissions
+/// in `permissions` then an `Authorization` error is returned.
+///
+/// If 'None' is returned the client and attribute have the required permissions to proceed with
+/// the operation.
+///
+/// # Inputs
+/// $this: `self` for `Server`
+/// $attribute_permissions: `&[AttributePermissions]`
+/// $operation_permissions: &[AttributePermissions]
+macro_rules! validate_permissions {
+    ($this:expr, $attribute_permissions:expr, $operation_permissions:expr $(,)?) => {
+        match $this
+            .given_permissions
+            .iter()
+            .skip_while(|&p| !$attribute_permissions.contains(p) || !$operation_permissions.contains(p))
+            .nth(0)
+        {
+            Some(_) => None,
+            None => $operation_permissions
+                .iter()
+                .find(|&p| $attribute_permissions.contains(p))
+                .map(|&p| // Map the invalid permission to it's corresponding error
+                    match p {
+                        $crate::AttributePermissions::Read($crate::AttributeRestriction::None) =>
+                            pdu::Error::ReadNotPermitted,
+
+                        $crate::AttributePermissions::Write($crate::AttributeRestriction::None) =>
+                            pdu::Error::WriteNotPermitted,
+
+                        $crate::AttributePermissions::Read($crate::AttributeRestriction::Encryption(_)) =>
+                            $this.given_permissions.iter().find(|&&x| {
+                                match x {
+                                    AttributePermissions::Read($crate::AttributeRestriction::Encryption(_)) => true,
+                                    _ => false
+                                }
+                            })
+                                .and_then(|_| Some($crate::pdu::Error::InsufficientEncryptionKeySize))
+                                .or_else(|| Some($crate::pdu::Error::InsufficientEncryption))
+                                .unwrap(),
+
+                        $crate::AttributePermissions::Write($crate::AttributeRestriction::Encryption(_)) =>
+                            $this.given_permissions.iter().find(|&&x| {
+                                match x {
+                                    $crate::AttributePermissions::Write($crate::AttributeRestriction::Encryption(_)) => true,
+                                    _ => false
+                                }
+                            })
+                                .and_then(|_| Some($crate::pdu::Error::InsufficientEncryptionKeySize))
+                                .or_else(|| Some($crate::pdu::Error::InsufficientEncryption))
+                                .unwrap(),
+
+                        $crate::AttributePermissions::Read($crate::AttributeRestriction::Authorization) |
+                        $crate::AttributePermissions::Write($crate::AttributeRestriction::Authorization) =>
+                            $crate::pdu::Error::InsufficientAuthorization,
+
+                        $crate::AttributePermissions::Read($crate::AttributeRestriction::Authentication) |
+                        $crate::AttributePermissions::Write($crate::AttributeRestriction::Authentication) =>
+                            $crate::pdu::Error::InsufficientAuthentication,
+                    })
+                .or(Some($crate::pdu::Error::InsufficientAuthorization)),
+        }
+    }
+}
+
+/// Check if the client has acceptable permissions for the attribute with the provided handle
+///
+/// see [`check_permissions`]
+///
+/// # Inputs
+/// $this: `self` for `Server`
+/// $handle: `u16`
+/// $operation_permissions: `&[AttributePermissions]`
+///
+/// [`check_permissions`]: Server::check_permissions
+macro_rules! check_permissions {
+    (
+    $this:expr,
+    $handle:expr,
+    $operation_permissions:expr $(,)?
+) => {{
+        let att = $this.attributes.get($handle).ok_or($crate::pdu::Error::InvalidHandle)?;
+
+        match validate_permissions!($this, att.get_permissions(), $operation_permissions) {
+            None => Ok(()),
+            Some(e) => Err(e),
+        }
+    }};
+}
+
+/// Check if a client can read the given attribute
+///
+/// Returns the error as to why the client couldn't read the attribute
+macro_rules! client_can_read_attribute {
+    ($this:expr, $att:expr $(,)?) => {
+        validate_permissions!($this, $att.get_permissions(), &$crate::FULL_READ_PERMISSIONS)
+    };
+}
+
+/// Check if a client can write the given attribute
+///
+/// Returns the error as to why the client cannot write to the the attribute
+///
+/// # Inputs
+/// $this: `self` for `Server`
+/// $att: `&super::Attribute<_>`
+macro_rules! client_can_write_attribute {
+    ( $this:expr, $att:expr $(,)?) => {
+        validate_permissions!($this, $att.get_permissions(), &$crate::FULL_WRITE_PERMISSIONS)
+    };
+}
+
+/// Send an attribute PDU to the client
+///
+/// # Inputs
+/// $this: `self` for `Server`
+/// $connection_channel: `impl ConnectionChannel`,
+/// $pdu: `pdu::Pdu<_>`,
+macro_rules! send_pdu {
+    ( $connection_channel:expr, $pdu:expr $(,)?) => {{
+        log::info!("(ATT) sending {}", $pdu.get_opcode());
+
+        send_pdu!(SKIP_LOG, $connection_channel, $pdu)
+    }};
+
+    (SKIP_LOG, $connection_channel:expr, $pdu:expr $(,)?) => {{
+        let interface_data = $crate::TransferFormatInto::into(&$pdu);
+
+        let acl_data = bo_tie_l2cap::BasicInfoFrame::new(interface_data, $crate::L2CAP_CHANNEL_ID);
+
+        $connection_channel
+            .send(acl_data)
+            .await
+            .map_err(|e| ConnectionError::<C>::from(e))
+    }};
+}
+
+/// Send an error the the client
+///
+/// # Inpus
+/// connection_channel: `impl ConnectionChannel`,
+/// handle: `u16`,
+/// received_opcode: `ClientPduName`,
+/// pdu_error: `pdu::Error`,
+macro_rules! send_error {
+    (
+    $connection_channel:expr,
+    $handle:expr,
+    $received_opcode:expr,
+    $pdu_error:expr $(,)?
+) => {{
+        log::info!(
+            "(ATT) sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
+            Into::<u8>::into($received_opcode),
+            $handle,
+            $pdu_error
+        );
+
+        send_pdu!(
+            SKIP_LOG,
+            $connection_channel,
+            $crate::pdu::error_response($received_opcode.into(), $handle, $pdu_error),
+        )
+    }};
+}
+
 impl<Q> Server<Q>
 where
     Q: QueuedWriter,
@@ -412,98 +586,9 @@ where
     pub fn check_permissions(
         &self,
         handle: u16,
-        operation_permissions: &[super::AttributePermissions],
+        operation_permissions: &[AttributePermissions],
     ) -> Result<(), pdu::Error> {
-        let att = self.attributes.get(handle).ok_or(super::pdu::Error::InvalidHandle)?;
-
-        match self.validate_permissions(att.get_permissions(), operation_permissions) {
-            None => Ok(()),
-            Some(e) => Err(e),
-        }
-    }
-
-    /// Validate the permissions of the attribute
-    ///
-    /// This is used to validate a list of possible permissions required to perform an operation.
-    /// The `att` and client need to share at least one of the permissions in `permissions` for
-    /// this function to return without an error.
-    ///
-    /// If there is a permission issue, an error corresponding to the missing permission is
-    /// returned. This error will be the first permission in `permissions` that is also a part of
-    /// the permission list for the attribute. If the attribute does not have any of the permissions
-    /// in `permissions` then an `Authorization` error is returned.
-    ///
-    /// If 'None' is returned the client and attribute have the required permissions to proceed with
-    /// the operation.
-    fn validate_permissions(
-        &self,
-        attribute_permissions: &[super::AttributePermissions],
-        operation_permissions: &[super::AttributePermissions],
-    ) -> Option<pdu::Error> {
-        match self
-            .given_permissions
-            .iter()
-            .skip_while(|&p| !attribute_permissions.contains(p) || !operation_permissions.contains(p))
-            .nth(0)
-        {
-            Some(_) => None,
-            None => operation_permissions
-                .iter()
-                .find(|&p| attribute_permissions.contains(p))
-                .map(|&p| // Map the invalid permission to it's corresponding error
-                    match p {
-                        AttributePermissions::Read(AttributeRestriction::None) =>
-                            pdu::Error::ReadNotPermitted,
-
-                        AttributePermissions::Write(AttributeRestriction::None) =>
-                            pdu::Error::WriteNotPermitted,
-
-                        AttributePermissions::Read(AttributeRestriction::Encryption(_)) =>
-                            self.given_permissions.iter().find(|&&x| {
-                                match x {
-                                    AttributePermissions::Read(AttributeRestriction::Encryption(_)) => true,
-                                    _ => false
-                                }
-                            })
-                                .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize))
-                                .or_else(|| Some(pdu::Error::InsufficientEncryption))
-                                .unwrap(),
-
-                        AttributePermissions::Write(AttributeRestriction::Encryption(_)) =>
-                            self.given_permissions.iter().find(|&&x| {
-                                match x {
-                                    AttributePermissions::Write(AttributeRestriction::Encryption(_)) => true,
-                                    _ => false
-                                }
-                            })
-                                .and_then(|_| Some(pdu::Error::InsufficientEncryptionKeySize))
-                                .or_else(|| Some(pdu::Error::InsufficientEncryption))
-                                .unwrap(),
-
-                        AttributePermissions::Read(AttributeRestriction::Authorization) |
-                        AttributePermissions::Write(AttributeRestriction::Authorization) =>
-                            pdu::Error::InsufficientAuthorization,
-
-                        AttributePermissions::Read(AttributeRestriction::Authentication) |
-                        AttributePermissions::Write(AttributeRestriction::Authentication) =>
-                            pdu::Error::InsufficientAuthentication,
-                    })
-                .or(Some(pdu::Error::InsufficientAuthorization)),
-        }
-    }
-
-    /// Check if a client can read the given attribute
-    ///
-    /// Returns the error as to why the client couldn't read the attribute
-    fn client_can_read_attribute<V>(&self, att: &super::Attribute<V>) -> Option<pdu::Error> {
-        self.validate_permissions(att.get_permissions(), &super::FULL_READ_PERMISSIONS)
-    }
-
-    /// Check if a client can write the given attribute
-    ///
-    /// Returns the error as to why the client cannot write to the the attribute
-    fn client_can_write_attribute<V>(&self, att: &super::Attribute<V>) -> Option<pdu::Error> {
-        self.validate_permissions(att.get_permissions(), &super::FULL_WRITE_PERMISSIONS)
+        check_permissions!(self, handle, operation_permissions)
     }
 
     /// Process a received ACL Data packet form the Bluetooth Controller
@@ -630,13 +715,12 @@ where
                     .await
             }
 
-            pdu @ ClientPduName::ReadMultipleRequest
-            | pdu @ ClientPduName::WriteCommand
-            | pdu @ ClientPduName::HandleValueConfirmation
-            | pdu @ ClientPduName::SignedWriteCommand
-            | pdu @ ClientPduName::ReadByGroupTypeRequest => {
-                self.send_error(connection_channel, 0, pdu.into(), pdu::Error::RequestNotSupported)
-                    .await
+            pdu_name @ ClientPduName::ReadMultipleRequest
+            | pdu_name @ ClientPduName::WriteCommand
+            | pdu_name @ ClientPduName::HandleValueConfirmation
+            | pdu_name @ ClientPduName::SignedWriteCommand
+            | pdu_name @ ClientPduName::ReadByGroupTypeRequest => {
+                send_error!(connection_channel, 0, pdu_name, pdu::Error::RequestNotSupported)
             }
         }
     }
@@ -647,15 +731,21 @@ where
     ///
     /// # Return
     /// If the handle doesn't exist, then the notification isn't sent and false is returned.
-    pub async fn send_notification<C>(&self, connection_channel: &C, handle: u16) -> Result<bool, ConnectionError<C>>
+    pub async fn send_notification<C>(
+        &mut self,
+        connection_channel: &C,
+        handle: u16,
+    ) -> Result<bool, ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
-        match self.attributes.get(handle).map(|att| att) {
+        match self.attributes.get_mut(handle).map(|att| att) {
             Some(attribute) => {
-                let notification = pdu::handle_value_notification(handle, attribute.get_value().read().await);
+                let read_fut = attribute.get_mut_value().read();
 
-                self.send_pdu(connection_channel, notification).await?;
+                let notification = pdu::handle_value_notification(handle, read_fut.await);
+
+                send_pdu!(connection_channel, notification)?;
 
                 Ok(true)
             }
@@ -669,7 +759,7 @@ where
     ///
     /// # Return
     /// If the handle doesn't exist, then the notification isn't sent and false is returned.
-    pub async fn send_indication<C>(&self, connection_channel: &C, handle: u16) -> Result<bool, ConnectionError<C>>
+    pub async fn send_indication<C>(&mut self, connection_channel: &C, handle: u16) -> Result<bool, ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -677,74 +767,12 @@ where
             Some(attribute) => {
                 let notification = pdu::handle_value_indication(handle, attribute.get_value().read().await);
 
-                self.send_pdu(connection_channel, notification).await?;
+                send_pdu!(connection_channel, notification)?;
 
                 Ok(true)
             }
             None => Ok(false),
         }
-    }
-
-    /// Send the raw transfer format data
-    ///
-    /// This takes a complete Attribute PDU in its transfer byte form. This will package it into
-    /// a L2CAP PDU and send it using the `ConnectionChannel`.
-    async fn send_raw_tf<C>(&self, connection_channel: &C, intf_data: Vec<u8>) -> Result<(), super::ConnectionError<C>>
-    where
-        C: ConnectionChannel,
-    {
-        let acl_data = l2cap::BasicInfoFrame::new(intf_data, super::L2CAP_CHANNEL_ID);
-
-        connection_channel.send(acl_data).await.map_err(|e| e.into())
-    }
-
-    async fn send<C, D>(&self, connection_channel: &C, data: D) -> Result<(), super::ConnectionError<C>>
-    where
-        C: ConnectionChannel,
-        D: TransferFormatInto,
-    {
-        self.send_raw_tf(connection_channel, TransferFormatInto::into(&data))
-            .await
-    }
-
-    /// Send an attribute PDU to the client
-    pub async fn send_pdu<C, D>(
-        &self,
-        connection_channel: &C,
-        pdu: pdu::Pdu<D>,
-    ) -> Result<(), super::ConnectionError<C>>
-    where
-        C: ConnectionChannel,
-        D: TransferFormatInto,
-    {
-        log::info!("(ATT) sending {}", pdu.get_opcode());
-
-        self.send(connection_channel, pdu).await
-    }
-
-    /// Send an error the the client
-    pub async fn send_error<C>(
-        &self,
-        connection_channel: &C,
-        handle: u16,
-        received_opcode: ClientPduName,
-        pdu_error: pdu::Error,
-    ) -> Result<(), super::ConnectionError<C>>
-    where
-        C: ConnectionChannel,
-    {
-        log::info!(
-            "(ATT) sending error response. Received Op Code: '{:#x}', Handle: '{:?}', error: '{}'",
-            Into::<u8>::into(received_opcode),
-            handle,
-            pdu_error
-        );
-
-        self.send_pdu(
-            connection_channel,
-            pdu::error_response(received_opcode.into(), handle, pdu_error),
-        )
-        .await
     }
 
     fn get_att(&self, handle: u16) -> Result<&super::Attribute<Box<dyn ServerAttributeValue>>, pdu::Error> {
@@ -770,39 +798,28 @@ where
         self.blob_data = MultiReqData { tf_data: blob, handle }.into();
     }
 
-    /// Read an attribute and perform a conversion function on it.
-    ///
-    /// `read_att_and` is intended as a wrapper for checking if the client has permissions to
-    /// perform the provided
-    /// It is intended for `job` to convert the given ServerAttribute into a byte vector of the
-    /// transfer format.
-    ///
-    /// Returns an error if the client doesn't have the adequate permissions or the handle is
-    /// invalid.
-    async fn read_att_and<'s, F, A, O>(&'s self, handle: u16, job: F) -> Result<O, pdu::Error>
-    where
-        F: FnOnce(&'s dyn ServerAttributeValue) -> A + 's,
-        A: Future<Output = O> + 's,
-    {
-        let attribute = self.get_att(handle)?;
-
-        if let Some(err) = self.client_can_read_attribute(attribute) {
-            Err(err)
-        } else {
-            Ok(job(attribute.get_value().as_ref()).await)
-        }
-    }
-
     /// Write the interface data to the attribute
     ///
     /// Returns an error if the client doesn't have the adequate permissions or the handle is
     /// invalid.
     async fn write_att(&mut self, handle: u16, intf_data: &[u8]) -> Result<(), pdu::Error> {
-        if let Some(err) = self.client_can_write_attribute(self.get_att(handle)?) {
+        let opt_write_error = {
+            let att = self.get_att(handle)?;
+
+            client_can_write_attribute!(self, att)
+        };
+
+        if let Some(err) = opt_write_error {
             Err(err.into())
         } else {
             match self.get_att_mut(handle) {
-                Ok(att) => att.get_mut_value().try_set_value_from_transfer_format(intf_data).await,
+                Ok(att) => {
+                    let value = att.get_mut_value();
+
+                    let fut = value.try_set_value_from_transfer_format(intf_data);
+
+                    fut.await
+                }
                 Err(_) => Err(pdu::Error::InvalidPDU.into()),
             }
         }
@@ -821,11 +838,10 @@ where
 
         connection_channel.set_mtu(client_mtu);
 
-        self.send_pdu(
+        send_pdu!(
             connection_channel,
             pdu::exchange_mtu_response(connection_channel.get_mtu() as u16),
         )
-        .await
     }
 
     /// Process a Read Request from the client
@@ -839,24 +855,25 @@ where
     {
         log::info!("(ATT) processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
 
-        match self.read_att_and(handle, |att_tf| att_tf.read_response()).await {
-            Ok(mut tf) => {
-                // Amount of data that can be sent is the MTU minus the read response header size
-                if tf.get_parameters().0.len() > (connection_channel.get_mtu() - 1) {
-                    use core::mem::replace;
+        let read_error_result = check_permissions!(self, handle, &crate::FULL_READ_PERMISSIONS);
 
-                    let sent = tf.get_parameters().0[..(connection_channel.get_mtu() - 1)].to_vec();
-
-                    self.set_blob_data(replace(&mut tf.get_mut_parameters().0, sent), handle);
-                }
-
-                self.send_pdu(connection_channel, tf).await
-            }
-            Err(e) => {
-                self.send_error(connection_channel, handle, ClientPduName::ReadRequest, e)
-                    .await
-            }
+        if let Err(e) = read_error_result {
+            return send_error!(connection_channel, handle, ClientPduName::ReadRequest, e);
         }
+
+        let future = self.attributes.get(handle).unwrap().get_value().read_response();
+
+        let mut read_response = future.await;
+
+        if read_response.get_parameters().0.len() > (connection_channel.get_mtu() - 1) {
+            use core::mem::replace;
+
+            let sent = read_response.get_parameters().0[..(connection_channel.get_mtu() - 1)].to_vec();
+
+            self.set_blob_data(replace(&mut read_response.get_mut_parameters().0, sent), handle);
+        }
+
+        send_pdu!(connection_channel, read_response)
     }
 
     /// Process a Write Request from the client
@@ -874,11 +891,8 @@ where
         log::info!("(ATT) processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
 
         match self.write_att(handle, &payload[2..]).await {
-            Ok(_) => self.send_pdu(connection_channel, pdu::write_response()).await,
-            Err(e) => {
-                self.send_error(connection_channel, handle, ClientPduName::WriteRequest, e)
-                    .await
-            }
+            Ok(_) => send_pdu!(connection_channel, pdu::write_response()),
+            Err(e) => send_error!(connection_channel, handle, ClientPduName::WriteRequest, e),
         }
     }
 
@@ -891,153 +905,151 @@ where
     where
         C: ConnectionChannel,
     {
+        use core::cmp::min;
+
         log::info!(
             "(ATT) processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {}, end handle: {} }}",
             handle_range.starting_handle,
             handle_range.ending_handle
         );
 
-        macro_rules! iter_response {
-            ($response:expr) => {
-                $response
-                    .server
+        /// Checks if the Response would return 128 bit or 16 bit UUIDs
+        ///
+        /// `true` is returned if the UUID at $at is the correct size and readable by the Client.
+        macro_rules! check_response_uuid_size {
+            ($this:expr, $at:expr, 16) => {
+                check_response_uuid_size!(DONT_USE, $this, $at, true)
+            };
+            ($this:expr, $at:expr, 128) => {
+                check_response_uuid_size!(DONT_USE, $this, $at, false)
+            };
+            (DONT_USE, $this:expr, $at:expr, $is_16:literal) => {
+                $this
                     .attributes
-                    .attributes
-                    .get($response.start_handle..=$response.ending_handle)
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                    .take_while(|(cnt, _)| {
-                        let parameter_size = if $response.is_128_uuids { 16 } else { 2 } + 2;
-
-                        (cnt + 1) * parameter_size < $response.max_payload_size
-                    })
-                    .map(|(_, attribute)| attribute)
+                    .get($at)
+                    .map(|attribute| $is_16 == attribute.get_uuid().can_be_16_bit())
+                    .unwrap_or_default()
             };
         }
-        /// Response to a find information request
-        struct Response<'a, Q> {
-            server: &'a Server<Q>,
-            start_handle: usize,
-            ending_handle: usize,
-            is_128_uuids: bool,
-            max_payload_size: usize,
+
+        struct Response {
+            data: Vec<u8>,
         }
 
-        impl<'a, Q> Response<'a, Q>
-        where
-            Q: QueuedWriter,
-        {
-            fn new<C: ConnectionChannel>(
-                connection_channel: &C,
-                server: &'a Server<Q>,
-                is_128_uuids: bool,
-                start_handle: usize,
-                ending_handle: usize,
-            ) -> Self {
-                let max_payload_size = core::cmp::min(connection_channel.get_mtu() - 2, <u8>::MAX.into());
+        impl Response {
+            fn new<Q>(server: &Server<Q>, mtu: usize, start: usize, stop: usize, is_16_bit: bool) -> Self {
+                macro_rules! create_uuid_data {
+                    (SHORT_FORMAT) => {
+                        create_uuid_data!(DONT_USE, 2, 1)
+                    };
+                    (LONG_FORMAT) => {
+                        create_uuid_data!(DONT_USE, 16, 2)
+                    };
+                    (DONT_USE, $size:literal, $indicator:expr) => {
+                        server
+                            .attributes
+                            .attributes
+                            .get(start..=stop)
+                            .into_iter()
+                            .flatten()
+                            .enumerate()
+                            .take_while(|(cnt, _)| (cnt + 1) * ($size + 2) < (mtu - 2))
+                            .fold(vec![$indicator], |mut data, (_, attribute)| {
+                                let mut buffer = [0u8; $size + 2];
 
-                Self {
-                    server,
-                    start_handle,
-                    ending_handle,
-                    is_128_uuids,
-                    max_payload_size,
+                                attribute
+                                    .get_handle()
+                                    .unwrap()
+                                    .build_into_ret(&mut buffer[..2]);
+
+                                attribute.get_uuid().build_into_ret(&mut buffer[2..]);
+
+                                data.extend_from_slice(&buffer);
+
+                                data
+                            })
+                    };
                 }
-            }
 
-            /// Check the UUID of the attribute
-            fn check<T>(&self, attribute: &crate::Attribute<T>) -> bool {
-                if self.is_128_uuids {
-                    !attribute.get_uuid().can_be_16_bit() && self.server.client_can_read_attribute(attribute).is_none()
+                let data = if is_16_bit {
+                    create_uuid_data!(SHORT_FORMAT)
                 } else {
-                    attribute.get_uuid().can_be_16_bit() && self.server.client_can_read_attribute(attribute).is_none()
-                }
-            }
+                    create_uuid_data!(LONG_FORMAT)
+                };
 
-            fn has_any(&self) -> bool {
-                iter_response!(self).any(|attribute| self.check(attribute))
+                Self { data }
             }
         }
 
-        impl<Q: QueuedWriter> TransferFormatInto for Response<'_, Q> {
+        impl TransferFormatInto for Response {
             fn len_of_into(&self) -> usize {
-                iter_response!(self)
-                    .filter(|attribute| self.check(attribute))
-                    .map(|_| 2 + if self.is_128_uuids { 16 } else { 2 })
-                    .sum::<usize>()
-                    + 1
+                self.data.len()
             }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
-                const SHORT_FORMAT: u8 = 1;
-                const LONG_FORMAT: u8 = 2;
-
-                into_ret[0] = if self.is_128_uuids { LONG_FORMAT } else { SHORT_FORMAT };
-
-                iter_response!(self).fold(&mut into_ret[1..], |into_ret, attribute| {
-                    attribute.get_handle().unwrap().build_into_ret(&mut into_ret[..2]);
-
-                    if self.is_128_uuids {
-                        attribute.get_uuid().build_into_ret(&mut into_ret[2..18]);
-
-                        &mut into_ret[18..]
-                    } else {
-                        attribute.get_uuid().build_into_ret(&mut into_ret[2..4]);
-
-                        &mut into_ret[4..]
-                    }
-                });
+                into_ret.copy_from_slice(&self.data)
             }
         }
 
-        if handle_range.is_valid() {
-            use core::cmp::min;
-
-            // Both the start and ending handles cannot be past the actual length of the attributes
-            let start = min(handle_range.starting_handle as usize, self.attributes.count());
-            let stop = min(handle_range.ending_handle as usize, self.attributes.count());
-
-            // Try to build response_payload full of 16 bit attribute types. This will stop at the
-            // first attribute type that cannot be converted into a shortened 16 bit UUID or where
-            // the client does not have permissions to access the attribute.
-            let response_16 = Response::new(connection_channel, self, false, start, stop);
-
-            if !response_16.has_any() {
-                // If there is no 16 bit UUIDs then the UUIDs must be sent in the full 128 bit form.
-
-                let response_128 = Response::new(connection_channel, self, true, start, stop);
-
-                if !response_128.has_any() {
-                    // If there are still no UUIDs then there are no UUIDs within the given range
-                    // or none had the required read permissions for this operation.
-
-                    self.send_error(
-                        connection_channel,
-                        start as u16,
-                        ClientPduName::FindInformationRequest,
-                        pdu::Error::AttributeNotFound,
-                    )
-                    .await
-                } else {
-                    let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response_128);
-
-                    self.send_pdu(connection_channel, pdu).await
-                }
-            } else {
-                let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response_16);
-
-                self.send_pdu(connection_channel, pdu).await
-            }
-        } else {
-            self.send_error(
+        if !handle_range.is_valid() {
+            return send_error!(
                 connection_channel,
                 handle_range.starting_handle,
                 ClientPduName::FindInformationRequest,
                 pdu::Error::InvalidHandle,
-            )
-            .await
+            );
         }
+
+        // Both the start and ending handles cannot be past the actual length of the attributes
+        let start = min(handle_range.starting_handle as usize, self.attributes.count());
+        let stop = min(handle_range.ending_handle as usize, self.attributes.count());
+
+        // Check if the Client can read the next attribute
+
+        let opt_read_error = check_permissions!(self, start as u16, &crate::FULL_READ_PERMISSIONS);
+
+        if let Err(e) = opt_read_error {
+            return send_error!(
+                connection_channel,
+                start as u16,
+                ClientPduName::FindInformationRequest,
+                e
+            );
+        }
+
+        // Check if the server can send a response with 16 bit UUIDs
+
+        let is_size_16 = check_response_uuid_size!(self, start as u16, 16);
+
+        if is_size_16 {
+            let response = Response::new(self, connection_channel.get_mtu(), start, stop, true);
+
+            let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
+
+            return send_pdu!(connection_channel, pdu);
+        }
+
+        // If there is no 16 bit UUIDs then the UUIDs must be sent in the full 128 bit form.
+
+        let is_size_128 = check_response_uuid_size!(self, start as u16, 128);
+
+        if is_size_128 {
+            let response = Response::new(self, connection_channel.get_mtu(), start, stop, true);
+
+            let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
+
+            return send_pdu!(connection_channel, pdu);
+        }
+
+        // If there are still no UUIDs then there are no UUIDs within the given range
+        // or none had the required read permissions for this operation.
+
+        send_error!(
+            connection_channel,
+            start as u16,
+            ClientPduName::FindInformationRequest,
+            pdu::Error::AttributeNotFound,
+        )
     }
 
     /// Process find by type value request
@@ -1081,10 +1093,10 @@ where
 
                 let mut transfer = Vec::new();
 
-                for att in self.attributes.attributes[start..end].iter() {
+                for att in self.attributes.attributes[start..end].iter_mut() {
                     if att.get_uuid().can_be_16_bit()
                         && att.get_uuid() == &att_type
-                        && att.get_value().cmp_value_to_raw_transfer_format(raw_value).await
+                        && att.get_mut_value().cmp_value_to_raw_transfer_format(raw_value).await
                     {
                         cnt += 1;
 
@@ -1101,37 +1113,32 @@ where
                 }
 
                 if transfer.is_empty() {
-                    self.send_error(
+                    send_error!(
                         connection_channel,
                         handle_range.starting_handle,
                         ClientPduName::FindByTypeValueRequest,
                         pdu::Error::AttributeNotFound,
                     )
-                    .await
                 } else {
-                    self.send_pdu(
-                        connection_channel,
-                        pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer),
-                    )
-                    .await
+                    let pdu = pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer);
+
+                    send_pdu!(connection_channel, pdu,)
                 }
             } else {
-                self.send_error(
+                send_error!(
                     connection_channel,
                     handle_range.starting_handle,
                     ClientPduName::FindByTypeValueRequest,
                     pdu::Error::AttributeNotFound,
                 )
-                .await
             }
         } else {
-            self.send_error(
+            send_error!(
                 connection_channel,
                 0,
                 ClientPduName::FindInformationRequest,
                 pdu::Error::InvalidPDU,
             )
-            .await
         }
     }
 
@@ -1144,6 +1151,11 @@ where
     where
         C: ConnectionChannel,
     {
+        macro_rules! single_payload_size {
+            ($cnt:expr, $size:expr) => {
+                ($cnt + 1) * ($size + 2) < connection_channel.get_mtu() - 2
+            };
+        }
         log::info!(
             "(ATT) processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
             type: {:?} }}",
@@ -1158,107 +1170,108 @@ where
 
         let desired_att_type = type_request.attr_type;
 
-        if handle_range.is_valid() {
-            let start = min(handle_range.starting_handle as usize, self.attributes.count());
-            let end = min(handle_range.ending_handle as usize, self.attributes.count());
-
-            let payload_max = connection_channel.get_mtu() - 2;
-
-            let single_payload_size = |cnt, size| (cnt + 1) * (size + 2) < payload_max;
-
-            let mut init_iter = self.attributes.attributes[start..end]
-                .iter()
-                .filter(|att| att.get_uuid() == &desired_att_type);
-
-            match init_iter.by_ref().next() {
-                None => {
-                    self.send_error(
-                        connection_channel,
-                        handle_range.starting_handle,
-                        ClientPduName::ReadByTypeRequest,
-                        pdu::Error::AttributeNotFound,
-                    )
-                    .await
-                }
-
-                Some(first_match) => {
-                    if let Some(e) = self.client_can_read_attribute(first_match) {
-                        self.send_error(
-                            connection_channel,
-                            handle_range.starting_handle,
-                            ClientPduName::ReadByTypeRequest,
-                            e,
-                        )
-                        .await
-                    } else {
-                        let first_val = first_match.get_value();
-
-                        let first_handle = first_match.get_handle().unwrap();
-
-                        let first_size = first_val.value_transfer_format_size().await;
-
-                        let mut responses = Vec::new();
-
-                        if !single_payload_size(0, first_size) {
-                            use core::mem::replace;
-
-                            // This is where the data to be transferred of the first found attribute
-                            // is too large or equal to the connection MTU. Here, a read by type
-                            // response is generated with as much of the value transfer format that
-                            // can fit into the payload. A read blob request from the client is then
-                            // required to complete the full read.
-
-                            // Read type response includes a 2 byte handle, so the maximum byte
-                            // size for the data is the payload - 2
-                            let max_size = payload_max - 2;
-
-                            let mut rsp = first_val.single_read_by_type_response(first_handle).await;
-
-                            let sent = rsp[0..max_size].to_vec();
-
-                            // Move the complete data to a blob data while replacing it with the
-                            // sent amount
-                            self.set_blob_data(replace(&mut *rsp, sent), rsp.get_handle());
-
-                            responses.push(rsp);
-                        } else {
-                            let fst_rsp = first_val.single_read_by_type_response(first_handle).await;
-
-                            responses.push(fst_rsp);
-
-                            for (cnt, att) in init_iter.enumerate() {
-                                let val = att.get_value();
-                                let handle = att.get_handle().unwrap();
-
-                                // Break if att doesn't have the same transfer size as the
-                                // first value or if adding the value would exceed the MTU for
-                                // the attribute payload
-                                if !single_payload_size(cnt + 1, first_size)
-                                    || first_size != val.value_transfer_format_size().await
-                                {
-                                    break;
-                                }
-
-                                let response = val.single_read_by_type_response(handle).await;
-
-                                responses.push(response);
-                            }
-                        }
-
-                        self.send_pdu(connection_channel, pdu::read_by_type_response(responses))
-                            .await
-                    }
-                }
-            }
-        } else {
-            self.send_error(
+        if !handle_range.is_valid() {
+            return send_error!(
                 connection_channel,
                 handle_range.starting_handle,
                 ClientPduName::ReadByTypeRequest,
                 pdu::Error::InvalidHandle,
-            )
-            .await
+            );
         }
+
+        let start = min(handle_range.starting_handle as usize, self.attributes.count());
+        let end = min(handle_range.ending_handle as usize, self.attributes.count());
+
+        let payload_max = connection_channel.get_mtu() - 2;
+
+        let mut init_iter = self.attributes.attributes[start..end]
+            .iter_mut()
+            .filter(|att| att.get_uuid() == &desired_att_type);
+
+        let first = init_iter.next();
+
+        if first.is_none() {
+            return send_error!(
+                connection_channel,
+                handle_range.starting_handle,
+                ClientPduName::ReadByTypeRequest,
+                pdu::Error::AttributeNotFound,
+            );
+        }
+
+        let first_match = first.unwrap();
+
+        let read_permissions_result = client_can_read_attribute!(self, first_match);
+
+        if let Some(e) = read_permissions_result {
+            return send_error!(
+                connection_channel,
+                handle_range.starting_handle,
+                ClientPduName::ReadByTypeRequest,
+                e,
+            );
+        }
+
+        let first_handle = first_match.get_handle().unwrap();
+
+        let first_val = first_match.get_mut_value();
+
+        let first_size = first_val.value_transfer_format_size().await;
+
+        let mut responses = Vec::new();
+
+        let is_single_payload_size = single_payload_size!(0, first_size);
+
+        if !is_single_payload_size {
+            use core::mem::replace;
+
+            // This is where the data to be transferred of the first found attribute
+            // is too large or equal to the connection MTU. Here, a read by type
+            // response is generated with as much of the value transfer format that
+            // can fit into the payload. A read blob request from the client is then
+            // required to complete the full read.
+
+            // Read type response includes a 2 byte handle, so the maximum byte
+            // size for the data is the payload - 2
+            let max_size = payload_max - 2;
+
+            let mut rsp = first_val.single_read_by_type_response(first_handle).await;
+
+            let sent = rsp[0..max_size].to_vec();
+
+            let sent_response = replace(&mut *rsp, sent);
+
+            // Move the complete data to a blob data while replacing it with the
+            // sent amount
+            self.set_blob_data(sent_response, rsp.get_handle());
+
+            responses.push(rsp);
+        } else {
+            let fst_rsp = first_val.single_read_by_type_response(first_handle).await;
+
+            responses.push(fst_rsp);
+
+            for (cnt, att) in init_iter.enumerate() {
+                let handle = att.get_handle().unwrap();
+
+                let val = att.get_mut_value();
+
+                // Break if att doesn't have the same transfer size as the
+                // first value or if adding the value would exceed the MTU for
+                // the attribute payload
+                if !single_payload_size!(cnt + 1, first_size) || first_size != val.value_transfer_format_size().await {
+                    break;
+                }
+
+                let response = val.single_read_by_type_response(handle).await;
+
+                responses.push(response);
+            }
+        }
+
+        let pdu = pdu::read_by_type_response(responses);
+
+        send_pdu!(connection_channel, pdu)
     }
 
     /// Process read blob request
@@ -1276,43 +1289,42 @@ where
             blob_request.offset
         );
 
-        // Check the permissions (`check_permission` also validates the handle)
-        match match self.check_permissions(blob_request.handle, &super::FULL_READ_PERMISSIONS) {
-            Ok(_) => {
-                // Make a new blob if blob data doesn't exist or the blob handle does not match the
-                // requested for handle
-                let use_old_blob = self
-                    .blob_data
-                    .as_ref()
-                    .map(|bd| bd.handle == blob_request.handle)
-                    .unwrap_or_default();
+        let check_permissions_result = check_permissions!(self, blob_request.handle, &super::FULL_READ_PERMISSIONS);
 
-                match (use_old_blob, blob_request.offset) {
-                    // No prior blob or start of new blob
-                    (false, _) | (_, 0) => self.create_blob_send_response(connection_channel, &blob_request).await,
+        if let Err(e) = check_permissions_result {
+            return send_error!(
+                connection_channel,
+                blob_request.handle,
+                ClientPduName::ReadBlobRequest,
+                e
+            );
+        }
 
-                    // Continuing reading prior blob
-                    (true, offset) => self.use_blob_send_response(connection_channel, offset).await,
-                }
-            }
+        // Make a new blob if blob data doesn't exist or the blob handle does not match the
+        // requested for handle
+        let use_old_blob = self
+            .blob_data
+            .as_ref()
+            .map(|bd| bd.handle == blob_request.handle)
+            .unwrap_or_default();
 
-            Err(e) => Err(e.into()),
-        } {
-            Err(e) => match e {
-                ConnectionError::AttError(super::Error::PduError(e)) => {
-                    self.send_error(
-                        connection_channel,
-                        blob_request.handle,
-                        ClientPduName::ReadBlobRequest,
-                        e,
-                    )
-                    .await
-                }
+        let response_result = match (use_old_blob, blob_request.offset) {
+            // No prior blob or start of new blob
+            (false, _) | (_, 0) => self.create_blob_send_response(connection_channel, &blob_request).await,
 
-                _ => Err(e),
-            },
+            // Continuing reading prior blob
+            (true, offset) => self.use_blob_send_response(connection_channel, offset).await,
+        };
 
-            _ => Ok(()),
+        if let Err(ConnectionError::AttError(super::Error::PduError(e))) = response_result {
+            send_error!(
+                connection_channel,
+                blob_request.handle,
+                ClientPduName::ReadBlobRequest,
+                e,
+            )
+        } else {
+            response_result
         }
     }
 
@@ -1335,7 +1347,13 @@ where
     where
         C: ConnectionChannel,
     {
-        let data = self.attributes.get(br.handle).unwrap().get_value().read().await;
+        let read_future = {
+            let attribute = self.attributes.get(br.handle).unwrap();
+
+            attribute.get_value().read()
+        };
+
+        let data = read_future.await;
 
         let rsp = match self.new_read_blob_response(connection_channel, &data, br.offset)? {
             // when true is returned the data is blobbed
@@ -1352,7 +1370,7 @@ where
             (rsp, false) => rsp,
         };
 
-        self.send_pdu(connection_channel, rsp).await
+        send_pdu!(connection_channel, rsp)
     }
 
     /// Use the current blob and send the blob response
@@ -1366,19 +1384,17 @@ where
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// that `blob_data` is `Some(_)`
     #[inline]
-    async fn use_blob_send_response<C>(
-        &mut self,
-        connection_channel: &C,
-        offset: u16,
-    ) -> Result<(), super::ConnectionError<C>>
+    async fn use_blob_send_response<C>(&mut self, connection_channel: &C, offset: u16) -> Result<(), ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
         let data = self.blob_data.as_ref().unwrap();
 
-        match self.new_read_blob_response(connection_channel, &data.tf_data, offset)? {
+        let response_return = self.new_read_blob_response(connection_channel, &data.tf_data, offset)?;
+
+        match response_return {
             (rsp, false) => {
-                self.send_pdu(connection_channel, rsp).await?;
+                send_pdu!(connection_channel, rsp)?;
 
                 // This is the final piece of the blob
                 self.blob_data = None;
@@ -1386,7 +1402,7 @@ where
                 Ok(())
             }
 
-            (rsp, true) => self.send_pdu(connection_channel, rsp).await,
+            (rsp, true) => send_pdu!(connection_channel, rsp),
         }
     }
 
@@ -1422,42 +1438,34 @@ where
         &mut self,
         connection_channel: &C,
         payload: &[u8],
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
-        if let Err((h, e)) = match pdu::PreparedWriteRequest::try_from_raw(payload) {
-            Ok(request) => {
-                log::info!(
-                    "(ATT) processing ATT_PREPARE_WRITE_REQ {{ handle: {:#X}, offset {} }}",
-                    request.get_handle(),
-                    request.get_prepared_offset()
-                );
-
-                match self.check_permissions(request.get_handle(), &super::FULL_WRITE_PERMISSIONS) {
-                    Ok(_) => match self.queued_writer.process_prepared(&request) {
-                        Err(e) => Err((request.get_handle(), e)),
-
-                        Ok(_) => {
-                            let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
-
-                            self.send_pdu(connection_channel, response).await?;
-
-                            Ok(())
-                        }
-                    },
-
-                    Err(e) => Err((request.get_handle(), e)),
-                }
+        let request = match pdu::PreparedWriteRequest::try_from_raw(payload) {
+            Ok(request) => request,
+            Err(e) => {
+                return send_error!(connection_channel, 0, ClientPduName::PrepareWriteRequest, e.pdu_err);
             }
+        };
 
-            Err(e) => Err((0, e.pdu_err)),
-        } {
-            self.send_error(connection_channel, h, ClientPduName::PrepareWriteRequest, e)
-                .await
-        } else {
-            Ok(())
+        let handle = request.get_handle();
+
+        let check_permissions_result = check_permissions!(self, handle, &super::FULL_WRITE_PERMISSIONS);
+
+        if let Err(e) = check_permissions_result {
+            return send_error!(connection_channel, handle, ClientPduName::PrepareWriteRequest, e);
         }
+
+        let prepare_result = self.queued_writer.process_prepared(&request);
+
+        if let Err(e) = prepare_result {
+            return send_error!(connection_channel, handle, ClientPduName::PrepareWriteRequest, e);
+        }
+
+        let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
+
+        send_pdu!(connection_channel, response)
     }
 
     async fn process_execute_write_request<C>(
@@ -1473,7 +1481,7 @@ where
         match match self.queued_writer.process_execute(request_flag) {
             Ok(Some(iter)) => {
                 for queued_data in iter.into_iter() {
-                    self.check_permissions(queued_data.0, &super::FULL_WRITE_PERMISSIONS)?;
+                    check_permissions!(self, queued_data.0, &super::FULL_WRITE_PERMISSIONS)?;
 
                     self.write_att(queued_data.0, &queued_data.1).await?;
                 }
@@ -1485,12 +1493,9 @@ where
 
             Err(e) => Err(e),
         } {
-            Err(e) => {
-                self.send_error(connection_channel, 0, ClientPduName::ExecuteWriteRequest, e)
-                    .await
-            }
+            Err(e) => send_error!(connection_channel, 0, ClientPduName::ExecuteWriteRequest, e),
 
-            Ok(_) => self.send_pdu(connection_channel, pdu::execute_write_response()).await,
+            Ok(_) => send_pdu!(connection_channel, pdu::execute_write_response()),
         }
     }
 
@@ -1917,6 +1922,60 @@ trait AccessValueExt: AccessValue {
 
 impl<S: AccessValue> AccessValueExt for S {}
 
+/// Trait `AccessValue` with `async fn`
+///
+/// This is equivalent to `AccessValue` with the exception that it uses `async fn` instead of having
+/// associated types for the read and write futures. Anything that implements `AsyncAccessValue`
+/// also implements `AccessValue`.
+///
+/// # Note
+/// Right now this trait is gated behind the `async-trait` feature as it depends on the
+/// `async-trait` crate.
+#[cfg(feature = "async-trait")]
+#[async_trait::async_trait]
+pub trait AsyncAccessValue: Send {
+    type ReadValue: ?Sized + Send;
+
+    type ReadGuard<'a>: core::ops::Deref<Target = Self::ReadValue>
+    where
+        Self: 'a;
+
+    type WriteValue: Unpin + Send;
+
+    async fn read(&self) -> Self::ReadGuard<'_>;
+
+    async fn write(&mut self, v: Self::WriteValue) -> Result<(), pdu::Error>;
+
+    fn as_any(&self) -> &dyn core::any::Any;
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any;
+}
+
+#[cfg(feature = "async-trait")]
+impl<T: AsyncAccessValue> AccessValue for T {
+    type ReadValue = T::ReadValue;
+    type ReadGuard<'a> = T::ReadGuard<'a> where Self: 'a;
+    type Read<'a> =  Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type WriteValue = T::WriteValue;
+    type Write<'a> = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>> where Self: 'a ;
+
+    fn read(&self) -> Self::Read<'_> {
+        AsyncAccessValue::read(self)
+    }
+
+    fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
+        AsyncAccessValue::write(self, v)
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        AsyncAccessValue::as_any(self)
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        AsyncAccessValue::as_mut_any(self)
+    }
+}
+
 /// Future for reading the value and performing an operation
 struct ReadAnd<R, F> {
     reader: R,
@@ -2016,7 +2075,7 @@ trait ServerAttribute: core::any::Any {
     ///
     /// # Panic
     /// This should panic if the attribute has not been assigned a handle
-    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
+    fn single_read_by_type_response(&mut self, handle: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
 
     /// Try to convert raw data from the interface and write to the attribute value
     fn try_set_value_from_transfer_format<'a>(
@@ -2025,10 +2084,10 @@ trait ServerAttribute: core::any::Any {
     ) -> PinnedFuture<'a, Result<(), pdu::Error>>;
 
     /// The number of bytes in the interface format
-    fn value_transfer_format_size(&self) -> PinnedFuture<'_, usize>;
+    fn value_transfer_format_size(&mut self) -> PinnedFuture<'_, usize>;
 
     /// Compare the value with the data received from the interface
-    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool>;
+    fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'a, bool>;
 
     /// Get an reference to self as a `dyn Any`
     fn as_any(&self) -> &dyn core::any::Any;
@@ -2054,7 +2113,7 @@ where
         Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
     }
 
-    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
+    fn single_read_by_type_response(&mut self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
         Box::pin(self.0.read_and(move |v| {
             let tf = TransferFormatInto::into(v);
 
@@ -2070,13 +2129,13 @@ where
         })
     }
 
-    fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
+    fn value_transfer_format_size(&mut self) -> PinnedFuture<usize> {
         let read_and_fut = self.0.read_and(|v: &A::ReadValue| v.len_of_into());
 
         Box::pin(async move { read_and_fut.await })
     }
 
-    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
+    fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
         let read_fut = self.read();
 
         Box::pin(async { read_fut.await.cmp_tf_data(raw) })
@@ -2115,7 +2174,7 @@ where
         Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
     }
 
-    fn single_read_by_type_response(&self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
+    fn single_read_by_type_response(&mut self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
         Box::pin(self.0.read_and(move |v| {
             let tf = TransferFormatInto::into(v);
 
@@ -2127,13 +2186,13 @@ where
         unreachable!()
     }
 
-    fn value_transfer_format_size(&self) -> PinnedFuture<usize> {
+    fn value_transfer_format_size(&mut self) -> PinnedFuture<usize> {
         let read_and_fut = self.0.read_and(|v: &R::Value| v.len_of_into());
 
         Box::pin(async move { read_and_fut.await })
     }
 
-    fn cmp_value_to_raw_transfer_format<'a>(&'a self, raw: &'a [u8]) -> PinnedFuture<'a, bool> {
+    fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'a, bool> {
         let read_fut = self.read();
 
         Box::pin(async move { read_fut.await.cmp_tf_data(raw) })
@@ -2223,7 +2282,7 @@ impl ServerAttribute for ReservedHandle {
         })
     }
 
-    fn single_read_by_type_response(&self, _: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>> {
+    fn single_read_by_type_response(&mut self, _: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>> {
         Box::pin(async {
             log::error!("(ATT) client tried to read the reserved handle for a read by type response");
 
@@ -2239,11 +2298,11 @@ impl ServerAttribute for ReservedHandle {
         })
     }
 
-    fn value_transfer_format_size(&self) -> PinnedFuture<'_, usize> {
+    fn value_transfer_format_size(&mut self) -> PinnedFuture<'_, usize> {
         Box::pin(async { 0 })
     }
 
-    fn cmp_value_to_raw_transfer_format(&self, _: &[u8]) -> PinnedFuture<'_, bool> {
+    fn cmp_value_to_raw_transfer_format(&mut self, _: &[u8]) -> PinnedFuture<'_, bool> {
         Box::pin(async { false })
     }
 
@@ -2260,7 +2319,7 @@ impl ServerAttribute for ReservedHandle {
 pub struct AttributeInfo<'a> {
     ty: &'a crate::Uuid,
     handle: u16,
-    permissions: &'a [super::AttributePermissions],
+    permissions: &'a [AttributePermissions],
 }
 
 impl<'a> AttributeInfo<'a> {

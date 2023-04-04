@@ -5,7 +5,7 @@
 use crate::security::{Security, SecurityStage};
 use crate::server::Server;
 use crate::{ConnectionToMain, ConnectionToMainMessage, MainToConnection};
-use bo_tie::hci::channel::SendSafeConnectionChannelEnds;
+use bo_tie::hci::channel::SendAndSyncSafeConnectionChannelEnds;
 use bo_tie::hci::{ConnectionChannelEnds, LeL2cap};
 use bo_tie::host::l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannelExt, LeUserChannelIdentifier};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -33,7 +33,7 @@ pub(crate) struct Connection<C: ConnectionChannelEnds> {
     notification_interval: tokio::time::Interval,
 }
 
-impl<C: SendSafeConnectionChannelEnds> Connection<C> {
+impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
     const NOTIFICATION_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 
     pub fn new(

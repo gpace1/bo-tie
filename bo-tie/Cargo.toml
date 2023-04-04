@@ -35,6 +35,7 @@ uuid-crate = ["bo-tie-att/uuid-crate", "bo-tie-gatt/uuid-crate", "bo-tie-host-ut
 cryptography = ["bo-tie-util/cryptography", "bo-tie-gatt/cryptography"]
 sys-rand = ["bo-tie-util/sys-rand"]
 serde = ["bo-tie-util/serde", "bo-tie-sm/serde"]
+async-trait = ["bo-tie-att/async-trait"]
 
 # Unstable features
 #

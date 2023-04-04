@@ -38,7 +38,7 @@
 //! [`run`]: LinuxInterface::run
 //!
 
-use bo_tie_hci_util::channel::{SendSafeChannelReserve, SendSafeHostChannelEnds};
+use bo_tie_hci_util::channel::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
 use bo_tie_hci_util::{ChannelReserve, HciPacket};
 use std::error;
 use std::fmt;
@@ -331,8 +331,8 @@ impl<T: ChannelReserve> LinuxInterface<T> {
 fn from_adapter_id(
     adapter_id: usize,
 ) -> (
-    LinuxInterface<impl SendSafeChannelReserve>,
-    impl SendSafeHostChannelEnds,
+    LinuxInterface<impl SendAndSyncSafeChannelReserve>,
+    impl SendAndSyncSafeHostChannelEnds,
 ) {
     use nix::libc;
     use nix::sys::epoll::{epoll_create1, epoll_ctl, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
@@ -460,8 +460,8 @@ impl<C> Drop for LinuxInterface<C> {
 pub fn new<T>(
     adapter_id: T,
 ) -> (
-    LinuxInterface<impl SendSafeChannelReserve>,
-    impl SendSafeHostChannelEnds,
+    LinuxInterface<impl SendAndSyncSafeChannelReserve>,
+    impl SendAndSyncSafeHostChannelEnds,
 )
 where
     T: Into<Option<usize>>,

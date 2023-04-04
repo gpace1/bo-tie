@@ -12,6 +12,7 @@ bo-tie-util = { path = "../../bo-tie-util" }
 tokio = { version = "1", features = ["sync"], optional = true }
 futures = { version = "0.3", optional = true }
 async-std = { version = "1", optional = true }
+async-trait = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tinymt = "1"
@@ -26,6 +27,7 @@ uuid-crate = ["bo-tie-host-util/uuid-crate"]
 tokio = ["dep:tokio", "std"]
 futures-rs = ["futures", "std"]
 async-std = ["dep:async-std", "std"]
+async-trait = ["dep:async-trait"]
 
 [package.metadata.docs.rs]
 all-features = true
