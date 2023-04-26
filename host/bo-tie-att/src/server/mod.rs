@@ -747,7 +747,19 @@ where
             Some(attribute) => {
                 let read_fut = attribute.get_mut_value().read();
 
-                let notification = pdu::create_notification(handle, read_fut.await);
+                let mut notification = pdu::create_notification(handle, read_fut.await);
+
+                if notification.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+                    use core::mem::replace;
+
+                    let sent =
+                        notification.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+
+                    self.set_blob_data(
+                        replace(&mut notification.get_mut_parameters().0.get_mut_data(), sent),
+                        handle,
+                    );
+                }
 
                 send_pdu!(connection_channel, notification)?;
 
@@ -773,9 +785,20 @@ where
     {
         match self.attributes.get(handle).map(|att| att) {
             Some(attribute) => {
-                let notification = pdu::create_indication(handle, attribute.get_value().read().await);
+                let mut indication = pdu::create_indication(handle, attribute.get_value().read().await);
 
-                send_pdu!(connection_channel, notification)?;
+                if indication.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+                    use core::mem::replace;
+
+                    let sent = indication.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+
+                    self.set_blob_data(
+                        replace(&mut indication.get_mut_parameters().0.get_mut_data(), sent),
+                        handle,
+                    );
+                }
+
+                send_pdu!(connection_channel, indication)?;
 
                 Ok(true)
             }
