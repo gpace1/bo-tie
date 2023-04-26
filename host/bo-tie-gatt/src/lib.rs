@@ -1534,7 +1534,7 @@ where
             ending_handle,
         };
 
-        let indication = att::pdu::handle_value_indication(service_changed_handle, service_changed);
+        let indication = att::pdu::create_indication(service_changed_handle, service_changed);
 
         send_pdu!(connection_channel, indication).map_err(|e| AddServicesError::ConnectionError(e))
     }

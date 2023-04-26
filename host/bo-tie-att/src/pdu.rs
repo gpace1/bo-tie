@@ -2395,7 +2395,7 @@ where
 }
 
 /// Create a server sent notification
-pub fn handle_value_notification<D>(handle: u16, data: D) -> Pdu<HandleValueNotification<D>> {
+pub fn create_notification<D>(handle: u16, data: D) -> Pdu<HandleValueNotification<D>> {
     Pdu {
         opcode: From::from(ServerPduName::HandleValueNotification),
         parameters: HandleValueNotification(HandleWithData { handle, data }),
@@ -2438,7 +2438,7 @@ where
 }
 
 /// Create a server sent indication
-pub fn handle_value_indication<D>(handle: u16, data: D) -> Pdu<HandleValueIndication<D>> {
+pub fn create_indication<D>(handle: u16, data: D) -> Pdu<HandleValueIndication<D>> {
     Pdu {
         opcode: From::from(ServerPduName::HandleValueIndication),
         parameters: HandleValueIndication(HandleWithData { handle, data }),

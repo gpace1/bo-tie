@@ -743,7 +743,7 @@ where
             Some(attribute) => {
                 let read_fut = attribute.get_mut_value().read();
 
-                let notification = pdu::handle_value_notification(handle, read_fut.await);
+                let notification = pdu::create_notification(handle, read_fut.await);
 
                 send_pdu!(connection_channel, notification)?;
 
@@ -765,7 +765,7 @@ where
     {
         match self.attributes.get(handle).map(|att| att) {
             Some(attribute) => {
-                let notification = pdu::handle_value_indication(handle, attribute.get_value().read().await);
+                let notification = pdu::create_indication(handle, attribute.get_value().read().await);
 
                 send_pdu!(connection_channel, notification)?;
 
