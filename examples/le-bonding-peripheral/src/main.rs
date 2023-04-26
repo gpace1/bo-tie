@@ -221,7 +221,7 @@ where
                             gatt_server
                                 .process_acl_data(&mut le_connection_channel, &packet)
                                 .await
-                                .unwrap()
+                                .unwrap();
                         }
                         ChannelIdentifier::Le(LeUserChannelIdentifier::SecurityManagerProtocol) => {
                             match security_manager

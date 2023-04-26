@@ -212,7 +212,7 @@ impl Server {
             self.local_heart_rate_measurement.set_mtu(mtu.into()).await
         }
 
-        self.server.process_acl_data(channel, packet).await.unwrap()
+        self.server.process_acl_data(channel, packet).await.unwrap();
     }
 
     /// Give Permissions to the client when encrypted

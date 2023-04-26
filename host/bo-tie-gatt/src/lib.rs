@@ -1330,19 +1330,21 @@ where
         &mut self,
         connection_channel: &mut C,
         acl_data: &l2cap::BasicInfoFrame<alloc::vec::Vec<u8>>,
-    ) -> Result<(), att::ConnectionError<C>>
+    ) -> Result<bo_tie_att::server::Status, att::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
         let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
 
         if let att::client::ClientPduName::ReadByGroupTypeRequest = pdu_type {
-            // log::info!(
-            //     "(GATT) processing '{}'",
-            //     att::client::ClientPduName::ReadByGroupTypeRequest
-            // );
+            log::info!(
+                "(GATT) processing '{}'",
+                att::client::ClientPduName::ReadByGroupTypeRequest
+            );
 
-            self.process_read_by_group_type_request(connection_channel, &[]).await
+            self.process_read_by_group_type_request(connection_channel, &[]).await?;
+
+            Ok(bo_tie_att::server::Status::None)
         } else {
             self.server
                 .process_parsed_acl_data(connection_channel, pdu_type, payload)

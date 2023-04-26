@@ -606,7 +606,7 @@ where
         &mut self,
         connection_channel: &mut C,
         acl_packet: &l2cap::BasicInfoFrame<Vec<u8>>,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<Status, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -669,60 +669,63 @@ where
         connection_channel: &mut C,
         pdu_type: ClientPduName,
         payload: &[u8],
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<Status, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
         match pdu_type {
             ClientPduName::ExchangeMtuRequest => {
                 self.process_exchange_mtu_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await
+                    .await?
             }
 
-            ClientPduName::WriteRequest => self.process_write_request(connection_channel, &payload).await,
+            ClientPduName::WriteRequest => self.process_write_request(connection_channel, &payload).await?,
 
             ClientPduName::ReadRequest => {
                 self.process_read_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await
+                    .await?
             }
 
             ClientPduName::FindInformationRequest => {
                 self.process_find_information_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await
+                    .await?
             }
 
             ClientPduName::FindByTypeValueRequest => {
                 self.process_find_by_type_value_request(connection_channel, &payload)
-                    .await
+                    .await?
             }
 
             ClientPduName::ReadByTypeRequest => {
                 self.process_read_by_type_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await
+                    .await?
             }
 
             ClientPduName::ReadBlobRequest => {
                 self.process_read_blob_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await
+                    .await?
             }
 
             ClientPduName::PrepareWriteRequest => {
-                self.process_prepare_write_request(connection_channel, &payload).await
+                self.process_prepare_write_request(connection_channel, &payload).await?
             }
 
             ClientPduName::ExecuteWriteRequest => {
                 self.process_execute_write_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await
+                    .await?
             }
+
+            ClientPduName::HandleValueConfirmation => return Ok(Status::IndicationConfirmed),
 
             pdu_name @ ClientPduName::ReadMultipleRequest
             | pdu_name @ ClientPduName::WriteCommand
-            | pdu_name @ ClientPduName::HandleValueConfirmation
             | pdu_name @ ClientPduName::SignedWriteCommand
             | pdu_name @ ClientPduName::ReadByGroupTypeRequest => {
-                send_error!(connection_channel, 0, pdu_name, pdu::Error::RequestNotSupported)
+                send_error!(connection_channel, 0, pdu_name, pdu::Error::RequestNotSupported)?
             }
-        }
+        };
+
+        Ok(Status::None)
     }
 
     /// Send out a notification
@@ -730,7 +733,8 @@ where
     /// The attribute value at the given handle will be sent out as a notification.
     ///
     /// # Return
-    /// If the handle doesn't exist, then the notification isn't sent and false is returned.
+    /// If an attribute for the handle doesn't exist, then the notification isn't sent and false is
+    /// returned.
     pub async fn send_notification<C>(
         &mut self,
         connection_channel: &C,
@@ -756,6 +760,10 @@ where
     /// Send out an indication
     ///
     /// The attribute value at the given handle will be sent out as a notification.
+    ///
+    /// # Note
+    /// This does not await for the indication to be acknowledged by the client. Instead the
+    /// `Server`
     ///
     /// # Return
     /// If the handle doesn't exist, then the notification isn't sent and false is returned.
@@ -1505,6 +1513,19 @@ where
     pub fn iter_attr_info(&self) -> impl Iterator<Item = AttributeInfo<'_>> {
         self.attributes.iter_info()
     }
+}
+
+/// Server status
+///
+/// Returned by the methods [`process_acl_data`] and [`processed_parsed_acl_data`] to give the
+/// status of the Server
+#[derive(Clone, Debug)]
+pub enum Status {
+    /// Returned when there is no status to report
+    None,
+    /// Returned whenever the server process a *handle value confirm* message from the client in
+    /// response to a indication.
+    IndicationConfirmed,
 }
 
 /// Attributes of a [`Server`]
