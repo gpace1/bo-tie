@@ -181,7 +181,7 @@ impl core::fmt::Display for ServerPduName {
 impl ServerPduName {
     /// Check that the given raw pdu is this response pdu
     ///
-    /// This will loosly check that the size of the pdu is correct and that the opcode value
+    /// This will loosely check that the size of the pdu is correct and that the opcode value
     /// matches this response. The size of the packet will only be checked for the minimum possible
     /// size and not the maximum allowable size by the connection's ATT_MTU.
     pub(super) fn is_convertible_from(&self, raw_pdu: &[u8]) -> bool {
@@ -237,6 +237,12 @@ struct MultiReqData {
     handle: u16,
     /// Data in its transfer format form
     tf_data: Vec<u8>,
+    /// Temporary restrictions (used only by [`send_notification_with`] and [`send_indication_with`]
+    ///
+    /// [`send_notification_with`]: Server::send_notification_with
+    /// [`send_indication_with`]: Server::send_indication_with
+    temporary_read_restrictions:
+        Option<bo_tie_util::buffer::stack::LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions>>,
 }
 
 /// An Attribute server
@@ -732,6 +738,12 @@ where
     ///
     /// The attribute value at the given handle will be sent out as a notification.
     ///
+    /// If the transfer format of the attribute value is larger than the maximum transfer format
+    /// size for the notification, the client must send one or more a read blob request to get the
+    /// entire value. Sending a notification does not require the client and attribute to have read
+    /// permissions, but *in order to enable a blob request, the attribute must be readable and the
+    /// client must have been granted sufficient read permissions*.   
+    ///
     /// # Return
     /// If an attribute for the handle doesn't exist, then the notification isn't sent and false is
     /// returned.
@@ -743,7 +755,7 @@ where
     where
         C: ConnectionChannel,
     {
-        match self.attributes.get_mut(handle).map(|att| att) {
+        match self.attributes.get_mut(handle) {
             Some(attribute) => {
                 let read_fut = attribute.get_mut_value().read();
 
@@ -756,7 +768,7 @@ where
                         notification.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
 
                     self.set_blob_data(
-                        replace(&mut notification.get_mut_parameters().0.get_mut_data(), sent),
+                        replace(notification.get_mut_parameters().0.get_mut_data(), sent),
                         handle,
                     );
                 }
@@ -766,6 +778,68 @@ where
                 Ok(true)
             }
             None => Ok(false),
+        }
+    }
+
+    /// Send out a notification with some data
+    ///
+    /// This sends out a notification with the input `value`. The type for `value` does not need to
+    /// match the type of the data stored within the attribute at `handle`.
+    ///
+    /// # Data larger than the MTU
+    /// If the transfer format of `value` is larger than the maximum transfer format size for the
+    /// notification, the client must send one or more a read blob request to get the entire value.
+    /// Sending a notification does not require the client and attribute to have read permissions,
+    /// but *in order to enable a blob request for `value`, the client must have been granted
+    /// sufficient read permissions*. This temporarily grants the read permission if not already
+    /// granted to the attribute.
+    ///
+    /// ## Temporary restrictions
+    /// Input `restrictions` is used to set temporary read restrictions for a read blob request.
+    /// These `restrictions` restrictions only apply to this request, any other read requests from
+    /// the client for the attribute at `handle` will use the permissions of the attribute. Once the
+    /// read blob is dropped or changed, these temporary restrictions are dropped.
+    ///
+    /// If `restrictions` is set to `None` it will refer to the read restrictions of the attribute
+    /// at `handle`. But if the attribute at `handle` is not readable, then the restrictions will be
+    /// defaulted to the *clients currently granted read permissions*. If `restrictions` is set to
+    /// `Some(..)` then it will be the temporary permissions for executing a blob read.
+    ///
+    /// # Return
+    /// If an attribute for the handle doesn't exist, then the notification isn't sent and false is
+    /// returned.
+    pub async fn send_notification_with<C, V, R>(
+        &mut self,
+        connection_channel: &C,
+        handle: u16,
+        value: &V,
+        restrictions: R,
+    ) -> Result<bool, ConnectionError<C>>
+    where
+        C: ConnectionChannel,
+        V: TransferFormatInto,
+        R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
+    {
+        if let Some(attribute) = self.attributes.get(handle) {
+            let data = TransferFormatInto::into(&value);
+
+            let mut notification = pdu::create_notification(handle, data);
+
+            if notification.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+                use core::mem::replace;
+
+                let sent = notification.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+
+                let blob = replace(notification.get_mut_parameters().0.get_mut_data(), sent);
+
+                self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
+            }
+
+            send_pdu!(connection_channel, notification)?;
+
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -783,7 +857,7 @@ where
     where
         C: ConnectionChannel,
     {
-        match self.attributes.get(handle).map(|att| att) {
+        match self.attributes.get(handle) {
             Some(attribute) => {
                 let mut indication = pdu::create_indication(handle, attribute.get_value().read().await);
 
@@ -792,10 +866,7 @@ where
 
                     let sent = indication.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
 
-                    self.set_blob_data(
-                        replace(&mut indication.get_mut_parameters().0.get_mut_data(), sent),
-                        handle,
-                    );
+                    self.set_blob_data(replace(indication.get_mut_parameters().0.get_mut_data(), sent), handle);
                 }
 
                 send_pdu!(connection_channel, indication)?;
@@ -803,6 +874,68 @@ where
                 Ok(true)
             }
             None => Ok(false),
+        }
+    }
+
+    /// Send out a indication with some data
+    ///
+    /// This sends out a notification with the input `value`. The type for `value` does not need to
+    /// match the type of the data stored within the attribute at `handle`.
+    ///
+    /// # Data larger than the MTU
+    /// If the transfer format of `value` is larger than the maximum transfer format size for the
+    /// indication, the client must send one or more a read blob request to get the entire value.
+    /// Sending a indication does not require the client and attribute to have read permissions,
+    /// but *in order to enable a blob request for `value`, the client must have been granted
+    /// sufficient read permissions*. This temporarily grants the read permission if not already
+    /// granted to the attribute.
+    ///
+    /// ## Temporary restrictions
+    /// Input `restrictions` is used to set temporary read restrictions for a read blob request.
+    /// These `restrictions` restrictions only apply to this request, any other read requests from
+    /// the client for the attribute at `handle` will use the permissions of the attribute. Once the
+    /// read blob is dropped or changed, these temporary restrictions are dropped.
+    ///
+    /// If `restrictions` is set to `None` it will refer to the read restrictions of the attribute
+    /// at `handle`. But if the attribute at `handle` is not readable, then the restrictions will be
+    /// defaulted to the *clients currently granted read permissions*. If `restrictions` is set to
+    /// `Some(..)` then it will be the temporary permissions for executing a blob read.
+    ///
+    /// # Return
+    /// If an attribute for the handle doesn't exist, then the notification isn't sent and false is
+    /// returned.
+    pub async fn send_indication_with<C, V, R>(
+        &mut self,
+        connection_channel: &C,
+        handle: u16,
+        value: &V,
+        restrictions: R,
+    ) -> Result<bool, ConnectionError<C>>
+    where
+        C: ConnectionChannel,
+        V: TransferFormatInto,
+        R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
+    {
+        if let Some(attribute) = self.attributes.get(handle) {
+            let data = TransferFormatInto::into(&value);
+
+            let mut indication = pdu::create_indication(handle, data);
+
+            if indication.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+                use core::mem::replace;
+
+                let sent = indication.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+
+                let blob = replace(indication.get_mut_parameters().0.get_mut_data(), sent);
+
+                self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
+            }
+
+            send_pdu!(connection_channel, indication)?;
+
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -826,7 +959,90 @@ where
     ///
     /// Input data must be the full data, in transfer format, of the read item.
     fn set_blob_data(&mut self, blob: Vec<u8>, handle: u16) {
-        self.blob_data = MultiReqData { tf_data: blob, handle }.into();
+        self.blob_data = MultiReqData {
+            tf_data: blob,
+            handle,
+            temporary_read_restrictions: None,
+        }
+        .into();
+    }
+
+    /// Set the blob data for "server sent with"
+    ///
+    /// This is used by the method [`send_notification_with`] and [`send_indication_with`]
+    ///
+    /// [`send_notification_with`]: Server::send_notification_with
+    /// [`send_indication_with`]: Server::send_indication_with
+    fn set_blob_for_server_sent_with(
+        &mut self,
+        blob: Vec<u8>,
+        handle: u16,
+        temporary_restrictions: Option<&[AttributeRestriction]>,
+    ) {
+        use core::mem::discriminant;
+
+        macro_rules! set_blob_data {
+            ($data:expr, $handle:expr) => {
+                self.blob_data = MultiReqData {
+                    tf_data: $data,
+                    handle: $handle,
+                    temporary_read_restrictions: None,
+                }
+                .into()
+            };
+
+            ($data:expr, $handle:expr, $restrictions:expr) => {
+                self.blob_data = MultiReqData {
+                    tf_data: $data,
+                    handle: $handle,
+                    temporary_read_restrictions: $restrictions
+                        .iter()
+                        .fold(bo_tie_util::buffer::stack::LinearBuffer::new(), |mut lb, r| {
+                            let permission = $crate::AttributePermissions::Read(*r);
+
+                            if !lb.contains(&permission) {
+                                lb.try_push(permission).unwrap();
+                            }
+
+                            lb
+                        })
+                        .into(),
+                }
+                .into()
+            };
+        }
+
+        if let Some(restrictions) = temporary_restrictions {
+            set_blob_data!(blob, handle, restrictions);
+        } else if self
+            .attributes
+            .get(handle)
+            .unwrap()
+            .get_permissions()
+            .iter()
+            .any(|p| discriminant(&AttributePermissions::Read(AttributeRestriction::None)) == discriminant(p))
+        {
+            set_blob_data!(blob, handle);
+        } else {
+            let mut lb = bo_tie_util::buffer::stack::LinearBuffer::<
+                { AttributeRestriction::full_depth() },
+                AttributeRestriction,
+            >::new();
+
+            self.given_permissions
+                .iter()
+                .filter_map(|p| {
+                    if let AttributePermissions::Read(r) = p {
+                        Some(r)
+                    } else {
+                        None
+                    }
+                })
+                .copied()
+                .for_each(|r| lb.try_push(r).unwrap());
+
+            set_blob_data!(blob, handle, lb);
+        }
     }
 
     /// Write the interface data to the attribute
@@ -1392,6 +1608,7 @@ where
                 self.blob_data = MultiReqData {
                     handle: br.handle,
                     tf_data: data.clone(),
+                    temporary_read_restrictions: None,
                 }
                 .into();
 
