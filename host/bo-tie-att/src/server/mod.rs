@@ -2706,7 +2706,12 @@ enum BasicQueuedWriterState {
 /// A *very* basic queued writer
 ///
 /// This queued writer supports queuing of in-order prepared write requests for a single attribute.
-/// Once a client as sent a prepared write request to the server this queue writer will only accept
+///
+/// This is a basic queued writer as it only contains a buffer for a single attribute value blob.
+/// The allocation for the buffer will persists for the lifetime of the BasicQueuedWriter unless
+/// the buffer needs to resize to contain a blob larger than the current allocation.
+///
+/// Once a client sends a prepared write request to the server this queue writer will only accept
 /// prepare write requests with the same attribute. Furthermore the offset value in the prepare
 /// write request must match the count of all the attribute value bytes received so far. Lastly
 /// this queue is initialized with a buffer and the total amount of bytes received cannot exceed
@@ -2721,10 +2726,13 @@ pub struct BasicQueuedWriter {
 impl BasicQueuedWriter {
     /// Create a new BasicQueuedWriter
     ///
-    /// The input `buffer_cap` is the capacity of the data buffer used for queuing writes.
-    pub fn new(buffer_cap: usize) -> Self {
+    /// The input `capacity` can be used to set the initial capacity of the internal buffer.
+    pub fn new<T>(capacity: T) -> Self
+    where
+        T: Into<Option<usize>>,
+    {
         Self {
-            data: Vec::with_capacity(buffer_cap),
+            data: Vec::with_capacity(capacity.into().unwrap_or_default()),
             state: BasicQueuedWriterState::NoQueuedWrites,
         }
     }
