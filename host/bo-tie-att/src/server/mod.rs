@@ -708,8 +708,9 @@ where
             }
 
             ClientPduName::ReadBlobRequest => {
-                self.process_read_blob_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await?
+                return self
+                    .process_read_blob_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                    .await;
             }
 
             ClientPduName::PrepareWriteRequest => {
@@ -742,21 +743,27 @@ where
     /// size for the notification, the client must send one or more a read blob request to get the
     /// entire value. Sending a notification does not require the client and attribute to have read
     /// permissions, but *in order to enable a blob request, the attribute must be readable and the
-    /// client must have been granted sufficient read permissions*.   
+    /// client must have been granted sufficient read permissions*. Depending on the implementation
+    /// of the [`QueuedWrite`] used by this `Server`, notifications and indications may need to be
+    /// halted until a [`Status::ReadBlobComplete`] is returned by a client PDU processing method.
     ///
-    /// # Return
-    /// If an attribute for the handle doesn't exist, then the notification isn't sent and false is
-    /// returned.
+    /// `true` is returned if the notification contains the entire attribute value.
+    ///
+    /// # Error
+    /// An error is returned if there is not an attribute at `handle` or the notification could not
+    /// be sent.
     pub async fn send_notification<C>(
         &mut self,
         connection_channel: &C,
         handle: u16,
-    ) -> Result<bool, ConnectionError<C>>
+    ) -> Result<bool, ServerInitiatedError<C>>
     where
         C: ConnectionChannel,
     {
         match self.attributes.get_mut(handle) {
             Some(attribute) => {
+                let mut ret_val = true;
+
                 let read_fut = attribute.get_mut_value().read();
 
                 let mut notification = pdu::create_notification(handle, read_fut.await);
@@ -771,56 +778,63 @@ where
                         replace(notification.get_mut_parameters().0.get_mut_data(), sent),
                         handle,
                     );
+
+                    ret_val = false;
                 }
 
-                send_pdu!(connection_channel, notification)?;
+                send_pdu!(connection_channel, notification)
+                    .map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
-                Ok(true)
+                Ok(ret_val)
             }
-            None => Ok(false),
+            None => Err(ServerInitiatedError::InvalidHandle(handle)),
         }
     }
 
     /// Send out a notification with some data
     ///
-    /// This sends out a notification with the input `value`. The type for `value` does not need to
-    /// match the type of the data stored within the attribute at `handle`.
+    /// This sends out a notification with the input `value` as the **Attribute Value** parameter.
+    /// The type for `value` does not need to match the type of the data stored within the attribute
+    /// at `handle`.
     ///
     /// # Data larger than the MTU
     /// If the transfer format of `value` is larger than the maximum transfer format size for the
-    /// notification, the client must send one or more a read blob request to get the entire value.
-    /// Sending a notification does not require the client and attribute to have read permissions,
-    /// but *in order to enable a blob request for `value`, the client must have been granted
-    /// sufficient read permissions*. This temporarily grants the read permission if not already
-    /// granted to the attribute.
+    /// notification, the client must send one or more read blob requests to get the entire value.
+    /// Depending on the implementation of the [`QueuedWrite`] used by this `Server`, notifications
+    /// and indications may need to be halted until a [`Status::ReadBlobComplete`] is returned by a
+    /// client PDU processing method.
+    ///
+    /// `true` is returned if the notification contains the entire attribute value.
     ///
     /// ## Temporary restrictions
     /// Input `restrictions` is used to set temporary read restrictions for a read blob request.
-    /// These `restrictions` restrictions only apply to this request, any other read requests from
-    /// the client for the attribute at `handle` will use the permissions of the attribute. Once the
-    /// read blob is dropped or changed, these temporary restrictions are dropped.
+    /// These restrictions only apply to this request, any other read requests from the client for
+    /// the attribute at `handle` will use the permissions of the attribute and the temporary
+    /// `restrictions` are also dropped.
     ///
     /// If `restrictions` is set to `None` it will refer to the read restrictions of the attribute
     /// at `handle`. But if the attribute at `handle` is not readable, then the restrictions will be
     /// defaulted to the *clients currently granted read permissions*. If `restrictions` is set to
     /// `Some(..)` then it will be the temporary permissions for executing a blob read.
     ///
-    /// # Return
-    /// If an attribute for the handle doesn't exist, then the notification isn't sent and false is
-    /// returned.
+    /// # Error
+    /// An error is returned if there is not an attribute at `handle` or the notification could not
+    /// be sent.
     pub async fn send_notification_with<C, V, R>(
         &mut self,
         connection_channel: &C,
         handle: u16,
         value: &V,
         restrictions: R,
-    ) -> Result<bool, ConnectionError<C>>
+    ) -> Result<bool, ServerInitiatedError<C>>
     where
         C: ConnectionChannel,
         V: TransferFormatInto,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
-        if let Some(attribute) = self.attributes.get(handle) {
+        if self.attributes.get(handle).is_some() {
+            let mut ret_val = true;
+
             let data = TransferFormatInto::into(&value);
 
             let mut notification = pdu::create_notification(handle, data);
@@ -833,32 +847,52 @@ where
                 let blob = replace(notification.get_mut_parameters().0.get_mut_data(), sent);
 
                 self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
+
+                ret_val = false;
             }
 
-            send_pdu!(connection_channel, notification)?;
+            send_pdu!(connection_channel, notification).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
-            Ok(true)
+            Ok(ret_val)
         } else {
-            Ok(false)
+            Err(ServerInitiatedError::InvalidHandle(handle))
         }
     }
 
-    /// Send out an indication
+    /// Send out a indication
     ///
-    /// The attribute value at the given handle will be sent out as a notification.
+    /// The attribute value at the given handle will be sent out as a indication.
+    ///
+    /// If the transfer format of the attribute value is larger than the maximum transfer format
+    /// size for the indication, the client must send one or more a read blob request to get the
+    /// entire value. Sending a indication does not require the client and attribute to have read
+    /// permissions, but *in order to enable a blob request, the attribute must be readable and the
+    /// client must have been granted sufficient read permissions*. Depending on the implementation
+    /// of the [`QueuedWrite`] used by this `Server`, notifications and indications may need to be
+    /// halted until a [`Status::ReadBlobComplete`] is returned by a client PDU processing method.
+    ///
+    /// `true` is returned if the notification contains the entire attribute value.
     ///
     /// # Note
-    /// This does not await for the indication to be acknowledged by the client. Instead the
-    /// `Server`
+    /// [`Status::IndicationConfirmed`] is returned by [`process_acl_data`] or
+    /// [`process_parsed_acl_data`] whenever they process a
+    /// [`ClientPduName::HandleValueConfirmation`].
     ///
-    /// # Return
-    /// If the handle doesn't exist, then the notification isn't sent and false is returned.
-    pub async fn send_indication<C>(&mut self, connection_channel: &C, handle: u16) -> Result<bool, ConnectionError<C>>
+    /// # Error
+    /// An error is returned if there is not an attribute at `handle` or the notification could not
+    /// be sent.
+    pub async fn send_indication<C>(
+        &mut self,
+        connection_channel: &C,
+        handle: u16,
+    ) -> Result<bool, ServerInitiatedError<C>>
     where
         C: ConnectionChannel,
     {
         match self.attributes.get(handle) {
             Some(attribute) => {
+                let mut ret_val = true;
+
                 let mut indication = pdu::create_indication(handle, attribute.get_value().read().await);
 
                 if indication.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
@@ -867,56 +901,68 @@ where
                     let sent = indication.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
 
                     self.set_blob_data(replace(indication.get_mut_parameters().0.get_mut_data(), sent), handle);
+
+                    ret_val = false;
                 }
 
-                send_pdu!(connection_channel, indication)?;
+                send_pdu!(connection_channel, indication)
+                    .map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
-                Ok(true)
+                Ok(ret_val)
             }
-            None => Ok(false),
+            None => Err(ServerInitiatedError::InvalidHandle(handle)),
         }
     }
 
     /// Send out a indication with some data
     ///
-    /// This sends out a notification with the input `value`. The type for `value` does not need to
-    /// match the type of the data stored within the attribute at `handle`.
+    /// This sends out a indication with the input `value` as the **Attribute Value** parameter.
+    /// The type for `value` does not need to match the type of the data stored within the attribute
+    /// at `handle`.
     ///
     /// # Data larger than the MTU
     /// If the transfer format of `value` is larger than the maximum transfer format size for the
-    /// indication, the client must send one or more a read blob request to get the entire value.
-    /// Sending a indication does not require the client and attribute to have read permissions,
-    /// but *in order to enable a blob request for `value`, the client must have been granted
-    /// sufficient read permissions*. This temporarily grants the read permission if not already
-    /// granted to the attribute.
+    /// indication, the client must send one or more read blob requests to get the entire value.
+    /// Depending on the implementation of the [`QueuedWrite`] used by this `Server`, notifications
+    /// and indications may need to be halted until a [`Status::ReadBlobComplete`] is returned by a
+    /// client PDU processing method.
+    ///
+    /// `true` is returned if the notification contains the entire attribute value.
     ///
     /// ## Temporary restrictions
     /// Input `restrictions` is used to set temporary read restrictions for a read blob request.
-    /// These `restrictions` restrictions only apply to this request, any other read requests from
-    /// the client for the attribute at `handle` will use the permissions of the attribute. Once the
-    /// read blob is dropped or changed, these temporary restrictions are dropped.
+    /// These restrictions only apply to this request, any other read requests from the client for
+    /// the attribute at `handle` will use the permissions of the attribute and the temporary
+    /// `restrictions` are also dropped.
     ///
     /// If `restrictions` is set to `None` it will refer to the read restrictions of the attribute
     /// at `handle`. But if the attribute at `handle` is not readable, then the restrictions will be
     /// defaulted to the *clients currently granted read permissions*. If `restrictions` is set to
     /// `Some(..)` then it will be the temporary permissions for executing a blob read.
     ///
-    /// # Return
-    /// If an attribute for the handle doesn't exist, then the notification isn't sent and false is
-    /// returned.
+    /// # Note
+    /// [`Status::IndicationConfirmed`] is returned by [`process_acl_data`] or
+    /// [`process_parsed_acl_data`] whenever they process a
+    /// [`ClientPduName::HandleValueConfirmation`].
+    ///
+    /// # Error
+    /// An error is returned if there is not an attribute at `handle` or the notification could not
+    /// be sent.
     pub async fn send_indication_with<C, V, R>(
         &mut self,
         connection_channel: &C,
         handle: u16,
         value: &V,
         restrictions: R,
-    ) -> Result<bool, ConnectionError<C>>
+    ) -> Result<bool, ServerInitiatedError<C>>
     where
         C: ConnectionChannel,
         V: TransferFormatInto,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
-        if let Some(attribute) = self.attributes.get(handle) {
+        if self.attributes.get(handle).is_some() {
+            let mut ret_val = true;
+
             let data = TransferFormatInto::into(&value);
 
             let mut indication = pdu::create_indication(handle, data);
@@ -929,13 +975,15 @@ where
                 let blob = replace(indication.get_mut_parameters().0.get_mut_data(), sent);
 
                 self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
+
+                ret_val = false;
             }
 
-            send_pdu!(connection_channel, indication)?;
+            send_pdu!(connection_channel, indication).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
-            Ok(true)
+            Ok(ret_val)
         } else {
-            Ok(false)
+            Err(ServerInitiatedError::InvalidHandle(handle))
         }
     }
 
@@ -1526,7 +1574,7 @@ where
         &mut self,
         connection_channel: &C,
         blob_request: pdu::ReadBlobRequest,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<Status, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1544,7 +1592,8 @@ where
                 blob_request.handle,
                 ClientPduName::ReadBlobRequest,
                 e
-            );
+            )
+            .map(|_| Status::None);
         }
 
         // Make a new blob if blob data doesn't exist or the blob handle does not match the
@@ -1557,7 +1606,10 @@ where
 
         let response_result = match (use_old_blob, blob_request.offset) {
             // No prior blob or start of new blob
-            (false, _) | (_, 0) => self.create_blob_send_response(connection_channel, &blob_request).await,
+            (false, _) | (_, 0) => self
+                .create_blob_send_response(connection_channel, &blob_request)
+                .await
+                .map(|_| Status::None),
 
             // Continuing reading prior blob
             (true, offset) => self.use_blob_send_response(connection_channel, offset).await,
@@ -1570,6 +1622,7 @@ where
                 ClientPduName::ReadBlobRequest,
                 e,
             )
+            .map(|_| Status::None)
         } else {
             response_result
         }
@@ -1579,12 +1632,9 @@ where
     ///
     /// This function is a helper function for process read blob request
     ///
-    /// # Note
-    /// If the entire data payload can be contained within one response then no blob is created.
-    ///
     /// # Warning
     /// This does not check permissions for accessibility of the attribute by the client and assumes
-    /// the handle requested is valid
+    /// the handle requested is valid.
     #[inline]
     async fn create_blob_send_response<C>(
         &mut self,
@@ -1632,7 +1682,11 @@ where
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// that `blob_data` is `Some(_)`
     #[inline]
-    async fn use_blob_send_response<C>(&mut self, connection_channel: &C, offset: u16) -> Result<(), ConnectionError<C>>
+    async fn use_blob_send_response<C>(
+        &mut self,
+        connection_channel: &C,
+        offset: u16,
+    ) -> Result<Status, ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
@@ -1647,17 +1701,18 @@ where
                 // This is the final piece of the blob
                 self.blob_data = None;
 
-                Ok(())
+                Ok(Status::ReadBlobComplete)
             }
 
-            (rsp, true) => send_pdu!(connection_channel, rsp),
+            (rsp, true) => send_pdu!(connection_channel, rsp).map(|_| Status::None),
         }
     }
 
     /// Create a Read Blob Response
     ///
-    /// This return is the Read Blob Response with a boolean to indicate if the response payload was
-    /// completely filled with data bytes.
+    /// This return is the Read Blob Response with a boolean to indicate if the response payload has
+    /// the maximum number of data bytes that can be sent. If the boolean is false then this is used
+    /// to indicate that the last blob is sent.
     #[inline]
     fn new_read_blob_response<'a, C>(
         &self,
@@ -1766,6 +1821,9 @@ pub enum Status {
     /// Returned whenever the server process a *handle value confirm* message from the client in
     /// response to a indication.
     IndicationConfirmed,
+    /// Returned when the Server has sent the last byte of an attribute's value in a read blob
+    /// response
+    ReadBlobComplete,
 }
 
 /// Attributes of a [`Server`]
@@ -2785,3 +2843,36 @@ impl QueuedWriter for NoQueuedWrites {
         Err(pdu::Error::RequestNotSupported)
     }
 }
+
+/// Error for notifications or indication methods of [`Server`]
+pub enum ServerInitiatedError<C: bo_tie_l2cap::ConnectionChannel> {
+    InvalidHandle(u16),
+    ConnectionError(ConnectionError<C>),
+}
+
+impl<C> core::fmt::Debug for ServerInitiatedError<C>
+where
+    C: bo_tie_l2cap::ConnectionChannel,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ServerInitiatedError::InvalidHandle(handle) => write!(f, "InvalidHandle({})", handle),
+            ServerInitiatedError::ConnectionError(c) => core::fmt::Debug::fmt(&c, f),
+        }
+    }
+}
+
+impl<C> core::fmt::Display for ServerInitiatedError<C>
+where
+    C: bo_tie_l2cap::ConnectionChannel,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ServerInitiatedError::InvalidHandle(handle) => write!(f, "no attribute for handle {}", handle),
+            ServerInitiatedError::ConnectionError(c) => core::fmt::Display::fmt(c, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<C> std::error::Error for ServerInitiatedError<C> where C: bo_tie_l2cap::ConnectionChannel {}
