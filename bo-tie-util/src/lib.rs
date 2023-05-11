@@ -1144,7 +1144,7 @@ impl LeDeviceFeatures {
     }
 
     /// Check if a LE feature is enabled
-    pub fn check(&self, feature: LeFeatures) -> bool {
+    pub fn contains(&self, feature: &LeFeatures) -> bool {
         feature.check_within(&self.bit_mask)
     }
 

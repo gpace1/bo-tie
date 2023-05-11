@@ -544,7 +544,7 @@ pub mod read_local_supported_features {
     use crate::{
         opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
-    use bo_tie_util::{LeDeviceFeatures, LeFeaturesItr};
+    use bo_tie_util::{LeDeviceFeatures, LeFeatures, LeFeaturesItr};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
@@ -556,6 +556,10 @@ pub mod read_local_supported_features {
     impl EnabledLeFeatures {
         pub fn iter(&self) -> LeFeaturesItr<'_> {
             self.features.iter()
+        }
+
+        pub fn contains(&self, feature: &LeFeatures) -> bool {
+            self.features.contains(feature)
         }
     }
 
