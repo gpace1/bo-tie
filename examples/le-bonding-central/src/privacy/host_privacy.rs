@@ -118,7 +118,7 @@ impl HostPrivacy {
 
         let report = self.scan_for_rpa(host).await;
 
-        let parameters = ConnectionParameters::new_without_whitelist(
+        let parameters = ConnectionParameters::new_without_filter_list(
             ScanningInterval::default(),
             ScanningWindow::default(),
             report.address_type,

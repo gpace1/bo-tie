@@ -154,7 +154,7 @@ pub mod create_connection {
 
     impl ConnectionParameters {
         /// Command Parameters for connecting without the filter list
-        pub fn new_without_whitelist(
+        pub fn new_without_filter_list(
             scan_interval: ScanningInterval,
             scan_window: ScanningWindow,
             peer_address_type: AddressType,

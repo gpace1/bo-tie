@@ -100,7 +100,7 @@ async fn connect<H: HostChannelEnds>(
 
     // This device is not part of the whitelist, so
     // the whitelist is ignored here.
-    let connection_parameters = create_connection::ConnectionParameters::new_without_whitelist(
+    let connection_parameters = create_connection::ConnectionParameters::new_without_filter_list(
         create_connection::ScanningInterval::default(),
         create_connection::ScanningWindow::default(),
         report.address_type,
