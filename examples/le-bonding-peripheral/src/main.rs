@@ -170,7 +170,7 @@ where
     C: bo_tie::hci::ConnectionChannelEnds,
 {
     use bo_tie::hci::events::{EventsData, LeMetaData};
-    use bo_tie::host::l2cap::{ChannelIdentifier, ConnectionChannelExt, LeUserChannelIdentifier};
+    use bo_tie::host::l2cap::{channels::ChannelIdentifier, channels::LeCid, ConnectionChannelExt};
     use bo_tie::host::{att, gatt, sm};
 
     let peer_address = AddressInfo {
@@ -217,13 +217,13 @@ where
             l2cap_packets = le_connection_channel.receive_b_frame() => {
                 for packet in l2cap_packets.ok().into_iter().flatten() {
                     match packet.get_channel_id() {
-                        ChannelIdentifier::Le(LeUserChannelIdentifier::AttributeProtocol) => {
+                        ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
                             gatt_server
                                 .process_acl_data(&mut le_connection_channel, &packet)
                                 .await
                                 .unwrap();
                         }
-                        ChannelIdentifier::Le(LeUserChannelIdentifier::SecurityManagerProtocol) => {
+                        ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
                             match security_manager
                                 .process_command(&le_connection_channel, &packet)
                                 .await

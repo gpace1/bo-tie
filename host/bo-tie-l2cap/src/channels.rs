@@ -1,0 +1,262 @@
+//! L2CAP Channels Definitions
+
+use crate::{AclU, LeU};
+
+/// Channel Identifier
+///
+/// Channel Identifiers are used by the L2CAP to associate the data with a given channel. Channels
+/// are a numeric identifier for a protocol or an association of protocols that are part of L2CAP or
+/// a higher layer (such as the Attribute (ATT) protocol).
+///
+/// # Specification Reference
+/// See Bluetooth Specification V5 | Vol 3, Part A Section 2.1
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ChannelIdentifier {
+    /// ACL-U identifiers
+    Acl(AclCid),
+    /// APB-U identifiers
+    Apb(ApbCid),
+    /// LE-U identifiers
+    Le(LeCid),
+}
+
+impl ChannelIdentifier {
+    /// Convert to the numerical value
+    ///
+    /// The returned value is in *native byte order*
+    pub fn to_cid(&self) -> u16 {
+        match self {
+            ChannelIdentifier::Acl(ci) => ci.to_cid(),
+            ChannelIdentifier::Apb(ci) => ci.to_cid(),
+            ChannelIdentifier::Le(ci) => ci.to_cid(),
+        }
+    }
+
+    /// Try to convert a raw value into a LE-U channel identifier
+    pub fn le_try_from_raw(val: u16) -> Result<Self, ()> {
+        LeCid::try_from_raw(val).map(|c| c.into())
+    }
+
+    /// Try to convert a raw value into a ACL-U channel identifier
+    pub fn acl_try_from_raw(val: u16) -> Result<Self, ()> {
+        AclCid::try_from_raw(val).map(|c| c.into())
+    }
+}
+
+impl core::fmt::Display for ChannelIdentifier {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ChannelIdentifier::Acl(id) => write!(f, "ACL-U {}", id),
+            ChannelIdentifier::Apb(id) => write!(f, "APB-U {}", id),
+            ChannelIdentifier::Le(id) => write!(f, "LE-U {}", id),
+        }
+    }
+}
+
+impl From<LeCid> for ChannelIdentifier {
+    fn from(le: LeCid) -> Self {
+        ChannelIdentifier::Le(le)
+    }
+}
+
+impl From<AclCid> for ChannelIdentifier {
+    fn from(acl: AclCid) -> Self {
+        ChannelIdentifier::Acl(acl)
+    }
+}
+
+/// Dynamically created L2CAP channel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DynChannelId<T> {
+    channel_id: u16,
+    _p: core::marker::PhantomData<T>,
+}
+
+impl<T> DynChannelId<T> {
+    fn new(channel_id: u16) -> Self {
+        DynChannelId {
+            channel_id,
+            _p: core::marker::PhantomData,
+        }
+    }
+
+    /// Get the value of the dynamic channel identifier
+    pub fn get_val(&self) -> u16 {
+        self.channel_id
+    }
+}
+
+impl DynChannelId<LeU> {
+    pub const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
+
+    /// Create a new Dynamic Channel identifier for the LE-U CID name space
+    ///
+    /// This will return the enum
+    /// [`DynamicallyAllocated`](../enum.LeUserChannelIdentifier.html#variant.DynamicallyAllocated)
+    /// with the `channel_id` if the id is within the bounds of
+    /// [`LE_LOWER`](#const.LE_LOWER) and
+    /// [`LE_UPPER`](#const.LE_UPPER). If the input is not between those bounds, then an error is
+    /// returned containing the infringing input value.
+    pub fn new_le(channel_id: u16) -> Result<LeCid, u16> {
+        if Self::LE_BOUNDS.contains(&channel_id) {
+            Ok(LeCid::DynamicallyAllocated(DynChannelId::new(channel_id)))
+        } else {
+            Err(channel_id)
+        }
+    }
+}
+
+impl DynChannelId<AclU> {
+    pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
+
+    pub fn new_acl(channel_id: u16) -> Result<AclCid, u16> {
+        if Self::ACL_BOUNDS.contains(&channel_id) {
+            Ok(AclCid::DynamicallyAllocated(DynChannelId::new(channel_id)))
+        } else {
+            Err(channel_id)
+        }
+    }
+}
+
+impl<T> core::fmt::Display for DynChannelId<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.channel_id, f)
+    }
+}
+
+/// ACL User (ACL-U) Channel Identifiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AclCid {
+    SignalingChannel,
+    ConnectionlessChannel,
+    AmpManagerProtocol,
+    BrEdrSecurityManager,
+    AmpTestManager,
+    DynamicallyAllocated(DynChannelId<AclU>),
+}
+
+impl AclCid {
+    pub fn to_cid(&self) -> u16 {
+        match self {
+            AclCid::SignalingChannel => 0x1,
+            AclCid::ConnectionlessChannel => 0x2,
+            AclCid::AmpManagerProtocol => 0x3,
+            AclCid::BrEdrSecurityManager => 0x7,
+            AclCid::AmpTestManager => 0x3F,
+            AclCid::DynamicallyAllocated(ci) => ci.get_val(),
+        }
+    }
+
+    pub fn try_from_raw(val: u16) -> Result<Self, ()> {
+        match val {
+            0x1 => Ok(AclCid::SignalingChannel),
+            0x2 => Ok(AclCid::ConnectionlessChannel),
+            0x3 => Ok(AclCid::AmpManagerProtocol),
+            0x7 => Ok(AclCid::BrEdrSecurityManager),
+            0x3F => Ok(AclCid::AmpTestManager),
+            val if DynChannelId::<AclU>::ACL_BOUNDS.contains(&val) => {
+                Ok(AclCid::DynamicallyAllocated(DynChannelId::new(val)))
+            }
+            _ => Err(()),
+        }
+    }
+}
+
+impl core::fmt::Display for AclCid {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            AclCid::SignalingChannel => f.write_str("signaling channel"),
+            AclCid::ConnectionlessChannel => f.write_str("connectionless channel"),
+            AclCid::AmpManagerProtocol => f.write_str("AMP manager protocol"),
+            AclCid::BrEdrSecurityManager => f.write_str("BR/EDR security manager"),
+            AclCid::AmpTestManager => f.write_str("AMP test manager"),
+            AclCid::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
+        }
+    }
+}
+
+/// APB User (APB-U) Channel Identifiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ApbCid {
+    ConnectionlessChannel,
+}
+
+impl ApbCid {
+    pub fn to_cid(&self) -> u16 {
+        0x2
+    }
+
+    pub fn try_from_raw(val: u16) -> Result<Self, ()> {
+        match val {
+            0x2 => Ok(ApbCid::ConnectionlessChannel),
+            _ => Err(()),
+        }
+    }
+}
+
+impl core::fmt::Display for ApbCid {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ApbCid::ConnectionlessChannel => f.write_str("connectionless channel"),
+        }
+    }
+}
+
+/// LE User (LE-U) Channel Identifiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LeCid {
+    /// Channel for the Attribute Protocol
+    ///
+    /// This channel is used for the attribute protocol, which also means that all GATT data will
+    /// be sent through this channel.
+    AttributeProtocol,
+    /// Channel signaling
+    ///
+    /// See the Bluetooth Specification V5 | Vol 3, Part A Section 4
+    LowEnergyL2capSignalingChannel,
+    /// Security Manager Protocol
+    SecurityManagerProtocol,
+    /// Dynamically allocated channel identifiers
+    ///
+    /// These are channels that are dynamically allocated through the "Credit Based Connection
+    /// Request" procedure defined in See Bluetooth Specification V5 | Vol 3, Part A Section 4.22
+    ///
+    /// To make a `DynamicallyAllocated` variant, use the function
+    /// [`new_le`](../DynChannelId/index.html)
+    /// of the struct `DynChannelId`
+    DynamicallyAllocated(DynChannelId<LeU>),
+}
+
+impl LeCid {
+    pub fn to_cid(&self) -> u16 {
+        match self {
+            LeCid::AttributeProtocol => 0x4,
+            LeCid::LowEnergyL2capSignalingChannel => 0x5,
+            LeCid::SecurityManagerProtocol => 0x6,
+            LeCid::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
+        }
+    }
+
+    pub fn try_from_raw(val: u16) -> Result<Self, ()> {
+        match val {
+            0x4 => Ok(LeCid::AttributeProtocol),
+            0x5 => Ok(LeCid::LowEnergyL2capSignalingChannel),
+            0x6 => Ok(LeCid::SecurityManagerProtocol),
+            _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
+                Ok(LeCid::DynamicallyAllocated(DynChannelId::new(val)))
+            }
+            _ => Err(()),
+        }
+    }
+}
+
+impl core::fmt::Display for LeCid {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            LeCid::AttributeProtocol => f.write_str("attribute protocol"),
+            LeCid::LowEnergyL2capSignalingChannel => f.write_str("LE L2CAP signaling channel"),
+            LeCid::SecurityManagerProtocol => f.write_str("security manager protocol"),
+            LeCid::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
+        }
+    }
+}

@@ -48,7 +48,7 @@
 //! [`accepted_bonding_keys`]: SecurityManagerBuilder::accepted_bonding_keys
 
 use crate::AuthenticationInput;
-use bo_tie::host::l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannel};
+use bo_tie::host::l2cap::{BasicInfoFrame, ConnectionChannel};
 use bo_tie::host::sm::pairing::{PairingFailed, PairingFailedReason};
 use bo_tie::host::sm::responder::{NumberComparison, PasskeyInput, SecurityManager, SecurityManagerBuilder, Status};
 use bo_tie::host::sm::{IdentityAddress, Keys};
@@ -308,8 +308,7 @@ impl Security {
         use bo_tie::host::sm::CommandType;
 
         if let Ok(CommandType::PairingRequest) = (&*pdu).try_into() {
-            let pairing_request =
-                core::mem::replace(pdu, BasicInfoFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier));
+            let pairing_request = pdu.clone();
 
             self.pairing_request = Some(pairing_request);
 

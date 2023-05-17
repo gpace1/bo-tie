@@ -67,8 +67,8 @@ pub mod pdu;
 // End submodules that use the above macros
 //==================================================================================================
 
-pub const L2CAP_CHANNEL_ID: bo_tie_l2cap::ChannelIdentifier =
-    bo_tie_l2cap::ChannelIdentifier::Le(bo_tie_l2cap::LeUserChannelIdentifier::AttributeProtocol);
+pub const L2CAP_CHANNEL_ID: bo_tie_l2cap::channels::ChannelIdentifier =
+    bo_tie_l2cap::channels::ChannelIdentifier::Le(bo_tie_l2cap::channels::LeCid::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bo_tie_macros::DepthCount)]
@@ -309,7 +309,7 @@ pub enum Error {
     /// Custom opcode is already used by the Att protocol
     AttUsedOpcode(u8),
     /// Incorrect Channel Identifier
-    IncorrectChannelId(bo_tie_l2cap::ChannelIdentifier),
+    IncorrectChannelId(bo_tie_l2cap::channels::ChannelIdentifier),
     /// Pdu Error
     PduError(pdu::Error),
 }
@@ -964,12 +964,12 @@ mod test {
     use bo_tie_util::buffer::TryExtend;
     use std::sync::{Arc, Mutex};
 
+    use crate::server::ServerAttributes;
     use std::{
         future::Future,
         pin::Pin,
         task::{Context, Poll, Waker},
     };
-    use crate::server::ServerAttributes;
 
     struct TwoWayChannel {
         b1: Option<Vec<u8>>,

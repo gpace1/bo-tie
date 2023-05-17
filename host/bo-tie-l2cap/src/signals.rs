@@ -5,8 +5,8 @@
 //! # Note
 //! This module is very unfinished and is gated behind the feature `unstable`
 
-const ACL_U_SIG_CHANNEL_ID: super::ChannelIdentifier =
-    super::ChannelIdentifier::ACL(super::AclUserChannelIdentifier::SignalingChannel);
+const ACL_U_SIG_CHANNEL_ID: crate::channels::ChannelIdentifier =
+    super::ChannelIdentifier::Acl(crate::channels::AclCid::SignalingChannel);
 
 /// Codes for each Signal Type
 ///

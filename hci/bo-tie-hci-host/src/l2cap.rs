@@ -103,6 +103,7 @@ impl<C> bo_tie_l2cap::ConnectionChannel for LeL2cap<C>
 where
     C: ConnectionChannelEnds,
 {
+    type LogicalLink = bo_tie_l2cap::LeU;
     type SendBuffer = C::ToBuffer;
     type SendFut<'a> = ConnectionChannelSender<'a, C> where Self: 'a;
     type SendFutErr = <C::Sender as bo_tie_hci_util::Sender>::Error;

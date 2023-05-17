@@ -31,7 +31,7 @@ impl<I, D, F, C, S> AsSlicedPacketFuture<I, D, F, C, S> {
 
         let len = len.map(|val| val.to_le_bytes());
 
-        let channel_id = frame.channel_id.to_val().to_le_bytes();
+        let channel_id = frame.channel_id.to_cid().to_le_bytes();
 
         let data = frame.payload;
 

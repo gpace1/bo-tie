@@ -7,7 +7,7 @@ use crate::server::Server;
 use crate::{ConnectionToMain, ConnectionToMainMessage, MainToConnection};
 use bo_tie::hci::channel::SendAndSyncSafeConnectionChannelEnds;
 use bo_tie::hci::{ConnectionChannelEnds, LeL2cap};
-use bo_tie::host::l2cap::{BasicInfoFrame, ChannelIdentifier, ConnectionChannelExt, LeUserChannelIdentifier};
+use bo_tie::host::l2cap::{channels::ChannelIdentifier, channels::LeCid, BasicInfoFrame, ConnectionChannelExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone)]
@@ -90,10 +90,8 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
 
     async fn process_frame(&mut self, frame: &mut BasicInfoFrame<Vec<u8>>) {
         match frame.get_channel_id() {
-            ChannelIdentifier::Le(LeUserChannelIdentifier::AttributeProtocol) => {
-                self.server.process(&mut self.le_l2cap, frame).await
-            }
-            ChannelIdentifier::Le(LeUserChannelIdentifier::SecurityManagerProtocol) => {
+            ChannelIdentifier::Le(LeCid::AttributeProtocol) => self.server.process(&mut self.le_l2cap, frame).await,
+            ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
                 if let Some(security_stage) = self.security.process(&mut self.le_l2cap, frame).await {
                     self.send_security_stage(security_stage)
                 }

@@ -145,8 +145,8 @@ pub mod toolbox;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
 /// The L2CAP channel identifier for the Security Manager
-pub const L2CAP_CHANNEL_ID: l2cap::ChannelIdentifier =
-    l2cap::ChannelIdentifier::Le(l2cap::LeUserChannelIdentifier::SecurityManagerProtocol);
+pub const L2CAP_CHANNEL_ID: l2cap::channels::ChannelIdentifier =
+    l2cap::channels::ChannelIdentifier::Le(l2cap::channels::LeCid::SecurityManagerProtocol);
 
 /// General error within the Security Manager Protocol
 #[derive(Debug, Clone)]

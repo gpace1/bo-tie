@@ -11,10 +11,12 @@
 
 extern crate alloc;
 
+pub mod channels;
 pub mod send_future;
 #[cfg(feature = "unstable")]
 pub mod signals;
 
+use crate::channels::ChannelIdentifier;
 use alloc::vec::Vec;
 use bo_tie_util::buffer::TryExtend;
 use core::future::Future;
@@ -22,6 +24,57 @@ use core::future::Future;
 /// A trait containing a constant for the smallest maximum transfer unit for a logical link
 pub trait MinimumMtu {
     const MIN_MTU: usize;
+}
+
+mod private {
+    /// A trait for a logical link type
+    pub trait Link {
+        fn channel_from_raw(byte: u16) -> Result<super::channels::ChannelIdentifier, ()>;
+    }
+}
+
+/// ACL-U L2CAP logical link type
+///
+/// This is a marker type for an ACL-U L2CAP logical link that does not support the extended flow
+/// Specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AclU;
+
+impl MinimumMtu for AclU {
+    const MIN_MTU: usize = 48;
+}
+
+impl private::Link for AclU {
+    fn channel_from_raw(byte: u16) -> Result<ChannelIdentifier, ()> {
+        channels::AclCid::try_from_raw(byte).map(|id| ChannelIdentifier::Acl(id))
+    }
+}
+
+/// ACL-U L2CAP logical link type supporting Extended Flow Specification
+///
+/// This is a marker type for an ACL-U L2CAP logical link that supports the extended flow
+/// specification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AclUExt;
+
+impl MinimumMtu for AclUExt {
+    const MIN_MTU: usize = 672;
+}
+
+impl private::Link for AclUExt {
+    fn channel_from_raw(byte: u16) -> Result<ChannelIdentifier, ()> {
+        channels::AclCid::try_from_raw(byte).map(|id| ChannelIdentifier::Acl(id))
+    }
+}
+
+/// APB-U L2CAP logical link type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Apb;
+
+impl private::Link for Apb {
+    fn channel_from_raw(byte: u16) -> Result<ChannelIdentifier, ()> {
+        channels::ApbCid::try_from_raw(byte).map(|id| ChannelIdentifier::Apb(id))
+    }
 }
 
 /// LE-U L2CAP logical link type
@@ -34,250 +87,9 @@ impl MinimumMtu for LeU {
     const MIN_MTU: usize = 23;
 }
 
-/// ACL-U L2CAP logical link type
-///
-/// This is a marker type for a ACL-U L2CAP logical link. This is not the MTU for ACL-U with support
-/// for the Extended Flow Rate feature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ACLU;
-
-impl MinimumMtu for ACLU {
-    const MIN_MTU: usize = 48;
-}
-
-/// Channel Identifier
-///
-/// Channel Identifiers are used by the L2CAP to associate the data with a given channel. Channels
-/// are a numeric identifier for a protocol or an association of protocols that are part of L2CAP or
-/// a higher layer (such as the Attribute (ATT) protocol).
-///
-/// # Specification Reference
-/// See Bluetooth Specification V5 | Vol 3, Part A Section 2.1
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ChannelIdentifier {
-    NullIdentifier,
-    /// ACL-U identifiers
-    ACL(AclUserChannelIdentifier),
-    /// LE-U identifiers
-    Le(LeUserChannelIdentifier),
-}
-
-impl ChannelIdentifier {
-    /// Convert to the numerical value
-    ///
-    /// The returned value is in *native byte order*
-    pub fn to_val(&self) -> u16 {
-        match self {
-            ChannelIdentifier::NullIdentifier => 0,
-            ChannelIdentifier::ACL(ci) => ci.to_val(),
-            ChannelIdentifier::Le(ci) => ci.to_val(),
-        }
-    }
-
-    /// Try to convert a raw value into a LE-U channel identifier
-    pub fn le_try_from_raw(val: u16) -> Result<Self, ()> {
-        LeUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
-    }
-
-    /// Try to convert a raw value into a ACL-U channel identifier
-    pub fn acl_try_from_raw(val: u16) -> Result<Self, ()> {
-        AclUserChannelIdentifier::try_from_raw(val).map(|c| c.into())
-    }
-}
-
-impl core::fmt::Display for ChannelIdentifier {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            ChannelIdentifier::NullIdentifier => f.write_str("null identifier"),
-            ChannelIdentifier::ACL(id) => write!(f, "ACL {}", id),
-            ChannelIdentifier::Le(id) => write!(f, "LE {}", id),
-        }
-    }
-}
-
-impl From<LeUserChannelIdentifier> for ChannelIdentifier {
-    fn from(le: LeUserChannelIdentifier) -> Self {
-        ChannelIdentifier::Le(le)
-    }
-}
-
-impl From<AclUserChannelIdentifier> for ChannelIdentifier {
-    fn from(acl: AclUserChannelIdentifier) -> Self {
-        ChannelIdentifier::ACL(acl)
-    }
-}
-
-/// Dynamically created L2CAP channel
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct DynChannelId<T> {
-    channel_id: u16,
-    _p: core::marker::PhantomData<T>,
-}
-
-impl<T> DynChannelId<T> {
-    fn new(channel_id: u16) -> Self {
-        DynChannelId {
-            channel_id,
-            _p: core::marker::PhantomData,
-        }
-    }
-
-    /// Get the value of the dynamic channel identifier
-    pub fn get_val(&self) -> u16 {
-        self.channel_id
-    }
-}
-
-impl DynChannelId<LeU> {
-    pub const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
-
-    /// Create a new Dynamic Channel identifier for the LE-U CID name space
-    ///
-    /// This will return the enum
-    /// [`DynamicallyAllocated`](../enum.LeUserChannelIdentifier.html#variant.DynamicallyAllocated)
-    /// with the `channel_id` if the id is within the bounds of
-    /// [`LE_LOWER`](#const.LE_LOWER) and
-    /// [`LE_UPPER`](#const.LE_UPPER). If the input is not between those bounds, then an error is
-    /// returned containing the infringing input value.
-    pub fn new_le(channel_id: u16) -> Result<LeUserChannelIdentifier, u16> {
-        if Self::LE_BOUNDS.contains(&channel_id) {
-            Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
-                channel_id,
-            )))
-        } else {
-            Err(channel_id)
-        }
-    }
-}
-
-impl DynChannelId<ACLU> {
-    pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
-
-    pub fn new_acl(channel_id: u16) -> Result<AclUserChannelIdentifier, u16> {
-        if Self::ACL_BOUNDS.contains(&channel_id) {
-            Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(
-                channel_id,
-            )))
-        } else {
-            Err(channel_id)
-        }
-    }
-}
-
-impl<T> core::fmt::Display for DynChannelId<T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        core::fmt::Display::fmt(&self.channel_id, f)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AclUserChannelIdentifier {
-    SignalingChannel,
-    ConnectionlessChannel,
-    AmpManagerProtocol,
-    BrEdrSecurityManager,
-    AmpTestManager,
-    DynamicallyAllocated(DynChannelId<ACLU>),
-}
-
-impl AclUserChannelIdentifier {
-    fn to_val(&self) -> u16 {
-        match self {
-            AclUserChannelIdentifier::SignalingChannel => 0x1,
-            AclUserChannelIdentifier::ConnectionlessChannel => 0x2,
-            AclUserChannelIdentifier::AmpManagerProtocol => 0x3,
-            AclUserChannelIdentifier::BrEdrSecurityManager => 0x7,
-            AclUserChannelIdentifier::AmpTestManager => 0x3F,
-            AclUserChannelIdentifier::DynamicallyAllocated(ci) => ci.get_val(),
-        }
-    }
-
-    fn try_from_raw(val: u16) -> Result<Self, ()> {
-        match val {
-            0x1 => Ok(AclUserChannelIdentifier::SignalingChannel),
-            0x2 => Ok(AclUserChannelIdentifier::ConnectionlessChannel),
-            0x3 => Ok(AclUserChannelIdentifier::AmpManagerProtocol),
-            0x7 => Ok(AclUserChannelIdentifier::BrEdrSecurityManager),
-            0x3F => Ok(AclUserChannelIdentifier::AmpTestManager),
-            val if DynChannelId::<ACLU>::ACL_BOUNDS.contains(&val) => {
-                Ok(AclUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
-            }
-            _ => Err(()),
-        }
-    }
-}
-
-impl core::fmt::Display for AclUserChannelIdentifier {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            AclUserChannelIdentifier::SignalingChannel => f.write_str("signaling channel"),
-            AclUserChannelIdentifier::ConnectionlessChannel => f.write_str("connectionless channel"),
-            AclUserChannelIdentifier::AmpManagerProtocol => f.write_str("AMP manager protocol"),
-            AclUserChannelIdentifier::BrEdrSecurityManager => f.write_str("BR/EDR security manager"),
-            AclUserChannelIdentifier::AmpTestManager => f.write_str("AMP test manager"),
-            AclUserChannelIdentifier::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
-        }
-    }
-}
-
-/// LE User (LE-U) Channel Identifiers
-///
-/// These are the channel identifiers for a LE
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LeUserChannelIdentifier {
-    /// Channel for the Attribute Protocol
-    ///
-    /// This channel is used for the attribute protocol, which also means that all GATT data will
-    /// be sent through this channel.
-    AttributeProtocol,
-    /// Channel signaling
-    ///
-    /// See the Bluetooth Specification V5 | Vol 3, Part A Section 4
-    LowEnergyL2capSignalingChannel,
-    /// Security Manager Protocol
-    SecurityManagerProtocol,
-    /// Dynamically allocated channel identifiers
-    ///
-    /// These are channels that are dynamically allocated through the "Credit Based Connection
-    /// Request" procedure defined in See Bluetooth Specification V5 | Vol 3, Part A Section 4.22
-    ///
-    /// To make a `DynamicallyAllocated` variant, use the function
-    /// [`new_le`](../DynChannelId/index.html)
-    /// of the struct `DynChannelId`
-    DynamicallyAllocated(DynChannelId<LeU>),
-}
-
-impl LeUserChannelIdentifier {
-    fn to_val(&self) -> u16 {
-        match self {
-            LeUserChannelIdentifier::AttributeProtocol => 0x4,
-            LeUserChannelIdentifier::LowEnergyL2capSignalingChannel => 0x5,
-            LeUserChannelIdentifier::SecurityManagerProtocol => 0x6,
-            LeUserChannelIdentifier::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
-        }
-    }
-
-    fn try_from_raw(val: u16) -> Result<Self, ()> {
-        match val {
-            0x4 => Ok(LeUserChannelIdentifier::AttributeProtocol),
-            0x5 => Ok(LeUserChannelIdentifier::LowEnergyL2capSignalingChannel),
-            0x6 => Ok(LeUserChannelIdentifier::SecurityManagerProtocol),
-            _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
-                Ok(LeUserChannelIdentifier::DynamicallyAllocated(DynChannelId::new(val)))
-            }
-            _ => Err(()),
-        }
-    }
-}
-
-impl core::fmt::Display for LeUserChannelIdentifier {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            LeUserChannelIdentifier::AttributeProtocol => f.write_str("attribute protocol"),
-            LeUserChannelIdentifier::LowEnergyL2capSignalingChannel => f.write_str("LE L2CAP signaling channel"),
-            LeUserChannelIdentifier::SecurityManagerProtocol => f.write_str("security manager protocol"),
-            LeUserChannelIdentifier::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
-        }
+impl private::Link for LeU {
+    fn channel_from_raw(byte: u16) -> Result<ChannelIdentifier, ()> {
+        channels::LeCid::try_from_raw(byte).map(|id| ChannelIdentifier::Le(id))
     }
 }
 
@@ -370,7 +182,7 @@ impl BasicFrameError<core::convert::Infallible> {
 /// size.
 #[derive(Debug, Clone)]
 pub struct BasicInfoFrame<T> {
-    channel_id: ChannelIdentifier,
+    channel_id: channels::ChannelIdentifier,
     payload: T,
 }
 
@@ -379,12 +191,12 @@ impl<T> BasicInfoFrame<T> {
     pub const HEADER_SIZE: usize = 4;
 
     /// Create a new `BasicInfoFrame`
-    pub fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
+    pub fn new(payload: T, channel_id: channels::ChannelIdentifier) -> Self {
         BasicInfoFrame { channel_id, payload }
     }
 
     /// Get the channel identifier for this `BasicInfoFrame`
-    pub fn get_channel_id(&self) -> ChannelIdentifier {
+    pub fn get_channel_id(&self) -> channels::ChannelIdentifier {
         self.channel_id
     }
 
@@ -407,7 +219,7 @@ impl<T> BasicInfoFrame<T> {
 
         p.try_extend(len.to_le_bytes())?;
 
-        p.try_extend(self.channel_id.to_val().to_le_bytes())?;
+        p.try_extend(self.channel_id.to_cid().to_le_bytes())?;
 
         p.try_extend(self.payload.iter().copied())?;
 
@@ -460,11 +272,14 @@ impl<T> BasicInfoFrame<T> {
     /// * The length field in the input `data` must be less than or equal to the length of the
     ///   payload field. Any bytes beyond the payload in `data` are ignored.
     /// * The channel id field must be valid
-    pub fn try_from_slice(data: &[u8]) -> Result<Self, BasicFrameError<<T as TryExtend<u8>>::Error>>
+    /// * Type `L` must match the data channel's link type. It can be one of [`AclU`], [`ApbU`], or
+    ///   [`LeU`].
+    pub fn try_from_slice<L>(data: &[u8]) -> Result<Self, BasicFrameError<<T as TryExtend<u8>>::Error>>
     where
         T: core::ops::Deref<Target = [u8]> + TryExtend<u8> + Default,
+        L: private::Link,
     {
-        Self::try_from_slice_with_buffer(data, Default::default())
+        Self::try_from_slice_with_buffer::<L>(data, Default::default())
     }
 
     /// Try to create a `BasicInfoFrame` from a slice of bytes and a buffer
@@ -477,14 +292,19 @@ impl<T> BasicInfoFrame<T> {
     /// * The length field in the input `data` must be less than or equal to the length of the
     ///   payload field. Any bytes beyond the payload in `data` are ignored.
     /// * The channel id field must be valid
-    fn try_from_slice_with_buffer(data: &[u8], mut buffer: T) -> Result<Self, BasicFrameError<T::Error>>
+    /// * Type `L` must match the data channel's link type. It can be one of [`AclU`], [`ApbU`], or
+    ///   [`LeU`].
+    fn try_from_slice_with_buffer<L>(data: &[u8], mut buffer: T) -> Result<Self, BasicFrameError<T::Error>>
     where
         T: core::ops::Deref<Target = [u8]> + TryExtend<u8>,
+        L: private::Link,
     {
         if data.len() >= 4 {
             let len: usize = <u16>::from_le_bytes([data[0], data[1]]).into();
 
             let raw_channel_id = <u16>::from_le_bytes([data[2], data[3]]);
+
+            let channel_id = L::channel_from_raw(raw_channel_id).or(Err(BasicFrameError::InvalidChannelId))?;
 
             let payload = &data[4..];
 
@@ -494,10 +314,7 @@ impl<T> BasicInfoFrame<T> {
                     .map_err(|e| BasicFrameError::TryExtendError(e))
                     .and_then(|_| {
                         Ok(Self {
-                            channel_id: ChannelIdentifier::Le(
-                                LeUserChannelIdentifier::try_from_raw(raw_channel_id)
-                                    .or(Err(BasicFrameError::InvalidChannelId))?,
-                            ),
+                            channel_id,
                             payload: buffer,
                         })
                     })
@@ -507,17 +324,6 @@ impl<T> BasicInfoFrame<T> {
         } else {
             Err(BasicFrameError::RawDataTooSmall)
         }
-    }
-}
-
-impl<'a, T> TryFrom<&'a [u8]> for BasicInfoFrame<T>
-where
-    T: core::ops::Deref<Target = [u8]> + TryExtend<u8> + Default,
-{
-    type Error = BasicFrameError<<T as TryExtend<u8>>::Error>;
-
-    fn try_from(slice: &'a [u8]) -> Result<Self, Self::Error> {
-        Self::try_from_slice(slice)
     }
 }
 
@@ -540,7 +346,7 @@ where
 
         v.extend_from_slice(&(frame.payload.len() as u16).to_le_bytes());
 
-        v.extend_from_slice(&frame.channel_id.to_val().to_le_bytes());
+        v.extend_from_slice(&frame.channel_id.to_cid().to_le_bytes());
 
         v.extend_from_slice(&frame.payload);
 
@@ -650,6 +456,9 @@ impl<T> L2capFragment<T> {
 /// instead of submitting a vector of bytes, a type is submitted that can be turned into fragments.
 /// However this *idea* is currently tentative.
 pub trait ConnectionChannel {
+    /// The logical link used for this Connection.
+    type LogicalLink: private::Link;
+
     /// The buffer type for sent L2CAP fragments
     ///
     /// This buffer is for containing the raw data of a L2CAP packet sent by the future returned
@@ -875,7 +684,7 @@ where
                 // Check if `fragment` is a complete L2CAP payload
                 Some(l) if (l + Self::HEADER_SIZE) <= fragment.data.len() => {
                     // todo use a buffer instead of Vec::new()
-                    match BasicInfoFrame::try_from_slice_with_buffer(&fragment.data, Vec::new()) {
+                    match BasicInfoFrame::try_from_slice_with_buffer::<C::LogicalLink>(&fragment.data, Vec::new()) {
                         Ok(data) => self.full_acl_data.push(data),
                         Err(e) => return Err(e),
                     }
@@ -925,7 +734,10 @@ where
             // Assemble the carryover fragments into a complete L2CAP packet if the length of the
             // fragments matches (or is greater than) the total length of the payload.
             if (acl_len + Self::HEADER_SIZE) <= self.carryover_fragments.len() {
-                match BasicInfoFrame::try_from_slice_with_buffer(&self.carryover_fragments, Vec::new()) {
+                match BasicInfoFrame::try_from_slice_with_buffer::<C::LogicalLink>(
+                    &self.carryover_fragments,
+                    Vec::new(),
+                ) {
                     Ok(data) => {
                         self.full_acl_data.push(data);
                         self.carryover_fragments.clear();
