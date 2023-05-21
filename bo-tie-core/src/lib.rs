@@ -1,7 +1,8 @@
-//! Utilities for `bo-tie`
+//! Core functionality for `bo-tie`
 //!
-//! These are things that are used throughout the other crates within the `bo-tie` workspace and are
-//! collected here as a common place to put them.
+//! Unlike most `core` libraries of rust, `bo-tie-core` is not intended to be usable on its own. It
+//! is purely a supporting library for all other libraries within the `bo-tie` workspace. Types used
+//! throughout `bo-tie` are collected here as a common place to put them.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
