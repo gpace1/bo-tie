@@ -9,11 +9,11 @@ use crate::pdu::{ExecuteWriteFlag, HandleRange, ReadBlobRequest, TypeRequest};
 use crate::server::{NoQueuedWrites, ServerAttributes};
 use crate::{pdu, Server, TransferFormatInto};
 use alloc::vec::Vec;
+use bo_tie_core::buffer::de_vec::DeVec;
+use bo_tie_core::buffer::TryExtend;
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::send_future::Error;
 use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ChannelIdentifier, ConnectionChannel, L2capFragment, MinimumMtu};
-use bo_tie_util::buffer::de_vec::DeVec;
-use bo_tie_util::buffer::TryExtend;
 use core::{
     future::Future,
     pin::Pin,

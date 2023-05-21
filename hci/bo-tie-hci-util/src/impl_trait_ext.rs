@@ -17,13 +17,13 @@ use crate::{
     Receiver, Sender, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage,
     ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
-use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use bo_tie_core::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::fmt::{Debug, Display};
 use core::future::Future;
 
 /// Send safe equivalent of [`Buffer`]
 ///
-/// [`Buffer`]: bo_tie_util::buffer::Buffer
+/// [`Buffer`]: bo_tie_core::buffer::Buffer
 pub trait SendSafeBuffer<'a>:
     'static
     + Send
@@ -65,7 +65,7 @@ where
 
 /// Send and Sync safe equivalent of [`Buffer`]
 ///
-/// [`Buffer`]: bo_tie_util::buffer::Buffer
+/// [`Buffer`]: bo_tie_core::buffer::Buffer
 pub trait SendAndSyncSafeBuffer<'a>:
     'static
     + Send

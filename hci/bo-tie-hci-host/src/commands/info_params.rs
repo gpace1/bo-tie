@@ -1097,7 +1097,7 @@ pub mod read_local_supported_features {
     use crate::{
         opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
-    use bo_tie_util::{DeviceFeatures, Features, FeaturesIter};
+    use bo_tie_core::{DeviceFeatures, Features, FeaturesIter};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::InformationParameters(opcodes::InformationParameters::ReadLocalSupportedFeatures);
@@ -1163,7 +1163,7 @@ pub mod read_bd_addr {
     use crate::{
         opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
-    use bo_tie_util::BluetoothDeviceAddress;
+    use bo_tie_core::BluetoothDeviceAddress;
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::InformationParameters(opcodes::InformationParameters::ReadBD_ADDR);

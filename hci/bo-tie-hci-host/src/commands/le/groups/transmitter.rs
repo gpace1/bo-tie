@@ -56,7 +56,7 @@ pub mod read_advertising_channel_tx_power {
 pub mod set_advertising_parameters {
     use crate::commands::le::OwnAddressType;
     use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
-    use bo_tie_util::BluetoothDeviceAddress;
+    use bo_tie_core::BluetoothDeviceAddress;
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::SetAdvertisingParameters);
@@ -366,7 +366,7 @@ pub mod set_random_address {
 
     #[derive(Clone)]
     struct Parameter {
-        rand_address: bo_tie_util::BluetoothDeviceAddress,
+        rand_address: bo_tie_core::BluetoothDeviceAddress,
     }
 
     impl CommandParameter<6> for Parameter {
@@ -378,7 +378,7 @@ pub mod set_random_address {
 
     pub async fn send<'a, H: HostChannelEnds>(
         host: &mut Host<H>,
-        address: bo_tie_util::BluetoothDeviceAddress,
+        address: bo_tie_core::BluetoothDeviceAddress,
     ) -> Result<(), CommandError<H>> {
         let parameter = Parameter { rand_address: address };
 

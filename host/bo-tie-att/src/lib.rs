@@ -10,8 +10,8 @@ use core::borrow::Borrow;
 pub mod client;
 pub mod server;
 
+use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
-use bo_tie_util::buffer::stack::LinearBuffer;
 pub use client::Client;
 pub use server::Server;
 
@@ -364,14 +364,14 @@ impl From<TransferFormatError> for Error {
 /// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
 pub enum ConnectionError<C: bo_tie_l2cap::ConnectionChannel> {
     AttError(Error),
-    RecvError(bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>),
+    RecvError(bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>),
     SendError(bo_tie_l2cap::send_future::Error<C::SendFutErr>),
 }
 
 impl<C> PartialEq for ConnectionError<C>
 where
     C: bo_tie_l2cap::ConnectionChannel,
-    <C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: PartialEq,
+    <C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error: PartialEq,
     C::SendFutErr: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -393,10 +393,10 @@ impl<C: bo_tie_l2cap::ConnectionChannel, E: Into<Error>> From<E> for ConnectionE
 }
 
 impl<C: bo_tie_l2cap::ConnectionChannel>
-    From<bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>>
+    From<bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>>
     for ConnectionError<C>
 {
-    fn from(e: bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>) -> Self {
+    fn from(e: bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>) -> Self {
         Self::RecvError(e)
     }
 }
@@ -929,7 +929,7 @@ where
     }
 }
 
-impl TransferFormatInto for bo_tie_util::BluetoothDeviceAddress {
+impl TransferFormatInto for bo_tie_core::BluetoothDeviceAddress {
     fn len_of_into(&self) -> usize {
         6
     }
@@ -939,7 +939,7 @@ impl TransferFormatInto for bo_tie_util::BluetoothDeviceAddress {
     }
 }
 
-impl TransferFormatTryFrom for bo_tie_util::BluetoothDeviceAddress {
+impl TransferFormatTryFrom for bo_tie_core::BluetoothDeviceAddress {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
     where
         Self: Sized,
@@ -959,9 +959,9 @@ impl TransferFormatTryFrom for bo_tie_util::BluetoothDeviceAddress {
 #[cfg(test)]
 mod test {
     use super::*;
+    use bo_tie_core::buffer::de_vec::DeVec;
+    use bo_tie_core::buffer::TryExtend;
     use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ConnectionChannelExt, L2capFragment, MinimumMtu};
-    use bo_tie_util::buffer::de_vec::DeVec;
-    use bo_tie_util::buffer::TryExtend;
     use std::sync::{Arc, Mutex};
 
     use crate::server::ServerAttributes;

@@ -544,7 +544,7 @@ pub mod read_local_supported_features {
     use crate::{
         opcodes, CCParameterError, CommandError, CommandParameter, Host, HostChannelEnds, TryFromCommandComplete,
     };
-    use bo_tie_util::{LeDeviceFeatures, LeFeatures, LeFeaturesItr};
+    use bo_tie_core::{LeDeviceFeatures, LeFeatures, LeFeaturesItr};
 
     const COMMAND: opcodes::HciCommand =
         opcodes::HciCommand::LEController(opcodes::LEController::ReadLocalSupportedFeatures);
@@ -667,7 +667,7 @@ macro_rules! add_remove_filter_list_setup {
     ( $command: ident ) => {
         use crate::commands::le::FilterListAddressType;
         use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
-        use bo_tie_util::BluetoothDeviceAddress;
+        use bo_tie_core::BluetoothDeviceAddress;
 
         struct CommandPrameter {
             address_type: u8,

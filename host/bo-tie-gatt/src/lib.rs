@@ -28,7 +28,7 @@ macro_rules! unique_only_owned {
 
 macro_rules! map_restrictions {
     ( $restrictions:expr => Read ) => {{
-        let mut permissions = bo_tie_util::buffer::stack::LinearBuffer::<
+        let mut permissions = bo_tie_core::buffer::stack::LinearBuffer::<
             { bo_tie_att::AttributeRestriction::full_depth() },
             bo_tie_att::AttributePermissions,
         >::new();
@@ -38,7 +38,7 @@ macro_rules! map_restrictions {
         permissions
     }};
     ( $restrictions:expr => Write ) => {{
-        let mut permissions = bo_tie_util::buffer::stack::LinearBuffer::<
+        let mut permissions = bo_tie_core::buffer::stack::LinearBuffer::<
             { bo_tie_att::AttributeRestriction::full_depth() },
             bo_tie_att::AttributePermissions,
         >::new();
@@ -46,7 +46,7 @@ macro_rules! map_restrictions {
         map_restrictions!($restrictions => Write => permissions)
     }};
     ( $restrictions:expr => Read & Write ) => {{
-        let mut permissions = bo_tie_util::buffer::stack::LinearBuffer::<
+        let mut permissions = bo_tie_core::buffer::stack::LinearBuffer::<
             { bo_tie_att::AttributePermissions::full_depth() },
             bo_tie_att::AttributePermissions,
         >::new();
@@ -88,10 +88,10 @@ pub mod characteristic;
 
 pub use bo_tie_att as att;
 use bo_tie_att::TransferFormatInto;
+use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::ConnectionChannel;
-use bo_tie_util::buffer::stack::LinearBuffer;
 
 struct ServiceDefinition;
 
@@ -1081,8 +1081,8 @@ impl<'a> GapServiceBuilder<'a> {
 /// # use bo_tie_l2cap::{BasicFrameError,BasicInfoFrame, L2capFragment, send_future};
 /// # use std::future::Future;
 /// # use std::pin::Pin;
-/// # use bo_tie_util::buffer::de_vec::DeVec;
-/// # use bo_tie_util::buffer::TryExtend;
+/// # use bo_tie_core::buffer::de_vec::DeVec;
+/// # use bo_tie_core::buffer::TryExtend;
 /// # const SERVICE_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
 /// # const CHARACTERISTIC_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
 /// # struct CC;
@@ -1932,9 +1932,9 @@ mod tests {
     use att::TransferFormatInto;
     use bo_tie_att::server::access_value::Trivial;
     use bo_tie_att::{AttributePermissions, AttributeRestriction};
+    use bo_tie_core::buffer::de_vec::DeVec;
+    use bo_tie_core::buffer::TryExtend;
     use bo_tie_l2cap::{send_future, BasicFrameError};
-    use bo_tie_util::buffer::de_vec::DeVec;
-    use bo_tie_util::buffer::TryExtend;
     use std::{
         future::Future,
         pin::Pin,

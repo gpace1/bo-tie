@@ -15,7 +15,7 @@ use crate::local_channel::local_stack::{
 };
 use crate::local_channel::LocalSendFutureError;
 use crate::Channel;
-use bo_tie_util::buffer::stack::{
+use bo_tie_core::buffer::stack::{
     BufferReservation, DeLinearBuffer, Reservation, StackHotel, UnsafeBufferReservation, UnsafeReservation,
 };
 use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};

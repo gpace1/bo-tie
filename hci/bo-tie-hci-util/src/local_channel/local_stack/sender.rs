@@ -11,7 +11,7 @@ use crate::local_channel::local_stack::{
 };
 use crate::local_channel::{LocalQueueBuffer, LocalQueueBufferSend, LocalSendFuture, LocalSendFutureError};
 use crate::{Sender, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage};
-use bo_tie_util::buffer::stack::{BufferReservation, Reservation};
+use bo_tie_core::buffer::stack::{BufferReservation, Reservation};
 use core::borrow::Borrow;
 use core::task::Waker;
 

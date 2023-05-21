@@ -43,15 +43,15 @@
 //!
 //! ```
 //! # // example initialization boilerplate
-//! # let this_address = bo_tie_util::BluetoothDeviceAddress::zeroed();
-//! # let peer_address = bo_tie_util::BluetoothDeviceAddress::zeroed();
+//! # let this_address = bo_tie_core::BluetoothDeviceAddress::zeroed();
+//! # let peer_address = bo_tie_core::BluetoothDeviceAddress::zeroed();
 //! # struct StubConnectionChannel;
 //! # impl ConnectionChannel for StubConnectionChannel {
 //! #     type SendBuffer = Vec<u8>;
 //! #     type SendFut<'a> = std::pin::Pin<Box<dyn Future<Output=Result<(), bo_tie_l2cap::send_future::Error<Self::SendFutErr>>>>>;
 //! #     type SendFutErr = usize;
 //! #     type RecvBuffer = Vec<u8>;
-//! #     type RecvFut<'a> = std::pin::Pin<Box<dyn Future<Output=Option<Result<L2capFragment<Self::RecvBuffer>, bo_tie_l2cap::BasicFrameError<<Self::RecvBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>>>>>>;
+//! #     type RecvFut<'a> = std::pin::Pin<Box<dyn Future<Output=Option<Result<L2capFragment<Self::RecvBuffer>, bo_tie_l2cap::BasicFrameError<<Self::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>>>>>>;
 //! #     fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
 //! #     fn set_mtu(&mut self,mtu: u16) { unimplemented!() }
 //! #     fn get_mtu(&self) -> usize { unimplemented!() }
@@ -118,8 +118,8 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+pub use bo_tie_core::BluetoothDeviceAddress;
 pub use bo_tie_l2cap as l2cap;
-pub use bo_tie_util::BluetoothDeviceAddress;
 
 use crate::pairing::KeyDistributions;
 use l2cap::BasicInfoFrame;
@@ -355,7 +355,7 @@ where
     Self: Sized,
 {
     /// Convert into command data
-    fn into_command_format(self) -> bo_tie_util::buffer::stack::LinearBuffer<65, u8>;
+    fn into_command_format(self) -> bo_tie_core::buffer::stack::LinearBuffer<65, u8>;
 
     /// Try to convert from command data
     fn try_from_command_format(icd: &[u8]) -> Result<Self, Error>;
@@ -376,7 +376,7 @@ impl<D> CommandData for Command<D>
 where
     D: CommandData,
 {
-    fn into_command_format(self) -> bo_tie_util::buffer::stack::LinearBuffer<65, u8> {
+    fn into_command_format(self) -> bo_tie_core::buffer::stack::LinearBuffer<65, u8> {
         let mut data = self.data.into_command_format();
 
         data.try_insert(self.command_type.into_val(), 0).unwrap();

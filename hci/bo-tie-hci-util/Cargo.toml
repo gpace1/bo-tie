@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 bo-tie-macros = { path = "../../bo-tie-macros" }
-bo-tie-util = { path = "../../bo-tie-util" }
+bo-tie-core = { path = "../../bo-tie-core" }
 bo-tie-gap = { path = "../../host/bo-tie-gap", optional = true }
 tokio = { version = "1", features = ["sync"], optional = true }
 futures = { version = "0.3", optional = true }

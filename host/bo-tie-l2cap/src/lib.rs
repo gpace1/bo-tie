@@ -18,7 +18,7 @@ pub mod signals;
 
 use crate::channels::ChannelIdentifier;
 use alloc::vec::Vec;
-use bo_tie_util::buffer::TryExtend;
+use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
 
 /// A trait containing a constant for the smallest maximum transfer unit for a logical link

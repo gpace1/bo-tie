@@ -242,7 +242,7 @@ struct MultiReqData {
     /// [`send_notification_with`]: Server::send_notification_with
     /// [`send_indication_with`]: Server::send_indication_with
     temporary_read_restrictions:
-        Option<bo_tie_util::buffer::stack::LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions>>,
+        Option<bo_tie_core::buffer::stack::LinearBuffer<{ AttributePermissions::full_depth() }, AttributePermissions>>,
 }
 
 /// An Attribute server
@@ -1045,7 +1045,7 @@ where
                     handle: $handle,
                     temporary_read_restrictions: $restrictions
                         .iter()
-                        .fold(bo_tie_util::buffer::stack::LinearBuffer::new(), |mut lb, r| {
+                        .fold(bo_tie_core::buffer::stack::LinearBuffer::new(), |mut lb, r| {
                             let permission = $crate::AttributePermissions::Read(*r);
 
                             if !lb.contains(&permission) {
@@ -1072,7 +1072,7 @@ where
         {
             set_blob_data!(blob, handle);
         } else {
-            let mut lb = bo_tie_util::buffer::stack::LinearBuffer::<
+            let mut lb = bo_tie_core::buffer::stack::LinearBuffer::<
                 { AttributeRestriction::full_depth() },
                 AttributeRestriction,
             >::new();

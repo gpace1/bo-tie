@@ -174,7 +174,7 @@ struct AclBufferBuilder<C: ConnectionChannelEnds> {
     acl_data: Option<HciAclData<C::ToBuffer>>,
 }
 
-impl<C> bo_tie_util::buffer::TryExtend<u8> for AclBufferBuilder<C>
+impl<C> bo_tie_core::buffer::TryExtend<u8> for AclBufferBuilder<C>
 where
     C: ConnectionChannelEnds,
 {
@@ -295,11 +295,11 @@ impl<C: ConnectionChannelEnds> Future for AclBufferFuture<C> {
 
 /// Error for `TryExtend` implementation of `SelfSendBuffer`
 
-enum AclBufferError<T: bo_tie_util::buffer::TryExtend<u8>> {
+enum AclBufferError<T: bo_tie_core::buffer::TryExtend<u8>> {
     Buffer(T::Error),
 }
 
-impl<T: bo_tie_util::buffer::TryExtend<u8>> core::fmt::Debug for AclBufferError<T>
+impl<T: bo_tie_core::buffer::TryExtend<u8>> core::fmt::Debug for AclBufferError<T>
 where
     T::Error: core::fmt::Debug,
 {
@@ -310,7 +310,7 @@ where
     }
 }
 
-impl<T: bo_tie_util::buffer::TryExtend<u8>> core::fmt::Display for AclBufferError<T>
+impl<T: bo_tie_core::buffer::TryExtend<u8>> core::fmt::Display for AclBufferError<T>
 where
     T::Error: core::fmt::Display,
 {
@@ -423,7 +423,7 @@ where
     type Output = Option<
         Result<
             bo_tie_l2cap::L2capFragment<C::FromBuffer>,
-            bo_tie_l2cap::BasicFrameError<<C::FromBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error>,
+            bo_tie_l2cap::BasicFrameError<<C::FromBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>,
         >,
     >;
 

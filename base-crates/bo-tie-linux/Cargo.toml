@@ -8,7 +8,7 @@ edition = "2021"
 bo-tie-hci-host = { path = "../../hci/bo-tie-hci-host" }
 bo-tie-hci-interface = { path = "../../hci/bo-tie-hci-interface", features = ["std"] }
 bo-tie-hci-util = { path = "../../hci/bo-tie-hci-util", features = ["std", "tokio"] }
-bo-tie-util = { path = "../../bo-tie-util" }
+bo-tie-core = { path = "../../bo-tie-core" }
 nix = "0.25.0"
 log = "0.4.6"
 tokio = { version = "1", features = ["sync", "macros"] }

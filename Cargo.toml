@@ -4,7 +4,7 @@ default-members = [
     "host/*",
     "hci/*",
     "bo-tie-macros",
-    "bo-tie-util",
+    "bo-tie-core",
 ]
 
 members = [
@@ -13,7 +13,7 @@ members = [
     "host/*",
     "bo-tie-macros",
     "bo-tie-serde",
-    "bo-tie-util",
+    "bo-tie-core",
     "base-crates/*",
     "examples/*",
 ]

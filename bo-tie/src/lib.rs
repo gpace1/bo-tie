@@ -23,5 +23,5 @@ pub mod hci;
 ))]
 pub mod host;
 
-pub use bo_tie_util::errors::Error;
-pub use bo_tie_util::{BluetoothDeviceAddress, DeviceFeatures, Features, LeDeviceFeatures, LeFeatures};
+pub use bo_tie_core::errors::Error;
+pub use bo_tie_core::{BluetoothDeviceAddress, DeviceFeatures, Features, LeDeviceFeatures, LeFeatures};

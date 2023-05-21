@@ -154,7 +154,7 @@ pub mod add_device_to_resolving_list {
     /// Parameters for the LE Add Device To Resolving List command
     pub struct Parameter {
         pub peer_identity_address_type: PeerIdentityAddressType,
-        pub peer_identity_address: bo_tie_util::BluetoothDeviceAddress,
+        pub peer_identity_address: bo_tie_core::BluetoothDeviceAddress,
         pub peer_irk: u128,
         pub local_irk: u128,
     }
@@ -192,7 +192,7 @@ pub mod remove_device_from_resolving_list {
 
     pub struct Parameter {
         pub peer_identity_address_type: PeerIdentityAddressType,
-        pub peer_identity_address: bo_tie_util::BluetoothDeviceAddress,
+        pub peer_identity_address: bo_tie_core::BluetoothDeviceAddress,
     }
 
     impl CommandParameter<7> for Parameter {
@@ -258,7 +258,7 @@ pub mod set_privacy_mode {
 
     pub struct Parameter {
         pub peer_identity_address_type: PeerIdentityAddressType,
-        pub peer_identity_address: bo_tie_util::BluetoothDeviceAddress,
+        pub peer_identity_address: bo_tie_core::BluetoothDeviceAddress,
         pub privacy_mode: PrivacyMode,
     }
 

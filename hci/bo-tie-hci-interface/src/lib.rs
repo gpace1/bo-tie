@@ -76,6 +76,8 @@ extern crate alloc;
 mod buffer;
 pub mod uart;
 
+use bo_tie_core::buffer::stack::LinearBuffer;
+use bo_tie_core::buffer::{Buffer, TryExtend};
 pub use bo_tie_hci_util::{
     events, local_channel, ChannelReserve, ChannelReserveExt, CommandEventMatcher, ConnectionHandle,
 };
@@ -85,8 +87,6 @@ use bo_tie_hci_util::{
     ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage,
     ToInterfaceIntraMessage,
 };
-use bo_tie_util::buffer::stack::LinearBuffer;
-use bo_tie_util::buffer::{Buffer, TryExtend};
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
@@ -492,7 +492,7 @@ where
                     disconnect.connection_handle,
                 )))
         {
-            let error = bo_tie_util::errors::Error::from(disconnect.reason);
+            let error = bo_tie_core::errors::Error::from(disconnect.reason);
 
             let message = ToConnectionDataIntraMessage::Disconnect(error);
 

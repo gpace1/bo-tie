@@ -85,7 +85,7 @@ pub mod create_connection {
         SupervisionTimeout,
     };
     use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
-    use bo_tie_util::BluetoothDeviceAddress;
+    use bo_tie_core::BluetoothDeviceAddress;
 
     const COMMAND: opcodes::HciCommand = opcodes::HciCommand::LEController(opcodes::LEController::CreateConnection);
 
@@ -111,7 +111,7 @@ pub mod create_connection {
         scan_window: ScanningWindow,
         initiator_filter_policy: InitiatorFilterPolicy,
         peer_address_type: AddressType,
-        peer_address: bo_tie_util::BluetoothDeviceAddress,
+        peer_address: bo_tie_core::BluetoothDeviceAddress,
         own_address_type: OwnAddressType,
         connection_interval: ConnectionIntervalBounds,
         connection_latency: ConnectionLatency,

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bo-tie-util = { path = "../../bo-tie-util" }
+bo-tie-core = { path = "../../bo-tie-core" }
 
 [features]
 std = []

@@ -6,8 +6,8 @@ use crate::le::{
     AddressType, ConnectionInterval, ConnectionLatency, ExtendedAdvertisingAndScanResponseData, SupervisionTimeout,
 };
 use crate::{ConnectionHandle, EncryptionLevel};
-use bo_tie_util::errors::Error;
-use bo_tie_util::{BluetoothDeviceAddress, DeviceFeatures, LeDeviceFeatures};
+use bo_tie_core::errors::Error;
+use bo_tie_core::{BluetoothDeviceAddress, DeviceFeatures, LeDeviceFeatures};
 
 type BufferType<T> = alloc::vec::Vec<T>;
 

@@ -7,7 +7,7 @@ edition = "2021"
 bo-tie-gap = { path = "../bo-tie-gap" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-macros = { path = "../../bo-tie-macros" }
-bo-tie-util = { path = "../../bo-tie-util", features = ["sys-rand", "cryptography"] }
+bo-tie-core = { path = "../../bo-tie-core", features = ["sys-rand", "cryptography"] }
 elliptic-curve = "0.12"
 log = "0.4"
 p256 = "0.11"
@@ -20,7 +20,7 @@ tokio = {version = "1", features = ["sync", "rt", "macros"]}
 
 [features]
 std = []
-serde = ["dep:serde", "bo-tie-util/serde"]
+serde = ["dep:serde", "bo-tie-core/serde"]
 
 [package.metadata.docs.rs]
 all-features = true

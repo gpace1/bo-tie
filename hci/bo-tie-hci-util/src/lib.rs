@@ -63,8 +63,8 @@
 //! popped off the front.
 //!
 //! [local stack channels]: local_channel::local_stack
-//! [`DeVec`]: bo_tie_util::buffer::de_vec::DeVec
-//! [`DeLinearBuffer`]: bo_tie_util::buffer::stack::DeLinearBuffer
+//! [`DeVec`]: bo_tie_core::buffer::de_vec::DeVec
+//! [`DeLinearBuffer`]: bo_tie_core::buffer::stack::DeLinearBuffer
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
@@ -78,7 +78,7 @@ pub mod le;
 pub mod local_channel;
 pub mod opcodes;
 
-use bo_tie_util::buffer::Buffer;
+use bo_tie_core::buffer::Buffer;
 use core::fmt;
 use core::future::Future;
 use core::ops::Deref;
@@ -1915,7 +1915,7 @@ pub enum ToConnectionDataIntraMessage<T> {
     /// HCI isochronous Data Packet
     Iso(T),
     /// A disconnection indication
-    Disconnect(bo_tie_util::errors::Error),
+    Disconnect(bo_tie_core::errors::Error),
 }
 
 /// An event message to a connection async task

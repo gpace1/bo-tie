@@ -23,7 +23,7 @@ use crate::{
     HostChannelEnds as HostChannelEndsTrait, InterfaceReceivers, TaskId, ToConnectionDataIntraMessage,
     ToConnectionEventIntraMessage, ToHostCommandIntraMessage, ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
-use bo_tie_util::buffer::stack::{
+use bo_tie_core::buffer::stack::{
     BufferReservation, DeLinearBuffer, LinearBuffer, Reservation, StackHotel, UnsafeBufferReservation,
     UnsafeReservation,
 };

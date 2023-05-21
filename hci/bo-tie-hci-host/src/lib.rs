@@ -30,10 +30,10 @@ pub mod commands;
 pub mod l2cap;
 
 use alloc::vec::Vec;
+use bo_tie_core::errors;
 use bo_tie_hci_util::{events, le, ConnectionChannelEnds, EventRoutingPolicy, ToHostCommandIntraMessage};
 use bo_tie_hci_util::{opcodes, ToHostGeneralIntraMessage};
 use bo_tie_hci_util::{HostChannelEnds, PacketBufferInformation};
-use bo_tie_util::errors;
 use core::ops::Deref;
 
 /// Used to get the information required for sending a command from the host to the controller
@@ -61,7 +61,7 @@ pub trait CommandParameter<const PARAMETER_SIZE: usize> {
     /// packet must be wrapped within a type to give the interface driver the knowledge
     fn as_command_packet<T>(&self, buffer: &mut T) -> Result<(), T::Error>
     where
-        T: bo_tie_util::buffer::TryExtend<u8>,
+        T: bo_tie_core::buffer::TryExtend<u8>,
     {
         let parameter = self.get_parameter();
 
@@ -341,7 +341,7 @@ impl<T> HciAclData<T> {
     /// The buffer must contain a complete HCI ACL packet within it.
     fn try_from_buffer(mut buffer: T) -> Result<Self, HciAclPacketError>
     where
-        T: bo_tie_util::buffer::TryFrontRemove<u8> + bo_tie_util::buffer::TryRemove<u8> + Deref<Target = [u8]>,
+        T: bo_tie_core::buffer::TryFrontRemove<u8> + bo_tie_core::buffer::TryRemove<u8> + Deref<Target = [u8]>,
     {
         let first_2_bytes = <u16>::from_le_bytes([
             buffer.try_front_pop().ok_or(HciAclPacketError::PacketTooSmall)?,
@@ -411,9 +411,9 @@ impl<T> HciAclData<T> {
     ///
     /// # Error
     /// The header for the HCI ACL packet could not be pushed to the front of the buffer
-    pub fn into_inner_packet(mut self) -> Result<T, <T as bo_tie_util::buffer::TryFrontExtend<u8>>::Error>
+    pub fn into_inner_packet(mut self) -> Result<T, <T as bo_tie_core::buffer::TryFrontExtend<u8>>::Error>
     where
-        T: bo_tie_util::buffer::Buffer,
+        T: bo_tie_core::buffer::Buffer,
     {
         let first_2_bytes = self.connection_handle.get_raw_handle()
             | self.packet_boundary_flag.get_shifted_val()
@@ -1042,7 +1042,7 @@ impl<C> Connection<C> {
     /// Get the peer address
     ///
     /// This returns the address of the connected device.
-    pub fn get_peer_address(&self) -> bo_tie_util::BluetoothDeviceAddress {
+    pub fn get_peer_address(&self) -> bo_tie_core::BluetoothDeviceAddress {
         match &self.kind {
             ConnectionKind::BrEdr(c) => c.bluetooth_address,
             ConnectionKind::BrEdrSco(c) => c.bluetooth_address,
@@ -1231,12 +1231,12 @@ impl<C> std::error::Error for TryIntoLeL2capError<C> {}
 /// Bluetooth's errors can be taken from a `CommandError`, but if `try_from` returns an error then
 /// either the interface async task exited or there was a bug in `bo-tie` or the Controller.
 ///
-/// [`Error`]: bo_tie_util::errors::Error
+/// [`Error`]: bo_tie_core::errors::Error
 pub enum CommandError<H>
 where
     H: HostChannelEnds,
 {
-    TryExtendBufferError(<H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error),
+    TryExtendBufferError(<H::ToBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error),
     CommandError(errors::Error),
     SendError(<H::Sender as bo_tie_hci_util::Sender>::Error),
     EventError(events::EventError),
@@ -1247,7 +1247,7 @@ where
 impl<H> core::fmt::Debug for CommandError<H>
 where
     H: HostChannelEnds,
-    <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Debug,
+    <H::ToBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error: core::fmt::Debug,
     <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
@@ -1265,7 +1265,7 @@ where
 impl<H> core::fmt::Display for CommandError<H>
 where
     H: HostChannelEnds,
-    <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Display,
+    <H::ToBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error: core::fmt::Display,
     <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
@@ -1284,9 +1284,9 @@ where
 impl<H> std::error::Error for CommandError<H>
 where
     H: HostChannelEnds,
-    <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Debug,
+    <H::ToBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error: core::fmt::Debug,
     <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Debug,
-    <H::ToBuffer as bo_tie_util::buffer::TryExtend<u8>>::Error: core::fmt::Display,
+    <H::ToBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error: core::fmt::Display,
     <H::Sender as bo_tie_hci_util::Sender>::Error: core::fmt::Display,
 {
 }

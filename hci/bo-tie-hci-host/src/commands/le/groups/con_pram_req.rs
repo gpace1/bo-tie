@@ -88,7 +88,7 @@ pub mod remote_connection_parameter_request_reply {
 /// This sends a reason as to why the the request is rejected
 ///
 /// ```
-/// # use bo_tie_util::errors::Error;
+/// # use bo_tie_core::errors::Error;
 /// # use bo_tie_hci_util::events::LeMeta;
 /// # let (_channel_ends, host_ends) = bo_tie_hci_util::channel::tokio_unbounded();
 /// # async {
@@ -108,9 +108,9 @@ pub mod remote_connection_parameter_request_reply {
 /// though the error code will probably be unknown to the peer device.
 ///
 /// [`send`]: remote_connection_parameter_request_negative_reply::send
-/// [`NoError`]: bo_tie_util::errors::Error::NoError
-/// [`MissingErrorCode`]: bo_tie_util::errors::Error::MissingErrorCode
-/// [`UnspecifiedError`]: bo_tie_util::errors::Error::UnspecifiedError
+/// [`NoError`]: bo_tie_core::errors::Error::NoError
+/// [`MissingErrorCode`]: bo_tie_core::errors::Error::MissingErrorCode
+/// [`UnspecifiedError`]: bo_tie_core::errors::Error::UnspecifiedError
 pub mod remote_connection_parameter_request_negative_reply {
 
     use crate::errors::Error;
