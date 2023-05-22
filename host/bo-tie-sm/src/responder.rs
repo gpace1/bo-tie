@@ -105,8 +105,8 @@ use crate::{
 };
 use crate::{AcceptedBondingKeysBuilder, OobDirection};
 use alloc::vec::Vec;
-use bo_tie_util::buffer::stack::LinearBuffer;
-use bo_tie_util::BluetoothDeviceAddress;
+use bo_tie_core::buffer::stack::LinearBuffer;
+use bo_tie_core::BluetoothDeviceAddress;
 
 macro_rules! error {
     ($connection_channel:ty) => {

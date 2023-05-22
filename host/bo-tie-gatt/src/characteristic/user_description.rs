@@ -4,7 +4,7 @@ use crate::characteristic::AddCharacteristicComponent;
 use bo_tie_att::server::access_value::Trivial;
 use bo_tie_att::server::{AccessReadOnly, AccessValue, ServerAttributes};
 use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
-use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_core::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 use core::future::Future;
 use core::ops::Deref;

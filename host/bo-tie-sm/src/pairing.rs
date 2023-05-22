@@ -2,7 +2,7 @@
 
 use super::encrypt_info::AuthRequirements;
 use super::*;
-use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_core::buffer::stack::LinearBuffer;
 
 pub(crate) fn convert_io_cap(
     auth_req: &[encrypt_info::AuthRequirements],

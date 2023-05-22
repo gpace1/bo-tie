@@ -1,6 +1,6 @@
 //! This is the buffer that is sent to the driver from the interface async task
 
-use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use bo_tie_core::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::fmt::{Display, Formatter};
 use core::ops::{Deref, DerefMut};
 

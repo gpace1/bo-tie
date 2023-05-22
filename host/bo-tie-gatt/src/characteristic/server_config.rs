@@ -3,7 +3,7 @@
 use crate::characteristic::{AddCharacteristicComponent, VecArray};
 use bo_tie_att::server::{AccessValue, ServerAttributes};
 use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
-use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_core::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 
 /// UUID of a server configuration descriptor

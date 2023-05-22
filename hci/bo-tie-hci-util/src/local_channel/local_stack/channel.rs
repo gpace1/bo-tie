@@ -7,7 +7,7 @@ use crate::local_channel::local_stack::receiver::LocalChannelReceiver;
 use crate::local_channel::local_stack::{ToConnectionEventChannel, ToHostGenChannel, ToHostGenMsg, UnsafeToHostGenMsg};
 use crate::local_channel::LocalSendFutureError;
 use crate::{Channel, ToConnectionEventIntraMessage, ToHostCommandIntraMessage};
-use bo_tie_util::buffer::stack::{QueueBuffer, Reservation};
+use bo_tie_core::buffer::stack::{QueueBuffer, Reservation};
 use core::borrow::Borrow;
 use core::cell::{Cell, RefCell};
 use core::task::Waker;

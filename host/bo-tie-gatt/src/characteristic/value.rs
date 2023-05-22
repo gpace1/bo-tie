@@ -4,8 +4,8 @@ use crate::characteristic::AddCharacteristicComponent;
 use bo_tie_att::server::access_value::Trivial;
 use bo_tie_att::server::{AccessValue, Comparable, ServerAttributes};
 use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction, TransferFormatInto, TransferFormatTryFrom};
+use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_host_util::Uuid;
-use bo_tie_util::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 
 /// A constructor of a Characteristic value declaration

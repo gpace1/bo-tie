@@ -10,7 +10,7 @@ use crate::local_channel::local_stack::{
 };
 use crate::local_channel::{LocalQueueBuffer, LocalQueueBufferReceive, LocalReceiverFuture};
 use crate::{Receiver, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage};
-use bo_tie_util::buffer::stack::{Reservation, UnsafeBufferReservation};
+use bo_tie_core::buffer::stack::{Reservation, UnsafeBufferReservation};
 use core::borrow::Borrow;
 use core::task::Waker;
 use core::task::{Context, Poll};

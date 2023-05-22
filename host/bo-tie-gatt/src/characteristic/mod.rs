@@ -23,7 +23,7 @@ pub use crate::characteristic::server_config::{ServerConfiguration, ServerConfig
 pub use crate::characteristic::user_description::UserDescriptionBuilder;
 pub use crate::characteristic::value::ValueBuilder;
 use crate::Uuid;
-use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_core::buffer::stack::LinearBuffer;
 
 /// A vector growable up to `SIZE`
 ///

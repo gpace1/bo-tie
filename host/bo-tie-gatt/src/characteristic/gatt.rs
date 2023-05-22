@@ -3,7 +3,7 @@
 //! These are the characteristics of the GATT Attribute profile.
 
 use bo_tie_att::{TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
-use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_core::buffer::stack::LinearBuffer;
 
 /// The Value of the Service Changed Characteristic
 pub struct ServiceChangedValue {
@@ -195,7 +195,7 @@ impl HashValue {
             })
             .flatten();
 
-        HashValue(bo_tie_util::cryptography::aes_cmac_generate(0, msg))
+        HashValue(bo_tie_core::cryptography::aes_cmac_generate(0, msg))
     }
 }
 

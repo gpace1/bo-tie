@@ -18,7 +18,7 @@ use crate::Channel;
 use bo_tie_core::buffer::stack::{
     BufferReservation, DeLinearBuffer, Reservation, StackHotel, UnsafeBufferReservation, UnsafeReservation,
 };
-use bo_tie_util::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use bo_tie_core::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::borrow::Borrow;
 use core::future::Future;
 use core::ops::{Deref, DerefMut};

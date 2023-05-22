@@ -5,9 +5,9 @@
 //! functionality used by this library. These are linux specific and have no relation to the
 //! bluetooth specification.
 
+use bo_tie_core::buffer::Buffer;
+use bo_tie_core::BluetoothDeviceAddress;
 use bo_tie_hci_util::HciPacket;
-use bo_tie_util::buffer::Buffer;
-use bo_tie_util::BluetoothDeviceAddress;
 
 #[allow(non_camel_case_types, dead_code)]
 pub(crate) mod bindings;

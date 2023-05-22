@@ -19,7 +19,7 @@ use crate::{
 };
 use alloc::collections::VecDeque;
 use alloc::rc::Rc;
-use bo_tie_util::buffer::de_vec::{DeVec, DynBufferReserve, TakeFuture};
+use bo_tie_core::buffer::de_vec::{DeVec, DynBufferReserve, TakeFuture};
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
 use core::task::{Context, Poll, Waker};
@@ -323,7 +323,7 @@ impl<B: Unpin, T: Unpin> Channel for LocalBufferedChannel<B, T> {
 
 impl<B, T> BufferReserve for LocalBufferedChannel<B, T>
 where
-    B: bo_tie_util::buffer::Buffer,
+    B: bo_tie_core::buffer::Buffer,
 {
     type Buffer = B;
     type TakeBuffer = TakeFuture<B>;

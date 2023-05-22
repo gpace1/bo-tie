@@ -8,8 +8,8 @@
 //! indicator into the sending and reception of packets from the host or connection async tasks.
 
 use crate::{BufferedUpSend, Interface, SendError};
+use bo_tie_core::buffer::TryExtend;
 use bo_tie_hci_util::{BufferReserve, ChannelReserve, HciPacket, HciPacketType};
-use bo_tie_util::buffer::TryExtend;
 use core::fmt::{Debug, Display, Formatter};
 use core::ops::Deref;
 
@@ -264,7 +264,7 @@ impl PacketIndicator {
     /// An error will occur if the buffer `T` cannot be prepend to.
     pub fn prepend<T>(packet: &mut HciPacket<T>) -> Result<&mut T, T::Error>
     where
-        T: bo_tie_util::buffer::TryFrontExtend<u8>,
+        T: bo_tie_core::buffer::TryFrontExtend<u8>,
     {
         macro_rules! prepend {
             ($buffer:expr, $enumeration:ident) => {{

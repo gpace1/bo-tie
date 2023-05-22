@@ -3,7 +3,7 @@
 //! These packets are defined under the Security In Bluetooth Low Energy section of the Bluetooth
 //! Specification (v5.0 | Vol 3, Part H, section 3.6)
 use super::*;
-use bo_tie_util::buffer::stack::LinearBuffer;
+use bo_tie_core::buffer::stack::LinearBuffer;
 
 #[derive(Debug, Clone, Copy, PartialEq, bo_tie_macros::DepthCount)]
 #[non_exhaustive]

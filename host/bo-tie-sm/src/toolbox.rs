@@ -15,11 +15,11 @@
 //! For the the functions defined in the specification, all array inputs need to be in big-endian
 //! order.
 
-use bo_tie_util::buffer::stack::LinearBuffer;
-pub use bo_tie_util::cryptography::{
+use bo_tie_core::buffer::stack::LinearBuffer;
+pub use bo_tie_core::cryptography::{
     aes_cmac_generate, aes_cmac_verify, ah, e, ecc_gen, ecdh, nonce, rand_u128, PriKey, PubKey,
 };
-use bo_tie_util::BluetoothDeviceAddress;
+use bo_tie_core::BluetoothDeviceAddress;
 
 /// The identifier for an uncompressed public key
 const UNCOMPRESSED_PUB_KEY_TYPE: u8 = 0x4;
