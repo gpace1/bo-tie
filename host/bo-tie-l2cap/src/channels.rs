@@ -21,10 +21,8 @@ pub enum ChannelIdentifier {
 }
 
 impl ChannelIdentifier {
-    /// Convert to the numerical value
-    ///
-    /// The returned value is in *native byte order*
-    pub fn to_cid(&self) -> u16 {
+    /// Convert this `ChannelIdentifier` to its numerical value
+    pub fn to_val(&self) -> u16 {
         match self {
             ChannelIdentifier::Acl(ci) => ci.to_cid(),
             ChannelIdentifier::Apb(ci) => ci.to_cid(),
@@ -32,14 +30,19 @@ impl ChannelIdentifier {
         }
     }
 
+    /// Try to convert a raw value into an ACL-U channel identifier
+    pub fn acl_try_from_raw(val: u16) -> Result<Self, ()> {
+        AclCid::try_from_raw(val).map(|c| c.into())
+    }
+
+    /// Try to convert a raw value into an APB-U channel identifier
+    pub fn apb_try_from_raw(val: u16) -> Result<Self, ()> {
+        ApbCid::try_from_raw(val).map(|c| c.into())
+    }
+
     /// Try to convert a raw value into a LE-U channel identifier
     pub fn le_try_from_raw(val: u16) -> Result<Self, ()> {
         LeCid::try_from_raw(val).map(|c| c.into())
-    }
-
-    /// Try to convert a raw value into a ACL-U channel identifier
-    pub fn acl_try_from_raw(val: u16) -> Result<Self, ()> {
-        AclCid::try_from_raw(val).map(|c| c.into())
     }
 }
 
@@ -53,15 +56,21 @@ impl core::fmt::Display for ChannelIdentifier {
     }
 }
 
-impl From<LeCid> for ChannelIdentifier {
-    fn from(le: LeCid) -> Self {
-        ChannelIdentifier::Le(le)
-    }
-}
-
 impl From<AclCid> for ChannelIdentifier {
     fn from(acl: AclCid) -> Self {
         ChannelIdentifier::Acl(acl)
+    }
+}
+
+impl From<ApbCid> for ChannelIdentifier {
+    fn from(apb: ApbCid) -> Self {
+        ChannelIdentifier::Apb(apb)
+    }
+}
+
+impl From<LeCid> for ChannelIdentifier {
+    fn from(le: LeCid) -> Self {
+        ChannelIdentifier::Le(le)
     }
 }
 
@@ -129,9 +138,7 @@ impl<T> core::fmt::Display for DynChannelId<T> {
 pub enum AclCid {
     SignalingChannel,
     ConnectionlessChannel,
-    AmpManagerProtocol,
     BrEdrSecurityManager,
-    AmpTestManager,
     DynamicallyAllocated(DynChannelId<AclU>),
 }
 
@@ -140,9 +147,7 @@ impl AclCid {
         match self {
             AclCid::SignalingChannel => 0x1,
             AclCid::ConnectionlessChannel => 0x2,
-            AclCid::AmpManagerProtocol => 0x3,
             AclCid::BrEdrSecurityManager => 0x7,
-            AclCid::AmpTestManager => 0x3F,
             AclCid::DynamicallyAllocated(ci) => ci.get_val(),
         }
     }
@@ -151,9 +156,7 @@ impl AclCid {
         match val {
             0x1 => Ok(AclCid::SignalingChannel),
             0x2 => Ok(AclCid::ConnectionlessChannel),
-            0x3 => Ok(AclCid::AmpManagerProtocol),
             0x7 => Ok(AclCid::BrEdrSecurityManager),
-            0x3F => Ok(AclCid::AmpTestManager),
             val if DynChannelId::<AclU>::ACL_BOUNDS.contains(&val) => {
                 Ok(AclCid::DynamicallyAllocated(DynChannelId::new(val)))
             }
@@ -167,9 +170,7 @@ impl core::fmt::Display for AclCid {
         match self {
             AclCid::SignalingChannel => f.write_str("signaling channel"),
             AclCid::ConnectionlessChannel => f.write_str("connectionless channel"),
-            AclCid::AmpManagerProtocol => f.write_str("AMP manager protocol"),
             AclCid::BrEdrSecurityManager => f.write_str("BR/EDR security manager"),
-            AclCid::AmpTestManager => f.write_str("AMP test manager"),
             AclCid::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
         }
     }
@@ -210,10 +211,8 @@ pub enum LeCid {
     /// This channel is used for the attribute protocol, which also means that all GATT data will
     /// be sent through this channel.
     AttributeProtocol,
-    /// Channel signaling
-    ///
-    /// See the Bluetooth Specification V5 | Vol 3, Part A Section 4
-    LowEnergyL2capSignalingChannel,
+    /// LE Signaling Channel
+    LeSignalingChannel,
     /// Security Manager Protocol
     SecurityManagerProtocol,
     /// Dynamically allocated channel identifiers
@@ -231,7 +230,7 @@ impl LeCid {
     pub fn to_cid(&self) -> u16 {
         match self {
             LeCid::AttributeProtocol => 0x4,
-            LeCid::LowEnergyL2capSignalingChannel => 0x5,
+            LeCid::LeSignalingChannel => 0x5,
             LeCid::SecurityManagerProtocol => 0x6,
             LeCid::DynamicallyAllocated(dyn_id) => dyn_id.channel_id,
         }
@@ -240,7 +239,7 @@ impl LeCid {
     pub fn try_from_raw(val: u16) -> Result<Self, ()> {
         match val {
             0x4 => Ok(LeCid::AttributeProtocol),
-            0x5 => Ok(LeCid::LowEnergyL2capSignalingChannel),
+            0x5 => Ok(LeCid::LeSignalingChannel),
             0x6 => Ok(LeCid::SecurityManagerProtocol),
             _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
                 Ok(LeCid::DynamicallyAllocated(DynChannelId::new(val)))
@@ -254,7 +253,7 @@ impl core::fmt::Display for LeCid {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             LeCid::AttributeProtocol => f.write_str("attribute protocol"),
-            LeCid::LowEnergyL2capSignalingChannel => f.write_str("LE L2CAP signaling channel"),
+            LeCid::LeSignalingChannel => f.write_str("LE L2CAP signaling channel"),
             LeCid::SecurityManagerProtocol => f.write_str("security manager protocol"),
             LeCid::DynamicallyAllocated(id) => write!(f, "dynamically allocated channel ({})", id),
         }

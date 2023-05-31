@@ -6,7 +6,7 @@ use crate::{
     server::{BasicQueuedWriter, Server, ServerAttributes},
     TransferFormatTryFrom,
 };
-use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel};
+use bo_tie_l2cap::{BasicFrame, ConnectionChannel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -210,7 +210,7 @@ async fn prepare_write_bad_offset() {
     // A request with a bad offset (last 2 bytes should indicate an offset of 0)
     let raw_request = [0x16, att_handle as u8, 0, 33, 33].to_vec();
 
-    let acl_data = BasicInfoFrame::new(raw_request, crate::L2CAP_CHANNEL_ID);
+    let acl_data = BasicFrame::new(raw_request, crate::L2CAP_CHANNEL_ID);
 
     server.process_acl_data(&mut cc, &acl_data).await.unwrap();
 

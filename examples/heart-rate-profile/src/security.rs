@@ -48,7 +48,7 @@
 //! [`accepted_bonding_keys`]: SecurityManagerBuilder::accepted_bonding_keys
 
 use crate::AuthenticationInput;
-use bo_tie::host::l2cap::{BasicInfoFrame, ConnectionChannel};
+use bo_tie::host::l2cap::{BasicFrame, ConnectionChannel};
 use bo_tie::host::sm::pairing::{PairingFailed, PairingFailedReason};
 use bo_tie::host::sm::responder::{NumberComparison, PasskeyInput, SecurityManager, SecurityManagerBuilder, Status};
 use bo_tie::host::sm::{IdentityAddress, Keys};
@@ -232,7 +232,7 @@ pub struct Security {
     store: Store,
     keys: Option<Keys>,
     is_encrypted: bool,
-    pairing_request: Option<BasicInfoFrame<Vec<u8>>>,
+    pairing_request: Option<BasicFrame<Vec<u8>>>,
     authentication: Option<Authentication>,
 }
 
@@ -297,11 +297,7 @@ impl Security {
     /// The return is a boolean indicating if the client sent a pairing request message (while the
     /// connection is unencrypted). This is used to signal the connection async task to send a
     /// `ConnectionToMain` message to alert the user that a device is
-    pub async fn process<C>(
-        &mut self,
-        connection_channel: &C,
-        pdu: &mut BasicInfoFrame<Vec<u8>>,
-    ) -> Option<SecurityStage>
+    pub async fn process<C>(&mut self, connection_channel: &C, pdu: &mut BasicFrame<Vec<u8>>) -> Option<SecurityStage>
     where
         C: ConnectionChannel,
     {

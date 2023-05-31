@@ -961,7 +961,7 @@ mod test {
     use super::*;
     use bo_tie_core::buffer::de_vec::DeVec;
     use bo_tie_core::buffer::TryExtend;
-    use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ConnectionChannelExt, L2capFragment, MinimumMtu};
+    use bo_tie_l2cap::{BasicFrame, BasicFrameError, ConnectionChannelExt, L2capFragment, MinimumMtu};
     use std::sync::{Arc, Mutex};
 
     use crate::server::ServerAttributes;
@@ -1077,7 +1077,7 @@ mod test {
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<2>;
 
-        fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
             DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
         }
 
@@ -1107,7 +1107,7 @@ mod test {
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<1>;
 
-        fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
             DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
         }
 

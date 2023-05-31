@@ -856,9 +856,9 @@ impl SecurityManager {
         Cmd: Into<Command<P>>,
         P: CommandData,
     {
-        use crate::l2cap::BasicInfoFrame;
+        use crate::l2cap::BasicFrame;
 
-        let acl_data = BasicInfoFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
+        let acl_data = BasicFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
 
         connection_channel
             .send(acl_data)
@@ -1082,7 +1082,7 @@ impl SecurityManager {
     pub async fn process_command<C>(
         &mut self,
         connection_channel: &C,
-        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
+        acl_data: &crate::l2cap::BasicFrame<Vec<u8>>,
     ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,

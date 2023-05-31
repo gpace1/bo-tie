@@ -13,7 +13,7 @@ use bo_tie_core::buffer::de_vec::DeVec;
 use bo_tie_core::buffer::TryExtend;
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::send_future::Error;
-use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ChannelIdentifier, ConnectionChannel, L2capFragment, MinimumMtu};
+use bo_tie_l2cap::{BasicFrame, BasicFrameError, ChannelIdentifier, ConnectionChannel, L2capFragment, MinimumMtu};
 use core::{
     future::Future,
     pin::Pin,
@@ -53,7 +53,7 @@ impl ConnectionChannel for DummyConnection {
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
-    fn send(&self, _: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+    fn send(&self, _: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
         DummySendFut
     }
 
@@ -91,7 +91,7 @@ impl ConnectionChannel for PayloadConnection {
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
-    fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+    fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
         self.sent.set(data.get_payload().to_vec());
 
         DummySendFut
@@ -118,8 +118,8 @@ impl ConnectionChannel for PayloadConnection {
     }
 }
 
-fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D>) -> BasicInfoFrame<Vec<u8>> {
-    BasicInfoFrame::new(TransferFormatInto::into(&pdu), crate::L2CAP_CHANNEL_ID)
+fn pdu_into_acl_data<D: TransferFormatInto>(pdu: pdu::Pdu<D>) -> BasicFrame<Vec<u8>> {
+    BasicFrame::new(TransferFormatInto::into(&pdu), crate::L2CAP_CHANNEL_ID)
 }
 
 fn is_send<T: Future + Send>(t: T) {}
@@ -171,8 +171,5 @@ where
 
     is_send(server.process_parsed_acl_data(&mut c, ClientPduName::FindInformationRequest, &[]));
 
-    is_send(server.process_acl_data(
-        &mut c,
-        &BasicInfoFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier),
-    ))
+    is_send(server.process_acl_data(&mut c, &BasicFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier)))
 }

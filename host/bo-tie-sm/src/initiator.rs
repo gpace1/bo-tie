@@ -624,9 +624,9 @@ impl SecurityManager {
         Cmd: Into<Command<P>>,
         P: CommandData,
     {
-        use crate::l2cap::BasicInfoFrame;
+        use crate::l2cap::BasicFrame;
 
-        let acl_data = BasicInfoFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
+        let acl_data = BasicFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
 
         connection_channel
             .send(acl_data)
@@ -1427,7 +1427,7 @@ impl SecurityManager {
     pub async fn continue_pairing<C>(
         &mut self,
         connection_channel: &C,
-        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
+        acl_data: &crate::l2cap::BasicFrame<Vec<u8>>,
     ) -> Result<Status, error!(C)>
     where
         C: ConnectionChannel,
@@ -1552,7 +1552,7 @@ impl SecurityManager {
     pub async fn process_bonding<C>(
         &mut self,
         connection_channel: &C,
-        acl_data: &crate::l2cap::BasicInfoFrame<Vec<u8>>,
+        acl_data: &crate::l2cap::BasicFrame<Vec<u8>>,
     ) -> Result<bool, error!(C)>
     where
         C: ConnectionChannel,
@@ -2596,7 +2596,7 @@ mod tests {
     };
     use crate::toolbox::PairingAddress;
     use crate::{toolbox, Command, CommandData, CommandType, GetXOfP256Key};
-    use bo_tie_l2cap::{send_future::Error, BasicFrameError, BasicInfoFrame, ConnectionChannel, L2capFragment};
+    use bo_tie_l2cap::{send_future::Error, BasicFrame, BasicFrameError, ConnectionChannel, L2capFragment};
     use bo_tie_util::buffer::TryExtend;
     use bo_tie_util::BluetoothDeviceAddress;
     use std::future::Future;
@@ -2616,7 +2616,7 @@ mod tests {
         type RecvBuffer = Vec<u8>;
         type RecvFut<'a> = impl Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>> + 'a where Self: 'a,;
 
-        fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
             self.sender.send(data.into()).unwrap();
 
             async { Ok(()) }
@@ -2659,7 +2659,7 @@ mod tests {
         fn receive<T: CommandData>(&mut self) -> T {
             let pairing_request_raw = self.receiver.try_recv().expect("expected message");
 
-            let pairing_request_l2cap = BasicInfoFrame::<Vec<u8>>::try_from_slice(&pairing_request_raw).unwrap();
+            let pairing_request_l2cap = BasicFrame::<Vec<u8>>::try_from_slice(&pairing_request_raw).unwrap();
 
             // first byte is skipped as it is assumed to be packet 'code'
             T::try_from_command_format(&pairing_request_l2cap.get_payload()[1..]).unwrap()
@@ -2668,7 +2668,7 @@ mod tests {
         fn send<T: CommandData>(&mut self, command: Command<T>) {
             let payload = command.into_command_format();
 
-            let basic_frame = BasicInfoFrame::new(payload, crate::L2CAP_CHANNEL_ID);
+            let basic_frame = BasicFrame::new(payload, crate::L2CAP_CHANNEL_ID);
 
             self.sender.send(basic_frame.into()).unwrap();
         }

@@ -426,7 +426,7 @@ macro_rules! send_pdu {
     (SKIP_LOG, $connection_channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = $crate::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::BasicInfoFrame::new(interface_data, $crate::L2CAP_CHANNEL_ID);
+        let acl_data = bo_tie_l2cap::BasicFrame::new(interface_data, $crate::L2CAP_CHANNEL_ID);
 
         $connection_channel
             .send(acl_data)
@@ -611,7 +611,7 @@ where
     pub async fn process_acl_data<C>(
         &mut self,
         connection_channel: &mut C,
-        acl_packet: &l2cap::BasicInfoFrame<Vec<u8>>,
+        acl_packet: &l2cap::BasicFrame<Vec<u8>>,
     ) -> Result<Status, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
@@ -636,7 +636,7 @@ where
     /// server for communication with a client device.
     pub fn parse_acl_packet<'a>(
         &self,
-        acl_packet: &'a l2cap::BasicInfoFrame<Vec<u8>>,
+        acl_packet: &'a l2cap::BasicFrame<Vec<u8>>,
     ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
         use l2cap::{channels::ChannelIdentifier, channels::LeCid};
 

@@ -7,7 +7,7 @@ use crate::server::Server;
 use crate::{ConnectionToMain, ConnectionToMainMessage, MainToConnection};
 use bo_tie::hci::channel::SendAndSyncSafeConnectionChannelEnds;
 use bo_tie::hci::{ConnectionChannelEnds, LeL2cap};
-use bo_tie::host::l2cap::{channels::ChannelIdentifier, channels::LeCid, BasicInfoFrame, ConnectionChannelExt};
+use bo_tie::host::l2cap::{channels::ChannelIdentifier, channels::LeCid, BasicFrame, ConnectionChannelExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone)]
@@ -88,7 +88,7 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
         self.to.send(message).unwrap();
     }
 
-    async fn process_frame(&mut self, frame: &mut BasicInfoFrame<Vec<u8>>) {
+    async fn process_frame(&mut self, frame: &mut BasicFrame<Vec<u8>>) {
         match frame.get_channel_id() {
             ChannelIdentifier::Le(LeCid::AttributeProtocol) => self.server.process(&mut self.le_l2cap, frame).await,
             ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
@@ -139,7 +139,7 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
 }
 
 struct Frames {
-    frames: std::vec::IntoIter<BasicInfoFrame<Vec<u8>>>,
+    frames: std::vec::IntoIter<BasicFrame<Vec<u8>>>,
 }
 
 impl Frames {
@@ -152,7 +152,7 @@ impl Frames {
     async fn receive_frame<C: ConnectionChannelEnds>(
         &mut self,
         le_l2cap: &mut LeL2cap<C>,
-    ) -> Option<BasicInfoFrame<Vec<u8>>> {
+    ) -> Option<BasicFrame<Vec<u8>>> {
         loop {
             if let Some(frame) = self.frames.next() {
                 return Some(frame);

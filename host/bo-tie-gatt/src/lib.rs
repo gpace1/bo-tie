@@ -1078,7 +1078,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// use bo_tie_gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
 /// use bo_tie_att::{FULL_PERMISSIONS, server::NoQueuedWrites};
 ///
-/// # use bo_tie_l2cap::{BasicFrameError,BasicInfoFrame, L2capFragment, send_future};
+/// # use bo_tie_l2cap::{BasicFrameError,BasicFrame, L2capFragment, send_future};
 /// # use std::future::Future;
 /// # use std::pin::Pin;
 /// # use bo_tie_core::buffer::de_vec::DeVec;
@@ -1092,7 +1092,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// #     type SendFutErr = usize;
 /// #     type RecvBuffer = DeVec<u8>;
 /// #     type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>>>>;
-/// #     fn send(&self,data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
+/// #     fn send(&self,data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
 /// #     fn set_mtu(&mut self,_: u16) { unimplemented!() }
 /// #     fn get_mtu(&self) -> usize { unimplemented!() }
 /// #     fn max_mtu(&self) -> usize { unimplemented!() }
@@ -1275,7 +1275,7 @@ macro_rules! send_pdu {
     (SKIP_LOG, $connection_channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = bo_tie_att::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::BasicInfoFrame::new(interface_data, bo_tie_att::L2CAP_CHANNEL_ID);
+        let acl_data = bo_tie_l2cap::BasicFrame::new(interface_data, bo_tie_att::L2CAP_CHANNEL_ID);
 
         $connection_channel
             .send(acl_data)
@@ -1329,7 +1329,7 @@ where
     pub async fn process_acl_data<C>(
         &mut self,
         connection_channel: &mut C,
-        acl_data: &l2cap::BasicInfoFrame<alloc::vec::Vec<u8>>,
+        acl_data: &l2cap::BasicFrame<alloc::vec::Vec<u8>>,
     ) -> Result<bo_tie_att::server::Status, att::ConnectionError<C>>
     where
         C: ConnectionChannel,
@@ -2028,7 +2028,7 @@ mod tests {
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut where Self: 'a,;
 
-        fn send(&self, data: crate::l2cap::BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        fn send(&self, data: crate::l2cap::BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
             self.last_sent_pdu.set(Some(data.try_into_packet().unwrap()));
 
             DummySendFut
@@ -2110,7 +2110,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(1.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         assert_eq!(
             Ok(()),
@@ -2128,14 +2128,14 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicInfoFrame::<Vec<_>>::try_from_slice(&data).unwrap();
+                let acl_data = l2cap::BasicFrame::<Vec<_>>::try_from_slice(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );
 
         let client_pdu = att::pdu::read_by_group_type_request(11.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         assert_eq!(
             Ok(()),
@@ -2148,14 +2148,14 @@ mod tests {
         assert_eq!(
             Some(att::pdu::read_by_group_type_response(expected_response)),
             test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicInfoFrame::<Vec<_>>::try_from_slice(&data).unwrap();
+                let acl_data = l2cap::BasicFrame::<Vec<_>>::try_from_slice(&data).unwrap();
                 att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
             }),
         );
 
         let client_pdu = att::pdu::read_by_group_type_request(15.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         // Request was made for for a attribute that was out of range
         assert_eq!(

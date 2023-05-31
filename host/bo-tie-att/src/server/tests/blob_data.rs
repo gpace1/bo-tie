@@ -8,7 +8,7 @@ use crate::{
     Attribute, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
     TransferFormatTryFrom, Uuid,
 };
-use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel, MinimumMtu};
+use bo_tie_l2cap::{BasicFrame, ConnectionChannel, MinimumMtu};
 use bo_tie_util::buffer::de_vec::DeVec;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -39,7 +39,7 @@ impl ConnectionChannel for SendWatchConnection {
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
-    fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {
+    fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
         let pdu_name = ServerPduName::try_from(data.get_payload()[0]);
 
         // add the attribute value bytes and skip the header

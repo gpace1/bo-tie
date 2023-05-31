@@ -52,7 +52,7 @@
 //! #     type SendFutErr = usize;
 //! #     type RecvBuffer = Vec<u8>;
 //! #     type RecvFut<'a> = std::pin::Pin<Box<dyn Future<Output=Option<Result<L2capFragment<Self::RecvBuffer>, bo_tie_l2cap::BasicFrameError<<Self::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>>>>>>;
-//! #     fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
+//! #     fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
 //! #     fn set_mtu(&mut self,mtu: u16) { unimplemented!() }
 //! #     fn get_mtu(&self) -> usize { unimplemented!() }
 //! #     fn max_mtu(&self) -> usize { unimplemented!() }
@@ -63,7 +63,7 @@
 //! // An example of setting up a receiver that support oob
 //!
 //! use bo_tie_sm::responder::SecurityManagerBuilder;
-//! use bo_tie_l2cap::{BasicInfoFrame, ConnectionChannel, L2capFragment};
+//! use bo_tie_l2cap::{BasicFrame, ConnectionChannel, L2capFragment};
 //! use std::task::Waker;
 //! use std::future::Future;
 //!
@@ -122,7 +122,7 @@ pub use bo_tie_core::BluetoothDeviceAddress;
 pub use bo_tie_l2cap as l2cap;
 
 use crate::pairing::KeyDistributions;
-use l2cap::BasicInfoFrame;
+use l2cap::BasicFrame;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -314,10 +314,10 @@ impl core::fmt::Display for CommandType {
     }
 }
 
-impl TryFrom<&'_ BasicInfoFrame<Vec<u8>>> for CommandType {
+impl TryFrom<&'_ BasicFrame<Vec<u8>>> for CommandType {
     type Error = Error;
 
-    fn try_from(acl_data: &'_ BasicInfoFrame<Vec<u8>>) -> Result<Self, Self::Error> {
+    fn try_from(acl_data: &'_ BasicFrame<Vec<u8>>) -> Result<Self, Self::Error> {
         if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
             return Err(Error::IncorrectL2capChannelId);
         }

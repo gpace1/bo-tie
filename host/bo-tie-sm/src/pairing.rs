@@ -801,7 +801,7 @@ impl PairingFailed {
     /// a security manager handle sending of `PairingFailed` commands to the other device.
     ///
     /// ```
-    /// # use bo_tie_l2cap::{BasicFrameError, BasicInfoFrame, ChannelIdentifier, ConnectionChannelExt, L2capFragment, LeUserChannelIdentifier};
+    /// # use bo_tie_l2cap::{BasicFrameError, BasicFrame, ChannelIdentifier, ConnectionChannelExt, L2capFragment, LeUserChannelIdentifier};
     /// # use bo_tie_l2cap::send_future::Error;
     /// # use bo_tie_sm::L2CAP_CHANNEL_ID;
     /// # use bo_tie_util::buffer::de_vec::DeVec;
@@ -814,7 +814,7 @@ impl PairingFailed {
     /// #    type SendFutErr = usize;
     /// #    type RecvBuffer = DeVec<u8>;
     /// #    type RecvFut<'a> = std::future::Pending<Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>>;
-    /// #    fn send(&self, data: BasicInfoFrame<Vec<u8>>) -> Self::SendFut<'_> {unimplemented!()}
+    /// #    fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {unimplemented!()}
     /// #    fn set_mtu(&mut self, mtu: u16) {unimplemented!()}
     /// #    fn get_mtu(&self) -> usize {unimplemented!()}
     /// #    fn max_mtu(&self) -> usize {unimplemented!()}
@@ -850,7 +850,7 @@ impl PairingFailed {
 
         let data = command.into_command_format();
 
-        let b_frame = BasicInfoFrame::new(data.to_vec(), L2CAP_CHANNEL_ID);
+        let b_frame = BasicFrame::new(data.to_vec(), L2CAP_CHANNEL_ID);
 
         connection_channel.send(b_frame).await
     }

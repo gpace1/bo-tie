@@ -202,7 +202,7 @@ impl Server {
     pub async fn process<C: bo_tie::host::l2cap::ConnectionChannel>(
         &mut self,
         channel: &mut C,
-        packet: &bo_tie::host::l2cap::BasicInfoFrame<Vec<u8>>,
+        packet: &bo_tie::host::l2cap::BasicFrame<Vec<u8>>,
     ) {
         let parse_result = self.server.parse_acl_packet(packet);
 

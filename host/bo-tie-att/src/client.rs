@@ -96,7 +96,7 @@ impl core::fmt::Display for ClientPduName {
 pub trait ResponseProcessor {
     type Response;
 
-    fn process_response(self, acl_data: &l2cap::BasicInfoFrame<Vec<u8>>) -> Result<Self::Response, super::Error>;
+    fn process_response(self, acl_data: &l2cap::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error>;
 }
 
 /// Process a server response of a client request
@@ -114,7 +114,7 @@ where
     ///
     /// The input `acl_data` should be the response from the server to the request that generated
     /// this `ResponseProcessor`.
-    fn process_response(self, acl_data: &l2cap::BasicInfoFrame<Vec<u8>>) -> Result<Self::Response, super::Error> {
+    fn process_response(self, acl_data: &l2cap::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error> {
         if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
             self.0(acl_data.get_payload())
         } else {
@@ -204,7 +204,7 @@ impl ConnectClient {
         } else {
             let mtu_req = pdu::exchange_mtu_request(requested_mtu as u16);
 
-            let acl_data = l2cap::BasicInfoFrame::new(TransferFormatInto::into(&mtu_req), super::L2CAP_CHANNEL_ID);
+            let acl_data = l2cap::BasicFrame::new(TransferFormatInto::into(&mtu_req), super::L2CAP_CHANNEL_ID);
 
             connection_channel.send(acl_data).await?;
 
@@ -224,7 +224,7 @@ impl ConnectClient {
     pub async fn create_client<C>(
         self,
         connection_channel: &C,
-        response: &l2cap::BasicInfoFrame<Vec<u8>>,
+        response: &l2cap::BasicFrame<Vec<u8>>,
     ) -> Result<Client, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
@@ -373,7 +373,7 @@ impl Client {
         if payload.len() > connection_channel.get_mtu() {
             Err(super::Error::MtuExceeded.into())
         } else {
-            let data = l2cap::BasicInfoFrame::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
+            let data = l2cap::BasicFrame::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
 
             connection_channel
                 .send(data)
