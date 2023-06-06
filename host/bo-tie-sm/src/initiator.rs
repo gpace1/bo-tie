@@ -2611,8 +2611,8 @@ mod tests {
     #[cfg(feature = "std")]
     impl ConnectionChannel for InitiatorChannel {
         type SendBuffer = Vec<u8>;
-        type SendFut<'a> = impl Future<Output = Result<(), Error<Self::SendFutErr>>> where Self: 'a;
-        type SendFutErr = usize;
+        type SendFut<'a> = impl Future<Output = Result<(), Error<Self::SendErr>>> where Self: 'a;
+        type SendErr = usize;
         type RecvBuffer = Vec<u8>;
         type RecvFut<'a> = impl Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>> + 'a where Self: 'a,;
 
@@ -2638,7 +2638,7 @@ mod tests {
             512
         }
 
-        fn receive(&mut self) -> Self::RecvFut<'_> {
+        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
             async {
                 self.receiver
                     .recv()

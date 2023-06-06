@@ -48,8 +48,8 @@
 //! # struct StubConnectionChannel;
 //! # impl ConnectionChannel for StubConnectionChannel {
 //! #     type SendBuffer = Vec<u8>;
-//! #     type SendFut<'a> = std::pin::Pin<Box<dyn Future<Output=Result<(), bo_tie_l2cap::send_future::Error<Self::SendFutErr>>>>>;
-//! #     type SendFutErr = usize;
+//! #     type SendFut<'a> = std::pin::Pin<Box<dyn Future<Output=Result<(), bo_tie_l2cap::send_future::Error<Self::SendErr>>>>>;
+//! #     type SendErr = usize;
 //! #     type RecvBuffer = Vec<u8>;
 //! #     type RecvFut<'a> = std::pin::Pin<Box<dyn Future<Output=Option<Result<L2capFragment<Self::RecvBuffer>, bo_tie_l2cap::BasicFrameError<<Self::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>>>>>>;
 //! #     fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
@@ -57,7 +57,7 @@
 //! #     fn get_mtu(&self) -> usize { unimplemented!() }
 //! #     fn max_mtu(&self) -> usize { unimplemented!() }
 //! #     fn min_mtu(&self) -> usize { unimplemented!() }
-//! #     fn receive(&mut self) -> Self::RecvFut<'_> { unimplemented!() }
+//! #     fn receive_fragment(&mut self) -> Self::RecvFut<'_> { unimplemented!() }
 //! # }
 //! # let connection_channel = StubConnectionChannel;
 //! // An example of setting up a receiver that support oob

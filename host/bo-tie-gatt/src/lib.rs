@@ -1089,7 +1089,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// # impl bo_tie_l2cap::ConnectionChannel for CC {
 /// #     type SendBuffer = DeVec<u8>;
 /// #     type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), send_future::Error<usize>>>>>;
-/// #     type SendFutErr = usize;
+/// #     type SendErr = usize;
 /// #     type RecvBuffer = DeVec<u8>;
 /// #     type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>>>>;
 /// #     fn send(&self,data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
@@ -1097,7 +1097,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// #     fn get_mtu(&self) -> usize { unimplemented!() }
 /// #     fn max_mtu(&self) -> usize { unimplemented!() }
 /// #     fn min_mtu(&self) -> usize { unimplemented!() }
-/// #     fn receive(&mut self) -> Self::RecvFut<'_> { unimplemented!()}
+/// #     fn receive_fragment(&mut self) -> Self::RecvFut<'_> { unimplemented!()}
 /// # }
 /// # let connection_channel = CC;
 ///
@@ -2024,7 +2024,7 @@ mod tests {
     impl ConnectionChannel for TestChannel {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut;
-        type SendFutErr = usize;
+        type SendErr = usize;
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut where Self: 'a,;
 
@@ -2048,7 +2048,7 @@ mod tests {
             bo_tie_l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&mut self) -> Self::RecvFut<'_> {
+        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
             unimplemented!()
         }
     }
@@ -2171,7 +2171,7 @@ mod tests {
     where
         C: ConnectionChannel + Send,
         <C::RecvBuffer as TryExtend<u8>>::Error: Send,
-        C::SendFutErr: Send,
+        C::SendErr: Send,
         for<'a> C::SendFut<'a>: Send,
     {
         let gap = GapServiceBuilder::new("dev", None);

@@ -12,22 +12,20 @@ mod send_future;
 
 use crate::channels::ChannelIdentifier;
 pub use basic_frame::BasicFrame;
-use bo_tie_core::buffer::TryExtend;
 pub(crate) use control_frame::ControlFrame;
 pub use control_frame::ControlFrameError;
-pub use send_future::BufferedFragmentsFuture;
+pub use send_future::{SendBufferedFuture, SendFuture};
 
 /// L2CAP PDU Fragmentation
 ///
 /// The purpose of this trait is to facilitate fragmentation for protocols **below** L2CAP.
-pub trait FragmentL2capPdu {
-    type DataIter<'a>: Iterator<Item = u8>
-    where
-        Self: 'a;
-
-    type FragmentIterator<'a>: Iterator<Item = Self::DataIter<'a>>
-    where
-        Self: 'a;
+pub trait FragmentL2capPdu: Sized {
+    /// Type for iterating over fragments
+    ///
+    /// This type is an iterator of iterators. Each output of this iterator is a complete fragment,
+    /// in iterator form, of the whole PDU. Fragments are output in the order of least significant
+    /// to most significant fragment.
+    type FragmentIterator: FragmentIterator;
 
     /// Create fragments of this L2CAP PDU
     ///
@@ -42,7 +40,40 @@ pub trait FragmentL2capPdu {
     /// 2) The payload within is L2CAP PDU is larger than the maximum transfer size for the L2CAP
     ///    PDU. This error occurs as the length of the payload may not be validated until this
     ///    method is called.
-    fn as_fragments(&self, fragmentation_size: usize) -> Result<Self::FragmentIterator<'_>, FragmentationError>;
+    fn into_fragments(self, fragmentation_size: usize) -> Result<Self::FragmentIterator, FragmentationError>;
+}
+
+pub trait FragmentL2capPduExt: FragmentL2capPdu {
+    /// Convert this into a `Vec`
+    ///
+    /// This converts this PDU into the returned `Vec`. The bytes within the `Vec` will be in the
+    /// correct format for transmission to a connected device.
+    fn into_vec(self) -> Vec<u8> {
+        let mut vec = Vec::new();
+
+        let mut iter = self.into_fragments(<u16>::MAX as usize).unwrap();
+
+        while let Some(fragment) = iter.next() {
+            vec.extend(fragment)
+        }
+
+        vec
+    }
+}
+
+impl<T> FragmentL2capPduExt for T where T: FragmentL2capPdu {}
+
+/// Trait for iterating over fragments of a PDU
+///
+/// See type [`FragmentIterator`] of `FragmentL2capPdu`
+///
+/// [`FragmentIterator`]: FragmentL2capPdu::FragmentIterator
+pub trait FragmentIterator {
+    type Item<'a>: Iterator<Item = u8>
+    where
+        Self: 'a;
+
+    fn next(&mut self) -> Option<Self::Item<'_>>;
 }
 
 /// L2CAP PDU Recombination
@@ -89,57 +120,6 @@ pub trait RecombineL2capPdu {
         Self: Sized,
         T: Iterator<Item = u8> + ExactSizeIterator;
 }
-
-/// Extension traits of [`FragmentL2capPdu`]
-pub trait FragmentL2capPduExt: FragmentL2capPdu {
-    /// Fragment the L2CAP PDU(s) with buffers.
-    ///
-    /// This is used to fragment a single L2CAP PDU (not the SDU) into a size that can be handled by
-    /// a lower layer, which is usually Controller. The information payload can be up to 65535
-    /// octets (a.k.a 2^16 - 1) which is generally much greater than even the total buffer space
-    /// within the Controller.
-    ///
-    /// `into_fragments` returns a future for converting this into fragments the size of which
-    /// are specified by the input `fragmentation_size`. Fragments are placed into self-resolving
-    /// buffers acquired from the input `buffers_iterator`. Each buffer is filled with the data of
-    /// this `BasicInfoFrame` and then self-resolved before the next buffer is acquired.
-    ///
-    /// # Buffering
-    /// As fragments cannot be stored within the implementation of `L2capPdu`, they must be placed
-    /// within a buffer provided by the callee. When a new fragment is ready to be sent, it is
-    /// placed within an buffer acquired by the called of `info_fragments`. These buffers may come
-    /// from a finite pool of buffers and the method is implemented to await until one is available.
-    ///
-    /// Buffer awaiting is done via the `buffers_iterator`. `buffers_iterator` must be an endlessly
-    /// repeating iterator over futures used for acquiring a buffer. The purpose of the future is
-    /// for awaiting when there are no buffers currently available. This can occur on systems that
-    /// have finite number of buffers available to be used by multiple connections.
-    ///
-    /// The buffer type (which is the generic `C`) is self completing. Once a buffer is acquired, it
-    /// is filled with bytes until either it returns an error when trying to extend (via its
-    /// implementation of [`TryExtend`]) or the number of bytes within it is equal to
-    /// `fragmentation_size`. The buffer is then self-resolved by converted it into a future with is
-    /// awaited until it is polled to completion. Within `bo-tie` this future is used for sending
-    /// the data to the connected device, but this is outside the scope of `into_fragments` so there
-    /// is no requirement that this is what the future must do.
-    fn send_as_fragments<I, F, C, E>(
-        &self,
-        fragmentation_size: usize,
-        buffers_iterator: I,
-    ) -> Result<
-        BufferedFragmentsFuture<Self::FragmentIterator<'_>, Self::DataIter<'_>, I::IntoIter, F, C::IntoFuture>,
-        FragmentationError,
-    >
-    where
-        I: IntoIterator<Item = F>,
-        F: core::future::Future<Output = C>,
-        C: TryExtend<u8> + core::future::IntoFuture<Output = Result<(), E>>,
-    {
-        BufferedFragmentsFuture::new(fragmentation_size, self, buffers_iterator)
-    }
-}
-
-impl<T> FragmentL2capPduExt for T where T: FragmentL2capPdu {}
 
 /// L2CAP Service Data Unit (SDU) Fragmentation
 ///

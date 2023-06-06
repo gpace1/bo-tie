@@ -365,14 +365,14 @@ impl From<TransferFormatError> for Error {
 pub enum ConnectionError<C: bo_tie_l2cap::ConnectionChannel> {
     AttError(Error),
     RecvError(bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>),
-    SendError(bo_tie_l2cap::send_future::Error<C::SendFutErr>),
+    SendError(bo_tie_l2cap::send_future::Error<C::SendErr>),
 }
 
 impl<C> PartialEq for ConnectionError<C>
 where
     C: bo_tie_l2cap::ConnectionChannel,
     <C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error: PartialEq,
-    C::SendFutErr: PartialEq,
+    C::SendErr: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         use ConnectionError::*;
@@ -401,8 +401,8 @@ impl<C: bo_tie_l2cap::ConnectionChannel>
     }
 }
 
-impl<C: bo_tie_l2cap::ConnectionChannel> From<bo_tie_l2cap::send_future::Error<C::SendFutErr>> for ConnectionError<C> {
-    fn from(e: bo_tie_l2cap::send_future::Error<C::SendFutErr>) -> Self {
+impl<C: bo_tie_l2cap::ConnectionChannel> From<bo_tie_l2cap::send_future::Error<C::SendErr>> for ConnectionError<C> {
+    fn from(e: bo_tie_l2cap::send_future::Error<C::SendErr>) -> Self {
         Self::SendError(e)
     }
 }
@@ -1073,7 +1073,7 @@ mod test {
     impl bo_tie_l2cap::ConnectionChannel for Channel1 {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut<1>;
-        type SendFutErr = usize;
+        type SendErr = usize;
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<2>;
 
@@ -1095,7 +1095,7 @@ mod test {
             bo_tie_l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&mut self) -> Self::RecvFut<'_> {
+        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
             DummyRecvFut(self.two_way.clone())
         }
     }
@@ -1103,7 +1103,7 @@ mod test {
     impl bo_tie_l2cap::ConnectionChannel for Channel2 {
         type SendBuffer = DeVec<u8>;
         type SendFut<'a> = DummySendFut<2>;
-        type SendFutErr = usize;
+        type SendErr = usize;
         type RecvBuffer = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<1>;
 
@@ -1125,7 +1125,7 @@ mod test {
             bo_tie_l2cap::LeU::MIN_MTU
         }
 
-        fn receive(&mut self) -> Self::RecvFut<'_> {
+        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
             DummyRecvFut(self.two_way.clone())
         }
     }

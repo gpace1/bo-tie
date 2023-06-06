@@ -106,7 +106,7 @@ where
     type LogicalLink = bo_tie_l2cap::LeU;
     type SendBuffer = C::ToBuffer;
     type SendFut<'a> = ConnectionChannelSender<'a, C> where Self: 'a;
-    type SendFutErr = <C::Sender as bo_tie_hci_util::Sender>::Error;
+    type SendErr = <C::Sender as bo_tie_hci_util::Sender>::Error;
     type RecvBuffer = C::FromBuffer;
     type RecvFut<'a> = AclReceiverMap<'a, C> where Self: 'a;
 
@@ -154,7 +154,7 @@ where
         bo_tie_l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&mut self) -> Self::RecvFut<'_> {
+    fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
         AclReceiverMap {
             receiver: self.channel_ends.get_mut_data_receiver(),
             _p: core::marker::PhantomData,

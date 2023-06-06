@@ -42,10 +42,9 @@ impl<T> FragmentL2capPdu for BasicFrame<T>
 where
     T: core::ops::Deref<Target = [u8]>,
 {
-    type DataIter<'a> = DataIter<'a, T> where Self: 'a;
-    type FragmentIterator<'a> = FragmentationIterator<'a, T> where Self: 'a;
+    type FragmentIterator = FragmentationIterator<T>;
 
-    fn as_fragments(&self, fragmentation_size: usize) -> Result<Self::FragmentIterator<'_>, FragmentationError> {
+    fn into_fragments(self, fragmentation_size: usize) -> Result<Self::FragmentIterator, FragmentationError> {
         if fragmentation_size == 0 {
             Err(FragmentationError::FragmentationSizeIsZero)
         } else if self.payload.len() <= <u16>::MAX.into() {
@@ -183,14 +182,14 @@ impl BasicFrameError<core::convert::Infallible> {
     }
 }
 
-pub struct FragmentationIterator<'a, T> {
-    b_frame: &'a BasicFrame<T>,
+pub struct FragmentationIterator<T> {
+    b_frame: BasicFrame<T>,
     fragmentation_size: usize,
     offset: usize,
 }
 
-impl<'a, T> FragmentationIterator<'a, T> {
-    fn new(b_frame: &'a BasicFrame<T>, fragmentation_size: usize) -> Self {
+impl<T> FragmentationIterator<T> {
+    fn new(b_frame: BasicFrame<T>, fragmentation_size: usize) -> Self {
         let offset = 0;
 
         Self {
@@ -201,16 +200,16 @@ impl<'a, T> FragmentationIterator<'a, T> {
     }
 }
 
-impl<'a, T> Iterator for FragmentationIterator<'a, T>
+impl<T> crate::pdu::FragmentIterator for FragmentationIterator<T>
 where
     T: core::ops::Deref<Target = [u8]>,
 {
-    type Item = DataIter<'a, T>;
+    type Item<'a> = DataIter<'a, T> where Self: 'a;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<Self::Item<'_>> {
         (self.offset < self.b_frame.get_payload().len() + BasicFrame::<T>::HEADER_SIZE).then(|| {
             let data_iter = DataIter {
-                b_frame: self.b_frame,
+                b_frame: &self.b_frame,
                 fragmentation_size: self.fragmentation_size,
                 offset: self.offset,
                 byte: 0,

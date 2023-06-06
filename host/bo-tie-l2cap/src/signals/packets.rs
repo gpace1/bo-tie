@@ -1,6 +1,7 @@
 //! Definitions of L2CAP signaling packets
 
 use crate::channels::ChannelIdentifier;
+use crate::pdu::{ControlFrame, FragmentL2capPdu};
 use crate::signals::{SignalError, TryIntoSignal};
 use bo_tie_core::buffer::TryExtend;
 use core::fmt::{self, Display, Formatter};
@@ -339,23 +340,22 @@ impl CommandRejectResponse {
         6 + self.data.len()
     }
 
-    /// Convert this `CommandRejectResponse` into a C-frame for an ACL-U logic link
-    ///
-    /// This creates a packet containing a command reject response for the specified signalling
-    /// channel. The return is a complete L2CAP control frame packet contained within the type `P`.
-    ///
-    /// # Panics
-    /// * `P` must be type that can contain at least ten bytes of data.
-    pub fn into_acl_u_packet<P>(self) -> P
-    where
-        P: TryExtend<u8> + Default,
-    {
-        crate::pdu::ControlFrame::new_acl(CmdRejectRspIter::new(&self)).into_packet()
+    // /// Convert this `CommandRejectResponse` into a C-frame for an ACL-U logic link
+    // pub(crate) fn as_acl_control_frame(&self) -> impl FragmentL2capPdu + '_ {
+    //     ControlFrame::new_acl(IntoCmdRejectRspIter(self))
+    // }
+
+    /// Convert this `CommandRejectResponse` into a C-frame for a LE-U logic link
+    pub(crate) fn as_le_control_frame(&self) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new_acl(IntoCmdRejectRspIter(self))
     }
 
-    /// Try to create a `CommandRejectResponse` from a C-frame
-    pub fn try_from_control_frame(frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
-        crate::pdu::ControlFrame::try_from_slice(frame)
+    /// Try to create a `CommandRejectResponse` from raw L2CAP data.
+    pub fn try_from_raw_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    where
+        L: crate::private::Link,
+    {
+        ControlFrame::try_from_slice(data)
     }
 }
 
@@ -407,6 +407,17 @@ impl TryIntoSignal for CommandRejectResponse {
     }
 }
 
+struct IntoCmdRejectRspIter<'a>(&'a CommandRejectResponse);
+
+impl<'a> IntoIterator for IntoCmdRejectRspIter<'a> {
+    type Item = u8;
+    type IntoIter = CmdRejectRspIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        CmdRejectRspIter::new(self.0)
+    }
+}
+
 struct CmdRejectRspIter<'a> {
     reject: &'a CommandRejectResponse,
     pos: usize,
@@ -445,7 +456,7 @@ impl Iterator for CmdRejectRspIter<'_> {
 
 impl ExactSizeIterator for CmdRejectRspIter<'_> {
     fn len(&self) -> usize {
-        5 + self.reject.data.len()
+        (6 + self.reject.data.len()).checked_sub(self.pos).unwrap_or_default()
     }
 }
 
@@ -635,7 +646,7 @@ impl Iterator for LeCreditRequestIter<'_> {
 
 impl ExactSizeIterator for LeCreditRequestIter<'_> {
     fn len(&self) -> usize {
-        14
+        14usize.checked_sub(self.pos).unwrap_or_default()
     }
 }
 
@@ -717,16 +728,13 @@ impl LeCreditBasedConnectionResponse {
     }
 
     /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
-    pub fn into_packet<P>(self) -> P
-    where
-        P: TryExtend<u8> + Default,
-    {
-        crate::pdu::ControlFrame::new_le(LeCreditResponseIter::new(&self)).into_packet()
+    pub fn as_control_frame(&self) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new_le(IntoLeCreditResponseIter(self))
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
     pub fn try_from_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
-        crate::pdu::ControlFrame::try_from_slice(c_frame)
+        ControlFrame::try_from_slice(c_frame)
     }
 }
 
@@ -807,6 +815,17 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
     }
 }
 
+struct IntoLeCreditResponseIter<'a>(&'a LeCreditBasedConnectionResponse);
+
+impl<'a> IntoIterator for IntoLeCreditResponseIter<'a> {
+    type Item = u8;
+    type IntoIter = LeCreditResponseIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LeCreditResponseIter::new(self.0)
+    }
+}
+
 struct LeCreditResponseIter<'a> {
     rsp: &'a LeCreditBasedConnectionResponse,
     pos: usize,
@@ -862,7 +881,7 @@ impl Iterator for LeCreditResponseIter<'_> {
 
 impl ExactSizeIterator for LeCreditResponseIter<'_> {
     fn len(&self) -> usize {
-        14
+        14usize.checked_sub(self.pos).unwrap_or_default()
     }
 }
 
@@ -1004,6 +1023,6 @@ impl Iterator for FlowControlCreditIndIter<'_> {
 
 impl ExactSizeIterator for FlowControlCreditIndIter<'_> {
     fn len(&self) -> usize {
-        14
+        14usize.checked_sub(self.pos).unwrap_or_default()
     }
 }

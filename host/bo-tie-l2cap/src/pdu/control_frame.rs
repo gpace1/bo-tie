@@ -1,33 +1,32 @@
 //! L2CAP control frame implementation
 
 use crate::channels::ChannelIdentifier;
-use crate::pdu::{FragmentL2capPdu, FragmentationError, RecombineL2capPdu};
+use crate::pdu::{FragmentIterator, FragmentL2capPdu, FragmentationError, RecombineL2capPdu};
 use bo_tie_core::buffer::TryExtend;
+use std::num::{NonZeroU16, NonZeroU8};
 
 /// Control Frame
 ///
 /// Control frames (C-frames) are used for sending signaling packets between two devices connected
 /// via L2CAP. A `ControlFrame` can be created from one of the signaling data types within the
 /// [`signals`] module.
-pub struct ControlFrame<T> {
+pub(crate) struct ControlFrame<T> {
     channel_id: ChannelIdentifier,
     payload: T,
 }
 
 impl<T> ControlFrame<T> {
-    const HEADER_SIZE: usize = 4;
+    pub const HEADER_SIZE: usize = 4;
 
     /// Create a new `ControlFrame` for an ACL-U connection
-    pub(crate) fn new_acl(payload: T) -> Self {
+    pub fn new_acl(payload: T) -> Self {
         let channel_id = ChannelIdentifier::Acl(crate::channels::AclCid::SignalingChannel);
-
         ControlFrame { channel_id, payload }
     }
 
     /// Create a new `ControlFrame` for a LE-U connection
-    pub(crate) fn new_le(payload: T) -> Self {
+    pub fn new_le(payload: T) -> Self {
         let channel_id = ChannelIdentifier::Le(crate::channels::LeCid::LeSignalingChannel);
-
         ControlFrame { channel_id, payload }
     }
 
@@ -40,7 +39,7 @@ impl<T> ControlFrame<T> {
     /// If not then this method may panic when trying to create a packet. See the *signaling packets
     /// formats* section of the *Logical Link Control and Adaption Protocol* part of the *Host*
     /// volume for the minimum required supported buffer size of `P`.
-    pub(crate) fn into_packet<P>(self) -> P
+    pub fn into_packet<P>(self) -> P
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
@@ -71,7 +70,7 @@ impl<T> ControlFrame<T> {
     /// * The length field in the input `data` must be less than or equal to the length of the
     ///   payload field. Any bytes beyond the payload in `data` are ignored.
     /// * The channel id field must be valid for the signaling message.
-    pub(crate) fn try_from_slice(data: &[u8]) -> Result<T, ControlFrameError>
+    pub fn try_from_slice(data: &[u8]) -> Result<T, ControlFrameError>
     where
         T: crate::signals::TryIntoSignal,
     {
@@ -95,12 +94,12 @@ impl<T> ControlFrame<T> {
 
 impl<T> FragmentL2capPdu for ControlFrame<T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: IntoIterator<Item = u8>,
+    T::IntoIter: ExactSizeIterator,
 {
-    type DataIter<'a> = DataIter<'a, T> where Self: 'a;
-    type FragmentIterator<'a> = FragmentationIterator<'a, T> where Self: 'a;
+    type FragmentIterator = FragmentationIterator<T::IntoIter>;
 
-    fn as_fragments(&self, fragmentation_size: usize) -> Result<Self::FragmentIterator<'_>, FragmentationError> {
+    fn into_fragments(self, fragmentation_size: usize) -> Result<Self::FragmentIterator, FragmentationError> {
         if fragmentation_size == 0 {
             Err(FragmentationError::FragmentationSizeIsZero)
         } else {
@@ -142,8 +141,13 @@ pub enum ControlFrameError {
     RawDataTooSmall,
     /// Specified payload length didn't match the actual payload length
     PayloadLengthIncorrect,
-    /// Invalid Channel Id
     InvalidChannelId,
+    /// Invalid Channel Ids used for Connection
+    InvalidChannelConnectionIds {
+        id: NonZeroU8,
+        local: Option<NonZeroU16>,
+        source: Option<NonZeroU16>,
+    },
     /// Signal Conversion Error
     SignalError(crate::signals::SignalError),
 }
@@ -155,7 +159,37 @@ impl core::fmt::Display for ControlFrameError {
             ControlFrameError::PayloadLengthIncorrect => {
                 write!(f, "the payload length field didn't match the actual payload length")
             }
-            ControlFrameError::InvalidChannelId => write!(f, "invalid channel id"),
+            ControlFrameError::InvalidChannelId => f.write_str("invalid channel id"),
+            ControlFrameError::InvalidChannelConnectionIds {
+                id,
+                local: Some(local),
+                source: Some(source),
+            } => write!(
+                f,
+                "invalid local ({}) and/or source ({}) channel ids for signal with identifier {}",
+                local, source, id
+            ),
+            ControlFrameError::InvalidChannelConnectionIds {
+                id, local: Some(local), ..
+            } => {
+                write!(
+                    f,
+                    "invalid local ({}) channel id for signal with identifier {}",
+                    local, id
+                )
+            }
+            ControlFrameError::InvalidChannelConnectionIds {
+                id,
+                source: Some(source),
+                ..
+            } => write!(
+                f,
+                "invalid source ({}) channel id for signal with identifier {}",
+                source, id
+            ),
+            ControlFrameError::InvalidChannelConnectionIds { id, .. } => {
+                write!(f, "invalid channel ids for signal with identifier {}", id)
+            }
             ControlFrameError::SignalError(e) => write!(f, "cannot convert control frame to signal, {}", e),
         }
     }
@@ -164,34 +198,45 @@ impl core::fmt::Display for ControlFrameError {
 #[cfg(feature = "std")]
 impl std::error::Error for ControlFrameError {}
 
-pub struct FragmentationIterator<'a, T> {
-    c_frame: &'a ControlFrame<T>,
+pub struct FragmentationIterator<T> {
+    iterator: T,
+    channel_id: ChannelIdentifier,
     fragmentation_size: usize,
     offset: usize,
 }
 
-impl<'a, T> FragmentationIterator<'a, T> {
-    fn new(c_frame: &'a ControlFrame<T>, fragmentation_size: usize) -> Self {
+impl<T> FragmentationIterator<T> {
+    fn new<C>(c_frame: ControlFrame<C>, fragmentation_size: usize) -> Self
+    where
+        T: Iterator,
+        C: IntoIterator<IntoIter = T>,
+    {
+        let iterator = c_frame.payload.into_iter();
+
         let offset = 0;
 
+        let channel_id = c_frame.channel_id;
+
         Self {
-            c_frame,
+            iterator,
+            channel_id,
             fragmentation_size,
             offset,
         }
     }
 }
 
-impl<'a, T> Iterator for FragmentationIterator<'a, T>
+impl<T> FragmentIterator for FragmentationIterator<T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8> + ExactSizeIterator,
 {
-    type Item = DataIter<'a, T>;
+    type Item<'a> = DataIter<'a, T> where Self: 'a;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        (self.offset < self.c_frame.payload.len() + ControlFrame::<T>::HEADER_SIZE).then(|| {
+    fn next(&mut self) -> Option<Self::Item<'_>> {
+        (self.iterator.len() != 0).then(|| {
             let data_iter = DataIter {
-                c_frame: self.c_frame,
+                channel_id: self.channel_id,
+                iterator: &mut self.iterator,
                 fragmentation_size: self.fragmentation_size,
                 offset: self.offset,
                 byte: 0,
@@ -205,7 +250,8 @@ where
 }
 
 pub struct DataIter<'a, T> {
-    c_frame: &'a ControlFrame<T>,
+    channel_id: ChannelIdentifier,
+    iterator: &'a mut T,
     fragmentation_size: usize,
     offset: usize,
     byte: usize,
@@ -213,7 +259,7 @@ pub struct DataIter<'a, T> {
 
 impl<T> Iterator for DataIter<'_, T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8> + ExactSizeIterator,
 {
     type Item = u8;
 
@@ -227,11 +273,11 @@ where
         self.byte += 1;
 
         match self.offset + current_byte {
-            0 => Some((self.c_frame.payload.len() as u16).to_le_bytes()[0]),
-            1 => Some((self.c_frame.payload.len() as u16).to_le_bytes()[1]),
-            2 => Some(self.c_frame.channel_id.to_val().to_le_bytes()[0]),
-            3 => Some(self.c_frame.channel_id.to_val().to_le_bytes()[1]),
-            i => self.c_frame.payload.get(i - ControlFrame::<T>::HEADER_SIZE).copied(),
+            0 => Some((self.iterator.len() as u16).to_le_bytes()[0]),
+            1 => Some((self.iterator.len() as u16).to_le_bytes()[1]),
+            2 => Some(self.channel_id.to_val().to_le_bytes()[0]),
+            3 => Some(self.channel_id.to_val().to_le_bytes()[1]),
+            _ => self.iterator.next(),
         }
     }
 }

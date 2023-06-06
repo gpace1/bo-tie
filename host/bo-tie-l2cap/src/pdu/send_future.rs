@@ -4,109 +4,115 @@
 //! the MTU of the connection or the Controller's maximum data transfer size (probably specified
 //! within the HCI).
 
+use crate::pdu::FragmentIterator;
+use crate::ConnectionChannel;
+use alloc::boxed::Box;
 use core::future::Future;
 use core::pin::Pin;
-use core::task::{Context, Poll};
+use std::future::IntoFuture;
 
-const BUFFERS_EXPECT: &'static str = "input 'buffers' returned None";
-
-pub struct BufferedFragmentsFuture<T, D, B, F, S> {
-    fragments_iter: T,
-    data_iter: Option<D>,
-    buffer_iter: B,
-    state: State<F, S>,
+/// Future for sending a PDU
+pub struct SendFuture<'a, C: ?Sized, P> {
+    connection_channel: &'a C,
+    pdu: P,
 }
 
-impl<T, D, B, F, S> BufferedFragmentsFuture<T, D, B, F, S> {
-    pub fn new<'a, I, P, C>(
-        fragmentation_size: usize,
-        pdu: &'a P,
-        buffers: I,
-    ) -> Result<Self, crate::pdu::FragmentationError>
-    where
-        T: Iterator<Item = D> + 'a,
-        D: 'a,
-        I: IntoIterator<IntoIter = B>,
-        B: Iterator<Item = F>,
-        F: Future<Output = C>,
-        P: crate::pdu::FragmentL2capPdu<FragmentIterator<'a> = T, DataIter<'a> = D> + ?Sized,
-    {
-        assert_ne!(fragmentation_size, 0, "the size of a fragment cannot be zero");
-
-        let mut fragments_iter = pdu.as_fragments(fragmentation_size)?;
-
-        let data_iter = fragments_iter.next();
-
-        let mut buffer_iter = buffers.into_iter();
-
-        let first_buffer = buffer_iter.next().expect("failed to acquire buffer future");
-
-        let state = if data_iter.is_some() {
-            State::AcquireBuffer(first_buffer)
-        } else {
-            State::Complete // ¯\_(ツ)_/¯
-        };
-
-        Ok(Self {
-            fragments_iter,
-            data_iter,
-            buffer_iter,
-            state,
-        })
-    }
-}
-
-impl<T, D, B, F, C, E> Future for BufferedFragmentsFuture<T, D, B, F, C::IntoFuture>
-where
-    T: Iterator<Item = D>,
-    D: Iterator<Item = u8>,
-    B: Iterator<Item = F>,
-    F: Future<Output = C>,
-    C: crate::TryExtend<u8> + core::future::IntoFuture<Output = Result<(), E>>,
-{
-    type Output = Result<(), E>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // No generics except for F and C are moved. Using `get_unchecked_mut`
-        // is safe because both types F and C are moved only before they have
-        // been polled and are dropped once they have polled to completion.
-
-        let this = unsafe { self.get_unchecked_mut() };
-
-        loop {
-            match &mut this.state {
-                State::AcquireBuffer(future) => match unsafe { Pin::new_unchecked(future) }.poll(cx) {
-                    Poll::Ready(mut current) => {
-                        current
-                            .try_extend(this.data_iter.as_mut().into_iter().flatten())
-                            .expect("buffer is too small for fragment");
-
-                        this.state = State::FinishCurrent(current.into_future())
-                    }
-                    Poll::Pending => break Poll::Pending,
-                },
-                State::FinishCurrent(current) => match unsafe { Pin::new_unchecked(current) }.poll(cx)? {
-                    Poll::Ready(_) => match this.fragments_iter.next() {
-                        None => this.state = State::Complete,
-                        data_iter => {
-                            let future = this.buffer_iter.next().expect(BUFFERS_EXPECT);
-
-                            this.data_iter = data_iter;
-
-                            this.state = State::AcquireBuffer(future);
-                        }
-                    },
-                    Poll::Pending => break Poll::Pending,
-                },
-                State::Complete => break Poll::Ready(Ok(())),
-            }
+impl<'a, C: ?Sized, P> SendFuture<'a, C, P> {
+    pub(crate) fn new(connection_channel: &'a C, pdu: P) -> Self {
+        SendFuture {
+            connection_channel,
+            pdu,
         }
     }
 }
 
-/// States used to describe the current operation when polling a `AsSlicedPacketFuture`
-enum State<F, S> {
-    AcquireBuffer(F),
-    FinishCurrent(S),
-    Complete,
+impl<'a, C, P> IntoFuture for SendFuture<'a, C, P>
+where
+    C: ConnectionChannel + ?Sized,
+    P: crate::pdu::FragmentL2capPdu + 'a,
+{
+    type Output = Result<(), C::SendErr>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let future = async move {
+            let mut is_first = true;
+
+            let mut fragments_iter = self
+                .pdu
+                .into_fragments(self.connection_channel.fragmentation_size())
+                .unwrap();
+
+            while let Some(data) = fragments_iter.next() {
+                let fragment = crate::L2capFragment::new(is_first, data);
+
+                is_first = false;
+
+                self.connection_channel.send_fragment(fragment).await?;
+            }
+
+            Ok(())
+        };
+
+        Box::pin(future)
+    }
+}
+
+/// Future for sending a PDU in buffers
+///
+/// This is returned by the method [`send_buffered`].
+///
+/// [`send`]: crate::ConnectionChannelExt::send
+pub struct SendBufferedFuture<T, B> {
+    fragments_iter: T,
+    buffer_iter: B,
+}
+
+impl<T, B> SendBufferedFuture<T, B> {
+    pub fn new<P, D>(fragmentation_size: usize, pdu: P, buffers: D) -> Result<Self, crate::pdu::FragmentationError>
+    where
+        P: crate::pdu::FragmentL2capPdu<FragmentIterator = T> + ?Sized,
+        D: IntoIterator<IntoIter = B>,
+    {
+        assert_ne!(fragmentation_size, 0, "the size of a fragment cannot be zero");
+
+        let mut fragments_iter = pdu.into_fragments(fragmentation_size)?;
+
+        let mut buffer_iter = buffers.into_iter();
+
+        Ok(Self {
+            fragments_iter,
+            buffer_iter,
+        })
+    }
+}
+
+impl<T, D, B, F, C, E> IntoFuture for SendBufferedFuture<T, B>
+where
+    T: Iterator<Item = D> + 'static,
+    D: Iterator<Item = u8>,
+    B: Iterator<Item = F> + 'static,
+    F: Future<Output = C>,
+    C: crate::TryExtend<u8> + IntoFuture<Output = Result<(), E>>,
+{
+    type Output = Result<(), E>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output>>>;
+
+    fn into_future(mut self) -> Self::IntoFuture {
+        let future = async move {
+            for fragment in self.fragments_iter {
+                let mut buffer = self.buffer_iter.next().unwrap().await;
+
+                buffer
+                    .try_extend(fragment.into_iter())
+                    .expect("buffer is too small for fragment");
+
+                buffer.into_future().await?;
+            }
+
+            Ok(())
+        };
+
+        Box::pin(future)
+    }
 }

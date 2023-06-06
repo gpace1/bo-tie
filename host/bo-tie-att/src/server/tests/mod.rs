@@ -49,7 +49,7 @@ impl Future for DummyRecvFut {
 impl ConnectionChannel for DummyConnection {
     type SendBuffer = DeVec<u8>;
     type SendFut<'a> = DummySendFut;
-    type SendFutErr = usize;
+    type SendErr = usize;
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
@@ -73,7 +73,7 @@ impl ConnectionChannel for DummyConnection {
         bo_tie_l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&mut self) -> Self::RecvFut<'_> {
+    fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
         DummyRecvFut
     }
 }
@@ -87,7 +87,7 @@ struct PayloadConnection {
 impl ConnectionChannel for PayloadConnection {
     type SendBuffer = DeVec<u8>;
     type SendFut<'a> = DummySendFut;
-    type SendFutErr = usize;
+    type SendErr = usize;
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
@@ -113,7 +113,7 @@ impl ConnectionChannel for PayloadConnection {
         bo_tie_l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&mut self) -> Self::RecvFut<'_> {
+    fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
         DummyRecvFut
     }
 }
@@ -129,7 +129,7 @@ fn send_test<C>(mut c: C)
 where
     C: ConnectionChannel + Send,
     <C::RecvBuffer as TryExtend<u8>>::Error: Send,
-    C::SendFutErr: Send,
+    C::SendErr: Send,
     for<'a> C::SendFut<'a>: Send,
 {
     let attributes = ServerAttributes::new();

@@ -35,7 +35,7 @@ impl SendWatchConnection {
 impl ConnectionChannel for SendWatchConnection {
     type SendBuffer = DeVec<u8>;
     type SendFut<'a> = DummySendFut;
-    type SendFutErr = usize;
+    type SendErr = usize;
     type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
 
@@ -89,7 +89,7 @@ impl ConnectionChannel for SendWatchConnection {
         bo_tie_l2cap::LeU::MIN_MTU
     }
 
-    fn receive(&mut self) -> Self::RecvFut<'_> {
+    fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
         DummyRecvFut
     }
 }

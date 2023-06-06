@@ -1,7 +1,19 @@
 //! Processing of Received Signals
 
+use crate::pdu::FragmentL2capPdu;
 use crate::signals::packets;
+use crate::signals::packets::{CommandRejectResponse, LeCreditBasedConnectionResponse};
+use crate::ConnectionChannel;
 use std::num::NonZeroU8;
+
+/// The minimum MTU for a credit based frame
+const MIN_LE_CREDIT_MTU: u16 = 23;
+
+/// The minimum MPS for a credit based frame
+const MIN_LE_CREDIT_MPS: u16 = 23;
+
+/// The maximum MPS for a credit based frame
+const MAX_LE_CREDIT_MPS: u16 = 25533;
 
 /// Signals Processor
 pub struct SignalsProcessor {
@@ -9,46 +21,87 @@ pub struct SignalsProcessor {
     identifier: NonZeroU8,
 }
 
+macro_rules! invalid_cid_response {
+    ($id:expr, $local:expr, $source:expr) => {
+        CommandRejectResponse::new_invalid_cid_in_request(
+            $id,
+            $local.map(|l| l.get()).unwrap_or_default(),
+            $source.map(|s| s.get()).unwrap_or_default(),
+        )
+    };
+}
 impl SignalsProcessor {
     pub fn builder() -> SignalsProcessorBuilder {
         SignalsProcessorBuilder::new()
     }
 
-    pub fn process<C>(&mut self, connection_channel: &C, control_frame: &[u8]) -> SignalProcessResult
+    fn send<C, T>(&mut self, connection_channel: &C, signal: T)
+    where
+        C: ConnectionChannel,
+        T: FragmentL2capPdu,
+    {
+    }
+
+    pub async fn process<C>(
+        &mut self,
+        connection_channel: &C,
+        control_frame: &[u8],
+    ) -> Result<SignalProcessResult, C::SendErr>
     where
         C: crate::ConnectionChannel,
     {
         match control_frame.get(0) {
             Some(&packets::LeCreditBasedConnectionRequest::CODE) => {
                 self.process_le_credit_based_connection(connection_channel, control_frame)
+                    .await
             }
-            _ => SignalProcessResult::Ignore,
+            _ => Ok(SignalProcessResult::Ignore),
         }
     }
 
-    fn process_le_credit_based_connection<C>(
+    async fn process_le_credit_based_connection<C>(
         &mut self,
         connection_channel: &C,
         control_frame: &[u8],
-    ) -> SignalProcessResult
+    ) -> Result<SignalProcessResult, C::SendErr>
     where
         C: crate::ConnectionChannel,
     {
-        if let Ok(signal) = packets::LeCreditBasedConnectionRequest::try_from_control_frame(control_frame) {
-            let response = packets::LeCreditBasedConnectionResponse {
-                identifier: self.identifier,
-                destination_dyn_cid: signal.source_dyn_cid,
-                mtu: signal.mtu,
-                mps: signal.mps,
-                initial_credits: 0,
-                result: Ok(()),
-            };
+        use crate::ConnectionChannelExt;
 
-            todo!();
+        match packets::LeCreditBasedConnectionRequest::try_from_control_frame(control_frame) {
+            Ok(request) => {
+                // If any of these conditions are false, the request is ignored
+                if request.mtu >= MIN_LE_CREDIT_MTU
+                    && request.mps >= MIN_LE_CREDIT_MPS
+                    && request.mps <= MAX_LE_CREDIT_MPS
+                {
+                    let response = packets::LeCreditBasedConnectionResponse {
+                        identifier: self.identifier,
+                        destination_dyn_cid: request.source_dyn_cid,
+                        mtu: request.mtu,
+                        mps: request.mps,
+                        initial_credits: 0,
+                        result: Ok(()),
+                    };
 
-            SignalProcessResult::Ignore
-        } else {
-            SignalProcessResult::Ignore
+                    let le_credit_connection = LeCreditConnection::new(&response);
+
+                    connection_channel.send(response.as_control_frame()).await?;
+
+                    Ok(SignalProcessResult::LeCreditConnection(le_credit_connection))
+                } else {
+                    Ok(SignalProcessResult::Ignore)
+                }
+            }
+            Err(crate::pdu::ControlFrameError::InvalidChannelConnectionIds { id, local, source }) => {
+                connection_channel
+                    .send(invalid_cid_response!(id, local, source).as_le_control_frame())
+                    .await?;
+
+                Ok(SignalProcessResult::Ignore)
+            }
+            _ => Ok(SignalProcessResult::Ignore),
         }
     }
 }
@@ -117,3 +170,9 @@ pub enum CreditKind {
 ///
 /// A credit based connection needs to monitor
 pub struct LeCreditConnection;
+
+impl LeCreditConnection {
+    fn new(response: &LeCreditBasedConnectionResponse) -> Self {
+        Self
+    }
+}

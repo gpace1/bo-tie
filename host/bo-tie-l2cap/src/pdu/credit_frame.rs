@@ -10,7 +10,7 @@
 //! allocated channel for the connection, the number of credits, and the MTU of the SDU.
 
 use crate::channels::ChannelIdentifier;
-use crate::pdu::{FragmentL2capPdu, FragmentationError, PacketsError, RecombineL2capPdu};
+use crate::pdu::{FragmentIterator, FragmentL2capPdu, FragmentationError, PacketsError, RecombineL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 
 /// Credit-Based SDU
@@ -390,10 +390,9 @@ impl<P> FragmentL2capPdu for CreditBasedFrame<P>
 where
     P: core::ops::Deref<Target = [u8]>,
 {
-    type DataIter<'a> = DataIter<'a, P> where Self: 'a;
-    type FragmentIterator<'a> = FragmentationIterator<'a, P> where Self: 'a;
+    type FragmentIterator = FragmentationIterator<P>;
 
-    fn as_fragments(&self, fragmentation_size: usize) -> Result<Self::FragmentIterator<'_>, FragmentationError> {
+    fn into_fragments(self, fragmentation_size: usize) -> Result<Self::FragmentIterator, FragmentationError> {
         let len = self.payload.len() + if self.sdu_len.is_some() { 2 } else { 0 };
 
         if len <= <u16>::MAX.into() {
@@ -450,14 +449,14 @@ where
     }
 }
 
-pub struct FragmentationIterator<'a, T> {
-    k_frame: &'a CreditBasedFrame<T>,
+pub struct FragmentationIterator<T> {
+    k_frame: CreditBasedFrame<T>,
     fragmentation_size: usize,
     offset: usize,
 }
 
-impl<'a, T> FragmentationIterator<'a, T> {
-    fn new(k_frame: &'a CreditBasedFrame<T>, fragmentation_size: usize) -> Self {
+impl<'a, T> FragmentationIterator<T> {
+    fn new(k_frame: CreditBasedFrame<T>, fragmentation_size: usize) -> Self {
         let offset = 0;
 
         Self {
@@ -468,16 +467,16 @@ impl<'a, T> FragmentationIterator<'a, T> {
     }
 }
 
-impl<'a, T> Iterator for FragmentationIterator<'a, T>
+impl<T> FragmentIterator for FragmentationIterator<T>
 where
     T: core::ops::Deref<Target = [u8]>,
 {
-    type Item = DataIter<'a, T>;
+    type Item<'a> = DataIter<'a, T> where Self: 'a;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<Self::Item<'_>> {
         (self.offset < self.k_frame.get_payload().len() + CreditBasedFrame::<T>::HEADER_SIZE).then(|| {
             let data_iter = DataIter {
-                k_frame: self.k_frame,
+                k_frame: &self.k_frame,
                 fragmentation_size: self.fragmentation_size,
                 offset: self.offset,
                 byte: 0,

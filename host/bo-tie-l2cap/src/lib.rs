@@ -186,16 +186,10 @@ pub trait ConnectionChannel {
     /// The logical link used for this Connection.
     type LogicalLink: private::Link;
 
-    /// The buffer type for sent L2CAP fragments
-    ///
-    /// This buffer is for containing the raw data of a L2CAP packet sent by the future returned
-    /// from the method `send`.
-    type SendBuffer: core::ops::Deref<Target = [u8]> + TryExtend<u8>;
-
     /// Sending future
     ///
     /// This is the future returned by [`send`](ConnectionChannel::send).
-    type SendFut<'a>: Future<Output = Result<(), Self::SendFutErr>>
+    type SendFut<'a>: Future<Output = Result<(), Self::SendErr>>
     where
         Self: 'a;
 
@@ -204,7 +198,7 @@ pub trait ConnectionChannel {
     /// This is the error type for the output of the future [`SendFut`]
     ///
     /// [`SendFut`](ConnectionChannel::SendFut)
-    type SendFutErr;
+    type SendErr;
 
     /// The buffer type for received L2CAP fragments
     ///
@@ -219,42 +213,23 @@ pub trait ConnectionChannel {
     ///
     /// This is the future returned by [`receive`].
     ///
-    /// [`receive`](ConnectionChannel::receive)
+    /// [`receive`](ConnectionChannel::receive_fragment)
     type RecvFut<'a>: Future<Output = Result<L2capFragment<Self::RecvBuffer>, Self::RecvErr>>
     where
         Self: 'a;
 
-    /// Send a L2CAP PDU to the Controller
+    /// Get the fragmentation size
     ///
-    /// This attempts to sends [`BasicFrame`] to the controller. The pdu must be complete as
-    /// the implementor of a `ConnectionChannel` will perform any necessary flow control and
-    /// fragmentation of `data` before sending raw packets to the controller.
-    fn send<T>(&self, data: T) -> Self::SendFut<'_>
+    /// This is the size in which sent and receive packets are fragmented to. This should match the
+    /// maximum size of payload portion for the underlying protocol's data packet.
+    fn fragmentation_size(&self) -> usize;
+
+    /// Send a L2CAP fragment to the Controller
+    ///
+    /// This is used to send a L2CAP fragment to the connected device.
+    fn send_fragment<T>(&self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
     where
-        T: pdu::FragmentL2capPdu;
-
-    /// Set the MTU for `send`
-    ///
-    /// This is used as the maximum transfer unit of sent L2CAP data payloads. This value must be
-    /// larger than equal to the minimum for the logical link, but smaller than or equal to the
-    /// maximum MTU this implementation of `ConnectionChannel` can support (you can get this value
-    /// with a call to `max_mut`). An ACL-U logical link has a minimum MTU of 48 and a LE-U logical
-    /// link has a minimum MTU of 23. If `mtu` is invalid it will not change the current MTU for the
-    /// connection channel.
-    fn set_mtu(&mut self, mtu: u16);
-
-    /// Get the current MTU
-    fn get_mtu(&self) -> usize;
-
-    /// Get the maximum MTU this `ConnectionChannel` can support
-    ///
-    /// This is the maximum MTU value that higher layer protocols can use to call `set_mtu` with.
-    fn max_mtu(&self) -> usize;
-
-    /// Get the minimum MTU for the logical Link
-    ///
-    /// This will return 48 if this is a ACL-U logical link or 23 if this is a LE-U logical link
-    fn min_mtu(&self) -> usize;
+        T: IntoIterator<Item = u8>;
 
     /// Await the reception of a L2CAP PDU fragment
     ///
@@ -269,13 +244,28 @@ pub trait ConnectionChannel {
     /// The returned `RecvFut` outputs a [`L2capFragment`]. In order to recombine fragments, they
     /// must be output by all instances of `RecvFut` in order in which they are received from the
     /// lower layer. This is why is not recommended for `RecvFut` to be `Sync`.
-    fn receive(&mut self) -> Self::RecvFut<'_>;
+    fn receive_fragment(&mut self) -> Self::RecvFut<'_>;
 }
 
 /// Extension method for a [`ConnectionChannel`]
 ///
 /// Anything that implements `ConnectionChannel` will also `ConnectionChannelExt`.
 pub trait ConnectionChannelExt: ConnectionChannel {
+    /// Send a L2CAP PDU
+    ///
+    /// The input `pdu` will be sent to the connected device. Unlike method [`send_fragment`], this
+    /// extension method returns a future that, if required, will fragment the `pdu` and send the
+    /// individual fragments using the `send_fragment` method.
+    ///
+    /// # Note
+    /// The returned `SendFuture` implements `IntoFuture` instead of directly implementing `Future`.
+    fn send<T>(&self, pdu: T) -> pdu::SendFuture<Self, T>
+    where
+        T: pdu::FragmentL2capPdu,
+    {
+        pdu::SendFuture::new(self, pdu)
+    }
+
     /// A receiver for a complete [`BasicFrame`] L2CAP PDU.
     ///
     /// This returns a [`ReceiveL2capPdu`] that will output a L2CAP Basic Frame PDU.
@@ -297,7 +287,7 @@ where
 {
     connection_channel: &'a mut C,
     receive_future: Option<C::RecvFut<'a>>,
-    fragments: Vec<u8>,
+    partial_assembly: Vec<u8>,
     pdu_len: Option<usize>,
     recombine_meta: T::RecombineMeta,
     pd: core::marker::PhantomData<T>,
@@ -317,7 +307,7 @@ where
         Self {
             connection_channel,
             receive_future: None,
-            fragments: Vec::new(),
+            partial_assembly: Vec::new(),
             pdu_len: None,
             recombine_meta,
             pd: core::marker::PhantomData,
@@ -359,13 +349,13 @@ where
             // The Length field in `fragment` is available, but `fragment` is just the starting
             // fragment of a L2CAP packet split into multiple fragments.
             len @ Some(_) => {
-                self.fragments.extend_from_slice(&fragment.data);
+                self.partial_assembly.extend_from_slice(&fragment.data);
                 self.pdu_len = len;
             }
 
             // Length field is unavailable or incomplete, its debatable if this case ever
             // happens, but `fragment` is definitely not a L2CAP complete packet.
-            None => self.fragments.extend_from_slice(&fragment.data),
+            None => self.partial_assembly.extend_from_slice(&fragment.data),
         }
 
         Ok(None)
@@ -383,15 +373,16 @@ where
     where
         F: core::ops::Deref<Target = [u8]>,
     {
-        self.fragments.extend_from_slice(&fragment.data);
+        self.partial_assembly.extend_from_slice(&fragment.data);
 
         let payload_len = match self.pdu_len {
             None => {
-                if self.fragments.len() < 2 {
+                if self.partial_assembly.len() < 2 {
                     // not enough bytes to determine the PDU length field
                     return Ok(None);
                 } else {
-                    let pdu_len: usize = <u16>::from_le_bytes([self.fragments[0], self.fragments[1]]).into();
+                    let pdu_len: usize =
+                        <u16>::from_le_bytes([self.partial_assembly[0], self.partial_assembly[1]]).into();
 
                     self.pdu_len = pdu_len.into();
 
@@ -403,14 +394,14 @@ where
 
         // Assemble the carryover fragments into a complete L2CAP packet if the length of the
         // fragments matches (or is greater than) the total length of the payload.
-        if (payload_len + Self::BASIC_HEADER_SIZE) <= self.fragments.len() {
+        if (payload_len + Self::BASIC_HEADER_SIZE) <= self.partial_assembly.len() {
             let channel_id = <C::LogicalLink as private::Link>::channel_from_raw(<u16>::from_le_bytes([
-                self.fragments[2],
-                self.fragments[3],
+                self.partial_assembly[2],
+                self.partial_assembly[3],
             ]))
             .ok_or(FragmentError::InvalidChannelIdentifier)?;
 
-            let payload = core::mem::take(&mut self.fragments).into_iter();
+            let payload = core::mem::take(&mut self.partial_assembly).into_iter();
 
             T::recombine(channel_id, payload, &mut self.recombine_meta)
                 .map(|t| t.into())
@@ -440,7 +431,7 @@ where
             return Ok(None);
         }
 
-        if self.fragments.is_empty() {
+        if self.partial_assembly.is_empty() {
             self.process_first_fragment(fragment)
         } else {
             self.process_continuing_fragment(fragment)
@@ -451,7 +442,6 @@ where
 impl<C, T> Future for ReceiveL2capPdu<'_, C, T>
 where
     C: ?Sized + ConnectionChannel,
-    C::SendBuffer: core::ops::Deref<Target = [u8]> + TryExtend<u8>,
     T: pdu::RecombineL2capPdu,
 {
     type Output = Result<T, FragmentError<T::RecombineError, C::RecvErr>>;
@@ -464,10 +454,11 @@ where
         loop {
             match this.receive_future {
                 None => {
-                    // this decouples the lifetime, connection_channel
-                    // will not be touched until after `receive_future`
-                    // is dropped.
-                    let receive_future = unsafe { &mut *(this.connection_channel as *mut C) }.receive();
+                    // this decouples the lifetime.
+                    //
+                    // connection_channel will not be touched until
+                    // after `receive_future` is dropped.
+                    let receive_future = unsafe { &mut *(this.connection_channel as *mut C) }.receive_fragment();
 
                     this.receive_future = receive_future.into()
                 }
