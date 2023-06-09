@@ -85,12 +85,12 @@ impl core::fmt::Display for BasicFrame<alloc::vec::Vec<u8>> {
     }
 }
 
-impl<T> From<BasicFrame<T>> for Vec<u8>
+impl<T> From<BasicFrame<T>> for alloc::vec::Vec<u8>
 where
     T: core::ops::Deref<Target = [u8]>,
 {
-    fn from(frame: BasicFrame<T>) -> Vec<u8> {
-        let mut v = Vec::with_capacity(BasicFrame::<T>::HEADER_SIZE + frame.payload.len());
+    fn from(frame: BasicFrame<T>) -> alloc::vec::Vec<u8> {
+        let mut v = alloc::vec::Vec::with_capacity(BasicFrame::<T>::HEADER_SIZE + frame.payload.len());
 
         v.extend_from_slice(&(frame.payload.len() as u16).to_le_bytes());
 

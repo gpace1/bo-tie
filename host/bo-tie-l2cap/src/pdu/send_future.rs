@@ -8,8 +8,8 @@ use crate::pdu::FragmentIterator;
 use crate::ConnectionChannel;
 use alloc::boxed::Box;
 use core::future::Future;
+use core::future::IntoFuture;
 use core::pin::Pin;
-use std::future::IntoFuture;
 
 /// Future for sending a PDU
 pub struct SendFuture<'a, C: ?Sized, P> {

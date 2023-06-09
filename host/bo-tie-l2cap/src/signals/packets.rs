@@ -4,7 +4,7 @@ use crate::channels::ChannelIdentifier;
 use crate::pdu::{ControlFrame, FragmentL2capPdu};
 use crate::signals::{SignalError, TryIntoSignal};
 use core::fmt::{self, Display, Formatter};
-use std::num::NonZeroU8;
+use core::num::NonZeroU8;
 
 /// Codes for each Signal Type
 ///

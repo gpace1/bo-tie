@@ -712,11 +712,7 @@ pub trait BufferReserve {
 /// but the interface async task will determine what information is needed to be stored.
 ///
 /// Flow control is only for the controller. There is no flow control upwards to the host and
-/// connection async tasks as a channel to those tasks naturally implements it.
-///
-/// The flow control information should be initialized with [`Default`](std::default::Default) by
-/// the channel. It then will be initialized to the current controller later by the interface async
-/// task.
+/// connection async tasks as a `Channel` naturally implements it.
 pub trait Channel {
     type SenderError: fmt::Debug;
 

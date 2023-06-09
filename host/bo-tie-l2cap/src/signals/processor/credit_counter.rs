@@ -8,7 +8,7 @@ use crate::pdu::credit_frame::PacketsIterator;
 use crate::pdu::{FragmentL2capSdu, PacketsError};
 use crate::signals::packets::LeCreditBasedConnectionResponse;
 use crate::{ConnectionChannel, ConnectionChannelExt};
-use std::num::NonZeroU8;
+use core::num::NonZeroU8;
 
 /// The kind of crediting to be enabled
 ///

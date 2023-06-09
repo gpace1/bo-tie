@@ -1,7 +1,7 @@
 //! L2CAP Channels Definitions
 
 use crate::{AclU, AclUExt, LeU};
-use std::cmp::Ordering;
+use core::cmp::Ordering;
 
 /// Channel Identifier
 ///

@@ -48,8 +48,8 @@ pub trait FragmentL2capPduExt: FragmentL2capPdu {
     ///
     /// This converts this PDU into the returned `Vec`. The bytes within the `Vec` will be in the
     /// correct format for transmission to a connected device.
-    fn into_vec(self) -> Vec<u8> {
-        let mut vec = Vec::new();
+    fn into_vec(self) -> alloc::vec::Vec<u8> {
+        let mut vec = alloc::vec::Vec::new();
 
         let mut iter = self.into_fragments(<u16>::MAX as usize).unwrap();
 

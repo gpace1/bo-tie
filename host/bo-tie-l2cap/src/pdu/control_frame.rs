@@ -3,7 +3,7 @@
 use crate::channels::ChannelIdentifier;
 use crate::pdu::{FragmentIterator, FragmentL2capPdu, FragmentationError, RecombineL2capPdu};
 use bo_tie_core::buffer::TryExtend;
-use std::num::{NonZeroU16, NonZeroU8};
+use core::num::{NonZeroU16, NonZeroU8};
 
 /// Control Frame
 ///
