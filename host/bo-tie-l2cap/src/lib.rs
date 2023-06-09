@@ -15,7 +15,7 @@ pub mod channels;
 pub mod pdu;
 pub mod signals;
 
-use crate::channels::ChannelIdentifier;
+use crate::channels::{AclCid, ChannelIdentifier, LeCid};
 use alloc::vec::Vec;
 use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
@@ -26,11 +26,23 @@ pub trait MinimumMtu {
 }
 
 mod private {
+    use crate::channels::ChannelIdentifier;
+
     /// A trait for a logical link type
     ///
     /// `None` is returned if `val` is not a valid Channel ID for the link type.
     pub trait Link {
-        fn channel_from_raw(val: u16) -> Option<super::channels::ChannelIdentifier>;
+        /// Get the channel identifier from its value
+        ///
+        /// Channels differ depending on the logical link of the connection. This will map the value
+        /// to the correct channel identifier for this logical link.
+        fn channel_from_raw(val: u16) -> Option<ChannelIdentifier>;
+
+        /// Get the channel identifier for the signaling channel
+        ///
+        /// The signalling channel for this logical link is returned if there is a signalling
+        /// channel.
+        fn get_signaling_channel() -> Option<ChannelIdentifier>;
     }
 }
 
@@ -47,9 +59,11 @@ impl MinimumMtu for AclU {
 
 impl private::Link for AclU {
     fn channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        channels::AclCid::try_from_raw(val)
-            .map(|id| ChannelIdentifier::Acl(id))
-            .ok()
+        AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
+    }
+
+    fn get_signaling_channel() -> Option<ChannelIdentifier> {
+        Some(ChannelIdentifier::Acl(AclCid::SignalingChannel))
     }
 }
 
@@ -66,9 +80,11 @@ impl MinimumMtu for AclUExt {
 
 impl private::Link for AclUExt {
     fn channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        channels::AclCid::try_from_raw(val)
-            .map(|id| ChannelIdentifier::Acl(id))
-            .ok()
+        AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
+    }
+
+    fn get_signaling_channel() -> Option<ChannelIdentifier> {
+        Some(ChannelIdentifier::Acl(AclCid::SignalingChannel))
     }
 }
 
@@ -81,6 +97,10 @@ impl private::Link for Apb {
         channels::ApbCid::try_from_raw(val)
             .map(|id| ChannelIdentifier::Apb(id))
             .ok()
+    }
+
+    fn get_signaling_channel() -> Option<ChannelIdentifier> {
+        None
     }
 }
 
@@ -96,9 +116,11 @@ impl MinimumMtu for LeU {
 
 impl private::Link for LeU {
     fn channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        channels::LeCid::try_from_raw(val)
-            .map(|id| ChannelIdentifier::Le(id))
-            .ok()
+        LeCid::try_from_raw(val).map(|id| ChannelIdentifier::Le(id)).ok()
+    }
+
+    fn get_signaling_channel() -> Option<ChannelIdentifier> {
+        Some(ChannelIdentifier::Le(LeCid::LeSignalingChannel))
     }
 }
 

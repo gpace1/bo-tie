@@ -1,6 +1,7 @@
 //! L2CAP Channels Definitions
 
-use crate::{AclU, LeU};
+use crate::{AclU, AclUExt, LeU};
+use std::cmp::Ordering;
 
 /// Channel Identifier
 ///
@@ -75,10 +76,41 @@ impl From<LeCid> for ChannelIdentifier {
 }
 
 /// Dynamically created L2CAP channel
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug)]
 pub struct DynChannelId<T> {
     channel_id: u16,
     _p: core::marker::PhantomData<T>,
+}
+
+impl<T> Clone for DynChannelId<T> {
+    fn clone(&self) -> Self {
+        DynChannelId {
+            channel_id: self.channel_id,
+            _p: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> Copy for DynChannelId<T> {}
+
+impl<T> PartialEq for DynChannelId<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.channel_id.eq(&other.channel_id)
+    }
+}
+
+impl<T> Eq for DynChannelId<T> {}
+
+impl<T> PartialOrd for DynChannelId<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.channel_id.partial_cmp(&other.channel_id)
+    }
+}
+
+impl<T> Ord for DynChannelId<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.channel_id.cmp(&other.channel_id)
+    }
 }
 
 impl<T> DynChannelId<T> {
@@ -123,6 +155,15 @@ impl DynChannelId<AclU> {
             Ok(AclCid::DynamicallyAllocated(DynChannelId::new(channel_id)))
         } else {
             Err(channel_id)
+        }
+    }
+}
+
+impl From<DynChannelId<AclU>> for DynChannelId<AclUExt> {
+    fn from(channel: DynChannelId<AclU>) -> Self {
+        DynChannelId {
+            channel_id: channel.channel_id,
+            _p: core::marker::PhantomData,
         }
     }
 }

@@ -228,15 +228,6 @@ impl<P> CreditBasedFrame<P> {
     /// The number of bytes within subsequent credit based packets
     pub const SUBSEQUENT_HEADER_SIZE: usize = 4;
 
-    /// Create a new `CreditBasedFrame`
-    fn new(payload: P, channel_id: ChannelIdentifier, sdu_len: Option<u16>) -> Self {
-        Self {
-            channel_id,
-            sdu_len,
-            payload,
-        }
-    }
-
     /// Get the channel identifier
     pub fn get_channel_id(&self) -> ChannelIdentifier {
         self.channel_id
@@ -299,7 +290,8 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
         }
     }
 
-    fn try_subsequent_from<L>(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>>
+    /// Try to create a 'subsequent'
+    pub fn try_subsequent_from<L>(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>>
     where
         L: crate::private::Link,
     {

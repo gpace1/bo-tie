@@ -3,7 +3,6 @@
 use crate::channels::ChannelIdentifier;
 use crate::pdu::{ControlFrame, FragmentL2capPdu};
 use crate::signals::{SignalError, TryIntoSignal};
-use bo_tie_core::buffer::TryExtend;
 use core::fmt::{self, Display, Formatter};
 use std::num::NonZeroU8;
 
@@ -224,6 +223,7 @@ impl Display for InvalidCommandRejectReason {
 impl std::error::Error for InvalidCommandRejectReason {}
 
 /// The *reason data* for a command rejection
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum CommandRejectReasonData {
     None,
     Mtu(u16),
@@ -290,6 +290,7 @@ impl std::error::Error for CommandRejectReasonDataError {}
 /// Command Rejection Response
 ///
 /// This L2CAP signal packet is sent when a device rejects a received request signal.
+#[derive(Debug, Copy, Clone)]
 pub struct CommandRejectResponse {
     identifier: NonZeroU8,
     reason: CommandRejectReason,
@@ -340,14 +341,11 @@ impl CommandRejectResponse {
         6 + self.data.len()
     }
 
-    // /// Convert this `CommandRejectResponse` into a C-frame for an ACL-U logic link
-    // pub(crate) fn as_acl_control_frame(&self) -> impl FragmentL2capPdu + '_ {
-    //     ControlFrame::new_acl(IntoCmdRejectRspIter(self))
-    // }
-
-    /// Convert this `CommandRejectResponse` into a C-frame for a LE-U logic link
-    pub(crate) fn as_le_control_frame(&self) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new_acl(IntoCmdRejectRspIter(self))
+    pub(crate) fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
+    where
+        L: crate::private::Link,
+    {
+        ControlFrame::new::<L>(IntoCmdRejectRspIter(self))
     }
 
     /// Try to create a `CommandRejectResponse` from raw L2CAP data.
@@ -518,11 +516,11 @@ impl LeCreditBasedConnectionRequest {
     }
 
     /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
-    pub fn into_packet<P>(self) -> P
+    pub fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
     where
-        P: TryExtend<u8> + Default,
+        L: crate::private::Link,
     {
-        crate::pdu::ControlFrame::new_le(LeCreditRequestIter::new(&self)).into_packet()
+        ControlFrame::new::<L>(IntoLeCreditRequestIter(self))
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
@@ -600,6 +598,17 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
         use crate::channels::LeCid;
 
         raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
+    }
+}
+
+struct IntoLeCreditRequestIter<'a>(&'a LeCreditBasedConnectionRequest);
+
+impl<'a> IntoIterator for IntoLeCreditRequestIter<'a> {
+    type Item = u8;
+    type IntoIter = LeCreditRequestIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LeCreditRequestIter::new(self.0)
     }
 }
 
@@ -720,16 +729,15 @@ pub struct LeCreditBasedConnectionResponse {
 impl LeCreditBasedConnectionResponse {
     const CODE: u8 = 0x15;
 
-    /// Get the source CID
+    /// Get the destination CID
     ///
-    /// This will map the dynamic CID to the full channel identifier.
-    pub fn get_source_cid(&self) -> ChannelIdentifier {
+    /// This will map `destination_dyn_cid` to the full channel identifier.
+    pub fn get_destination_cid(&self) -> ChannelIdentifier {
         ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(self.destination_dyn_cid))
     }
 
-    /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
-    pub fn as_control_frame(&self) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new_le(IntoLeCreditResponseIter(self))
+    pub(crate) fn as_control_frame(&self) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new::<crate::LeU>(IntoLeCreditResponseIter(self))
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
@@ -848,8 +856,8 @@ impl Iterator for LeCreditResponseIter<'_> {
             1 => Some(self.rsp.identifier.get()),
             2 => Some(10),
             3 => Some(0),
-            4 => self.rsp.get_source_cid().to_val().to_le_bytes().get(0).copied(),
-            5 => self.rsp.get_source_cid().to_val().to_le_bytes().get(1).copied(),
+            4 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(0).copied(),
+            5 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(1).copied(),
             6 => self.rsp.mtu.to_le_bytes().get(0).copied(),
             7 => self.rsp.mtu.to_le_bytes().get(1).copied(),
             8 => self.rsp.mps.to_le_bytes().get(0).copied(),
@@ -924,12 +932,11 @@ impl FlowControlCreditInd {
         self.cid
     }
 
-    /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
-    pub fn into_packet<P>(self) -> P
+    pub(crate) fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
     where
-        P: TryExtend<u8> + Default,
+        L: crate::private::Link,
     {
-        crate::pdu::ControlFrame::new_acl(FlowControlCreditIndIter::new(&self)).into_packet()
+        ControlFrame::new::<L>(IntoFlowControlCreditIndIter(self))
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
@@ -983,6 +990,17 @@ impl TryIntoSignal for FlowControlCreditInd {
 
         raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
             || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
+    }
+}
+
+struct IntoFlowControlCreditIndIter<'a>(&'a FlowControlCreditInd);
+
+impl<'a> IntoIterator for IntoFlowControlCreditIndIter<'a> {
+    type Item = u8;
+    type IntoIter = FlowControlCreditIndIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        FlowControlCreditIndIter::new(self.0)
     }
 }
 

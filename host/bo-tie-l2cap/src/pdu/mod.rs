@@ -143,45 +143,6 @@ pub trait FragmentL2capSdu {
     fn as_packets(&self) -> Result<Self::PacketsIterator<'_>, PacketsError>;
 }
 
-/// Error for converting a frame type into one or more packets.
-pub enum IntoPacketError<E> {
-    TryFromU16Error,
-    TryExtendError(E),
-}
-
-impl<E: core::fmt::Debug> core::fmt::Debug for IntoPacketError<E> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            IntoPacketError::TryFromU16Error => f.write_str(
-                "data cannot fit within a L2CAP basic info \
-                frame, it must be fragmented by a higher protocol",
-            ),
-            IntoPacketError::TryExtendError(e) => core::fmt::Debug::fmt(e, f),
-        }
-    }
-}
-
-impl<E: core::fmt::Display> core::fmt::Display for IntoPacketError<E> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            IntoPacketError::TryFromU16Error => f.write_str(
-                "data cannot fit within a L2CAP basic info \
-                frame, it must be fragmented by a higher protocol",
-            ),
-            IntoPacketError::TryExtendError(e) => core::fmt::Display::fmt(e, f),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl<E: std::error::Error> std::error::Error for IntoPacketError<E> {}
-
-impl<E> From<E> for IntoPacketError<E> {
-    fn from(e: E) -> Self {
-        IntoPacketError::TryExtendError(e)
-    }
-}
-
 /// Error returned by [`as_fragments`] of `FragmentL2capPdu`
 #[derive(Debug, Copy, Clone)]
 pub enum FragmentationError {

@@ -16,49 +16,16 @@ pub(crate) struct ControlFrame<T> {
 }
 
 impl<T> ControlFrame<T> {
-    pub const HEADER_SIZE: usize = 4;
-
-    /// Create a new `ControlFrame` for an ACL-U connection
-    pub fn new_acl(payload: T) -> Self {
-        let channel_id = ChannelIdentifier::Acl(crate::channels::AclCid::SignalingChannel);
-        ControlFrame { channel_id, payload }
-    }
-
-    /// Create a new `ControlFrame` for a LE-U connection
-    pub fn new_le(payload: T) -> Self {
-        let channel_id = ChannelIdentifier::Le(crate::channels::LeCid::LeSignalingChannel);
-        ControlFrame { channel_id, payload }
-    }
-
-    /// Create a complete L2CAP Control Frame
-    ///
-    /// The return is a complete L2CAP control frame packet contained within the type `P`.
+    /// Create a new `ControlFrame`
     ///
     /// # Panic
-    /// The buffer type `P` must be able to contain the minimum payload size within a control frame.
-    /// If not then this method may panic when trying to create a packet. See the *signaling packets
-    /// formats* section of the *Logical Link Control and Adaption Protocol* part of the *Host*
-    /// volume for the minimum required supported buffer size of `P`.
-    pub fn into_packet<P>(self) -> P
+    /// There must be a signalling channel associated with the logical link `L`.
+    pub fn new<L>(payload: T) -> Self
     where
-        T: IntoIterator<Item = u8>,
-        T::IntoIter: ExactSizeIterator,
-        P: TryExtend<u8> + Default,
+        L: crate::private::Link,
     {
-        let mut p = P::default();
-
-        let payload_iter = self.payload.into_iter();
-
-        let len = <u16>::try_from(payload_iter.len()).unwrap();
-
-        p.try_extend(len.to_le_bytes()).expect("failed to extend buffer");
-
-        p.try_extend(self.channel_id.to_val().to_le_bytes())
-            .expect("failed to extend buffer");
-
-        p.try_extend(payload_iter).expect("failed to extend buffer");
-
-        p
+        let channel_id = L::get_signaling_channel().expect("no signaling channel for this logical link");
+        ControlFrame { channel_id, payload }
     }
 
     /// Try to create a signaling packet from a slice of bytes
@@ -117,7 +84,7 @@ where
 
     fn recombine<I>(
         channel_id: ChannelIdentifier,
-        mut bytes: I,
+        bytes: I,
         _: &mut Self::RecombineMeta,
     ) -> Result<Self, Self::RecombineError>
     where

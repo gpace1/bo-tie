@@ -76,9 +76,9 @@ impl<T, B> SendBufferedFuture<T, B> {
     {
         assert_ne!(fragmentation_size, 0, "the size of a fragment cannot be zero");
 
-        let mut fragments_iter = pdu.into_fragments(fragmentation_size)?;
+        let fragments_iter = pdu.into_fragments(fragmentation_size)?;
 
-        let mut buffer_iter = buffers.into_iter();
+        let buffer_iter = buffers.into_iter();
 
         Ok(Self {
             fragments_iter,

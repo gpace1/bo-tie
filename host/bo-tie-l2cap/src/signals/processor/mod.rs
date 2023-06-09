@@ -1,10 +1,11 @@
 //! Processing of Received Signals
 
-use crate::pdu::FragmentL2capPdu;
+pub mod credit_counter;
+
 use crate::signals::packets;
 use crate::signals::packets::{CommandRejectResponse, LeCreditBasedConnectionResponse};
-use crate::ConnectionChannel;
-use std::num::NonZeroU8;
+use crate::{ConnectionChannel, ConnectionChannelExt};
+pub use credit_counter::{CreditBasedConnection, CreditKind};
 
 /// The minimum MTU for a credit based frame
 const MIN_LE_CREDIT_MTU: u16 = 23;
@@ -18,7 +19,6 @@ const MAX_LE_CREDIT_MPS: u16 = 25533;
 /// Signals Processor
 pub struct SignalsProcessor {
     credits: Option<CreditKind>,
-    identifier: NonZeroU8,
 }
 
 macro_rules! invalid_cid_response {
@@ -30,32 +30,63 @@ macro_rules! invalid_cid_response {
         )
     };
 }
+
+macro_rules! get_identifier {
+    ($control_frame:expr) => {
+        $control_frame
+            .get(6)
+            .copied()
+            .and_then(|id| core::num::NonZeroU8::new(id))
+    };
+}
+
 impl SignalsProcessor {
     pub fn builder() -> SignalsProcessorBuilder {
         SignalsProcessorBuilder::new()
     }
 
-    fn send<C, T>(&mut self, connection_channel: &C, signal: T)
-    where
-        C: ConnectionChannel,
-        T: FragmentL2capPdu,
-    {
+    fn get_initial_credits(&self) -> Option<u16> {
+        self.credits.map(|kind| match kind {
+            CreditKind::Owned(val) => val,
+        })
     }
 
     pub async fn process<C>(
         &mut self,
         connection_channel: &C,
         control_frame: &[u8],
-    ) -> Result<SignalProcessResult, C::SendErr>
+    ) -> Result<SignalProcessOutput, C::SendErr>
     where
-        C: crate::ConnectionChannel,
+        C: ConnectionChannel,
     {
         match control_frame.get(0) {
             Some(&packets::LeCreditBasedConnectionRequest::CODE) => {
                 self.process_le_credit_based_connection(connection_channel, control_frame)
                     .await
             }
-            _ => Ok(SignalProcessResult::Ignore),
+            Some(_) => self.process_unknown_signal(connection_channel, control_frame).await,
+            None => Ok(SignalProcessOutput::Ignore),
+        }
+    }
+
+    async fn process_unknown_signal<C>(
+        &mut self,
+        connection_channel: &C,
+        control_frame: &[u8],
+    ) -> Result<SignalProcessOutput, C::SendErr>
+    where
+        C: ConnectionChannel,
+    {
+        if let Some(identifier) = get_identifier!(control_frame) {
+            let response = CommandRejectResponse::new_command_not_understood(identifier);
+
+            let pdu = response.as_control_frame::<C::LogicalLink>();
+
+            connection_channel.send(pdu).await?;
+
+            Ok(SignalProcessOutput::Rejected(response))
+        } else {
+            Ok(SignalProcessOutput::Ignore)
         }
     }
 
@@ -63,11 +94,13 @@ impl SignalsProcessor {
         &mut self,
         connection_channel: &C,
         control_frame: &[u8],
-    ) -> Result<SignalProcessResult, C::SendErr>
+    ) -> Result<SignalProcessOutput, C::SendErr>
     where
-        C: crate::ConnectionChannel,
+        C: ConnectionChannel,
     {
-        use crate::ConnectionChannelExt;
+        let Some(initial_credits) = self.get_initial_credits() else {
+            return self.process_unknown_signal(connection_channel, control_frame).await
+        };
 
         match packets::LeCreditBasedConnectionRequest::try_from_control_frame(control_frame) {
             Ok(request) => {
@@ -76,32 +109,34 @@ impl SignalsProcessor {
                     && request.mps >= MIN_LE_CREDIT_MPS
                     && request.mps <= MAX_LE_CREDIT_MPS
                 {
-                    let response = packets::LeCreditBasedConnectionResponse {
-                        identifier: self.identifier,
+                    let response = LeCreditBasedConnectionResponse {
+                        identifier: request.identifier,
                         destination_dyn_cid: request.source_dyn_cid,
                         mtu: request.mtu,
                         mps: request.mps,
-                        initial_credits: 0,
+                        initial_credits,
                         result: Ok(()),
                     };
 
-                    let le_credit_connection = LeCreditConnection::new(&response);
+                    let le_credit_connection = CreditBasedConnection::new_le(&response, self.credits.unwrap());
 
                     connection_channel.send(response.as_control_frame()).await?;
 
-                    Ok(SignalProcessResult::LeCreditConnection(le_credit_connection))
+                    Ok(SignalProcessOutput::LeCreditConnection(le_credit_connection))
                 } else {
-                    Ok(SignalProcessResult::Ignore)
+                    Ok(SignalProcessOutput::Ignore)
                 }
             }
             Err(crate::pdu::ControlFrameError::InvalidChannelConnectionIds { id, local, source }) => {
+                let response = invalid_cid_response!(id, local, source);
+
                 connection_channel
-                    .send(invalid_cid_response!(id, local, source).as_le_control_frame())
+                    .send(response.as_control_frame::<C::LogicalLink>())
                     .await?;
 
-                Ok(SignalProcessResult::Ignore)
+                Ok(SignalProcessOutput::Rejected(response))
             }
-            _ => Ok(SignalProcessResult::Ignore),
+            _ => Ok(SignalProcessOutput::Ignore),
         }
     }
 }
@@ -109,18 +144,18 @@ impl SignalsProcessor {
 /// The return of method [`process`]
 ///
 /// [`process`]: SignalsProcessor::process
-pub enum SignalProcessResult {
+pub enum SignalProcessOutput {
     Ignore,
-    Rejected(packets::CommandRejectResponse),
-    LeCreditConnection(LeCreditConnection),
+    Rejected(CommandRejectResponse),
+    LeCreditConnection(CreditBasedConnection),
 }
 
 /// Builder for a `SignalsProcessor`
 ///
 /// The default configuration of a `SignalsProcessBuilder` is to create a `SignalsProcessor` that
-/// returns *Command Reject Response* for every signal processed by it. Signals must be enabled
-/// through the methods of the builder in order for the created `SignalsProcessor` to generate
-/// corresponding responses to request signals.
+/// returns a *Command not understood Response* for every signal processed by it. Signals must be
+/// enabled through the methods of this builder in order to create a `SignalsProcessor` that send
+/// back correct responses.
 pub struct SignalsProcessorBuilder {
     enable_credits: Option<CreditKind>,
 }
@@ -135,6 +170,13 @@ impl SignalsProcessorBuilder {
     ///
     /// This enables the processing of the signals *LE Credit Based Connection Request* and *Credit
     /// Based Connection* and the creation of credit based L2CAP connections.
+    ///
+    /// Calling this method with `credit_count` equal to `None` will enable the maximum number of
+    /// credits (equivalent to <u16>::MAX).
+    ///
+    /// # Enables
+    /// * LE credit based connections
+    /// * Enhanced credit based connections
     pub fn enable_credits<T>(&mut self, credit_count: T) -> &mut Self
     where
         T: Into<Option<CreditKind>>,
@@ -144,35 +186,8 @@ impl SignalsProcessorBuilder {
     }
 
     pub fn build(self) -> SignalsProcessor {
-        let identifier = NonZeroU8::new(1).unwrap();
-
         SignalsProcessor {
             credits: self.enable_credits,
-            identifier,
         }
-    }
-}
-
-/// The kind of crediting to be enabled
-///
-/// Crediting can be done based on how credits are distributed to all connections. Crediting is
-/// styled between all credit based flow control connections. There is no distinction between *LE
-/// credit based connections* and regular *credit based connections* in terms of
-///
-/// # `Owned`
-/// Credits are owned by the connections. The value of owned is the initial credit limit established
-/// for each connection.
-pub enum CreditKind {
-    Owned(u16),
-}
-
-/// A L2CAP LE Credit Based Connection Processor
-///
-/// A credit based connection needs to monitor
-pub struct LeCreditConnection;
-
-impl LeCreditConnection {
-    fn new(response: &LeCreditBasedConnectionResponse) -> Self {
-        Self
     }
 }
