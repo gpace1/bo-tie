@@ -4,7 +4,21 @@
 //! base protocol for all other host protocols of Bluetooth. Its main purpose is for data managing
 //! and control between the host, the protocols below the host layer (usually this is the HCI
 //! layer), and connected devices.
-//!    
+//!  
+//! # Logical Links Types
+//! Logical links are how data is transferred via a physical link from one host to another host.
+//! There are two kings of logical links, ACL-U for a BR/ERD physical link and LE-U for a LE
+//! physical link. This library breaks these up these two into for *types* of logical links as each
+//! type has different requirements per the Bluetooth Specification.
+//!
+//! [`AclU`], [`AclUExt`], [`Apb`], and [`LeU`] are the four 'types' of logical links defined within
+//! this library. `AclU`, `AclUExt`, `Apb` are ACL-U logical links and `LeU` is a LE-U logical link.
+//! Each type differs in the Minimum supported Maximum Transmission Unit (MTU) and channel mapping
+//! (as assigned by the Bluetooth SIG).
+//!
+//! The most often used case for a logical link type is mapping raw data to a L2CAP data type. A
+//! raw channel value cannot be converted into a valid channel until the logical link type is
+//! defined
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
@@ -20,23 +34,35 @@ use alloc::vec::Vec;
 use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
 
-/// A trait containing a constant for the smallest maximum transfer unit for a logical link
-pub trait MinimumMtu {
-    const MIN_MTU: usize;
-}
-
 mod private {
     use crate::channels::ChannelIdentifier;
 
     /// A trait for a logical link type
     ///
-    /// `None` is returned if `val` is not a valid Channel ID for the link type.
-    pub trait Link {
-        /// Get the channel identifier from its value
+    /// Every logical link type of this library implements `LinkType`. For explanation on what a
+    /// *logical link type* is see the [library level] documentation.
+    ///
+    /// Use the trait [`LinkTypeExt`] if you would like to call these methods directly.
+    ///
+    /// [library level]: crate
+    pub trait LinkType {
+        /// The supported Maximum Transmission Unit (MTU)
+        ///
+        /// Every device must be able to support a MTU up to this value for this logical link type.
+        /// However, this does not mean two devices cannot use a smaller MTU negotiated at a higher
+        /// layer.
+        ///
+        /// # Note
+        /// This is returned by the method [`get_min_supported_mtu`] of `LinkTypePort`.
+        ///
+        /// [`get_min_supported_mtu`]: crate::LinkTypePort::get_min_supported_mtu
+        const MIN_SUPPORTED_MTU: u16;
+
+        /// Try to get the channel identifier from its value
         ///
         /// Channels differ depending on the logical link of the connection. This will map the value
         /// to the correct channel identifier for this logical link.
-        fn channel_from_raw(val: u16) -> Option<ChannelIdentifier>;
+        fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier>;
 
         /// Get the channel identifier for the signaling channel
         ///
@@ -46,6 +72,40 @@ mod private {
     }
 }
 
+/// Porting trait for methods of `LinkType`
+///
+/// As [`LinkType`] is a 'private' trait, this trait can be imported to call the methods of
+/// `LinkType`.
+///
+/// [`LinkType`]: private::LinkType
+pub trait LinkTypePort: private::LinkType {
+    /// Get the minimum supported Maximum Transmission Unit (MTU)
+    ///
+    /// Every device must be able to support a MTU up to this value for this logical link type.
+    /// However, this does not mean two devices cannot use a smaller MTU negotiated at a higher
+    /// layer.
+    fn get_min_supported_mtu() -> u16 {
+        Self::MIN_SUPPORTED_MTU
+    }
+
+    /// Try to get the channel identifier from its value
+    ///
+    /// Channels differ depending on the logical link of the connection. This will map the value
+    /// to the correct channel identifier for this logical link.
+    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
+        <Self as private::LinkType>::try_channel_from_raw(val)
+    }
+
+    /// Get the Channel Identifier of this Signalling Channel
+    ///
+    /// `None` is returned if there is no signalling channel for this logical link type.
+    fn get_signalling_channel() -> Option<ChannelIdentifier> {
+        <Self as private::LinkType>::get_signaling_channel()
+    }
+}
+
+impl<T> LinkTypePort for T where T: private::LinkType {}
+
 /// ACL-U L2CAP logical link type
 ///
 /// This is a marker type for an ACL-U L2CAP logical link that does not support the extended flow
@@ -53,12 +113,10 @@ mod private {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AclU;
 
-impl MinimumMtu for AclU {
-    const MIN_MTU: usize = 48;
-}
+impl private::LinkType for AclU {
+    const MIN_SUPPORTED_MTU: u16 = 48;
 
-impl private::Link for AclU {
-    fn channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
+    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
     }
 
@@ -74,12 +132,10 @@ impl private::Link for AclU {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AclUExt;
 
-impl MinimumMtu for AclUExt {
-    const MIN_MTU: usize = 672;
-}
+impl private::LinkType for AclUExt {
+    const MIN_SUPPORTED_MTU: u16 = 672;
 
-impl private::Link for AclUExt {
-    fn channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
+    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
     }
 
@@ -92,8 +148,10 @@ impl private::Link for AclUExt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Apb;
 
-impl private::Link for Apb {
-    fn channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
+impl private::LinkType for Apb {
+    const MIN_SUPPORTED_MTU: u16 = 48;
+
+    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         channels::ApbCid::try_from_raw(val)
             .map(|id| ChannelIdentifier::Apb(id))
             .ok()
@@ -110,12 +168,10 @@ impl private::Link for Apb {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LeU;
 
-impl MinimumMtu for LeU {
-    const MIN_MTU: usize = 23;
-}
+impl private::LinkType for LeU {
+    const MIN_SUPPORTED_MTU: u16 = 23;
 
-impl private::Link for LeU {
-    fn channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
+    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         LeCid::try_from_raw(val).map(|id| ChannelIdentifier::Le(id)).ok()
     }
 
@@ -166,11 +222,11 @@ impl<T> L2capFragment<T> {
     /// This returns `None` if the packet cannot be determined to have the channel ID field
     fn get_channel_id<L>(&self) -> Option<ChannelIdentifier>
     where
-        L: private::Link,
+        L: private::LinkType,
         T: core::ops::Deref<Target = [u8]>,
     {
         if self.start_fragment {
-            L::channel_from_raw(<u16>::from_le_bytes([
+            L::try_channel_from_raw(<u16>::from_le_bytes([
                 self.data.get(2).copied()?,
                 self.data.get(3).copied()?,
             ]))
@@ -206,7 +262,7 @@ impl<T> L2capFragment<T> {
 /// However this *idea* is currently tentative.
 pub trait ConnectionChannel {
     /// The logical link used for this Connection.
-    type LogicalLink: private::Link;
+    type LogicalLinkType: private::LinkType;
 
     /// Sending future
     ///
@@ -358,7 +414,7 @@ where
             // Check if `fragment` is a complete L2CAP payload
             Some(payload_len) if (payload_len + Self::BASIC_HEADER_SIZE) <= fragment.data.len() => {
                 let channel_id = fragment
-                    .get_channel_id::<C::LogicalLink>()
+                    .get_channel_id::<C::LogicalLinkType>()
                     .ok_or(FragmentError::InvalidChannelIdentifier)?;
 
                 let payload = fragment.data[Self::BASIC_HEADER_SIZE..].iter().copied();
@@ -417,7 +473,7 @@ where
         // Assemble the carryover fragments into a complete L2CAP packet if the length of the
         // fragments matches (or is greater than) the total length of the payload.
         if (payload_len + Self::BASIC_HEADER_SIZE) <= self.partial_assembly.len() {
-            let channel_id = <C::LogicalLink as private::Link>::channel_from_raw(<u16>::from_le_bytes([
+            let channel_id = <C::LogicalLinkType as private::LinkType>::try_channel_from_raw(<u16>::from_le_bytes([
                 self.partial_assembly[2],
                 self.partial_assembly[3],
             ]))
@@ -509,7 +565,7 @@ where
 }
 
 /// Error concerning an L2CAP fragment
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum FragmentError<Rc, Rx> {
     ExpectedStartFragment,
     InvalidChannelIdentifier,

@@ -73,7 +73,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::ConnectionChannel;
+use bo_tie_l2cap::{ConnectionChannel, ConnectionChannelExt};
 use core::{
     future::Future,
     pin::Pin,
@@ -268,6 +268,8 @@ struct MultiReqData {
 /// can be implemented on the container to perform concurrency safe reading or writing on the
 /// contained value.
 pub struct Server<Q> {
+    /// The maximum transmission unit
+    mtu: usize,
     /// The attributes of the server
     attributes: ServerAttributes,
     /// The permissions the client currently has
@@ -426,12 +428,12 @@ macro_rules! send_pdu {
     (SKIP_LOG, $connection_channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = $crate::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::BasicFrame::new(interface_data, $crate::L2CAP_CHANNEL_ID);
+        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, $crate::L2CAP_CHANNEL_ID);
 
         $connection_channel
             .send(acl_data)
             .await
-            .map_err(|e| ConnectionError::<C>::from(e))
+            .map_err(|e| ConnectionError::SendError(e))
     }};
 }
 
@@ -481,10 +483,12 @@ where
     /// via the method [`revoke_permissions_of_client`].
     ///
     /// [`revoke_permissions_of_client`]: Server::revoke_permissions_of_client
-    pub fn new<A>(server_attributes: A, queued_writer: Q) -> Self
+    pub fn new<A>(default_mtu: u16, server_attributes: A, queued_writer: Q) -> Self
     where
         A: Into<Option<ServerAttributes>>,
     {
+        let mtu = default_mtu.into();
+
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
         let given_permissions = alloc::vec![
@@ -493,6 +497,7 @@ where
         ];
 
         Self {
+            mtu,
             attributes,
             given_permissions,
             blob_data: None,
@@ -611,7 +616,7 @@ where
     pub async fn process_acl_data<C>(
         &mut self,
         connection_channel: &mut C,
-        acl_packet: &l2cap::BasicFrame<Vec<u8>>,
+        acl_packet: &l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<Status, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
@@ -636,7 +641,7 @@ where
     /// server for communication with a client device.
     pub fn parse_acl_packet<'a>(
         &self,
-        acl_packet: &'a l2cap::BasicFrame<Vec<u8>>,
+        acl_packet: &'a l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
         use l2cap::{channels::ChannelIdentifier, channels::LeCid};
 
@@ -768,11 +773,10 @@ where
 
                 let mut notification = pdu::create_notification(handle, read_fut.await);
 
-                if notification.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+                if notification.get_parameters().0.get_data().len() > (self.mtu - 3) {
                     use core::mem::replace;
 
-                    let sent =
-                        notification.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+                    let sent = notification.get_parameters().0.get_data()[..(self.mtu - 3)].to_vec();
 
                     self.set_blob_data(
                         replace(notification.get_mut_parameters().0.get_mut_data(), sent),
@@ -839,10 +843,10 @@ where
 
             let mut notification = pdu::create_notification(handle, data);
 
-            if notification.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+            if notification.get_parameters().0.get_data().len() > (self.mtu - 3) {
                 use core::mem::replace;
 
-                let sent = notification.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+                let sent = notification.get_parameters().0.get_data()[..(self.mtu - 3)].to_vec();
 
                 let blob = replace(notification.get_mut_parameters().0.get_mut_data(), sent);
 
@@ -895,10 +899,10 @@ where
 
                 let mut indication = pdu::create_indication(handle, attribute.get_value().read().await);
 
-                if indication.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+                if indication.get_parameters().0.get_data().len() > (self.mtu - 3) {
                     use core::mem::replace;
 
-                    let sent = indication.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+                    let sent = indication.get_parameters().0.get_data()[..(self.mtu - 3)].to_vec();
 
                     self.set_blob_data(replace(indication.get_mut_parameters().0.get_mut_data(), sent), handle);
 
@@ -967,10 +971,10 @@ where
 
             let mut indication = pdu::create_indication(handle, data);
 
-            if indication.get_parameters().0.get_data().len() > (connection_channel.get_mtu() - 3) {
+            if indication.get_parameters().0.get_data().len() > (self.mtu - 3) {
                 use core::mem::replace;
 
-                let sent = indication.get_parameters().0.get_data()[..(connection_channel.get_mtu() - 3)].to_vec();
+                let sent = indication.get_parameters().0.get_data()[..(self.mtu - 3)].to_vec();
 
                 let blob = replace(indication.get_mut_parameters().0.get_mut_data(), sent);
 
@@ -1131,12 +1135,9 @@ where
     {
         log::info!("(ATT) processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
 
-        connection_channel.set_mtu(client_mtu);
+        self.mtu = client_mtu.into();
 
-        send_pdu!(
-            connection_channel,
-            pdu::exchange_mtu_response(connection_channel.get_mtu() as u16),
-        )
+        send_pdu!(connection_channel, pdu::exchange_mtu_response(self.mtu as u16),)
     }
 
     /// Process a Read Request from the client
@@ -1160,10 +1161,10 @@ where
 
         let mut read_response = future.await;
 
-        if read_response.get_parameters().0.len() > (connection_channel.get_mtu() - 1) {
+        if read_response.get_parameters().0.len() > (self.mtu - 1) {
             use core::mem::replace;
 
-            let sent = read_response.get_parameters().0[..(connection_channel.get_mtu() - 1)].to_vec();
+            let sent = read_response.get_parameters().0[..(self.mtu - 1)].to_vec();
 
             self.set_blob_data(replace(&mut read_response.get_mut_parameters().0, sent), handle);
         }
@@ -1317,7 +1318,7 @@ where
         let is_size_16 = check_response_uuid_size!(self, start as u16, 16);
 
         if is_size_16 {
-            let response = Response::new(self, connection_channel.get_mtu(), start, stop, true);
+            let response = Response::new(self, self.mtu, start, stop, true);
 
             let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
 
@@ -1329,7 +1330,7 @@ where
         let is_size_128 = check_response_uuid_size!(self, start as u16, 128);
 
         if is_size_128 {
-            let response = Response::new(self, connection_channel.get_mtu(), start, stop, true);
+            let response = Response::new(self, self.mtu, start, stop, true);
 
             let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
 
@@ -1382,7 +1383,7 @@ where
                 let start = min(handle_range.starting_handle as usize, self.attributes.count());
                 let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
-                let payload_max = connection_channel.get_mtu() - 1;
+                let payload_max = self.mtu - 1;
 
                 let mut cnt = 0;
 
@@ -1448,7 +1449,7 @@ where
     {
         macro_rules! single_payload_size {
             ($cnt:expr, $size:expr) => {
-                ($cnt + 1) * ($size + 2) < connection_channel.get_mtu() - 2
+                ($cnt + 1) * ($size + 2) < self.mtu - 2
             };
         }
         log::info!(
@@ -1477,7 +1478,7 @@ where
         let start = min(handle_range.starting_handle as usize, self.attributes.count());
         let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
-        let payload_max = connection_channel.get_mtu() - 2;
+        let payload_max = self.mtu - 2;
 
         let mut init_iter = self.attributes.attributes[start..end]
             .iter_mut()
@@ -1652,7 +1653,7 @@ where
 
         let data = read_future.await;
 
-        let rsp = match self.new_read_blob_response(connection_channel, &data, br.offset)? {
+        let rsp = match self.new_read_blob_response(&data, br.offset)? {
             // when true is returned the data is blobbed
             (rsp, true) => {
                 self.blob_data = MultiReqData {
@@ -1692,7 +1693,7 @@ where
     {
         let data = self.blob_data.as_ref().unwrap();
 
-        let response_return = self.new_read_blob_response(connection_channel, &data.tf_data, offset)?;
+        let response_return = self.new_read_blob_response(&data.tf_data, offset)?;
 
         match response_return {
             (rsp, false) => {
@@ -1714,16 +1715,12 @@ where
     /// the maximum number of data bytes that can be sent. If the boolean is false then this is used
     /// to indicate that the last blob is sent.
     #[inline]
-    fn new_read_blob_response<'a, C>(
+    fn new_read_blob_response<'a>(
         &self,
-        connection_channel: &C,
         data: &'a [u8],
         offset: u16,
-    ) -> Result<(pdu::Pdu<pdu::LocalReadBlobResponse<'a>>, bool), pdu::Error>
-    where
-        C: ConnectionChannel,
-    {
-        let max_payload = connection_channel.get_mtu() - 1;
+    ) -> Result<(pdu::Pdu<pdu::LocalReadBlobResponse<'a>>, bool), pdu::Error> {
+        let max_payload = self.mtu - 1;
 
         match offset as usize {
             o if o > data.len() => Err(pdu::Error::InvalidOffset),
@@ -2853,14 +2850,16 @@ impl QueuedWriter for NoQueuedWrites {
 }
 
 /// Error for notifications or indication methods of [`Server`]
-pub enum ServerInitiatedError<C: bo_tie_l2cap::ConnectionChannel> {
+pub enum ServerInitiatedError<C: ConnectionChannel> {
     InvalidHandle(u16),
     ConnectionError(ConnectionError<C>),
 }
 
 impl<C> core::fmt::Debug for ServerInitiatedError<C>
 where
-    C: bo_tie_l2cap::ConnectionChannel,
+    C: ConnectionChannel,
+    C::RecvErr: core::fmt::Debug,
+    C::SendErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -2872,7 +2871,9 @@ where
 
 impl<C> core::fmt::Display for ServerInitiatedError<C>
 where
-    C: bo_tie_l2cap::ConnectionChannel,
+    C: ConnectionChannel,
+    C::RecvErr: core::fmt::Display,
+    C::SendErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -2883,4 +2884,10 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<C> std::error::Error for ServerInitiatedError<C> where C: bo_tie_l2cap::ConnectionChannel {}
+impl<C> std::error::Error for ServerInitiatedError<C>
+where
+    C: ConnectionChannel,
+    C::RecvErr: std::error::Error,
+    C::SendErr: std::error::Error,
+{
+}

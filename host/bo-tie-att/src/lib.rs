@@ -335,12 +335,6 @@ impl core::fmt::Display for Error {
     }
 }
 
-// impl core::fmt::Debug for Error {
-//     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-//         core::fmt::Display::fmt(self, f)
-//     }
-// }
-
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
@@ -364,14 +358,14 @@ impl From<TransferFormatError> for Error {
 /// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
 pub enum ConnectionError<C: bo_tie_l2cap::ConnectionChannel> {
     AttError(Error),
-    RecvError(bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>),
-    SendError(bo_tie_l2cap::send_future::Error<C::SendErr>),
+    RecvError(bo_tie_l2cap::FragmentError<core::convert::Infallible, C::RecvErr>),
+    SendError(C::SendErr),
 }
 
 impl<C> PartialEq for ConnectionError<C>
 where
     C: bo_tie_l2cap::ConnectionChannel,
-    <C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error: PartialEq,
+    C::RecvErr: PartialEq,
     C::SendErr: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -392,22 +386,20 @@ impl<C: bo_tie_l2cap::ConnectionChannel, E: Into<Error>> From<E> for ConnectionE
     }
 }
 
-impl<C: bo_tie_l2cap::ConnectionChannel>
-    From<bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>>
+impl<C: bo_tie_l2cap::ConnectionChannel> From<bo_tie_l2cap::FragmentError<core::convert::Infallible, C::RecvErr>>
     for ConnectionError<C>
 {
-    fn from(e: bo_tie_l2cap::BasicFrameError<<C::RecvBuffer as bo_tie_core::buffer::TryExtend<u8>>::Error>) -> Self {
+    fn from(e: bo_tie_l2cap::FragmentError<core::convert::Infallible, C::RecvErr>) -> Self {
         Self::RecvError(e)
     }
 }
 
-impl<C: bo_tie_l2cap::ConnectionChannel> From<bo_tie_l2cap::send_future::Error<C::SendErr>> for ConnectionError<C> {
-    fn from(e: bo_tie_l2cap::send_future::Error<C::SendErr>) -> Self {
-        Self::SendError(e)
-    }
-}
-
-impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Debug for ConnectionError<C> {
+impl<C> core::fmt::Debug for ConnectionError<C>
+where
+    C: bo_tie_l2cap::ConnectionChannel,
+    C::RecvErr: core::fmt::Debug,
+    C::SendErr: core::fmt::Debug,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Self::AttError(e) => write!(f, "AttError({e:?})"),
@@ -417,7 +409,12 @@ impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Debug for ConnectionError<C>
     }
 }
 
-impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Display for ConnectionError<C> {
+impl<C> core::fmt::Display for ConnectionError<C>
+where
+    C: bo_tie_l2cap::ConnectionChannel,
+    C::RecvErr: core::fmt::Display,
+    C::SendErr: core::fmt::Display,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Self::AttError(e) => core::fmt::Display::fmt(e, f),
@@ -428,7 +425,13 @@ impl<C: bo_tie_l2cap::ConnectionChannel> core::fmt::Display for ConnectionError<
 }
 
 #[cfg(feature = "std")]
-impl<C: bo_tie_l2cap::ConnectionChannel> std::error::Error for ConnectionError<C> {}
+impl<C> std::error::Error for ConnectionError<C>
+where
+    C: bo_tie_l2cap::ConnectionChannel,
+    C::RecvErr: std::error::Error,
+    C::SendErr: std::error::Error,
+{
+}
 
 #[derive(PartialEq)]
 pub struct TransferFormatError {
@@ -1084,15 +1087,15 @@ mod test {
         fn set_mtu(&mut self, _: u16) {}
 
         fn get_mtu(&self) -> usize {
-            bo_tie_l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_SUPPORTED_MTU
         }
 
         fn max_mtu(&self) -> usize {
-            bo_tie_l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_SUPPORTED_MTU
         }
 
         fn min_mtu(&self) -> usize {
-            bo_tie_l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_SUPPORTED_MTU
         }
 
         fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
@@ -1114,15 +1117,15 @@ mod test {
         fn set_mtu(&mut self, _: u16) {}
 
         fn get_mtu(&self) -> usize {
-            bo_tie_l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_SUPPORTED_MTU
         }
 
         fn max_mtu(&self) -> usize {
-            bo_tie_l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_SUPPORTED_MTU
         }
 
         fn min_mtu(&self) -> usize {
-            bo_tie_l2cap::LeU::MIN_MTU
+            bo_tie_l2cap::LeU::MIN_SUPPORTED_MTU
         }
 
         fn receive_fragment(&mut self) -> Self::RecvFut<'_> {

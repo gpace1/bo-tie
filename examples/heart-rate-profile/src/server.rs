@@ -307,7 +307,7 @@ struct LocalHeartRateMeasurementArc {
 
 impl LocalHeartRateMeasurementArc {
     fn new(shared: HeartRateMeasurementArc) -> Self {
-        let mtu = LeU::MIN_MTU;
+        let mtu = LeU::MIN_SUPPORTED_MTU;
         let rr_offset = None;
 
         let local = LocalHeartRateMeasurement { rr_offset, mtu, shared };
@@ -324,7 +324,7 @@ impl LocalHeartRateMeasurementArc {
     ///
     /// ['blobbed']: /bo_tie/host/att/server/index.html#data-blobbing
     async fn set_mtu(&mut self, mtu: usize) {
-        if mtu >= LeU::MIN_MTU {
+        if mtu >= LeU::MIN_SUPPORTED_MTU {
             self.arc.lock().await.mtu = mtu;
         }
     }

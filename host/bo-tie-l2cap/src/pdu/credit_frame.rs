@@ -252,9 +252,9 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
         bytes: &'a [u8],
     ) -> Result<ChannelIdentifier, CreditBasedFrameError<core::convert::Infallible>>
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
-        L::channel_from_raw(<u16>::from_le_bytes([
+        L::try_channel_from_raw(<u16>::from_le_bytes([
             *bytes.get(2).ok_or(CreditBasedFrameError::RawDataTooSmall)?,
             *bytes.get(3).ok_or(CreditBasedFrameError::RawDataTooSmall)?,
         ]))
@@ -263,7 +263,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
 
     fn try_first_from<L>(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>>
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
         let len: usize = Self::try_len_from(bytes)?;
 
@@ -293,7 +293,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
     /// Try to create a 'subsequent'
     pub fn try_subsequent_from<L>(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>>
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
         let len: usize = Self::try_len_from(bytes)?;
 

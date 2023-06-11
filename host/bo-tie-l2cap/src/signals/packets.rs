@@ -343,7 +343,7 @@ impl CommandRejectResponse {
 
     pub(crate) fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
         ControlFrame::new::<L>(IntoCmdRejectRspIter(self))
     }
@@ -351,7 +351,7 @@ impl CommandRejectResponse {
     /// Try to create a `CommandRejectResponse` from raw L2CAP data.
     pub fn try_from_raw_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
         ControlFrame::try_from_slice(data)
     }
@@ -518,7 +518,7 @@ impl LeCreditBasedConnectionRequest {
     /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
     pub fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
         ControlFrame::new::<L>(IntoLeCreditRequestIter(self))
     }
@@ -934,7 +934,7 @@ impl FlowControlCreditInd {
 
     pub(crate) fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
         ControlFrame::new::<L>(IntoFlowControlCreditIndIter(self))
     }

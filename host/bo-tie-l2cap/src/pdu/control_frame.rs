@@ -22,7 +22,7 @@ impl<T> ControlFrame<T> {
     /// There must be a signalling channel associated with the logical link `L`.
     pub fn new<L>(payload: T) -> Self
     where
-        L: crate::private::Link,
+        L: crate::private::LinkType,
     {
         let channel_id = L::get_signaling_channel().expect("no signaling channel for this logical link");
         ControlFrame { channel_id, payload }

@@ -80,7 +80,7 @@ impl SignalsProcessor {
         if let Some(identifier) = get_identifier!(control_frame) {
             let response = CommandRejectResponse::new_command_not_understood(identifier);
 
-            let pdu = response.as_control_frame::<C::LogicalLink>();
+            let pdu = response.as_control_frame::<C::LogicalLinkType>();
 
             connection_channel.send(pdu).await?;
 
@@ -131,7 +131,7 @@ impl SignalsProcessor {
                 let response = invalid_cid_response!(id, local, source);
 
                 connection_channel
-                    .send(response.as_control_frame::<C::LogicalLink>())
+                    .send(response.as_control_frame::<C::LogicalLinkType>())
                     .await?;
 
                 Ok(SignalProcessOutput::Rejected(response))

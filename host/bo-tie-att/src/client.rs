@@ -1,7 +1,7 @@
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
 use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::ConnectionChannel;
+use bo_tie_l2cap::{ConnectionChannel, ConnectionChannelExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ClientPduName {
@@ -96,7 +96,7 @@ impl core::fmt::Display for ClientPduName {
 pub trait ResponseProcessor {
     type Response;
 
-    fn process_response(self, acl_data: &l2cap::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error>;
+    fn process_response(self, acl_data: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error>;
 }
 
 /// Process a server response of a client request
@@ -114,7 +114,7 @@ where
     ///
     /// The input `acl_data` should be the response from the server to the request that generated
     /// this `ResponseProcessor`.
-    fn process_response(self, acl_data: &l2cap::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error> {
+    fn process_response(self, acl_data: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error> {
         if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
             self.0(acl_data.get_payload())
         } else {
@@ -125,21 +125,14 @@ where
 
 /// Connect this device to an Attribute Server
 ///
-/// `ConnectClient` is used for initiating and connecting to an attribute server. It performs a
-/// MTU exchange as part of the connection process. Once the exchange is complete and there were no
-/// errors preventing a connection, a [`Client`] will be created.
-///
-/// ```
-/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) -> Result<(), bo_tie_att::ConnectionError<C>> {
-/// use bo_tie_att::client::ConnectClient;
-///
-/// // Initiate a connection to the Att server with
-/// // a MTU of 64 and then create the client.
-/// let client = ConnectClient::connect(&mut connection_channel, 64).await?;
-/// # Ok(())
-/// # }
+/// `ConnectClient` is used for initiating and connecting to an attribute server. Unlike a physical
+/// link there is not an extensive process to setup an ATT connection beyond configuring a Maximum
+/// Transmission Unit (MTU). In fact if the default MTU is to be used for the connection (the value
+/// of which is defined at a higher layer) then there is not exchange with the server and the client
+/// automatically "connects".
 /// ```
 pub struct ConnectClient {
+    default_mtu: usize,
     requested_mtu: usize,
     skipped_mtu_request: bool,
 }
@@ -147,70 +140,84 @@ pub struct ConnectClient {
 impl ConnectClient {
     /// Connect to the Attribute server of the peer device
     ///
-    /// `connect` initiates the connection and create an Attribute `Client`. This is a combination
-    /// of methods `initiate` + `create_client`. This is a simpler, but it doesn't allow for other
-    /// Bluetooth protocols to transmit PDU's on the same connection channel until it is complete.
+    /// `connect` is a shortcut of calling methods `initiate` and then `create_client`. This is a
+    /// simpler, but it doesn't allow for other Bluetooth protocols to transmit PDU's on the same
+    /// physical link until it is complete.
     ///
-    /// # Error
-    /// This expects that the ATT server will only transmit an *Exchange MTU Response* PDU through
-    /// the connection channel until the completion of the future created by `connect`. Any other
-    /// PDU will cause `connect` to return an error.
-    pub async fn connect<C, M>(connection_channel: &mut C, mtu: M) -> Result<Client, super::ConnectionError<C>>
+    /// # MTU
+    /// The `default_mtu` is the initial MTU set for this instance of the ATT protocol. This value
+    /// is defined by a higher layer protocol or profile and it is the assumed value of the MTU when
+    /// the client and server initially connect.
+    ///
+    /// The `requested_mtu` is the value that will be sent as part of an *exchange MTU request* that
+    /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
+    /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
+    /// during the MTU exchange will be set as the new MTU.
+    pub async fn connect<C, M>(
+        connection_channel: &mut C,
+        default_mtu: u16,
+        requested_mtu: M,
+    ) -> Result<Client, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
         M: Into<Option<u16>>,
     {
-        use bo_tie_l2cap::ConnectionChannelExt;
+        let connect_client = Self::initiate(connection_channel, default_mtu, requested_mtu).await?;
 
-        let connect_client = Self::initiate(connection_channel, mtu).await?;
-
-        let l2cap_pdus = connection_channel
+        let response = connection_channel
             .receive_b_frame()
             .await
-            .map_err(|e| e.from_infallible())?;
+            .map_err(|e| super::ConnectionError::RecvError(e))?;
 
-        if l2cap_pdus.len() > 1 {
-            return Err(super::Error::Other("received more than one L2CAP PDU when connecting ATT client").into());
-        }
-
-        // Getting the first will never fail as receive_b_frame().await always returns at least one
-        let response = l2cap_pdus.first().unwrap();
-
-        connect_client.create_client(connection_channel, response).await
+        connect_client.create_client(&response).await.map_err(|e| e.into())
     }
 
-    /// Create a new `LeConnectClient` and initiate the connection process
+    /// Initiate a connection to an ATT server
     ///
-    /// This takes a connection channel between this device and a slave device with an optional
-    /// maximum transfer unit (MTU). When the MTU is deliberately set, this client will request the
-    /// server to use this MTU, but oth devices need to go through a MTU handshake before an MTU
-    /// (less than or equal to `mtu`) is assigned to the connection. If `max_mtu` is `None`, then
-    /// the smallest MTU for the channel is used as the maximum MTU. This MTU size will depend on if
-    /// the channel is for LE or BR/EDR.
-    pub async fn initiate<C, M>(connection_channel: &C, mtu: M) -> Result<ConnectClient, super::ConnectionError<C>>
+    /// # MTU
+    /// The `default_mtu` is the initial MTU set for this instance of the ATT protocol. This value
+    /// is defined by a higher layer protocol or profile and it is the assumed value of the MTU when
+    /// the client and server initially connect.
+    ///
+    /// The `requested_mtu` is the value that will be sent as part of an *exchange MTU request* that
+    /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
+    /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
+    /// during the MTU exchange will be set as the new MTU.
+    pub async fn initiate<C, M>(
+        connection_channel: &C,
+        default_mtu: u16,
+        requested_mtu: M,
+    ) -> Result<ConnectClient, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
         M: Into<Option<u16>>,
     {
-        let requested_mtu = mtu.into().map(|mtu| mtu.into()).unwrap_or(connection_channel.min_mtu());
+        let default_mtu = default_mtu.into();
 
-        if connection_channel.min_mtu() > requested_mtu {
-            Err(super::Error::TooSmallMtu.into())
-        } else if requested_mtu == connection_channel.min_mtu() {
-            Ok(ConnectClient {
-                requested_mtu,
-                skipped_mtu_request: true,
-            })
-        } else {
+        if let Some(requested_mtu) = requested_mtu.into() {
             let mtu_req = pdu::exchange_mtu_request(requested_mtu as u16);
 
-            let acl_data = l2cap::BasicFrame::new(TransferFormatInto::into(&mtu_req), super::L2CAP_CHANNEL_ID);
+            let requested_mtu = requested_mtu.into();
 
-            connection_channel.send(acl_data).await?;
+            let acl_data = l2cap::pdu::BasicFrame::new(TransferFormatInto::into(&mtu_req), super::L2CAP_CHANNEL_ID);
+
+            connection_channel
+                .send(acl_data)
+                .await
+                .map_err(|e| super::ConnectionError::SendError(e))?;
 
             Ok(ConnectClient {
+                default_mtu,
                 requested_mtu,
                 skipped_mtu_request: false,
+            })
+        } else {
+            let requested_mtu = default_mtu;
+
+            Ok(ConnectClient {
+                default_mtu,
+                requested_mtu,
+                skipped_mtu_request: true,
             })
         }
     }
@@ -221,54 +228,29 @@ impl ConnectClient {
     /// occur if the response doesn't contain the correct channel identifier or an unexpected ATT
     /// PDU was received. The server is expected to respond with either a mtu response PDU or an
     /// error PDU with request not supported.
-    pub async fn create_client<C>(
-        self,
-        connection_channel: &C,
-        response: &l2cap::BasicFrame<Vec<u8>>,
-    ) -> Result<Client, super::ConnectionError<C>>
-    where
-        C: ConnectionChannel,
-    {
+    pub async fn create_client(self, response: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Client, super::Error> {
         if self.skipped_mtu_request {
-            Ok(Client::new())
+            Ok(Client::new(self.requested_mtu))
         } else if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
             Err(super::Error::IncorrectChannelId(response.get_channel_id()).into())
         } else if ServerPduName::ExchangeMTUResponse.is_convertible_from(response.get_payload()) {
-            self.process_mtu_response(connection_channel, response.get_payload())
+            self.process_mtu_response(response.get_payload())
         } else if ServerPduName::ErrorResponse.is_convertible_from(response.get_payload()) {
-            self.process_err_response(response.get_payload()).map_err(|e| e.into())
+            self.process_err_response(response.get_payload())
         } else {
             self.process_incorrect_response(response.get_payload().get(0).cloned())
                 .map_err(|e| e.into())
         }
     }
 
-    fn process_mtu_response<C>(
-        self,
-        connection_channel: &C,
-        payload: &[u8],
-    ) -> Result<Client, super::ConnectionError<C>>
-    where
-        C: ConnectionChannel,
-    {
+    fn process_mtu_response(self, payload: &[u8]) -> Result<Client, crate::Error> {
         let pdu: Result<pdu::Pdu<pdu::MtuResponse>, _> = TransferFormatTryFrom::try_from(payload);
 
         match pdu {
             Ok(received_mtu) => {
                 let mtu: usize = self.requested_mtu.min(received_mtu.get_parameters().0.into());
 
-                if connection_channel.min_mtu() > mtu {
-                    log::info!(
-                        "(ATT) received a bad MTU (MTU is less than the minimum) \
-                        from the server, default to using the minimum MTU"
-                    );
-
-                    Ok(Client::new())
-                } else if connection_channel.max_mtu() < mtu {
-                    Ok(Client::new())
-                } else {
-                    Ok(Client::new())
-                }
+                Ok(Client::new(mtu))
             }
             Err(e) => Err(TransferFormatError::from(format!("Bad exchange MTU response: {}", e)).into()),
         }
@@ -284,7 +266,7 @@ impl ConnectClient {
 
                 log::info!("(ATT) server doesn't support 'MTU exchange'; default MTU is used",);
 
-                Ok(Client::new())
+                Ok(Client::new(self.default_mtu))
             }
 
             e @ _ => Err(super::Error::from(TransferFormatError {
@@ -327,11 +309,13 @@ impl ConnectClient {
 ///
 /// The MTU between the Client and Server is already established when a 'Client' is created, however
 /// a new MTU can be requested at any time.
-pub struct Client;
+pub struct Client {
+    mtu: usize,
+}
 
 impl Client {
-    fn new() -> Self {
-        Self
+    fn new(mtu: usize) -> Self {
+        Self { mtu }
     }
 
     fn process_raw_data<P>(expected_response: ServerPduName, bytes: &[u8]) -> Result<P, super::Error>
@@ -370,10 +354,10 @@ impl Client {
     {
         let payload = TransferFormatInto::into(pdu);
 
-        if payload.len() > connection_channel.get_mtu() {
+        if payload.len() > self.mtu {
             Err(super::Error::MtuExceeded.into())
         } else {
-            let data = l2cap::BasicFrame::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
+            let data = l2cap::pdu::BasicFrame::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
 
             connection_channel
                 .send(data)
@@ -389,24 +373,22 @@ impl Client {
     ///
     /// The new MTU is returned by the future
     pub async fn exchange_mtu_request<C>(
-        self,
+        &mut self,
         connection_channel: &mut C,
         mtu: u16,
     ) -> Result<impl ResponseProcessor<Response = ()> + '_, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
-        if connection_channel.min_mtu() > mtu.into() {
+        if self.mtu > mtu.into() {
             Err(super::Error::TooSmallMtu.into())
-        } else if connection_channel.max_mtu() < mtu.into() {
-            Err(super::Error::MtuExceeded.into())
         } else {
             self.send(connection_channel, &pdu::exchange_mtu_request(mtu)).await?;
 
             Ok(ResponseProcessorCheck(move |data| {
                 let response: pdu::MtuResponse = Self::process_raw_data(ServerPduName::ExchangeMTUResponse, data)?;
 
-                connection_channel.set_mtu(core::cmp::min(mtu, response.0).into());
+                self.mtu = core::cmp::min(mtu, response.0).into();
 
                 Ok(())
             }))
@@ -738,7 +720,7 @@ impl Client {
         let op: u8 = pdu.get_opcode().as_raw();
 
         if ClientPduName::try_from(op).is_err() && ServerPduName::try_from(op).is_err() {
-            if connection_channel.get_mtu() >= pdu.len_of_into() {
+            if self.mtu >= pdu.len_of_into() {
                 self.send(connection_channel, &pdu).await?;
 
                 Ok(())
