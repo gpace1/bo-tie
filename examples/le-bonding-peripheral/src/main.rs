@@ -219,7 +219,7 @@ where
                     match packet.get_channel_id() {
                         ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
                             gatt_server
-                                .process_acl_data(&mut le_connection_channel, &packet)
+                                .process_att_pdu(&mut le_connection_channel, &packet)
                                 .await
                                 .unwrap();
                         }

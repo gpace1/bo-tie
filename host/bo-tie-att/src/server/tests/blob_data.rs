@@ -188,7 +188,7 @@ async fn blobbing_from_blob_request() {
     let request_1 = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, 0));
 
     bti.server
-        .process_acl_data(&mut connection_channel, &request_1)
+        .process_att_pdu(&mut connection_channel, &request_1)
         .await
         .unwrap();
 
@@ -203,7 +203,7 @@ async fn blobbing_from_blob_request() {
     let request_2 = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, 0));
 
     bti.server
-        .process_acl_data(&mut connection_channel, &request_2)
+        .process_att_pdu(&mut connection_channel, &request_2)
         .await
         .unwrap();
 
@@ -225,7 +225,7 @@ async fn blobbing_from_blob_request() {
         let request = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, offset as u16));
 
         bti.server
-            .process_acl_data(&mut connection_channel, &request)
+            .process_att_pdu(&mut connection_channel, &request)
             .await
             .unwrap();
 
@@ -246,7 +246,7 @@ async fn blobbing_from_blob_request() {
     let request_last = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, (item_cnt * item_size) as u16));
 
     bti.server
-        .process_acl_data(&mut connection_channel, &request_last)
+        .process_att_pdu(&mut connection_channel, &request_last)
         .await
         .unwrap();
 
@@ -260,7 +260,7 @@ async fn blobbing_from_blob_request() {
     let blob_request_tangent = pdu_into_acl_data(pdu::read_blob_request(bti.att_handle, 0));
 
     bti.server
-        .process_acl_data(&mut connection_channel, &blob_request_tangent)
+        .process_att_pdu(&mut connection_channel, &blob_request_tangent)
         .await
         .unwrap();
 
@@ -276,7 +276,7 @@ async fn blobbing_from_blob_request() {
     let read_request_tangent = pdu_into_acl_data(pdu::read_request(other_handle));
 
     bti.server
-        .process_acl_data(&mut connection_channel, &read_request_tangent)
+        .process_att_pdu(&mut connection_channel, &read_request_tangent)
         .await
         .unwrap();
 
@@ -295,7 +295,7 @@ async fn blobbing_from_read_request_test() {
 
     blob_info
         .server
-        .process_acl_data(&mut DummyConnection, &request_1)
+        .process_att_pdu(&mut DummyConnection, &request_1)
         .await
         .unwrap();
 
@@ -307,7 +307,7 @@ async fn blobbing_from_read_request_test() {
 
     blob_info
         .server
-        .process_acl_data(&mut DummyConnection, &request_2)
+        .process_att_pdu(&mut DummyConnection, &request_2)
         .await
         .unwrap();
 
@@ -323,7 +323,7 @@ async fn blobbing_from_read_by_type() {
 
     blob_info
         .server
-        .process_acl_data(&mut DummyConnection, &request_1)
+        .process_att_pdu(&mut DummyConnection, &request_1)
         .await
         .unwrap();
 
@@ -335,7 +335,7 @@ async fn blobbing_from_read_by_type() {
 
     blob_info
         .server
-        .process_acl_data(&mut DummyConnection, &request_2)
+        .process_att_pdu(&mut DummyConnection, &request_2)
         .await
         .unwrap();
 

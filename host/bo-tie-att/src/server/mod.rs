@@ -515,6 +515,14 @@ where
         &mut self.attributes
     }
 
+    /// Get the current MTU
+    ///
+    /// # Note
+    /// The return can be safely casted to a `u16`
+    pub fn get_mtu(&self) -> usize {
+        self.mtu
+    }
+
     /// Give a permission to the client
     ///
     /// This doesn't check that the client is qualified to receive the permission, it just adds an
@@ -602,32 +610,32 @@ where
         check_permissions!(self, handle, operation_permissions)
     }
 
-    /// Process a received ACL Data packet form the Bluetooth Controller
+    /// Process a received ATT PDU
     ///
     /// The packet is assumed to be in the form of an Attribute protocol request packet. This
     /// function will then process the request and send to the client the appropriate response
     /// packet.
     ///
     /// This function is a combination of the methods
-    /// [`parse_acl_packet`](crate::server::Server::parse_acl_packet) and
-    /// [`process_parsed_acl_data`](crate::server::Server::process_parsed_acl_data). It is
+    /// [`parse_att_pdu`](crate::server::Server::parse_att_pdu) and
+    /// [`process_parsed_acl_data`](crate::server::Server::process_parsed_att_pdu). It is
     /// recommended to use this function over those two functions when this `Server` is at the top
     /// of your server stack (you're not using GATT or some other custom higher layer protocol).
-    pub async fn process_acl_data<C>(
+    pub async fn process_att_pdu<C>(
         &mut self,
         connection_channel: &mut C,
-        acl_packet: &l2cap::pdu::BasicFrame<Vec<u8>>,
+        pdu: &l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<Status, super::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
-        let (pdu_type, payload) = self.parse_acl_packet(acl_packet)?;
+        let (pdu_type, payload) = self.parse_att_pdu(pdu)?;
 
-        self.process_parsed_acl_data(connection_channel, pdu_type, payload)
+        self.process_parsed_att_pdu(connection_channel, pdu_type, payload)
             .await
     }
 
-    /// Parse an ACL Packet
+    /// Parse an ATT PDU
     ///
     /// This checks the following things
     /// * The ACL packet has the correct channel identifier for the Attribute Protocol
@@ -637,9 +645,9 @@ where
     /// # Note
     /// This is meant to be used by implementations of higher layer protocols for interfacing with
     /// the attribute protocol. Use
-    /// [`process_acl_data`](crate::server::Server::process_acl_data) when directly using this
+    /// [`process_acl_data`](crate::server::Server::process_att_pdu) when directly using this
     /// server for communication with a client device.
-    pub fn parse_acl_packet<'a>(
+    pub fn parse_att_pdu<'a>(
         &self,
         acl_packet: &'a l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
@@ -662,10 +670,10 @@ where
         }
     }
 
-    /// Process a parsed ACL Packet
+    /// Process a parsed ATT PDU
     ///
-    /// This will take the data from the Ok result of [`parse_acl_packet`](Server::parse_acl_packet).
-    /// This is otherwise equivalent to the function [`process_acl_data`](Server::parse_acl_packet)
+    /// This will take the data from the Ok result of [`parse_acl_packet`](Server::parse_att_pdu).
+    /// This is otherwise equivalent to the function [`process_acl_data`](Server::parse_att_pdu)
     /// (really `process_acl_data` is just `parse_acl_packet` followed by this function) and is
     /// useful for higher layer protocols that need to parse an ACL packet before performing their
     /// own calculations on the data and *then* have the Attribute server processing the data.
@@ -673,9 +681,9 @@ where
     /// # Note
     /// This is meant to be used by implementations of higher layer protocols for interfacing with
     /// the attribute protocol. Use
-    /// [`process_acl_data`](crate::server::Server::process_acl_data) when directly using this
+    /// [`process_acl_data`](crate::server::Server::process_att_pdu) when directly using this
     /// server for communication with a client device.
-    pub async fn process_parsed_acl_data<C>(
+    pub async fn process_parsed_att_pdu<C>(
         &mut self,
         connection_channel: &mut C,
         pdu_type: ClientPduName,

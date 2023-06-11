@@ -96,7 +96,7 @@ impl core::fmt::Display for ClientPduName {
 pub trait ResponseProcessor {
     type Response;
 
-    fn process_response(self, acl_data: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error>;
+    fn process_response(self, b_frame: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error>;
 }
 
 /// Process a server response of a client request

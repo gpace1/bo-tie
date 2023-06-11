@@ -1210,7 +1210,7 @@ mod test {
                 match c2.receive_b_frame().await {
                     Ok(l2cap_data_vec) => {
                         for l2cap_pdu in l2cap_data_vec {
-                            match server.process_acl_data(&mut c2, &l2cap_pdu).await {
+                            match server.process_att_pdu(&mut c2, &l2cap_pdu).await {
                                 Err(ConnectionError::AttError(super::Error::UnknownOpcode(op)))
                                     if op == kill_opcode =>
                                 {

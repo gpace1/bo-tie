@@ -141,7 +141,7 @@ where
 
     loop {
         for l2cap_packet in connection_channel.receive_b_frame().await.unwrap() {
-            match server.process_acl_data(&mut connection_channel, &l2cap_packet).await {
+            match server.process_att_pdu(&mut connection_channel, &l2cap_packet).await {
                 Ok(_) => (),
                 Err(e) => println!("Cannot process acl data, '{}'", e),
             }

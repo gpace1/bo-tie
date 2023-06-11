@@ -4,6 +4,15 @@
 extern crate alloc;
 extern crate core;
 
+/// The minimum size of the ATT profile's MTU (running the GATT profile)
+///
+/// This is also the default ATT_MTU when running the GATT profile over a LE physical link.
+///
+/// # Note
+/// This value is only for 'regular' LE ATT protocol operation. This is not the same value for
+/// enhanced LE ATT or BR/EDR.
+const LE_MINIMUM_ATT_MTU: u16 = 23;
+
 /// macro to ensure that `$to` is filled only with unique items of `$from`.
 macro_rules! unique_only {
     ($to:expr, $from:expr) => {
@@ -91,7 +100,7 @@ use bo_tie_att::TransferFormatInto;
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::ConnectionChannel;
+use bo_tie_l2cap::{ConnectionChannel, ConnectionChannelExt};
 
 struct ServiceDefinition;
 
@@ -1237,7 +1246,7 @@ impl ServerBuilder {
         #[cfg(feature = "cryptography")]
         gatt_service_info.initiate_database_hash(&mut self.attributes);
 
-        let server = att::server::Server::new(Some(self.attributes), queue_writer);
+        let server = att::server::Server::new(LE_MINIMUM_ATT_MTU, Some(self.attributes), queue_writer);
 
         Server {
             primary_services: self.primary_services,
@@ -1275,12 +1284,12 @@ macro_rules! send_pdu {
     (SKIP_LOG, $connection_channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = bo_tie_att::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::BasicFrame::new(interface_data, bo_tie_att::L2CAP_CHANNEL_ID);
+        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, bo_tie_att::L2CAP_CHANNEL_ID);
 
         $connection_channel
             .send(acl_data)
             .await
-            .map_err(|e| bo_tie_att::ConnectionError::<C>::from(e))
+            .map_err(|e| bo_tie_att::ConnectionError::<C>::SendError(e))
     }};
 }
 
@@ -1325,30 +1334,47 @@ where
         })
     }
 
-    /// Process some ACL data as a ATT client message
-    pub async fn process_acl_data<C>(
+    /// Process an ATT PDU
+    ///
+    /// This processes an ATT client PDU with the requirements imposed by a GATT profile. It is
+    /// important to call this method to ensure that the GATT profile requirements are met within
+    /// the underlying ATT server.
+    pub async fn process_att_pdu<C>(
         &mut self,
         connection_channel: &mut C,
-        acl_data: &l2cap::BasicFrame<alloc::vec::Vec<u8>>,
+        b_frame: &l2cap::pdu::BasicFrame<alloc::vec::Vec<u8>>,
     ) -> Result<bo_tie_att::server::Status, att::ConnectionError<C>>
     where
         C: ConnectionChannel,
     {
-        let (pdu_type, payload) = self.server.parse_acl_packet(&acl_data)?;
+        let (pdu_type, payload) = self.server.parse_att_pdu(&b_frame)?;
 
-        if let att::client::ClientPduName::ReadByGroupTypeRequest = pdu_type {
-            log::info!(
-                "(GATT) processing '{}'",
-                att::client::ClientPduName::ReadByGroupTypeRequest
-            );
+        match pdu_type {
+            att::client::ClientPduName::ReadByGroupTypeRequest => {
+                log::info!(
+                    "(GATT) processing '{}'",
+                    att::client::ClientPduName::ReadByGroupTypeRequest
+                );
 
-            self.process_read_by_group_type_request(connection_channel, &[]).await?;
+                self.process_read_by_group_type_request(connection_channel, payload)
+                    .await?;
 
-            Ok(bo_tie_att::server::Status::None)
-        } else {
-            self.server
-                .process_parsed_acl_data(connection_channel, pdu_type, payload)
-                .await
+                Ok(bo_tie_att::server::Status::None)
+            }
+            att::client::ClientPduName::ExchangeMtuRequest => {
+                if self.check_mtu_request(connection_channel, payload).await? {
+                    self.server
+                        .process_parsed_att_pdu(connection_channel, pdu_type, payload)
+                        .await
+                } else {
+                    Ok(bo_tie_att::server::Status::None)
+                }
+            }
+            _ => {
+                self.server
+                    .process_parsed_att_pdu(connection_channel, pdu_type, payload)
+                    .await
+            }
         }
     }
 
@@ -1480,15 +1506,35 @@ where
             );
         }
 
-        let response = Response::new(
-            self,
-            request.handle_range.to_range_bounds(),
-            connection_channel.get_mtu(),
-        );
+        let response = Response::new(self, request.handle_range.to_range_bounds(), self.server.get_mtu());
 
         let pdu = att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response);
 
         send_pdu!(connection_channel, pdu)
+    }
+
+    /// Check a MTU request to ensure it does not contain a MTU less than [`LE_MINIMUM_ATT_MTU`]
+    async fn check_mtu_request<C>(
+        &self,
+        connection_channel: &C,
+        payload: &[u8],
+    ) -> Result<bool, att::ConnectionError<C>>
+    where
+        C: ConnectionChannel,
+    {
+        match <att::pdu::MtuRequest as att::TransferFormatTryFrom>::try_from(payload) {
+            Ok(request) => Ok(LE_MINIMUM_ATT_MTU >= request.0),
+            Err(_) => {
+                send_error!(
+                    connection_channel,
+                    0,
+                    att::client::ClientPduName::ReadByGroupTypeRequest,
+                    att::pdu::Error::UnlikelyError,
+                )?;
+
+                Ok(false)
+            }
+        }
     }
 
     /// Add Services to the Server
@@ -1568,13 +1614,31 @@ impl<Q> core::ops::DerefMut for Server<Q> {
     }
 }
 
-#[derive(Debug)]
 pub enum AddServicesError<C: ConnectionChannel> {
     NoServicesChangedCharacteristic,
     ConnectionError(att::ConnectionError<C>),
 }
 
-impl<C: core::fmt::Display + ConnectionChannel> core::fmt::Display for AddServicesError<C> {
+impl<C> core::fmt::Debug for AddServicesError<C>
+where
+    C: ConnectionChannel,
+    C::SendErr: core::fmt::Debug,
+    C::RecvErr: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            AddServicesError::NoServicesChangedCharacteristic => f.write_str("NoServicesChangedCharacteristic"),
+            AddServicesError::ConnectionError(e) => core::fmt::Debug::fmt(e, f),
+        }
+    }
+}
+
+impl<C: ConnectionChannel> core::fmt::Display for AddServicesError<C>
+where
+    C: ConnectionChannel,
+    C::SendErr: core::fmt::Display,
+    C::RecvErr: core::fmt::Display,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             AddServicesError::NoServicesChangedCharacteristic => f.write_str(
@@ -1587,7 +1651,13 @@ impl<C: core::fmt::Display + ConnectionChannel> core::fmt::Display for AddServic
 }
 
 #[cfg(feature = "std")]
-impl<C: std::error::Error + ConnectionChannel> std::error::Error for AddServicesError<C> {}
+impl<C> std::error::Error for AddServicesError<C>
+where
+    C: ConnectionChannel,
+    C::SendErr: std::error::Error,
+    C::RecvErr: std::error::Error,
+{
+}
 
 /// A GATT client
 ///
@@ -1690,15 +1760,14 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
         >,
     ) -> Result<Option<bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>, bo_tie_att::ConnectionError<C>> {
         use bo_tie_att::pdu::Error;
-        use bo_tie_l2cap::ConnectionChannelExt;
 
-        let frames = self.channel.receive_b_frame().await.map_err(|e| e.from_infallible())?;
+        let frame = self
+            .channel
+            .receive_b_frame()
+            .await
+            .map_err(|e| bo_tie_att::ConnectionError::RecvError(e))?;
 
-        if frames.len() != 1 {
-            return Err(bo_tie_att::Error::Other("received more than one L2CAP PDU").into());
-        };
-
-        match response_processor.process_response(frames.first().unwrap()) {
+        match response_processor.process_response(&frame) {
             Ok(response) => Ok(Some(response)),
             Err(bo_tie_att::Error::Pdu(pdu)) if pdu.get_parameters().error == Error::AttributeNotFound => Ok(None), // no more services
             Err(e) => Err(e.into()),
@@ -2112,10 +2181,7 @@ mod tests {
 
         let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
-        assert_eq!(
-            Ok(()),
-            server.process_acl_data(&mut test_channel, &acl_client_pdu).await
-        );
+        assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
 
         let expected_response = att::pdu::ReadByGroupTypeResponse::new(vec![
             // GAP Service
@@ -2137,10 +2203,7 @@ mod tests {
 
         let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
-        assert_eq!(
-            Ok(()),
-            server.process_acl_data(&mut test_channel, &acl_client_pdu).await
-        );
+        assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
 
         let expected_response =
             att::pdu::ReadByGroupTypeResponse::new(vec![att::pdu::ReadGroupTypeData::new(12, 14, second_test_uuid)]);
@@ -2158,10 +2221,7 @@ mod tests {
         let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
 
         // Request was made for for a attribute that was out of range
-        assert_eq!(
-            Ok(()),
-            server.process_acl_data(&mut test_channel, &acl_client_pdu).await
-        );
+        assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
     }
 
     fn is_send<T: Future + Send>(t: T) {}

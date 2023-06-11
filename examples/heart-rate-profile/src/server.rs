@@ -204,7 +204,7 @@ impl Server {
         channel: &mut C,
         packet: &bo_tie::host::l2cap::BasicFrame<Vec<u8>>,
     ) {
-        let parse_result = self.server.parse_acl_packet(packet);
+        let parse_result = self.server.parse_att_pdu(packet);
 
         if let Ok((ClientPduName::ExchangeMtuRequest, payload)) = parse_result {
             let mtu: u16 = TransferFormatTryFrom::try_from(payload).unwrap();
@@ -212,7 +212,7 @@ impl Server {
             self.local_heart_rate_measurement.set_mtu(mtu.into()).await
         }
 
-        self.server.process_acl_data(channel, packet).await.unwrap();
+        self.server.process_att_pdu(channel, packet).await.unwrap();
     }
 
     /// Give Permissions to the client when encrypted

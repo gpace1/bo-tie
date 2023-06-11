@@ -53,7 +53,7 @@ async fn prepare_write_with_exec_test() {
 
         let acl_data = pdu_into_acl_data(request);
 
-        server.process_acl_data(&mut cc, &acl_data).await.unwrap();
+        server.process_att_pdu(&mut cc, &acl_data).await.unwrap();
 
         let server_sent_response: pdu::Pdu<pdu::PreparedWriteResponse> =
             TransferFormatTryFrom::try_from(&cc.sent.take()).unwrap();
@@ -66,7 +66,7 @@ async fn prepare_write_with_exec_test() {
     let exec_write_request = pdu::execute_write_request(WriteAllPreparedWrites);
 
     server
-        .process_acl_data(&mut cc, &pdu_into_acl_data(exec_write_request))
+        .process_att_pdu(&mut cc, &pdu_into_acl_data(exec_write_request))
         .await
         .unwrap();
 
@@ -111,7 +111,7 @@ async fn prepare_write_with_cancel_test() {
 
     for request in prepared_write_requests.iter() {
         server
-            .process_acl_data(&mut cc, &pdu_into_acl_data(request))
+            .process_att_pdu(&mut cc, &pdu_into_acl_data(request))
             .await
             .unwrap()
     }
@@ -119,7 +119,7 @@ async fn prepare_write_with_cancel_test() {
     let cancel_write_request = pdu::execute_write_request(CancelAllPreparedWrites);
 
     server
-        .process_acl_data(&mut cc, &pdu_into_acl_data(cancel_write_request))
+        .process_att_pdu(&mut cc, &pdu_into_acl_data(cancel_write_request))
         .await
         .unwrap();
 
@@ -167,7 +167,7 @@ async fn prepare_write_over_flow() {
 
     for (cnt, request) in prepared_write_requests.iter().enumerate() {
         server
-            .process_acl_data(&mut cc, &pdu_into_acl_data(request))
+            .process_att_pdu(&mut cc, &pdu_into_acl_data(request))
             .await
             .unwrap();
 
@@ -212,14 +212,14 @@ async fn prepare_write_bad_offset() {
 
     let acl_data = BasicFrame::new(raw_request, crate::L2CAP_CHANNEL_ID);
 
-    server.process_acl_data(&mut cc, &acl_data).await.unwrap();
+    server.process_att_pdu(&mut cc, &acl_data).await.unwrap();
 
     let exec_req = pdu::execute_write_request(pdu::ExecuteWriteFlag::WriteAllPreparedWrites);
 
     <pdu::Pdu<pdu::PreparedWriteResponse> as TransferFormatTryFrom>::try_from(&cc.sent.take()).unwrap();
 
     server
-        .process_acl_data(&mut cc, &pdu_into_acl_data(exec_req))
+        .process_att_pdu(&mut cc, &pdu_into_acl_data(exec_req))
         .await
         .unwrap();
 

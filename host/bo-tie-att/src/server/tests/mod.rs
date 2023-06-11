@@ -169,7 +169,7 @@ where
 
     is_send(server.process_execute_write_request(&mut c, ExecuteWriteFlag::CancelAllPreparedWrites));
 
-    is_send(server.process_parsed_acl_data(&mut c, ClientPduName::FindInformationRequest, &[]));
+    is_send(server.process_parsed_att_pdu(&mut c, ClientPduName::FindInformationRequest, &[]));
 
-    is_send(server.process_acl_data(&mut c, &BasicFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier)))
+    is_send(server.process_att_pdu(&mut c, &BasicFrame::new(Vec::new(), ChannelIdentifier::NullIdentifier)))
 }
