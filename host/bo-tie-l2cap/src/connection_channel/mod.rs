@@ -378,7 +378,6 @@ where
         Poll::Ready(future)
     }
 
-    // todo check for valid channel (if the channel is defined/established) upon basic header completion
     async fn maybe_recv_header_process(
         &self,
         owner: ChannelIdentifier,
