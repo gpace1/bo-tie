@@ -10,7 +10,9 @@
 //! allocated channel for the connection, the number of credits, and the MTU of the SDU.
 
 use crate::channels::ChannelIdentifier;
-use crate::pdu::{FragmentIterator, FragmentL2capPdu, FragmentationError, PacketsError, RecombineL2capPdu};
+use crate::pdu::{
+    FragmentIterator, FragmentL2capPdu, FragmentationError, PacketsError, RecombineL2capPdu, SduPacketsIterator,
+};
 use bo_tie_core::buffer::TryExtend;
 
 /// Credit-Based SDU
@@ -60,103 +62,112 @@ impl<T> CreditBasedSdu<T> {
 
 impl<T> crate::pdu::FragmentL2capSdu for CreditBasedSdu<T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: IntoIterator<Item = u8>,
+    T::IntoIter: ExactSizeIterator,
 {
-    type Pdu<'a> = CreditBasedFrame<SduSubSlice<'a, T>> where Self: 'a;
+    type PacketsIterator = PacketsIterator<T::IntoIter>;
 
-    type PacketsIterator<'a> = PacketsIterator<'a, T> where Self: 'a;
+    fn into_packets(self) -> Result<Self::PacketsIterator, PacketsError> {
+        let sdu = self.sdu.into_iter();
 
-    fn as_packets(&self) -> Result<Self::PacketsIterator<'_>, PacketsError> {
         if self.mps == 0 {
             Err(PacketsError::PayloadZeroSized)
-        } else if self.sdu.len() > CreditBasedSdu::<T>::MAX_SDU_SIZE {
+        } else if sdu.len() > CreditBasedSdu::<T>::MAX_SDU_SIZE {
             Err(PacketsError::SduTooLarge)
         } else {
-            Ok(PacketsIterator { sdu: self, offset: 0 })
+            Ok(PacketsIterator::new(self.channel_id, self.mps.into(), sdu))
         }
     }
 }
 
-pub struct PacketsIterator<'a, T> {
-    sdu: &'a CreditBasedSdu<T>,
-    offset: usize,
+pub struct PacketsIterator<T: Iterator> {
+    channel_id: ChannelIdentifier,
+    sdu: core::iter::Peekable<core::iter::Fuse<T>>,
+    mps: usize,
+    first: bool,
 }
 
-impl<'a, T> Iterator for PacketsIterator<'a, T>
+impl<T: Iterator> PacketsIterator<T> {
+    fn new(channel_id: ChannelIdentifier, mps: usize, sdu: T) -> Self {
+        let first = true;
+
+        let sdu = sdu.fuse().peekable();
+
+        Self {
+            channel_id,
+            sdu,
+            mps,
+            first,
+        }
+    }
+}
+
+impl<T> SduPacketsIterator for PacketsIterator<T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8> + ExactSizeIterator,
 {
-    type Item = CreditBasedFrame<SduSubSlice<'a, T>>;
+    type Item<'a> = CreditBasedFrame<SduSubIter<'a, T>> where Self: 'a;
+
+    fn next(&mut self) -> Option<Self::Item<'_>> {
+        self.sdu.peek().is_some().then(|| {
+            if self.first {
+                self.first = false;
+
+                let max_amount = self.mps.checked_sub(2).unwrap_or_default();
+
+                let amount = core::cmp::min(self.sdu.len(), max_amount);
+
+                let sdu_size = self.sdu.len() as u16;
+
+                let channel_id = self.channel_id;
+
+                let sub_iter = SduSubIter {
+                    packets_iterator: self,
+                    amount,
+                };
+
+                CreditBasedFrame::new_first(sdu_size, channel_id, sub_iter)
+            } else {
+                let amount = core::cmp::min(self.sdu.len(), self.mps);
+
+                let channel_id = self.channel_id;
+
+                let sub_iter = SduSubIter {
+                    packets_iterator: self,
+                    amount,
+                };
+
+                CreditBasedFrame::new_subsequent(channel_id, sub_iter)
+            }
+        })
+    }
+}
+
+pub struct SduSubIter<'a, T: Iterator> {
+    packets_iterator: &'a mut PacketsIterator<T>,
+    amount: usize,
+}
+
+impl<T: Iterator<Item = u8>> Iterator for SduSubIter<'_, T> {
+    type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        use core::cmp::min;
+        if self.amount != 0 {
+            self.amount -= 1;
 
-        if self.offset < self.sdu.sdu.len() {
-            if self.offset == 0 {
-                // the first packet contains the SDU length
-                let sdu_len = (self.sdu.sdu.len() as u16).into();
-
-                let end = min(
-                    self.offset + <usize>::from(self.sdu.mps).checked_sub(2).unwrap_or_default(),
-                    self.offset + self.sdu.sdu.len(),
-                );
-
-                let payload = SduSubSlice {
-                    t: &self.sdu.sdu,
-                    start: self.offset,
-                    end,
-                };
-
-                self.offset += end;
-
-                Some(CreditBasedFrame {
-                    channel_id: self.sdu.channel_id,
-                    sdu_len,
-                    payload,
-                })
-            } else {
-                // subsequent packets do not contain the SDU length
-                let sdu_len = None;
-
-                let end = min(
-                    self.offset + <usize>::from(self.sdu.mps),
-                    self.offset + self.sdu.sdu.len(),
-                );
-
-                let payload = SduSubSlice {
-                    t: &self.sdu.sdu,
-                    start: self.offset,
-                    end,
-                };
-
-                self.offset += end;
-
-                Some(CreditBasedFrame {
-                    channel_id: self.sdu.channel_id,
-                    sdu_len,
-                    payload,
-                })
-            }
+            self.packets_iterator.sdu.next()
         } else {
             None
         }
     }
 }
 
-pub struct SduSubSlice<'a, T> {
-    t: &'a T,
-    start: usize,
-    end: usize,
-}
-
-impl<T> core::ops::Deref for SduSubSlice<'_, T>
+impl<T> ExactSizeIterator for SduSubIter<'_, T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8> + ExactSizeIterator,
 {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.t[self.start..self.end]
+    fn len(&self) -> usize {
+        core::cmp::min(self.packets_iterator.sdu.len(), self.amount)
     }
 }
 
@@ -237,6 +248,37 @@ impl<P> CreditBasedFrame<P> {
     pub fn get_payload(&self) -> &P {
         &self.payload
     }
+
+    /// Convert this `CreditBasedFrame` into its payload.
+    pub fn into_payload(self) -> P {
+        self.payload
+    }
+
+    /// Get the SDU length
+    ///
+    /// Only the first L2CAP PDU carries the SDU length. If this happens to be the first PDU then
+    /// the SDU length is returned.
+    pub fn get_sdu_length(&self) -> Option<u16> {
+        self.sdu_len
+    }
+
+    /// Create a new `CreditBasedFrame` for the first frame
+    pub(crate) fn new_first(sdu_size: u16, channel_id: ChannelIdentifier, payload: P) -> Self {
+        Self {
+            channel_id,
+            sdu_len: Some(sdu_size),
+            payload,
+        }
+    }
+
+    /// Create a new `CreditBasedFrame` for a subsequent frame
+    pub(crate) fn new_subsequent(channel_id: ChannelIdentifier, payload: P) -> Self {
+        Self {
+            channel_id,
+            sdu_len: None,
+            payload,
+        }
+    }
 }
 
 impl<'a> CreditBasedFrame<&'a [u8]> {
@@ -290,6 +332,40 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
         }
     }
 
+    /// Try to create the first credit based frame from a LE channel.
+    ///
+    /// The first credit based for of a SDU contains the *SDU Length* field, where as all subsequent
+    /// k-frames do not contain this field. This tries to create a `CreditBasedFrame` for a LE-U
+    /// channel.
+    pub fn try_le_first_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
+        Self::try_first_from::<crate::LeULinkType>(bytes)
+    }
+
+    /// Try to create the first credit based frame from an ACL channel
+    ///
+    /// The first credit based for of a SDU contains the *SDU Length* field, where as all subsequent
+    /// k-frames do not contain this field. This tries to create a `CreditBasedFrame` for an ACL-U
+    /// channel.
+    pub fn try_acl_first_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
+        Self::try_first_from::<crate::AclULinkType>(bytes)
+    }
+
+    /// Try to create a subsequent credit based frame from a LE channel.
+    ///
+    /// Credit based frames Frames after the first frame for a SDU do not contain the *SDU Length*
+    /// field. This tries to create a subsequent `CreditBasedFrame` for a LE-U channel.
+    pub fn try_le_subsequent_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
+        Self::try_first_from::<crate::LeULinkType>(bytes)
+    }
+
+    /// Try to create a subsequent credit based frame from an ACL channel
+    ///
+    /// Credit based frames Frames after the first frame for a SDU do not contain the *SDU Length*
+    /// field. This tries to create a subsequent `CreditBasedFrame` for a ACL-U channel.
+    pub fn try_acl_subsequent_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
+        Self::try_first_from::<crate::AclULinkType>(bytes)
+    }
+
     /// Try to create a 'subsequent'
     pub fn try_subsequent_from<L>(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>>
     where
@@ -314,40 +390,6 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
         } else {
             Err(CreditBasedFrameError::PayloadLengthIncorrect)
         }
-    }
-
-    /// Try to create the first credit based frame from a LE channel.
-    ///
-    /// The first credit based for of a SDU contains the *SDU Length* field, where as all subsequent
-    /// k-frames do not contain this field. This tries to create a `CreditBasedFrame` for a LE-U
-    /// channel.
-    pub fn try_le_first_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::LeU>(bytes)
-    }
-
-    /// Try to create the first credit based frame from an ACL channel
-    ///
-    /// The first credit based for of a SDU contains the *SDU Length* field, where as all subsequent
-    /// k-frames do not contain this field. This tries to create a `CreditBasedFrame` for an ACL-U
-    /// channel.
-    pub fn try_acl_first_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::AclU>(bytes)
-    }
-
-    /// Try to create a subsequent credit based frame from a LE channel.
-    ///
-    /// Credit based frames Frames after the first frame for a SDU do not contain the *SDU Length*
-    /// field. This tries to create a subsequent `CreditBasedFrame` for a LE-U channel.
-    pub fn try_le_subsequent_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::LeU>(bytes)
-    }
-
-    /// Try to create a subsequent credit based frame from an ACL channel
-    ///
-    /// Credit based frames Frames after the first frame for a SDU do not contain the *SDU Length*
-    /// field. This tries to create a subsequent `CreditBasedFrame` for a ACL-U channel.
-    pub fn try_acl_subsequent_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::AclU>(bytes)
     }
 
     /// Convert this into a `CreditBasedFrame` containing a buffered payload
@@ -380,7 +422,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
 
 impl<P> FragmentL2capPdu for CreditBasedFrame<P>
 where
-    P: core::ops::Deref<Target = [u8]>,
+    P: Iterator<Item = u8> + ExactSizeIterator,
 {
     type FragmentIterator = FragmentationIterator<P>;
 
@@ -401,117 +443,97 @@ where
 {
     type RecombineError = RecombineError;
     type RecombineMeta = RecombineMeta;
+    type PayloadRecombiner<'a> = CreditBasedFrameRecombiner<'a, P>;
 
-    fn recombine<T>(
+    fn recombine(
+        payload_length: u16,
         channel_id: ChannelIdentifier,
-        mut bytes: T,
         meta: &mut Self::RecombineMeta,
-    ) -> Result<Self, Self::RecombineError>
-    where
-        Self: Sized,
-        T: Iterator<Item = u8> + ExactSizeIterator,
-    {
-        // check that the length is not larger than the mps
-        if bytes.len() > meta.mps.into() {
-            return Err(RecombineError::PayloadLargerThanMps);
-        }
-
-        // the first frame has the SDU length field
-        let sdu_len = if meta.first {
-            meta.first = false;
-
-            <u16>::from_le_bytes([
-                bytes.next().ok_or(RecombineError::MissingSduLength)?,
-                bytes.next().ok_or(RecombineError::MissingSduLength)?,
-            ])
-            .into()
-        } else {
-            None
-        };
-
-        let mut payload = P::default();
-
-        payload.try_extend(bytes).map_err(|_| RecombineError::BufferTooSmall)?;
-
-        Ok(Self {
-            channel_id,
-            sdu_len,
-            payload,
-        })
+    ) -> Self::PayloadRecombiner<'_> {
+        CreditBasedFrameRecombiner::new(payload_length.into(), channel_id, meta)
     }
 }
 
-pub struct FragmentationIterator<T> {
-    k_frame: CreditBasedFrame<T>,
+pub struct FragmentationIterator<T: Iterator> {
+    channel_id: ChannelIdentifier,
+    sdu_len: Option<u16>,
+    payload: core::iter::Peekable<core::iter::Fuse<T>>,
     fragmentation_size: usize,
-    offset: usize,
+    header_size: usize,
 }
 
-impl<'a, T> FragmentationIterator<T> {
-    fn new(k_frame: CreditBasedFrame<T>, fragmentation_size: usize) -> Self {
-        let offset = 0;
+impl<'a, T: Iterator> FragmentationIterator<T> {
+    fn new<I>(k_frame: CreditBasedFrame<I>, fragmentation_size: usize) -> Self
+    where
+        I: IntoIterator<IntoIter = T>,
+    {
+        let channel_id = k_frame.channel_id;
+
+        let sdu_len = k_frame.sdu_len;
+
+        let payload = k_frame.payload.into_iter().fuse().peekable();
+
+        // extra `+ 1` is for iterator algorithm of `DataIter`
+        let header_size = if k_frame.sdu_len.is_none() { 4 } else { 6 } + 1;
 
         Self {
-            k_frame,
+            channel_id,
+            sdu_len,
+            payload,
             fragmentation_size,
-            offset,
+            header_size,
         }
     }
 }
 
 impl<T> FragmentIterator for FragmentationIterator<T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8> + ExactSizeIterator,
 {
     type Item<'a> = DataIter<'a, T> where Self: 'a;
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
-        (self.offset < self.k_frame.get_payload().len() + CreditBasedFrame::<T>::HEADER_SIZE).then(|| {
-            let data_iter = DataIter {
-                k_frame: &self.k_frame,
-                fragmentation_size: self.fragmentation_size,
-                offset: self.offset,
+        self.payload.peek().is_some().then(|| {
+            self.header_size += self.fragmentation_size;
+
+            DataIter {
+                fragmentation_iter: self,
                 byte: 0,
-            };
-
-            self.offset += self.fragmentation_size;
-
-            data_iter
+            }
         })
     }
 }
 
-pub struct DataIter<'a, T> {
-    k_frame: &'a CreditBasedFrame<T>,
-    fragmentation_size: usize,
-    offset: usize,
+pub struct DataIter<'a, T: Iterator> {
+    fragmentation_iter: &'a mut FragmentationIterator<T>,
     byte: usize,
 }
 
 impl<T> Iterator for DataIter<'_, T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8> + ExactSizeIterator,
 {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.byte >= self.fragmentation_size {
+        if self.byte >= self.fragmentation_iter.fragmentation_size {
             return None;
         }
 
-        let current_byte = self.byte;
-
         self.byte += 1;
 
-        match (self.offset + current_byte, self.k_frame.sdu_len) {
-            (0, _) => Some((self.k_frame.get_payload().len() as u16).to_le_bytes()[0]),
-            (1, _) => Some((self.k_frame.get_payload().len() as u16).to_le_bytes()[1]),
-            (2, _) => Some(self.k_frame.get_channel_id().to_val().to_le_bytes()[0]),
-            (3, _) => Some(self.k_frame.get_channel_id().to_val().to_le_bytes()[1]),
-            (4, Some(sdu_len)) => Some(sdu_len.to_le_bytes()[0]),
-            (5, Some(sdu_len)) => Some(sdu_len.to_le_bytes()[1]),
-            (i, Some(_)) => self.k_frame.payload.get(i - 6).copied(),
-            (i, None) => self.k_frame.payload.get(i - 4).copied(),
+        self.fragmentation_iter.header_size = self.fragmentation_iter.header_size.checked_sub(1).unwrap_or_default();
+
+        match self.fragmentation_iter.header_size {
+            0 => self.fragmentation_iter.payload.next(),
+            1 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[0]),
+            2 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[1]),
+            3 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[0]),
+            4 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[1]),
+            // Because of how `header_size` is initialized, `sdu_len` is always `Some(_)`
+            5 => Some(self.fragmentation_iter.sdu_len.unwrap().to_le_bytes()[0]),
+            6 => Some(self.fragmentation_iter.sdu_len.unwrap().to_le_bytes()[1]),
+            _ => unreachable!(),
         }
     }
 }
@@ -538,7 +560,7 @@ impl core::fmt::Display for RecombineError {
         match self {
             RecombineError::MissingSduLength => f.write_str("credit based frame does not contain a SDU length field"),
             RecombineError::BufferTooSmall => {
-                f.write_str("buffer too small to contain credit based frame information payload")
+                f.write_str("buffer too small to contain a credit based frame's information payload")
             }
             RecombineError::PayloadLargerThanMps => {
                 f.write_str("received credit based frame larger than the agreed upon MPS")
@@ -550,7 +572,193 @@ impl core::fmt::Display for RecombineError {
 #[cfg(feature = "std")]
 impl std::error::Error for RecombineError {}
 
+/// Meta information required for recombining Credit Based Frames.
 pub struct RecombineMeta {
     first: bool,
     mps: u16,
+}
+
+impl RecombineMeta {
+    pub fn new(mps: u16) -> Self {
+        RecombineMeta { first: true, mps }
+    }
+}
+
+/// A recombiner of fragments into a Credit Based PDU.
+pub struct CreditBasedFrameRecombiner<'a, P> {
+    payload_len: usize,
+    channel_id: ChannelIdentifier,
+    meta: &'a RecombineMeta,
+    sdu: SduState,
+    byte_count: usize,
+    payload: Option<P>,
+}
+
+impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
+    fn new(len: usize, channel_id: ChannelIdentifier, meta: &'a mut RecombineMeta) -> Self
+    where
+        P: Default,
+    {
+        CreditBasedFrameRecombiner {
+            payload_len: len,
+            channel_id,
+            meta,
+            sdu: SduState::None,
+            byte_count: 0,
+            payload: Some(P::default()),
+        }
+    }
+
+    /// Recombine the SDU Length
+    ///
+    /// This is used to recombine the SDU length field (from two bytes). Once it has constructed the
+    /// SDU length it will return `Some(())` (`Option` is used over `bool` as it works well with the
+    /// try operator). Further calling this method will have no effect on the input `payload` and
+    /// the method will always return `Some(())`.  
+    fn recombine_sdu_len<T>(&mut self, payload: &mut T) -> Option<()>
+    where
+        T: Iterator<Item = u8>,
+    {
+        loop {
+            match self.sdu {
+                SduState::None => self.sdu = SduState::First(payload.next()?),
+                SduState::First(first) => self.sdu = SduState::Complete(<u16>::from_le_bytes([first, payload.next()?])),
+                SduState::Complete(_) => break Some(()),
+            }
+        }
+    }
+
+    /// Get the SDU length field
+    ///
+    /// `None` is returned if the SDU length was never processed or never existed.
+    fn get_sdu_len(&self) -> Option<u16> {
+        match self.sdu {
+            SduState::Complete(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    /// Update the Payload Byte Count
+    ///
+    /// This updates the count for the number of bytes within the PDU payload.
+    fn update_byte_count(&mut self, payload_len: usize) -> Result<(), RecombineError> {
+        if self.byte_count + payload_len > self.meta.mps.into() {
+            Err(RecombineError::PayloadLargerThanMps)
+        } else {
+            self.byte_count += payload_len;
+
+            Ok(())
+        }
+    }
+
+    /// Recombine the first Credit Based PDU of the SDU
+    ///
+    /// This will return a `CreditBasedFrame` when input `payload` contains the last byte of a
+    /// Credit Based PDU.
+    ///
+    /// This method shall not be called again for this `CreditBasedFrameRecombiner` after a
+    /// `CreditBasedFrame` is returned.
+    ///
+    /// # Errors
+    /// * [`RecombineError::BufferTooSmall`]: Buffer `P` is too small for the PDU. The size of the
+    ///   buffer should be larger than the MPS.
+    /// * [`RecombineError::PayloadLargerThanMps`]: The payload ended up being larger than the
+    ///   agreed MPS for the credit based channel.
+    fn recombine_first<T>(&mut self, payload: T) -> Result<Option<CreditBasedFrame<P>>, RecombineError>
+    where
+        P: TryExtend<u8>,
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let mut payload_iter = payload.into_iter();
+
+        if self.recombine_sdu_len(&mut payload_iter).is_some() {
+            self.update_byte_count(payload_iter.len())?;
+
+            self.payload
+                .as_mut()
+                .unwrap()
+                .try_extend(payload_iter)
+                .map_err(|_| RecombineError::BufferTooSmall)?;
+
+            if self.payload_len == self.byte_count {
+                let sdu_size = self.get_sdu_len().unwrap(); // unwrap will never panic
+
+                let payload = self.payload.take().unwrap();
+
+                let k_frame = CreditBasedFrame::new_first(sdu_size, self.channel_id, payload);
+
+                Ok(Some(k_frame))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Recombine Subsequent Credit Based PDUs of the SDU
+    ///
+    /// After the first PDU, all subsequent PDUs for a SDU do not contain the *SDU length field*.
+    /// This will return a `CreditBasedFrame` when input `payload` contains the last byte of a
+    /// Credit Based PDU.
+    ///
+    /// This method shall not be called again for this `CreditBasedFrameRecombiner` after a
+    /// `CreditBasedFrame` is returned.
+    fn recombine_subsequent<T>(&mut self, payload: T) -> Result<Option<CreditBasedFrame<P>>, RecombineError>
+    where
+        P: TryExtend<u8>,
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let payload_iter = payload.into_iter();
+
+        self.update_byte_count(payload_iter.len())?;
+
+        self.payload
+            .as_mut()
+            .unwrap()
+            .try_extend(payload_iter)
+            .map_err(|_| RecombineError::BufferTooSmall)?;
+
+        if self.payload_len == self.byte_count {
+            let payload = self.payload.take().unwrap();
+
+            let k_frame = CreditBasedFrame::new_subsequent(self.channel_id, payload);
+
+            Ok(Some(k_frame))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<P> crate::pdu::RecombinePayloadIncrementally for CreditBasedFrameRecombiner<'_, P>
+where
+    P: TryExtend<u8>,
+{
+    type Pdu = CreditBasedFrame<P>;
+    type RecombineError = RecombineError;
+
+    fn add<T>(&mut self, payload: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        if self.meta.first {
+            self.recombine_first(payload)
+        } else {
+            self.recombine_subsequent(payload)
+        }
+    }
+}
+
+/// State for combining the SDU field
+///
+/// This is used by `CreditBasedFrameRecombiner` for combing non basic header bytes into the SDU
+/// Length field.
+enum SduState {
+    None,
+    First(u8),
+    Complete(u16),
 }

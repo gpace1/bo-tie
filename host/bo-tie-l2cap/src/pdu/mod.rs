@@ -6,15 +6,78 @@
 //! Specification, data flow control is also implemented.
 
 pub mod basic_frame;
-mod control_frame;
+pub(crate) mod control_frame;
 pub mod credit_frame;
-mod send_future;
 
 use crate::channels::ChannelIdentifier;
 pub use basic_frame::BasicFrame;
 pub(crate) use control_frame::ControlFrame;
 pub use control_frame::ControlFrameError;
-pub use send_future::{SendBufferedFuture, SendFuture};
+pub use credit_frame::CreditBasedSdu;
+
+/// A L2CAP PDU Fragment
+///
+/// A L2CAP PDU may be larger than the maximum buffer size of the controller, or maximum transfer
+/// size of the connection. A `L2capFragment` is either a complete `L2CAP` PDU or a part of one.
+///
+/// Fragmentation and defragmentation is done by the implementation of [`ConnectionChannel`] and
+/// [`ConnectionChannelExt`].
+///
+/// A `L2capFragment` only contains a flag to indicate if it is the start fragment and raw data
+/// of the L2CAP PDU. There is no distinction for what kind of L2CAP PDU it is and no fragment order
+/// information (besides the start flag). It is up to the user to ensure that fragments are
+/// delivered from the starting one to the ending one in order.
+pub struct L2capFragment<T> {
+    pub(crate) start_fragment: bool,
+    pub(crate) data: T,
+}
+
+impl<T> L2capFragment<T> {
+    /// Crate a new 'ACLDataFragment'
+    pub fn new(start_fragment: bool, data: T) -> Self {
+        Self { start_fragment, data }
+    }
+
+    /// Get the value of length field in the basic header
+    ///
+    /// This returns `None` if it cannot be determined if this packet has the PDU length field.
+    fn get_len_field(&self) -> Option<usize>
+    where
+        T: core::ops::Deref<Target = [u8]>,
+    {
+        if self.start_fragment && self.data.len() > 2 {
+            Some(<u16>::from_le_bytes([self.data[0], self.data[1]]) as usize)
+        } else {
+            None
+        }
+    }
+
+    /// Get the value of the channel identifier
+    ///
+    /// This returns `None` if the packet cannot be determined to have the channel ID field
+    fn get_channel_id<L>(&self) -> Option<ChannelIdentifier>
+    where
+        L: crate::private::LinkType,
+        T: core::ops::Deref<Target = [u8]>,
+    {
+        if self.start_fragment {
+            L::try_channel_from_raw(<u16>::from_le_bytes([
+                self.data.get(2).copied()?,
+                self.data.get(3).copied()?,
+            ]))
+        } else {
+            None
+        }
+    }
+
+    pub fn is_start_fragment(&self) -> bool {
+        self.start_fragment
+    }
+
+    pub fn fragment_data(&self) -> &T {
+        &self.data
+    }
+}
 
 /// L2CAP PDU Fragmentation
 ///
@@ -87,6 +150,9 @@ pub trait RecombineL2capPdu {
     /// Error when trying to recombine fragments.
     type RecombineError;
 
+    /// The type for recombining fragments into a PDU
+    type PayloadRecombiner<'a>: RecombinePayloadIncrementally<Pdu = Self, RecombineError = Self::RecombineError>;
+
     /// Recombine fragments into this PDU
     ///
     /// This is used to recombine L2CAP PDU fragments of this L2CAP PDU.
@@ -98,10 +164,8 @@ pub trait RecombineL2capPdu {
     /// The length of `payload` is equivalent to the length within the *PDU length* field.
     ///
     /// # Meta
-    /// This extra information may be required when the PDU format is not consistent. An example of
-    /// this is a [`CreditBasedFrame`] where only the first frame of a SDU contains the *SDU length*
-    /// field. The meta is *created* through its default implementation, but it may have been
-    /// modified at some point before this method is called.
+    /// This extra information that is required for every PDU except for the Basic Frame. This
+    /// information is used to fill out extra fields within the
     ///
     /// # Errors
     /// Errors should be returned if the payload contains incorrect or missing fields or the L2CAP
@@ -111,14 +175,36 @@ pub trait RecombineL2capPdu {
     /// # Note
     /// The L2CAP basic header consists of the L2CAP *PDU length* and the *channel ID* fields. These
     /// make up the first four bytes of every L2CAP data type.
-    fn recombine<T>(
+    fn recombine(
+        payload_length: u16,
         channel_id: ChannelIdentifier,
-        payload: T,
         meta: &mut Self::RecombineMeta,
-    ) -> Result<Self, Self::RecombineError>
+    ) -> Self::PayloadRecombiner<'_>;
+}
+
+/// A trait for Incrementally Recombining L2CAP fragments into the Payload of a PDU
+///
+/// This is used to recombine fragments of the payload into the complete PDU. The initial combiner
+/// is created using the information within the Basic Header of a L2CAP PDU. This is generally done
+/// within the method [`recombine`] of the trait `RecombineL2capPdu`. Every other byte is added to
+/// the recombine via the method [`add`].
+///
+/// Method `add` input is a type that can be converted into an iterator over bytes. These bytes are
+/// added to the *recombiner* until the number of bytes matches the *payload length* field that was
+/// part of the basic header.
+pub trait RecombinePayloadIncrementally {
+    type Pdu: Sized;
+
+    type RecombineError;
+
+    /// Add more payload bytes to the PDU
+    ///
+    /// Once the complete PDU is formed it is output by this method. This method shall not be called
+    /// again after a PDU is returned.
+    fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
     where
-        Self: Sized,
-        T: Iterator<Item = u8> + ExactSizeIterator;
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator;
 }
 
 /// L2CAP Service Data Unit (SDU) Fragmentation
@@ -127,20 +213,27 @@ pub trait RecombineL2capPdu {
 /// SDU is a fancy acronym for data that comes from a protocol at a higher layer than L2CAP. Unlike
 /// [`FragmentL2capPdu`], this is used to fragment higher layered data into L2CAP PDUs.
 pub trait FragmentL2capSdu {
-    type Pdu<'a>: FragmentL2capPdu
-    where
-        Self: 'a;
-
-    type PacketsIterator<'a>: Iterator<Item = Self::Pdu<'a>>
-    where
-        Self: 'a;
+    type PacketsIterator: SduPacketsIterator;
 
     /// Convert the SDU type into L2CAP PDUs
     ///
     /// # Error
     /// The SDU) cannot be larger than the maximum transfer size for the L2CAP SDU transfer type. If
     /// this error occurs the SDU must be fragmented by a higher layer protocol into smaller SDUs.
-    fn as_packets(&self) -> Result<Self::PacketsIterator<'_>, PacketsError>;
+    fn into_packets(self) -> Result<Self::PacketsIterator, PacketsError>;
+}
+
+/// Iterator over packets of a SDU
+///
+/// See type [`PacketsIterator`] of `FragmentL2capSdu`
+///
+/// [`PacketsIterator`]: FragmentL2capSdu::PacketsIterator
+pub trait SduPacketsIterator {
+    type Item<'a>: FragmentL2capPdu
+    where
+        Self: 'a;
+
+    fn next(&mut self) -> Option<Self::Item<'_>>;
 }
 
 /// Error returned by [`as_fragments`] of `FragmentL2capPdu`

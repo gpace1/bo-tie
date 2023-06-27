@@ -103,7 +103,7 @@ impl<C> bo_tie_l2cap::ConnectionChannel for LeL2cap<C>
 where
     C: ConnectionChannelEnds,
 {
-    type LogicalLinkType = bo_tie_l2cap::LeU;
+    type LogicalLinkType = bo_tie_l2cap::LeULinkType;
     type SendBuffer = C::ToBuffer;
     type SendFut<'a> = ConnectionChannelSender<'a, C> where Self: 'a;
     type SendErr = <C::Sender as bo_tie_hci_util::Sender>::Error;
@@ -151,7 +151,7 @@ where
     fn min_mtu(&self) -> usize {
         use bo_tie_l2cap::MinimumMtu;
 
-        bo_tie_l2cap::LeU::MIN_SUPPORTED_MTU
+        bo_tie_l2cap::LeULinkType::MIN_SUPPORTED_MTU
     }
 
     fn receive_fragment(&mut self) -> Self::RecvFut<'_> {

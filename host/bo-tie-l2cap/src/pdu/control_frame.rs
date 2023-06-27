@@ -1,6 +1,6 @@
 //! L2CAP control frame implementation
 
-use crate::channels::ChannelIdentifier;
+use crate::channels::{AclCid, ChannelIdentifier, LeCid};
 use crate::pdu::{FragmentIterator, FragmentL2capPdu, FragmentationError, RecombineL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 use core::num::{NonZeroU16, NonZeroU8};
@@ -20,12 +20,23 @@ impl<T> ControlFrame<T> {
     ///
     /// # Panic
     /// There must be a signalling channel associated with the logical link `L`.
-    pub fn new<L>(payload: T) -> Self
-    where
-        L: crate::private::LinkType,
-    {
-        let channel_id = L::get_signaling_channel().expect("no signaling channel for this logical link");
+    pub fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
+        match channel_id {
+            ChannelIdentifier::Acl(AclCid::SignalingChannel) | ChannelIdentifier::Le(LeCid::LeSignalingChannel) => (),
+            _ => panic!("invalid signalling channel {channel_id}"),
+        }
+
         ControlFrame { channel_id, payload }
+    }
+
+    /// Create a new `ControlFrame` for a ACL-U logical link
+    pub fn new_acl(payload: T) -> Self {
+        Self::new(payload, ChannelIdentifier::Acl(AclCid::SignalingChannel))
+    }
+
+    /// Create a new `ControlFrame` for a LE-U logical link
+    pub fn new_le(payload: T) -> Self {
+        Self::new(payload, ChannelIdentifier::Le(LeCid::LeSignalingChannel))
     }
 
     /// Try to create a signaling packet from a slice of bytes
@@ -57,6 +68,10 @@ impl<T> ControlFrame<T> {
             Err(ControlFrameError::RawDataTooSmall)
         }
     }
+
+    pub fn into_payload(self) -> T {
+        self.payload
+    }
 }
 
 impl<T> FragmentL2capPdu for ControlFrame<T>
@@ -79,23 +94,16 @@ impl<T> RecombineL2capPdu for ControlFrame<T>
 where
     T: TryExtend<u8> + Default,
 {
-    type RecombineError = <T as TryExtend<u8>>::Error;
     type RecombineMeta = ();
+    type RecombineError = RecombineError;
+    type PayloadRecombiner<'a> = ControlFrameRecombiner<T>;
 
-    fn recombine<I>(
+    fn recombine(
+        payload_length: u16,
         channel_id: ChannelIdentifier,
-        bytes: I,
         _: &mut Self::RecombineMeta,
-    ) -> Result<Self, Self::RecombineError>
-    where
-        Self: Sized,
-        I: Iterator<Item = u8> + ExactSizeIterator,
-    {
-        let mut payload = T::default();
-
-        payload.try_extend(bytes)?;
-
-        Ok(ControlFrame { channel_id, payload })
+    ) -> Self::PayloadRecombiner<'_> {
+        ControlFrameRecombiner::new(payload_length.into(), channel_id)
     }
 }
 
@@ -248,3 +256,93 @@ where
         }
     }
 }
+
+pub(crate) struct ControlFrameRecombiner<T> {
+    payload_len: usize,
+    channel_id: ChannelIdentifier,
+    byte_count: usize,
+    payload: Option<T>,
+}
+
+impl<T> ControlFrameRecombiner<T> {
+    /// Create a new `BasicFrameRecombiner` with a default payload
+    fn new(payload_len: usize, channel_id: ChannelIdentifier) -> Self
+    where
+        T: Default,
+    {
+        let byte_count = 0;
+        let payload = T::default().into();
+
+        ControlFrameRecombiner {
+            payload_len,
+            channel_id,
+            byte_count,
+            payload,
+        }
+    }
+}
+
+impl<P> crate::pdu::RecombinePayloadIncrementally for ControlFrameRecombiner<P>
+where
+    P: TryExtend<u8>,
+{
+    type Pdu = ControlFrame<P>;
+    type RecombineError = RecombineError;
+
+    fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let payload_iter = payload_fragment.into_iter();
+
+        if self.byte_count + payload_iter.len() <= self.payload_len {
+            self.byte_count += payload_iter.len();
+
+            self.payload
+                .as_mut()
+                .unwrap()
+                .try_extend(payload_iter)
+                .map_err(|_| RecombineError::BufferTooSmall)?;
+
+            if self.payload_len == self.byte_count {
+                let c_frame = ControlFrame {
+                    payload: self.payload.take().unwrap(),
+                    channel_id: self.channel_id,
+                };
+
+                Ok(Some(c_frame))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Err(RecombineError::PayloadLargerThanStatedLength)
+        }
+    }
+}
+
+/// Basic Frame Recombination Error
+///
+/// This error is returned by the implementation of the method [`FragmentL2capPdu::recombine`] for
+/// `BasicFrame`
+#[derive(Debug)]
+pub enum RecombineError {
+    BufferTooSmall,
+    PayloadLargerThanStatedLength,
+}
+
+impl core::fmt::Display for RecombineError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            RecombineError::BufferTooSmall => {
+                f.write_str("buffer too small to contain a basic frame's information payload")
+            }
+            RecombineError::PayloadLargerThanStatedLength => {
+                f.write_str("payload is larger than payload length field in basic header")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for RecombineError {}

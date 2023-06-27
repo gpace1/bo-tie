@@ -6,9 +6,6 @@
 //! This module is very unfinished and is gated behind the feature `unstable`
 
 pub mod packets;
-pub mod processor;
-
-pub use processor::SignalsProcessor;
 
 /// The Channel Identifier for ACL-U signals
 pub const ACL_U_SIGNAL_CHANNEL_ID: crate::channels::ChannelIdentifier =
@@ -39,6 +36,7 @@ pub enum SignalError {
     InvalidCommandRejectReasonData(packets::CommandRejectReasonDataError),
     InvalidSpsm,
     InvalidChannel,
+    InvalidValue,
 }
 
 impl core::fmt::Display for SignalError {
@@ -52,6 +50,7 @@ impl core::fmt::Display for SignalError {
             Self::InvalidCommandRejectReasonData(r) => core::fmt::Display::fmt(&r, f),
             Self::InvalidSpsm => f.write_str("invalid simplified protocol/service multiplexer"),
             Self::InvalidChannel => f.write_str("invalid channel identifier"),
+            Self::InvalidValue => f.write_str("a value of a field within this signal is invalid"),
         }
     }
 }

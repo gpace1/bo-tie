@@ -40,15 +40,18 @@ impl<T> BasicFrame<T> {
 
 impl<T> FragmentL2capPdu for BasicFrame<T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: IntoIterator<Item = u8>,
+    T::IntoIter: ExactSizeIterator,
 {
-    type FragmentIterator = FragmentationIterator<T>;
+    type FragmentIterator = FragmentationIterator<T::IntoIter>;
 
     fn into_fragments(self, fragmentation_size: usize) -> Result<Self::FragmentIterator, FragmentationError> {
+        let payload = self.payload.into_iter();
+
         if fragmentation_size == 0 {
             Err(FragmentationError::FragmentationSizeIsZero)
-        } else if self.payload.len() <= <u16>::MAX.into() {
-            Ok(FragmentationIterator::new(self, fragmentation_size))
+        } else if payload.len() <= <u16>::MAX.into() {
+            Ok(FragmentationIterator::new(self.channel_id, payload, fragmentation_size))
         } else {
             Err(FragmentationError::DataForTypeIsTooLarge)
         }
@@ -59,19 +62,12 @@ impl<T> RecombineL2capPdu for BasicFrame<T>
 where
     T: TryExtend<u8> + Default,
 {
-    type RecombineError = <T as TryExtend<u8>>::Error;
+    type RecombineError = RecombineError;
     type RecombineMeta = ();
+    type PayloadRecombiner<'a> = BasicFrameRecombiner<T>;
 
-    fn recombine<I>(channel_id: ChannelIdentifier, payload: I, _: &mut ()) -> Result<Self, Self::RecombineError>
-    where
-        Self: Sized,
-        I: Iterator<Item = u8> + ExactSizeIterator,
-    {
-        let mut buffer = T::default();
-
-        buffer.try_extend(payload)?;
-
-        Ok(BasicFrame::new(buffer, channel_id))
+    fn recombine(payload_length: u16, channel_id: ChannelIdentifier, _: &mut ()) -> Self::PayloadRecombiner<'_> {
+        BasicFrameRecombiner::new(payload_length.into(), channel_id)
     }
 }
 
@@ -182,40 +178,48 @@ impl BasicFrameError<core::convert::Infallible> {
     }
 }
 
-pub struct FragmentationIterator<T> {
-    b_frame: BasicFrame<T>,
+pub struct FragmentationIterator<T: Iterator> {
+    channel_id: ChannelIdentifier,
+    payload: core::iter::Peekable<core::iter::Fuse<T>>,
+    len: usize,
+    header_count: usize,
     fragmentation_size: usize,
-    offset: usize,
 }
 
-impl<T> FragmentationIterator<T> {
-    fn new(b_frame: BasicFrame<T>, fragmentation_size: usize) -> Self {
-        let offset = 0;
+impl<T: Iterator + ExactSizeIterator> FragmentationIterator<T> {
+    fn new(channel_id: ChannelIdentifier, payload: T, fragmentation_size: usize) -> Self {
+        let payload = payload.fuse().peekable();
+
+        let len = payload.len();
+
+        let header_count = 0;
 
         Self {
-            b_frame,
+            channel_id,
+            payload,
+            len,
+            header_count,
             fragmentation_size,
-            offset,
         }
     }
 }
 
 impl<T> crate::pdu::FragmentIterator for FragmentationIterator<T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8>,
 {
-    type Item<'a> = DataIter<'a, T> where Self: 'a;
+    type Item<'a> = DataIter<'a, core::iter::Peekable<core::iter::Fuse<T>>> where Self: 'a;
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
-        (self.offset < self.b_frame.get_payload().len() + BasicFrame::<T>::HEADER_SIZE).then(|| {
+        self.payload.peek().is_some().then(|| {
             let data_iter = DataIter {
-                b_frame: &self.b_frame,
+                channel_id: self.channel_id,
+                payload: &mut self.payload,
+                len: self.len,
+                header_count: &mut self.header_count,
                 fragmentation_size: self.fragmentation_size,
-                offset: self.offset,
                 byte: 0,
             };
-
-            self.offset += self.fragmentation_size;
 
             data_iter
         })
@@ -223,33 +227,122 @@ where
 }
 
 pub struct DataIter<'a, T> {
-    b_frame: &'a BasicFrame<T>,
+    channel_id: ChannelIdentifier,
+    payload: &'a mut T,
+    len: usize,
+    header_count: &'a mut usize,
     fragmentation_size: usize,
-    offset: usize,
     byte: usize,
 }
 
 impl<T> Iterator for DataIter<'_, T>
 where
-    T: core::ops::Deref<Target = [u8]>,
+    T: Iterator<Item = u8>,
 {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.byte >= self.fragmentation_size {
+        if self.byte == self.fragmentation_size {
             return None;
         }
 
-        let current_byte = self.byte;
-
         self.byte += 1;
+        *self.header_count = self.header_count.checked_add(1).unwrap_or(<usize>::MAX);
 
-        match self.offset + current_byte {
-            0 => Some((self.b_frame.get_payload().len() as u16).to_le_bytes()[0]),
-            1 => Some((self.b_frame.get_payload().len() as u16).to_le_bytes()[1]),
-            2 => Some(self.b_frame.get_channel_id().to_val().to_le_bytes()[0]),
-            3 => Some(self.b_frame.get_channel_id().to_val().to_le_bytes()[1]),
-            i => self.b_frame.payload.get(i - BasicFrame::<T>::HEADER_SIZE).copied(),
+        match self.header_count {
+            1 => Some((self.len as u16).to_le_bytes()[0]),
+            2 => Some((self.len as u16).to_le_bytes()[1]),
+            3 => Some(self.channel_id.to_val().to_le_bytes()[0]),
+            4 => Some(self.channel_id.to_val().to_le_bytes()[1]),
+            _ => self.payload.next(),
         }
     }
 }
+
+/// Recombiner of fragments into a Basic Frame PDU
+pub struct BasicFrameRecombiner<T> {
+    payload_len: usize,
+    channel_id: ChannelIdentifier,
+    byte_count: usize,
+    payload: Option<T>,
+}
+
+impl<T> BasicFrameRecombiner<T> {
+    /// Create a new `BasicFrameRecombiner` with a default payload
+    fn new(payload_len: usize, channel_id: ChannelIdentifier) -> Self
+    where
+        T: Default,
+    {
+        let byte_count = 0;
+        let payload = T::default().into();
+
+        BasicFrameRecombiner {
+            payload_len,
+            channel_id,
+            byte_count,
+            payload,
+        }
+    }
+}
+
+impl<P> crate::pdu::RecombinePayloadIncrementally for BasicFrameRecombiner<P>
+where
+    P: TryExtend<u8>,
+{
+    type Pdu = BasicFrame<P>;
+    type RecombineError = RecombineError;
+
+    fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let payload_iter = payload_fragment.into_iter();
+
+        if self.byte_count + payload_iter.len() <= self.payload_len {
+            self.byte_count += payload_iter.len();
+
+            self.payload
+                .as_mut()
+                .unwrap()
+                .try_extend(payload_iter)
+                .map_err(|_| RecombineError::BufferTooSmall)?;
+
+            if self.payload_len == self.byte_count {
+                let b_frame = BasicFrame::new(self.payload.take().unwrap(), self.channel_id);
+
+                Ok(Some(b_frame))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Err(RecombineError::PayloadLargerThanStatedLength)
+        }
+    }
+}
+
+/// Basic Frame Recombination Error
+///
+/// This error is returned by the implementation of the method [`FragmentL2capPdu::recombine`] for
+/// `BasicFrame`
+#[derive(Debug)]
+pub enum RecombineError {
+    BufferTooSmall,
+    PayloadLargerThanStatedLength,
+}
+
+impl core::fmt::Display for RecombineError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            RecombineError::BufferTooSmall => {
+                f.write_str("buffer too small to contain a basic frame's information payload")
+            }
+            RecombineError::PayloadLargerThanStatedLength => {
+                f.write_str("payload is larger than payload length field in basic header")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for RecombineError {}

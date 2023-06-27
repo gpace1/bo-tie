@@ -1,6 +1,6 @@
 //! L2CAP Channels Definitions
 
-use crate::{AclU, AclUExt, LeU};
+use crate::{AclUExtLinkType, AclULinkType, LeULinkType};
 use core::cmp::Ordering;
 
 /// Channel Identifier
@@ -11,7 +11,7 @@ use core::cmp::Ordering;
 ///
 /// # Specification Reference
 /// See Bluetooth Specification V5 | Vol 3, Part A Section 2.1
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ChannelIdentifier {
     /// ACL-U identifiers
     Acl(AclCid),
@@ -113,10 +113,20 @@ impl<T> Ord for DynChannelId<T> {
     }
 }
 
+impl<T> core::hash::Hash for DynChannelId<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.channel_id.hash(state)
+    }
+}
+
 impl<T> DynChannelId<T> {
-    fn new(channel_id: u16) -> Self {
+    /// Create a new `DynChannelId`
+    ///
+    /// # Note
+    /// `channel_val` is not checked for whether it is a valid dynamic channel value.
+    pub(crate) fn new_unchecked(channel_val: u16) -> Self {
         DynChannelId {
-            channel_id,
+            channel_id: channel_val,
             _p: core::marker::PhantomData,
         }
     }
@@ -127,7 +137,7 @@ impl<T> DynChannelId<T> {
     }
 }
 
-impl DynChannelId<LeU> {
+impl DynChannelId<LeULinkType> {
     pub const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
 
     /// Create a new Dynamic Channel identifier for the LE-U CID name space
@@ -140,27 +150,27 @@ impl DynChannelId<LeU> {
     /// returned containing the infringing input value.
     pub fn new_le(channel_id: u16) -> Result<LeCid, u16> {
         if Self::LE_BOUNDS.contains(&channel_id) {
-            Ok(LeCid::DynamicallyAllocated(DynChannelId::new(channel_id)))
+            Ok(LeCid::DynamicallyAllocated(DynChannelId::new_unchecked(channel_id)))
         } else {
             Err(channel_id)
         }
     }
 }
 
-impl DynChannelId<AclU> {
+impl DynChannelId<AclULinkType> {
     pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
 
     pub fn new_acl(channel_id: u16) -> Result<AclCid, u16> {
         if Self::ACL_BOUNDS.contains(&channel_id) {
-            Ok(AclCid::DynamicallyAllocated(DynChannelId::new(channel_id)))
+            Ok(AclCid::DynamicallyAllocated(DynChannelId::new_unchecked(channel_id)))
         } else {
             Err(channel_id)
         }
     }
 }
 
-impl From<DynChannelId<AclU>> for DynChannelId<AclUExt> {
-    fn from(channel: DynChannelId<AclU>) -> Self {
+impl From<DynChannelId<AclULinkType>> for DynChannelId<AclUExtLinkType> {
+    fn from(channel: DynChannelId<AclULinkType>) -> Self {
         DynChannelId {
             channel_id: channel.channel_id,
             _p: core::marker::PhantomData,
@@ -175,12 +185,12 @@ impl<T> core::fmt::Display for DynChannelId<T> {
 }
 
 /// ACL User (ACL-U) Channel Identifiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AclCid {
     SignalingChannel,
     ConnectionlessChannel,
     BrEdrSecurityManager,
-    DynamicallyAllocated(DynChannelId<AclU>),
+    DynamicallyAllocated(DynChannelId<AclULinkType>),
 }
 
 impl AclCid {
@@ -198,8 +208,8 @@ impl AclCid {
             0x1 => Ok(AclCid::SignalingChannel),
             0x2 => Ok(AclCid::ConnectionlessChannel),
             0x7 => Ok(AclCid::BrEdrSecurityManager),
-            val if DynChannelId::<AclU>::ACL_BOUNDS.contains(&val) => {
-                Ok(AclCid::DynamicallyAllocated(DynChannelId::new(val)))
+            val if DynChannelId::<AclULinkType>::ACL_BOUNDS.contains(&val) => {
+                Ok(AclCid::DynamicallyAllocated(DynChannelId::new_unchecked(val)))
             }
             _ => Err(()),
         }
@@ -218,7 +228,7 @@ impl core::fmt::Display for AclCid {
 }
 
 /// APB User (APB-U) Channel Identifiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ApbCid {
     ConnectionlessChannel,
 }
@@ -245,7 +255,7 @@ impl core::fmt::Display for ApbCid {
 }
 
 /// LE User (LE-U) Channel Identifiers
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LeCid {
     /// Channel for the Attribute Protocol
     ///
@@ -264,7 +274,7 @@ pub enum LeCid {
     /// To make a `DynamicallyAllocated` variant, use the function
     /// [`new_le`](../DynChannelId/index.html)
     /// of the struct `DynChannelId`
-    DynamicallyAllocated(DynChannelId<LeU>),
+    DynamicallyAllocated(DynChannelId<LeULinkType>),
 }
 
 impl LeCid {
@@ -282,8 +292,8 @@ impl LeCid {
             0x4 => Ok(LeCid::AttributeProtocol),
             0x5 => Ok(LeCid::LeSignalingChannel),
             0x6 => Ok(LeCid::SecurityManagerProtocol),
-            _ if DynChannelId::<LeU>::LE_BOUNDS.contains(&val) => {
-                Ok(LeCid::DynamicallyAllocated(DynChannelId::new(val)))
+            _ if DynChannelId::<LeULinkType>::LE_BOUNDS.contains(&val) => {
+                Ok(LeCid::DynamicallyAllocated(DynChannelId::new_unchecked(val)))
             }
             _ => Err(()),
         }

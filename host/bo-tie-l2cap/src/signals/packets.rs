@@ -1,6 +1,6 @@
 //! Definitions of L2CAP signaling packets
 
-use crate::channels::ChannelIdentifier;
+use crate::channels::{AclCid, ChannelIdentifier, LeCid};
 use crate::pdu::{ControlFrame, FragmentL2capPdu};
 use crate::signals::{SignalError, TryIntoSignal};
 use core::fmt::{self, Display, Formatter};
@@ -11,7 +11,7 @@ use core::num::NonZeroU8;
 /// This is the enum of the different signaling codes within L2CAP.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum SignalCode {
-    CommandReject,
+    CommandRejectResponse,
     ConnectionRequest,
     ConnectionResponse,
     ConfigurationRequest,
@@ -37,7 +37,7 @@ impl SignalCode {
     /// Get the raw code value of the Signal
     pub fn into_code(self) -> u8 {
         match self {
-            SignalCode::CommandReject => 0x1,
+            SignalCode::CommandRejectResponse => 0x1,
             SignalCode::ConnectionRequest => 0x2,
             SignalCode::ConnectionResponse => 0x3,
             SignalCode::ConfigurationRequest => 0x4,
@@ -63,7 +63,7 @@ impl SignalCode {
     /// Create a `SignalCode` from the raw code value
     pub fn try_from_code(val: u8) -> Result<Self, InvalidSignalCode> {
         match val {
-            0x1 => Ok(SignalCode::CommandReject),
+            0x1 => Ok(SignalCode::CommandRejectResponse),
             0x2 => Ok(SignalCode::ConnectionRequest),
             0x3 => Ok(SignalCode::ConnectionResponse),
             0x4 => Ok(SignalCode::ConfigurationRequest),
@@ -90,7 +90,7 @@ impl SignalCode {
     /// Check if the code is used by the ACL-U signaling channel
     pub fn used_by_acl_u(&self) -> bool {
         match self {
-            Self::CommandReject
+            Self::CommandRejectResponse
             | Self::ConnectionRequest
             | Self::ConnectionResponse
             | Self::ConfigurationRequest
@@ -124,7 +124,7 @@ impl SignalCode {
             | Self::EchoResponse
             | Self::InformationRequest
             | Self::InformationResponse => false,
-            Self::CommandReject
+            Self::CommandRejectResponse
             | Self::DisconnectionRequest
             | Self::DisconnectionResponse
             | Self::ConnectionParameterUpdateRequest
@@ -136,6 +136,35 @@ impl SignalCode {
             | Self::CreditBasedConnectionResponse
             | Self::CreditBasedReconfigureRequest
             | Self::CreditBasedReconfigureResponse => true,
+        }
+    }
+}
+
+impl Display for SignalCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("L2CAP ")?;
+
+        match self {
+            SignalCode::CommandRejectResponse => f.write_str("command reject response"),
+            SignalCode::ConnectionRequest => f.write_str("connection request"),
+            SignalCode::ConnectionResponse => f.write_str("connection response"),
+            SignalCode::ConfigurationRequest => f.write_str("configuration request"),
+            SignalCode::ConfigurationResponse => f.write_str("configuration response"),
+            SignalCode::DisconnectionRequest => f.write_str("disconnection request"),
+            SignalCode::DisconnectionResponse => f.write_str("disconnection response"),
+            SignalCode::EchoRequest => f.write_str("echo request"),
+            SignalCode::EchoResponse => f.write_str("echo response"),
+            SignalCode::InformationRequest => f.write_str("information request"),
+            SignalCode::InformationResponse => f.write_str("information response"),
+            SignalCode::ConnectionParameterUpdateRequest => f.write_str("connection parameter update request"),
+            SignalCode::ConnectionParameterUpdateResponse => f.write_str("connection parameter update response"),
+            SignalCode::LeCreditBasedConnectionRequest => f.write_str("LE credit based connection request"),
+            SignalCode::LeCreditBasedConnectionResponse => f.write_str("LE credit based connection response"),
+            SignalCode::FlowControlCreditIndication => f.write_str("flow control credit indication"),
+            SignalCode::CreditBasedConnectionRequest => f.write_str("credit based connection request"),
+            SignalCode::CreditBasedConnectionResponse => f.write_str("credit based connection response"),
+            SignalCode::CreditBasedReconfigureRequest => f.write_str("credit based reconfigure request"),
+            SignalCode::CreditBasedReconfigureResponse => f.write_str("credit based reconfigure response"),
         }
     }
 }
@@ -162,6 +191,35 @@ impl Display for InvalidSignalCode {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "code {} is not a valid L2CAP signal packet type", self.0)
     }
+}
+
+/// Trait for a Signal
+///
+/// Every signal implements this trait.
+pub trait Signal {
+    /// Get the code for the signal
+    fn get_code(&self) -> SignalCode;
+
+    /// Get the identifier within the signal packet.
+    fn get_identifier(&self) -> NonZeroU8;
+
+    /// Get the *Data Length* field of the signal packet
+    fn get_data_length(&self) -> u16;
+}
+
+/// Trait for signals that dynamically allocate channels
+///
+/// Signals that handle tye dynamic allocation of channels implement this trait.
+pub trait SignalWithDynChannel {
+    /// Get the local channel
+    ///
+    /// This will return the local channel identifier if it exists for this signal.
+    fn get_local_cid(&self) -> Option<ChannelIdentifier>;
+
+    /// Get the remote channel
+    ///
+    /// This will return the remote channel identifier if it exists for this signal.
+    fn get_remote_cid(&self) -> Option<ChannelIdentifier>;
 }
 
 /// Command Rejection Reason
@@ -341,19 +399,38 @@ impl CommandRejectResponse {
         6 + self.data.len()
     }
 
-    pub(crate) fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
-    where
-        L: crate::private::LinkType,
-    {
-        ControlFrame::new::<L>(IntoCmdRejectRspIter(self))
+    /// Create a k-frame from this signal
+    ///
+    /// # Panic
+    /// `channel_id` can only be a signalling channel
+    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new(IntoCmdRejectRspIter(self), channel_id)
     }
 
     /// Try to create a `CommandRejectResponse` from raw L2CAP data.
-    pub fn try_from_raw_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    pub fn try_from_raw_control_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
     where
         L: crate::private::LinkType,
     {
         ControlFrame::try_from_slice(data)
+    }
+}
+
+impl Signal for CommandRejectResponse {
+    fn get_code(&self) -> SignalCode {
+        SignalCode::CommandRejectResponse
+    }
+
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
+    }
+
+    fn get_data_length(&self) -> u16 {
+        match self.data {
+            CommandRejectReasonData::None => 2,
+            CommandRejectReasonData::Mtu(_) => 4,
+            CommandRejectReasonData::RequestedCid(_, _) => 6,
+        }
     }
 }
 
@@ -398,8 +475,6 @@ impl TryIntoSignal for CommandRejectResponse {
     }
 
     fn correct_channel(raw_channel_id: u16) -> bool {
-        use crate::channels::{AclCid, LeCid};
-
         raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
             || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
@@ -495,13 +570,134 @@ impl SimplifiedProtocolServiceMultiplexer {
     }
 }
 
+/// Error for bounded values
+///
+/// This is returned whenever an object is attempted to be created with a value outside of an
+/// acceptable range.
+#[derive(Debug)]
+pub enum BoundsError {
+    TooSmall(&'static str, &'static str),
+    TooLarge(&'static str, &'static str),
+}
+
+impl Display for BoundsError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            BoundsError::TooSmall(what, bound) => write!(f, "value for {what} is smaller than {bound}"),
+            BoundsError::TooLarge(what, bound) => write!(f, "value for {what} is larger than {bound}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for BoundsError {}
+
+macro_rules! max_u16 {
+    ($( #[ $doc:meta ], )* $name:ident, $min:literal) => {
+        max_u16! {
+            $( # [ $doc ], )* ;
+            #[doc = "create a new `"],
+            #[doc = stringify!($name)],
+            #[doc = "`\n"],
+            #[doc = "\n"],
+            #[doc = "# Panic\n"],
+            #[doc = "This will panic if `val` is less than "],
+            #[doc = stringify!($min)],
+            #[doc = "."],
+            $name,
+            65535, // a.k.a. <u16>::MAX
+            $min
+        }
+    };
+
+    ($( #[ $doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
+        max_u16! {
+            $( # [ $doc ], )* ;
+            #[doc = "create a new `"],
+            #[doc = stringify!($name)],
+            #[doc = "`\n"],
+            #[doc = "\n"],
+            #[doc = "# Panic\n"],
+            #[doc = "This will panic if `val` is greater than "],
+            #[doc = stringify!($max)],
+            #[doc = " or less than "],
+            #[doc = stringify!($min)],
+            #[doc = "."],
+            $name,
+            $max,
+            $min
+        }
+    };
+
+    ($( #[ $def_doc:meta ], )* ; $( #[ $new_doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
+        $( # [ $def_doc ] )*
+        pub struct $name {
+            val: u16,
+        }
+
+        impl $name {
+            $( # [ $new_doc ] )*
+            #[allow(unused_comparisons)]
+            pub fn new(val: u16) -> Self {
+                match Self::try_new(val) {
+                    Ok(this) => this,
+                    Err(e) => panic!("{e}")
+                }
+            }
+
+            #[doc = "Try to create a new `"]
+            #[doc = stringify!($name)]
+            #[doc = "`\n"]
+            #[doc = "\n"]
+            #[doc = "# Error"]
+            #[doc = "An error is returned if the panic condition as stated for method [`new`] "]
+            #[doc = "were to occur\n"]
+            #[doc = "\n"]
+            #[doc = "[`new`]: "]
+            #[doc = stringify!($new)]
+            #[doc = "::new"]
+            pub fn try_new(val: u16) -> Result<Self, BoundsError> {
+                #[allow(unused_comparisons)]
+                if val > $max {
+                    Err(BoundsError::TooLarge(stringify!($name), stringify!($max)))
+                } else if val < $min {
+                    Err(BoundsError::TooSmall(stringify!($name), stringify!($min)))
+                } else {
+                    Ok($name { val })
+                }
+            }
+
+            /// Convert into the inner value
+            pub fn into_inner(self) -> u16 {
+                self.val
+            }
+
+            /// Get the value
+            pub fn get(&self) -> u16 {
+                self.val
+            }
+        }
+
+        impl core::ops::Deref for $name {
+            type Target = u16;
+
+            fn deref(&self) -> &Self::Target {
+                &self.val
+            }
+        }
+    }
+}
+
+max_u16!(#[doc = "Credit based connection maximum PDU payload size"], LeCreditMps, 65533, 23);
+max_u16!(#[doc = "Credit based connection maximum transmission size"], LeCreditMtu, 23);
+
 /// LE credit based connection request
 pub struct LeCreditBasedConnectionRequest {
     pub identifier: NonZeroU8,
     pub spsm: SimplifiedProtocolServiceMultiplexer,
-    pub source_dyn_cid: crate::channels::DynChannelId<crate::LeU>,
-    pub mtu: u16,
-    pub mps: u16,
+    pub source_dyn_cid: crate::channels::DynChannelId<crate::LeULinkType>,
+    pub mtu: LeCreditMtu,
+    pub mps: LeCreditMps,
     pub initial_credits: u16,
 }
 
@@ -516,16 +712,40 @@ impl LeCreditBasedConnectionRequest {
     }
 
     /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
-    pub fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
-    where
-        L: crate::private::LinkType,
-    {
-        ControlFrame::new::<L>(IntoLeCreditRequestIter(self))
+    ///
+    /// # Panic
+    /// `channel_id` can only be a signalling channel
+    pub fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new(IntoLeCreditRequestIter(self), channel_id)
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
+    pub fn try_from_raw_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
         crate::pdu::ControlFrame::try_from_slice(c_frame)
+    }
+}
+
+impl Signal for LeCreditBasedConnectionRequest {
+    fn get_code(&self) -> SignalCode {
+        SignalCode::LeCreditBasedConnectionRequest
+    }
+
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
+    }
+
+    fn get_data_length(&self) -> u16 {
+        10
+    }
+}
+
+impl SignalWithDynChannel for LeCreditBasedConnectionRequest {
+    fn get_local_cid(&self) -> Option<ChannelIdentifier> {
+        self.get_source_cid().into()
+    }
+
+    fn get_remote_cid(&self) -> Option<ChannelIdentifier> {
+        None
     }
 }
 
@@ -569,15 +789,17 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
             return Err(SignalError::InvalidChannel);
         };
 
-        let mtu = <u16>::from_le_bytes([
+        let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
             raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(9).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
+        ]))
+        .map_err(|_| SignalError::InvalidValue)?;
 
-        let mps = <u16>::from_le_bytes([
+        let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
             raw.get(10).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(11).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
+        ]))
+        .map_err(|_| SignalError::InvalidValue)?;
 
         let initial_credits = <u16>::from_le_bytes([
             raw.get(12).copied().ok_or(SignalError::InvalidSize)?,
@@ -595,8 +817,6 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
     }
 
     fn correct_channel(raw_channel_id: u16) -> bool {
-        use crate::channels::LeCid;
-
         raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
 }
@@ -719,15 +939,30 @@ impl LeCreditBasedConnectionResponseError {
 
 pub struct LeCreditBasedConnectionResponse {
     pub identifier: NonZeroU8,
-    pub destination_dyn_cid: crate::channels::DynChannelId<crate::LeU>,
-    pub mtu: u16,
-    pub mps: u16,
+    pub destination_dyn_cid: crate::channels::DynChannelId<crate::LeULinkType>,
+    pub mtu: LeCreditMtu,
+    pub mps: LeCreditMps,
     pub initial_credits: u16,
     pub result: Result<(), LeCreditBasedConnectionResponseError>,
 }
 
 impl LeCreditBasedConnectionResponse {
     const CODE: u8 = 0x15;
+
+    /// Create a new `LeCreditBasedConnectionResponse` for rejecting the request.
+    ///
+    /// # Note
+    /// The `identifier` must the the same identifier used within the request.
+    pub fn new_rejected(identifier: NonZeroU8, reason: LeCreditBasedConnectionResponseError) -> Self {
+        Self {
+            identifier,
+            destination_dyn_cid: crate::channels::DynChannelId::new_unchecked(0),
+            mtu: LeCreditMtu { val: 0 },
+            mps: LeCreditMps { val: 0 },
+            initial_credits: 0,
+            result: Err(reason),
+        }
+    }
 
     /// Get the destination CID
     ///
@@ -736,13 +971,41 @@ impl LeCreditBasedConnectionResponse {
         ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(self.destination_dyn_cid))
     }
 
-    pub(crate) fn as_control_frame(&self) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new::<crate::LeU>(IntoLeCreditResponseIter(self))
+    /// Create a c-frame from this signal
+    ///
+    /// # Panic
+    /// `channel_id` can only be a signalling channel
+    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new(IntoLeCreditResponseIter(self), channel_id)
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
+    pub fn try_from_raw_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
         ControlFrame::try_from_slice(c_frame)
+    }
+}
+
+impl Signal for LeCreditBasedConnectionResponse {
+    fn get_code(&self) -> SignalCode {
+        SignalCode::LeCreditBasedConnectionResponse
+    }
+
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
+    }
+
+    fn get_data_length(&self) -> u16 {
+        10
+    }
+}
+
+impl SignalWithDynChannel for LeCreditBasedConnectionResponse {
+    fn get_local_cid(&self) -> Option<ChannelIdentifier> {
+        self.get_destination_cid().into()
+    }
+
+    fn get_remote_cid(&self) -> Option<ChannelIdentifier> {
+        None
     }
 }
 
@@ -781,15 +1044,17 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
                 return Err(SignalError::InvalidChannel);
             };
 
-        let mtu = <u16>::from_le_bytes([
+        let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
             raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
+        ]))
+        .map_err(|_| SignalError::InvalidValue)?;
 
-        let mps = <u16>::from_le_bytes([
+        let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
             raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(9).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
+        ]))
+        .map_err(|_| SignalError::InvalidValue)?;
 
         let initial_credits = <u16>::from_le_bytes([
             raw.get(10).copied().ok_or(SignalError::InvalidSize)?,
@@ -817,8 +1082,6 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
     }
 
     fn correct_channel(raw_channel_id: u16) -> bool {
-        use crate::channels::LeCid;
-
         raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
 }
@@ -904,7 +1167,11 @@ impl FlowControlCreditInd {
     const CODE: u8 = 0x16;
 
     /// Create a new `FlowControlCreditInd` for an ACL-U credit based connection
-    pub fn new_acl(identifier: NonZeroU8, dyn_cid: crate::channels::DynChannelId<crate::AclU>, credits: u16) -> Self {
+    pub fn new_acl(
+        identifier: NonZeroU8,
+        dyn_cid: crate::channels::DynChannelId<crate::AclULinkType>,
+        credits: u16,
+    ) -> Self {
         let cid = ChannelIdentifier::Acl(crate::channels::AclCid::DynamicallyAllocated(dyn_cid));
 
         Self {
@@ -915,7 +1182,11 @@ impl FlowControlCreditInd {
     }
 
     /// Create a new `FlowControlCreditInd` for a LE-U credit based connection
-    pub fn new_le(identifier: NonZeroU8, dyn_cid: crate::channels::DynChannelId<crate::LeU>, credits: u16) -> Self {
+    pub fn new_le(
+        identifier: NonZeroU8,
+        dyn_cid: crate::channels::DynChannelId<crate::LeULinkType>,
+        credits: u16,
+    ) -> Self {
         let cid = ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(dyn_cid));
 
         Self {
@@ -932,15 +1203,16 @@ impl FlowControlCreditInd {
         self.cid
     }
 
-    pub(crate) fn as_control_frame<L>(&self) -> impl FragmentL2capPdu + '_
-    where
-        L: crate::private::LinkType,
-    {
-        ControlFrame::new::<L>(IntoFlowControlCreditIndIter(self))
+    /// Create a c-frame from this signal
+    ///
+    /// # Panic
+    /// `channel_id` can only be a signalling channel
+    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new(IntoFlowControlCreditIndIter(self), channel_id)
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
+    pub fn try_from_raw_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
         crate::pdu::ControlFrame::try_from_slice(c_frame)
     }
 }
@@ -986,8 +1258,6 @@ impl TryIntoSignal for FlowControlCreditInd {
     }
 
     fn correct_channel(raw_channel_id: u16) -> bool {
-        use crate::channels::{AclCid, LeCid};
-
         raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
             || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
