@@ -1,6 +1,6 @@
 //! Structures for credit based channels
 
-use crate::connection_channel::{CreditBasedChannel, SendSduError};
+use crate::channel::{CreditBasedChannel, SendSduError};
 use crate::pdu::credit_frame::PacketsIterator;
 use crate::pdu::SduPacketsIterator;
 

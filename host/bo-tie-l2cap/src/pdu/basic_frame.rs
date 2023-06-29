@@ -1,7 +1,6 @@
 //! L2CAP Basic Frame Implementation
 
-use crate::channels;
-use crate::channels::ChannelIdentifier;
+use crate::channel::id::ChannelIdentifier;
 use crate::pdu::{FragmentL2capPdu, FragmentationError, RecombineL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 
@@ -14,7 +13,7 @@ use bo_tie_core::buffer::TryExtend;
 /// size.
 #[derive(Debug, Clone)]
 pub struct BasicFrame<T> {
-    channel_id: channels::ChannelIdentifier,
+    channel_id: ChannelIdentifier,
     payload: T,
 }
 
@@ -23,12 +22,12 @@ impl<T> BasicFrame<T> {
     pub const HEADER_SIZE: usize = 4;
 
     /// Create a new `BasicInfoFrame`
-    pub fn new(payload: T, channel_id: channels::ChannelIdentifier) -> Self {
+    pub fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
         BasicFrame { channel_id, payload }
     }
 
     /// Get the channel identifier for this `BasicInfoFrame`
-    pub fn get_channel_id(&self) -> channels::ChannelIdentifier {
+    pub fn get_channel_id(&self) -> ChannelIdentifier {
         self.channel_id
     }
 

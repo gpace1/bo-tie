@@ -1,6 +1,6 @@
 //! L2CAP control frame implementation
 
-use crate::channels::{AclCid, ChannelIdentifier, LeCid};
+use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 use crate::pdu::{FragmentIterator, FragmentL2capPdu, FragmentationError, RecombineL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 use core::num::{NonZeroU16, NonZeroU8};

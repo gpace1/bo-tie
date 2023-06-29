@@ -9,7 +9,7 @@ pub mod basic_frame;
 pub(crate) mod control_frame;
 pub mod credit_frame;
 
-use crate::channels::ChannelIdentifier;
+use crate::channel::id::ChannelIdentifier;
 pub use basic_frame::BasicFrame;
 pub(crate) use control_frame::ControlFrame;
 pub use control_frame::ControlFrameError;

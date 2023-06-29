@@ -8,12 +8,12 @@
 pub mod packets;
 
 /// The Channel Identifier for ACL-U signals
-pub const ACL_U_SIGNAL_CHANNEL_ID: crate::channels::ChannelIdentifier =
-    crate::ChannelIdentifier::Acl(crate::channels::AclCid::SignalingChannel);
+pub const ACL_U_SIGNAL_CHANNEL_ID: crate::channel::id::ChannelIdentifier =
+    crate::ChannelIdentifier::Acl(crate::channel::id::AclCid::SignalingChannel);
 
 /// The channel identifier for LE-U signals
-pub const LE_U_SIGNAL_CHANNEL_ID: crate::channels::ChannelIdentifier =
-    crate::ChannelIdentifier::Le(crate::channels::LeCid::LeSignalingChannel);
+pub const LE_U_SIGNAL_CHANNEL_ID: crate::channel::id::ChannelIdentifier =
+    crate::ChannelIdentifier::Le(crate::channel::id::LeCid::LeSignalingChannel);
 
 pub(crate) trait TryIntoSignal {
     fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>

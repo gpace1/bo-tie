@@ -1,6 +1,6 @@
 //! Definitions of L2CAP signaling packets
 
-use crate::channels::{AclCid, ChannelIdentifier, LeCid};
+use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 use crate::pdu::{ControlFrame, FragmentL2capPdu};
 use crate::signals::{SignalError, TryIntoSignal};
 use core::fmt::{self, Display, Formatter};
@@ -1011,7 +1011,7 @@ max_u16!(#[doc = "Credit based connection maximum transmission size"], LeCreditM
 pub struct LeCreditBasedConnectionRequest {
     pub identifier: NonZeroU8,
     pub spsm: SimplifiedProtocolServiceMultiplexer,
-    pub source_dyn_cid: crate::channels::DynChannelId<crate::LeULink>,
+    pub source_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
     pub mtu: LeCreditMtu,
     pub mps: LeCreditMps,
     pub initial_credits: u16,
@@ -1024,7 +1024,7 @@ impl LeCreditBasedConnectionRequest {
     ///
     /// This will map the dynamic CID to the full channel identifier.
     pub fn get_source_cid(&self) -> ChannelIdentifier {
-        ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(self.source_dyn_cid))
+        ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(self.source_dyn_cid))
     }
 
     /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
@@ -1103,11 +1103,12 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
         ]))
         .map_err(|_| SignalError::InvalidChannel)?;
 
-        let dyn_cid = if let ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(dyn_cid)) = source_cid {
-            dyn_cid
-        } else {
-            return Err(SignalError::InvalidChannel);
-        };
+        let dyn_cid =
+            if let ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(dyn_cid)) = source_cid {
+                dyn_cid
+            } else {
+                return Err(SignalError::InvalidChannel);
+            };
 
         let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
             raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
@@ -1259,7 +1260,7 @@ impl LeCreditBasedConnectionResponseError {
 
 pub struct LeCreditBasedConnectionResponse {
     pub identifier: NonZeroU8,
-    pub destination_dyn_cid: crate::channels::DynChannelId<crate::LeULink>,
+    pub destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
     pub mtu: LeCreditMtu,
     pub mps: LeCreditMps,
     pub initial_credits: u16,
@@ -1276,7 +1277,7 @@ impl LeCreditBasedConnectionResponse {
     pub fn new_rejected(identifier: NonZeroU8, reason: LeCreditBasedConnectionResponseError) -> Self {
         Self {
             identifier,
-            destination_dyn_cid: crate::channels::DynChannelId::new_unchecked(0),
+            destination_dyn_cid: crate::channel::id::DynChannelId::new_unchecked(0),
             mtu: LeCreditMtu { val: 0 },
             mps: LeCreditMps { val: 0 },
             initial_credits: 0,
@@ -1288,7 +1289,9 @@ impl LeCreditBasedConnectionResponse {
     ///
     /// This will map `destination_dyn_cid` to the full channel identifier.
     pub fn get_destination_cid(&self) -> ChannelIdentifier {
-        ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(self.destination_dyn_cid))
+        ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(
+            self.destination_dyn_cid,
+        ))
     }
 
     /// Create a c-frame from this signal
@@ -1362,7 +1365,7 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
         .map_err(|_| SignalError::InvalidSpsm)?;
 
         let destination_dyn_cid =
-            if let ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
+            if let ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
                 dyn_cid
             } else {
                 return Err(SignalError::InvalidChannel);
@@ -1493,7 +1496,7 @@ impl FlowControlCreditInd {
     /// Create a new `FlowControlCreditInd` for an ACL-U credit based connection
     pub fn new_acl(
         identifier: NonZeroU8,
-        dyn_cid: crate::channels::DynChannelId<crate::AclULink>,
+        dyn_cid: crate::channel::id::DynChannelId<crate::AclULink>,
         credits: u16,
     ) -> Self {
         let cid = ChannelIdentifier::Acl(AclCid::DynamicallyAllocated(dyn_cid));
@@ -1506,7 +1509,11 @@ impl FlowControlCreditInd {
     }
 
     /// Create a new `FlowControlCreditInd` for a LE-U credit based connection
-    pub fn new_le(identifier: NonZeroU8, dyn_cid: crate::channels::DynChannelId<crate::LeULink>, credits: u16) -> Self {
+    pub fn new_le(
+        identifier: NonZeroU8,
+        dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
+        credits: u16,
+    ) -> Self {
         let cid = ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_cid));
 
         Self {

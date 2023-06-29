@@ -1,9 +1,7 @@
 //! Signalling Channel implementation
 
-use crate::channels::{AclCid, ChannelIdentifier, LeCid};
-use crate::connection_channel::{
-    ConnectionChannel, CreditBasedChannel, HeadedFragment, MaybeRecvError, SharedPhysicalLink,
-};
+use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
+use crate::channel::{ConnectionChannel, CreditBasedChannel, HeadedFragment, MaybeRecvError, SharedPhysicalLink};
 use crate::pdu::control_frame::RecombineError;
 use crate::pdu::{
     ControlFrame, FragmentIterator, FragmentL2capPdu, L2capFragment, RecombineL2capPdu, RecombinePayloadIncrementally,
@@ -124,7 +122,7 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
     /// ```
     /// # use std::future::Future;
     /// use bo_tie_l2cap::{LeULogicalLink, SignallingChannel};
-    /// use bo_tie_l2cap::connection_channel::signalling::ReceivedSignal;
+    /// use bo_tie_l2cap::channel::signalling::ReceivedSignal;
     ///
     /// # fn link<P: bo_tie_l2cap::PhysicalLink>(link: LeULogicalLink<P>) -> impl Future + Send {
     /// # async move {
@@ -337,7 +335,7 @@ impl ReceivedSignal {
 #[derive(Debug)]
 pub enum ReceiveSignalError<P: PhysicalLink> {
     RecvErr(P::RecvErr),
-    InvalidChannel(crate::connection_channel::InvalidChannel),
+    InvalidChannel(crate::channel::InvalidChannel),
     Convert(ConvertSignalError),
     Recombine(RecombineError),
     ExpectedFirstFragment,
@@ -690,7 +688,7 @@ impl Request<LeCreditBasedConnectionRequest> {
 /// Builder used for creating a *LE Credit Based Connection Response*
 pub struct LeCreditBasedConnectionResponseBuilder<'a> {
     request: &'a LeCreditBasedConnectionRequest,
-    destination_dyn_cid: crate::channels::DynChannelId<crate::LeULink>,
+    destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
     mtu: u16,
     mps: u16,
     initial_credits: u16,

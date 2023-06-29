@@ -26,14 +26,13 @@
 extern crate alloc;
 extern crate core;
 
-pub mod channels;
-pub mod connection_channel;
+pub mod channel;
 pub mod link_flavor;
 pub mod pdu;
 pub mod signals;
 
-use crate::channels::{ChannelIdentifier, LeCid};
-pub use crate::connection_channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
+use crate::channel::id::{ChannelIdentifier, LeCid};
+pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
 use core::future::Future;
 use link_flavor::{AclULink, LeULink};
 use pdu::L2capFragment;
@@ -166,13 +165,13 @@ pub trait LogicalLink {
 
 /// A LE-U Logical Link
 pub struct LeULogicalLink<P: PhysicalLink> {
-    shared_link: connection_channel::SharedPhysicalLink<P>,
+    shared_link: channel::SharedPhysicalLink<P>,
 }
 
 impl<P: PhysicalLink> LeULogicalLink<P> {
     /// Create a new `LogicalLink`
     pub fn new(physical_link: P) -> Self {
-        let shared_link = connection_channel::SharedPhysicalLink::new(physical_link);
+        let shared_link = channel::SharedPhysicalLink::new(physical_link);
 
         Self { shared_link }
     }

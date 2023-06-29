@@ -3,9 +3,10 @@
 //! [`ConnectionChannel`]: ConnectionChannel
 
 mod credit_based;
+pub mod id;
 pub mod signalling;
 
-use crate::channels::ChannelIdentifier;
+use crate::channel::id::ChannelIdentifier;
 use crate::pdu::credit_frame::CreditBasedFrame;
 use crate::pdu::{
     BasicFrame, CreditBasedSdu, FragmentIterator, FragmentL2capPdu, FragmentL2capSdu, PacketsError,
@@ -320,8 +321,8 @@ where
     /// This will create a new dynamically created channel and return the channel identifier.
     ///
     /// `None` is returned if all dynamic allocated channels are already used
-    fn new_le_dyn_channel(&self) -> Option<crate::channels::DynChannelId<crate::LeULink>> {
-        use crate::channels::DynChannelId;
+    fn new_le_dyn_channel(&self) -> Option<crate::channel::id::DynChannelId<crate::LeULink>> {
+        use crate::channel::id::DynChannelId;
         use crate::link_flavor::LeULink;
 
         let mut channel_val = *DynChannelId::<LeULink>::LE_BOUNDS.start();

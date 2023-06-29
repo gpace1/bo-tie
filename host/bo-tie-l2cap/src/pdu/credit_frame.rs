@@ -9,7 +9,7 @@
 //! The parameters determine the maximum size of each credit based L2CAP PDU, the dynamically
 //! allocated channel for the connection, the number of credits, and the MTU of the SDU.
 
-use crate::channels::ChannelIdentifier;
+use crate::channel::id::ChannelIdentifier;
 use crate::pdu::{
     FragmentIterator, FragmentL2capPdu, FragmentationError, PacketsError, RecombineL2capPdu, SduPacketsIterator,
 };

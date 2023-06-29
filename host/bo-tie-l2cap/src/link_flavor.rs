@@ -10,30 +10,29 @@
 //! 2) the minimum supported MTU of the payload or SDU.
 //! 3) the valid channel identifier ranges
 //! 4) the signalling channel (if any).
-//! 
+//!
 //! # Logical Link
 //! A flavor is for labeling the further parameters of how the current logical link or channel is
 //! acting in regards to the other device(s) connected via a physical link. If a channel is defined
 //! to use the [`AclULink`] flavor it has different requirements than if it used the [`ApbLink`]
 //! flavor.
-//! 
-//! When data is sent or received, a channel will use the flavor to set or validate (respectively) 
+//!
+//! When data is sent or received, a channel will use the flavor to set or validate (respectively)
 //! that the channeling information of the L2CAP PDUs.
-//! 
+//!
 //! # Minimum Supported MTU
-//! Flavors have different supported MTU values. It can be helpful to upper layers to understand 
+//! Flavors have different supported MTU values. It can be helpful to upper layers to understand
 //! the minimum MTU for a L2CAP connection based on the link flavor of the channel.
-//! 
+//!
 //! # Identifier Ranges
 //! Channel identifier values depend on the link flavor. Different link flavors have different valid
 //! channel identifier values even if the flavors are part of the same logical link kind.
-//! 
+//!
 //! # Signalling Channel
 //! Most flavors have an associated signalling channel, but not all of them. This is used to get the
-//! signalling channel identifier of the link flavor. 
+//! signalling channel identifier of the link flavor.
 
-use crate::channels;
-use crate::channels::{AclCid, ChannelIdentifier, LeCid};
+use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 
 /// A trait for a logical link type
 ///
@@ -126,7 +125,7 @@ impl LinkFlavor for ApbLink {
     const MIN_SUPPORTED_MTU: u16 = 48;
 
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        channels::ApbCid::try_from_raw(val)
+        crate::channel::id::ApbCid::try_from_raw(val)
             .map(|id| ChannelIdentifier::Apb(id))
             .ok()
     }
