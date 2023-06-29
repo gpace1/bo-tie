@@ -294,7 +294,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
         bytes: &'a [u8],
     ) -> Result<ChannelIdentifier, CreditBasedFrameError<core::convert::Infallible>>
     where
-        L: crate::private::LinkType,
+        L: crate::link_flavor::LinkFlavor,
     {
         L::try_channel_from_raw(<u16>::from_le_bytes([
             *bytes.get(2).ok_or(CreditBasedFrameError::RawDataTooSmall)?,
@@ -305,7 +305,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
 
     fn try_first_from<L>(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>>
     where
-        L: crate::private::LinkType,
+        L: crate::link_flavor::LinkFlavor,
     {
         let len: usize = Self::try_len_from(bytes)?;
 
@@ -338,7 +338,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
     /// k-frames do not contain this field. This tries to create a `CreditBasedFrame` for a LE-U
     /// channel.
     pub fn try_le_first_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::LeULinkType>(bytes)
+        Self::try_first_from::<crate::LeULink>(bytes)
     }
 
     /// Try to create the first credit based frame from an ACL channel
@@ -347,7 +347,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
     /// k-frames do not contain this field. This tries to create a `CreditBasedFrame` for an ACL-U
     /// channel.
     pub fn try_acl_first_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::AclULinkType>(bytes)
+        Self::try_first_from::<crate::AclULink>(bytes)
     }
 
     /// Try to create a subsequent credit based frame from a LE channel.
@@ -355,7 +355,7 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
     /// Credit based frames Frames after the first frame for a SDU do not contain the *SDU Length*
     /// field. This tries to create a subsequent `CreditBasedFrame` for a LE-U channel.
     pub fn try_le_subsequent_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::LeULinkType>(bytes)
+        Self::try_first_from::<crate::LeULink>(bytes)
     }
 
     /// Try to create a subsequent credit based frame from an ACL channel
@@ -363,13 +363,13 @@ impl<'a> CreditBasedFrame<&'a [u8]> {
     /// Credit based frames Frames after the first frame for a SDU do not contain the *SDU Length*
     /// field. This tries to create a subsequent `CreditBasedFrame` for a ACL-U channel.
     pub fn try_acl_subsequent_from(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>> {
-        Self::try_first_from::<crate::AclULinkType>(bytes)
+        Self::try_first_from::<crate::AclULink>(bytes)
     }
 
     /// Try to create a 'subsequent'
     pub fn try_subsequent_from<L>(bytes: &'a [u8]) -> Result<Self, CreditBasedFrameError<core::convert::Infallible>>
     where
-        L: crate::private::LinkType,
+        L: crate::link_flavor::LinkFlavor,
     {
         let len: usize = Self::try_len_from(bytes)?;
 

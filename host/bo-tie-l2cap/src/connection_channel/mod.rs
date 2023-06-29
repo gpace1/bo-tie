@@ -19,6 +19,35 @@ use core::task::Poll;
 pub use credit_based::UnsentCreditFrames;
 pub use signalling::SignallingChannel;
 
+/// A L2CAP connection channel
+///
+/// Channels that implement this form a L2CAP connection between the two linked devices.
+pub trait ConnectionChannel {
+    /// Get the channel identifier used on this device
+    ///
+    /// This returns the channel identifier used by this device for the connection. The peer device
+    /// will send PDUs with the returned channel identifier for this connection.
+    fn get_this_channel_id(&self) -> ChannelIdentifier;
+
+    /// Get the channel identifier used by the peer device
+    ///
+    /// This returns the channel identifier used by the peer device for this connection. This device
+    /// will send PDUs with the returned channel identifier to the other device.
+    fn get_peer_channel_id(&self) -> ChannelIdentifier;
+
+    /// Get the maximum transmission size (MTU)
+    ///
+    /// This is the maximum transmission size of the service data unit (SDU) for this connection.
+    /// `None` is returned if the connection does not have or define a MTU at the L2CAP layer.
+    fn get_mtu(&self) -> Option<usize>;
+
+    /// Get the maximum PDU payload size (MPS)
+    ///
+    /// This is the maximum size of a PDU's payload for this connection. `None` is returned if the
+    /// connection does not have or define a MPS at the L2CAP layer.
+    fn get_mps(&self) -> Option<usize>;
+}
+
 /// A [`L2capFragment`] with its attached header
 ///
 /// This is used to pass a L2CAP fragment with its associated header.
@@ -262,6 +291,10 @@ where
         }
     }
 
+    pub(crate) fn is_channel_used(&self, id: ChannelIdentifier) -> bool {
+        self.channels.borrow().binary_search(&id).is_ok()
+    }
+
     fn clear_owner(&self) {
         self.owner.set(PhysicalLinkOwner::None);
     }
@@ -287,13 +320,13 @@ where
     /// This will create a new dynamically created channel and return the channel identifier.
     ///
     /// `None` is returned if all dynamic allocated channels are already used
-    fn new_le_dyn_channel(&self) -> Option<crate::channels::DynChannelId<crate::LeULinkType>> {
+    fn new_le_dyn_channel(&self) -> Option<crate::channels::DynChannelId<crate::LeULink>> {
         use crate::channels::DynChannelId;
-        use crate::LeULinkType;
+        use crate::link_flavor::LeULink;
 
-        let mut channel_val = *DynChannelId::<LeULinkType>::LE_BOUNDS.start();
+        let mut channel_val = *DynChannelId::<LeULink>::LE_BOUNDS.start();
 
-        while let Ok(channel) = DynChannelId::<LeULinkType>::new_le(channel_val) {
+        while let Ok(channel) = DynChannelId::<LeULink>::new_le(channel_val) {
             let channel = ChannelIdentifier::Le(channel);
 
             let mut channels_mref = self.channels.borrow_mut();
@@ -832,6 +865,24 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
         }
 
         Ok(sdu)
+    }
+}
+
+impl<P: PhysicalLink> ConnectionChannel for CreditBasedChannel<'_, P> {
+    fn get_this_channel_id(&self) -> ChannelIdentifier {
+        self.this_channel_id
+    }
+
+    fn get_peer_channel_id(&self) -> ChannelIdentifier {
+        self.peer_channel_id
+    }
+
+    fn get_mtu(&self) -> Option<usize> {
+        Some(self.maximum_transmission_size)
+    }
+
+    fn get_mps(&self) -> Option<usize> {
+        Some(self.maximum_pdu_payload_size)
     }
 }
 

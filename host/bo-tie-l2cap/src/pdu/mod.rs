@@ -38,38 +38,6 @@ impl<T> L2capFragment<T> {
         Self { start_fragment, data }
     }
 
-    /// Get the value of length field in the basic header
-    ///
-    /// This returns `None` if it cannot be determined if this packet has the PDU length field.
-    fn get_len_field(&self) -> Option<usize>
-    where
-        T: core::ops::Deref<Target = [u8]>,
-    {
-        if self.start_fragment && self.data.len() > 2 {
-            Some(<u16>::from_le_bytes([self.data[0], self.data[1]]) as usize)
-        } else {
-            None
-        }
-    }
-
-    /// Get the value of the channel identifier
-    ///
-    /// This returns `None` if the packet cannot be determined to have the channel ID field
-    fn get_channel_id<L>(&self) -> Option<ChannelIdentifier>
-    where
-        L: crate::private::LinkType,
-        T: core::ops::Deref<Target = [u8]>,
-    {
-        if self.start_fragment {
-            L::try_channel_from_raw(<u16>::from_le_bytes([
-                self.data.get(2).copied()?,
-                self.data.get(3).copied()?,
-            ]))
-        } else {
-            None
-        }
-    }
-
     pub fn is_start_fragment(&self) -> bool {
         self.start_fragment
     }

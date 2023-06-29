@@ -1134,7 +1134,7 @@ impl<C: ConnectionChannelEnds> Connection<C> {
             ConnectionKind::Le(CC { status, .. }) | ConnectionKind::LeEnh(ECC { status, .. }) => {
                 if status == errors::Error::NoError {
                     let max_mtu = if self.bounded { self.hci_max } else { <u16>::MAX.into() };
-                    let initial_mtu = <bo_tie_l2cap::LeULinkType as bo_tie_l2cap::MinimumMtu>::MIN_SUPPORTED_MTU;
+                    let initial_mtu = <bo_tie_l2cap::LeULink as bo_tie_l2cap::MinimumMtu>::MIN_SUPPORTED_MTU;
 
                     let le = l2cap::LeL2cap::new(
                         self.get_handle(),

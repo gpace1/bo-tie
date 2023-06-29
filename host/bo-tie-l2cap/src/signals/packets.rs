@@ -6,6 +6,102 @@ use crate::signals::{SignalError, TryIntoSignal};
 use core::fmt::{self, Display, Formatter};
 use core::num::NonZeroU8;
 
+macro_rules! max_u16 {
+    ($( #[ $doc:meta ], )* $name:ident, $min:literal) => {
+        max_u16! {
+            $( # [ $doc ], )* ;
+            #[doc = "create a new `"],
+            #[doc = stringify!($name)],
+            #[doc = "`\n"],
+            #[doc = "\n"],
+            #[doc = "# Panic\n"],
+            #[doc = "This will panic if `val` is less than "],
+            #[doc = stringify!($min)],
+            #[doc = "."],
+            $name,
+            65535, // a.k.a. <u16>::MAX
+            $min
+        }
+    };
+
+    ($( #[ $doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
+        max_u16! {
+            $( # [ $doc ], )* ;
+            #[doc = "create a new `"],
+            #[doc = stringify!($name)],
+            #[doc = "`\n"],
+            #[doc = "\n"],
+            #[doc = "# Panic\n"],
+            #[doc = "This will panic if `val` is greater than "],
+            #[doc = stringify!($max)],
+            #[doc = " or less than "],
+            #[doc = stringify!($min)],
+            #[doc = "."],
+            $name,
+            $max,
+            $min
+        }
+    };
+
+    ($( #[ $def_doc:meta ], )* ; $( #[ $new_doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
+        $( # [ $def_doc ] )*
+        pub struct $name {
+            val: u16,
+        }
+
+        impl $name {
+            $( # [ $new_doc ] )*
+            #[allow(unused_comparisons)]
+            pub fn new(val: u16) -> Self {
+                match Self::try_new(val) {
+                    Ok(this) => this,
+                    Err(e) => panic!("{e}")
+                }
+            }
+
+            #[doc = "Try to create a new `"]
+            #[doc = stringify!($name)]
+            #[doc = "`\n"]
+            #[doc = "\n"]
+            #[doc = "# Error"]
+            #[doc = "An error is returned if the panic condition as stated for method [`new`] "]
+            #[doc = "were to occur\n"]
+            #[doc = "\n"]
+            #[doc = "[`new`]: "]
+            #[doc = stringify!($new)]
+            #[doc = "::new"]
+            pub fn try_new(val: u16) -> Result<Self, BoundsError> {
+                #[allow(unused_comparisons)]
+                if val > $max {
+                    Err(BoundsError::TooLarge(stringify!($name), stringify!($max)))
+                } else if val < $min {
+                    Err(BoundsError::TooSmall(stringify!($name), stringify!($min)))
+                } else {
+                    Ok($name { val })
+                }
+            }
+
+            /// Convert into the inner value
+            pub fn into_inner(self) -> u16 {
+                self.val
+            }
+
+            /// Get the value
+            pub fn get(&self) -> u16 {
+                self.val
+            }
+        }
+
+        impl core::ops::Deref for $name {
+            type Target = u16;
+
+            fn deref(&self) -> &Self::Target {
+                &self.val
+            }
+        }
+    }
+}
+
 /// Codes for each Signal Type
 ///
 /// This is the enum of the different signaling codes within L2CAP.
@@ -394,12 +490,12 @@ impl CommandRejectResponse {
     /// Get the length of the signal command reject response packet
     ///
     /// # Note
-    /// This is the length of the information payload within a control frame (k-frame).
+    /// This is the length of the information payload within a control frame (c-frame).
     pub fn size(&self) -> usize {
         6 + self.data.len()
     }
 
-    /// Create a k-frame from this signal
+    /// Create a c-frame from this signal
     ///
     /// # Panic
     /// `channel_id` can only be a signalling channel
@@ -410,9 +506,9 @@ impl CommandRejectResponse {
     /// Try to create a `CommandRejectResponse` from raw L2CAP data.
     pub fn try_from_raw_control_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
     where
-        L: crate::private::LinkType,
+        L: crate::link_flavor::LinkFlavor,
     {
-        ControlFrame::try_from_slice(data)
+        ControlFrame::try_from_slice::<L>(data)
     }
 }
 
@@ -435,8 +531,9 @@ impl Signal for CommandRejectResponse {
 }
 
 impl TryIntoSignal for CommandRejectResponse {
-    fn try_from(raw: &[u8]) -> Result<Self, SignalError>
+    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
     where
+        L: crate::link_flavor::LinkFlavor,
         Self: Sized,
     {
         if CommandRejectResponse::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
@@ -517,7 +614,7 @@ impl Iterator for CmdRejectRspIter<'_> {
             2 => self.reject.data.len().to_le_bytes().get(0).copied(),
             3 => self.reject.data.len().to_le_bytes().get(1).copied(),
             4 => self.reject.reason.into_val().to_le_bytes().get(0).copied(),
-            5 => self.reject.reason.into_val().to_le_bytes().get(0).copied(),
+            5 => self.reject.reason.into_val().to_le_bytes().get(1).copied(),
             _ => self.reject.data.iter_pos(self.pos - 6),
         };
 
@@ -530,6 +627,321 @@ impl Iterator for CmdRejectRspIter<'_> {
 impl ExactSizeIterator for CmdRejectRspIter<'_> {
     fn len(&self) -> usize {
         (6 + self.reject.data.len()).checked_sub(self.pos).unwrap_or_default()
+    }
+}
+
+/// Disconnection Request Signal
+///
+/// This signal is used for terminating a dynamically allocated L2CAP channel
+pub struct DisconnectRequest {
+    pub identifier: NonZeroU8,
+    pub destination_cid: ChannelIdentifier,
+    pub source_cid: ChannelIdentifier,
+}
+
+impl DisconnectRequest {
+    const CODE: u8 = 0x6;
+
+    /// Get the destination CID
+    pub fn get_destination_cid(&self) -> ChannelIdentifier {
+        self.destination_cid
+    }
+
+    /// Get the source CID
+    pub fn get_source_cid(&self) -> ChannelIdentifier {
+        self.source_cid
+    }
+
+    /// Create a Disconnect Request
+    pub fn new(identifier: NonZeroU8, destination_cid: ChannelIdentifier, source_cid: ChannelIdentifier) -> Self {
+        Self {
+            identifier,
+            destination_cid,
+            source_cid,
+        }
+    }
+
+    /// Create a c-frame from this signal
+    ///
+    /// # Panic
+    /// `channel_id` can only be a signalling channel
+    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new(IntoDisconnectRequestIter(self), channel_id)
+    }
+
+    /// Try to create a `CommandRejectResponse` from raw L2CAP data.
+    pub fn try_from_raw_control_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    where
+        L: crate::link_flavor::LinkFlavor,
+    {
+        ControlFrame::try_from_slice::<L>(data)
+    }
+}
+
+impl Signal for DisconnectRequest {
+    fn get_code(&self) -> SignalCode {
+        SignalCode::DisconnectionRequest
+    }
+
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
+    }
+
+    fn get_data_length(&self) -> u16 {
+        4
+    }
+}
+
+impl TryIntoSignal for DisconnectRequest {
+    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
+    where
+        L: crate::link_flavor::LinkFlavor,
+        Self: Sized,
+    {
+        if DisconnectRequest::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
+            return Err(SignalError::IncorrectCode);
+        }
+
+        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
+
+        let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
+
+        let data_len = <u16>::from_le_bytes([
+            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
+            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        if data_len != 4 {
+            return Err(SignalError::InvalidLengthField);
+        }
+
+        let raw_destination_cid = <u16>::from_le_bytes([
+            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
+            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        let destination_cid = L::try_channel_from_raw(raw_destination_cid).ok_or(SignalError::InvalidChannel)?;
+
+        let raw_source_cid = <u16>::from_le_bytes([
+            raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
+            raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        let source_cid = L::try_channel_from_raw(raw_source_cid).ok_or(SignalError::InvalidChannel)?;
+
+        Ok(DisconnectRequest {
+            identifier,
+            destination_cid,
+            source_cid,
+        })
+    }
+
+    fn correct_channel(raw_channel_id: u16) -> bool {
+        raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
+            || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
+    }
+}
+
+struct IntoDisconnectRequestIter<'a>(&'a DisconnectRequest);
+
+impl<'a> IntoIterator for IntoDisconnectRequestIter<'a> {
+    type Item = u8;
+    type IntoIter = DisconnectRequestIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DisconnectRequestIter::new(self.0)
+    }
+}
+
+struct DisconnectRequestIter<'a> {
+    request: &'a DisconnectRequest,
+    pos: usize,
+}
+
+impl<'a> DisconnectRequestIter<'a> {
+    fn new(request: &'a DisconnectRequest) -> Self {
+        let pos = 0;
+
+        DisconnectRequestIter { request, pos }
+    }
+}
+
+impl Iterator for DisconnectRequestIter<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = match self.pos {
+            0 => Some(DisconnectRequest::CODE),
+            1 => Some(self.request.identifier.get()),
+
+            // using `to_le_bytes` here is kinda dirty without
+            // converting to u16, but the logic is the same.
+            2 => 4u16.to_le_bytes().get(0).copied(),
+            3 => 4u16.to_le_bytes().get(1).copied(),
+            4 => self.request.destination_cid.to_val().to_le_bytes().get(0).copied(),
+            5 => self.request.destination_cid.to_val().to_le_bytes().get(1).copied(),
+            6 => self.request.source_cid.to_val().to_le_bytes().get(0).copied(),
+            7 => self.request.source_cid.to_val().to_le_bytes().get(1).copied(),
+            _ => None,
+        };
+
+        self.pos += 1;
+
+        ret
+    }
+}
+
+impl ExactSizeIterator for DisconnectRequestIter<'_> {
+    fn len(&self) -> usize {
+        8
+    }
+}
+
+/// Disconnection Response Signal
+///
+/// This signal is used for terminating a dynamically allocated L2CAP channel
+pub struct DisconnectResponse {
+    pub identifier: NonZeroU8,
+    pub destination_cid: ChannelIdentifier,
+    pub source_cid: ChannelIdentifier,
+}
+
+impl DisconnectResponse {
+    const CODE: u8 = 0x7;
+
+    /// Create a c-frame from this signal
+    ///
+    /// # Panic
+    /// `channel_id` can only be a signalling channel
+    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
+        ControlFrame::new(IntoDisconnectResponseIter(self), channel_id)
+    }
+
+    /// Try to create a `CommandRejectResponse` from raw L2CAP data.
+    pub fn try_from_raw_control_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    where
+        L: crate::link_flavor::LinkFlavor,
+    {
+        ControlFrame::try_from_slice::<L>(data)
+    }
+}
+
+impl Signal for DisconnectResponse {
+    fn get_code(&self) -> SignalCode {
+        SignalCode::DisconnectionResponse
+    }
+
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
+    }
+
+    fn get_data_length(&self) -> u16 {
+        4
+    }
+}
+
+impl TryIntoSignal for DisconnectResponse {
+    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
+    where
+        L: crate::link_flavor::LinkFlavor,
+        Self: Sized,
+    {
+        if DisconnectResponse::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
+            return Err(SignalError::IncorrectCode);
+        }
+
+        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
+
+        let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
+
+        let data_len = <u16>::from_le_bytes([
+            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
+            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        if data_len != 4 {
+            return Err(SignalError::InvalidLengthField);
+        }
+
+        let raw_destination_cid = <u16>::from_le_bytes([
+            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
+            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        let destination_cid = L::try_channel_from_raw(raw_destination_cid).ok_or(SignalError::InvalidChannel)?;
+
+        let raw_source_cid = <u16>::from_le_bytes([
+            raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
+            raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        let source_cid = L::try_channel_from_raw(raw_source_cid).ok_or(SignalError::InvalidChannel)?;
+
+        Ok(DisconnectResponse {
+            identifier,
+            destination_cid,
+            source_cid,
+        })
+    }
+
+    fn correct_channel(raw_channel_id: u16) -> bool {
+        raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
+            || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
+    }
+}
+
+struct IntoDisconnectResponseIter<'a>(&'a DisconnectResponse);
+
+impl<'a> IntoIterator for IntoDisconnectResponseIter<'a> {
+    type Item = u8;
+    type IntoIter = DisconnectResponseIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DisconnectResponseIter::new(self.0)
+    }
+}
+
+struct DisconnectResponseIter<'a> {
+    request: &'a DisconnectResponse,
+    pos: usize,
+}
+
+impl<'a> DisconnectResponseIter<'a> {
+    fn new(request: &'a DisconnectResponse) -> Self {
+        let pos = 0;
+
+        DisconnectResponseIter { request, pos }
+    }
+}
+
+impl Iterator for DisconnectResponseIter<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = match self.pos {
+            0 => Some(DisconnectRequest::CODE),
+            1 => Some(self.request.identifier.get()),
+
+            // using `to_le_bytes` here is kinda dirty without
+            // converting to u16, but the logic is the same.
+            2 => 4u16.to_le_bytes().get(0).copied(),
+            3 => 4u16.to_le_bytes().get(1).copied(),
+            4 => self.request.destination_cid.to_val().to_le_bytes().get(0).copied(),
+            5 => self.request.destination_cid.to_val().to_le_bytes().get(1).copied(),
+            6 => self.request.source_cid.to_val().to_le_bytes().get(0).copied(),
+            7 => self.request.source_cid.to_val().to_le_bytes().get(1).copied(),
+            _ => None,
+        };
+
+        self.pos += 1;
+
+        ret
+    }
+}
+
+impl ExactSizeIterator for DisconnectResponseIter<'_> {
+    fn len(&self) -> usize {
+        8
     }
 }
 
@@ -592,102 +1004,6 @@ impl Display for BoundsError {
 #[cfg(feature = "std")]
 impl std::error::Error for BoundsError {}
 
-macro_rules! max_u16 {
-    ($( #[ $doc:meta ], )* $name:ident, $min:literal) => {
-        max_u16! {
-            $( # [ $doc ], )* ;
-            #[doc = "create a new `"],
-            #[doc = stringify!($name)],
-            #[doc = "`\n"],
-            #[doc = "\n"],
-            #[doc = "# Panic\n"],
-            #[doc = "This will panic if `val` is less than "],
-            #[doc = stringify!($min)],
-            #[doc = "."],
-            $name,
-            65535, // a.k.a. <u16>::MAX
-            $min
-        }
-    };
-
-    ($( #[ $doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
-        max_u16! {
-            $( # [ $doc ], )* ;
-            #[doc = "create a new `"],
-            #[doc = stringify!($name)],
-            #[doc = "`\n"],
-            #[doc = "\n"],
-            #[doc = "# Panic\n"],
-            #[doc = "This will panic if `val` is greater than "],
-            #[doc = stringify!($max)],
-            #[doc = " or less than "],
-            #[doc = stringify!($min)],
-            #[doc = "."],
-            $name,
-            $max,
-            $min
-        }
-    };
-
-    ($( #[ $def_doc:meta ], )* ; $( #[ $new_doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
-        $( # [ $def_doc ] )*
-        pub struct $name {
-            val: u16,
-        }
-
-        impl $name {
-            $( # [ $new_doc ] )*
-            #[allow(unused_comparisons)]
-            pub fn new(val: u16) -> Self {
-                match Self::try_new(val) {
-                    Ok(this) => this,
-                    Err(e) => panic!("{e}")
-                }
-            }
-
-            #[doc = "Try to create a new `"]
-            #[doc = stringify!($name)]
-            #[doc = "`\n"]
-            #[doc = "\n"]
-            #[doc = "# Error"]
-            #[doc = "An error is returned if the panic condition as stated for method [`new`] "]
-            #[doc = "were to occur\n"]
-            #[doc = "\n"]
-            #[doc = "[`new`]: "]
-            #[doc = stringify!($new)]
-            #[doc = "::new"]
-            pub fn try_new(val: u16) -> Result<Self, BoundsError> {
-                #[allow(unused_comparisons)]
-                if val > $max {
-                    Err(BoundsError::TooLarge(stringify!($name), stringify!($max)))
-                } else if val < $min {
-                    Err(BoundsError::TooSmall(stringify!($name), stringify!($min)))
-                } else {
-                    Ok($name { val })
-                }
-            }
-
-            /// Convert into the inner value
-            pub fn into_inner(self) -> u16 {
-                self.val
-            }
-
-            /// Get the value
-            pub fn get(&self) -> u16 {
-                self.val
-            }
-        }
-
-        impl core::ops::Deref for $name {
-            type Target = u16;
-
-            fn deref(&self) -> &Self::Target {
-                &self.val
-            }
-        }
-    }
-}
-
 max_u16!(#[doc = "Credit based connection maximum PDU payload size"], LeCreditMps, 65533, 23);
 max_u16!(#[doc = "Credit based connection maximum transmission size"], LeCreditMtu, 23);
 
@@ -695,7 +1011,7 @@ max_u16!(#[doc = "Credit based connection maximum transmission size"], LeCreditM
 pub struct LeCreditBasedConnectionRequest {
     pub identifier: NonZeroU8,
     pub spsm: SimplifiedProtocolServiceMultiplexer,
-    pub source_dyn_cid: crate::channels::DynChannelId<crate::LeULinkType>,
+    pub source_dyn_cid: crate::channels::DynChannelId<crate::LeULink>,
     pub mtu: LeCreditMtu,
     pub mps: LeCreditMps,
     pub initial_credits: u16,
@@ -720,8 +1036,11 @@ impl LeCreditBasedConnectionRequest {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_raw_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
-        crate::pdu::ControlFrame::try_from_slice(c_frame)
+    pub fn try_from_raw_control_frame<L>(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    where
+        L: crate::link_flavor::LinkFlavor,
+    {
+        crate::pdu::ControlFrame::try_from_slice::<L>(c_frame)
     }
 }
 
@@ -750,8 +1069,9 @@ impl SignalWithDynChannel for LeCreditBasedConnectionRequest {
 }
 
 impl TryIntoSignal for LeCreditBasedConnectionRequest {
-    fn try_from(raw: &[u8]) -> Result<Self, SignalError>
+    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
     where
+        L: crate::link_flavor::LinkFlavor,
         Self: Sized,
     {
         if LeCreditBasedConnectionRequest::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
@@ -939,7 +1259,7 @@ impl LeCreditBasedConnectionResponseError {
 
 pub struct LeCreditBasedConnectionResponse {
     pub identifier: NonZeroU8,
-    pub destination_dyn_cid: crate::channels::DynChannelId<crate::LeULinkType>,
+    pub destination_dyn_cid: crate::channels::DynChannelId<crate::LeULink>,
     pub mtu: LeCreditMtu,
     pub mps: LeCreditMps,
     pub initial_credits: u16,
@@ -980,8 +1300,11 @@ impl LeCreditBasedConnectionResponse {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_raw_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
-        ControlFrame::try_from_slice(c_frame)
+    pub fn try_from_raw_control_frame<L>(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    where
+        L: crate::link_flavor::LinkFlavor,
+    {
+        ControlFrame::try_from_slice::<L>(c_frame)
     }
 }
 
@@ -1010,8 +1333,9 @@ impl SignalWithDynChannel for LeCreditBasedConnectionResponse {
 }
 
 impl TryIntoSignal for LeCreditBasedConnectionResponse {
-    fn try_from(raw: &[u8]) -> Result<Self, SignalError>
+    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
     where
+        L: crate::link_flavor::LinkFlavor,
         Self: Sized,
     {
         if LeCreditBasedConnectionResponse::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
@@ -1169,10 +1493,10 @@ impl FlowControlCreditInd {
     /// Create a new `FlowControlCreditInd` for an ACL-U credit based connection
     pub fn new_acl(
         identifier: NonZeroU8,
-        dyn_cid: crate::channels::DynChannelId<crate::AclULinkType>,
+        dyn_cid: crate::channels::DynChannelId<crate::AclULink>,
         credits: u16,
     ) -> Self {
-        let cid = ChannelIdentifier::Acl(crate::channels::AclCid::DynamicallyAllocated(dyn_cid));
+        let cid = ChannelIdentifier::Acl(AclCid::DynamicallyAllocated(dyn_cid));
 
         Self {
             identifier,
@@ -1182,12 +1506,8 @@ impl FlowControlCreditInd {
     }
 
     /// Create a new `FlowControlCreditInd` for a LE-U credit based connection
-    pub fn new_le(
-        identifier: NonZeroU8,
-        dyn_cid: crate::channels::DynChannelId<crate::LeULinkType>,
-        credits: u16,
-    ) -> Self {
-        let cid = ChannelIdentifier::Le(crate::channels::LeCid::DynamicallyAllocated(dyn_cid));
+    pub fn new_le(identifier: NonZeroU8, dyn_cid: crate::channels::DynChannelId<crate::LeULink>, credits: u16) -> Self {
+        let cid = ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_cid));
 
         Self {
             identifier,
@@ -1212,14 +1532,18 @@ impl FlowControlCreditInd {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_raw_control_frame(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError> {
-        crate::pdu::ControlFrame::try_from_slice(c_frame)
+    pub fn try_from_raw_control_frame<L>(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    where
+        L: crate::link_flavor::LinkFlavor,
+    {
+        ControlFrame::try_from_slice::<L>(c_frame)
     }
 }
 
 impl TryIntoSignal for FlowControlCreditInd {
-    fn try_from(raw: &[u8]) -> Result<Self, SignalError>
+    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
     where
+        L: crate::link_flavor::LinkFlavor,
         Self: Sized,
     {
         if FlowControlCreditInd::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {

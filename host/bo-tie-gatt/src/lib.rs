@@ -2106,15 +2106,15 @@ mod tests {
         fn set_mtu(&mut self, _: u16) {}
 
         fn get_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULinkType::MIN_SUPPORTED_MTU
+            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
         }
 
         fn max_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULinkType::MIN_SUPPORTED_MTU
+            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
         }
 
         fn min_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULinkType::MIN_SUPPORTED_MTU
+            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
         }
 
         fn receive_fragment(&mut self) -> Self::RecvFut<'_> {

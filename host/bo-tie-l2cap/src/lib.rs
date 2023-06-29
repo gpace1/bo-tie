@@ -11,7 +11,7 @@
 //! physical link. This library breaks these up these two into for *types* of logical links as each
 //! type has different requirements per the Bluetooth Specification.
 //!
-//! [`AclULinkType`], [`AclUExtLinkType`], [`ApbLinkType`], and [`LeULinkType`] are the four 'types' of logical links defined within
+//! [`AclULink`], [`AclUExtLink`], [`ApbLink`], and [`LeULink`] are the four 'types' of logical links defined within
 //! this library. `AclU`, `AclUExt`, `Apb` are ACL-U logical links and `LeU` is a LE-U logical link.
 //! Each type differs in the Minimum supported Maximum Transmission Unit (MTU) and channel mapping
 //! (as assigned by the Bluetooth SIG).
@@ -28,51 +28,15 @@ extern crate core;
 
 pub mod channels;
 pub mod connection_channel;
+pub mod link_flavor;
 pub mod pdu;
 pub mod signals;
 
-use crate::channels::{AclCid, ChannelIdentifier, LeCid};
+use crate::channels::{ChannelIdentifier, LeCid};
 pub use crate::connection_channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
 use core::future::Future;
+use link_flavor::{AclULink, LeULink};
 use pdu::L2capFragment;
-
-mod private {
-    use crate::channels::ChannelIdentifier;
-
-    /// A trait for a logical link type
-    ///
-    /// Every logical link type of this library implements `LinkType`. For explanation on what a
-    /// *logical link type* is see the [library level] documentation.
-    ///
-    /// Use the trait [`LinkTypeExt`] if you would like to call these methods directly.
-    ///
-    /// [library level]: crate
-    pub trait LinkType {
-        /// The supported Maximum Transmission Unit (MTU)
-        ///
-        /// Every device must be able to support a MTU up to this value for this logical link type.
-        /// However, this does not mean two devices cannot use a smaller MTU negotiated at a higher
-        /// layer.
-        ///
-        /// # Note
-        /// This is returned by the method [`get_min_supported_mtu`] of `LinkTypePort`.
-        ///
-        /// [`get_min_supported_mtu`]: crate::LinkTypePort::get_min_supported_mtu
-        const MIN_SUPPORTED_MTU: u16;
-
-        /// Try to get the channel identifier from its value
-        ///
-        /// Channels differ depending on the logical link of the connection. This will map the value
-        /// to the correct channel identifier for this logical link.
-        fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier>;
-
-        /// Get the channel identifier for the signaling channel
-        ///
-        /// The signalling channel for this logical link is returned if there is a signalling
-        /// channel.
-        fn get_signaling_channel() -> Option<ChannelIdentifier>;
-    }
-}
 
 /// The Different Types of Logical Links
 ///
@@ -80,9 +44,14 @@ mod private {
 /// BR/EDR physical link
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum LogicalLinkKind {
-    /// Basic Rate or Enhanced Data Rate
+    /// Asynchronous Connection-oriented logical link (ACL-U)
+    ///
+    /// This is the logical link that maps to either a Basic Rate or Enhanced Data Rate physical
+    /// link.
     Acl,
-    /// Low Energy
+    /// Low Energy logical link (LE-U)
+    ///
+    /// This logical link maps to a Low Energy physical link.
     Le,
 }
 
@@ -185,6 +154,16 @@ pub trait PhysicalLink {
     fn recv(&mut self) -> Self::RecvFut<'_>;
 }
 
+/// Trait for a Logical Links
+///
+pub trait LogicalLink {
+    /// Check if the current channel is used by this Logical Link
+    ///
+    /// This will return `true` if there is a channel that is currently created for this channel
+    /// identifier.
+    fn is_channel_used(&self, id: ChannelIdentifier) -> bool;
+}
+
 /// A LE-U Logical Link
 pub struct LeULogicalLink<P: PhysicalLink> {
     shared_link: connection_channel::SharedPhysicalLink<P>,
@@ -246,125 +225,9 @@ impl<P: PhysicalLink> LeULogicalLink<P> {
     }
 }
 
-/// Porting trait for methods of `LinkType`
-///
-/// As [`LinkType`] is a 'private' trait, this trait can be imported to call the methods of
-/// `LinkType`.
-///
-/// [`LinkType`]: private::LinkType
-pub trait LinkTypePort: private::LinkType {
-    /// Get the minimum supported Maximum Transmission Unit (MTU)
-    ///
-    /// Every device must be able to support a MTU up to this value for this logical link type.
-    /// However, this does not mean two devices cannot use a smaller MTU negotiated at a higher
-    /// layer.
-    fn get_min_supported_mtu() -> u16 {
-        Self::MIN_SUPPORTED_MTU
-    }
-
-    /// Try to get the channel identifier from its value
-    ///
-    /// Channels differ depending on the logical link of the connection. This will map the value
-    /// to the correct channel identifier for this logical link.
-    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        <Self as private::LinkType>::try_channel_from_raw(val)
-    }
-
-    /// Get the Channel Identifier of this Signalling Channel
-    ///
-    /// `None` is returned if there is no signalling channel for this logical link type.
-    fn get_signalling_channel_id() -> Option<ChannelIdentifier> {
-        <Self as private::LinkType>::get_signaling_channel()
-    }
-}
-
-impl<T> LinkTypePort for T where T: private::LinkType {}
-
-/// ACL-U L2CAP logical link type
-///
-/// This is a marker type for an ACL-U L2CAP logical link that does not support the extended flow
-/// Specification.
-///
-/// This is used to mark the operation of logical link. When a channel uses this type of logical
-/// link, it operates as a regular ACL-U logical link.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AclULinkType;
-
-impl private::LinkType for AclULinkType {
-    const MIN_SUPPORTED_MTU: u16 = 48;
-
-    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
-    }
-
-    fn get_signaling_channel() -> Option<ChannelIdentifier> {
-        Some(ChannelIdentifier::Acl(AclCid::SignalingChannel))
-    }
-}
-
-/// ACL-U L2CAP logical link type supporting the *Extended Flow Specification*
-///
-/// This is a marker type for an ACL-U L2CAP logical link that supports the extended flow
-/// specification.
-///
-/// This is used to mark the operation of logical link. When a channel uses this type of logical
-/// link, it operates as a ACL-U logical link with support for the the extended flow specification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AclUExtLinkType;
-
-impl private::LinkType for AclUExtLinkType {
-    const MIN_SUPPORTED_MTU: u16 = 672;
-
-    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
-    }
-
-    fn get_signaling_channel() -> Option<ChannelIdentifier> {
-        Some(ChannelIdentifier::Acl(AclCid::SignalingChannel))
-    }
-}
-
-/// APB-U L2CAP logical link type
-///
-/// This is a marker type for an ACL-U L2CAP logical link that uses broadcast packets.
-///
-/// This is used to mark the operation of logical link. When a channel uses this type of logical
-/// link, it operates as a ACL-U logical link for unreliable broadcast packets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ApbLinkType;
-
-impl private::LinkType for ApbLinkType {
-    const MIN_SUPPORTED_MTU: u16 = 48;
-
-    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        channels::ApbCid::try_from_raw(val)
-            .map(|id| ChannelIdentifier::Apb(id))
-            .ok()
-    }
-
-    fn get_signaling_channel() -> Option<ChannelIdentifier> {
-        None
-    }
-}
-
-/// LE-U L2CAP logical link type
-///
-/// This is a marker type for a LE-U L2CAP logical link.
-///
-/// This is used to mark the operation of logical link. When a channel uses this type of logical
-/// link, it operates as a Le-U logical link.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LeULinkType;
-
-impl private::LinkType for LeULinkType {
-    const MIN_SUPPORTED_MTU: u16 = 23;
-
-    fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
-        LeCid::try_from_raw(val).map(|id| ChannelIdentifier::Le(id)).ok()
-    }
-
-    fn get_signaling_channel() -> Option<ChannelIdentifier> {
-        Some(ChannelIdentifier::Le(LeCid::LeSignalingChannel))
+impl<P: PhysicalLink> LogicalLink for LeULogicalLink<P> {
+    fn is_channel_used(&self, id: ChannelIdentifier) -> bool {
+        self.shared_link.is_channel_used(id)
     }
 }
 

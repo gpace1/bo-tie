@@ -29,16 +29,6 @@ impl<T> ControlFrame<T> {
         ControlFrame { channel_id, payload }
     }
 
-    /// Create a new `ControlFrame` for a ACL-U logical link
-    pub fn new_acl(payload: T) -> Self {
-        Self::new(payload, ChannelIdentifier::Acl(AclCid::SignalingChannel))
-    }
-
-    /// Create a new `ControlFrame` for a LE-U logical link
-    pub fn new_le(payload: T) -> Self {
-        Self::new(payload, ChannelIdentifier::Le(LeCid::LeSignalingChannel))
-    }
-
     /// Try to create a signaling packet from a slice of bytes
     ///
     /// The input `data` must be a slice of bytes containing a complete control frame.
@@ -48,8 +38,9 @@ impl<T> ControlFrame<T> {
     /// * The length field in the input `data` must be less than or equal to the length of the
     ///   payload field. Any bytes beyond the payload in `data` are ignored.
     /// * The channel id field must be valid for the signaling message.
-    pub fn try_from_slice(data: &[u8]) -> Result<T, ControlFrameError>
+    pub fn try_from_slice<L>(data: &[u8]) -> Result<T, ControlFrameError>
     where
+        L: crate::link_flavor::LinkFlavor,
         T: crate::signals::TryIntoSignal,
     {
         if data.len() >= 4 {
@@ -60,7 +51,7 @@ impl<T> ControlFrame<T> {
             if T::correct_channel(raw_channel_id) {
                 Err(ControlFrameError::InvalidChannelId)
             } else if len == data[4..].len() {
-                T::try_from(&data[4..]).map_err(|e| ControlFrameError::SignalError(e))
+                T::try_from::<L>(&data[4..]).map_err(|e| ControlFrameError::SignalError(e))
             } else {
                 Err(ControlFrameError::PayloadLengthIncorrect)
             }

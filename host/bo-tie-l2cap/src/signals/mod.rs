@@ -16,8 +16,9 @@ pub const LE_U_SIGNAL_CHANNEL_ID: crate::channels::ChannelIdentifier =
     crate::ChannelIdentifier::Le(crate::channels::LeCid::LeSignalingChannel);
 
 pub(crate) trait TryIntoSignal {
-    fn try_from(raw: &[u8]) -> Result<Self, SignalError>
+    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
     where
+        L: crate::link_flavor::LinkFlavor,
         Self: Sized;
 
     fn correct_channel(raw_channel_id: u16) -> bool;

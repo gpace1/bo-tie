@@ -1,6 +1,6 @@
 //! L2CAP Channels Definitions
 
-use crate::{AclUExtLinkType, AclULinkType, LeULinkType};
+use crate::link_flavor::{AclUExtLink, AclULink, LeULink};
 use core::cmp::Ordering;
 
 /// Channel Identifier
@@ -137,7 +137,7 @@ impl<T> DynChannelId<T> {
     }
 }
 
-impl DynChannelId<LeULinkType> {
+impl DynChannelId<LeULink> {
     pub const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
 
     /// Create a new Dynamic Channel identifier for the LE-U CID name space
@@ -157,7 +157,7 @@ impl DynChannelId<LeULinkType> {
     }
 }
 
-impl DynChannelId<AclULinkType> {
+impl DynChannelId<AclULink> {
     pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
 
     pub fn new_acl(channel_id: u16) -> Result<AclCid, u16> {
@@ -169,8 +169,8 @@ impl DynChannelId<AclULinkType> {
     }
 }
 
-impl From<DynChannelId<AclULinkType>> for DynChannelId<AclUExtLinkType> {
-    fn from(channel: DynChannelId<AclULinkType>) -> Self {
+impl From<DynChannelId<AclULink>> for DynChannelId<AclUExtLink> {
+    fn from(channel: DynChannelId<AclULink>) -> Self {
         DynChannelId {
             channel_id: channel.channel_id,
             _p: core::marker::PhantomData,
@@ -190,7 +190,7 @@ pub enum AclCid {
     SignalingChannel,
     ConnectionlessChannel,
     BrEdrSecurityManager,
-    DynamicallyAllocated(DynChannelId<AclULinkType>),
+    DynamicallyAllocated(DynChannelId<AclULink>),
 }
 
 impl AclCid {
@@ -208,7 +208,7 @@ impl AclCid {
             0x1 => Ok(AclCid::SignalingChannel),
             0x2 => Ok(AclCid::ConnectionlessChannel),
             0x7 => Ok(AclCid::BrEdrSecurityManager),
-            val if DynChannelId::<AclULinkType>::ACL_BOUNDS.contains(&val) => {
+            val if DynChannelId::<AclULink>::ACL_BOUNDS.contains(&val) => {
                 Ok(AclCid::DynamicallyAllocated(DynChannelId::new_unchecked(val)))
             }
             _ => Err(()),
@@ -274,7 +274,7 @@ pub enum LeCid {
     /// To make a `DynamicallyAllocated` variant, use the function
     /// [`new_le`](../DynChannelId/index.html)
     /// of the struct `DynChannelId`
-    DynamicallyAllocated(DynChannelId<LeULinkType>),
+    DynamicallyAllocated(DynChannelId<LeULink>),
 }
 
 impl LeCid {
@@ -292,7 +292,7 @@ impl LeCid {
             0x4 => Ok(LeCid::AttributeProtocol),
             0x5 => Ok(LeCid::LeSignalingChannel),
             0x6 => Ok(LeCid::SecurityManagerProtocol),
-            _ if DynChannelId::<LeULinkType>::LE_BOUNDS.contains(&val) => {
+            _ if DynChannelId::<LeULink>::LE_BOUNDS.contains(&val) => {
                 Ok(LeCid::DynamicallyAllocated(DynChannelId::new_unchecked(val)))
             }
             _ => Err(()),

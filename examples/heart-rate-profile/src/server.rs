@@ -10,7 +10,8 @@ use bo_tie::host::att::{
 };
 use bo_tie::host::gatt::characteristic::{ClientConfiguration, Properties};
 use bo_tie::host::gatt::{GapServiceBuilder, ServerBuilder};
-use bo_tie::host::l2cap::{LeULinkType, MinimumMtu};
+use bo_tie::host::l2cap::link_flavor::LeULink;
+use bo_tie::host::l2cap::MinimumMtu;
 use bo_tie::host::{gatt, Uuid};
 use std::any::Any;
 use std::collections::VecDeque;
@@ -307,7 +308,7 @@ struct LocalHeartRateMeasurementArc {
 
 impl LocalHeartRateMeasurementArc {
     fn new(shared: HeartRateMeasurementArc) -> Self {
-        let mtu = LeULinkType::MIN_SUPPORTED_MTU;
+        let mtu = LeULink::MIN_SUPPORTED_MTU;
         let rr_offset = None;
 
         let local = LocalHeartRateMeasurement { rr_offset, mtu, shared };
@@ -324,7 +325,7 @@ impl LocalHeartRateMeasurementArc {
     ///
     /// ['blobbed']: /bo_tie/host/att/server/index.html#data-blobbing
     async fn set_mtu(&mut self, mtu: usize) {
-        if mtu >= LeULinkType::MIN_SUPPORTED_MTU {
+        if mtu >= LeULink::MIN_SUPPORTED_MTU {
             self.arc.lock().await.mtu = mtu;
         }
     }
