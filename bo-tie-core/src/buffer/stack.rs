@@ -3,7 +3,7 @@
 //! Buffers in this module are statically allocated. The size of the buffer must be known at
 //! compile time.
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, IntoExactSizeIterator};
 use core::borrow::{Borrow, BorrowMut};
 use core::fmt::{Debug, Display, Formatter};
 use core::mem::{replace, transmute, MaybeUninit};
@@ -321,9 +321,9 @@ impl Display for LinearBufferError {
 /// # Reserves
 /// There is a front reserve and a back reserve in a `DeLinearBuffer`. When a `DeLinearBuffer` is
 /// created these reserve sizes are fixed. Values cannot be added nor removed passed these reserve
-/// limits. Elements can only be added to and from there respective reserves. Pushing to the back
-/// is limited to the size of the back buffer, and consequently removing from the back can only be
-/// done for elements *within the end reserve*. The same is true for the front reserve.
+/// limits. Pushing to the back is limited to the size of the back buffer, and consequently removing
+/// from the back can only be done for elements *within the end reserve*. The same is true for the
+/// front reserve.
 ///
 /// ## Adding/Removing
 /// Adding and removing elements from a `DeLinearBuffer` is done by the traits [`TryExtend`],
@@ -554,6 +554,19 @@ impl<const SIZE: usize, T> crate::buffer::TryFrontRemove<T> for DeLinearBuffer<S
     }
 }
 
+impl<const SIZE: usize, T> IntoIterator for DeLinearBuffer<SIZE, T> {
+    type Item = T;
+    type IntoIter = DeLinearBufferIntoIter<SIZE, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DeLinearBufferIntoIter(self)
+    }
+}
+
+impl<const SIZE: usize, T> IntoExactSizeIterator for DeLinearBuffer<SIZE, T> {
+    type IntoExactIter = <DeLinearBuffer<SIZE, T> as IntoIterator>::IntoIter;
+}
+
 /// An iterator over items removed from a `DeLinearBuffer`
 pub struct DeLinearBufferRemoveIter<'a, T>(core::slice::IterMut<'a, MaybeUninit<T>>);
 
@@ -564,6 +577,30 @@ impl<T> Iterator for DeLinearBufferRemoveIter<'_, T> {
         self.0
             .next()
             .map(|maybe| unsafe { replace(maybe, MaybeUninit::uninit()).assume_init() })
+    }
+}
+
+/// Into Iterator for `DeLinearBuffer`
+pub struct DeLinearBufferIntoIter<const SIZE: usize, T>(DeLinearBuffer<SIZE, T>);
+
+impl<const SIZE: usize, T> Iterator for DeLinearBufferIntoIter<SIZE, T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        (self.0.count != 0).then(|| {
+            let next = unsafe { replace(&mut self.0.buffer[self.0.start], MaybeUninit::uninit()).assume_init() };
+
+            self.0.start += 1;
+            self.0.count -= 1;
+
+            next
+        })
+    }
+}
+
+impl<const SIZE: usize, T> ExactSizeIterator for DeLinearBufferIntoIter<SIZE, T> {
+    fn len(&self) -> usize {
+        self.0.count
     }
 }
 
@@ -1019,14 +1056,66 @@ impl<T, const SIZE: usize> UnsafeReservation<T, SIZE> {
         self.get_reserve_mut().get_inner_mut().last = self.get_mut_link().prev;
     }
 
+    /// Full operation for dropping this link
+    #[inline]
+    unsafe fn drop_link(&mut self) {
+        let link = self.get_mut_link();
+
+        match (link.prev.is_null(), link.next.is_null()) {
+            (false, false) => self.drop_middle_of_link_list(),
+            (true, false) => self.drop_front_of_link_list(),
+            (false, true) => self.drop_end_of_link_list(),
+            (true, true) => {
+                // This occurs when the link list only has one
+                // link in it (reserved by this `ReservedBuffer`)
+                self.get_reserve_mut().get_inner_mut().last = ptr::null_mut();
+            }
+        }
+    }
+
     /// Get a reference to the buffer
     fn get(&self) -> &T {
         unsafe { self.get_link().buffer.assume_init_ref() }
     }
 
     /// Get a mutable reference to the buffer
+    ///
+    /// # Panic
+    /// This will panic if there exist any other reservations to the value.
     fn get_mut(&mut self) -> &mut T {
+        assert_eq!(
+            self.get_link().ref_count.get(),
+            1,
+            "tried to call get_mut when there is multiple references for StackHotel reservation"
+        );
+
         unsafe { self.get_mut_link().buffer.assume_init_mut() }
+    }
+
+    /// Consume the reservation returning the buffer
+    ///
+    /// # Panic
+    /// This will panic if this reservation has been cloned from another reservation.
+    fn into_inner(mut self) -> T {
+        let val = unsafe {
+            let link = self.get_mut_link();
+
+            link.ref_count.set(link.ref_count.get() - 1);
+
+            assert_eq!(link.ref_count.get(), 0, "tried to to get mutable inner value of a StackHotel reservation but there are other reservations to the inner value");
+
+            let val = link.buffer.assume_init_read();
+
+            self.drop_link();
+
+            val
+        };
+
+        if let Some(waker) = self.get_reserve_mut().get_inner_mut().waker.take() {
+            waker.wake()
+        }
+
+        val
     }
 }
 
@@ -1053,16 +1142,7 @@ impl<T, const SIZE: usize> Drop for UnsafeReservation<T, SIZE> {
             if link.ref_count.get() == 0 {
                 link.buffer.assume_init_drop();
 
-                match (link.prev.is_null(), link.next.is_null()) {
-                    (false, false) => self.drop_middle_of_link_list(),
-                    (true, false) => self.drop_front_of_link_list(),
-                    (false, true) => self.drop_end_of_link_list(),
-                    (true, true) => {
-                        // This occurs when the link list only has one
-                        // link in it (reserved by this `ReservedBuffer`)
-                        self.get_reserve_mut().get_inner_mut().last = ptr::null_mut();
-                    }
-                }
+                self.drop_link();
             }
         }
 
@@ -1282,6 +1362,27 @@ where
     }
 }
 
+impl<T, const SIZE: usize> IntoIterator for BufferReservation<'_, T, SIZE>
+where
+    T: IntoIterator,
+{
+    type Item = T::Item;
+    type IntoIter = T::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let t = self.ubr.0.into_inner();
+
+        t.into_iter()
+    }
+}
+
+impl<T, const SIZE: usize> IntoExactSizeIterator for BufferReservation<'_, T, SIZE>
+where
+    T: IntoExactSizeIterator,
+{
+    type IntoExactIter = T::IntoExactIter;
+}
+
 /// An unsafe buffer reservation
 ///
 /// This is a wrapper around an [`UnsafeReservation`] so that it can implement buffer related
@@ -1400,6 +1501,27 @@ where
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
         self.0.get_mut().try_front_remove(how_many)
     }
+}
+
+impl<T, const SIZE: usize> IntoIterator for UnsafeBufferReservation<T, SIZE>
+where
+    T: IntoIterator,
+{
+    type Item = T::Item;
+    type IntoIter = T::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let t = self.0.into_inner();
+
+        t.into_iter()
+    }
+}
+
+impl<T, const SIZE: usize> IntoExactSizeIterator for UnsafeBufferReservation<T, SIZE>
+where
+    T: IntoExactSizeIterator,
+{
+    type IntoExactIter = T::IntoExactIter;
 }
 
 /// Tests

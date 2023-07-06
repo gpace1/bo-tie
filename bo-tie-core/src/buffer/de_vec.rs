@@ -2,6 +2,7 @@
 //!
 //! See the doc for [`DeVec`] for details.
 
+use crate::buffer::IntoExactSizeIterator;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -155,6 +156,21 @@ where
     }
 }
 
+impl<T> IntoIterator for DeVec<T> {
+    type Item = T;
+    type IntoIter = DeVecIntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let iter = self.vec.into_iter().skip(self.start);
+
+        DeVecIntoIter { iter }
+    }
+}
+
+impl<T> IntoExactSizeIterator for DeVec<T> {
+    type IntoExactIter = <DeVec<T> as IntoIterator>::IntoIter;
+}
+
 /// Drain iterator for a `DeVec`
 pub struct DeVecDrain<'a, T> {
     removed: &'a mut [T],
@@ -173,6 +189,25 @@ where
         self.cnt += 1;
 
         self.removed.get(next).copied()
+    }
+}
+
+/// Into Iterator for `DeVec`
+pub struct DeVecIntoIter<T> {
+    iter: core::iter::Skip<alloc::vec::IntoIter<T>>,
+}
+
+impl<T> Iterator for DeVecIntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
+    }
+}
+
+impl<T> ExactSizeIterator for DeVecIntoIter<T> {
+    fn len(&self) -> usize {
+        self.iter.len()
     }
 }
 

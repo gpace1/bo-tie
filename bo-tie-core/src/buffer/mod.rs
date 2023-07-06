@@ -12,6 +12,13 @@ use core::ops::DerefMut;
 pub mod de_vec;
 pub mod stack;
 
+/// An Exact Sized [`IntoIterator`]
+///
+/// This is the same as `IntoIterator` except the type `IntoIter` implements [`ExactSizeIterator`].
+pub trait IntoExactSizeIterator: IntoIterator<IntoIter = Self::IntoExactIter> {
+    type IntoExactIter: Iterator<Item = Self::Item> + ExactSizeIterator;
+}
+
 /// The Buffer type
 ///
 /// Buffers within the HCI are used for passing between the various protocols on the Bluetooth
@@ -23,7 +30,15 @@ pub mod stack;
 /// header information are pushed to the front of a buffer while payload data is pushed to the end
 /// of the buffer.
 pub trait Buffer:
-    Unpin + DerefMut<Target = [u8]> + TryExtend<u8> + TryRemove<u8> + TryFrontExtend<u8> + TryFrontRemove<u8>
+    Unpin
+    + DerefMut<Target = [u8]>
+    + TryExtend<u8>
+    + TryRemove<u8>
+    + TryFrontExtend<u8>
+    + TryFrontRemove<u8>
+    + IntoExactSizeIterator<Item = u8>
+where
+    Self::IntoIter: ExactSizeIterator,
 {
     /// Create a Buffer with the front and back capacities
     fn with_capacity(front: usize, back: usize) -> Self
@@ -39,7 +54,10 @@ pub trait Buffer:
 }
 
 /// Extension methods for types that implement [`Buffer`]
-pub trait BufferExt: Buffer {
+pub trait BufferExt: Buffer
+where
+    Self::IntoIter: ExactSizeIterator,
+{
     /// Create a new buffer
     ///
     /// This creates a new buffer with both the front and back capacities of zero
