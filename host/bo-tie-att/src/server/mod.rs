@@ -73,7 +73,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::{ConnectionChannel, ConnectionChannelExt};
+use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
 use core::{
     future::Future,
     pin::Pin,
@@ -416,37 +416,34 @@ macro_rules! client_can_write_attribute {
 ///
 /// # Inputs
 /// $this: `self` for `Server`
-/// $connection_channel: `impl ConnectionChannel`,
+/// $channel: `impl ConnectionChannel`,
 /// $pdu: `pdu::Pdu<_>`,
 macro_rules! send_pdu {
-    ( $connection_channel:expr, $pdu:expr $(,)?) => {{
+    ( $channel:expr, $pdu:expr $(,)?) => {{
         log::info!("(ATT) sending {}", $pdu.get_opcode());
 
-        send_pdu!(SKIP_LOG, $connection_channel, $pdu)
+        send_pdu!(SKIP_LOG, $channel, $pdu)
     }};
 
-    (SKIP_LOG, $connection_channel:expr, $pdu:expr $(,)?) => {{
+    (SKIP_LOG, $channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = $crate::TransferFormatInto::into(&$pdu);
 
         let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, $crate::L2CAP_CHANNEL_ID);
 
-        $connection_channel
-            .send(acl_data)
-            .await
-            .map_err(|e| ConnectionError::SendError(e))
+        $channel.send(acl_data).await.map_err(|e| ConnectionError::SendError(e))
     }};
 }
 
 /// Send an error the the client
 ///
 /// # Inpus
-/// connection_channel: `impl ConnectionChannel`,
+/// channel: `impl ConnectionChannel`,
 /// handle: `u16`,
 /// received_opcode: `ClientPduName`,
 /// pdu_error: `pdu::Error`,
 macro_rules! send_error {
     (
-    $connection_channel:expr,
+    $channel:expr,
     $handle:expr,
     $received_opcode:expr,
     $pdu_error:expr $(,)?
@@ -460,7 +457,7 @@ macro_rules! send_error {
 
         send_pdu!(
             SKIP_LOG,
-            $connection_channel,
+            $channel,
             $crate::pdu::error_response($received_opcode.into(), $handle, $pdu_error),
         )
     }};
@@ -621,18 +618,17 @@ where
     /// [`process_parsed_acl_data`](crate::server::Server::process_parsed_att_pdu). It is
     /// recommended to use this function over those two functions when this `Server` is at the top
     /// of your server stack (you're not using GATT or some other custom higher layer protocol).
-    pub async fn process_att_pdu<C>(
+    pub async fn process_att_pdu<T>(
         &mut self,
-        connection_channel: &mut C,
+        channel: &mut BasicFrameChannel<'_, T>,
         pdu: &l2cap::pdu::BasicFrame<Vec<u8>>,
-    ) -> Result<Status, super::ConnectionError<C>>
+    ) -> Result<Status, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let (pdu_type, payload) = self.parse_att_pdu(pdu)?;
 
-        self.process_parsed_att_pdu(connection_channel, pdu_type, payload)
-            .await
+        self.process_parsed_att_pdu(channel, pdu_type, payload).await
     }
 
     /// Parse an ATT PDU
@@ -651,7 +647,7 @@ where
         &self,
         acl_packet: &'a l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
-        use l2cap::{channels::ChannelIdentifier, channels::LeCid};
+        use l2cap::channel::id::{ChannelIdentifier, LeCid};
 
         match acl_packet.get_channel_id() {
             ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
@@ -683,55 +679,50 @@ where
     /// the attribute protocol. Use
     /// [`process_acl_data`](crate::server::Server::process_att_pdu) when directly using this
     /// server for communication with a client device.
-    pub async fn process_parsed_att_pdu<C>(
+    pub async fn process_parsed_att_pdu<T>(
         &mut self,
-        connection_channel: &mut C,
+        channel: &mut BasicFrameChannel<'_, T>,
         pdu_type: ClientPduName,
         payload: &[u8],
-    ) -> Result<Status, super::ConnectionError<C>>
+    ) -> Result<Status, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match pdu_type {
             ClientPduName::ExchangeMtuRequest => {
-                self.process_exchange_mtu_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                self.process_exchange_mtu_request(channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await?
             }
 
-            ClientPduName::WriteRequest => self.process_write_request(connection_channel, &payload).await?,
+            ClientPduName::WriteRequest => self.process_write_request(channel, &payload).await?,
 
             ClientPduName::ReadRequest => {
-                self.process_read_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                self.process_read_request(channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await?
             }
 
             ClientPduName::FindInformationRequest => {
-                self.process_find_information_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                self.process_find_information_request(channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await?
             }
 
-            ClientPduName::FindByTypeValueRequest => {
-                self.process_find_by_type_value_request(connection_channel, &payload)
-                    .await?
-            }
+            ClientPduName::FindByTypeValueRequest => self.process_find_by_type_value_request(channel, &payload).await?,
 
             ClientPduName::ReadByTypeRequest => {
-                self.process_read_by_type_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                self.process_read_by_type_request(channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await?
             }
 
             ClientPduName::ReadBlobRequest => {
                 return self
-                    .process_read_blob_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                    .process_read_blob_request(channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await;
             }
 
-            ClientPduName::PrepareWriteRequest => {
-                self.process_prepare_write_request(connection_channel, &payload).await?
-            }
+            ClientPduName::PrepareWriteRequest => self.process_prepare_write_request(channel, &payload).await?,
 
             ClientPduName::ExecuteWriteRequest => {
-                self.process_execute_write_request(connection_channel, TransferFormatTryFrom::try_from(&payload)?)
+                self.process_execute_write_request(channel, TransferFormatTryFrom::try_from(&payload)?)
                     .await?
             }
 
@@ -741,7 +732,7 @@ where
             | pdu_name @ ClientPduName::WriteCommand
             | pdu_name @ ClientPduName::SignedWriteCommand
             | pdu_name @ ClientPduName::ReadByGroupTypeRequest => {
-                send_error!(connection_channel, 0, pdu_name, pdu::Error::RequestNotSupported)?
+                send_error!(channel, 0, pdu_name, pdu::Error::RequestNotSupported)?
             }
         };
 
@@ -765,13 +756,13 @@ where
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
-    pub async fn send_notification<C>(
+    pub async fn send_notification<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
-    ) -> Result<bool, ServerInitiatedError<C>>
+    ) -> Result<bool, ServerInitiatedError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.attributes.get_mut(handle) {
             Some(attribute) => {
@@ -794,8 +785,7 @@ where
                     ret_val = false;
                 }
 
-                send_pdu!(connection_channel, notification)
-                    .map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
+                send_pdu!(channel, notification).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
                 Ok(ret_val)
             }
@@ -832,15 +822,15 @@ where
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
-    pub async fn send_notification_with<C, V, R>(
+    pub async fn send_notification_with<T, V, R>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         value: &V,
         restrictions: R,
-    ) -> Result<bool, ServerInitiatedError<C>>
+    ) -> Result<bool, ServerInitiatedError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         V: TransferFormatInto,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
@@ -863,7 +853,7 @@ where
                 ret_val = false;
             }
 
-            send_pdu!(connection_channel, notification).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
+            send_pdu!(channel, notification).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
             Ok(ret_val)
         } else {
@@ -893,13 +883,13 @@ where
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
-    pub async fn send_indication<C>(
+    pub async fn send_indication<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
-    ) -> Result<bool, ServerInitiatedError<C>>
+    ) -> Result<bool, ServerInitiatedError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.attributes.get(handle) {
             Some(attribute) => {
@@ -917,8 +907,7 @@ where
                     ret_val = false;
                 }
 
-                send_pdu!(connection_channel, indication)
-                    .map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
+                send_pdu!(channel, indication).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
                 Ok(ret_val)
             }
@@ -960,15 +949,15 @@ where
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
-    pub async fn send_indication_with<C, V, R>(
+    pub async fn send_indication_with<T, V, R>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         value: &V,
         restrictions: R,
-    ) -> Result<bool, ServerInitiatedError<C>>
+    ) -> Result<bool, ServerInitiatedError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         V: TransferFormatInto,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
@@ -991,7 +980,7 @@ where
                 ret_val = false;
             }
 
-            send_pdu!(connection_channel, indication).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
+            send_pdu!(channel, indication).map_err(|e| ServerInitiatedError::ConnectionError(e.into()))?;
 
             Ok(ret_val)
         } else {
@@ -1133,36 +1122,36 @@ where
     }
 
     /// Process a exchange MTU request from the client
-    async fn process_exchange_mtu_request<C>(
+    async fn process_exchange_mtu_request<T>(
         &mut self,
-        connection_channel: &mut C,
+        channel: &mut BasicFrameChannel<'_, T>,
         client_mtu: u16,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         log::info!("(ATT) processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
 
         self.mtu = client_mtu.into();
 
-        send_pdu!(connection_channel, pdu::exchange_mtu_response(self.mtu as u16),)
+        send_pdu!(channel, pdu::exchange_mtu_response(self.mtu as u16),)
     }
 
     /// Process a Read Request from the client
-    async fn process_read_request<C>(
+    async fn process_read_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         log::info!("(ATT) processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
 
         let read_error_result = check_permissions!(self, handle, &crate::FULL_READ_PERMISSIONS);
 
         if let Err(e) = read_error_result {
-            return send_error!(connection_channel, handle, ClientPduName::ReadRequest, e);
+            return send_error!(channel, handle, ClientPduName::ReadRequest, e);
         }
 
         let future = self.attributes.get(handle).unwrap().get_value().read_response();
@@ -1177,17 +1166,17 @@ where
             self.set_blob_data(replace(&mut read_response.get_mut_parameters().0, sent), handle);
         }
 
-        send_pdu!(connection_channel, read_response)
+        send_pdu!(channel, read_response)
     }
 
     /// Process a Write Request from the client
-    async fn process_write_request<C>(
+    async fn process_write_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
@@ -1195,19 +1184,19 @@ where
         log::info!("(ATT) processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
 
         match self.write_att(handle, &payload[2..]).await {
-            Ok(_) => send_pdu!(connection_channel, pdu::write_response()),
-            Err(e) => send_error!(connection_channel, handle, ClientPduName::WriteRequest, e),
+            Ok(_) => send_pdu!(channel, pdu::write_response()),
+            Err(e) => send_error!(channel, handle, ClientPduName::WriteRequest, e),
         }
     }
 
     /// Process a Find Information Request form the client
-    async fn process_find_information_request<C>(
+    async fn process_find_information_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         handle_range: pdu::HandleRange,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         use core::cmp::min;
 
@@ -1297,7 +1286,7 @@ where
 
         if !handle_range.is_valid() {
             return send_error!(
-                connection_channel,
+                channel,
                 handle_range.starting_handle,
                 ClientPduName::FindInformationRequest,
                 pdu::Error::InvalidHandle,
@@ -1313,12 +1302,7 @@ where
         let opt_read_error = check_permissions!(self, start as u16, &crate::FULL_READ_PERMISSIONS);
 
         if let Err(e) = opt_read_error {
-            return send_error!(
-                connection_channel,
-                start as u16,
-                ClientPduName::FindInformationRequest,
-                e
-            );
+            return send_error!(channel, start as u16, ClientPduName::FindInformationRequest, e);
         }
 
         // Check if the server can send a response with 16 bit UUIDs
@@ -1330,7 +1314,7 @@ where
 
             let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
 
-            return send_pdu!(connection_channel, pdu);
+            return send_pdu!(channel, pdu);
         }
 
         // If there is no 16 bit UUIDs then the UUIDs must be sent in the full 128 bit form.
@@ -1342,14 +1326,14 @@ where
 
             let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
 
-            return send_pdu!(connection_channel, pdu);
+            return send_pdu!(channel, pdu);
         }
 
         // If there are still no UUIDs then there are no UUIDs within the given range
         // or none had the required read permissions for this operation.
 
         send_error!(
-            connection_channel,
+            channel,
             start as u16,
             ClientPduName::FindInformationRequest,
             pdu::Error::AttributeNotFound,
@@ -1362,13 +1346,13 @@ where
     ///
     /// Because the Attribute Protocol doesn't define what a 'group' is this returns the group
     /// end handle with the same found attribute handle.
-    async fn process_find_by_type_value_request<C>(
+    async fn process_find_by_type_value_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         if payload.len() >= 6 {
             let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4]).unwrap();
@@ -1418,7 +1402,7 @@ where
 
                 if transfer.is_empty() {
                     send_error!(
-                        connection_channel,
+                        channel,
                         handle_range.starting_handle,
                         ClientPduName::FindByTypeValueRequest,
                         pdu::Error::AttributeNotFound,
@@ -1426,11 +1410,11 @@ where
                 } else {
                     let pdu = pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer);
 
-                    send_pdu!(connection_channel, pdu,)
+                    send_pdu!(channel, pdu,)
                 }
             } else {
                 send_error!(
-                    connection_channel,
+                    channel,
                     handle_range.starting_handle,
                     ClientPduName::FindByTypeValueRequest,
                     pdu::Error::AttributeNotFound,
@@ -1438,7 +1422,7 @@ where
             }
         } else {
             send_error!(
-                connection_channel,
+                channel,
                 0,
                 ClientPduName::FindInformationRequest,
                 pdu::Error::InvalidPDU,
@@ -1447,13 +1431,13 @@ where
     }
 
     /// Process Read By Type Request
-    async fn process_read_by_type_request<C>(
+    async fn process_read_by_type_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         type_request: pdu::TypeRequest,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         macro_rules! single_payload_size {
             ($cnt:expr, $size:expr) => {
@@ -1476,7 +1460,7 @@ where
 
         if !handle_range.is_valid() {
             return send_error!(
-                connection_channel,
+                channel,
                 handle_range.starting_handle,
                 ClientPduName::ReadByTypeRequest,
                 pdu::Error::InvalidHandle,
@@ -1496,7 +1480,7 @@ where
 
         if first.is_none() {
             return send_error!(
-                connection_channel,
+                channel,
                 handle_range.starting_handle,
                 ClientPduName::ReadByTypeRequest,
                 pdu::Error::AttributeNotFound,
@@ -1509,7 +1493,7 @@ where
 
         if let Some(e) = read_permissions_result {
             return send_error!(
-                connection_channel,
+                channel,
                 handle_range.starting_handle,
                 ClientPduName::ReadByTypeRequest,
                 e,
@@ -1575,17 +1559,17 @@ where
 
         let pdu = pdu::read_by_type_response(responses);
 
-        send_pdu!(connection_channel, pdu)
+        send_pdu!(channel, pdu)
     }
 
     /// Process read blob request
-    async fn process_read_blob_request<C>(
+    async fn process_read_blob_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         blob_request: pdu::ReadBlobRequest,
-    ) -> Result<Status, super::ConnectionError<C>>
+    ) -> Result<Status, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         log::info!(
             "(ATT) processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
@@ -1596,13 +1580,7 @@ where
         let check_permissions_result = check_permissions!(self, blob_request.handle, &super::FULL_READ_PERMISSIONS);
 
         if let Err(e) = check_permissions_result {
-            return send_error!(
-                connection_channel,
-                blob_request.handle,
-                ClientPduName::ReadBlobRequest,
-                e
-            )
-            .map(|_| Status::None);
+            return send_error!(channel, blob_request.handle, ClientPduName::ReadBlobRequest, e).map(|_| Status::None);
         }
 
         // Make a new blob if blob data doesn't exist or the blob handle does not match the
@@ -1616,22 +1594,16 @@ where
         let response_result = match (use_old_blob, blob_request.offset) {
             // No prior blob or start of new blob
             (false, _) | (_, 0) => self
-                .create_blob_send_response(connection_channel, &blob_request)
+                .create_blob_send_response(channel, &blob_request)
                 .await
                 .map(|_| Status::None),
 
             // Continuing reading prior blob
-            (true, offset) => self.use_blob_send_response(connection_channel, offset).await,
+            (true, offset) => self.use_blob_send_response(channel, offset).await,
         };
 
         if let Err(ConnectionError::AttError(super::Error::PduError(e))) = response_result {
-            send_error!(
-                connection_channel,
-                blob_request.handle,
-                ClientPduName::ReadBlobRequest,
-                e,
-            )
-            .map(|_| Status::None)
+            send_error!(channel, blob_request.handle, ClientPduName::ReadBlobRequest, e,).map(|_| Status::None)
         } else {
             response_result
         }
@@ -1645,13 +1617,13 @@ where
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// the handle requested is valid.
     #[inline]
-    async fn create_blob_send_response<C>(
+    async fn create_blob_send_response<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         br: &pdu::ReadBlobRequest,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let read_future = {
             let attribute = self.attributes.get(br.handle).unwrap();
@@ -1677,7 +1649,7 @@ where
             (rsp, false) => rsp,
         };
 
-        send_pdu!(connection_channel, rsp)
+        send_pdu!(channel, rsp)
     }
 
     /// Use the current blob and send the blob response
@@ -1691,13 +1663,13 @@ where
     /// This does not check permissions for accessibility of the attribute by the client and assumes
     /// that `blob_data` is `Some(_)`
     #[inline]
-    async fn use_blob_send_response<C>(
+    async fn use_blob_send_response<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         offset: u16,
-    ) -> Result<Status, ConnectionError<C>>
+    ) -> Result<Status, ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let data = self.blob_data.as_ref().unwrap();
 
@@ -1705,7 +1677,7 @@ where
 
         match response_return {
             (rsp, false) => {
-                send_pdu!(connection_channel, rsp)?;
+                send_pdu!(channel, rsp)?;
 
                 // This is the final piece of the blob
                 self.blob_data = None;
@@ -1713,7 +1685,7 @@ where
                 Ok(Status::ReadBlobComplete)
             }
 
-            (rsp, true) => send_pdu!(connection_channel, rsp).map(|_| Status::None),
+            (rsp, true) => send_pdu!(channel, rsp).map(|_| Status::None),
         }
     }
 
@@ -1742,18 +1714,18 @@ where
         }
     }
 
-    async fn process_prepare_write_request<C>(
+    async fn process_prepare_write_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<(), ConnectionError<C>>
+    ) -> Result<(), ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let request = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => request,
             Err(e) => {
-                return send_error!(connection_channel, 0, ClientPduName::PrepareWriteRequest, e.pdu_err);
+                return send_error!(channel, 0, ClientPduName::PrepareWriteRequest, e.pdu_err);
             }
         };
 
@@ -1762,27 +1734,27 @@ where
         let check_permissions_result = check_permissions!(self, handle, &super::FULL_WRITE_PERMISSIONS);
 
         if let Err(e) = check_permissions_result {
-            return send_error!(connection_channel, handle, ClientPduName::PrepareWriteRequest, e);
+            return send_error!(channel, handle, ClientPduName::PrepareWriteRequest, e);
         }
 
         let prepare_result = self.queued_writer.process_prepared(&request);
 
         if let Err(e) = prepare_result {
-            return send_error!(connection_channel, handle, ClientPduName::PrepareWriteRequest, e);
+            return send_error!(channel, handle, ClientPduName::PrepareWriteRequest, e);
         }
 
         let response = pdu::PreparedWriteResponse::pdu_from_request(&request);
 
-        send_pdu!(connection_channel, response)
+        send_pdu!(channel, response)
     }
 
-    async fn process_execute_write_request<C>(
+    async fn process_execute_write_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         request_flag: pdu::ExecuteWriteFlag,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         log::info!("(ATT) processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
 
@@ -1801,9 +1773,9 @@ where
 
             Err(e) => Err(e),
         } {
-            Err(e) => send_error!(connection_channel, 0, ClientPduName::ExecuteWriteRequest, e),
+            Err(e) => send_error!(channel, 0, ClientPduName::ExecuteWriteRequest, e),
 
-            Ok(_) => send_pdu!(connection_channel, pdu::execute_write_response()),
+            Ok(_) => send_pdu!(channel, pdu::execute_write_response()),
         }
     }
 
@@ -2858,16 +2830,16 @@ impl QueuedWriter for NoQueuedWrites {
 }
 
 /// Error for notifications or indication methods of [`Server`]
-pub enum ServerInitiatedError<C: ConnectionChannel> {
+pub enum ServerInitiatedError<T: PhysicalLink> {
     InvalidHandle(u16),
-    ConnectionError(ConnectionError<C>),
+    ConnectionError(ConnectionError<T>),
 }
 
-impl<C> core::fmt::Debug for ServerInitiatedError<C>
+impl<T> core::fmt::Debug for ServerInitiatedError<T>
 where
-    C: ConnectionChannel,
-    C::RecvErr: core::fmt::Debug,
-    C::SendErr: core::fmt::Debug,
+    T: PhysicalLink,
+    T::RecvErr: core::fmt::Debug,
+    T::SendErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -2877,11 +2849,11 @@ where
     }
 }
 
-impl<C> core::fmt::Display for ServerInitiatedError<C>
+impl<T> core::fmt::Display for ServerInitiatedError<T>
 where
-    C: ConnectionChannel,
-    C::RecvErr: core::fmt::Display,
-    C::SendErr: core::fmt::Display,
+    T: PhysicalLink,
+    T::RecvErr: core::fmt::Display,
+    T::SendErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -2892,10 +2864,10 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<C> std::error::Error for ServerInitiatedError<C>
+impl<T> std::error::Error for ServerInitiatedError<T>
 where
-    C: ConnectionChannel,
-    C::RecvErr: std::error::Error,
-    C::SendErr: std::error::Error,
+    T: PhysicalLink,
+    T::RecvErr: std::error::Error,
+    T::SendErr: std::error::Error,
 {
 }

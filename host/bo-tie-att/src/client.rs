@@ -1,7 +1,7 @@
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
 use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::{ConnectionChannel, ConnectionChannelExt};
+use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ClientPduName {
@@ -153,19 +153,19 @@ impl ConnectClient {
     /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
     /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
     /// during the MTU exchange will be set as the new MTU.
-    pub async fn connect<C, M>(
-        connection_channel: &mut C,
+    pub async fn connect<T, M>(
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         default_mtu: u16,
         requested_mtu: M,
-    ) -> Result<Client, super::ConnectionError<C>>
+    ) -> Result<Client, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         M: Into<Option<u16>>,
     {
         let connect_client = Self::initiate(connection_channel, default_mtu, requested_mtu).await?;
 
         let response = connection_channel
-            .receive_b_frame()
+            .receive()
             .await
             .map_err(|e| super::ConnectionError::RecvError(e))?;
 
@@ -183,13 +183,13 @@ impl ConnectClient {
     /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
     /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
     /// during the MTU exchange will be set as the new MTU.
-    pub async fn initiate<C, M>(
-        connection_channel: &C,
+    pub async fn initiate<T, M>(
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         default_mtu: u16,
         requested_mtu: M,
-    ) -> Result<ConnectClient, super::ConnectionError<C>>
+    ) -> Result<ConnectClient, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         M: Into<Option<u16>>,
     {
         let default_mtu = default_mtu.into();
@@ -347,9 +347,13 @@ impl Client {
         }
     }
 
-    async fn send<C, P>(&self, connection_channel: &C, pdu: &pdu::Pdu<P>) -> Result<(), super::ConnectionError<C>>
+    async fn send<T, P>(
+        &self,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
+        pdu: &pdu::Pdu<P>,
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         P: TransferFormatInto,
     {
         let payload = TransferFormatInto::into(pdu);
@@ -372,13 +376,13 @@ impl Client {
     /// to try to change the mtu, then this will resend the exchange mtu request PDU to the server.
     ///
     /// The new MTU is returned by the future
-    pub async fn exchange_mtu_request<C>(
+    pub async fn exchange_mtu_request<T>(
         &mut self,
-        connection_channel: &mut C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         mtu: u16,
-    ) -> Result<impl ResponseProcessor<Response = ()> + '_, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = ()> + '_, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         if self.mtu > mtu.into() {
             Err(super::Error::TooSmallMtu.into())
@@ -400,13 +404,13 @@ impl Client {
     /// # Panic
     /// A range cannot be the reserved handle 0x0000 and the ending handle must be larger than or
     /// equal to the starting handle
-    pub async fn find_information_request<C, R>(
+    pub async fn find_information_request<T, R>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
-    ) -> Result<impl ResponseProcessor<Response = pdu::FormattedHandlesWithType>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = pdu::FormattedHandlesWithType>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
     {
         if !pdu::is_valid_handle_range(&handle_range) {
@@ -430,15 +434,15 @@ impl Client {
     /// # Panic
     /// A range cannot be the reserved handle 0x0000 and the start handle must be larger then the
     /// ending handle
-    pub async fn find_by_type_value_request<C, R, D>(
+    pub async fn find_by_type_value_request<T, R, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
         uuid: crate::Uuid,
         value: D,
-    ) -> Result<impl ResponseProcessor<Response = pdu::TypeValueResponse>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = pdu::TypeValueResponse>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -465,14 +469,14 @@ impl Client {
     /// # Panic
     /// A range cannot contain be the reserved handle 0x0000 and the start handle must be larger
     /// then the ending handle
-    pub async fn read_by_type_request<C, R, D>(
+    pub async fn read_by_type_request<T, R, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
         attr_type: crate::Uuid,
-    ) -> Result<impl ResponseProcessor<Response = Vec<pdu::ReadTypeResponse<D>>>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = Vec<pdu::ReadTypeResponse<D>>>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         R: Into<pdu::HandleRange>,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -494,13 +498,13 @@ impl Client {
     ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
-    pub async fn read_request<C, D>(
+    pub async fn read_request<T, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
-    ) -> Result<impl ResponseProcessor<Response = D>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = D>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         D: TransferFormatTryFrom,
     {
         if !pdu::is_valid_handle(handle) {
@@ -520,14 +524,14 @@ impl Client {
     ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
-    pub async fn read_blob_request<C, D>(
+    pub async fn read_blob_request<T, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         offset: u16,
-    ) -> Result<impl ResponseProcessor<Response = ReadBlob>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = ReadBlob>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         D: TransferFormatTryFrom,
     {
         if !pdu::is_valid_handle(handle) {
@@ -554,13 +558,13 @@ impl Client {
     ///
     /// # Panic
     /// A handle cannot be the reserved handle 0x0000
-    pub async fn read_multiple_request<C, D, I>(
+    pub async fn read_multiple_request<T, D, I>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handles: I,
-    ) -> Result<impl ResponseProcessor<Response = Vec<D>>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = Vec<D>>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         I: IntoIterator<Item = u16> + Clone,
         Vec<D>: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -586,14 +590,14 @@ impl Client {
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn read_by_group_type_request<C, R, D>(
+    pub async fn read_by_group_type_request<T, R, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
         group_type: crate::Uuid,
-    ) -> Result<impl ResponseProcessor<Response = pdu::ReadByGroupTypeResponse<D>>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = pdu::ReadByGroupTypeResponse<D>>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
         D: TransferFormatTryFrom,
     {
@@ -619,14 +623,14 @@ impl Client {
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn write_request<C, D>(
+    pub async fn write_request<T, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         data: D,
-    ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
         if !pdu::is_valid_handle(handle) {
@@ -647,14 +651,14 @@ impl Client {
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn write_command<C, D>(
+    pub async fn write_command<T, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         data: D,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         D: TransferFormatInto,
     {
         if !pdu::is_valid_handle(handle) {
@@ -671,13 +675,13 @@ impl Client {
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn prepare_write_request<C, D>(
+    pub async fn prepare_write_request<T, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         pwr: pdu::Pdu<pdu::PreparedWriteRequest<'_>>,
-    ) -> Result<impl ResponseProcessor<Response = pdu::PreparedWriteResponse>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = pdu::PreparedWriteResponse>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
         self.send(connection_channel, &pwr).await?;
@@ -687,13 +691,13 @@ impl Client {
         }))
     }
 
-    pub async fn execute_write_request<C>(
+    pub async fn execute_write_request<T>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         execute: pdu::ExecuteWriteFlag,
-    ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<C>>
+    ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         self.send(connection_channel, &pdu::execute_write_request(execute))
             .await?;
@@ -708,13 +712,13 @@ impl Client {
     /// This can be used by higher layer protocols to send a command to the server that is not
     /// implemented at the ATT protocol level. However, if the provided pdu contains an opcode
     /// already used by the ATT protocol, then an error is returned.
-    pub async fn custom_command<C, D>(
+    pub async fn custom_command<T, D>(
         &self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
         pdu: pdu::Pdu<D>,
-    ) -> Result<(), super::ConnectionError<C>>
+    ) -> Result<(), super::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         D: TransferFormatInto,
     {
         let op: u8 = pdu.get_opcode().as_raw();

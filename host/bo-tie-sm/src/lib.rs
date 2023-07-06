@@ -122,7 +122,7 @@ pub use bo_tie_core::BluetoothDeviceAddress;
 pub use bo_tie_l2cap as l2cap;
 
 use crate::pairing::KeyDistributions;
-use l2cap::BasicFrame;
+use bo_tie_l2cap::pdu::BasicFrame;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -145,8 +145,8 @@ pub mod toolbox;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
 /// The L2CAP channel identifier for the Security Manager
-pub const L2CAP_CHANNEL_ID: l2cap::channels::ChannelIdentifier =
-    l2cap::channels::ChannelIdentifier::Le(l2cap::channels::LeCid::SecurityManagerProtocol);
+pub const L2CAP_CHANNEL_ID: l2cap::channel::id::ChannelIdentifier =
+    l2cap::channel::id::ChannelIdentifier::Le(l2cap::channel::id::LeCid::SecurityManagerProtocol);
 
 /// General error within the Security Manager Protocol
 #[derive(Debug, Clone)]
@@ -169,8 +169,6 @@ pub enum Error {
     UnknownIfLinkIsEncrypted,
     /// Incorrect L2CAP channel ID
     IncorrectL2capChannelId,
-    /// ACL Data related
-    ACLData(l2cap::BasicFrameError<core::convert::Infallible>), // temporarily using infallible
     /// The operation requires this device to be paired with the connected device.
     OperationRequiresPairing,
     /// The input or operation is no longer valid to the scope of pairing
@@ -199,7 +197,6 @@ impl core::fmt::Display for Error {
             Error::IncorrectL2capChannelId => {
                 f.write_str("incorrect channel identifier for the security manager protocol")
             }
-            Error::ACLData(e) => write!(f, "invalid ACL basic frame: {}", e),
             Error::OperationRequiresPairing => f.write_str("operation requires pairing"),
             Error::Invalid => f.write_str("the operation is no longer valid"),
             Error::PairingUnsupported => f.write_str("the Security Manager is not configured to support pairing"),

@@ -95,7 +95,8 @@ pub trait PhysicalLink {
 
     /// Received L2CAP Data
     ///
-    /// `RecvData` shall be an iterator over the payload of a *single* physical link packet.
+    /// `RecvData` shall be an iterator over data of a *single* physical link packet. The bytes of
+    /// the data are also be in the order in which they are received by the linked device.
     ///
     /// # Note
     /// The implementation does not need to verify or check that the payload contains valid L2CAP
@@ -130,7 +131,7 @@ pub trait PhysicalLink {
     /// may mean that the data has fully transmitted to the peer device.
     fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
     where
-        T: Iterator<Item = u8>;
+        T: IntoIterator<Item = u8>;
 
     /// Receive From the Physical Link
     ///

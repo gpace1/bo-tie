@@ -42,8 +42,16 @@ impl<T> L2capFragment<T> {
         self.start_fragment
     }
 
-    pub fn fragment_data(&self) -> &T {
+    pub fn get_data(&self) -> &T {
         &self.data
+    }
+
+    pub fn get_mut_data(&mut self) -> &mut T {
+        &mut self.data
+    }
+
+    pub fn into_inner(self) -> T {
+        self.data
     }
 }
 

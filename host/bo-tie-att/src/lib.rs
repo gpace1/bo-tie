@@ -67,8 +67,8 @@ pub mod pdu;
 // End submodules that use the above macros
 //==================================================================================================
 
-pub const L2CAP_CHANNEL_ID: bo_tie_l2cap::channels::ChannelIdentifier =
-    bo_tie_l2cap::channels::ChannelIdentifier::Le(bo_tie_l2cap::channels::LeCid::AttributeProtocol);
+pub const L2CAP_CHANNEL_ID: bo_tie_l2cap::channel::id::ChannelIdentifier =
+    bo_tie_l2cap::channel::id::ChannelIdentifier::Le(bo_tie_l2cap::channel::id::LeCid::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bo_tie_macros::DepthCount)]
@@ -309,7 +309,7 @@ pub enum Error {
     /// Custom opcode is already used by the Att protocol
     AttUsedOpcode(u8),
     /// Incorrect Channel Identifier
-    IncorrectChannelId(bo_tie_l2cap::channels::ChannelIdentifier),
+    IncorrectChannelId(bo_tie_l2cap::channel::id::ChannelIdentifier),
     /// Pdu Error
     PduError(pdu::Error),
 }
@@ -352,53 +352,31 @@ impl From<TransferFormatError> for Error {
 
 /// Connection Channel Attribute Error
 ///
-/// This is used by the Attribute client and server implementations when dealing with a
-/// [`ConnectionChannel`]
-///
-/// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
-pub enum ConnectionError<C: bo_tie_l2cap::ConnectionChannel> {
+/// This is used by the Attribute client and server implementations when dealing with the L2CAP
+/// channel for the Attribute Protocol.
+pub enum ConnectionError<T: bo_tie_l2cap::PhysicalLink> {
     AttError(Error),
-    RecvError(bo_tie_l2cap::FragmentError<core::convert::Infallible, C::RecvErr>),
-    SendError(C::SendErr),
+    RecvError(
+        bo_tie_l2cap::channel::ReceiveError<
+            T::RecvErr,
+            <bo_tie_core::buffer::de_vec::DeVec<u8> as bo_tie_core::buffer::TryExtend<u8>>::Error,
+            bo_tie_l2cap::pdu::basic_frame::RecombineError,
+        >,
+    ),
+    SendError(T::SendErr),
 }
 
-impl<C> PartialEq for ConnectionError<C>
-where
-    C: bo_tie_l2cap::ConnectionChannel,
-    C::RecvErr: PartialEq,
-    C::SendErr: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        use ConnectionError::*;
-
-        match (self, other) {
-            (AttError(e1), AttError(e2)) => e1.eq(e2),
-            (RecvError(r1), RecvError(r2)) => r1.eq(r2),
-            (SendError(s1), SendError(s2)) => s1.eq(s2),
-            _ => false,
-        }
-    }
-}
-
-impl<C: bo_tie_l2cap::ConnectionChannel, E: Into<Error>> From<E> for ConnectionError<C> {
+impl<T: bo_tie_l2cap::PhysicalLink, E: Into<Error>> From<E> for ConnectionError<T> {
     fn from(e: E) -> Self {
         Self::AttError(e.into())
     }
 }
 
-impl<C: bo_tie_l2cap::ConnectionChannel> From<bo_tie_l2cap::FragmentError<core::convert::Infallible, C::RecvErr>>
-    for ConnectionError<C>
-{
-    fn from(e: bo_tie_l2cap::FragmentError<core::convert::Infallible, C::RecvErr>) -> Self {
-        Self::RecvError(e)
-    }
-}
-
-impl<C> core::fmt::Debug for ConnectionError<C>
+impl<T> core::fmt::Debug for ConnectionError<T>
 where
-    C: bo_tie_l2cap::ConnectionChannel,
-    C::RecvErr: core::fmt::Debug,
-    C::SendErr: core::fmt::Debug,
+    T: bo_tie_l2cap::PhysicalLink,
+    T::RecvErr: core::fmt::Debug,
+    T::SendErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -409,11 +387,11 @@ where
     }
 }
 
-impl<C> core::fmt::Display for ConnectionError<C>
+impl<T> core::fmt::Display for ConnectionError<T>
 where
-    C: bo_tie_l2cap::ConnectionChannel,
-    C::RecvErr: core::fmt::Display,
-    C::SendErr: core::fmt::Display,
+    T: bo_tie_l2cap::PhysicalLink,
+    T::RecvErr: core::fmt::Display,
+    T::SendErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -425,11 +403,11 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<C> std::error::Error for ConnectionError<C>
+impl<T> std::error::Error for ConnectionError<T>
 where
-    C: bo_tie_l2cap::ConnectionChannel,
-    C::RecvErr: std::error::Error,
-    C::SendErr: std::error::Error,
+    T: bo_tie_l2cap::PhysicalLink,
+    T::RecvErr: std::error::Error,
+    T::SendErr: std::error::Error,
 {
 }
 
@@ -964,7 +942,7 @@ mod test {
     use super::*;
     use bo_tie_core::buffer::de_vec::DeVec;
     use bo_tie_core::buffer::TryExtend;
-    use bo_tie_l2cap::{BasicFrame, BasicFrameError, ConnectionChannelExt, L2capFragment, MinimumMtu};
+    use bo_tie_l2cap::{pdu::BasicFrame, L2capFragment};
     use std::sync::{Arc, Mutex};
 
     use crate::server::ServerAttributes;
@@ -1015,7 +993,7 @@ mod test {
     struct DummyRecvFut<const DIRECTION: usize>(Arc<Mutex<TwoWayChannel>>);
 
     impl<const DIRECTION: usize> Future for DummyRecvFut<DIRECTION> {
-        type Output = Option<Result<L2capFragment<DeVec<u8>>, BasicFrameError<<DeVec<u8> as TryExtend<u8>>::Error>>>;
+        type Output = Option<Result<L2capFragment<DeVec<u8>>, <DeVec<u8> as TryExtend<u8>>::Error>>;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.get_mut();
@@ -1073,62 +1051,48 @@ mod test {
         }
     }
 
-    impl bo_tie_l2cap::ConnectionChannel for Channel1 {
-        type SendBuffer = DeVec<u8>;
+    impl bo_tie_l2cap::PhysicalLink for Channel1 {
         type SendFut<'a> = DummySendFut<1>;
         type SendErr = usize;
-        type RecvBuffer = DeVec<u8>;
+        type RecvData = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<2>;
+        type RecvErr = usize;
 
-        fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        fn max_transmission_size(&self) -> usize {
+            23
+        }
+
+        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+        where
+            T: Iterator<Item = u8>,
+        {
             DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
         }
 
-        fn set_mtu(&mut self, _: u16) {}
-
-        fn get_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn max_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn min_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
+        fn recv(&mut self) -> Self::RecvFut<'_> {
             DummyRecvFut(self.two_way.clone())
         }
     }
 
-    impl bo_tie_l2cap::ConnectionChannel for Channel2 {
-        type SendBuffer = DeVec<u8>;
+    impl bo_tie_l2cap::PhysicalLink for Channel2 {
         type SendFut<'a> = DummySendFut<2>;
         type SendErr = usize;
-        type RecvBuffer = DeVec<u8>;
+        type RecvData = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut<1>;
+        type RecvErr = usize;
 
-        fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        fn max_transmission_size(&self) -> usize {
+            23
+        }
+
+        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+        where
+            T: Iterator<Item = u8>,
+        {
             DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
         }
 
-        fn set_mtu(&mut self, _: u16) {}
-
-        fn get_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn max_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn min_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
+        fn recv(&mut self) -> Self::RecvFut<'_> {
             DummyRecvFut(self.two_way.clone())
         }
     }
@@ -1197,7 +1161,7 @@ mod test {
             server_attributes.push(attribute_1); // has handle value of 2
             server_attributes.push(attribute_3); // has handle value of 3
 
-            let mut server = Server::new(server_attributes, server::NoQueuedWrites);
+            let mut server = Server::new(256, server_attributes, server::NoQueuedWrites);
 
             let client_permissions: &[AttributePermissions] =
                 &[Read(AttributeRestriction::None), Write(AttributeRestriction::None)];
@@ -1288,10 +1252,7 @@ mod test {
         .unwrap()
         .expect("connect receiver");
 
-        let client = le_client_setup
-            .create_client(&mut c1, mtu_rsp.first().unwrap())
-            .await
-            .unwrap();
+        let client = le_client_setup.create_client(mtu_rsp.first().unwrap()).await.unwrap();
 
         // writing to handle 1
         client

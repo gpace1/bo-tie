@@ -29,7 +29,7 @@ use bo_tie::sm::initiator::SecurityManagerBuilder;
 use bo_tie_sm::responder::SecurityManagerBuilder;
 "##
 )]
-//! # use bo_tie_util::BluetoothDeviceAddress;
+//! # use bo_tie_core::BluetoothDeviceAddress;
 //! # let this_address = BluetoothDeviceAddress::zeroed();
 //! # let peer_address = BluetoothDeviceAddress::zeroed();
 //!
@@ -48,7 +48,7 @@ use bo_tie_sm::responder::SecurityManagerBuilder;
 //!
 //! ```
 //! # use bo_tie_sm::responder::SecurityManagerBuilder;
-//! # use bo_tie_util::BluetoothDeviceAddress;
+//! # use bo_tie_core::BluetoothDeviceAddress;
 //! let security_manager_builder = SecurityManagerBuilder::new(BluetoothDeviceAddress::zeroed(), BluetoothDeviceAddress::zeroed(), false, false);
 //!
 //! // create a security manager that will send an
@@ -83,7 +83,7 @@ use bo_tie_sm::responder::SecurityManagerBuilder;
 //! out of band data by the security manager.
 //!
 //! ```
-//! # use bo_tie_util::BluetoothDeviceAddress;
+//! # use bo_tie_core::BluetoothDeviceAddress;
 //! # let this_addr = BluetoothDeviceAddress::zeroed();
 //! # let remote_addr = BluetoothDeviceAddress::zeroed();
 //! # let security_manager_builder = bo_tie_sm::responder::SecurityManagerBuilder::new(this_addr, remote_addr, false, false);
@@ -100,7 +100,6 @@ use super::{
     encrypt_info, pairing, toolbox, Command, CommandData, CommandType, Error, GetXOfP256Key, PairingData, PairingMethod,
 };
 use crate::encrypt_info::AuthRequirements;
-use crate::l2cap::ConnectionChannel;
 use crate::pairing::{IoCapability, KeyDistributions, PairingFailedReason};
 use crate::{
     AcceptedBondingKeysBuilder, DistributedBondingKeysBuilder, IdentityAddress, LocalDistributedKeys, OobDirection,
@@ -109,11 +108,13 @@ use crate::{
 use alloc::vec::Vec;
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_core::BluetoothDeviceAddress;
+use bo_tie_l2cap::pdu::BasicFrame;
+use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
 
 macro_rules! error {
-    ($connection_channel:ty) => {
-        crate::SecurityManagerError<bo_tie_l2cap::send_future::Error<
-            <$connection_channel as bo_tie_l2cap::ConnectionChannel>::SendFutErr>
+    ($physical_link:ty) => {
+        crate::SecurityManagerError<
+            <$physical_link as bo_tie_l2cap::PhysicalLink>::SendErr
         >
     }
 }
@@ -411,9 +412,9 @@ impl SecurityManagerBuilder {
     /// method does not need to be called if the default key configuration is desired.
     ///
     /// ```
+    /// # use bo_tie_core::BluetoothDeviceAddress;
     /// # use bo_tie_sm::IdentityAddress;
     /// # use bo_tie_sm::initiator::SecurityManagerBuilder;
-    /// # use bo_tie_util::BluetoothDeviceAddress;
     /// # let connected_device_address = BluetoothDeviceAddress::zeroed();
     /// # let this_device_address = BluetoothDeviceAddress::zeroed();
     /// # let this_identity_address = IdentityAddress::StaticRandom(BluetoothDeviceAddress::zeroed());
@@ -449,9 +450,9 @@ impl SecurityManagerBuilder {
     /// method does not need to be called if the default key configuration is desired.
     ///
     /// ```
+    /// # use bo_tie_core::BluetoothDeviceAddress;
     /// # use bo_tie_sm::IdentityAddress;
     /// # use bo_tie_sm::initiator::SecurityManagerBuilder;
-    /// # use bo_tie_util::BluetoothDeviceAddress;
     /// # let connected_device_address = BluetoothDeviceAddress::zeroed();
     /// # let this_device_address = BluetoothDeviceAddress::zeroed();
     /// # let this_identity_address = IdentityAddress::StaticRandom(BluetoothDeviceAddress::zeroed());
@@ -618,32 +619,35 @@ impl SecurityManager {
         self.keys.as_ref()
     }
 
-    async fn send<C, Cmd, P>(&self, connection_channel: &C, command: Cmd) -> Result<(), error!(C)>
+    async fn send<T, Cmd, P>(&self, channel: &mut BasicFrameChannel<'_, T>, command: Cmd) -> Result<(), error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         Cmd: Into<Command<P>>,
         P: CommandData,
     {
-        use crate::l2cap::BasicFrame;
+        let payload = command.into().into_command_format().to_vec();
 
-        let acl_data = BasicFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
+        let acl_data = crate::l2cap::pdu::BasicFrame::new(payload, super::L2CAP_CHANNEL_ID);
 
-        connection_channel
+        channel
             .send(acl_data)
             .await
             .map_err(|e| SecurityManagerError::Sender(e))
     }
 
-    async fn send_err<C>(&mut self, connection_channel: &C, fail_reason: PairingFailedReason) -> Result<(), error!(C)>
+    async fn send_err<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        fail_reason: PairingFailedReason,
+    ) -> Result<(), error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         self.pairing_data = None;
 
         self.pairing_expected_cmd = None;
 
-        self.send(connection_channel, pairing::PairingFailed::new(fail_reason))
-            .await
+        self.send(channel, pairing::PairingFailed::new(fail_reason)).await
     }
 
     /// Send the Identity Resolving Key
@@ -656,9 +660,13 @@ impl SecurityManager {
     /// The IRK is returned if it was successfully sent to the other device.
     ///
     /// [`set_encrypted`]: bo_tie_sm::initiator::SecurityManager::set_encrypted
-    pub async fn send_irk<C, Irk>(&mut self, connection_channel: &C, irk: Irk) -> Result<u128, error!(C)>
+    pub async fn send_irk<T, Irk>(
+        &mut self,
+        connection: &mut BasicFrameChannel<'_, T>,
+        irk: Irk,
+    ) -> Result<u128, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         Irk: Into<Option<u128>>,
     {
         if self.link_encrypted {
@@ -671,7 +679,7 @@ impl SecurityManager {
                 *irk_opt = Some(irk)
             }
 
-            self.send(connection_channel, encrypt_info::IdentityInformation::new(irk))
+            self.send(connection, encrypt_info::IdentityInformation::new(irk))
                 .await?;
 
             Ok(irk)
@@ -695,9 +703,13 @@ impl SecurityManager {
     /// sign counter within the CSRK will always be 0.
     ///
     /// [`set_encrypted`]: bo_tie_sm::initiator::SecurityManager::set_encrypted
-    pub async fn send_csrk<C, Csrk>(&mut self, connection_channel: &C, csrk: Csrk) -> Result<u128, error!(C)>
+    pub async fn send_csrk<T, Csrk>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        csrk: Csrk,
+    ) -> Result<u128, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         Csrk: Into<Option<u128>>,
     {
         if self.link_encrypted {
@@ -710,8 +722,7 @@ impl SecurityManager {
                 *csrk_opt = Some((csrk, 0));
             }
 
-            self.send(connection_channel, encrypt_info::SigningInformation::new(csrk))
-                .await?;
+            self.send(channel, encrypt_info::SigningInformation::new(csrk)).await?;
 
             Ok(csrk)
         } else {
@@ -743,9 +754,13 @@ impl SecurityManager {
     /// message to the peer device.
     ///
     /// [`set_encrypted`]: crate::sm::initiator::SecurityManager::set_encrypted
-    pub async fn send_identity<C, I>(&mut self, connection_channel: &C, identity: I) -> Result<(), error!(C)>
+    pub async fn send_identity<T, I>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        identity: I,
+    ) -> Result<(), error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         I: Into<Option<IdentityAddress>>,
     {
         let identity = match identity.into() {
@@ -769,7 +784,7 @@ impl SecurityManager {
 
         if self.link_encrypted {
             self.send(
-                connection_channel,
+                channel,
                 match identity {
                     IdentityAddress::Public(addr) => encrypt_info::IdentityAddressInformation::new_pub(addr),
                     IdentityAddress::StaticRandom(addr) => {
@@ -797,9 +812,9 @@ impl SecurityManager {
     ///
     /// This sends the pairing request security manage PDU to the slave which will initiate the
     /// pairing process
-    async fn send_pairing_request<C>(&mut self, connection_channel: &C) -> Result<(), error!(C)>
+    async fn send_pairing_request<T>(&mut self, channel: &mut BasicFrameChannel<'_, T>) -> Result<(), error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         if !self.allow_just_works && self.io_capability.no_io_capability() {
             return Err(Error::PairingUnsupported.into());
@@ -823,26 +838,28 @@ impl SecurityManager {
             self.responder_key_distribution,
         );
 
-        self.send(connection_channel, pairing_request).await
+        self.send(channel, pairing_request).await
     }
 
-    async fn process_pairing_response<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
+    async fn process_pairing_response<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        payload: &[u8],
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let response = match pairing::PairingResponse::try_from_command_format(payload) {
             Ok(response) => response,
             Err(e) => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 return Err(e.into());
             }
         };
 
         if response.get_max_encryption_size() < self.encryption_key_size_min {
-            self.send_err(connection_channel, PairingFailedReason::EncryptionKeySize)
-                .await?;
+            self.send_err(channel, PairingFailedReason::EncryptionKeySize).await?;
 
             Ok(Status::PairingFailed(PairingFailedReason::EncryptionKeySize))
         } else {
@@ -862,7 +879,7 @@ impl SecurityManager {
             );
 
             if pairing_method.is_just_works() && !self.allow_just_works {
-                self.send_err(connection_channel, PairingFailedReason::AuthenticationRequirements)
+                self.send_err(channel, PairingFailedReason::AuthenticationRequirements)
                     .await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::AuthenticationRequirements))
@@ -904,7 +921,7 @@ impl SecurityManager {
 
                 self.pairing_expected_cmd = CommandType::PairingPublicKey.into();
 
-                self.send_pairing_pub_key(connection_channel).await?;
+                self.send_pairing_pub_key(channel).await?;
 
                 Ok(Status::None)
             }
@@ -919,9 +936,9 @@ impl SecurityManager {
     /// # Panic
     /// This will panic if the pairing data has not already been created and the public/private keys
     /// were not generated.
-    async fn send_pairing_pub_key<C>(&mut self, connection_channel: &C) -> Result<(), error!(C)>
+    async fn send_pairing_pub_key<T>(&mut self, channel: &mut BasicFrameChannel<'_, T>) -> Result<(), error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.pairing_data {
             Some(PairingData { ref public_key, .. }) => {
@@ -935,8 +952,7 @@ impl SecurityManager {
                     raw_key
                 };
 
-                self.send(connection_channel, pairing::PairingPubKey::new(raw_pub_key))
-                    .await?;
+                self.send(channel, pairing::PairingPubKey::new(raw_pub_key)).await?;
 
                 Ok(())
             }
@@ -953,19 +969,18 @@ impl SecurityManager {
     ///
     /// # Panic
     /// This will panic  
-    async fn process_responder_pub_key<C>(
+    async fn process_responder_pub_key<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let peer_pub_key = match pairing::PairingPubKey::try_from_command_format(payload) {
             Ok(public_key) => public_key,
             Err(e) => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 return Err(e.into());
             }
@@ -982,8 +997,7 @@ impl SecurityManager {
                 let remote_pub_key = match toolbox::PubKey::try_from_command_format(&peer_pub_key.get_key()) {
                     Ok(k) => k,
                     Err(e) => {
-                        self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                            .await?;
+                        self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                         return Err(e.into());
                     }
@@ -1018,14 +1032,14 @@ impl SecurityManager {
                         PasskeyDirection::ResponderDisplaysInitiatorInputs => {
                             self.pairing_expected_cmd = None;
 
-                            let input = PasskeyInput::new(self, connection_channel, false).await?;
+                            let input = PasskeyInput::new(self, channel, false).await?;
 
                             Ok(Status::PasskeyInput(input))
                         }
                         PasskeyDirection::InitiatorAndResponderInput => {
                             self.pairing_expected_cmd = CommandType::PairingKeyPressNotification.into();
 
-                            let input = PasskeyInput::new(self, connection_channel, true).await?;
+                            let input = PasskeyInput::new(self, channel, true).await?;
 
                             Ok(Status::PasskeyInput(input))
                         }
@@ -1038,8 +1052,7 @@ impl SecurityManager {
                 }
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
@@ -1057,19 +1070,18 @@ impl SecurityManager {
     ///
     /// # Panic
     /// This will panic if pairing data is not set.
-    async fn process_responder_confirm<C>(
+    async fn process_responder_confirm<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let responder_confirm = match pairing::PairingConfirm::try_from_command_format(payload) {
             Ok(public_key) => public_key,
             Err(e) => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 return Err(e.into());
             }
@@ -1088,14 +1100,12 @@ impl SecurityManager {
 
                 self.pairing_expected_cmd = CommandType::PairingRandom.into();
 
-                self.send(connection_channel, pairing::PairingRandom::new(nonce))
-                    .await?;
+                self.send(channel, pairing::PairingRandom::new(nonce)).await?;
 
                 Ok(Status::None)
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason).into())
             }
@@ -1110,14 +1120,18 @@ impl SecurityManager {
     /// # Return
     /// A status is returned as pairing can fail. The status returned is either `None` or
     /// `PairingFailed(PairingFailedReason::ConfirmValueFailed)`.
-    async fn process_responder_random<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
+    async fn process_responder_random<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        payload: &[u8],
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let responder_nonce = match pairing::PairingRandom::try_from_command_format(payload) {
             Ok(pairing_random) => pairing_random.get_value(),
             Err(e) => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
+                self.send_err(channel, pairing::PairingFailedReason::UnspecifiedReason)
                     .await?;
 
                 return Err(e.into());
@@ -1144,10 +1158,9 @@ impl SecurityManager {
                 if responder_confirm == calculated_confirm {
                     *peer_nonce = responder_nonce.into();
 
-                    self.send_initiator_dh_key_check(connection_channel).await
+                    self.send_initiator_dh_key_check(channel).await
                 } else {
-                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
-                        .await?;
+                    self.send_err(channel, PairingFailedReason::ConfirmValueFailed).await?;
 
                     Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
                 }
@@ -1178,8 +1191,7 @@ impl SecurityManager {
 
                     Ok(Status::NumberComparison(NumberComparison::new(self, v)))
                 } else {
-                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
-                        .await?;
+                    self.send_err(channel, PairingFailedReason::ConfirmValueFailed).await?;
 
                     Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
                 }
@@ -1206,15 +1218,14 @@ impl SecurityManager {
                     *passkey_round += 1;
 
                     if *passkey_round < 20 {
-                        self.send_passkey_confirm(connection_channel).await
+                        self.send_passkey_confirm(channel).await
                     } else {
                         self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
 
-                        self.send_initiator_dh_key_check(connection_channel).await
+                        self.send_initiator_dh_key_check(channel).await
                     }
                 } else {
-                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
-                        .await?;
+                    self.send_err(channel, PairingFailedReason::ConfirmValueFailed).await?;
 
                     Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
                 }
@@ -1228,20 +1239,22 @@ impl SecurityManager {
 
                 self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
 
-                self.send_initiator_dh_key_check(connection_channel).await
+                self.send_initiator_dh_key_check(channel).await
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    async fn send_initiator_dh_key_check<C>(&mut self, connection_channel: &C) -> Result<Status, error!(C)>
+    async fn send_initiator_dh_key_check<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.pairing_data {
             Some(PairingData {
@@ -1290,33 +1303,30 @@ impl SecurityManager {
 
                 self.pairing_expected_cmd = CommandType::PairingDHKeyCheck.into();
 
-                self.send(connection_channel, pairing::PairingDhKeyCheck::new(ea))
-                    .await?;
+                self.send(channel, pairing::PairingDhKeyCheck::new(ea)).await?;
 
                 Ok(Status::None)
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    async fn process_responder_dh_key_check<C>(
+    async fn process_responder_dh_key_check<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let eb = match pairing::PairingDhKeyCheck::try_from_command_format(payload) {
             Ok(dh_key_check) => dh_key_check,
             Err(e) => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 return Err(e.into());
             }
@@ -1362,29 +1372,31 @@ impl SecurityManager {
 
                     Ok(Status::PairingComplete)
                 } else {
-                    self.send_err(connection_channel, PairingFailedReason::DhKeyCheckFailed)
-                        .await?;
+                    self.send_err(channel, PairingFailedReason::DhKeyCheckFailed).await?;
 
                     Ok(Status::PairingFailed(PairingFailedReason::DhKeyCheckFailed))
                 }
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    async fn process_keypress<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
+    async fn process_keypress<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        payload: &[u8],
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let kp = match pairing::KeyPressNotification::try_from_command_format(payload) {
             Ok(responder_confirm) => responder_confirm,
             Err(e) => {
-                self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
+                self.send_err(channel, pairing::PairingFailedReason::UnspecifiedReason)
                     .await?;
 
                 return Err(e.into());
@@ -1392,7 +1404,7 @@ impl SecurityManager {
         };
 
         match kp {
-            pairing::KeyPressNotification::PasskeyEntryCompleted => self.send_passkey_confirm(connection_channel).await,
+            pairing::KeyPressNotification::PasskeyEntryCompleted => self.send_passkey_confirm(channel).await,
             pairing::KeyPressNotification::PasskeyEntryStarted => Ok(Status::None),
             _ => {
                 /* todo: reset security manager timeout */
@@ -1408,13 +1420,13 @@ impl SecurityManager {
     /// process and send further Security Manager PDU's to the slave.
     ///
     /// [`continue_pairing`]: SecurityManager::continue_pairing
-    pub async fn start_pairing<C>(&mut self, connection_channel: &C) -> Result<Status, error!(C)>
+    pub async fn start_pairing<T>(&mut self, channel: &mut BasicFrameChannel<'_, T>) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         self.pairing_expected_cmd = CommandType::PairingResponse.into();
 
-        self.send_pairing_request(connection_channel).await?;
+        self.send_pairing_request(channel).await?;
 
         Ok(Status::None)
     }
@@ -1424,13 +1436,13 @@ impl SecurityManager {
     /// This is used to continue pairing until pairing is either complete, fails, or user input
     /// is required for authentication. It must be called for every received Security Manager ACL
     /// data. The returned `Status` is used to indicate the next step in the procedure.
-    pub async fn continue_pairing<C>(
+    pub async fn continue_pairing<T>(
         &mut self,
-        connection_channel: &C,
-        acl_data: &crate::l2cap::BasicFrame<Vec<u8>>,
-    ) -> Result<Status, error!(C)>
+        channel: &mut BasicFrameChannel<'_, T>,
+        acl_data: &BasicFrame<Vec<u8>>,
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         check_channel_id_and!(acl_data, async {
             let (d_type, payload) = acl_data.get_payload().split_at(1);
@@ -1445,9 +1457,9 @@ impl SecurityManager {
                         pairing::PairingFailed::try_from_command_format(payload)?.get_reason(),
                     ))
                 }
-                Ok(cmd) if Some(cmd) == self.pairing_expected_cmd => self.next_step(connection_channel, payload).await,
+                Ok(cmd) if Some(cmd) == self.pairing_expected_cmd => self.next_step(channel, payload).await,
                 Ok(cmd) => {
-                    self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
+                    self.send_err(channel, pairing::PairingFailedReason::UnspecifiedReason)
                         .await?;
 
                     Err(Error::IncorrectCommand {
@@ -1457,7 +1469,7 @@ impl SecurityManager {
                     .into())
                 }
                 Err(e) => {
-                    self.send_err(connection_channel, pairing::PairingFailedReason::UnspecifiedReason)
+                    self.send_err(channel, pairing::PairingFailedReason::UnspecifiedReason)
                         .await?;
 
                     Err(e.into())
@@ -1466,22 +1478,23 @@ impl SecurityManager {
         })
     }
 
-    async fn next_step<C>(&mut self, connection_channel: &C, payload: &[u8]) -> Result<Status, error!(C)>
+    async fn next_step<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        payload: &[u8],
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let status_rslt = match self.pairing_expected_cmd {
-            Some(CommandType::PairingKeyPressNotification) => self.process_keypress(connection_channel, payload).await,
-            Some(CommandType::PairingResponse) => self.process_pairing_response(connection_channel, payload).await,
-            Some(CommandType::PairingPublicKey) => self.process_responder_pub_key(connection_channel, payload).await,
-            Some(CommandType::PairingConfirm) => self.process_responder_confirm(connection_channel, payload).await,
-            Some(CommandType::PairingRandom) => self.process_responder_random(connection_channel, payload).await,
-            Some(CommandType::PairingDHKeyCheck) => {
-                self.process_responder_dh_key_check(connection_channel, payload).await
-            }
+            Some(CommandType::PairingKeyPressNotification) => self.process_keypress(channel, payload).await,
+            Some(CommandType::PairingResponse) => self.process_pairing_response(channel, payload).await,
+            Some(CommandType::PairingPublicKey) => self.process_responder_pub_key(channel, payload).await,
+            Some(CommandType::PairingConfirm) => self.process_responder_confirm(channel, payload).await,
+            Some(CommandType::PairingRandom) => self.process_responder_random(channel, payload).await,
+            Some(CommandType::PairingDHKeyCheck) => self.process_responder_dh_key_check(channel, payload).await,
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
@@ -1549,13 +1562,13 @@ impl SecurityManager {
     /// [`IdentityInformation`]: CommandType::IdentityInformation
     /// [`IdentityAddressInformation`]: CommandType::IdentityAddressInformation
     /// [`SigningInformation`]: CommandType::SigningInformation
-    pub async fn process_bonding<C>(
+    pub async fn process_bonding<T>(
         &mut self,
-        connection_channel: &C,
-        acl_data: &crate::l2cap::BasicFrame<Vec<u8>>,
-    ) -> Result<bool, error!(C)>
+        channel: &mut BasicFrameChannel<'_, T>,
+        acl_data: &BasicFrame<Vec<u8>>,
+    ) -> Result<bool, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         macro_rules! set_peer_key {
             ($this:expr, $key_val: expr, $key:ident) => {
@@ -1601,7 +1614,7 @@ impl SecurityManager {
                             }
                         }
 
-                        $this.send_bonding_keys(connection_channel).await?;
+                        $this.send_bonding_keys(channel).await?;
 
                         Ok(true)
                     }
@@ -1640,9 +1653,9 @@ impl SecurityManager {
         })
     }
 
-    async fn send_bonding_keys<C>(&mut self, connection_channel: &C) -> Result<(), error!(C)>
+    async fn send_bonding_keys<T>(&mut self, channel: &mut BasicFrameChannel<'_, T>) -> Result<(), error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.pairing_data {
             Some(PairingData { sent_bonding_keys, .. }) => {
@@ -1650,14 +1663,14 @@ impl SecurityManager {
                     let irk = self.initiator_key_distribution.irk.unwrap();
                     let identity = self.initiator_key_distribution.identity.unwrap();
 
-                    self.send_irk(connection_channel, irk).await?;
-                    self.send_identity(connection_channel, identity).await?;
+                    self.send_irk(channel, irk).await?;
+                    self.send_identity(channel, identity).await?;
                 }
 
                 if sent_bonding_keys.contains(&KeyDistributions::SignKey) {
                     let csrk = self.initiator_key_distribution.csrk.unwrap();
 
-                    self.send_csrk(connection_channel, csrk).await?;
+                    self.send_csrk(channel, csrk).await?;
                 }
 
                 Ok(())
@@ -1666,16 +1679,16 @@ impl SecurityManager {
         }
     }
 
-    async fn process_number_comparison<C>(
+    async fn process_number_comparison<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         accepted: bool,
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         if !accepted {
-            self.send_err(connection_channel, PairingFailedReason::NumericComparisonFailed)
+            self.send_err(channel, PairingFailedReason::NumericComparisonFailed)
                 .await?;
 
             return Ok(Status::PairingFailed(PairingFailedReason::NumericComparisonFailed));
@@ -1685,44 +1698,46 @@ impl SecurityManager {
             Some(PairingData {
                 pairing_method: PairingMethod::NumbComp,
                 ..
-            }) => self.send_initiator_dh_key_check(connection_channel).await,
+            }) => self.send_initiator_dh_key_check(channel).await,
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    async fn process_input_passkey<C>(&mut self, connection_channel: &C, passkey_val: u32) -> Result<Status, error!(C)>
+    async fn process_input_passkey<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        passkey_val: u32,
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.pairing_data {
             Some(PairingData { ref mut passkey, .. }) => {
                 *passkey = passkey_val.into();
 
-                self.send_passkey_confirm(connection_channel).await
+                self.send_passkey_confirm(channel).await
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    async fn process_input_oob<C>(
+    async fn process_input_oob<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         _address: BluetoothDeviceAddress,
         random: u128,
         confirm: u128,
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.pairing_data {
             Some(PairingData {
@@ -1737,30 +1752,28 @@ impl SecurityManager {
 
                     let pairing_random = pairing::PairingRandom::new(*nonce);
 
-                    self.send(connection_channel, pairing_random).await?;
+                    self.send(channel, pairing_random).await?;
 
                     self.pairing_expected_cmd = CommandType::PairingRandom.into();
 
                     Ok(Status::None)
                 } else {
-                    self.send_err(connection_channel, PairingFailedReason::ConfirmValueFailed)
-                        .await?;
+                    self.send_err(channel, PairingFailedReason::ConfirmValueFailed).await?;
 
                     Ok(Status::PairingFailed(PairingFailedReason::ConfirmValueFailed))
                 }
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
         }
     }
 
-    async fn send_passkey_confirm<C>(&mut self, connection_channel: &C) -> Result<Status, error!(C)>
+    async fn send_passkey_confirm<T>(&mut self, channel: &mut BasicFrameChannel<'_, T>) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match self.pairing_data {
             Some(PairingData {
@@ -1781,15 +1794,14 @@ impl SecurityManager {
 
                 let confirm = pairing::PairingConfirm::new(toolbox::f4(pka, pkb, *nonce, ra0));
 
-                self.send(connection_channel, confirm).await?;
+                self.send(channel, confirm).await?;
 
                 self.pairing_expected_cmd = CommandType::PairingConfirm.into();
 
                 Ok(Status::None)
             }
             _ => {
-                self.send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
-                    .await?;
+                self.send_err(channel, PairingFailedReason::UnspecifiedReason).await?;
 
                 Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason))
             }
@@ -1889,18 +1901,18 @@ impl NumberComparison {
     /// Yes Confirmation From the Application User
     ///
     /// This should be called once the user has confirmed the number comparison value.
-    pub async fn yes<C>(
+    pub async fn yes<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<Status, NumberComparisonError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<Status, NumberComparisonError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
         security_manager
-            .process_number_comparison(connection_channel, true)
+            .process_number_comparison(channel, true)
             .await
             .map_err(|e| InputError::SecurityManager(e).into())
     }
@@ -1908,18 +1920,18 @@ impl NumberComparison {
     /// Yes Confirmation From the Application User
     ///
     /// This should be called once the user has denied the validity of the number comparison value.
-    pub async fn no<C>(
+    pub async fn no<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<Status, NumberComparisonError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<Status, NumberComparisonError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
         security_manager
-            .process_number_comparison(connection_channel, false)
+            .process_number_comparison(channel, false)
             .await
             .map_err(|e| InputError::SecurityManager(e).into())
     }
@@ -1997,18 +2009,18 @@ impl PasskeyInput {
     ///
     /// # Panic
     /// `security_manager` must have its field `pairing_data` as `Some(_)`
-    async fn new<C>(
+    async fn new<T>(
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         both_enter: bool,
-    ) -> Result<Self, error!(C)>
+    ) -> Result<Self, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let instance = security_manager.pairing_data.as_ref().unwrap().instance;
 
         security_manager
-            .send(connection_channel, pairing::KeyPressNotification::PasskeyEntryStarted)
+            .send(channel, pairing::KeyPressNotification::PasskeyEntryStarted)
             .await?;
 
         Ok(Self {
@@ -2041,16 +2053,16 @@ impl PasskeyInput {
     /// # Errors
     /// 1) `digit` must be a base 10 digit character and there must be less than six digits within
     ///    this passcode.
-    /// 2) The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    /// 2) The `channel` is closed and the `security_manager` fails to send the keypress
     ///    notification because.
-    pub async fn add<C>(
+    pub async fn add<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         digit: char,
-    ) -> Result<(), PasscodeInputError<error!(C)>>
+    ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
@@ -2064,7 +2076,7 @@ impl PasskeyInput {
             self.key_count += 1;
 
             security_manager
-                .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
+                .send(channel, pairing::KeyPressNotification::PasskeyDigitErased)
                 .await
                 .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
@@ -2083,17 +2095,17 @@ impl PasskeyInput {
     /// 1) `digit` must be a base 10 digit character and there must be less than six digits within
     ///    this passcode.
     /// 2) `index` must be a valid position to insert `digit` into the passcode.
-    /// 3) The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    /// 3) The `channel` is closed and the `security_manager` fails to send the keypress
     ///    notification because.
-    pub async fn insert<C>(
+    pub async fn insert<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         digit: char,
         index: usize,
-    ) -> Result<(), PasscodeInputError<error!(C)>>
+    ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
@@ -2111,7 +2123,7 @@ impl PasskeyInput {
             self.passkey[index] = digit;
 
             security_manager
-                .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitEntered)
+                .send(channel, pairing::KeyPressNotification::PasskeyDigitEntered)
                 .await
                 .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
@@ -2128,16 +2140,16 @@ impl PasskeyInput {
     ///
     /// # Errors
     /// 1) 'index' must be a valid position to remove a `digit` of the passcode
-    /// 2) The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    /// 2) The `channel` is closed and the `security_manager` fails to send the keypress
     ///    notification because.
-    pub async fn remove<C>(
+    pub async fn remove<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         index: usize,
-    ) -> Result<(), PasscodeInputError<error!(C)>>
+    ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
@@ -2149,7 +2161,7 @@ impl PasskeyInput {
             self.key_count -= 1;
 
             security_manager
-                .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
+                .send(channel, pairing::KeyPressNotification::PasskeyDigitErased)
                 .await
                 .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
@@ -2163,15 +2175,15 @@ impl PasskeyInput {
     /// keypress notification to the peer device's Security Manager containing *passkey cleared*.
     ///
     /// # Error
-    /// The `connection_channel` is closed and the `security_manager` fails to send the keypress
+    /// The `channel` is closed and the `security_manager` fails to send the keypress
     /// notification because.
-    pub async fn clear<C>(
+    pub async fn clear<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<(), PasscodeInputError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
@@ -2179,7 +2191,7 @@ impl PasskeyInput {
         self.key_count = 0;
 
         security_manager
-            .send(connection_channel, pairing::KeyPressNotification::PasskeyCleared)
+            .send(channel, pairing::KeyPressNotification::PasskeyCleared)
             .await
             .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
@@ -2191,13 +2203,13 @@ impl PasskeyInput {
     /// After the user has entered in all six digits and is satisfied with the input, this method
     /// is used to complete the passcode entry. The `security_manager` will send a keypress
     /// notification to the peer device's Security Manager containing *passkey completed*.
-    pub async fn complete<C>(
+    pub async fn complete<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<Status, PasscodeInputError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<Status, PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
@@ -2214,12 +2226,12 @@ impl PasskeyInput {
             }
 
             security_manager
-                .send(connection_channel, pairing::KeyPressNotification::PasskeyEntryCompleted)
+                .send(channel, pairing::KeyPressNotification::PasskeyEntryCompleted)
                 .await
                 .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
             security_manager
-                .process_input_passkey(connection_channel, passkey_val)
+                .process_input_passkey(channel, passkey_val)
                 .await
                 .map_err(|e| PasscodeInputError::SecurityManager(e))
         }
@@ -2245,18 +2257,18 @@ impl PasskeyInput {
     /// Send a keystroke entry notification
     ///
     /// This will send a keystroke entry notification without adding a digit to this `PasskeyInput`
-    pub async fn send_key_entry<C>(
+    pub async fn send_key_entry<T>(
         &self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<(), PasscodeInputError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
         security_manager
-            .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitEntered)
+            .send(channel, pairing::KeyPressNotification::PasskeyDigitEntered)
             .await
             .map_err(|e| PasscodeInputError::SecurityManager(e))
     }
@@ -2264,18 +2276,18 @@ impl PasskeyInput {
     /// Send a keystroke erase notification
     ///
     /// This will send a keystroke erase notification without removing a digit to this `PasskeyInput`
-    pub async fn send_key_erase<C>(
+    pub async fn send_key_erase<T>(
         &self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<(), PasscodeInputError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
         security_manager
-            .send(connection_channel, pairing::KeyPressNotification::PasskeyDigitErased)
+            .send(channel, pairing::KeyPressNotification::PasskeyDigitErased)
             .await
             .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
@@ -2285,18 +2297,18 @@ impl PasskeyInput {
     /// Send a keystroke erase notification
     ///
     /// This will send a keystroke clear notification without clearing a digit to this `PasskeyInput`
-    pub async fn send_key_clear<C>(
+    pub async fn send_key_clear<T>(
         &self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<(), PasscodeInputError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
         security_manager
-            .send(connection_channel, pairing::KeyPressNotification::PasskeyCleared)
+            .send(channel, pairing::KeyPressNotification::PasskeyCleared)
             .await
             .map_err(|e| PasscodeInputError::SecurityManager(e))
     }
@@ -2304,18 +2316,18 @@ impl PasskeyInput {
     /// Passkey failure
     ///
     /// This sends the passkey entry failed error to the device
-    pub async fn fail<C>(
+    pub async fn fail<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<Status, PasscodeInputError<error!(C)>>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<Status, PasscodeInputError<error!(T)>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager_check!(security_manager, self.instance);
 
         security_manager
-            .send_err(connection_channel, PairingFailedReason::PasskeyEntryFailed)
+            .send_err(channel, PairingFailedReason::PasskeyEntryFailed)
             .await
             .map_err(|e| PasscodeInputError::SecurityManager(e))?;
 
@@ -2507,14 +2519,14 @@ pub struct OutOfBandInput;
 
 impl OutOfBandInput {
     /// Input the Out of Band Data into the Security Manager
-    pub async fn input_oob<C>(
+    pub async fn input_oob<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         oob_data: &[u8],
-    ) -> Result<Status, error!(C)>
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         use bo_tie_gap::assigned::{
             le_device_address, sc_confirm_value, sc_random_value, AssignedTypes, TryFromStruct,
@@ -2523,7 +2535,7 @@ impl OutOfBandInput {
         macro_rules! error {
             () => {{
                 security_manager
-                    .send_err(connection_channel, PairingFailedReason::UnspecifiedReason)
+                    .send_err(channel, PairingFailedReason::UnspecifiedReason)
                     .await?;
 
                 return Ok(Status::PairingFailed(PairingFailedReason::UnspecifiedReason));
@@ -2560,7 +2572,7 @@ impl OutOfBandInput {
 
         if let (Some(address), Some(random), Some(confirm)) = (address, random, confirm) {
             security_manager
-                .process_input_oob(connection_channel, address, random, confirm)
+                .process_input_oob(channel, address, random, confirm)
                 .await
         } else {
             error!()
@@ -2570,16 +2582,16 @@ impl OutOfBandInput {
     /// Out of Band Data is Unavailable
     ///
     /// This method should be called whenever the OOB data cannot be acquired by this device.
-    pub async fn unavailable<C>(
+    pub async fn unavailable<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &C,
-    ) -> Result<Status, error!(C)>
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<Status, error!(T)>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         security_manager
-            .send_err(connection_channel, PairingFailedReason::OobNotAvailable)
+            .send_err(channel, PairingFailedReason::OobNotAvailable)
             .await?;
 
         Ok(Status::PairingFailed(PairingFailedReason::OobNotAvailable))
@@ -2596,62 +2608,58 @@ mod tests {
     };
     use crate::toolbox::PairingAddress;
     use crate::{toolbox, Command, CommandData, CommandType, GetXOfP256Key};
-    use bo_tie_l2cap::{send_future::Error, BasicFrame, BasicFrameError, ConnectionChannel, L2capFragment};
-    use bo_tie_util::buffer::TryExtend;
-    use bo_tie_util::BluetoothDeviceAddress;
+    use bo_tie_core::buffer::TryExtend;
+    use bo_tie_core::BluetoothDeviceAddress;
+    use bo_tie_core::BluetoothDeviceAddress;
+    use bo_tie_l2cap::pdu::BasicFrame;
+    use bo_tie_l2cap::{send_future::Error, BasicFrameError, ConnectionChannel, L2capFragment, PhysicalLink};
     use std::future::Future;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     #[cfg(feature = "std")]
     struct InitiatorChannel {
-        sender: UnboundedSender<Vec<u8>>,
-        receiver: UnboundedReceiver<Vec<u8>>,
+        sender: UnboundedSender<(bool, Vec<u8>)>,
+        receiver: UnboundedReceiver<(bool, Vec<u8>)>,
     }
 
     #[cfg(feature = "std")]
-    impl ConnectionChannel for InitiatorChannel {
-        type SendBuffer = Vec<u8>;
-        type SendFut<'a> = impl Future<Output = Result<(), Error<Self::SendErr>>> where Self: 'a;
+    impl PhysicalLink for InitiatorChannel {
+        type SendFut<'a> = impl Future<Output = Result<(), Self::SendErr>> where Self: 'a;
         type SendErr = usize;
-        type RecvBuffer = Vec<u8>;
-        type RecvFut<'a> = impl Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>> + 'a where Self: 'a,;
+        type RecvFut<'a> = impl Future<Output = Result<L2capFragment<Self::RecvData>, Self::RecvErr>> + 'a where Self: 'a,;
+        type RecvData = Vec<u8>;
+        type RecvErr = usize;
 
-        fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
-            self.sender.send(data.into()).unwrap();
+        fn max_transmission_size(&self) -> usize {
+            23
+        }
+
+        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+        where
+            T: Iterator<Item = u8>,
+        {
+            let message = (fragment.is_start_fragment(), fragment.into_inner().collect());
+
+            self.sender.send(message).unwrap();
 
             async { Ok(()) }
         }
 
-        fn set_mtu(&mut self, _: u16) {
-            ()
-        }
-
-        fn get_mtu(&self) -> usize {
-            512
-        }
-
-        fn max_mtu(&self) -> usize {
-            512
-        }
-
-        fn min_mtu(&self) -> usize {
-            512
-        }
-
-        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
+        fn recv(&mut self) -> Self::RecvFut<'_> {
             async {
                 self.receiver
                     .recv()
                     .await
-                    .map(|data| Ok(L2capFragment::new(true, data)))
+                    .map(|(start_fragment, data)| L2capFragment::new(start_fragment, data))
+                    .ok_or(0)
             }
         }
     }
 
     #[cfg(feature = "std")]
     struct ResponderChannel {
-        sender: UnboundedSender<Vec<u8>>,
-        receiver: UnboundedReceiver<Vec<u8>>,
+        sender: UnboundedSender<(bool, Vec<u8>)>,
+        receiver: UnboundedReceiver<(bool, Vec<u8>)>,
     }
 
     #[cfg(feature = "std")]

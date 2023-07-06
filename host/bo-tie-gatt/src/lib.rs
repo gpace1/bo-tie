@@ -100,7 +100,7 @@ use bo_tie_att::TransferFormatInto;
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::{ConnectionChannel, ConnectionChannelExt};
+use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
 
 struct ServiceDefinition;
 
@@ -1108,7 +1108,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// #     fn min_mtu(&self) -> usize { unimplemented!() }
 /// #     fn receive_fragment(&mut self) -> Self::RecvFut<'_> { unimplemented!()}
 /// # }
-/// # let connection_channel = CC;
+/// # let channel = CC;
 ///
 /// let gap_service = GapServiceBuilder::new("My Device", None);
 ///
@@ -1272,37 +1272,37 @@ pub struct Server<Q> {
 ///
 /// # Inputs
 /// $this: `self` for `Server`
-/// $connection_channel: `impl ConnectionChannel`,
+/// $channel: BasicFrameChannel,
 /// $pdu: `pdu::Pdu<_>`,
 macro_rules! send_pdu {
-    ( $connection_channel:expr, $pdu:expr $(,)?) => {{
+    ( $channel:expr, $pdu:expr $(,)?) => {{
         log::info!("(GATT) sending {}", $pdu.get_opcode());
 
-        send_pdu!(SKIP_LOG, $connection_channel, $pdu)
+        send_pdu!(SKIP_LOG, $channel, $pdu)
     }};
 
-    (SKIP_LOG, $connection_channel:expr, $pdu:expr $(,)?) => {{
+    (SKIP_LOG, $channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = bo_tie_att::TransferFormatInto::into(&$pdu);
 
         let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, bo_tie_att::L2CAP_CHANNEL_ID);
 
-        $connection_channel
+        $channel
             .send(acl_data)
             .await
-            .map_err(|e| bo_tie_att::ConnectionError::<C>::SendError(e))
+            .map_err(|e| bo_tie_att::ConnectionError::SendError(e))
     }};
 }
 
 /// Send an error the the client
 ///
 /// # Inpus
-/// connection_channel: `impl ConnectionChannel`,
+/// channel: BasicFrameChannel,,
 /// handle: `u16`,
 /// received_opcode: `ClientPduName`,
 /// pdu_error: `pdu::Error`,
 macro_rules! send_error {
     (
-    $connection_channel:expr,
+    $channel:expr,
     $handle:expr,
     $received_opcode:expr,
     $pdu_error:expr $(,)?
@@ -1316,7 +1316,7 @@ macro_rules! send_error {
 
         send_pdu!(
             SKIP_LOG,
-            $connection_channel,
+            $channel,
             bo_tie_att::pdu::error_response($received_opcode.into(), $handle, $pdu_error),
         )
     }};
@@ -1339,13 +1339,13 @@ where
     /// This processes an ATT client PDU with the requirements imposed by a GATT profile. It is
     /// important to call this method to ensure that the GATT profile requirements are met within
     /// the underlying ATT server.
-    pub async fn process_att_pdu<C>(
+    pub async fn process_att_pdu<T>(
         &mut self,
-        connection_channel: &mut C,
+        channel: &mut BasicFrameChannel<'_, T>,
         b_frame: &l2cap::pdu::BasicFrame<alloc::vec::Vec<u8>>,
-    ) -> Result<bo_tie_att::server::Status, att::ConnectionError<C>>
+    ) -> Result<bo_tie_att::server::Status, att::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         let (pdu_type, payload) = self.server.parse_att_pdu(&b_frame)?;
 
@@ -1356,38 +1356,31 @@ where
                     att::client::ClientPduName::ReadByGroupTypeRequest
                 );
 
-                self.process_read_by_group_type_request(connection_channel, payload)
-                    .await?;
+                self.process_read_by_group_type_request(channel, payload).await?;
 
                 Ok(bo_tie_att::server::Status::None)
             }
             att::client::ClientPduName::ExchangeMtuRequest => {
-                if self.check_mtu_request(connection_channel, payload).await? {
-                    self.server
-                        .process_parsed_att_pdu(connection_channel, pdu_type, payload)
-                        .await
+                if self.check_mtu_request(channel, payload).await? {
+                    self.server.process_parsed_att_pdu(channel, pdu_type, payload).await
                 } else {
                     Ok(bo_tie_att::server::Status::None)
                 }
             }
-            _ => {
-                self.server
-                    .process_parsed_att_pdu(connection_channel, pdu_type, payload)
-                    .await
-            }
+            _ => self.server.process_parsed_att_pdu(channel, pdu_type, payload).await,
         }
     }
 
     /// Process a Read by Group Type Request
     ///
     /// A GATT profile Client will send this to a server to query for the Primary Services.
-    async fn process_read_by_group_type_request<C>(
+    async fn process_read_by_group_type_request<T>(
         &mut self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<(), att::ConnectionError<C>>
+    ) -> Result<(), att::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         use core::ops::RangeBounds;
 
@@ -1453,7 +1446,7 @@ where
             Ok(request) => request,
             Err(_) => {
                 return send_error!(
-                    connection_channel,
+                    channel,
                     0,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
                     att::pdu::Error::UnlikelyError,
@@ -1463,7 +1456,7 @@ where
 
         if ServiceDefinition::PRIMARY_SERVICE_TYPE != request.attr_type {
             return send_error!(
-                connection_channel,
+                channel,
                 request.handle_range.starting_handle,
                 att::client::ClientPduName::ReadByGroupTypeRequest,
                 att::pdu::Error::UnsupportedGroupType,
@@ -1472,7 +1465,7 @@ where
 
         if !request.handle_range.is_valid() {
             return send_error!(
-                connection_channel,
+                channel,
                 0,
                 att::client::ClientPduName::ReadByGroupTypeRequest,
                 att::pdu::Error::UnlikelyError,
@@ -1498,35 +1491,30 @@ where
             });
 
         if let Err(e) = check_readable {
-            return send_error!(
-                connection_channel,
-                0,
-                att::client::ClientPduName::ReadByGroupTypeRequest,
-                e
-            );
+            return send_error!(channel, 0, att::client::ClientPduName::ReadByGroupTypeRequest, e);
         }
 
         let response = Response::new(self, request.handle_range.to_range_bounds(), self.server.get_mtu());
 
         let pdu = att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response);
 
-        send_pdu!(connection_channel, pdu)
+        send_pdu!(channel, pdu)
     }
 
     /// Check a MTU request to ensure it does not contain a MTU less than [`LE_MINIMUM_ATT_MTU`]
-    async fn check_mtu_request<C>(
+    async fn check_mtu_request<T>(
         &self,
-        connection_channel: &C,
+        channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
-    ) -> Result<bool, att::ConnectionError<C>>
+    ) -> Result<bool, att::ConnectionError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
     {
         match <att::pdu::MtuRequest as att::TransferFormatTryFrom>::try_from(payload) {
             Ok(request) => Ok(LE_MINIMUM_ATT_MTU >= request.0),
             Err(_) => {
                 send_error!(
-                    connection_channel,
+                    channel,
                     0,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
                     att::pdu::Error::UnlikelyError,
@@ -1550,9 +1538,13 @@ where
     ///
     /// # Note
     /// An indication is not sent to the ATT client if no services are added.
-    pub async fn add_services<C, F>(&mut self, connection_channel: &C, f: F) -> Result<(), AddServicesError<C>>
+    pub async fn add_services<T, F>(
+        &mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+        f: F,
+    ) -> Result<(), AddServicesError<T>>
     where
-        C: ConnectionChannel,
+        T: PhysicalLink,
         F: for<'a> FnOnce(ServicesAdder<'a>),
     {
         let service_changed_handle = if let Some(handle) = self.gatt_service_info.service_change_handle {
@@ -1584,7 +1576,7 @@ where
 
         let indication = att::pdu::create_indication(service_changed_handle, service_changed);
 
-        send_pdu!(connection_channel, indication).map_err(|e| AddServicesError::ConnectionError(e))
+        send_pdu!(channel, indication).map_err(|e| AddServicesError::ConnectionError(e))
     }
 }
 
@@ -1614,16 +1606,16 @@ impl<Q> core::ops::DerefMut for Server<Q> {
     }
 }
 
-pub enum AddServicesError<C: ConnectionChannel> {
+pub enum AddServicesError<T: PhysicalLink> {
     NoServicesChangedCharacteristic,
-    ConnectionError(att::ConnectionError<C>),
+    ConnectionError(att::ConnectionError<T>),
 }
 
-impl<C> core::fmt::Debug for AddServicesError<C>
+impl<T> core::fmt::Debug for AddServicesError<T>
 where
-    C: ConnectionChannel,
-    C::SendErr: core::fmt::Debug,
-    C::RecvErr: core::fmt::Debug,
+    T: PhysicalLink,
+    T::SendErr: core::fmt::Debug,
+    T::RecvErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -1633,11 +1625,11 @@ where
     }
 }
 
-impl<C: ConnectionChannel> core::fmt::Display for AddServicesError<C>
+impl<T> core::fmt::Display for AddServicesError<T>
 where
-    C: ConnectionChannel,
-    C::SendErr: core::fmt::Display,
-    C::RecvErr: core::fmt::Display,
+    T: PhysicalLink,
+    T::SendErr: core::fmt::Display,
+    T::RecvErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -1651,11 +1643,11 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<C> std::error::Error for AddServicesError<C>
+impl<T> std::error::Error for AddServicesError<T>
 where
-    C: ConnectionChannel,
-    C::SendErr: std::error::Error,
-    C::RecvErr: std::error::Error,
+    T: PhysicalLink,
+    T::SendErr: std::error::Error,
+    T::RecvErr: std::error::Error,
 {
 }
 
@@ -1667,11 +1659,11 @@ where
 /// Since this is really just a wrapper, it can be created from an Attribute `Client`.
 ///
 /// ```
-/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut connection_channel: C) -> Result<(), bo_tie_att::ConnectionError<C>> {
+/// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut channel: C) -> Result<(), bo_tie_att::ConnectionError<C>> {
 /// use bo_tie_att::client::ConnectClient;
 /// use bo_tie_gatt::Client;
 ///
-/// let gatt_client: Client = ConnectClient::connect(&mut connection_channel, 64).await?.into();
+/// let gatt_client: Client = ConnectClient::connect(&mut channel, 64).await?.into();
 /// # Ok(()) }
 /// ```
 ///
@@ -1688,8 +1680,11 @@ impl Client {
     /// Query the services
     ///
     /// This returns a `ServicesQuery` which is used to get the services on the remote device.
-    pub fn query_services<'a, C: ConnectionChannel>(&'a self, connection_channel: &'a mut C) -> ServicesQuery<'a, C> {
-        ServicesQuery::new(connection_channel, self)
+    pub fn query_services<'a, T: PhysicalLink>(
+        &'a self,
+        channel: &'a mut BasicFrameChannel<'a, T>,
+    ) -> ServicesQuery<'a, T> {
+        ServicesQuery::new(channel, self)
     }
 }
 
@@ -1710,15 +1705,15 @@ impl core::ops::Deref for Client {
 /// A querier for Services on a GATT server.
 ///
 /// This struct is created from the method [`query_services`]. See its documentation for details.
-pub struct ServicesQuery<'a, C> {
-    channel: &'a mut C,
+pub struct ServicesQuery<'a, T: PhysicalLink> {
+    channel: &'a mut BasicFrameChannel<'a, T>,
     client: &'a Client,
     iter: Option<alloc::vec::IntoIter<bo_tie_att::pdu::ReadGroupTypeData<Uuid>>>,
     handle: u16,
 }
 
-impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
-    fn new(channel: &'a mut C, client: &'a Client) -> Self {
+impl<'a, T: PhysicalLink> ServicesQuery<'a, T> {
+    fn new(channel: &'a mut BasicFrameChannel<'a, T>, client: &'a Client) -> Self {
         let iter = None;
         let handle = 1;
 
@@ -1735,7 +1730,7 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
         &mut self,
     ) -> Result<
         Option<impl bo_tie_att::client::ResponseProcessor<Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>>,
-        bo_tie_att::ConnectionError<C>,
+        bo_tie_att::ConnectionError<T>,
     > {
         if self.handle == <u16>::MAX {
             return Ok(None);
@@ -1758,12 +1753,12 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
         response_processor: impl bo_tie_att::client::ResponseProcessor<
             Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>,
         >,
-    ) -> Result<Option<bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>, bo_tie_att::ConnectionError<C>> {
+    ) -> Result<Option<bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>, bo_tie_att::ConnectionError<T>> {
         use bo_tie_att::pdu::Error;
 
         let frame = self
             .channel
-            .receive_b_frame()
+            .receive()
             .await
             .map_err(|e| bo_tie_att::ConnectionError::RecvError(e))?;
 
@@ -1778,7 +1773,7 @@ impl<'a, C: ConnectionChannel> ServicesQuery<'a, C> {
     ///
     /// This will return the next primary service on the Server. If there is no more services then
     /// `None` is returned.
-    pub async fn query_next(&mut self) -> Result<Option<ServiceRecord>, bo_tie_att::ConnectionError<C>> {
+    pub async fn query_next(&mut self) -> Result<Option<ServiceRecord>, bo_tie_att::ConnectionError<T>> {
         loop {
             if self.iter.is_none() {
                 let response = match self.send_request_for_primary_services().await? {
@@ -1996,7 +1991,7 @@ mod tests {
     use super::*;
     use crate::att::server::NoQueuedWrites;
     use crate::characteristic::CharacteristicBuilder;
-    use crate::l2cap::{ConnectionChannel, L2capFragment, MinimumMtu};
+    use crate::l2cap::L2capFragment;
     use crate::Uuid;
     use att::TransferFormatInto;
     use bo_tie_att::server::access_value::Trivial;
@@ -2023,7 +2018,7 @@ mod tests {
     struct DummyRecvFut;
 
     impl Future for DummyRecvFut {
-        type Output = Option<Result<L2capFragment<DeVec<u8>>, BasicFrameError<<DeVec<u8> as TryExtend<u8>>::Error>>>;
+        type Output = Option<Result<L2capFragment<DeVec<u8>>, <DeVec<u8> as TryExtend<u8>>::Error>>;
 
         fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
             unimplemented!()
@@ -2090,34 +2085,27 @@ mod tests {
         last_sent_pdu: std::cell::Cell<Option<Vec<u8>>>,
     }
 
-    impl ConnectionChannel for TestChannel {
-        type SendBuffer = DeVec<u8>;
+    impl PhysicalLink for TestChannel {
         type SendFut<'a> = DummySendFut;
         type SendErr = usize;
-        type RecvBuffer = DeVec<u8>;
+        type RecvData = DeVec<u8>;
         type RecvFut<'a> = DummyRecvFut where Self: 'a,;
+        type RecvErr = usize;
 
-        fn send(&self, data: crate::l2cap::BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
+        fn max_transmission_size(&self) -> usize {
+            23
+        }
+
+        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+        where
+            T: Iterator<Item = u8>,
+        {
             self.last_sent_pdu.set(Some(data.try_into_packet().unwrap()));
 
             DummySendFut
         }
 
-        fn set_mtu(&mut self, _: u16) {}
-
-        fn get_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn max_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn min_mtu(&self) -> usize {
-            bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-        }
-
-        fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
+        fn recv(&mut self) -> Self::RecvFut<'_> {
             unimplemented!()
         }
     }
@@ -2227,17 +2215,17 @@ mod tests {
     fn is_send<T: Future + Send>(t: T) {}
 
     #[allow(dead_code)]
-    fn send_test<C>(mut c: C)
+    fn send_test<T>(mut c: BasicFrameChannel<T>)
     where
-        C: ConnectionChannel + Send,
-        <C::RecvBuffer as TryExtend<u8>>::Error: Send,
-        C::SendErr: Send,
-        for<'a> C::SendFut<'a>: Send,
+        T: PhysicalLink + Send,
+        <T::RecvBuffer as TryExtend<u8>>::Error: Send,
+        T::SendErr: Send,
+        for<'a> T::SendFut<'a>: Send,
     {
         let gap = GapServiceBuilder::new("dev", None);
 
-        let server = ServerBuilder::from(gap).make_server(NoQueuedWrites);
+        let mut server = ServerBuilder::from(gap).make_server(NoQueuedWrites);
 
-        is_send(server.process_read_by_group_type_request(&c, &[]))
+        is_send(server.process_read_by_group_type_request(&mut c, &[]))
     }
 }

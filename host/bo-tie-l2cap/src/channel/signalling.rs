@@ -14,7 +14,7 @@ use crate::{LeULogicalLink, PhysicalLink};
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_core::buffer::TryExtend;
 use core::fmt::Formatter;
-use std::num::NonZeroU8;
+use core::num::NonZeroU8;
 
 /// A Signalling Channel
 ///
