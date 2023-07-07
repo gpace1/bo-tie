@@ -732,11 +732,7 @@ where
 
         match message {
             ToHostGeneralIntraMessage::Event(EventsData::ConnectionComplete(cc)) => {
-                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
-
                 let connection = Connection::new(
-                    head_cap,
-                    tail_cap,
                     self.acl_max_payload,
                     ConnectionKind::BrEdr(cc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
@@ -745,11 +741,7 @@ where
                 Ok(Some(Next::NewConnection(connection)))
             }
             ToHostGeneralIntraMessage::Event(EventsData::SynchronousConnectionComplete(scc)) => {
-                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
-
                 let connection = Connection::new(
-                    head_cap,
-                    tail_cap,
                     self.sco_max_payload,
                     ConnectionKind::BrEdrSco(scc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
@@ -758,11 +750,7 @@ where
                 Ok(Some(Next::NewConnection(connection)))
             }
             ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::ConnectionComplete(lcc))) => {
-                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
-
                 let connection = Connection::new(
-                    head_cap,
-                    tail_cap,
                     self.le_acl_max_payload,
                     ConnectionKind::Le(lcc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
@@ -771,11 +759,7 @@ where
                 Ok(Some(Next::NewConnection(connection)))
             }
             ToHostGeneralIntraMessage::Event(EventsData::LeMeta(LeMetaData::EnhancedConnectionComplete(lecc))) => {
-                let (head_cap, tail_cap) = self.host_interface.driver_buffer_capacities();
-
                 let connection = Connection::new(
-                    head_cap,
-                    tail_cap,
                     self.le_acl_max_payload,
                     ConnectionKind::LeEnh(lecc),
                     ce.take().ok_or(NextError::MissingConnectionEnds)?,
@@ -996,8 +980,6 @@ pub enum Next<C: bo_tie_hci_util::ConnectionChannelEnds> {
 /// [`set_mtu_max_to_hci`]: Connection::set_mtu_max_to_hci
 #[derive(Debug)]
 pub struct Connection<C> {
-    buffer_header_size: usize,
-    buffer_tail_size: usize,
     hci_max: usize,
     bounded: bool,
     kind: ConnectionKind,
@@ -1005,12 +987,10 @@ pub struct Connection<C> {
 }
 
 impl<C> Connection<C> {
-    fn new(buffer_header_size: usize, buffer_tail_size: usize, hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
+    fn new(hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
         let bounded = false;
 
         Self {
-            buffer_header_size,
-            buffer_tail_size,
             hci_max: hci_mtu,
             bounded,
             kind,
@@ -1122,13 +1102,7 @@ impl<C: ConnectionChannelEnds> Connection<C> {
         match self.get_kind() {
             ConnectionKind::Le(CC { status, .. }) | ConnectionKind::LeEnh(ECC { status, .. }) => {
                 if status == errors::Error::NoError {
-                    let le = l2cap::LeL2cap::new(
-                        self.get_handle(),
-                        self.buffer_header_size,
-                        self.buffer_tail_size,
-                        self.hci_max,
-                        self.ends,
-                    );
+                    let le = l2cap::LeL2cap::new(self.get_handle(), self.hci_max, self.ends);
 
                     Ok(le)
                 } else {

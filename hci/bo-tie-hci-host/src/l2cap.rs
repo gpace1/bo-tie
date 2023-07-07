@@ -13,8 +13,6 @@ use core::pin::Pin;
 /// A L2CAP connection for LE
 pub struct LeL2cap<C: ConnectionChannelEnds> {
     handle: ConnectionHandle,
-    front_cap: usize,
-    back_cap: usize,
     hci_max_payload_size: usize,
     channel_ends: C,
 }
@@ -28,17 +26,9 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
 }
 
 impl<C: ConnectionChannelEnds> LeL2cap<C> {
-    pub(crate) fn new(
-        handle: ConnectionHandle,
-        front_cap: usize,
-        back_cap: usize,
-        hci_max_payload_size: usize,
-        channel_ends: C,
-    ) -> Self {
+    pub(crate) fn new(handle: ConnectionHandle, hci_max_payload_size: usize, channel_ends: C) -> Self {
         Self {
             handle,
-            front_cap,
-            back_cap,
             hci_max_payload_size,
             channel_ends,
         }
@@ -106,7 +96,7 @@ where
                 .take_to_buffer(None, self.max_transmission_size())
                 .await;
 
-            buffer.try_extend(payload);
+            buffer.try_extend(payload).unwrap();
 
             log::info!(
                 "(HCI) sending L2CAP {}fragment: {:?}",
