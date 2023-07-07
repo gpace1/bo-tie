@@ -174,7 +174,7 @@ impl<'z, const TASK_COUNT: usize, const CHANNEL_SIZE: usize, const BUFFER_SIZE: 
         (&self.sender_channel).get_sender()
     }
 
-    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
+    fn take_to_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
         F: Into<Option<usize>>,
         B: Into<Option<usize>>,

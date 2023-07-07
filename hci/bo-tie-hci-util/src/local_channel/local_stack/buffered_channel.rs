@@ -18,7 +18,7 @@ use crate::Channel;
 use bo_tie_core::buffer::stack::{
     BufferReservation, DeLinearBuffer, Reservation, StackHotel, UnsafeBufferReservation, UnsafeReservation,
 };
-use bo_tie_core::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use bo_tie_core::buffer::{Buffer, IntoExactSizeIterator, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::borrow::Borrow;
 use core::future::Future;
 use core::ops::{Deref, DerefMut};
@@ -366,6 +366,27 @@ where
     fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
         self.buffer.try_front_remove(how_many)
     }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> IntoIterator
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: IntoIterator,
+{
+    type Item = B::Item;
+    type IntoIter = B::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.buffer.into_iter()
+    }
+}
+
+impl<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> IntoExactSizeIterator
+    for ReservedBuffer<'_, TASK_COUNT, CHANNEL_SIZE, B, T>
+where
+    B: IntoExactSizeIterator,
+{
+    type IntoExactIter = B::IntoExactIter;
 }
 
 pub struct UnsafeReservedBuffer<const TASK_COUNT: usize, const CHANNEL_SIZE: usize, B, T> {
