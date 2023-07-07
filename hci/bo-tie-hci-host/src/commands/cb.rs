@@ -242,9 +242,12 @@ pub mod set_event_mask {
         ///
         /// This creates a new `EventMask` from the iterable type `t` and a boolean indicating if
         /// LE events are to be enabled.
-        pub fn new(t: I, le_mask: bool) -> Self {
+        pub fn new<M>(mask: M, le_mask: bool) -> Self
+        where
+            M: IntoIterator<IntoIter = I>,
+        {
             EventMask {
-                mask: t,
+                mask: mask.into_iter(),
                 le_is_masked: le_mask,
             }
         }
