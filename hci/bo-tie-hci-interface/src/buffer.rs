@@ -1,6 +1,6 @@
 //! This is the buffer that is sent to the driver from the interface async task
 
-use bo_tie_core::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use bo_tie_core::buffer::{Buffer, IntoExactSizeIterator, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::fmt::{Display, Formatter};
 use core::ops::{Deref, DerefMut};
 
@@ -137,6 +137,32 @@ where
     }
 }
 
+impl<A, B> IntoIterator for DriverBuffer<A, B>
+where
+    A: IntoIterator,
+    B: IntoIterator<Item = A::Item>,
+{
+    type Item = A::Item;
+    type IntoIter = DriverBufferIter<A::IntoIter, B::IntoIter>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            DriverBuffer::Cmd(a) => DriverBufferIter::A(a.into_iter()),
+            DriverBuffer::Data(b) => DriverBufferIter::B(b.into_iter()),
+        }
+    }
+}
+
+impl<A, B> IntoExactSizeIterator for DriverBuffer<A, B>
+where
+    A: IntoIterator,
+    B: IntoIterator<Item = A::Item>,
+    A::IntoIter: ExactSizeIterator,
+    B::IntoIter: ExactSizeIterator,
+{
+    type IntoExactIter = DriverBufferIter<A::IntoIter, B::IntoIter>;
+}
+
 #[derive(Debug)]
 pub enum DriverBufferError {
     TryExtend,
@@ -161,17 +187,30 @@ pub enum DriverBufferIter<A, B> {
     B(B),
 }
 
-impl<A, B, C> Iterator for DriverBufferIter<A, B>
+impl<A, B> Iterator for DriverBufferIter<A, B>
 where
-    A: Iterator<Item = C>,
-    B: Iterator<Item = C>,
+    A: Iterator,
+    B: Iterator<Item = A::Item>,
 {
-    type Item = C;
+    type Item = A::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             DriverBufferIter::A(a) => a.next(),
             DriverBufferIter::B(b) => b.next(),
+        }
+    }
+}
+
+impl<A, B> ExactSizeIterator for DriverBufferIter<A, B>
+where
+    A: ExactSizeIterator,
+    B: Iterator<Item = A::Item> + ExactSizeIterator,
+{
+    fn len(&self) -> usize {
+        match self {
+            DriverBufferIter::A(a) => a.len(),
+            DriverBufferIter::B(b) => b.len(),
         }
     }
 }

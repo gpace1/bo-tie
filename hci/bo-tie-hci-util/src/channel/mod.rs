@@ -177,7 +177,7 @@ where
         self.from_connection.clone()
     }
 
-    fn take_buffer<F, B>(&self, front_capacity: F, _: B) -> Self::TakeBuffer
+    fn take_to_buffer<F, B>(&self, front_capacity: F, _: B) -> Self::TakeBuffer
     where
         F: Into<Option<usize>>,
         B: Into<Option<usize>>,

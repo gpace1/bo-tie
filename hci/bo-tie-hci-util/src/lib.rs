@@ -767,8 +767,8 @@ pub trait ConnectionChannelEnds: Sized {
     /// Get the sender of messages to the interface async task
     fn get_sender(&self) -> Self::Sender;
 
-    /// Take a buffer
-    fn take_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
+    /// Take a buffer for sending *to* the HCI
+    fn take_to_buffer<F, B>(&self, front_capacity: F, back_capacity: B) -> Self::TakeBuffer
     where
         F: Into<Option<usize>>,
         B: Into<Option<usize>>;

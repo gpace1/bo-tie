@@ -159,6 +159,7 @@ pub enum HciAclPacketError {
     PacketTooSmall,
     InvalidBroadcastFlag,
     InvalidConnectionHandle(&'static str),
+    Other(&'static str),
 }
 
 impl core::fmt::Display for HciAclPacketError {
@@ -168,6 +169,9 @@ impl core::fmt::Display for HciAclPacketError {
             HciAclPacketError::InvalidBroadcastFlag => write!(f, "Packet has invalid broadcast Flag"),
             HciAclPacketError::InvalidConnectionHandle(reason) => {
                 write!(f, "Invalid connection handle, {}", reason)
+            }
+            HciAclPacketError::Other(reason) => {
+                write!(f, "{}", reason)
             }
         }
     }
@@ -430,21 +434,6 @@ impl<T> HciAclData<T> {
         self.payload.try_front_extend(first_2_bytes.to_be_bytes())?;
 
         Ok(self.payload)
-    }
-}
-
-#[cfg(feature = "l2cap")]
-impl<T> From<HciAclData<T>> for bo_tie_l2cap::L2capFragment<T>
-where
-    T: Deref<Target = [u8]>,
-{
-    fn from(hci_acl_data: HciAclData<T>) -> Self {
-        use bo_tie_l2cap::L2capFragment;
-
-        match hci_acl_data.packet_boundary_flag {
-            AclPacketBoundary::ContinuingFragment => L2capFragment::new(false, hci_acl_data.payload),
-            _ => L2capFragment::new(true, hci_acl_data.payload),
-        }
     }
 }
 
@@ -1133,16 +1122,11 @@ impl<C: ConnectionChannelEnds> Connection<C> {
         match self.get_kind() {
             ConnectionKind::Le(CC { status, .. }) | ConnectionKind::LeEnh(ECC { status, .. }) => {
                 if status == errors::Error::NoError {
-                    let max_mtu = if self.bounded { self.hci_max } else { <u16>::MAX.into() };
-                    let initial_mtu = <bo_tie_l2cap::LeULink as bo_tie_l2cap::MinimumMtu>::MIN_SUPPORTED_MTU;
-
                     let le = l2cap::LeL2cap::new(
                         self.get_handle(),
                         self.buffer_header_size,
                         self.buffer_tail_size,
-                        max_mtu,
                         self.hci_max,
-                        initial_mtu,
                         self.ends,
                     );
 
