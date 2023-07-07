@@ -38,13 +38,13 @@ use core::pin::Pin;
 /// ```
 ///
 /// [`PhysicalLink`]: bo_tie_l2cap::PhysicalLink
-pub struct LeL2cap<C: ConnectionChannelEnds> {
+pub struct LeLink<C: ConnectionChannelEnds> {
     handle: ConnectionHandle,
     hci_max_payload_size: usize,
     channel_ends: C,
 }
 
-impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
+impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeLink<C> {
     type Error = TryIntoLeL2capError<C>;
 
     fn try_from(c: Connection<C>) -> Result<Self, Self::Error> {
@@ -52,18 +52,13 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeL2cap<C> {
     }
 }
 
-impl<C: ConnectionChannelEnds> LeL2cap<C> {
+impl<C: ConnectionChannelEnds> LeLink<C> {
     pub(crate) fn new(handle: ConnectionHandle, hci_max_payload_size: usize, channel_ends: C) -> Self {
         Self {
             handle,
             hci_max_payload_size,
             channel_ends,
         }
-    }
-
-    /// Convert this `LeL2Cap` into a [`LeULogicalLink`]
-    pub fn into_logical_link(self) -> LeULogicalLink<Self> {
-        LeULogicalLink::new(self)
     }
 
     /// Get the connection handle
@@ -90,7 +85,7 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
     }
 }
 
-impl<C> bo_tie_l2cap::PhysicalLink for LeL2cap<C>
+impl<C> bo_tie_l2cap::PhysicalLink for LeLink<C>
 where
     C: ConnectionChannelEnds,
 {
@@ -179,11 +174,11 @@ where
     }
 }
 
-impl<C> From<LeL2cap<C>> for LeULogicalLink<LeL2cap<C>>
+impl<C> From<LeLink<C>> for LeULogicalLink<LeLink<C>>
 where
     C: ConnectionChannelEnds,
 {
-    fn from(physical_link: LeL2cap<C>) -> Self {
+    fn from(physical_link: LeLink<C>) -> Self {
         LeULogicalLink::new(physical_link)
     }
 }

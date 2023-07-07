@@ -1096,13 +1096,13 @@ impl<C: ConnectionChannelEnds> Connection<C> {
     ///
     /// [`ConnectionChannel`]: bo_tie_l2cap::ConnectionChannel
     #[cfg(feature = "l2cap")]
-    pub fn try_into_le(self) -> Result<l2cap::LeL2cap<C>, TryIntoLeL2capError<C>> {
+    pub fn try_into_le(self) -> Result<l2cap::LeLink<C>, TryIntoLeL2capError<C>> {
         use events::parameters::{LeConnectionCompleteData as CC, LeEnhancedConnectionCompleteData as ECC};
 
         match self.get_kind() {
             ConnectionKind::Le(CC { status, .. }) | ConnectionKind::LeEnh(ECC { status, .. }) => {
                 if status == errors::Error::NoError {
-                    let le = l2cap::LeL2cap::new(self.get_handle(), self.hci_max, self.ends);
+                    let le = l2cap::LeLink::new(self.get_handle(), self.hci_max, self.ends);
 
                     Ok(le)
                 } else {

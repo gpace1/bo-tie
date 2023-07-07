@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
-use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
+use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeLink};
+use bo_tie::host::l2cap::PhysicalLink;
 
 /// This sets up the advertising for the connection
 ///
@@ -49,7 +50,7 @@ async fn advertise_setup<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str)
 
 async fn wait_for_connection<H: bo_tie::hci::channel::SendSafeHostChannelEnds>(
     hi: &mut Host<H>,
-) -> bo_tie::hci::LeL2cap<H::SendSafeConnectionChannelEnds> {
+) -> bo_tie::hci::LeLink<H::SendSafeConnectionChannelEnds> {
     use bo_tie::hci::events::{Events, LeMeta};
     use bo_tie::hci::Next;
 
@@ -124,11 +125,10 @@ async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Opt
 /// A generic attribute server is not *technically* required for connecting, but many peer devices
 /// require some basic implementation of GATT in order to 'complete' their connection process. The
 /// returned server will only contain the mandatory `GAP` service.
-async fn server_loop<C>(mut connection_channel: C, local_name: &str) -> !
+async fn server_loop<P>(mut physical_link: LeLink<P>, local_name: &str) -> !
 where
-    C: bo_tie::host::l2cap::ConnectionChannel,
+    P: PhysicalLink,
 {
-    use bo_tie::host::l2cap::ConnectionChannelExt;
     use bo_tie::host::{att, gatt};
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);

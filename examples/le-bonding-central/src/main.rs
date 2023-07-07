@@ -93,7 +93,7 @@ where
 async fn connect<H: HostChannelEnds>(
     host: &mut Host<H>,
     report: &bo_tie::hci::events::parameters::LeAdvertisingReportData,
-) -> bo_tie::hci::LeL2cap<H::ConnectionChannelEnds> {
+) -> bo_tie::hci::LeLink<H::ConnectionChannelEnds> {
     use bo_tie::hci::commands::le::create_connection;
     use bo_tie::hci::events::{Events, LeMeta};
     use std::time::Duration;
@@ -379,7 +379,7 @@ async fn setup_reconnect<H: HostChannelEnds>(
 async fn reconnect<H: HostChannelEnds>(
     host: &mut Host<H>,
     privacy: &mut privacy::Privacy,
-) -> bo_tie::hci::LeL2cap<H::ConnectionChannelEnds> {
+) -> bo_tie::hci::LeLink<H::ConnectionChannelEnds> {
     let connection = privacy.reconnect(host).await;
 
     connection.try_into_le().unwrap()

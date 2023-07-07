@@ -6,7 +6,7 @@ use crate::security::{Security, SecurityStage};
 use crate::server::Server;
 use crate::{ConnectionToMain, ConnectionToMainMessage, MainToConnection};
 use bo_tie::hci::channel::SendAndSyncSafeConnectionChannelEnds;
-use bo_tie::hci::{ConnectionChannelEnds, LeL2cap};
+use bo_tie::hci::{ConnectionChannelEnds, LeLink};
 use bo_tie::host::l2cap::{channels::ChannelIdentifier, channels::LeCid, BasicFrame, ConnectionChannelExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -26,7 +26,7 @@ impl ConnectedStatus {
 }
 
 pub(crate) struct Connection<C: ConnectionChannelEnds> {
-    le_l2cap: LeL2cap<C>,
+    le_l2cap: LeLink<C>,
     security: Security,
     server: Server,
     to: UnboundedSender<ConnectionToMain>,
@@ -37,7 +37,7 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
     const NOTIFICATION_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 
     pub fn new(
-        le_l2cap: LeL2cap<C>,
+        le_l2cap: LeLink<C>,
         security: Security,
         server: Server,
         to: UnboundedSender<ConnectionToMain>,
@@ -151,7 +151,7 @@ impl Frames {
 
     async fn receive_frame<C: ConnectionChannelEnds>(
         &mut self,
-        le_l2cap: &mut LeL2cap<C>,
+        le_l2cap: &mut LeLink<C>,
     ) -> Option<BasicFrame<Vec<u8>>> {
         loop {
             if let Some(frame) = self.frames.next() {

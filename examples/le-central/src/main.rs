@@ -3,7 +3,7 @@
 mod io;
 
 use bo_tie::hci::events::parameters::LeAdvertisingReportData;
-use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeL2cap, Next};
+use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeLink, Next};
 
 /// Scan for a device with the specific local name
 ///
@@ -80,7 +80,7 @@ where
 async fn connect<H: HostChannelEnds>(
     hi: &mut Host<H>,
     report: LeAdvertisingReportData,
-) -> LeL2cap<H::ConnectionChannelEnds> {
+) -> LeLink<H::ConnectionChannelEnds> {
     use bo_tie::hci::commands::le::create_connection;
     use bo_tie::hci::events::{Events, LeMeta};
     use std::time::Duration;
