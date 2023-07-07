@@ -7,10 +7,37 @@
 use crate::{AclBroadcastFlag, AclPacketBoundary, Connection, HciAclData, HciAclPacketError, TryIntoLeL2capError};
 use bo_tie_core::buffer::IntoExactSizeIterator;
 use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle, Receiver, Sender, ToConnectionDataIntraMessage};
+use bo_tie_l2cap::LeULogicalLink;
 use core::future::Future;
 use core::pin::Pin;
 
 /// A L2CAP connection for LE
+///
+/// This is the [`PhysicalLink`] implementation for a connection to another device via Bluetooth Low
+/// Energy.
+///
+/// ```
+/// # use bo_tie_hci_util::HostChannelEnds;
+/// # async fn _doc<H>(mut host: bo_tie_hci_host::Host<H>) -> Result<(), Box<dyn std::error::Error>>
+/// # where
+/// #     H: HostChannelEnds,
+/// #     <H as HostChannelEnds>::ConnectionChannelEnds: 'static
+/// # {
+/// use bo_tie_hci_host::Next;
+/// match host.next().await? {
+///     Next::NewConnection(connection) => {
+///         let le_phy_link = connection.try_into_le()?;
+///
+///         let logical_link = le_phy_link.into_logical_link();
+///     }
+///     _ => (), // not relevant to `LeL2cap`
+/// }
+///
+/// # Ok(())
+/// # }
+/// ```
+///
+/// [`PhysicalLink`]: bo_tie_l2cap::PhysicalLink
 pub struct LeL2cap<C: ConnectionChannelEnds> {
     handle: ConnectionHandle,
     hci_max_payload_size: usize,
@@ -32,6 +59,11 @@ impl<C: ConnectionChannelEnds> LeL2cap<C> {
             hci_max_payload_size,
             channel_ends,
         }
+    }
+
+    /// Convert this `LeL2Cap` into a [`LeULogicalLink`]
+    pub fn into_logical_link(self) -> LeULogicalLink<Self> {
+        LeULogicalLink::new(self)
     }
 
     /// Get the connection handle
@@ -131,7 +163,7 @@ where
                         Err(e) => return Some(Err(e)),
                     };
 
-                    Some(Ok(bo_tie_l2cap::pdu::L2capFragment::from(hci_data)))
+                    Some(Ok(hci_data.into_l2cap_fragment()))
                 }
                 Some(ToConnectionDataIntraMessage::Sco(_)) => Some(Err(HciAclPacketError::Other(
                     "synchronous connection data is not implemented",
@@ -147,16 +179,25 @@ where
     }
 }
 
-impl<T> From<HciAclData<T>> for bo_tie_l2cap::pdu::L2capFragment<T::IntoExactIter>
+impl<C> From<LeL2cap<C>> for LeULogicalLink<LeL2cap<C>>
 where
-    T: IntoExactSizeIterator,
+    C: ConnectionChannelEnds,
 {
-    fn from(hci_acl_data: HciAclData<T>) -> Self {
+    fn from(physical_link: LeL2cap<C>) -> Self {
+        LeULogicalLink::new(physical_link)
+    }
+}
+
+impl<T> HciAclData<T> {
+    fn into_l2cap_fragment(self) -> bo_tie_l2cap::pdu::L2capFragment<T::IntoExactIter>
+    where
+        T: IntoExactSizeIterator,
+    {
         use bo_tie_l2cap::pdu::L2capFragment;
 
-        match hci_acl_data.packet_boundary_flag {
-            AclPacketBoundary::ContinuingFragment => L2capFragment::new(false, hci_acl_data.payload.into_iter()),
-            _ => L2capFragment::new(true, hci_acl_data.payload.into_iter()),
+        match self.packet_boundary_flag {
+            AclPacketBoundary::ContinuingFragment => L2capFragment::new(false, self.payload.into_iter()),
+            _ => L2capFragment::new(true, self.payload.into_iter()),
         }
     }
 }
