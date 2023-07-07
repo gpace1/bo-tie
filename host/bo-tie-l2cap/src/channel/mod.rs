@@ -355,9 +355,9 @@ where
 
     /// Get a channel
 
-    fn maybe_send<T>(&self, owner: ChannelIdentifier, fragment: L2capFragment<T>) -> Poll<P::SendFut<'_>>
+    fn maybe_send<'s, T>(&'s self, owner: ChannelIdentifier, fragment: L2capFragment<T>) -> Poll<P::SendFut<'s>>
     where
-        T: IntoIterator<Item = u8>,
+        T: 's + IntoIterator<Item = u8>,
     {
         if self.owner.get().is_none() {
             debug_assert!(fragment.is_start_fragment(), "expected starting fragment");
@@ -393,6 +393,7 @@ where
                     .unwrap()
                     .recv()
                     .await
+                    .ok_or(MaybeRecvError::Disconnected)?
                     .map_err(|e| MaybeRecvError::RecvError(e))?
             };
 
@@ -450,6 +451,7 @@ where
 }
 
 enum MaybeRecvError<E> {
+    Disconnected,
     RecvError(E),
     InvalidChannel(InvalidChannel),
 }
@@ -947,6 +949,7 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match &self.inner {
             ReceiveErrorInner::TryExtend(e) => write!(f, "TryExtend({e:?})"),
+            ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("Disconnected"),
             ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "RecvError({r:?})"),
             ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:?}"),
             ReceiveErrorInner::Recombine(e) => write!(f, "Recombine({e:?})"),
@@ -966,6 +969,7 @@ where
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match &self.inner {
             ReceiveErrorInner::TryExtend(e) => write!(f, "failed to extend buffer {e:}"),
+            ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("peer device disconnected"),
             ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "receive error: {r:}"),
             ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:}"),
             ReceiveErrorInner::Recombine(e) => write!(f, "recombine error: {e:}"),

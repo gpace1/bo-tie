@@ -334,6 +334,7 @@ impl ReceivedSignal {
 /// [`receive`]: SignallingChannel::receive
 #[derive(Debug)]
 pub enum ReceiveSignalError<P: PhysicalLink> {
+    Disconnected,
     RecvErr(P::RecvErr),
     InvalidChannel(crate::channel::InvalidChannel),
     Convert(ConvertSignalError),
@@ -348,6 +349,7 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
+            ReceiveSignalError::Disconnected => f.write_str("peer device disconnected"),
             ReceiveSignalError::RecvErr(e) => write!(f, "failed to receive signal, {e}"),
             ReceiveSignalError::InvalidChannel(c) => core::fmt::Display::fmt(c, f),
             ReceiveSignalError::Convert(c) => core::fmt::Display::fmt(c, f),
@@ -361,6 +363,7 @@ where
 impl<P: PhysicalLink> From<MaybeRecvError<P::RecvErr>> for ReceiveSignalError<P> {
     fn from(value: MaybeRecvError<P::RecvErr>) -> Self {
         match value {
+            MaybeRecvError::Disconnected => ReceiveSignalError::Disconnected,
             MaybeRecvError::RecvError(e) => ReceiveSignalError::RecvErr(e),
             MaybeRecvError::InvalidChannel(c) => ReceiveSignalError::InvalidChannel(c),
         }

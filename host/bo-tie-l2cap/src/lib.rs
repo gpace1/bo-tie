@@ -89,7 +89,7 @@ pub trait PhysicalLink {
     /// an [`Err(Self::RecvErr)`].
     ///
     /// [`Err(Self::RecvErr)`]: PhysicalLink::RecvErr
-    type RecvFut<'a>: Future<Output = Result<L2capFragment<Self::RecvData>, Self::RecvErr>>
+    type RecvFut<'a>: Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>>
     where
         Self: 'a;
 
@@ -129,9 +129,9 @@ pub trait PhysicalLink {
     /// What 'sent' means is subjective to the implementation. For an HCI implementation it could
     /// mean that the data has been sent to the Controller. For a single system implementation it
     /// may mean that the data has fully transmitted to the peer device.
-    fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+    fn send<'s, T>(&'s mut self, fragment: L2capFragment<T>) -> Self::SendFut<'s>
     where
-        T: IntoIterator<Item = u8>;
+        T: 's + IntoIterator<Item = u8>;
 
     /// Receive From the Physical Link
     ///
@@ -140,17 +140,16 @@ pub trait PhysicalLink {
     /// received physical link PDU.
     ///
     /// # Output
-    /// The output of `recv` is a future that returns a result containing a [`RecvData`]. The return
-    /// is an iterator over the payload of a single physical link PDU.  
+    /// The output of `recv` is a future that returns a result within an option. The future's output
+    /// is either `None` to indicate the peer disconnected, a `L2capFragment`, or an error that
+    /// occurred when receiving.
     ///
     /// # Queued PDUs
     /// It is up to the implementation on how many physical link PDUs can be queued. Most
-    /// implementations do not provide any queuing. Queuing is only relevant for applications that
-    /// may occasionally take inordinate amounts of time between calling `recv`. In a truly bad
-    /// scenario, the host should be using flow control implemented in the L2CAP or higher layers.
-    ///
-    /// If an implementation is to queue messages, they shall be output by successive polls of the
-    /// `RecvFut` in the order in which they were received by this device.
+    /// implementations do not provide any queuing. Queuing is only relevant for supporting
+    /// applications that may occasionally take inordinate amounts of time between calling `recv`.
+    /// In a truly bad scenario, the host should be using flow control implemented in the L2CAP or
+    /// higher layers to manage the reception of L2CAP PDUs.
     fn recv(&mut self) -> Self::RecvFut<'_>;
 }
 
