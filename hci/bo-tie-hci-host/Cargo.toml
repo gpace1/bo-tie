@@ -16,7 +16,7 @@ bo-tie-hci-util = { path = "../bo-tie-hci-util", features = ["tokio"]}
 tokio = {version = "1", features = ["rt", "macros", "sync"] }
 
 [features]
-default = ["gap", "l2cap"]
+default = ["gap", "l2cap", "std"]
 gap = ["bo-tie-gap"]
 l2cap = ["bo-tie-l2cap"]
 std = ["bo-tie-hci-interface/std", "bo-tie-hci-util/std", "bo-tie-core/std"]
