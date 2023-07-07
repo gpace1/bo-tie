@@ -1415,15 +1415,20 @@ where
                     .fold(alloc::vec![0], |mut vec, (_, service_data)| {
                         vec[0] += (uuid_size.get().unwrap() + 4) as u8;
 
+                        // maximum size of each attribute data is
+                        // the maximum size of a UUID plus the
+                        // service and end handles.
                         let mut buffer = [0u8; 16 + 4];
+
+                        let len = 4 + uuid_size.get().unwrap();
 
                         service_data.service_handle.build_into_ret(&mut buffer[..2]);
 
                         service_data.end_group_handle.build_into_ret(&mut buffer[2..4]);
 
-                        service_data
-                            .service_uuid
-                            .build_into_ret(&mut buffer[4..(4 + uuid_size.get().unwrap())]);
+                        service_data.service_uuid.build_into_ret(&mut buffer[4..len]);
+
+                        vec.extend(buffer[..len].iter().copied());
 
                         vec
                     });
