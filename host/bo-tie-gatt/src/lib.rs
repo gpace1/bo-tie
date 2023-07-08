@@ -96,6 +96,7 @@ macro_rules! map_restrictions {
 pub mod characteristic;
 
 pub use bo_tie_att as att;
+use bo_tie_att::server::QueuedWriter;
 use bo_tie_att::TransferFormatInto;
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::Uuid;
@@ -1385,42 +1386,60 @@ where
         use core::ops::RangeBounds;
 
         struct Response {
+            size: u8,
             data: alloc::vec::Vec<u8>,
         }
 
         impl Response {
-            fn new<Q, R: RangeBounds<u16>>(server: &Server<Q>, handle_range: R, mtu: usize) -> Self {
-                let uuid_size = core::cell::Cell::new(None);
+            fn try_new<Q, R>(server: &Server<Q>, handle_range: R) -> Result<Self, bo_tie_att::pdu::Error>
+            where
+                Q: QueuedWriter,
+                R: RangeBounds<u16>,
+            {
+                let uuid_size: usize;
 
-                let data = server
+                let mut iter = server
                     .primary_services
                     .iter()
                     .filter(|service_data| handle_range.contains(&service_data.service_handle))
-                    .enumerate()
-                    .take_while(|(cnt, service_data)| {
-                        match (uuid_size.get(), service_data.service_uuid.can_be_16_bit()) {
-                            (None, true) => {
-                                uuid_size.set(Some(2));
-                                true
-                            }
-                            (None, false) => {
-                                uuid_size.set(Some(16));
-                                true
-                            }
-                            (Some(2), true) => (cnt + 1) * (2 + 4) < (mtu - 2),
-                            (Some(16), false) => (cnt + 1) * (16 + 4) < (mtu - 2),
-                            _ => false,
-                        }
+                    .map(|service_data| {
+                        server
+                            .server
+                            .check_permissions(service_data.service_handle, &att::FULL_READ_PERMISSIONS)
+                            .map(|_| service_data)
                     })
-                    .fold(alloc::vec![0], |mut vec, (_, service_data)| {
-                        vec[0] += (uuid_size.get().unwrap() + 4) as u8;
+                    .peekable();
 
-                        // maximum size of each attribute data is
-                        // the maximum size of a UUID plus the
-                        // service and end handles.
-                        let mut buffer = [0u8; 16 + 4];
+                match iter.peek() {
+                    None => return Err(att::pdu::Error::AttributeNotFound),
+                    Some(Err(e)) => return Err(*e),
+                    Some(Ok(service_data)) => {
+                        uuid_size = if service_data.service_uuid.can_be_16_bit() {
+                            2
+                        } else {
+                            16
+                        }
+                    }
+                }
 
-                        let len = 4 + uuid_size.get().unwrap();
+                let data = iter
+                    .take_while(|service_data| {
+                        service_data
+                            .map(|sd| sd.service_uuid.can_be_16_bit() && uuid_size == 2)
+                            .ok()
+                            .unwrap_or_default()
+                    })
+                    .map(|service_data| {
+                        // take_while ensures this will not panic
+                        let service_data = service_data.unwrap();
+
+                        let len = 4 + uuid_size;
+
+                        let mut buffer = LinearBuffer::<20, u8>::new();
+
+                        for _ in 0..len {
+                            buffer.try_push(0).unwrap();
+                        }
 
                         service_data.service_handle.build_into_ret(&mut buffer[..2]);
 
@@ -1428,22 +1447,26 @@ where
 
                         service_data.service_uuid.build_into_ret(&mut buffer[4..len]);
 
-                        vec.extend(buffer[..len].iter().copied());
+                        buffer
+                    })
+                    .flatten()
+                    .collect();
 
-                        vec
-                    });
+                let size = (uuid_size + 4) as u8;
 
-                Self { data }
+                Ok(Self { size, data })
             }
         }
 
         impl TransferFormatInto for Response {
             fn len_of_into(&self) -> usize {
-                self.data.len()
+                1 + self.data.len()
             }
 
             fn build_into_ret(&self, into_ret: &mut [u8]) {
-                into_ret.copy_from_slice(&self.data);
+                into_ret[0] = self.size;
+
+                into_ret[1..].copy_from_slice(&self.data);
             }
         }
 
@@ -1477,31 +1500,29 @@ where
             );
         }
 
-        // Check if the first primary service declaration can be read by the client
+        let response = match Response::try_new(self, request.handle_range.to_range_bounds()) {
+            Err(e) => return send_error!(channel, 0, att::client::ClientPduName::ReadByGroupTypeRequest, e),
+            Ok(response) => response,
+        };
 
-        let check_readable = self
-            .primary_services
-            .iter()
-            .filter(|service_data| {
-                request
-                    .handle_range
-                    .to_range_bounds()
-                    .contains(&service_data.service_handle)
-            })
-            .nth(0)
-            .ok_or(att::pdu::Error::AttributeNotFound)
-            .map(|first| {
-                self.server
-                    .check_permissions(first.service_handle, &att::FULL_READ_PERMISSIONS)
-            });
+        let max_tx = core::cmp::max(self.server.get_mtu() - 2, <u8>::MAX as usize);
 
-        if let Err(e) = check_readable {
-            return send_error!(channel, 0, att::client::ClientPduName::ReadByGroupTypeRequest, e);
-        }
+        let pdu = if response.data.len() > max_tx {
+            let short_response = Response {
+                size: response.size,
+                data: response.data[..max_tx].to_vec(),
+            };
 
-        let response = Response::new(self, request.handle_range.to_range_bounds(), self.server.get_mtu());
+            self.server
+                .set_blob_data(response.data, request.handle_range.starting_handle);
 
-        let pdu = att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response);
+            att::pdu::Pdu::new(
+                att::server::ServerPduName::ReadByGroupTypeResponse.into(),
+                short_response,
+            )
+        } else {
+            att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response)
+        };
 
         send_pdu!(channel, pdu)
     }
