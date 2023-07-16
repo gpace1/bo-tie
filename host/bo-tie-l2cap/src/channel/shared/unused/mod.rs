@@ -1,0 +1,52 @@
+//! Processing for Unused Channels
+//!
+//! Channels are only used when an object is created for them. The client may send a L2CAP PDU if it
+//! expects that the channel's implementation exists for this device. If the PDU is for a fixed
+//! channel a [`UnusedChannelResponse`] implementation will provide a response equivalent to either
+//! *channel is not used* or *channel has no support*. However, a dynamically allocated channels are
+//! ignored and produce the [`InvalidChannel`] error.
+
+pub mod le;
+
+use crate::channel::id::ChannelIdentifier;
+use crate::pdu::{FragmentL2capPdu, L2capFragment};
+
+/// Response for a PDU for an unused channel
+///
+/// A channel is unused when an object for the channel has not been created (or was dropped) by the
+/// user of a logical link. This is used to generate responses for L2CAP PDUs with the response
+/// akin to "*higher layer protocol* for this channel is not available".
+///
+/// e.g. for a LE logical link, this will return *pairing not supported* for the Security Manager
+/// channel.
+pub trait UnusedChannelResponse {
+    /// The data required to create a response
+    type ReceiveData: ReceiveDataProcessor;
+
+    /// The response sent back to the peer device
+    type Response: FragmentL2capPdu;
+
+    /// Generate the response from `Self::ReceiveData`
+    ///
+    /// A response is only generated for fixed channels. `None` is returned for dynamically
+    /// allocated channels.
+    fn generate_response(request_data: Self::ReceiveData) -> Option<Self::Response>;
+
+    /// Create a new `ReceiveData`
+    fn new_request_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveData;
+}
+
+/// Data from a received PDU
+///
+/// There may be some processing of the request required in order to form a proper response for an
+/// unused channel. This is used to determine both the end of the fragments from the
+pub trait ReceiveDataProcessor: Copy + Clone + core::fmt::Debug + PartialEq {
+    type Error: core::fmt::Debug + core::fmt::Display;
+
+    /// Process a fragment
+    ///
+    /// `true` is returned when the full PDU is processed.
+    fn process<T>(&mut self, fragment: L2capFragment<T>) -> Result<bool, Self::Error>
+    where
+        T: Iterator<Item = u8> + ExactSizeIterator;
+}

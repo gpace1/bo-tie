@@ -32,6 +32,7 @@ pub mod pdu;
 pub mod signals;
 
 use crate::channel::id::{ChannelIdentifier, LeCid};
+use crate::channel::SharedPhysicalLink;
 pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
 use core::future::Future;
 use link_flavor::{AclULink, LeULink};
@@ -155,23 +156,28 @@ pub trait PhysicalLink {
 
 /// Trait for a Logical Links
 ///
+/// This trait is used to mark a type as a L2CAP logical. It is not intended to be implemented by
+/// types outside the bounds of `bo-tie-l2cap`.
+///
+/// Its only method is `get_shared_link` which is used to return a [`SharedPhysicalLink`]. This
+/// return is used to ensure that multiple channels can be 'selected' within one async context. See
+/// the library level doc for details on this.
 pub trait LogicalLink {
-    /// Check if the current channel is used by this Logical Link
-    ///
-    /// This will return `true` if there is a channel that is currently created for this channel
-    /// identifier.
-    fn is_channel_used(&self, id: ChannelIdentifier) -> bool;
+    type PhysicalLink: PhysicalLink;
+    type UnusedChannelResponse: channel::UnusedChannelResponse;
+
+    fn get_shared_link(&self) -> &SharedPhysicalLink<Self::PhysicalLink, Self::UnusedChannelResponse>;
 }
 
 /// A LE-U Logical Link
 pub struct LeULogicalLink<P: PhysicalLink> {
-    shared_link: channel::SharedPhysicalLink<P>,
+    shared_link: SharedPhysicalLink<P, Self>,
 }
 
 impl<P: PhysicalLink> LeULogicalLink<P> {
     /// Create a new `LogicalLink`
     pub fn new(physical_link: P) -> Self {
-        let shared_link = channel::SharedPhysicalLink::new(physical_link);
+        let shared_link = SharedPhysicalLink::new(physical_link);
 
         Self { shared_link }
     }
@@ -189,10 +195,10 @@ impl<P: PhysicalLink> LeULogicalLink<P> {
     ///
     /// # Panic
     /// A panic will occur if a signalling channel already exists for this logical link.
-    pub fn get_signalling_channel(&self) -> SignallingChannel<'_, P> {
+    pub fn get_signalling_channel(&self) -> SignallingChannel<'_, Self> {
         let channel_id = ChannelIdentifier::Le(LeCid::LeSignalingChannel);
 
-        SignallingChannel::new(channel_id, &self.shared_link)
+        SignallingChannel::new(channel_id, &self)
     }
 
     /// Get the Channel for the Attribute Protocol
@@ -203,10 +209,10 @@ impl<P: PhysicalLink> LeULogicalLink<P> {
     ///
     /// # Panic
     /// A panic will occur if a channel already exists for the ATT protocol.
-    pub fn get_att_channel(&self) -> BasicFrameChannel<'_, P> {
+    pub fn get_att_channel(&self) -> BasicFrameChannel<'_, Self> {
         let channel_id = ChannelIdentifier::Le(LeCid::AttributeProtocol);
 
-        BasicFrameChannel::new(channel_id, &self.shared_link)
+        BasicFrameChannel::new(channel_id, &self)
     }
 
     /// Get the Channel for the Security Manager Protocol
@@ -217,16 +223,19 @@ impl<P: PhysicalLink> LeULogicalLink<P> {
     ///
     /// # Panic
     /// A panic will occur if a channel already exists for the ATT protocol.
-    pub fn get_sm_channel(&self) -> BasicFrameChannel<'_, P> {
+    pub fn get_sm_channel(&self) -> BasicFrameChannel<'_, Self> {
         let channel_id = ChannelIdentifier::Le(LeCid::SecurityManagerProtocol);
 
-        BasicFrameChannel::new(channel_id, &self.shared_link)
+        BasicFrameChannel::new(channel_id, &self)
     }
 }
 
 impl<P: PhysicalLink> LogicalLink for LeULogicalLink<P> {
-    fn is_channel_used(&self, id: ChannelIdentifier) -> bool {
-        self.shared_link.is_channel_used(id)
+    type PhysicalLink = P;
+    type UnusedChannelResponse = Self;
+
+    fn get_shared_link(&self) -> &SharedPhysicalLink<Self::PhysicalLink, Self::UnusedChannelResponse> {
+        &self.shared_link
     }
 }
 

@@ -3,28 +3,29 @@
 use crate::channel::{CreditBasedChannel, SendSduError};
 use crate::pdu::credit_frame::PacketsIterator;
 use crate::pdu::SduPacketsIterator;
+use crate::{LogicalLink, PhysicalLink};
 
 /// Unsent Credit Frames of a SDU
 ///
 /// When a credit based channel runs out of peer credits it must halt sending of Credit Based Frames
 /// (k-frames) until the peer device sends a *L2CAP flow control credit ind* containing one or more
 /// credits.
-pub struct UnsentCreditFrames<'a, P, T>
+pub struct UnsentCreditFrames<'a, L, T>
 where
+    L: LogicalLink,
     T: Iterator,
-    P: crate::PhysicalLink,
 {
-    credit_based_channel: &'a mut CreditBasedChannel<'a, P>,
+    credit_based_channel: &'a mut CreditBasedChannel<'a, L>,
     packets_iterator: PacketsIterator<T>,
 }
 
-impl<'a, P, T> UnsentCreditFrames<'a, P, T>
+impl<'a, L, T> UnsentCreditFrames<'a, L, T>
 where
+    L: LogicalLink,
     T: Iterator<Item = u8> + ExactSizeIterator,
-    P: crate::PhysicalLink,
 {
     pub(crate) fn new(
-        credit_based_channel: &'a mut CreditBasedChannel<'a, P>,
+        credit_based_channel: &'a mut CreditBasedChannel<'a, L>,
         packets_iterator: PacketsIterator<T>,
     ) -> Self {
         Self {
@@ -46,7 +47,7 @@ where
     pub async fn inc_and_send(
         mut self,
         amount: u16,
-    ) -> Result<Option<UnsentCreditFrames<'a, P, T>>, SendSduError<P::SendErr>> {
+    ) -> Result<Option<UnsentCreditFrames<'a, L, T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
         self.credit_based_channel.add_credits(amount);
 
         while self.credit_based_channel.peer_credits != 0 {

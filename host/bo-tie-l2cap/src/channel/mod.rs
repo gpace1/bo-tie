@@ -4,20 +4,21 @@
 
 mod credit_based;
 pub mod id;
+mod shared;
 pub mod signalling;
 
 use crate::channel::id::ChannelIdentifier;
+use crate::channel::shared::{BasicHeadedFragment, MaybeRecvError, ReceiveDataProcessor};
 use crate::pdu::credit_frame::CreditBasedFrame;
 use crate::pdu::{
     BasicFrame, CreditBasedSdu, FragmentIterator, FragmentL2capPdu, FragmentL2capSdu, PacketsError,
     RecombinePayloadIncrementally,
 };
 use crate::pdu::{RecombineL2capPdu, SduPacketsIterator};
-use crate::{pdu, pdu::L2capFragment, PhysicalLink};
+use crate::{pdu, pdu::L2capFragment, LogicalLink, PhysicalLink};
 use bo_tie_core::buffer::TryExtend;
-use core::future::Future;
-use core::task::Poll;
 pub use credit_based::UnsentCreditFrames;
+pub(crate) use shared::{SharedPhysicalLink, UnusedChannelResponse};
 pub use signalling::SignallingChannel;
 
 /// A L2CAP connection channel
@@ -49,139 +50,6 @@ pub trait ConnectionChannel {
     fn get_mps(&self) -> Option<usize>;
 }
 
-/// A [`L2capFragment`] with its attached header
-///
-/// This is used to pass a L2CAP fragment with its associated header.
-struct HeadedFragment<T> {
-    length: u16,
-    channel_id: ChannelIdentifier,
-    fragment: L2capFragment<T>,
-}
-
-/// Enumeration of a [`BasicHeaderProcessor`] length
-#[derive(Copy, Clone)]
-enum ProcessorLengthState {
-    None,
-    FirstByte(u8),
-    Complete(u16),
-}
-
-/// Enumeration of a [`BasicHeaderProcessor`]  channel identifier
-#[derive(Copy, Clone)]
-enum ProcessorChannelIdentifier {
-    None,
-    FirstByte(u8),
-    Complete(ChannelIdentifier),
-}
-
-/// The 'shared l2cap raw data processor'
-///
-/// This is a trick (based on polling) for `select!` like systems where basic L2CAP data processing
-/// is done through *any* channel receive future.
-///
-/// This does not do much as it really only processes the *Basic Header* (see the *Data Packet
-/// Format* of the L2CAP part of the Bluetooth Spec.). If the basic header *happens* to contain the
-/// same channel identifier as the current executing future then the same future will poll to
-/// completion, but most likely the executing is not the correct future and
-struct BasicHeaderProcessor {
-    length: core::cell::Cell<ProcessorLengthState>,
-    channel_id: core::cell::Cell<ProcessorChannelIdentifier>,
-}
-
-impl BasicHeaderProcessor {
-    fn init() -> Self {
-        BasicHeaderProcessor {
-            length: core::cell::Cell::new(ProcessorLengthState::None),
-            channel_id: core::cell::Cell::new(ProcessorChannelIdentifier::None),
-        }
-    }
-
-    /// Process a fragment.
-    ///
-    /// This process a fragment up to the point of being able to determine the channel identifier
-    /// of the L2CAP payload. `this_channel` is used for determining both the logical link and
-    /// whether this happens to be the exact channel for the L2CAP data.
-    ///
-    /// This will return a length and channel id (as a `(u16, ChannelIdentifier)`) if `this_channel`
-    /// happens to be the exact same channel.
-    ///
-    /// # Starting Fragment
-    /// A starting fragment will reset the state back to the initial state (both fields `length` and
-    /// `channel_id` are set to `None`). This does not validate that the starting fragment flag was
-    /// valid.
-    fn process<T>(
-        &self,
-        fragment: &mut L2capFragment<T>,
-        this_channel: ChannelIdentifier,
-        context: &mut core::task::Context,
-    ) -> Poll<Result<(u16, ChannelIdentifier), InvalidChannel>>
-    where
-        T: Iterator<Item = u8>,
-    {
-        if fragment.is_start_fragment() {
-            self.length.set(ProcessorLengthState::None);
-            self.channel_id.set(ProcessorChannelIdentifier::None);
-        }
-
-        for byte in &mut fragment.data {
-            match (self.length.get(), self.channel_id.get()) {
-                (ProcessorLengthState::None, ProcessorChannelIdentifier::None) => {
-                    self.length.set(ProcessorLengthState::FirstByte(byte))
-                }
-                (ProcessorLengthState::FirstByte(v), ProcessorChannelIdentifier::None) => self
-                    .length
-                    .set(ProcessorLengthState::Complete(<u16>::from_le_bytes([v, byte]))),
-                (ProcessorLengthState::Complete(_), ProcessorChannelIdentifier::None) => {
-                    self.channel_id.set(ProcessorChannelIdentifier::FirstByte(byte))
-                }
-                (ProcessorLengthState::Complete(_), ProcessorChannelIdentifier::FirstByte(v)) => {
-                    let raw_channel = <u16>::from_le_bytes([v, byte]);
-
-                    // the top level enum is used as the way to check the
-                    // logical link type. Every call to `process_start`
-                    // is done by the same logical link.
-
-                    let channel_id = match this_channel {
-                        ChannelIdentifier::Le(_) => ChannelIdentifier::le_try_from_raw(raw_channel)
-                            .map_err(|_| InvalidChannel::new_le(raw_channel)),
-                        ChannelIdentifier::Acl(_) => ChannelIdentifier::acl_try_from_raw(raw_channel)
-                            .map_err(|_| InvalidChannel::new_acl(raw_channel)),
-                        ChannelIdentifier::Apb(_) => ChannelIdentifier::apb_try_from_raw(raw_channel)
-                            .map_err(|_| InvalidChannel::new_apb(raw_channel)),
-                    }?;
-
-                    self.channel_id.set(ProcessorChannelIdentifier::Complete(channel_id));
-
-                    // If what called process_start has the exact same
-                    // channel ID then return the length and channel id.
-                    return if channel_id == this_channel {
-                        Poll::Ready(Ok(self.get_basic_header().unwrap()))
-                    } else {
-                        context.waker().clone().wake();
-
-                        Poll::Pending
-                    };
-                }
-                _ => unreachable!("unexpected state of SharedL2capRawDataProcessor"),
-            }
-        }
-
-        Poll::Pending
-    }
-
-    /// Get the Basic Header
-    ///
-    /// This gets the basic header, if the basic header was established.
-    pub fn get_basic_header(&self) -> Option<(u16, ChannelIdentifier)> {
-        match (self.length.get(), self.channel_id.get()) {
-            (ProcessorLengthState::Complete(length), ProcessorChannelIdentifier::Complete(channel_id)) => {
-                Some((length, channel_id))
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Invalid Channel
 ///
 /// This is used to indicate that a channel was invalid for a specific link type.
@@ -211,281 +79,42 @@ impl core::fmt::Display for InvalidChannel {
 #[cfg(feature = "std")]
 impl std::error::Error for InvalidChannel {}
 
-#[derive(Copy, Clone, Eq, PartialEq)]
-enum PhysicalLinkOwner {
-    None,
-    Sender(ChannelIdentifier),
-    Receiver(ChannelIdentifier),
-}
-
-impl PhysicalLinkOwner {
-    fn is_none(&self) -> bool {
-        match self {
-            PhysicalLinkOwner::None => true,
-            _ => false,
-        }
-    }
-}
-
-/// Shared Physical Linking
-///
-/// The physical link is shared by all connection channels associated with it. When data is sent or
-/// received, only one connection channel can use the physical link until the entire L2CAP PDU is
-/// sent or acquired. This is used to ensure that sending and receiving with multiple channels
-/// is safe.
-///
-/// ## How This Works
-/// If you look at the implementation of [`PhysicalLink`] both methods `send` and `recv` require
-/// mutable access to the implementation, but there are multiple channels that wish to have
-/// references to the physical link. To ensure safety, only one channel may *exclusively* call
-/// `send` or `recv` and poll the corresponding returned future. No channel may call `send` or
-/// `recv` until the previously generated future is dropped.
-///
-/// ### Receiving
-/// The "exception" however is in the initial basic header processing when receiving. When a L2CAP
-/// PDU is received, it is unknown who the receiver is (if any) until the channel identifier is
-/// acquired. During this stage, any channel processor will be used to receive L2CAP fragments until
-/// the connection channel is determined.
-///
-/// Once the channel identifier is determined, and that channel exists then only that channel may
-/// call `recv` until the entire PDU is acquired. However if the channel does not exist then `recv`
-/// may be called by any channel processor until the end of the L2CAP PDU is reached.
-///
-/// In any part of this process, once `recv` is called, `recv` cannot be called again until the
-/// future returned is dropped.
-///
-/// ### Resetting
-/// After a full PDU is sent or received, the channel must call `clear_owner` to reset the
-/// `SharedPhysicalLink`. This allows for the next PDU to be sent or received. `clear_owner` can be
-/// thought of as releasing the lock of a mutex.  
-///
-/// [`PhysicalLink`]: PhysicalLink
-pub(crate) struct SharedPhysicalLink<P: PhysicalLink> {
-    owner: core::cell::Cell<PhysicalLinkOwner>,
-    channels: core::cell::RefCell<alloc::vec::Vec<ChannelIdentifier>>,
-    physical_link: core::cell::UnsafeCell<P>,
-    basic_header_processor: BasicHeaderProcessor,
-    stasis_fragment: core::cell::Cell<Option<L2capFragment<P::RecvData>>>,
-}
-
-impl<P> SharedPhysicalLink<P>
-where
-    P: PhysicalLink,
-{
-    pub(crate) fn new(physical_link: P) -> Self {
-        let owner = core::cell::Cell::new(PhysicalLinkOwner::None);
-
-        let channels = core::cell::RefCell::default();
-
-        let basic_header_processor = BasicHeaderProcessor::init();
-
-        let stasis_fragment = core::cell::Cell::new(None);
-
-        let physical_link = core::cell::UnsafeCell::new(physical_link);
-
-        Self {
-            owner,
-            channels,
-            physical_link,
-            basic_header_processor,
-            stasis_fragment,
-        }
-    }
-
-    pub(crate) fn is_channel_used(&self, id: ChannelIdentifier) -> bool {
-        self.channels.borrow().binary_search(&id).is_ok()
-    }
-
-    fn clear_owner(&self) {
-        self.owner.set(PhysicalLinkOwner::None);
-    }
-
-    /// Add a channel to this `SharedPhysicalLink`
-    ///
-    /// `true` is returned if the channel is successfully added, however if the channel already
-    /// exists `false` is returned.
-    fn add_channel(&self, id: ChannelIdentifier) -> bool {
-        let mut borrowed_channels = self.channels.borrow_mut();
-
-        if let Err(index) = borrowed_channels.binary_search(&id) {
-            borrowed_channels.insert(index, id);
-
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Dynamically allocate a new channel
-    ///
-    /// This will create a new dynamically created channel and return the channel identifier.
-    ///
-    /// `None` is returned if all dynamic allocated channels are already used
-    fn new_le_dyn_channel(&self) -> Option<crate::channel::id::DynChannelId<crate::LeULink>> {
-        use crate::channel::id::DynChannelId;
-        use crate::link_flavor::LeULink;
-
-        let mut channel_val = *DynChannelId::<LeULink>::LE_BOUNDS.start();
-
-        while let Ok(channel) = DynChannelId::<LeULink>::new_le(channel_val) {
-            let channel = ChannelIdentifier::Le(channel);
-
-            let mut channels_mref = self.channels.borrow_mut();
-
-            if let Err(index) = channels_mref.binary_search(&channel) {
-                channels_mref.insert(index, channel);
-
-                return Some(DynChannelId::new_unchecked(channel_val));
-            } else {
-                channel_val += 1
-            }
-        }
-
-        None
-    }
-
-    /// Remove a channel from sharing the physical link.
-    fn remove_channel(&self, id: ChannelIdentifier) {
-        let mut borrowed_channels = self.channels.borrow_mut();
-
-        if let Ok(index) = borrowed_channels.binary_search(&id) {
-            borrowed_channels.remove(index);
-        }
-    }
-
-    /// Get a channel
-
-    fn maybe_send<'s, T>(&'s self, owner: ChannelIdentifier, fragment: L2capFragment<T>) -> Poll<P::SendFut<'s>>
-    where
-        T: 's + IntoIterator<Item = u8>,
-    {
-        if self.owner.get().is_none() {
-            debug_assert!(fragment.is_start_fragment(), "expected starting fragment");
-
-            self.owner.set(PhysicalLinkOwner::Sender(owner))
-        } else if self.owner.get() != PhysicalLinkOwner::Sender(owner) {
-            return Poll::Pending;
-        }
-
-        let fragment = L2capFragment {
-            start_fragment: fragment.start_fragment,
-            data: fragment.data.into_iter(),
-        };
-
-        unsafe { self.physical_link.get().as_mut().unwrap().send(fragment).into() }
-    }
-
-    fn maybe_recv(
-        &self,
-        owner: ChannelIdentifier,
-    ) -> Poll<impl Future<Output = Result<Poll<HeadedFragment<P::RecvData>>, MaybeRecvError<P::RecvErr>>> + '_> {
-        if self.owner.get().is_none() {
-            self.owner.set(PhysicalLinkOwner::Receiver(owner))
-        } else if self.owner.get() != PhysicalLinkOwner::Receiver(owner) {
-            return Poll::Pending;
-        }
-
-        let future = async move {
-            let fragment = unsafe {
-                self.physical_link
-                    .get()
-                    .as_mut()
-                    .unwrap()
-                    .recv()
-                    .await
-                    .ok_or(MaybeRecvError::Disconnected)?
-                    .map_err(|e| MaybeRecvError::RecvError(e))?
-            };
-
-            if let Some((len, cid)) = self.basic_header_processor.get_basic_header() {
-                let headed_fragment = HeadedFragment {
-                    length: len,
-                    channel_id: cid,
-                    fragment,
-                };
-
-                Ok(Poll::Ready(headed_fragment))
-            } else {
-                self.maybe_recv_header_process(owner, fragment).await
-            }
-        };
-
-        Poll::Ready(future)
-    }
-
-    async fn maybe_recv_header_process(
-        &self,
-        owner: ChannelIdentifier,
-        fragment: L2capFragment<P::RecvData>,
-    ) -> Result<Poll<HeadedFragment<P::RecvData>>, MaybeRecvError<P::RecvErr>> {
-        let mut fragment = Some(fragment);
-
-        core::future::poll_fn(move |context| {
-            match self
-                .basic_header_processor
-                .process(fragment.as_mut().unwrap(), owner, context)
-            {
-                Poll::Pending => {
-                    if self.basic_header_processor.get_basic_header().is_none() {
-                        self.clear_owner();
-
-                        self.stasis_fragment.set(fragment.take());
-                    }
-
-                    Poll::Pending
-                }
-                Poll::Ready(Err(e)) => Poll::Ready(Err(MaybeRecvError::InvalidChannel(e))),
-                Poll::Ready(Ok((len, cid))) => {
-                    let header_fragment = HeadedFragment {
-                        length: len,
-                        channel_id: cid,
-                        fragment: fragment.take().unwrap(),
-                    };
-
-                    Poll::Ready(Ok(Poll::Ready(header_fragment)))
-                }
-            }
-        })
-        .await
-    }
-}
-
-enum MaybeRecvError<E> {
-    Disconnected,
-    RecvError(E),
-    InvalidChannel(InvalidChannel),
-}
-
 /// A channel that only communicates with Basic Frames
 ///
 /// Many L2CAP channels defined by the Bluetooth Specification only use Basic Frames for
 /// communication to a connected device.
-pub struct BasicFrameChannel<'a, P>
-where
-    P: PhysicalLink,
-{
+pub struct BasicFrameChannel<'a, L: LogicalLink> {
     channel_id: ChannelIdentifier,
-    link_lock: &'a SharedPhysicalLink<P>,
+    logical_link: &'a L,
 }
 
-impl<'a, P: PhysicalLink> BasicFrameChannel<'a, P> {
-    pub(crate) fn new(channel_id: ChannelIdentifier, link_lock: &'a SharedPhysicalLink<P>) -> Self {
-        assert!(link_lock.add_channel(channel_id), "channel already exists");
+impl<'a, L: LogicalLink> BasicFrameChannel<'a, L> {
+    pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: &'a L) -> Self {
+        assert!(
+            logical_link.get_shared_link().add_channel(channel_id),
+            "channel already exists"
+        );
 
-        BasicFrameChannel { channel_id, link_lock }
+        BasicFrameChannel {
+            channel_id,
+            logical_link,
+        }
     }
 }
 
-impl<P: PhysicalLink> BasicFrameChannel<'_, P> {
+impl<L: LogicalLink> BasicFrameChannel<'_, L> {
     /// Get fragmentation size of L2CAP PDUs
     ///
     /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
     /// channel. Every L2CAP PDU is fragmented to this in both sending a receiving of L2CAP data.
     pub fn fragmentation_size(&self) -> usize {
-        unsafe { &*self.link_lock.physical_link.get() }.max_transmission_size()
+        self.logical_link.get_shared_link().get_fragmentation_size()
     }
 
-    async fn send_fragment<T>(&mut self, fragment: L2capFragment<T>) -> Result<(), P::SendErr>
+    async fn send_fragment<T>(
+        &mut self,
+        fragment: L2capFragment<T>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
     where
         T: IntoIterator<Item = u8>,
     {
@@ -494,41 +123,57 @@ impl<P: PhysicalLink> BasicFrameChannel<'_, P> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |_| self.link_lock.maybe_send(self.channel_id, fragment.take().unwrap()))
-            .await
-            .await
+        core::future::poll_fn(move |_| {
+            self.logical_link
+                .get_shared_link()
+                .maybe_send(self.channel_id, fragment.take().unwrap())
+        })
+        .await
+        .await
     }
 
-    async fn receive_fragment(&mut self) -> Result<HeadedFragment<P::RecvData>, MaybeRecvError<P::RecvErr>> {
-        let mut poll = Some(
-            match core::future::poll_fn(|_| self.link_lock.maybe_recv(self.channel_id))
-                .await
-                .await
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    self.link_lock.clear_owner();
+    async fn receive_fragment(
+        &mut self,
+    ) -> Result<
+        BasicHeadedFragment<<L::PhysicalLink as PhysicalLink>::RecvData>,
+        MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
+    > {
+        loop {
+            let mut poll = Some(
+                match core::future::poll_fn(|_| self.logical_link.get_shared_link().maybe_recv(self.channel_id))
+                    .await
+                    .await
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        self.logical_link.get_shared_link().clear_owner();
 
-                    return Err(e);
+                        return Err(e);
+                    }
+                },
+            );
+
+            match core::future::poll_fn(move |_| poll.take().unwrap()).await {
+                Ok(v) => break Ok(v),
+                Err(Some(pdu)) => {
+                    let output = self.send_inner(pdu).await;
+
+                    self.logical_link.get_shared_link().clear_owner();
+
+                    output.map_err(|_| MaybeRecvError::Disconnected)?;
                 }
-            },
-        );
-
-        Ok(core::future::poll_fn(move |_| poll.take().unwrap()).await)
+                Err(None) => (),
+            }
+        }
     }
 
-    /// Send a Basic Frame to the lower layers
-    ///
-    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
-    /// may be called by protocol at a higher layer than L2CAP.
-    pub async fn send<T>(&mut self, b_frame: pdu::BasicFrame<T>) -> Result<(), P::SendErr>
+    async fn send_inner<T>(&mut self, pdu: T) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
     where
-        T: IntoIterator<Item = u8>,
-        T::IntoIter: ExactSizeIterator,
+        T: FragmentL2capPdu,
     {
         let mut is_first = true;
 
-        let mut fragments_iter = b_frame.into_fragments(self.fragmentation_size()).unwrap();
+        let mut fragments_iter = pdu.into_fragments(self.fragmentation_size()).unwrap();
 
         while let Some(data) = fragments_iter.next() {
             let fragment = L2capFragment::new(is_first, data);
@@ -539,40 +184,51 @@ impl<P: PhysicalLink> BasicFrameChannel<'_, P> {
         }
 
         // clear owner as the full PDU was sent
-        self.link_lock.clear_owner();
+        self.logical_link.get_shared_link().clear_owner();
 
         Ok(())
     }
 
-    /// Receive a Basic Frame for this Channel
-    pub async fn receive<T>(
+    /// Send a Basic Frame to the lower layers
+    ///
+    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
+    /// may be called by protocol at a higher layer than L2CAP.
+    pub async fn send<T>(&mut self, b_frame: BasicFrame<T>) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let output = self.send_inner(b_frame).await;
+
+        self.logical_link.get_shared_link().clear_owner();
+
+        output
+    }
+
+    async fn receive_inner<T>(
         &mut self,
-    ) -> Result<BasicFrame<T>, ReceiveError<P::RecvErr, T::Error, pdu::basic_frame::RecombineError>>
+    ) -> Result<BasicFrame<T>, ReceiveError<L, T::Error, pdu::basic_frame::RecombineError>>
     where
         T: TryExtend<u8> + Default,
     {
         let fragment = self.receive_fragment().await?;
 
         if !fragment.fragment.is_start_fragment() {
-            self.link_lock.clear_owner();
-
             return Err(ReceiveError::new_expect_first_err());
         }
 
         let mut recombiner = BasicFrame::recombine(fragment.length, fragment.channel_id, &mut ());
 
-        if let Some(b_frame) = recombiner.add(fragment.fragment.data).map_err(|e| {
-            self.link_lock.clear_owner();
-            ReceiveError::new_recombine(e)
-        })? {
+        if let Some(b_frame) = recombiner
+            .add(fragment.fragment.data)
+            .map_err(|e| ReceiveError::new_recombine(e))?
+        {
             Ok(b_frame)
         } else {
             loop {
                 let fragment = self.receive_fragment().await?;
 
                 if fragment.fragment.is_start_fragment() {
-                    self.link_lock.clear_owner();
-
                     return Err(ReceiveError::new_unexpect_first_err());
                 }
 
@@ -580,18 +236,30 @@ impl<P: PhysicalLink> BasicFrameChannel<'_, P> {
                     .add(fragment.fragment.data)
                     .map_err(|e| ReceiveError::new_recombine(e))?
                 {
-                    self.link_lock.clear_owner();
-
                     return Ok(b_frame);
                 }
             }
         }
     }
+
+    /// Receive a Basic Frame for this Channel
+    pub async fn receive<T>(
+        &mut self,
+    ) -> Result<BasicFrame<T>, ReceiveError<L, T::Error, pdu::basic_frame::RecombineError>>
+    where
+        T: TryExtend<u8> + Default,
+    {
+        let output = self.receive_inner().await;
+
+        self.logical_link.get_shared_link().clear_owner();
+
+        output
+    }
 }
 
-impl<P: PhysicalLink> Drop for BasicFrameChannel<'_, P> {
+impl<L: LogicalLink> Drop for BasicFrameChannel<'_, L> {
     fn drop(&mut self) {
-        self.link_lock.remove_channel(self.channel_id)
+        self.logical_link.get_shared_link().remove_channel(self.channel_id)
     }
 }
 
@@ -601,33 +269,33 @@ impl<P: PhysicalLink> Drop for BasicFrameChannel<'_, P> {
 /// Credit Based Connections and Enhanced Credit Based Connections.
 ///
 /// A `CreditBasedChannel` is created via signalling packets
-pub struct CreditBasedChannel<'a, P>
-where
-    P: PhysicalLink,
-{
+pub struct CreditBasedChannel<'a, L: LogicalLink> {
     this_channel_id: ChannelIdentifier,
     peer_channel_id: ChannelIdentifier,
-    link_lock: &'a SharedPhysicalLink<P>,
+    logical_link: &'a L,
     maximum_pdu_payload_size: usize,
     maximum_transmission_size: usize,
     peer_credits: usize,
 }
 
-impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
+impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     pub(crate) fn new(
         this_channel_id: ChannelIdentifier,
         peer_channel_id: ChannelIdentifier,
-        link_lock: &'a SharedPhysicalLink<P>,
+        logical_link: &'a L,
         maximum_packet_size: usize,
         maximum_transmission_size: usize,
         initial_peer_credits: usize,
     ) -> Self {
-        assert!(link_lock.add_channel(this_channel_id), "channel already exists");
+        assert!(
+            logical_link.get_shared_link().add_channel(this_channel_id),
+            "channel already exists"
+        );
 
         CreditBasedChannel {
             this_channel_id,
             peer_channel_id,
-            link_lock,
+            logical_link,
             maximum_pdu_payload_size: maximum_packet_size,
             maximum_transmission_size,
             peer_credits: initial_peer_credits,
@@ -697,10 +365,13 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
     /// credit based frames are fragmented to. Use method [`get_mps`] to get the maximum size of a
     /// k_frame for this channel.
     pub fn fragmentation_size(&self) -> usize {
-        unsafe { &*self.link_lock.physical_link.get() }.max_transmission_size()
+        self.logical_link.get_shared_link().get_fragmentation_size()
     }
 
-    async fn send_fragment<T>(&mut self, fragment: L2capFragment<T>) -> Result<(), P::SendErr>
+    async fn send_fragment<T>(
+        &mut self,
+        fragment: L2capFragment<T>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
     where
         T: IntoIterator<Item = u8>,
     {
@@ -710,26 +381,55 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
         });
 
         core::future::poll_fn(move |_| {
-            self.link_lock
-                .maybe_send(self.peer_channel_id, fragment.take().unwrap())
+            self.logical_link
+                .get_shared_link()
+                .maybe_send(self.this_channel_id, fragment.take().unwrap())
         })
         .await
         .await
     }
 
-    async fn receive_fragment(&mut self) -> Result<HeadedFragment<P::RecvData>, MaybeRecvError<P::RecvErr>> {
-        let mut poll = Some(
-            core::future::poll_fn(|_| self.link_lock.maybe_recv(self.peer_channel_id))
-                .await
-                .await?,
-        );
+    async fn receive_fragment(
+        &mut self,
+    ) -> Result<
+        BasicHeadedFragment<<L::PhysicalLink as PhysicalLink>::RecvData>,
+        MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
+    > {
+        loop {
+            let mut poll = Some(
+                match core::future::poll_fn(|_| self.logical_link.get_shared_link().maybe_recv(self.this_channel_id))
+                    .await
+                    .await
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        self.logical_link.get_shared_link().clear_owner();
 
-        Ok(core::future::poll_fn(move |_| poll.take().unwrap()).await)
+                        return Err(e);
+                    }
+                },
+            );
+
+            match core::future::poll_fn(move |_| poll.take().unwrap()).await {
+                Ok(v) => break Ok(v),
+                Err(Some(pdu)) => {
+                    let output = self.send_pdu_inner(pdu).await;
+
+                    self.logical_link.get_shared_link().clear_owner();
+
+                    output.map_err(|_| MaybeRecvError::Disconnected)?;
+                }
+                Err(None) => (),
+            }
+        }
     }
 
-    async fn send_pdu<I>(&mut self, pdu: CreditBasedFrame<I>) -> Result<(), SendSduError<P::SendErr>>
+    async fn send_pdu_inner<T>(
+        &mut self,
+        pdu: T,
+    ) -> Result<(), SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>>
     where
-        I: Iterator<Item = u8> + ExactSizeIterator,
+        T: FragmentL2capPdu,
     {
         // boolean for first fragment of a *PDU*
         let mut is_first = true;
@@ -746,10 +446,21 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
                 .map_err(|e| SendSduError::SendErr(e))?;
         }
 
-        // clear owner as the a full PDU was sent
-        self.link_lock.clear_owner();
-
         Ok(())
+    }
+
+    async fn send_pdu<I>(
+        &mut self,
+        pdu: CreditBasedFrame<I>,
+    ) -> Result<(), SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>>
+    where
+        I: Iterator<Item = u8> + ExactSizeIterator,
+    {
+        let output = self.send_pdu_inner(pdu).await;
+
+        self.logical_link.get_shared_link().clear_owner();
+
+        output
     }
 
     /// Send a complete SDU to the lower layers
@@ -759,7 +470,7 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
     pub async fn send<T>(
         &'a mut self,
         sdu: T,
-    ) -> Result<Option<UnsentCreditFrames<'a, P, T::IntoIter>>, SendSduError<P::SendErr>>
+    ) -> Result<Option<UnsentCreditFrames<'a, L, T::IntoIter>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>>
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator + 'a,
@@ -781,12 +492,12 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
         Ok(Some(UnsentCreditFrames::new(self, packets)))
     }
 
-    /// Receive a Credit Based Frame for this channel
-    async fn receive_frame<T>(
+    /// Inner method of `receive_frame`
+    async fn receive_frame_inner<T>(
         &mut self,
     ) -> Result<
         CreditBasedFrame<T>,
-        ReceiveError<P::RecvErr, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>,
+        ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>,
     >
     where
         T: TryExtend<u8> + Default,
@@ -794,8 +505,6 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
         let headed_fragment = self.receive_fragment().await?;
 
         if !headed_fragment.fragment.is_start_fragment() {
-            self.link_lock.clear_owner();
-
             return Err(ReceiveError::new_expect_first_err());
         }
 
@@ -804,21 +513,21 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
         let mut first_recombiner =
             CreditBasedFrame::<T>::recombine(headed_fragment.length, self.peer_channel_id, &mut meta);
 
-        let k_frame = if let Some(first_k_frame) = first_recombiner.add(headed_fragment.fragment.data).map_err(|e| {
-            self.link_lock.clear_owner();
-            ReceiveError::new_recombine(e)
-        })? {
+        let k_frame = if let Some(first_k_frame) = first_recombiner
+            .add(headed_fragment.fragment.data)
+            .map_err(|e| ReceiveError::new_recombine(e))?
+        {
             first_k_frame
         } else {
             loop {
-                let fragment = self.receive_fragment().await?;
+                let bh_fragment = self.receive_fragment().await?;
 
-                if fragment.fragment.is_start_fragment() {
+                if bh_fragment.fragment.is_start_fragment() {
                     return Err(ReceiveError::new_unexpect_first_err());
                 }
 
                 if let Some(b_frame) = first_recombiner
-                    .add(fragment.fragment.data)
+                    .add(bh_fragment.fragment.data)
                     .map_err(|e| ReceiveError::new_recombine(e))?
                 {
                     break b_frame;
@@ -826,9 +535,24 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
             }
         };
 
-        self.link_lock.clear_owner();
-
         Ok(k_frame)
+    }
+
+    /// Receive a Credit Based Frame for this channel
+    async fn receive_frame<T>(
+        &mut self,
+    ) -> Result<
+        CreditBasedFrame<T>,
+        ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>,
+    >
+    where
+        T: TryExtend<u8> + Default,
+    {
+        let output = self.receive_frame_inner().await;
+
+        self.logical_link.get_shared_link().clear_owner();
+
+        output
     }
 
     /// Receive a SDU from this Channel
@@ -840,7 +564,7 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
     /// The `Ok(_)` output contains the `sdu`.
     pub async fn receive<T>(
         &mut self,
-    ) -> Result<T, ReceiveError<P::RecvErr, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
+    ) -> Result<T, ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
     where
         T: TryExtend<u8> + Default + core::ops::Deref<Target = [u8]>,
     {
@@ -871,7 +595,7 @@ impl<'a, P: PhysicalLink> CreditBasedChannel<'a, P> {
     }
 }
 
-impl<P: PhysicalLink> ConnectionChannel for CreditBasedChannel<'_, P> {
+impl<L: LogicalLink> ConnectionChannel for CreditBasedChannel<'_, L> {
     fn get_this_channel_id(&self) -> ChannelIdentifier {
         self.this_channel_id
     }
@@ -889,18 +613,18 @@ impl<P: PhysicalLink> ConnectionChannel for CreditBasedChannel<'_, P> {
     }
 }
 
-impl<P: PhysicalLink> Drop for CreditBasedChannel<'_, P> {
+impl<L: LogicalLink> Drop for CreditBasedChannel<'_, L> {
     fn drop(&mut self) {
-        self.link_lock.remove_channel(self.this_channel_id)
+        self.logical_link.get_shared_link().remove_channel(self.this_channel_id)
     }
 }
 
 /// Error output by the future [`FragmentReceiver`]
-pub struct ReceiveError<R, E, C> {
-    inner: ReceiveErrorInner<R, E, C>,
+pub struct ReceiveError<L: LogicalLink, E, C> {
+    inner: ReceiveErrorInner<L, E, C>,
 }
 
-impl<R, E, C> ReceiveError<R, E, C> {
+impl<L: LogicalLink, E, C> ReceiveError<L, E, C> {
     fn new_extend_err(extend_err: E) -> Self {
         let inner = ReceiveErrorInner::TryExtend(extend_err);
 
@@ -932,17 +656,22 @@ impl<R, E, C> ReceiveError<R, E, C> {
     }
 }
 
-impl<R, E, C> From<MaybeRecvError<R>> for ReceiveError<R, E, C> {
-    fn from(maybe: MaybeRecvError<R>) -> Self {
+impl<L, E, C> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveError<L, E, C>
+where
+    L: LogicalLink,
+{
+    fn from(maybe: MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>) -> Self {
         let inner = ReceiveErrorInner::Maybe(maybe);
 
         ReceiveError { inner }
     }
 }
 
-impl<R, E, C> core::fmt::Debug for ReceiveError<R, E, C>
+impl<L, E, C> core::fmt::Debug for ReceiveError<L, E, C>
 where
-    R: core::fmt::Debug,
+    L: LogicalLink,
+    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error: core::fmt::Debug,
     E: core::fmt::Debug,
     C: core::fmt::Debug,
 {
@@ -951,6 +680,7 @@ where
             ReceiveErrorInner::TryExtend(e) => write!(f, "TryExtend({e:?})"),
             ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("Disconnected"),
             ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "RecvError({r:?})"),
+            ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "DumpRecvError({d:?})"),
             ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:?}"),
             ReceiveErrorInner::Recombine(e) => write!(f, "Recombine({e:?})"),
             ReceiveErrorInner::ExpectedFirstFragment => f.write_str("ExpectedFirstFragment"),
@@ -960,9 +690,12 @@ where
     }
 }
 
-impl<R, E, C> core::fmt::Display for ReceiveError<R, E, C>
+impl<L, E, C> core::fmt::Display for ReceiveError<L, E, C>
 where
-    R: core::fmt::Display,
+    L: LogicalLink,
+    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error:
+        core::fmt::Display,
     E: core::fmt::Display,
     C: core::fmt::Display,
 {
@@ -971,6 +704,7 @@ where
             ReceiveErrorInner::TryExtend(e) => write!(f, "failed to extend buffer {e:}"),
             ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("peer device disconnected"),
             ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "receive error: {r:}"),
+            ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "receive error (dump): {d:?}"),
             ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:}"),
             ReceiveErrorInner::Recombine(e) => write!(f, "recombine error: {e:}"),
             ReceiveErrorInner::ExpectedFirstFragment => f.write_str("expected first fragment of PDU"),
@@ -981,16 +715,19 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<R, E, C> std::error::Error for ReceiveError<R, E, C>
+impl<L, E, C> std::error::Error for ReceiveError<L, E, C>
 where
-    R: std::error::Error,
+    L: LogicalLink,
+    <L::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error:
+        std::error::Error,
     E: std::error::Error,
     C: std::error::Error,
 {
 }
 
-enum ReceiveErrorInner<R, E, C> {
-    Maybe(MaybeRecvError<R>),
+enum ReceiveErrorInner<L: LogicalLink, E, C> {
+    Maybe(MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>),
     TryExtend(E),
     Recombine(C),
     ExpectedFirstFragment,

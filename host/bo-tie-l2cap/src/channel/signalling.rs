@@ -1,7 +1,8 @@
 //! Signalling Channel implementation
 
 use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
-use crate::channel::{ConnectionChannel, CreditBasedChannel, HeadedFragment, MaybeRecvError, SharedPhysicalLink};
+use crate::channel::shared::{ReceiveDataProcessor, UnusedChannelResponse};
+use crate::channel::{BasicHeadedFragment, ConnectionChannel, CreditBasedChannel, MaybeRecvError};
 use crate::pdu::control_frame::RecombineError;
 use crate::pdu::{
     ControlFrame, FragmentIterator, FragmentL2capPdu, L2capFragment, RecombineL2capPdu, RecombinePayloadIncrementally,
@@ -10,7 +11,7 @@ use crate::signals::packets::{
     CommandRejectResponse, DisconnectRequest, DisconnectResponse, FlowControlCreditInd, LeCreditBasedConnectionRequest,
     LeCreditBasedConnectionResponse, LeCreditMps, LeCreditMtu, Signal, SignalCode,
 };
-use crate::{LeULogicalLink, PhysicalLink};
+use crate::{LeULogicalLink, LogicalLink, PhysicalLink};
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_core::buffer::TryExtend;
 use core::fmt::Formatter;
@@ -25,27 +26,30 @@ use core::num::NonZeroU8;
 /// method of `LeULogicalLink`
 ///
 /// [`get_signalling_channel`]: crate::LeULogicalLink::get_signalling_channel
-pub struct SignallingChannel<'a, P: PhysicalLink> {
+pub struct SignallingChannel<'a, L: LogicalLink> {
     channel_id: ChannelIdentifier,
-    link_lock: &'a SharedPhysicalLink<P>,
+    logical_link: &'a L,
     awaiting_response: bool,
 }
 
-impl<'a, P: PhysicalLink> SignallingChannel<'a, P> {
-    pub(crate) fn new(channel_id: ChannelIdentifier, link_lock: &'a SharedPhysicalLink<P>) -> Self {
-        assert!(link_lock.add_channel(channel_id), "channel already exists");
+impl<'a, L: LogicalLink> SignallingChannel<'a, L> {
+    pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: &'a L) -> Self {
+        assert!(
+            logical_link.get_shared_link().add_channel(channel_id),
+            "channel already exists"
+        );
 
         let awaiting_response = false;
 
         Self {
             channel_id,
-            link_lock,
+            logical_link,
             awaiting_response,
         }
     }
 }
 
-impl<P: PhysicalLink> SignallingChannel<'_, P> {
+impl<L: LogicalLink> SignallingChannel<'_, L> {
     /// Get the channel identifier for this Signalling Channel
     pub fn get_channel_id(&self) -> ChannelIdentifier {
         self.channel_id
@@ -56,10 +60,13 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
     /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
     /// channel. Every L2CAP PDU is fragmented to this in both sending a receiving of L2CAP data.
     pub fn fragmentation_size(&self) -> usize {
-        unsafe { &*self.link_lock.physical_link.get() }.max_transmission_size()
+        self.logical_link.get_shared_link().get_fragmentation_size()
     }
 
-    async fn send_fragment<T>(&mut self, fragment: L2capFragment<T>) -> Result<(), P::SendErr>
+    async fn send_fragment<T>(
+        &mut self,
+        fragment: L2capFragment<T>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
     where
         T: IntoIterator<Item = u8>,
     {
@@ -68,34 +75,54 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |_| self.link_lock.maybe_send(self.channel_id, fragment.take().unwrap()))
-            .await
-            .await
+        core::future::poll_fn(move |_| {
+            self.logical_link
+                .get_shared_link()
+                .maybe_send(self.channel_id, fragment.take().unwrap())
+        })
+        .await
+        .await
     }
 
-    async fn receive_fragment(&mut self) -> Result<HeadedFragment<P::RecvData>, MaybeRecvError<P::RecvErr>> {
-        let mut poll = Some(
-            match core::future::poll_fn(|_| self.link_lock.maybe_recv(self.channel_id))
-                .await
-                .await
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    self.link_lock.clear_owner();
+    async fn receive_fragment(
+        &mut self,
+    ) -> Result<
+        BasicHeadedFragment<<L::PhysicalLink as PhysicalLink>::RecvData>,
+        MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
+    > {
+        loop {
+            let mut poll = Some(
+                match core::future::poll_fn(|_| self.logical_link.get_shared_link().maybe_recv(self.channel_id))
+                    .await
+                    .await
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        self.logical_link.get_shared_link().clear_owner();
 
-                    return Err(e);
+                        return Err(e);
+                    }
+                },
+            );
+
+            match core::future::poll_fn(move |_| poll.take().unwrap()).await {
+                Ok(v) => break Ok(v),
+                Err(Some(pdu)) => {
+                    let output = self.send_inner(pdu).await;
+
+                    self.logical_link.get_shared_link().clear_owner();
+
+                    output.map_err(|_| MaybeRecvError::Disconnected)?;
                 }
-            },
-        );
-
-        Ok(core::future::poll_fn(move |_| poll.take().unwrap()).await)
+                Err(None) => (),
+            }
+        }
     }
 
-    /// Send a Signal
-    ///
-    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
-    /// may be called by protocol at a higher layer than L2CAP.
-    async fn send(&mut self, c_frame: impl FragmentL2capPdu) -> Result<(), P::SendErr> {
+    async fn send_inner(
+        &mut self,
+        c_frame: impl FragmentL2capPdu,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let mut is_first = true;
 
         let mut fragments_iter = c_frame.into_fragments(self.fragmentation_size()).unwrap();
@@ -108,10 +135,58 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
             self.send_fragment(fragment).await?;
         }
 
-        // clear owner as the full PDU was sent
-        self.link_lock.clear_owner();
-
         Ok(())
+    }
+
+    /// Send a Signal
+    ///
+    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
+    /// may be called by protocol at a higher layer than L2CAP.
+    async fn send(&mut self, c_frame: impl FragmentL2capPdu) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+        let output = self.send_inner(c_frame).await;
+
+        self.logical_link.get_shared_link().clear_owner();
+
+        output
+    }
+
+    async fn receive_inner(&mut self) -> Result<ReceivedSignal, ReceiveSignalError<L>> {
+        let fragment = self.receive_fragment().await?;
+
+        if !fragment.fragment.is_start_fragment() {
+            return Err(ReceiveSignalError::ExpectedFirstFragment);
+        }
+
+        let mut recombiner =
+            ControlFrame::<ReceiveSignalRecombineBuilder>::recombine(fragment.length, fragment.channel_id, &mut ());
+
+        let c_frame = if let Some(c_frame) = recombiner.add(fragment.fragment.data)? {
+            c_frame
+        } else {
+            loop {
+                let fragment = self.receive_fragment().await?;
+
+                if fragment.fragment.is_start_fragment() {
+                    return Err(ReceiveSignalError::UnexpectedFirstFragment);
+                }
+
+                if let Some(c_frame) = recombiner.add(fragment.fragment.data)? {
+                    break c_frame;
+                }
+            }
+        };
+
+        let received_signal = match self.channel_id {
+            ChannelIdentifier::Acl(AclCid::SignalingChannel) => {
+                ReceivedSignal::try_from::<crate::AclULink>(c_frame.into_payload())?
+            }
+            ChannelIdentifier::Le(LeCid::LeSignalingChannel) => {
+                ReceivedSignal::try_from::<crate::LeULink>(c_frame.into_payload())?
+            }
+            _ => unreachable!(),
+        };
+
+        Ok(received_signal)
     }
 
     /// Receive a Signal on this Channel
@@ -140,53 +215,12 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
     ///     }
     /// # }}
     /// ```
-    pub async fn receive(&mut self) -> Result<ReceivedSignal, ReceiveSignalError<P>> {
-        let fragment = self.receive_fragment().await?;
+    pub async fn receive(&mut self) -> Result<ReceivedSignal, ReceiveSignalError<L>> {
+        let output = self.receive_inner().await;
 
-        if !fragment.fragment.is_start_fragment() {
-            self.link_lock.clear_owner();
+        self.logical_link.get_shared_link().clear_owner();
 
-            return Err(ReceiveSignalError::ExpectedFirstFragment);
-        }
-
-        let mut recombiner =
-            ControlFrame::<ReceiveSignalRecombineBuilder>::recombine(fragment.length, fragment.channel_id, &mut ());
-
-        let c_frame = if let Some(c_frame) = recombiner.add(fragment.fragment.data).map_err(|e| {
-            self.link_lock.clear_owner();
-
-            e
-        })? {
-            c_frame
-        } else {
-            loop {
-                let fragment = self.receive_fragment().await?;
-
-                if fragment.fragment.is_start_fragment() {
-                    self.link_lock.clear_owner();
-
-                    return Err(ReceiveSignalError::UnexpectedFirstFragment);
-                }
-
-                if let Some(c_frame) = recombiner.add(fragment.fragment.data)? {
-                    self.link_lock.clear_owner();
-
-                    break c_frame;
-                }
-            }
-        };
-
-        let received_signal = match self.channel_id {
-            ChannelIdentifier::Acl(AclCid::SignalingChannel) => {
-                ReceivedSignal::try_from::<crate::AclULink>(c_frame.into_payload())?
-            }
-            ChannelIdentifier::Le(LeCid::LeSignalingChannel) => {
-                ReceivedSignal::try_from::<crate::LeULink>(c_frame.into_payload())?
-            }
-            _ => unreachable!(),
-        };
-
-        Ok(received_signal)
+        output
     }
 
     /// Initiate a L2CAP Disconnection
@@ -197,7 +231,10 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
     /// # Note
     /// The disconnection of the L2CAP connection does not occur until after a disconnection
     /// response is received by this device (with the correct fields).
-    pub async fn init_connection_disconnection<C: ConnectionChannel>(&mut self, channel: &C) -> Result<(), P::SendErr> {
+    pub async fn init_connection_disconnection<C: ConnectionChannel>(
+        &mut self,
+        channel: &C,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let destination_id = channel.get_peer_channel_id();
         let source_id = channel.get_this_channel_id();
 
@@ -215,7 +252,7 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
     pub async fn init_le_credit_connection(
         &mut self,
         request: &LeCreditBasedConnectionRequest,
-    ) -> Result<(), P::SendErr> {
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         self.awaiting_response = true;
 
         let control_frame = request.as_control_frame(self.channel_id);
@@ -231,9 +268,9 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
     /// of PDUs plus any amount credits that the peer already had.
     pub async fn give_credits_to_peer(
         &mut self,
-        credit_channel: &mut CreditBasedChannel<'_, P>,
+        credit_channel: &mut CreditBasedChannel<'_, L>,
         credits: u16,
-    ) -> Result<(), P::SendErr> {
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let dyn_cid =
             if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel)) = credit_channel.this_channel_id {
                 dyn_channel
@@ -249,9 +286,9 @@ impl<P: PhysicalLink> SignallingChannel<'_, P> {
     }
 }
 
-impl<P: PhysicalLink> Drop for SignallingChannel<'_, P> {
+impl<L: LogicalLink> Drop for SignallingChannel<'_, L> {
     fn drop(&mut self) {
-        self.link_lock.remove_channel(self.channel_id)
+        self.logical_link.get_shared_link().remove_channel(self.channel_id)
     }
 }
 
@@ -332,10 +369,10 @@ impl ReceivedSignal {
 /// This error is returned by the method [`receive`] of `SignallingChannel`.
 ///
 /// [`receive`]: SignallingChannel::receive
-#[derive(Debug)]
-pub enum ReceiveSignalError<P: PhysicalLink> {
+pub enum ReceiveSignalError<L: LogicalLink> {
     Disconnected,
-    RecvErr(P::RecvErr),
+    RecvErr(<L::PhysicalLink as PhysicalLink>::RecvErr),
+    DumpRecvError(<<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error),
     InvalidChannel(crate::channel::InvalidChannel),
     Convert(ConvertSignalError),
     Recombine(RecombineError),
@@ -343,14 +380,38 @@ pub enum ReceiveSignalError<P: PhysicalLink> {
     UnexpectedFirstFragment,
 }
 
-impl<P: PhysicalLink> core::fmt::Display for ReceiveSignalError<P>
+impl<L> core::fmt::Debug for ReceiveSignalError<L>
 where
-    P::RecvErr: core::fmt::Display,
+    L: LogicalLink,
+    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ReceiveSignalError::Disconnected => f.write_str("Disconnected"),
+            ReceiveSignalError::RecvErr(e) => write!(f, "RecvErr({e:?})"),
+            ReceiveSignalError::DumpRecvError(e) => write!(f, "DumpRecvError({e:?})"),
+            ReceiveSignalError::InvalidChannel(c) => core::fmt::Debug::fmt(c, f),
+            ReceiveSignalError::Convert(c) => core::fmt::Debug::fmt(c, f),
+            ReceiveSignalError::Recombine(r) => core::fmt::Debug::fmt(r, f),
+            ReceiveSignalError::ExpectedFirstFragment => f.write_str("ExpectedFirstFragment"),
+            ReceiveSignalError::UnexpectedFirstFragment => f.write_str("UnexpectedFirstFragment"),
+        }
+    }
+}
+
+impl<L> core::fmt::Display for ReceiveSignalError<L>
+where
+    L: LogicalLink,
+    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error:
+        core::fmt::Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
             ReceiveSignalError::Disconnected => f.write_str("peer device disconnected"),
             ReceiveSignalError::RecvErr(e) => write!(f, "failed to receive signal, {e}"),
+            ReceiveSignalError::DumpRecvError(e) => write!(f, "receive error (dump), {e}"),
             ReceiveSignalError::InvalidChannel(c) => core::fmt::Display::fmt(c, f),
             ReceiveSignalError::Convert(c) => core::fmt::Display::fmt(c, f),
             ReceiveSignalError::Recombine(r) => core::fmt::Display::fmt(r, f),
@@ -360,31 +421,32 @@ where
     }
 }
 
-impl<P: PhysicalLink> From<MaybeRecvError<P::RecvErr>> for ReceiveSignalError<P> {
-    fn from(value: MaybeRecvError<P::RecvErr>) -> Self {
+impl<L: LogicalLink> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveSignalError<L> {
+    fn from(value: MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>) -> Self {
         match value {
             MaybeRecvError::Disconnected => ReceiveSignalError::Disconnected,
             MaybeRecvError::RecvError(e) => ReceiveSignalError::RecvErr(e),
+            MaybeRecvError::DumpRecvError(e) => ReceiveSignalError::DumpRecvError(e),
             MaybeRecvError::InvalidChannel(c) => ReceiveSignalError::InvalidChannel(c),
         }
     }
 }
 
-impl<P: PhysicalLink> From<ConvertSignalError> for ReceiveSignalError<P> {
+impl<L: LogicalLink> From<ConvertSignalError> for ReceiveSignalError<L> {
     fn from(value: ConvertSignalError) -> Self {
         ReceiveSignalError::Convert(value)
     }
 }
 
-impl<P: PhysicalLink> From<RecombineError> for ReceiveSignalError<P> {
+impl<L: LogicalLink> From<RecombineError> for ReceiveSignalError<L> {
     fn from(value: RecombineError) -> Self {
         ReceiveSignalError::Recombine(value)
     }
 }
 
 #[cfg(feature = "std")]
-impl<P: PhysicalLink> std::error::Error for ReceiveSignalError<P> where
-    ReceiveSignalError<P>: core::fmt::Debug + core::fmt::Display
+impl<L: LogicalLink> std::error::Error for ReceiveSignalError<L> where
+    ReceiveSignalError<L>: core::fmt::Debug + core::fmt::Display
 {
 }
 
@@ -555,12 +617,11 @@ impl<T> Request<T> {
     ///
     /// If ever a request is either not implemented or not used by the application, this can be used
     /// as a 'catch all' for those signals from the linked device.
-    pub async fn reject_as_not_understood<P>(
+    pub async fn reject_as_not_understood<L: LogicalLink>(
         self,
-        signalling_channel: &mut SignallingChannel<'_, P>,
-    ) -> Result<(), P::SendErr>
+        signalling_channel: &mut SignallingChannel<'_, L>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
     where
-        P: PhysicalLink,
         T: Signal,
     {
         let rejection = CommandRejectResponse::new_command_not_understood(self.request.get_identifier());
@@ -592,10 +653,10 @@ impl<T> core::ops::DerefMut for Request<T> {
 
 impl Request<CommandRejectResponse> {
     /// Send the command rejection response
-    pub async fn send_rejection<P: PhysicalLink>(
+    pub async fn send_rejection<L: LogicalLink>(
         self,
-        signalling_channel: &mut SignallingChannel<'_, P>,
-    ) -> Result<(), P::SendErr> {
+        signalling_channel: &mut SignallingChannel<'_, L>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let c_frame = self.request.as_control_frame(signalling_channel.channel_id);
 
         signalling_channel.send(c_frame).await
@@ -612,11 +673,14 @@ impl Request<DisconnectRequest> {
     /// If there is no channel associated with the destination channel identifier then an error is
     /// returned containing a command reject response that should be sent to the peer device. This
     /// rejection response contains the *invalid CID in request* reason.
-    pub fn check_disconnect_request<L: crate::LogicalLink>(
+    pub fn check_disconnect_request<L: LogicalLink>(
         &self,
         logical_link: &L,
     ) -> Result<(), Response<CommandRejectResponse>> {
-        if logical_link.is_channel_used(self.request.destination_cid) {
+        if logical_link
+            .get_shared_link()
+            .is_channel_used(self.request.destination_cid)
+        {
             Ok(())
         } else {
             let rejection = CommandRejectResponse::new_invalid_cid_in_request(
@@ -631,10 +695,10 @@ impl Request<DisconnectRequest> {
         }
     }
 
-    pub async fn send_disconnect_response<P: PhysicalLink>(
+    pub async fn send_disconnect_response<L: LogicalLink>(
         &self,
-        signalling_channel: &mut SignallingChannel<'_, P>,
-    ) -> Result<(), P::SendErr> {
+        signalling_channel: &mut SignallingChannel<'_, L>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let response = DisconnectResponse {
             identifier: self.request.identifier,
             destination_cid: self.request.destination_cid,
@@ -675,11 +739,11 @@ impl Request<LeCreditBasedConnectionRequest> {
     }
 
     /// Reject a LE credit based connection request
-    pub async fn reject_le_credit_based_connection<P: PhysicalLink>(
+    pub async fn reject_le_credit_based_connection<L: LogicalLink>(
         &self,
-        signal_channel: &mut SignallingChannel<'_, P>,
+        signal_channel: &mut SignallingChannel<'_, L>,
         reason: crate::signals::packets::LeCreditBasedConnectionResponseError,
-    ) -> Result<(), P::SendErr> {
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let response = LeCreditBasedConnectionResponse::new_rejected(self.request.identifier, reason);
 
         signal_channel
@@ -736,10 +800,10 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
     ///
     /// This sends the response to the peer device and returns a [`CreditBasedChannel`] for the new
     /// connection.
-    pub async fn send_response<'a, P: PhysicalLink>(
+    pub async fn send_response<'a, L: LogicalLink>(
         self,
-        signals_channel: &mut SignallingChannel<'a, P>,
-    ) -> Result<CreditBasedChannel<'a, P>, P::SendErr> {
+        signals_channel: &mut SignallingChannel<'a, L>,
+    ) -> Result<CreditBasedChannel<'a, L>, <L::PhysicalLink as PhysicalLink>::SendErr> {
         use core::cmp::min;
 
         let response = LeCreditBasedConnectionResponse {
@@ -768,7 +832,7 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
         let new_channel = CreditBasedChannel::new(
             this_channel_id,
             peer_channel_id,
-            &signals_channel.link_lock,
+            signals_channel.logical_link,
             maximum_packet_size,
             maximum_transmission_size,
             initial_peer_credits,
@@ -818,7 +882,7 @@ impl Response<LeCreditBasedConnectionResponse> {
         &self,
         request: &LeCreditBasedConnectionRequest,
         link: &'a LeULogicalLink<P>,
-    ) -> CreditBasedChannel<'a, P> {
+    ) -> CreditBasedChannel<'a, LeULogicalLink<P>> {
         let this_channel_id = request.get_source_cid();
 
         let peer_channel_id = self.response.get_destination_cid();
@@ -832,7 +896,7 @@ impl Response<LeCreditBasedConnectionResponse> {
         CreditBasedChannel::new(
             this_channel_id,
             peer_channel_id,
-            &link.shared_link,
+            &link,
             maximum_packet_size,
             maximum_transmission_size,
             initial_peer_credits,
