@@ -101,7 +101,7 @@ use bo_tie_att::TransferFormatInto;
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
+use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 
 struct ServiceDefinition;
 
@@ -1346,7 +1346,7 @@ where
         b_frame: &l2cap::pdu::BasicFrame<alloc::vec::Vec<u8>>,
     ) -> Result<bo_tie_att::server::Status, att::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let (pdu_type, payload) = self.server.parse_att_pdu(&b_frame)?;
 
@@ -1381,7 +1381,7 @@ where
         payload: &[u8],
     ) -> Result<(), att::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         use core::ops::RangeBounds;
 
@@ -1534,7 +1534,7 @@ where
         payload: &[u8],
     ) -> Result<bool, att::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match <att::pdu::MtuRequest as att::TransferFormatTryFrom>::try_from(payload) {
             Ok(request) => Ok(LE_MINIMUM_ATT_MTU >= request.0),
@@ -1570,7 +1570,7 @@ where
         f: F,
     ) -> Result<(), AddServicesError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         F: for<'a> FnOnce(ServicesAdder<'a>),
     {
         let service_changed_handle = if let Some(handle) = self.gatt_service_info.service_change_handle {
@@ -1632,16 +1632,16 @@ impl<Q> core::ops::DerefMut for Server<Q> {
     }
 }
 
-pub enum AddServicesError<T: PhysicalLink> {
+pub enum AddServicesError<T: LogicalLink> {
     NoServicesChangedCharacteristic,
     ConnectionError(att::ConnectionError<T>),
 }
 
 impl<T> core::fmt::Debug for AddServicesError<T>
 where
-    T: PhysicalLink,
-    T::SendErr: core::fmt::Debug,
-    T::RecvErr: core::fmt::Debug,
+    T: LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Debug,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -1653,9 +1653,9 @@ where
 
 impl<T> core::fmt::Display for AddServicesError<T>
 where
-    T: PhysicalLink,
-    T::SendErr: core::fmt::Display,
-    T::RecvErr: core::fmt::Display,
+    T: LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Display,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -1671,9 +1671,9 @@ where
 #[cfg(feature = "std")]
 impl<T> std::error::Error for AddServicesError<T>
 where
-    T: PhysicalLink,
-    T::SendErr: std::error::Error,
-    T::RecvErr: std::error::Error,
+    T: LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::SendErr: std::error::Error,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
 {
 }
 
@@ -1706,7 +1706,7 @@ impl Client {
     /// Query the services
     ///
     /// This returns a `ServicesQuery` which is used to get the services on the remote device.
-    pub fn query_services<'a, T: PhysicalLink>(
+    pub fn query_services<'a, T: LogicalLink>(
         &'a self,
         channel: &'a mut BasicFrameChannel<'a, T>,
     ) -> ServicesQuery<'a, T> {
@@ -1731,14 +1731,14 @@ impl core::ops::Deref for Client {
 /// A querier for Services on a GATT server.
 ///
 /// This struct is created from the method [`query_services`]. See its documentation for details.
-pub struct ServicesQuery<'a, T: PhysicalLink> {
+pub struct ServicesQuery<'a, T: LogicalLink> {
     channel: &'a mut BasicFrameChannel<'a, T>,
     client: &'a Client,
     iter: Option<alloc::vec::IntoIter<bo_tie_att::pdu::ReadGroupTypeData<Uuid>>>,
     handle: u16,
 }
 
-impl<'a, T: PhysicalLink> ServicesQuery<'a, T> {
+impl<'a, T: LogicalLink> ServicesQuery<'a, T> {
     fn new(channel: &'a mut BasicFrameChannel<'a, T>, client: &'a Client) -> Self {
         let iter = None;
         let handle = 1;
@@ -2111,7 +2111,7 @@ mod tests {
         last_sent_pdu: std::cell::Cell<Option<Vec<u8>>>,
     }
 
-    impl PhysicalLink for TestChannel {
+    impl LogicalLink for TestChannel {
         type SendFut<'a> = DummySendFut;
         type SendErr = usize;
         type RecvData = DeVec<u8>;
@@ -2243,7 +2243,7 @@ mod tests {
     #[allow(dead_code)]
     fn send_test<T>(mut c: BasicFrameChannel<T>)
     where
-        T: PhysicalLink + Send,
+        T: LogicalLink + Send,
         <T::RecvBuffer as TryExtend<u8>>::Error: Send,
         T::SendErr: Send,
         for<'a> T::SendFut<'a>: Send,

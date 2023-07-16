@@ -12,6 +12,7 @@ pub mod server;
 
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
+use bo_tie_l2cap::PhysicalLink;
 pub use client::Client;
 pub use server::Server;
 
@@ -354,19 +355,19 @@ impl From<TransferFormatError> for Error {
 ///
 /// This is used by the Attribute client and server implementations when dealing with the L2CAP
 /// channel for the Attribute Protocol.
-pub enum ConnectionError<T: bo_tie_l2cap::PhysicalLink> {
+pub enum ConnectionError<T: bo_tie_l2cap::LogicalLink> {
     AttError(Error),
     RecvError(
         bo_tie_l2cap::channel::ReceiveError<
-            T::RecvErr,
+            T,
             <bo_tie_core::buffer::de_vec::DeVec<u8> as bo_tie_core::buffer::TryExtend<u8>>::Error,
             bo_tie_l2cap::pdu::basic_frame::RecombineError,
         >,
     ),
-    SendError(T::SendErr),
+    SendError(<T::PhysicalLink as PhysicalLink>::SendErr),
 }
 
-impl<T: bo_tie_l2cap::PhysicalLink, E: Into<Error>> From<E> for ConnectionError<T> {
+impl<T: bo_tie_l2cap::LogicalLink, E: Into<Error>> From<E> for ConnectionError<T> {
     fn from(e: E) -> Self {
         Self::AttError(e.into())
     }
@@ -374,9 +375,9 @@ impl<T: bo_tie_l2cap::PhysicalLink, E: Into<Error>> From<E> for ConnectionError<
 
 impl<T> core::fmt::Debug for ConnectionError<T>
 where
-    T: bo_tie_l2cap::PhysicalLink,
-    T::RecvErr: core::fmt::Debug,
-    T::SendErr: core::fmt::Debug,
+    T: bo_tie_l2cap::LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
+    <T::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -389,9 +390,9 @@ where
 
 impl<T> core::fmt::Display for ConnectionError<T>
 where
-    T: bo_tie_l2cap::PhysicalLink,
-    T::RecvErr: core::fmt::Display,
-    T::SendErr: core::fmt::Display,
+    T: bo_tie_l2cap::LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
+    <T::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -405,9 +406,9 @@ where
 #[cfg(feature = "std")]
 impl<T> std::error::Error for ConnectionError<T>
 where
-    T: bo_tie_l2cap::PhysicalLink,
-    T::RecvErr: std::error::Error,
-    T::SendErr: std::error::Error,
+    T: bo_tie_l2cap::LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
+    <T::PhysicalLink as PhysicalLink>::SendErr: std::error::Error,
 {
 }
 
@@ -1051,7 +1052,7 @@ mod test {
         }
     }
 
-    impl bo_tie_l2cap::PhysicalLink for Channel1 {
+    impl bo_tie_l2cap::LogicalLink for Channel1 {
         type SendFut<'a> = DummySendFut<1>;
         type SendErr = usize;
         type RecvData = DeVec<u8>;
@@ -1074,7 +1075,7 @@ mod test {
         }
     }
 
-    impl bo_tie_l2cap::PhysicalLink for Channel2 {
+    impl bo_tie_l2cap::LogicalLink for Channel2 {
         type SendFut<'a> = DummySendFut<2>;
         type SendErr = usize;
         type RecvData = DeVec<u8>;

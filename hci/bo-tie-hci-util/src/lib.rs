@@ -817,10 +817,14 @@ pub trait HostChannelEnds {
     /// The channel ends type for a connection
     type ConnectionChannelEnds: ConnectionChannelEnds;
 
-    /// The front and back capacities (in that order) of a buffer as required by the driver
+    /// The front and back capacities (in that order) of the `ToBuffer` as required by the driver
     ///
-    /// Every buffer allocated by a connection must have these values added to the front and back
-    /// capacities to a new or cleared buffer.
+    /// These are the values of the front and back capacities of the `ToBuffer` that are required to
+    /// put in the header and/or tail required by the driver implementation of the interface.
+    ///
+    /// # Note
+    /// These values are added to the capacities required by the HCI PDUs. Thus the total size of a
+    /// capacity is *the size required by the driver* plus *the size required by a HCI PDU*.
     fn driver_buffer_capacities(&self) -> (usize, usize);
 
     /// Get the sender of messages to the interface async task

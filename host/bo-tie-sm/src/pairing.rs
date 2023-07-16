@@ -4,7 +4,7 @@ use super::encrypt_info::AuthRequirements;
 use super::*;
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_l2cap::pdu::BasicFrame;
-use bo_tie_l2cap::BasicFrameChannel;
+use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
 
 pub(crate) fn convert_io_cap(
     auth_req: &[encrypt_info::AuthRequirements],
@@ -844,9 +844,12 @@ impl PairingFailed {
     /// }
     /// # };
     /// ```
-    pub async fn send<T>(self, connection_channel: &mut BasicFrameChannel<'_, T>) -> Result<(), T::SendErr>
+    pub async fn send<T>(
+        self,
+        connection_channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<(), <T::PhysicalLink as PhysicalLink>::SendErr>
     where
-        T: bo_tie_l2cap::PhysicalLink,
+        T: bo_tie_l2cap::LogicalLink,
     {
         let command: Command<_> = self.into();
 

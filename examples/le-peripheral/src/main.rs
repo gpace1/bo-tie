@@ -1,14 +1,17 @@
 #![doc = include_str!("../README.md")]
 
-use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeLink};
-use bo_tie::host::l2cap::PhysicalLink;
+use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
+use bo_tie::host::l2cap::{LeULogicalLink, PhysicalLink};
+use bo_tie::BluetoothDeviceAddress;
 
 /// This sets up the advertising for the connection
 ///
 /// After this is executed the controller will be in the advertiser role and can be seen by a
 /// scanning device.
 async fn advertise_setup<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str) {
-    use bo_tie::hci::commands::le::{set_advertising_data, set_advertising_enable, set_advertising_parameters};
+    use bo_tie::hci::commands::le::{
+        set_advertising_data, set_advertising_enable, set_advertising_parameters, set_random_address,
+    };
     use bo_tie::host::gap::assigned;
 
     let adv_name = assigned::local_name::LocalName::new(local_name, None);
@@ -37,11 +40,15 @@ async fn advertise_setup<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str)
     adv_data.try_push(adv_flags).unwrap();
     adv_data.try_push(adv_name).unwrap();
 
-    set_advertising_data::send(hi, adv_data).await.unwrap();
-
     let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
 
     adv_prams.own_address_type = bo_tie::hci::commands::le::OwnAddressType::RandomDeviceAddress;
+
+    set_random_address::send(hi, BluetoothDeviceAddress::new_random_static())
+        .await
+        .unwrap();
+
+    set_advertising_data::send(hi, adv_data).await.unwrap();
 
     set_advertising_parameters::send(hi, adv_prams).await.unwrap();
 
@@ -123,11 +130,12 @@ async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Opt
 /// from the central device  
 ///
 /// A generic attribute server is not *technically* required for connecting, but many peer devices
-/// require some basic implementation of GATT in order to 'complete' their connection process. The
-/// returned server will only contain the mandatory `GAP` service.
-async fn server_loop<P>(mut physical_link: LeLink<P>, local_name: &str) -> !
+/// require some basic implementation of GATT in order to 'c vice.
+async fn server_loop<P>(logical_link: LeULogicalLink<P>, local_name: &str) -> !
 where
     P: PhysicalLink,
+    P::SendErr: core::fmt::Debug,
+    P::RecvErr: core::fmt::Debug,
 {
     use bo_tie::host::{att, gatt};
 
@@ -139,12 +147,14 @@ where
 
     server.give_permissions_to_client(att::AttributePermissions::Read(att::AttributeRestriction::None));
 
+    let mut att_channel = logical_link.get_att_channel();
+
     loop {
-        for l2cap_packet in connection_channel.receive_b_frame().await.unwrap() {
-            match server.process_att_pdu(&mut connection_channel, &l2cap_packet).await {
-                Ok(_) => (),
-                Err(e) => println!("Cannot process acl data, '{}'", e),
-            }
+        let basic_frame = att_channel.receive().await.unwrap();
+
+        match server.process_att_pdu(&mut att_channel, &basic_frame).await {
+            Ok(_) => (),
+            Err(e) => println!("Cannot process acl data, '{:?}'", e),
         }
     }
 }
@@ -162,22 +172,11 @@ fn setup_sig() -> impl core::future::Future {
 /// Stub for signal setup
 ///
 /// This is a generic fallback that returns future that will forever pend. This method should try
-/// to be avoided unless it is intended that the device running the example will be power cycled.
+/// to be avoided unless it is intended that the device running the example will be power cycled to
+/// stop the example.
 #[cfg(not(unix))]
-fn setup_sig() -> impl core::future::Future {
-    use core::future::Future;
-    use core::pin::Pin;
-    use core::task::{Context, Poll};
-
-    struct ForeverPend;
-
-    impl Future for ForeverPend {
-        type Output = ();
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Pending
-        }
-    }
+async fn setup_sig() {
+    std::future::pending().await
 }
 
 #[cfg(target_os = "linux")]
@@ -224,9 +223,9 @@ async fn main() {
     let task = async {
         advertise_setup(&mut host, local_name).await;
 
-        let connection_channel = wait_for_connection(&mut host).await;
+        let le_link = wait_for_connection(&mut host).await;
 
-        server_loop(connection_channel, local_name).await
+        server_loop(le_link.into(), local_name).await
     };
 
     tokio::select! {

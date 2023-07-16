@@ -1,7 +1,7 @@
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
 use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
+use bo_tie_l2cap::{BasicFrameChannel, LogicalLink};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ClientPduName {
@@ -159,7 +159,7 @@ impl ConnectClient {
         requested_mtu: M,
     ) -> Result<Client, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         M: Into<Option<u16>>,
     {
         let connect_client = Self::initiate(connection_channel, default_mtu, requested_mtu).await?;
@@ -189,7 +189,7 @@ impl ConnectClient {
         requested_mtu: M,
     ) -> Result<ConnectClient, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         M: Into<Option<u16>>,
     {
         let default_mtu = default_mtu.into();
@@ -353,7 +353,7 @@ impl Client {
         pdu: &pdu::Pdu<P>,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         P: TransferFormatInto,
     {
         let payload = TransferFormatInto::into(pdu);
@@ -382,7 +382,7 @@ impl Client {
         mtu: u16,
     ) -> Result<impl ResponseProcessor<Response = ()> + '_, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if self.mtu > mtu.into() {
             Err(super::Error::TooSmallMtu.into())
@@ -410,7 +410,7 @@ impl Client {
         handle_range: R,
     ) -> Result<impl ResponseProcessor<Response = pdu::FormattedHandlesWithType>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
     {
         if !pdu::is_valid_handle_range(&handle_range) {
@@ -442,7 +442,7 @@ impl Client {
         value: D,
     ) -> Result<impl ResponseProcessor<Response = pdu::TypeValueResponse>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -476,7 +476,7 @@ impl Client {
         attr_type: crate::Uuid,
     ) -> Result<impl ResponseProcessor<Response = Vec<pdu::ReadTypeResponse<D>>>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         R: Into<pdu::HandleRange>,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -504,7 +504,7 @@ impl Client {
         handle: u16,
     ) -> Result<impl ResponseProcessor<Response = D>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         D: TransferFormatTryFrom,
     {
         if !pdu::is_valid_handle(handle) {
@@ -531,7 +531,7 @@ impl Client {
         offset: u16,
     ) -> Result<impl ResponseProcessor<Response = ReadBlob>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         D: TransferFormatTryFrom,
     {
         if !pdu::is_valid_handle(handle) {
@@ -564,7 +564,7 @@ impl Client {
         handles: I,
     ) -> Result<impl ResponseProcessor<Response = Vec<D>>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         I: IntoIterator<Item = u16> + Clone,
         Vec<D>: TransferFormatTryFrom + TransferFormatInto,
     {
@@ -597,7 +597,7 @@ impl Client {
         group_type: crate::Uuid,
     ) -> Result<impl ResponseProcessor<Response = pdu::ReadByGroupTypeResponse<D>>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
         D: TransferFormatTryFrom,
     {
@@ -630,7 +630,7 @@ impl Client {
         data: D,
     ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
         if !pdu::is_valid_handle(handle) {
@@ -658,7 +658,7 @@ impl Client {
         data: D,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         D: TransferFormatInto,
     {
         if !pdu::is_valid_handle(handle) {
@@ -681,7 +681,7 @@ impl Client {
         pwr: pdu::Pdu<pdu::PreparedWriteRequest<'_>>,
     ) -> Result<impl ResponseProcessor<Response = pdu::PreparedWriteResponse>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         D: TransferFormatTryFrom + TransferFormatInto,
     {
         self.send(connection_channel, &pwr).await?;
@@ -697,7 +697,7 @@ impl Client {
         execute: pdu::ExecuteWriteFlag,
     ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         self.send(connection_channel, &pdu::execute_write_request(execute))
             .await?;
@@ -718,7 +718,7 @@ impl Client {
         pdu: pdu::Pdu<D>,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         D: TransferFormatInto,
     {
         let op: u8 = pdu.get_opcode().as_raw();

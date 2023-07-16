@@ -73,7 +73,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
+use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 use core::{
     future::Future,
     pin::Pin,
@@ -624,7 +624,7 @@ where
         pdu: &l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<Status, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let (pdu_type, payload) = self.parse_att_pdu(pdu)?;
 
@@ -686,7 +686,7 @@ where
         payload: &[u8],
     ) -> Result<Status, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match pdu_type {
             ClientPduName::ExchangeMtuRequest => {
@@ -762,7 +762,7 @@ where
         handle: u16,
     ) -> Result<bool, ServerInitiatedError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match self.attributes.get_mut(handle) {
             Some(attribute) => {
@@ -830,7 +830,7 @@ where
         restrictions: R,
     ) -> Result<bool, ServerInitiatedError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         V: TransferFormatInto,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
@@ -889,7 +889,7 @@ where
         handle: u16,
     ) -> Result<bool, ServerInitiatedError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match self.attributes.get(handle) {
             Some(attribute) => {
@@ -957,7 +957,7 @@ where
         restrictions: R,
     ) -> Result<bool, ServerInitiatedError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         V: TransferFormatInto,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
@@ -1006,8 +1006,19 @@ where
 
     /// Set the blob data
     ///
-    /// Input data must be the full data, in transfer format, of the read item.
-    fn set_blob_data(&mut self, blob: Vec<u8>, handle: u16) {
+    /// Blob data is used by the client to request additional data of a *read* response whenever the
+    /// response exceeds either the MTU or the maximum size for the response.
+    ///
+    /// This method is normally only used by a higher layer profile/protocol implementation. It is
+    /// not intended to be directly called by a application as it can be tricky to correctly assign
+    /// the blob data. The current blob must be congruent with the specification for the last sent
+    /// response to a read-kind request.
+    ///
+    /// Input `blob` must be the *full* data, in transfer format, of the read response. This client
+    /// can technically re-request data that was already sent so `blob` must be the full value.
+    ///
+    /// `handle` is the handle to the attribute to be read or the starting handle within a request.
+    pub fn set_blob_data(&mut self, blob: alloc::vec::Vec<u8>, handle: u16) {
         self.blob_data = MultiReqData {
             tf_data: blob,
             handle,
@@ -1128,7 +1139,7 @@ where
         client_mtu: u16,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(ATT) processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
 
@@ -1144,7 +1155,7 @@ where
         handle: u16,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(ATT) processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
 
@@ -1176,7 +1187,7 @@ where
         payload: &[u8],
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         // Need to split the handle from the raw data as the data type is not known
         let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
@@ -1196,7 +1207,7 @@ where
         handle_range: pdu::HandleRange,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         use core::cmp::min;
 
@@ -1352,7 +1363,7 @@ where
         payload: &[u8],
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if payload.len() >= 6 {
             let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4]).unwrap();
@@ -1437,7 +1448,7 @@ where
         type_request: pdu::TypeRequest,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         macro_rules! single_payload_size {
             ($cnt:expr, $size:expr) => {
@@ -1569,7 +1580,7 @@ where
         blob_request: pdu::ReadBlobRequest,
     ) -> Result<Status, super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!(
             "(ATT) processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
@@ -1623,7 +1634,7 @@ where
         br: &pdu::ReadBlobRequest,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let read_future = {
             let attribute = self.attributes.get(br.handle).unwrap();
@@ -1669,7 +1680,7 @@ where
         offset: u16,
     ) -> Result<Status, ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let data = self.blob_data.as_ref().unwrap();
 
@@ -1720,7 +1731,7 @@ where
         payload: &[u8],
     ) -> Result<(), ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let request = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => request,
@@ -1754,7 +1765,7 @@ where
         request_flag: pdu::ExecuteWriteFlag,
     ) -> Result<(), super::ConnectionError<T>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(ATT) processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
 
@@ -2830,16 +2841,16 @@ impl QueuedWriter for NoQueuedWrites {
 }
 
 /// Error for notifications or indication methods of [`Server`]
-pub enum ServerInitiatedError<T: PhysicalLink> {
+pub enum ServerInitiatedError<T: LogicalLink> {
     InvalidHandle(u16),
     ConnectionError(ConnectionError<T>),
 }
 
 impl<T> core::fmt::Debug for ServerInitiatedError<T>
 where
-    T: PhysicalLink,
-    T::RecvErr: core::fmt::Debug,
-    T::SendErr: core::fmt::Debug,
+    T: LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
+    <T::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -2851,9 +2862,9 @@ where
 
 impl<T> core::fmt::Display for ServerInitiatedError<T>
 where
-    T: PhysicalLink,
-    T::RecvErr: core::fmt::Display,
-    T::SendErr: core::fmt::Display,
+    T: LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
+    <T::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -2866,8 +2877,8 @@ where
 #[cfg(feature = "std")]
 impl<T> std::error::Error for ServerInitiatedError<T>
 where
-    T: PhysicalLink,
-    T::RecvErr: std::error::Error,
-    T::SendErr: std::error::Error,
+    T: LogicalLink,
+    <T::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
+    <T::PhysicalLink as PhysicalLink>::SendErr: std::error::Error,
 {
 }

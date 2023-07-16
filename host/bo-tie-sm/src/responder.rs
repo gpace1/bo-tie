@@ -107,12 +107,12 @@ use alloc::vec::Vec;
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_core::BluetoothDeviceAddress;
 use bo_tie_l2cap::pdu::BasicFrame;
-use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
+use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 
 macro_rules! error {
     ($channel:ty) => {
         crate::SecurityManagerError<
-            <$channel as bo_tie_l2cap::PhysicalLink>::SendErr
+            <<$channel as bo_tie_l2cap::LogicalLink>::PhysicalLink as PhysicalLink>::SendErr
         >
     }
 }
@@ -660,7 +660,7 @@ impl SecurityManager {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<bool, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match self.pairing_data {
             Some(PairingData {
@@ -720,7 +720,7 @@ impl SecurityManager {
         irk: Irk,
     ) -> Result<u128, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         Irk: Into<Option<u128>>,
     {
         if self.link_encrypted {
@@ -763,7 +763,7 @@ impl SecurityManager {
         csrk: Csrk,
     ) -> Result<u128, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         Csrk: Into<Option<u128>>,
     {
         if self.link_encrypted {
@@ -808,7 +808,7 @@ impl SecurityManager {
         identity: I,
     ) -> Result<crate::IdentityAddress, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         I: Into<Option<crate::IdentityAddress>>,
     {
         let identity = match identity.into() {
@@ -868,7 +868,7 @@ impl SecurityManager {
         command: Cmd,
     ) -> Result<(), error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
         Cmd: Into<Command<P>>,
         P: CommandData,
     {
@@ -886,7 +886,7 @@ impl SecurityManager {
         fail_reason: PairingFailedReason,
     ) -> Result<(), error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         self.pairing_data = None;
 
@@ -912,7 +912,7 @@ impl SecurityManager {
         input: Input,
     ) -> Result<Status, InputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if self.pairing_data.is_none() {
             return Err(InputError::NotPairing);
@@ -959,7 +959,7 @@ impl SecurityManager {
         notification: KeyPressNotification,
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         self.send(connection_channel, notification).await?;
 
@@ -973,7 +973,7 @@ impl SecurityManager {
         passkey_val: u32,
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match self.pairing_data {
             Some(PairingData {
@@ -1025,7 +1025,7 @@ impl SecurityManager {
         is_yes: bool,
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if !is_yes {
             self.send_err(connection_channel, PairingFailedReason::NumericComparisonFailed)
@@ -1070,7 +1070,7 @@ impl SecurityManager {
         confirm: u128,
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match self.pairing_data {
             Some(PairingData {
@@ -1111,7 +1111,7 @@ impl SecurityManager {
         acl_data: &BasicFrame<Vec<u8>>,
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let command = match CommandType::try_from(acl_data) {
             Err(e) => {
@@ -1148,7 +1148,7 @@ impl SecurityManager {
         _cmd: CommandType,
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         self.send_err(connection_channel, PairingFailedReason::CommandNotSupported)
             .await?;
@@ -1163,7 +1163,7 @@ impl SecurityManager {
         data: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing pairing request");
 
@@ -1306,7 +1306,7 @@ impl SecurityManager {
         data: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing pairing public Key");
 
@@ -1423,7 +1423,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing pairing confirm");
 
@@ -1513,7 +1513,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing pairing random");
 
@@ -1622,7 +1622,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing pairing failed");
 
@@ -1647,7 +1647,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing pairing dh key check");
 
@@ -1685,7 +1685,7 @@ impl SecurityManager {
         initiator_dh_key_check: u128,
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         match self.pairing_data {
             Some(PairingData {
@@ -1779,7 +1779,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let _keypress_notification = match KeyPressNotification::try_from_command_format(payload) {
             Ok(keypress_notification) => keypress_notification,
@@ -1800,7 +1800,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing peer IRK");
 
@@ -1847,7 +1847,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing peer address info");
 
@@ -1894,7 +1894,7 @@ impl SecurityManager {
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         log::info!("(SM) processing peer signing info (CSRK)");
 
@@ -2082,7 +2082,7 @@ impl NumberComparison {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<Status, NumberComparisonError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         security_manager
             .process_input(self.instance, connection_channel, Input::yes())
@@ -2099,7 +2099,7 @@ impl NumberComparison {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<Status, NumberComparisonError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         security_manager
             .process_input(self.instance, connection_channel, Input::no())
@@ -2177,7 +2177,7 @@ impl PasskeyInput {
         both_enter: bool,
     ) -> Result<Self, error!(T)>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         let instance = security_manager.pairing_data.as_ref().unwrap().instance;
 
@@ -2228,7 +2228,7 @@ impl PasskeyInput {
         digit: char,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if self.key_count >= 6 {
             Err(PasscodeInputError::TooManyDigits)
@@ -2268,7 +2268,7 @@ impl PasskeyInput {
         index: usize,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if self.key_count >= 6 {
             Err(PasscodeInputError::TooManyDigits)
@@ -2309,7 +2309,7 @@ impl PasskeyInput {
         index: usize,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if index >= self.key_count {
             Err(PasscodeInputError::IndexOutOfBounds)
@@ -2340,7 +2340,7 @@ impl PasskeyInput {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         self.passkey = Default::default();
         self.key_count = 0;
@@ -2363,7 +2363,7 @@ impl PasskeyInput {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<Status, PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if self.key_count != 6 {
             Err(PasscodeInputError::NotComplete)
@@ -2410,7 +2410,7 @@ impl PasskeyInput {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         security_manager
             .process_input(self.instance, connection_channel, Input::passkey_enter())
@@ -2428,7 +2428,7 @@ impl PasskeyInput {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         security_manager
             .process_input(self.instance, connection_channel, Input::passkey_erase())
@@ -2446,7 +2446,7 @@ impl PasskeyInput {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         security_manager
             .process_input(self.instance, connection_channel, Input::passkey_clear())
@@ -2464,7 +2464,7 @@ impl PasskeyInput {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<Status, PasscodeInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         if !security_manager
             .pairing_data
@@ -2680,7 +2680,7 @@ impl OutOfBandInput {
         oob_data: &[u8],
     ) -> Result<Status, OutOfBandInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         use bo_tie_gap::assigned::{
             le_device_address, sc_confirm_value, sc_random_value, AssignedTypes, TryFromStruct,
@@ -2746,7 +2746,7 @@ impl OutOfBandInput {
         connection_channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<Status, OutOfBandInputError<error!(T)>>
     where
-        T: PhysicalLink,
+        T: LogicalLink,
     {
         security_manager
             .send_err(connection_channel, PairingFailedReason::OobNotAvailable)

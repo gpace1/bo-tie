@@ -40,6 +40,8 @@ use core::pin::Pin;
 /// [`PhysicalLink`]: bo_tie_l2cap::PhysicalLink
 pub struct LeLink<C: ConnectionChannelEnds> {
     handle: ConnectionHandle,
+    front_cap: usize,
+    back_cap: usize,
     hci_max_payload_size: usize,
     channel_ends: C,
 }
@@ -53,9 +55,17 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeLink<C> {
 }
 
 impl<C: ConnectionChannelEnds> LeLink<C> {
-    pub(crate) fn new(handle: ConnectionHandle, hci_max_payload_size: usize, channel_ends: C) -> Self {
+    pub(crate) fn new(
+        handle: ConnectionHandle,
+        front_cap: usize,
+        back_cap: usize,
+        hci_max_payload_size: usize,
+        channel_ends: C,
+    ) -> Self {
         Self {
             handle,
+            front_cap,
+            back_cap,
             hci_max_payload_size,
             channel_ends,
         }
@@ -118,10 +128,7 @@ where
         let payload = fragment.into_inner();
 
         let future = async move {
-            let mut buffer = self
-                .channel_ends
-                .take_to_buffer(None, self.max_transmission_size())
-                .await;
+            let mut buffer = self.channel_ends.take_to_buffer(self.front_cap, self.back_cap).await;
 
             buffer.try_extend(payload).unwrap();
 
@@ -157,6 +164,16 @@ where
                         Ok(data) => data,
                         Err(e) => return Some(Err(e)),
                     };
+
+                    log::info!(
+                        "(HCI) received L2CAP {}fragment: {:?}",
+                        if let AclPacketBoundary::FirstNonFlushable = hci_data.packet_boundary_flag {
+                            "starting "
+                        } else {
+                            ""
+                        },
+                        hci_data.get_payload().iter().copied().collect::<Vec<u8>>()
+                    );
 
                     Some(Ok(hci_data.into_l2cap_fragment()))
                 }
