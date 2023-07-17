@@ -139,30 +139,20 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
         MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
     > {
         loop {
-            let mut poll = Some(
-                match core::future::poll_fn(|_| self.logical_link.get_shared_link().maybe_recv(self.channel_id))
-                    .await
-                    .await
-                {
-                    Ok(f) => f,
-                    Err(e) => {
-                        self.logical_link.get_shared_link().clear_owner();
-
-                        return Err(e);
-                    }
-                },
-            );
-
-            match core::future::poll_fn(move |_| poll.take().unwrap()).await {
-                Ok(v) => break Ok(v),
-                Err(Some(pdu)) => {
-                    let output = self.send_inner(pdu).await;
+            match self.logical_link.get_shared_link().maybe_recv(self.channel_id).await {
+                Ok(Ok(f)) => break Ok(f),
+                Ok(Err(reject_response)) => {
+                    let output = self.send_inner(reject_response).await;
 
                     self.logical_link.get_shared_link().clear_owner();
 
                     output.map_err(|_| MaybeRecvError::Disconnected)?;
                 }
-                Err(None) => (),
+                Err(e) => {
+                    self.logical_link.get_shared_link().clear_owner();
+
+                    break Err(e);
+                }
             }
         }
     }
@@ -396,30 +386,25 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
     > {
         loop {
-            let mut poll = Some(
-                match core::future::poll_fn(|_| self.logical_link.get_shared_link().maybe_recv(self.this_channel_id))
-                    .await
-                    .await
-                {
-                    Ok(f) => f,
-                    Err(e) => {
-                        self.logical_link.get_shared_link().clear_owner();
-
-                        return Err(e);
-                    }
-                },
-            );
-
-            match core::future::poll_fn(move |_| poll.take().unwrap()).await {
-                Ok(v) => break Ok(v),
-                Err(Some(pdu)) => {
-                    let output = self.send_pdu_inner(pdu).await;
+            match self
+                .logical_link
+                .get_shared_link()
+                .maybe_recv(self.this_channel_id)
+                .await
+            {
+                Ok(Ok(f)) => break Ok(f),
+                Ok(Err(reject_response)) => {
+                    let output = self.send_pdu_inner(reject_response).await;
 
                     self.logical_link.get_shared_link().clear_owner();
 
                     output.map_err(|_| MaybeRecvError::Disconnected)?;
                 }
-                Err(None) => (),
+                Err(e) => {
+                    self.logical_link.get_shared_link().clear_owner();
+
+                    break Err(e);
+                }
             }
         }
     }

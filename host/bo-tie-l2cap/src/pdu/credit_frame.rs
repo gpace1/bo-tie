@@ -160,6 +160,22 @@ impl<T: Iterator<Item = u8>> Iterator for SduSubIter<'_, T> {
             None
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self.packets_iterator.sdu.size_hint() {
+            (_, None) => (0, None),
+            (low, Some(up)) => {
+                let size = core::cmp::min(up, self.amount);
+
+                if low == up {
+                    // exact sized
+                    (size, Some(size))
+                } else {
+                    (0, Some(size))
+                }
+            }
+        }
+    }
 }
 
 impl<T> ExactSizeIterator for SduSubIter<'_, T>

@@ -30,7 +30,7 @@ pub trait UnusedChannelResponse {
     ///
     /// A response is only generated for fixed channels. `None` is returned for dynamically
     /// allocated channels.
-    fn generate_response(request_data: Self::ReceiveData) -> Option<Self::Response>;
+    fn try_generate_response(request_data: Self::ReceiveData) -> Option<Self::Response>;
 
     /// Create a new `ReceiveData`
     fn new_request_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveData;
@@ -46,6 +46,9 @@ pub trait ReceiveDataProcessor: Copy + Clone + core::fmt::Debug + PartialEq {
     /// Process a fragment
     ///
     /// `true` is returned when the full PDU is processed.
+    ///
+    /// # Note
+    /// `fragment` will only contain bytes after the basic header of the PDU.
     fn process<T>(&mut self, fragment: L2capFragment<T>) -> Result<bool, Self::Error>
     where
         T: Iterator<Item = u8> + ExactSizeIterator;

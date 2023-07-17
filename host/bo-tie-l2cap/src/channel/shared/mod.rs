@@ -14,8 +14,8 @@ pub(crate) use crate::channel::shared::unused::{ReceiveDataProcessor, UnusedChan
 use crate::channel::InvalidChannel;
 use crate::pdu::L2capFragment;
 use crate::PhysicalLink;
-use std::future::Future;
-use std::task::Poll;
+use core::cell::{Cell, RefCell, UnsafeCell};
+use core::task::Poll;
 
 mod unused;
 
@@ -38,15 +38,15 @@ pub struct BasicHeadedFragment<T> {
 /// same channel identifier as the current executing future then the same future will poll to
 /// completion, but most likely the executing is not the correct future and
 struct BasicHeaderProcessor {
-    length: core::cell::Cell<ProcessorLengthState>,
-    channel_id: core::cell::Cell<ProcessorChannelIdentifier>,
+    length: Cell<ProcessorLengthState>,
+    channel_id: Cell<ProcessorChannelIdentifier>,
 }
 
 impl BasicHeaderProcessor {
     fn init() -> Self {
         BasicHeaderProcessor {
-            length: core::cell::Cell::new(ProcessorLengthState::None),
-            channel_id: core::cell::Cell::new(ProcessorChannelIdentifier::None),
+            length: Cell::new(ProcessorLengthState::None),
+            channel_id: Cell::new(ProcessorChannelIdentifier::None),
         }
     }
 
@@ -80,8 +80,7 @@ impl BasicHeaderProcessor {
         fragment: &mut L2capFragment<T>,
         this_channel: ChannelIdentifier,
         active_channels: &[ChannelIdentifier],
-        context: &mut core::task::Context,
-    ) -> Poll<Result<Result<(u16, ChannelIdentifier), (u16, ChannelIdentifier)>, InvalidChannel>>
+    ) -> Result<BasicHeadProcessOutput, InvalidChannel>
     where
         T: Iterator<Item = u8>,
     {

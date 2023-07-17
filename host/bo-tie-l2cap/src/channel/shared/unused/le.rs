@@ -10,7 +10,7 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
     type ReceiveData = UnusedFixedChannelPduData;
     type Response = BasicFrame<UnusedPduResp>;
 
-    fn generate_response(request_data: UnusedFixedChannelPduData) -> Option<Self::Response> {
+    fn try_generate_response(request_data: UnusedFixedChannelPduData) -> Option<Self::Response> {
         match request_data.channel_id {
             ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
                 let UnusedFixedChannelPduChannelData::Attribute(attribute_data) = request_data.channel_data else {
