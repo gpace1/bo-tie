@@ -596,13 +596,13 @@ impl<const SIZE: usize, T> Iterator for DeLinearBufferIntoIter<SIZE, T> {
             next
         })
     }
-}
 
-impl<const SIZE: usize, T> ExactSizeIterator for DeLinearBufferIntoIter<SIZE, T> {
-    fn len(&self) -> usize {
-        self.0.count
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.0.count, Some(self.0.count))
     }
 }
+
+impl<const SIZE: usize, T> ExactSizeIterator for DeLinearBufferIntoIter<SIZE, T> {}
 
 /// A queue buffer
 ///

@@ -203,13 +203,13 @@ impl<T> Iterator for DeVecIntoIter<T> {
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
     }
-}
 
-impl<T> ExactSizeIterator for DeVecIntoIter<T> {
-    fn len(&self) -> usize {
-        self.iter.len()
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.iter.len(), Some(self.iter.len()))
     }
 }
+
+impl<T> ExactSizeIterator for DeVecIntoIter<T> {}
 
 /// A dynamic reserve of buffers
 ///

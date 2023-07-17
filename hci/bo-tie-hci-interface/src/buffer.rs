@@ -200,6 +200,13 @@ where
             DriverBufferIter::B(b) => b.next(),
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            DriverBufferIter::A(a) => a.size_hint(),
+            DriverBufferIter::B(b) => b.size_hint(),
+        }
+    }
 }
 
 impl<A, B> ExactSizeIterator for DriverBufferIter<A, B>
@@ -207,10 +214,4 @@ where
     A: ExactSizeIterator,
     B: Iterator<Item = A::Item> + ExactSizeIterator,
 {
-    fn len(&self) -> usize {
-        match self {
-            DriverBufferIter::A(a) => a.len(),
-            DriverBufferIter::B(b) => b.len(),
-        }
-    }
 }
