@@ -250,19 +250,21 @@ impl Iterator for UnusedPduRespIter {
 
         rsp
     }
-}
 
-impl ExactSizeIterator for UnusedPduRespIter {
-    fn len(&self) -> usize {
-        match &self.rsp {
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = match &self.rsp {
             UnusedPduResp::Att(_, _) => 5usize,
             UnusedPduResp::SigCmd(_) => 5,
             UnusedPduResp::SecurityManager => 2,
         }
         .checked_sub(self.cnt)
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+        (size, Some(size))
     }
 }
+
+impl ExactSizeIterator for UnusedPduRespIter {}
 
 #[derive(Debug)]
 pub enum UnusedError {

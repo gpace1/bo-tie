@@ -622,13 +622,15 @@ impl Iterator for CmdRejectRspIter<'_> {
 
         ret
     }
-}
 
-impl ExactSizeIterator for CmdRejectRspIter<'_> {
-    fn len(&self) -> usize {
-        (6 + self.reject.data.len()).checked_sub(self.pos).unwrap_or_default()
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = (6 + self.reject.data.len()).checked_sub(self.pos).unwrap_or_default();
+
+        (size, Some(size))
     }
 }
+
+impl ExactSizeIterator for CmdRejectRspIter<'_> {}
 
 /// Disconnection Request Signal
 ///
@@ -789,13 +791,15 @@ impl Iterator for DisconnectRequestIter<'_> {
 
         ret
     }
-}
 
-impl ExactSizeIterator for DisconnectRequestIter<'_> {
-    fn len(&self) -> usize {
-        8
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = 8usize.checked_sub(self.pos).unwrap_or_default();
+
+        (size, Some(size))
     }
 }
+
+impl ExactSizeIterator for DisconnectRequestIter<'_> {}
 
 /// Disconnection Response Signal
 ///
@@ -937,13 +941,15 @@ impl Iterator for DisconnectResponseIter<'_> {
 
         ret
     }
-}
 
-impl ExactSizeIterator for DisconnectResponseIter<'_> {
-    fn len(&self) -> usize {
-        8
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = 8usize.checked_sub(self.pos).unwrap_or_default();
+
+        (size, Some(size))
     }
 }
+
+impl ExactSizeIterator for DisconnectResponseIter<'_> {}
 
 /// Simplified Protocol/Service Multiplexer
 ///
@@ -1192,13 +1198,15 @@ impl Iterator for LeCreditRequestIter<'_> {
 
         ret
     }
-}
 
-impl ExactSizeIterator for LeCreditRequestIter<'_> {
-    fn len(&self) -> usize {
-        14usize.checked_sub(self.pos).unwrap_or_default()
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = 14usize.checked_sub(self.pos).unwrap_or_default();
+
+        (size, Some(size))
     }
 }
+
+impl ExactSizeIterator for LeCreditRequestIter<'_> {}
 
 /// Errors for the *result* field of a [`LeCreditBasedConnectionResponse`]
 ///
@@ -1475,13 +1483,15 @@ impl Iterator for LeCreditResponseIter<'_> {
 
         ret
     }
-}
 
-impl ExactSizeIterator for LeCreditResponseIter<'_> {
-    fn len(&self) -> usize {
-        14usize.checked_sub(self.pos).unwrap_or_default()
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = 14usize.checked_sub(self.pos).unwrap_or_default();
+
+        (size, Some(size))
     }
 }
+
+impl ExactSizeIterator for LeCreditResponseIter<'_> {}
 
 /// Flow control credit indication
 pub struct FlowControlCreditInd {
@@ -1638,10 +1648,12 @@ impl Iterator for FlowControlCreditIndIter<'_> {
 
         ret
     }
-}
 
-impl ExactSizeIterator for FlowControlCreditIndIter<'_> {
-    fn len(&self) -> usize {
-        14usize.checked_sub(self.pos).unwrap_or_default()
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = 14usize.checked_sub(self.pos).unwrap_or_default();
+
+        (size, Some(size))
     }
 }
+
+impl ExactSizeIterator for FlowControlCreditIndIter<'_> {}
