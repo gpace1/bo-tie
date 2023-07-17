@@ -777,14 +777,14 @@ impl<'a> GapServiceBuilder<'a> {
     /// Default attribute permissions
     // This is a reference to an array (instead of a slice) so that it errors if the types
     // AttributeRestriction or EncryptionKeySize has enums added to them.
-    const DEFAULT_NAME_PERMISSIONS: &'static [att::AttributeRestriction; att::AttributeRestriction::full_depth() - 1] =
-        &[
-            att::AttributeRestriction::Authorization,
-            att::AttributeRestriction::Authentication,
-            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128),
-            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits192),
-            att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits256),
-        ];
+    const DEFAULT_NAME_PERMISSIONS: &'static [att::AttributeRestriction; att::AttributeRestriction::full_depth()] = &[
+        att::AttributeRestriction::None,
+        att::AttributeRestriction::Authorization,
+        att::AttributeRestriction::Authentication,
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128),
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits192),
+        att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits256),
+    ];
 
     /// Default Appearance
     pub const UNKNOWN_APPEARANCE: u16 = 0;
