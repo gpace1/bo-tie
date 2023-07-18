@@ -121,21 +121,24 @@ impl BasicHeaderProcessor {
                     return if channel_id == this_channel {
                         // the channel calling this method is the same as
                         // the destination channel for this PDU
-                        Poll::Ready(Ok(Ok(self.get_basic_header().unwrap())))
-                    } else if active_channels.binary_search(&channel_id).is_err() {
-                        // channel is not used by the library user
-                        Poll::Ready(Ok(Err(self.get_basic_header().unwrap())))
-                    } else {
-                        context.waker().clone().wake();
+                        let (len, cid) = self.get_basic_header().unwrap();
 
-                        Poll::Pending
+                        Ok(BasicHeadProcessOutput::PduIsForThisChannel(len, cid))
+                    } else if active_channels.binary_search(&channel_id).is_err() {
+                        // channel for PDU is not currently being used
+
+                        let (len, cid) = self.get_basic_header().unwrap();
+
+                        Ok(BasicHeadProcessOutput::PduIsForUnusedChannel(len, cid))
+                    } else {
+                        Ok(BasicHeadProcessOutput::PduIsForDifferentChannel(channel_id))
                     };
                 }
                 _ => unreachable!("unexpected state of SharedL2capRawDataProcessor"),
             }
         }
 
-        Poll::Pending
+        Ok(BasicHeadProcessOutput::Undetermined)
     }
 
     /// Get the Basic Header
