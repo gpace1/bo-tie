@@ -156,6 +156,13 @@ impl BasicHeaderProcessor {
     }
 }
 
+enum BasicHeadProcessOutput {
+    Undetermined,
+    PduIsForDifferentChannel(ChannelIdentifier),
+    PduIsForThisChannel(u16, ChannelIdentifier),
+    PduIsForUnusedChannel(u16, ChannelIdentifier),
+}
+
 /// Enumeration of a [`BasicHeaderProcessor`] length
 #[derive(Copy, Clone)]
 enum ProcessorLengthState {
