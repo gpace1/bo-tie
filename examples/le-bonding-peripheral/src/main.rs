@@ -128,14 +128,16 @@ async fn wait_for_connection<H: HostChannelEnds>(
     connection
 }
 
-async fn on_encryption_change<C, Q>(
+async fn on_encryption_change<L, Q>(
     ed: &bo_tie::hci::events::parameters::EncryptionChangeV1Data,
-    le_connection_channel: &C,
+    security_manager_channel: &mut bo_tie::host::l2cap::BasicFrameChannel<'_, L>,
     security_manager: &mut bo_tie::host::sm::responder::SecurityManager,
     gatt_server: &mut bo_tie::host::gatt::Server<Q>,
 ) where
-    C: bo_tie::host::l2cap::ConnectionChannel,
+    L: bo_tie::host::l2cap::LogicalLink,
     Q: bo_tie::host::att::server::QueuedWriter,
+    <<L as bo_tie::host::l2cap::LogicalLink>::PhysicalLink as bo_tie::host::l2cap::PhysicalLink>::SendErr:
+        std::fmt::Debug,
 {
     use bo_tie::host::att::{AttributePermissions, AttributeRestriction, EncryptionKeySize};
 
@@ -149,7 +151,7 @@ async fn on_encryption_change<C, Q>(
         )));
 
         if let None = security_manager.get_keys().unwrap().get_irk() {
-            security_manager.start_bonding(le_connection_channel).await.unwrap();
+            security_manager.start_bonding(security_manager_channel).await.unwrap();
         }
     } else {
         gatt_server.revoke_permissions_of_client(AttributePermissions::Read(AttributeRestriction::Encryption(
@@ -170,7 +172,6 @@ where
     C: bo_tie::hci::ConnectionChannelEnds,
 {
     use bo_tie::hci::events::{EventsData, LeMetaData};
-    use bo_tie::host::l2cap::{channels::ChannelIdentifier, channels::LeCid, ConnectionChannelExt};
     use bo_tie::host::{att, gatt, sm};
 
     let peer_address = AddressInfo {
@@ -180,7 +181,11 @@ where
 
     let mut event_receiver = connection.take_event_receiver().unwrap();
 
-    let mut le_connection_channel = connection.try_into_le().unwrap();
+    let logical_link: bo_tie::host::l2cap::LeULogicalLink<_> = connection.try_into_le().unwrap().into();
+
+    let mut att_channel = logical_link.get_att_channel();
+
+    let mut sm_channel = logical_link.get_sm_channel();
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
@@ -214,57 +219,51 @@ where
 
     loop {
         tokio::select! {
-            l2cap_packets = le_connection_channel.receive_b_frame() => {
-                for packet in l2cap_packets.ok().into_iter().flatten() {
-                    match packet.get_channel_id() {
-                        ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
-                            gatt_server
-                                .process_att_pdu(&mut le_connection_channel, &packet)
-                                .await
-                                .unwrap();
-                        }
-                        ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                            match security_manager
-                                .process_command(&le_connection_channel, &packet)
-                                .await
-                                .unwrap()
-                            {
-                                Status::NumberComparison(n) => {
-                                    println!(
-                                        "To proceed with pairing, compare this number ({n}) with \
-                                        the number displayed on the other device"
-                                    );
-                                    println!("Does {n} match the number on the other device? \
-                                        [y/n]"
-                                    );
+            att_packet = att_channel.receive() => {
+                gatt_server
+                    .process_att_pdu(&mut att_channel, &att_packet.unwrap())
+                    .await
+                    .unwrap();
+            }
 
-                                    number_comparison = Some(n);
-                                },
-                                Status::PasskeyInput(i) => {
-                                    io::passkey_input_message(&i);
+            sm_packet = sm_channel.receive() => {
+                    match security_manager
+                        .process_command(&mut sm_channel, &sm_packet.unwrap())
+                        .await
+                        .unwrap()
+                    {
+                        Status::NumberComparison(n) => {
+                            println!(
+                                "To proceed with pairing, compare this number ({n}) with \
+                                the number displayed on the other device"
+                            );
+                            println!("Does {n} match the number on the other device? \
+                                [y/n]"
+                            );
 
-                                    passkey_input = Some(i)
-                                }
-                                Status::PasskeyOutput(o) => {
-                                   println!("enter this passkey on the other device: {o}")
-                                },
-                                Status::PairingFailed(reason) => {
-                                    eprintln!("pairing failed: {reason}");
-                                    number_comparison = None;
-                                    passkey_input = None;
-                                }
-                                Status::BondingComplete => println!("bonding complete"),
-                                _ => (),
-                            }
+                            number_comparison = Some(n);
+                        },
+                        Status::PasskeyInput(i) => {
+                            io::passkey_input_message(&i);
+
+                            passkey_input = Some(i)
                         }
-                        _ => println!("received unexpected channel identifier"),
+                        Status::PasskeyOutput(o) => {
+                           println!("enter this passkey on the other device: {o}")
+                        },
+                        Status::PairingFailed(reason) => {
+                            eprintln!("pairing failed: {reason}");
+                            number_comparison = None;
+                            passkey_input = None;
+                        }
+                        Status::BondingComplete => println!("bonding complete"),
+                        _ => (),
                     }
-                }
-            },
+            }
 
             event_data = event_receiver.recv() => match event_data {
                 Some(EventsData::EncryptionChangeV1(ed) )=> {
-                    on_encryption_change(&ed, &le_connection_channel, &mut security_manager, &mut gatt_server).await;
+                    on_encryption_change(&ed, &mut sm_channel, &mut security_manager, &mut gatt_server).await;
                 }
                 Some(EventsData::LeMeta(LeMetaData::LongTermKeyRequest(_))) => {
                     let opt_ltk = security_manager.get_keys().and_then(|keys| keys.get_ltk());
@@ -279,14 +278,14 @@ where
                 number_comparison
                     .take()
                     .unwrap()
-                    .yes(&mut security_manager, &le_connection_channel)
+                    .yes(&mut security_manager, &mut sm_channel)
                     .await
                     .unwrap();
             } else {
                 number_comparison
                     .take()
                     .unwrap()
-                    .no(&mut security_manager, &le_connection_channel)
+                    .no(&mut security_manager, &mut sm_channel)
                     .await
                     .unwrap();
             },
@@ -294,9 +293,9 @@ where
             passkey = io::get_passkey(passkey_input.is_none()) => if let Some(input) = io::process_passkey(passkey) {
                 passkey_input.as_mut().unwrap().write(input).unwrap();
 
-                passkey_input.take().unwrap().complete(&mut security_manager, &le_connection_channel).await.unwrap();
+                passkey_input.take().unwrap().complete(&mut security_manager, &mut sm_channel).await.unwrap();
             } else {
-                passkey_input.take().unwrap().fail(&mut security_manager, &le_connection_channel).await.unwrap();
+                passkey_input.take().unwrap().fail(&mut security_manager, &mut sm_channel).await.unwrap();
             },
         }
     }
