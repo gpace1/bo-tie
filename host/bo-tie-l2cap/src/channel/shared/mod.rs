@@ -342,129 +342,180 @@ where
         unsafe { self.physical_link.get().as_mut().unwrap().send(fragment).into() }
     }
 
-    pub fn maybe_recv(
+    /// Receive a Fragment
+    ///
+    /// This method is unsafe as it does not check if the caller is the correct `owner`. Before this
+    /// method is called, `self.owner` must be checked to ensure the caller is the correct owner.
+    async unsafe fn recv_fragment(&self) -> Result<L2capFragment<P::RecvData>, MaybeRecvError<P, U>> {
+        self.physical_link
+            .get()
+            .as_mut()
+            .unwrap()
+            .recv()
+            .await
+            .ok_or(MaybeRecvError::Disconnected)?
+            .map_err(|e| MaybeRecvError::RecvError(e))
+    }
+
+    pub async fn maybe_recv(
         &self,
         owner: ChannelIdentifier,
-    ) -> Poll<
-        impl Future<
-                Output = Result<
-                    Poll<Result<BasicHeadedFragment<P::RecvData>, Option<U::Response>>>,
-                    MaybeRecvError<P, U>,
-                >,
-            > + '_,
-    > {
-        if self.owner.get().is_none() {
-            self.owner.set(PhysicalLinkOwner::Receiver(owner))
-        } else if !self.owner.get().is_dump_recv() && self.owner.get() != PhysicalLinkOwner::Receiver(owner) {
-            return Poll::Pending;
+    ) -> Result<Result<BasicHeadedFragment<P::RecvData>, U::Response>, MaybeRecvError<P, U>> {
+        log::error!("maybe_recv");
+
+        loop {
+            core::future::poll_fn(|_| {
+                if self.owner.get().is_none() {
+                    log::error!("owner set {:?}", PhysicalLinkOwner::Receiver(owner));
+
+                    self.owner.set(PhysicalLinkOwner::Receiver(owner));
+                } else if self.owner.get() != PhysicalLinkOwner::Receiver(owner) {
+                    log::debug!(
+                        "awaiting other owner {:?} != {:?}",
+                        PhysicalLinkOwner::Receiver(owner),
+                        self.owner.get()
+                    );
+
+                    return Poll::Pending;
+                }
+
+                Poll::Ready(())
+            })
+            .await;
+
+            let fragment = unsafe { self.recv_fragment().await? };
+
+            log::error!("processing header");
+
+            if self.drop_data.get().is_some() {
+                if let Some(rsp) = self.process_dumped_fragment(fragment)? {
+                    break Ok(Err(rsp));
+                }
+            } else {
+                match self.maybe_recv_header_process(owner, fragment)? {
+                    MaybeReceiveOutput::HeadedFragment(f) => break Ok(Ok(f)),
+                    MaybeReceiveOutput::UnusedChannelPduResponse(rsp) => break Ok(Err(rsp)),
+                    MaybeReceiveOutput::Undetermined
+                    | MaybeReceiveOutput::PduIsForDifferentChannel
+                    | MaybeReceiveOutput::UnusedChannelFragmentForgotten => continue,
+                }
+            }
         }
+    }
 
-        let future = async move {
-            let fragment = unsafe {
-                self.physical_link
-                    .get()
-                    .as_mut()
-                    .unwrap()
-                    .recv()
-                    .await
-                    .ok_or(MaybeRecvError::Disconnected)?
-                    .map_err(|e| MaybeRecvError::RecvError(e))?
-            };
-
-            if self.owner.get().is_dump_recv() {
-                let response = self.process_dumped_fragment(fragment).await?;
-
-                Ok(Poll::Ready(Err(response)))
-            } else if let Some((len, cid)) = self.basic_header_processor.get_basic_header() {
-                let headed_fragment = BasicHeadedFragment {
+    /// Maybe receive the header
+    ///
+    /// # Output
+    /// The return is two results
+    /// * The outer result is the general 'is everything ok?'. If this returns an error the user
+    ///   (of the lib) should probably disconnect or end the link.
+    /// * The inner result is used to determine if there was a fragment for this channel or a PDU
+    ///   drop or reject that was *handled* by this channel. An `Ok(_)` of the inner is always a
+    ///   fragment for the channel that called this method, an `Err(_)` will be for a complete PDU
+    ///   that did not match any channel currently used. For `Err(None)` the channel doesn't need
+    ///   to send a response, for a `Err(Some(_))` the channel should send the generated response.
+    ///
+    /// ## PDU Drop/Reject (recap)
+    /// Dropping or Rejecting occurs whenever a PDU is received with a channel identifier of a
+    /// channel that is not currently used by the link layer instance.
+    fn maybe_recv_header_process(
+        &self,
+        owner: ChannelIdentifier,
+        fragment: L2capFragment<P::RecvData>,
+    ) -> Result<MaybeReceiveOutput<P, U>, MaybeRecvError<P, U>> {
+        if let Some((len, cid)) = self.basic_header_processor.get_basic_header() {
+            return if owner == cid {
+                let header_fragment = BasicHeadedFragment {
                     length: len,
                     channel_id: cid,
                     fragment,
                 };
 
-                Ok(Poll::Ready(Ok(headed_fragment)))
+                Ok(MaybeReceiveOutput::HeadedFragment(header_fragment))
             } else {
-                self.maybe_recv_header_process(owner, fragment)
-                    .await
-                    .map(|poll| poll.map(|frag| Ok(frag)))
-            }
-        };
+                Ok(MaybeReceiveOutput::PduIsForDifferentChannel)
+            };
+        }
 
-        Poll::Ready(future)
-    }
-
-    async fn maybe_recv_header_process(
-        &self,
-        owner: ChannelIdentifier,
-        fragment: L2capFragment<P::RecvData>,
-    ) -> Result<Poll<BasicHeadedFragment<P::RecvData>>, MaybeRecvError<P, U>> {
         let mut fragment = Some(fragment);
 
-        core::future::poll_fn(move |context| {
-            if fragment.is_none() {
-                return Poll::Pending;
+        let active_channels = self.channels.borrow();
+
+        let process_output =
+            self.basic_header_processor
+                .process(fragment.as_mut().unwrap(), owner, &**active_channels)?;
+
+        drop(active_channels);
+
+        match process_output {
+            BasicHeadProcessOutput::Undetermined => Ok(MaybeReceiveOutput::Undetermined),
+            BasicHeadProcessOutput::PduIsForDifferentChannel(cid) => {
+                self.owner.set(PhysicalLinkOwner::Receiver(cid));
+
+                self.stasis_fragment.set(fragment.take());
+
+                Ok(MaybeReceiveOutput::PduIsForDifferentChannel)
             }
+            BasicHeadProcessOutput::PduIsForThisChannel(len, cid) => {
+                let header_fragment = BasicHeadedFragment {
+                    length: len,
+                    channel_id: cid,
+                    fragment: fragment.take().unwrap(),
+                };
 
-            let active_channels = self.channels.borrow();
+                Ok(MaybeReceiveOutput::HeadedFragment(header_fragment))
+            }
+            BasicHeadProcessOutput::PduIsForUnusedChannel(len, cid) => {
+                // set this channel to deal with the
+                // to be dumped PDU
+                self.owner.set(PhysicalLinkOwner::Receiver(owner));
 
-            let process_output =
-                self.basic_header_processor
-                    .process(fragment.as_mut().unwrap(), owner, &**active_channels, context);
+                let receive_data = U::new_request_data(len.into(), cid);
 
-            drop(active_channels);
+                self.drop_data.set(Some(receive_data));
 
-            match process_output {
-                Poll::Pending => {
-                    if let Some((_, cid)) = self.basic_header_processor.get_basic_header() {
-                        self.owner.set(PhysicalLinkOwner::Receiver(cid));
+                let fragment = fragment.take().unwrap();
 
-                        self.stasis_fragment.set(fragment.take());
-                    }
-
-                    Poll::Pending
-                }
-                Poll::Ready(Err(e)) => Poll::Ready(Err(MaybeRecvError::InvalidChannel(e))),
-                Poll::Ready(Ok(Ok((len, cid)))) => {
-                    let header_fragment = BasicHeadedFragment {
-                        length: len,
-                        channel_id: cid,
-                        fragment: fragment.take().unwrap(),
-                    };
-
-                    Poll::Ready(Ok(Poll::Ready(header_fragment)))
-                }
-                Poll::Ready(Ok(Err((len, cid)))) => {
-                    let request_data = U::new_request_data(len.into(), cid);
-
-                    self.owner.set(PhysicalLinkOwner::DumpReceived(request_data));
-
-                    Poll::Pending
+                match self.process_dumped_fragment(fragment)? {
+                    Some(response) => Ok(MaybeReceiveOutput::UnusedChannelPduResponse(response)),
+                    None => Ok(MaybeReceiveOutput::UnusedChannelFragmentForgotten),
                 }
             }
-        })
-        .await
+        }
     }
 
-    async fn process_dumped_fragment<T: Iterator<Item = u8> + ExactSizeIterator>(
+    /// Process a dumped fragment
+    ///
+    /// This will only return a `U::Response` whenever there is a response to send. Otherwise it
+    /// will return `None`, regardless of if all fragments of the PDU have been processed.
+    fn process_dumped_fragment<T: Iterator<Item = u8> + ExactSizeIterator>(
         &self,
         fragment: L2capFragment<T>,
     ) -> Result<Option<U::Response>, MaybeRecvError<P, U>> {
-        let PhysicalLinkOwner::DumpReceived(mut d) = self.owner.get() else {
-            unreachable!()
-        };
+        let mut recv_data = self.drop_data.get().unwrap();
 
-        if d.process(fragment).map_err(|e| MaybeRecvError::DumpRecvError(e))? {
-            self.owner.set(PhysicalLinkOwner::None);
+        if recv_data
+            .process(fragment)
+            .map_err(|e| MaybeRecvError::DumpRecvError(e))?
+        {
+            self.clear_owner();
+            self.drop_data.take();
 
-            let response = U::generate_response(d);
-
-            Ok(response)
+            Ok(U::try_generate_response(recv_data))
         } else {
-            self.owner.set(PhysicalLinkOwner::DumpReceived(d));
+            self.drop_data.set(Some(recv_data));
 
             Ok(None)
         }
     }
+}
+
+enum MaybeReceiveOutput<P: PhysicalLink, U: UnusedChannelResponse> {
+    Undetermined,
+    PduIsForDifferentChannel,
+    HeadedFragment(BasicHeadedFragment<P::RecvData>),
+    UnusedChannelPduResponse(U::Response),
+    UnusedChannelFragmentForgotten,
 }
 
 pub enum MaybeRecvError<P: PhysicalLink, U: UnusedChannelResponse> {
@@ -472,6 +523,12 @@ pub enum MaybeRecvError<P: PhysicalLink, U: UnusedChannelResponse> {
     RecvError(P::RecvErr),
     InvalidChannel(InvalidChannel),
     DumpRecvError(<U::ReceiveData as ReceiveDataProcessor>::Error),
+}
+
+impl<P: PhysicalLink, U: UnusedChannelResponse> From<InvalidChannel> for MaybeRecvError<P, U> {
+    fn from(ic: InvalidChannel) -> Self {
+        MaybeRecvError::InvalidChannel(ic)
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
