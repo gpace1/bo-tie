@@ -189,7 +189,13 @@ enum ProcessorChannelIdentifier {
 /// sent or acquired. This is used to ensure that sending and receiving with multiple channels
 /// is safe.
 ///
-/// ## How This Works
+/// # Safety
+/// This type is inherently unsafe to use outside of this library. It unsafely implements `Sync`,
+/// even though the type is not `Sync` safe. Every channel (an other types) that use a reference to
+/// `SharedPhysicalLink` must be `!Sync` to ensure that this is not unsafely used in a `Sync`
+/// situation.
+///
+/// # How This Works
 /// If you look at the implementation of [`PhysicalLink`] both methods `send` and `recv` require
 /// mutable access to the implementation, but there are multiple channels that wish to have
 /// references to the physical link. To ensure safety, only one channel may *exclusively* call
@@ -216,12 +222,15 @@ enum ProcessorChannelIdentifier {
 ///
 /// [`PhysicalLink`]: PhysicalLink
 pub struct SharedPhysicalLink<P: PhysicalLink, U: UnusedChannelResponse> {
-    owner: core::cell::Cell<PhysicalLinkOwner<U::ReceiveData>>,
-    channels: core::cell::RefCell<alloc::vec::Vec<ChannelIdentifier>>,
-    physical_link: core::cell::UnsafeCell<P>,
+    owner: Cell<PhysicalLinkOwner>,
+    channels: RefCell<alloc::vec::Vec<ChannelIdentifier>>,
+    physical_link: UnsafeCell<P>,
     basic_header_processor: BasicHeaderProcessor,
-    stasis_fragment: core::cell::Cell<Option<L2capFragment<P::RecvData>>>,
+    stasis_fragment: Cell<Option<L2capFragment<P::RecvData>>>,
+    drop_data: Cell<Option<U::ReceiveData>>,
 }
+
+unsafe impl<P: PhysicalLink, U: UnusedChannelResponse> Sync for SharedPhysicalLink<P, U> {}
 
 impl<P, U> SharedPhysicalLink<P, U>
 where
@@ -229,15 +238,17 @@ where
     U: UnusedChannelResponse,
 {
     pub fn new(physical_link: P) -> Self {
-        let owner = core::cell::Cell::new(PhysicalLinkOwner::None);
+        let owner = Cell::new(PhysicalLinkOwner::None);
 
-        let channels = core::cell::RefCell::default();
+        let channels = RefCell::default();
 
         let basic_header_processor = BasicHeaderProcessor::init();
 
-        let stasis_fragment = core::cell::Cell::new(None);
+        let stasis_fragment = Cell::new(None);
 
-        let physical_link = core::cell::UnsafeCell::new(physical_link);
+        let physical_link = UnsafeCell::new(physical_link);
+
+        let drop_data = Cell::default();
 
         Self {
             owner,
@@ -245,6 +256,7 @@ where
             physical_link,
             basic_header_processor,
             stasis_fragment,
+            drop_data,
         }
     }
 
@@ -324,13 +336,6 @@ where
 
             self.owner.set(PhysicalLinkOwner::Sender(owner))
         } else if self.owner.get() != PhysicalLinkOwner::Sender(owner) {
-            // TODO Note:
-            // It may be possible for two things to try to send
-            // "at the same time", however there should be no
-            // reason to require "waking". This is because sending
-            // can only be done within the same async task. Not
-            // 100% sure this is true though....
-
             return Poll::Pending;
         }
 
@@ -361,21 +366,11 @@ where
         &self,
         owner: ChannelIdentifier,
     ) -> Result<Result<BasicHeadedFragment<P::RecvData>, U::Response>, MaybeRecvError<P, U>> {
-        log::error!("maybe_recv");
-
         loop {
             core::future::poll_fn(|_| {
                 if self.owner.get().is_none() {
-                    log::error!("owner set {:?}", PhysicalLinkOwner::Receiver(owner));
-
                     self.owner.set(PhysicalLinkOwner::Receiver(owner));
                 } else if self.owner.get() != PhysicalLinkOwner::Receiver(owner) {
-                    log::debug!(
-                        "awaiting other owner {:?} != {:?}",
-                        PhysicalLinkOwner::Receiver(owner),
-                        self.owner.get()
-                    );
-
                     return Poll::Pending;
                 }
 
@@ -384,8 +379,6 @@ where
             .await;
 
             let fragment = unsafe { self.recv_fragment().await? };
-
-            log::error!("processing header");
 
             if self.drop_data.get().is_some() {
                 if let Some(rsp) = self.process_dumped_fragment(fragment)? {
@@ -532,30 +525,19 @@ impl<P: PhysicalLink, U: UnusedChannelResponse> From<InvalidChannel> for MaybeRe
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-enum PhysicalLinkOwner<D> {
+enum PhysicalLinkOwner {
     /// No current owner
     None,
-    /// A dumped L2CAP packet
-    ///
-    /// Dumped packets occur for L2CAP PDUs to unused or invalid channels.
-    DumpReceived(D),
     /// Occupied by a channel sending a L2CAP PDU
     Sender(ChannelIdentifier),
     /// Occupied by a channel receiving a L2CAP PDU
     Receiver(ChannelIdentifier),
 }
 
-impl<D> PhysicalLinkOwner<D> {
+impl PhysicalLinkOwner {
     fn is_none(&self) -> bool {
         match self {
             PhysicalLinkOwner::None => true,
-            _ => false,
-        }
-    }
-
-    fn is_dump_recv(&self) -> bool {
-        match self {
-            PhysicalLinkOwner::DumpReceived(_) => true,
             _ => false,
         }
     }

@@ -17,7 +17,7 @@ use crate::{
     Receiver, Sender, ToConnectionDataIntraMessage, ToConnectionEventIntraMessage, ToHostCommandIntraMessage,
     ToHostGeneralIntraMessage, ToInterfaceIntraMessage,
 };
-use bo_tie_core::buffer::{Buffer, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
+use bo_tie_core::buffer::{Buffer, IntoExactSizeIterator, TryExtend, TryFrontExtend, TryFrontRemove, TryRemove};
 use core::fmt::{Debug, Display};
 use core::future::Future;
 
@@ -36,6 +36,7 @@ pub trait SendSafeBuffer<'a>:
         Error = Self::SendSafeTryFrontRemoveError,
         FrontRemoveIter<'a> = Self::SendSafeTryFrontRemoveIter,
     >
+    + IntoExactSizeIterator<IntoExactIter = Self::SendSafeIntoExactIter>
 {
     type SendSafeTryExtendError: Debug + Display + Send;
     type SendSafeTryRemoveError: Debug + Display + Send;
@@ -43,6 +44,7 @@ pub trait SendSafeBuffer<'a>:
     type SendSafeTryFrontExtendError: Debug + Display + Send;
     type SendSafeTryFrontRemoveError: Debug + Display + Send;
     type SendSafeTryFrontRemoveIter: Iterator<Item = u8> + Send;
+    type SendSafeIntoExactIter: Iterator<Item = u8> + ExactSizeIterator + Send;
 }
 
 impl<'a, T> SendSafeBuffer<'a> for T
@@ -54,6 +56,7 @@ where
     <T as TryFrontExtend<u8>>::Error: Send,
     <T as TryFrontRemove<u8>>::Error: Send,
     <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>: Send,
+    <T as IntoExactSizeIterator>::IntoExactIter: Send,
 {
     type SendSafeTryExtendError = <T as TryExtend<u8>>::Error;
     type SendSafeTryRemoveError = <T as TryRemove<u8>>::Error;
@@ -61,6 +64,7 @@ where
     type SendSafeTryFrontExtendError = <T as TryFrontExtend<u8>>::Error;
     type SendSafeTryFrontRemoveError = <T as TryFrontRemove<u8>>::Error;
     type SendSafeTryFrontRemoveIter = <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>;
+    type SendSafeIntoExactIter = <T as IntoExactSizeIterator>::IntoExactIter;
 }
 
 /// Send and Sync safe equivalent of [`Buffer`]
@@ -79,6 +83,7 @@ pub trait SendAndSyncSafeBuffer<'a>:
         Error = Self::SendAndSyncSafeTryFrontRemoveError,
         FrontRemoveIter<'a> = Self::SendAndSyncSafeTryFrontRemoveIter,
     >
+    + IntoExactSizeIterator<IntoExactIter = Self::SendSafeIntoExactIter>
 {
     type SendAndSyncSafeTryExtendError: Debug + Display + Send + Sync;
     type SendAndSyncSafeTryRemoveError: Debug + Display + Send + Sync;
@@ -86,6 +91,7 @@ pub trait SendAndSyncSafeBuffer<'a>:
     type SendAndSyncSafeTryFrontExtendError: Debug + Display + Send + Sync;
     type SendAndSyncSafeTryFrontRemoveError: Debug + Display + Send + Sync;
     type SendAndSyncSafeTryFrontRemoveIter: Iterator<Item = u8> + Send + Sync;
+    type SendSafeIntoExactIter: Iterator<Item = u8> + ExactSizeIterator + Send + Sync;
 }
 
 impl<'a, T> SendAndSyncSafeBuffer<'a> for T
@@ -97,6 +103,7 @@ where
     <T as TryFrontExtend<u8>>::Error: Send + Sync,
     <T as TryFrontRemove<u8>>::Error: Send + Sync,
     <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>: Send + Sync,
+    <T as IntoExactSizeIterator>::IntoExactIter: Send + Sync,
 {
     type SendAndSyncSafeTryExtendError = <T as TryExtend<u8>>::Error;
     type SendAndSyncSafeTryRemoveError = <T as TryRemove<u8>>::Error;
@@ -104,6 +111,7 @@ where
     type SendAndSyncSafeTryFrontExtendError = <T as TryFrontExtend<u8>>::Error;
     type SendAndSyncSafeTryFrontRemoveError = <T as TryFrontRemove<u8>>::Error;
     type SendAndSyncSafeTryFrontRemoveIter = <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>;
+    type SendSafeIntoExactIter = <T as IntoExactSizeIterator>::IntoExactIter;
 }
 
 /// Send safe equivalent of [`BufferReserve`]
