@@ -151,7 +151,7 @@ impl HashValue {
                     | &characteristic::user_description::TYPE
                     | &characteristic::client_config::TYPE
                     | &characteristic::server_config::TYPE
-                    | &characteristic::format::TYPE
+                    | &characteristic::presentation_format::TYPE
                     | &characteristic::aggregate_format::TYPE => (),
                     _ => return None,
                 };

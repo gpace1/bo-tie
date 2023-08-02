@@ -8,7 +8,7 @@ use bo_tie_host_util::Uuid;
 use core::borrow::Borrow;
 
 /// UUID of an extended properties descriptor
-pub(crate) const TYPE: Uuid = Uuid::from_u16(0x2900);
+pub(crate) const TYPE: Uuid = crate::uuid::CHARACTERISTIC_EXTENDED_PROPERTIES;
 
 /// A constructor of a Characteristic extended properties descriptor declaration
 ///

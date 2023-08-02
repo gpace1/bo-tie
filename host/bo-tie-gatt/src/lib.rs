@@ -2,7 +2,6 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
-extern crate core;
 
 /// macro to ensure that `$to` is filled only with unique items of `$from`.
 macro_rules! unique_only {
@@ -85,6 +84,7 @@ macro_rules! map_restrictions {
 }
 
 pub mod characteristic;
+pub mod uuid;
 
 pub use bo_tie_att as att;
 use bo_tie_att::TransferFormatInto;
@@ -100,10 +100,10 @@ impl ServiceDefinition {
     const DEFAULT_PERMISSIONS: [att::AttributePermissions; 6] = att::FULL_READ_PERMISSIONS;
 
     /// The primary service UUID
-    pub const PRIMARY_SERVICE_TYPE: Uuid = Uuid::from_u16(0x2800);
+    pub const PRIMARY_SERVICE_TYPE: Uuid = uuid::PRIMARY_SERVICE;
 
     /// The secondary service UUID
-    pub const SECONDARY_SERVICE_TYPE: Uuid = Uuid::from_u16(0x2801);
+    pub const SECONDARY_SERVICE_TYPE: Uuid = uuid::SECONDARY_SERVICE;
 }
 
 #[derive(PartialEq)]
@@ -161,7 +161,7 @@ impl att::TransferFormatInto for ServiceInclude {
 }
 
 impl ServiceInclude {
-    const TYPE: Uuid = Uuid::from_u16(0x2802);
+    const TYPE: Uuid = uuid::INCLUDE_DEFINITION;
 }
 
 struct ServiceBuilderSource<'a> {
@@ -747,22 +747,22 @@ pub struct GapServiceBuilder<'a> {
 
 impl<'a> GapServiceBuilder<'a> {
     /// Service UUID
-    const GAP_SERVICE_TYPE: Uuid = Uuid::from_u16(0x1800);
+    const GAP_SERVICE_TYPE: Uuid = uuid::gap::GAP_SERVICE;
 
     /// Device Name Characteristic UUID
-    const DEVICE_NAME_TYPE: Uuid = Uuid::from_u16(0x2a00);
+    const DEVICE_NAME_TYPE: Uuid = uuid::gap::DEVICE_NAME;
 
     /// Device Appearance Characteristic UUID
-    const DEVICE_APPEARANCE_TYPE: Uuid = Uuid::from_u16(0x2a01);
+    const DEVICE_APPEARANCE_TYPE: Uuid = uuid::gap::APPEARANCE;
 
     /// Peripheral Preferred Connection Parameters UUID
-    const PERIPHERAL_PREFERRED_CONNECTION_PARAMETERS_TYPE: Uuid = Uuid::from_u16(0x2a04);
+    const PERIPHERAL_PREFERRED_CONNECTION_PARAMETERS_TYPE: Uuid = uuid::gap::PERIPHERAL_PREFERRED_CONNECTION_PARAMETERS;
 
     /// Central Address Resolution Uuid
-    const CENTRAL_ADDRESS_RESOLUTION_TYPE: Uuid = Uuid::from_u16(0x2aa6);
+    const CENTRAL_ADDRESS_RESOLUTION_TYPE: Uuid = uuid::gap::CENTRAL_ADDRESS_RESOLUTION;
 
     /// Resolvable Private Address Only Uuid
-    const RESOLVABLE_PRIVATE_ADDRESS_ONLY_TYPE: Uuid = Uuid::from_u16(0x2aa6);
+    const RESOLVABLE_PRIVATE_ADDRESS_ONLY_TYPE: Uuid = uuid::gap::RESOLVABLE_PRIVATE_ADDRESS_ONLY;
 
     /// Default attribute permissions
     // This is a reference to an array (instead of a slice) so that it errors if the types
@@ -1778,7 +1778,7 @@ impl<'a> GattServiceBuilder<'a> {
     /// This characteristic is an indication only characteristic that is used to update the client
     /// that the services on the server has changed. This
     pub fn add_service_changed(mut self) -> Self {
-        const UUID: Uuid = Uuid::from_u16(0x2A05);
+        const UUID: Uuid = crate::uuid::gatt::SERVICE_CHANGED;
 
         const PERMISSIONS: [att::AttributePermissions; 0] = [];
 
@@ -1807,7 +1807,7 @@ impl<'a> GattServiceBuilder<'a> {
         T: IntoIterator<Item = B>,
         B: core::borrow::Borrow<characteristic::gatt::ClientFeatures>,
     {
-        const UUID: Uuid = Uuid::from_u16(0x2B29);
+        const UUID: Uuid = uuid::gatt::CLIENT_SUPPORTED_FEATURES;
 
         const PERMISSIONS: [att::AttributePermissions; att::AttributePermissions::full_depth()] = att::FULL_PERMISSIONS;
 
@@ -1834,7 +1834,7 @@ impl<'a> GattServiceBuilder<'a> {
     /// This has is automatically generated upon creating of of the GATT server.
     #[cfg(feature = "cryptography")]
     pub fn add_database_hash(mut self) -> Self {
-        const UUID: Uuid = Uuid::from_u16(0x2B2A);
+        const UUID: Uuid = uuid::gatt::DATABASE_HASH;
 
         const PERMISSIONS: [att::AttributePermissions; att::AttributePermissions::full_depth() / 2] =
             att::FULL_READ_PERMISSIONS;
@@ -1862,7 +1862,7 @@ impl<'a> GattServiceBuilder<'a> {
     where
         T: core::borrow::Borrow<[characteristic::gatt::ServerFeatures]>,
     {
-        const UUID: Uuid = Uuid::from_u16(0x2803);
+        const UUID: Uuid = uuid::gatt::SERVER_SUPPORTED_FEATURES;
 
         const PERMISSIONS: [att::AttributePermissions; att::AttributePermissions::full_depth() / 2] =
             att::FULL_READ_PERMISSIONS;
