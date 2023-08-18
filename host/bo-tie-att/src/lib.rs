@@ -335,12 +335,6 @@ impl core::fmt::Display for Error {
     }
 }
 
-// impl core::fmt::Debug for Error {
-//     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-//         core::fmt::Display::fmt(self, f)
-//     }
-// }
-
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
@@ -547,6 +541,10 @@ impl core::fmt::Display for TransferFormatError {
         write!(f, "{}, {}", self.pdu_err, self.message)
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for TransferFormatError {}
+
 /// ATT Protocol try from transmission format
 ///
 /// Structures that implement `TransferFormatTryFrom` can be constructed from the attribute protocol raw
