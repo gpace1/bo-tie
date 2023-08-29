@@ -285,7 +285,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn openssl_aes_cmac_generate(k: u128, m: &[u8]) -> u128 {
-        use std::io::Write;
+        use core::io::Write;
 
         let mut child = std::process::Command::new("openssl")
             .arg("dgst")

@@ -2,10 +2,10 @@
 
 use crate::pdu;
 use crate::server::{AccessReadOnly, AccessValue};
-use std::any::Any;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::any::Any;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// The trivial implementation of [`AccessValue`] or [`AccessReadOnly`]
 ///

@@ -2025,7 +2025,7 @@ mod tests {
     use bo_tie_core::buffer::de_vec::DeVec;
     use bo_tie_core::buffer::TryExtend;
     use bo_tie_l2cap::{send_future, BasicFrameError};
-    use std::{
+    use core::{
         future::Future,
         pin::Pin,
         task::{Context, Poll},

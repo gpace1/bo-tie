@@ -6,8 +6,8 @@ use crate::impl_trait_ext::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostCh
 use async_std::channel::{Receiver, Recv, Send, SendError, Sender};
 use core::fmt::Debug;
 use core::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 make_error!(Error, SendError, Sender, Receiver);
 

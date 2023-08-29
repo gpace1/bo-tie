@@ -2613,7 +2613,7 @@ mod tests {
     use bo_tie_core::BluetoothDeviceAddress;
     use bo_tie_l2cap::pdu::BasicFrame;
     use bo_tie_l2cap::{send_future::Error, BasicFrameError, ConnectionChannel, L2capFragment, LogicalLink};
-    use std::future::Future;
+    use core::future::Future;
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     #[cfg(feature = "std")]

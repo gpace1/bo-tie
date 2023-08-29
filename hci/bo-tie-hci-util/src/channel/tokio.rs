@@ -3,10 +3,10 @@
 //! [tokio]: tokio
 
 use crate::impl_trait_ext::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
-use std::fmt::Debug;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::fmt::Debug;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use tokio::sync::mpsc::{error, UnboundedReceiver, UnboundedSender};
 
 make_error!(Error, error::SendError, UnboundedSender, UnboundedReceiver);

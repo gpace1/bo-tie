@@ -10,7 +10,7 @@ use crate::{
 };
 use bo_tie_l2cap::{BasicFrame, ConnectionChannel, MinimumMtu};
 use bo_tie_util::buffer::de_vec::DeVec;
-use std::sync::Arc;
+use core::sync::Arc;
 use tokio::sync::Mutex;
 
 /// A connection channel that counts the number of payload bytes sent

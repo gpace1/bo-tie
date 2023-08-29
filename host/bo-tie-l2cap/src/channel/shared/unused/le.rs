@@ -4,7 +4,7 @@ use crate::channel::id::{ChannelIdentifier, LeCid};
 use crate::channel::shared::unused::{ReceiveDataProcessor, UnusedChannelResponse};
 use crate::pdu::{BasicFrame, L2capFragment};
 use crate::{LeULogicalLink, PhysicalLink};
-use std::num::NonZeroU8;
+use core::num::NonZeroU8;
 
 impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
     type ReceiveData = UnusedFixedChannelPduData;

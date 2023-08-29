@@ -3,9 +3,9 @@
 //! [futures-rs]: futures
 
 use crate::impl_trait_ext::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use futures::channel::mpsc;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 impl<T> crate::Sender for mpsc::UnboundedSender<T>
 where

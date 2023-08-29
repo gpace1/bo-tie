@@ -1855,7 +1855,7 @@ mod test {
     /// without it being UB. The only check made
     unsafe fn inboxed_buffer_reserve<const SIZE: usize, const BUFFER_SIZE: usize>(
     ) -> Box<StackHotel<DeLinearBuffer<BUFFER_SIZE, u8>, SIZE>> {
-        use std::ptr::write;
+        use core::ptr::write;
 
         let layout = std::alloc::Layout::new::<StackHotel<DeLinearBuffer<BUFFER_SIZE, u8>, SIZE>>();
 
