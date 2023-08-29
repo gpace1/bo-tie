@@ -12,7 +12,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 /// UUID for a user description descriptor
-pub(crate) const TYPE: crate::Uuid = crate::Uuid::from_u16(0x2901);
+pub(crate) const TYPE: crate::Uuid = crate::uuid::CHARACTERISTIC_USER_DESCRIPTION;
 
 pub struct UserDescriptionBuilder<T> {
     current: T,

@@ -11,7 +11,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 /// UUID of a client configuration descriptor
-pub(crate) const TYPE: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0x2902);
+pub(crate) const TYPE: bo_tie_host_util::Uuid = crate::uuid::CLIENT_CHARACTERISTIC_CONFIGURATION;
 
 type ClientConfigVec = VecArray<{ ClientConfiguration::full_depth() }, ClientConfiguration>;
 

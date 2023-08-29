@@ -16,7 +16,7 @@
 /// and 32 bit. A shortened UUID can always be converted into a larger UUID or full sized UUID.
 ///
 /// ```
-/// # use bo_tie_host_common::Uuid;
+/// # use bo_tie_host_util::Uuid;
 ///
 /// let uuid_16 = Uuid::from(123u16);
 ///
@@ -30,9 +30,30 @@
 /// assert!(!uuid_128.can_be_16_bit());
 /// ```
 ///
-/// ## Conversion
-/// A UUID can be converted to a [uuid::Uuid](https://github.com/uuid-rs/uuid) if the feature
-/// `uuid-crate` is enabled.
+/// ## String UUID
+///
+/// A [`Uuid`] can be created from a string that is formatted as a UUID. The string must exactly
+/// match the field format \[8\]-\[4\]-\[4\]-\[4\]-\[12\] where each number represents the number of
+/// characters for the field.
+///
+/// An example UUID would look like
+/// ```text
+/// 67836afd-ae0b-4eb4-946d-e5b716f333e7
+/// ```
+///
+/// A string of a 16 or 32 bit shortened UUID cannot be converted *directly* into a `Uuid`. Instead
+/// use the [`str::parse`] to convert the string to a `u16` or `u32` bit number and then convert
+/// that into a UUID.
+///
+/// Either the of the implementations of `TryFrom` or `FromStr` (see method `str::parse`) can be
+/// used to perform the conversion, but the `TryFrom` error type does contains some information on
+/// what went wrong.
+///
+/// ## Using crate [`uuid`]
+///
+/// A UUID can be converted to and from a [uuid::Uuid] if the feature `uuid-crate` is enabled.
+///
+/// [uuid]: https://github.com/uuid-rs/uuid
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Uuid {
     base_uuid: u128,
@@ -186,7 +207,7 @@ pub enum UuidFormatError<'a> {
 }
 
 impl<'a> core::fmt::Display for UuidFormatError<'a> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match *self {
             UuidFormatError::IncorrectFieldLength(field) => {
                 write!(f, "Field with '{}' has an incorrect number of characters", field)
@@ -199,18 +220,13 @@ impl<'a> core::fmt::Display for UuidFormatError<'a> {
     }
 }
 
-/// Create a UUID from its formatted type
-///
-/// The format is a 16 octet UUID in the form of \[8\]-\[4\]-\[4\]-\[4\]-\[12\] where each number represents
-/// the number of characters for the field. An example UUID would be
-/// '68d82662-0305-4e6f-a679-6be1475f5e04'
 impl<'a> TryFrom<&'a str> for Uuid {
     type Error = UuidFormatError<'a>;
 
     fn try_from(v: &'a str) -> Result<Self, Self::Error> {
         let mut fields = v.split("-");
 
-        // The format is naturally big-endian
+        // The str format is naturally big-endian
         let mut bytes_be = [0u8; 16];
 
         macro_rules! parse_uuid_field {
@@ -241,6 +257,23 @@ impl<'a> TryFrom<&'a str> for Uuid {
         Ok(Uuid {
             base_uuid: <u128>::from_be_bytes(bytes_be),
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct FromStrError;
+
+impl core::fmt::Display for FromStrError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str("invalid UUID format")
+    }
+}
+
+impl core::str::FromStr for Uuid {
+    type Err = FromStrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Uuid::try_from(s).map_err(|_| FromStrError)
     }
 }
 

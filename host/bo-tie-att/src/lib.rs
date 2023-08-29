@@ -529,6 +529,10 @@ impl core::fmt::Display for TransferFormatError {
         write!(f, "{}, {}", self.pdu_err, self.message)
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for TransferFormatError {}
+
 /// ATT Protocol try from transmission format
 ///
 /// Structures that implement `TransferFormatTryFrom` can be constructed from the attribute protocol raw

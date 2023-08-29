@@ -7,7 +7,7 @@ use bo_tie_core::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 
 /// UUID of a server configuration descriptor
-pub(crate) const TYPE: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0x2903);
+pub(crate) const TYPE: bo_tie_host_util::Uuid = crate::uuid::SERVER_CHARACTERISTIC_CONFIGURATION;
 
 /// Builder of a server configuration descriptor
 #[derive(Clone)]

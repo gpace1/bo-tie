@@ -8,7 +8,7 @@ use bo_tie_host_util::Uuid;
 use core::borrow::Borrow;
 
 /// UUID for a characteristic declaration
-pub(crate) const TYPE: Uuid = Uuid::from_u16(0x2803);
+pub(crate) const TYPE: Uuid = crate::uuid::CHARACTERISTIC;
 
 /// A constructor of a Characteristic Declaration
 ///
