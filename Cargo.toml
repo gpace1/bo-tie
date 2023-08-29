@@ -17,3 +17,5 @@ members = [
     "base-crates/*",
     "examples/*",
 ]
+
+resolver = "2"
