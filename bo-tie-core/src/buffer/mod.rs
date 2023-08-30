@@ -142,15 +142,8 @@ where
 /// This trait is used to remove items from the end of the collection and return them.
 pub trait TryRemove<A> {
     type Error: Debug + Display;
-    type RemoveIter<'a>: Iterator<Item = A>
-    where
-        Self: 'a;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error>;
-
-    fn try_pop(&mut self) -> Option<A> {
-        self.try_remove(1).ok().and_then(|mut i| i.next())
-    }
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error>;
 }
 
 /// Try to extend the front of a collection with an iterator
@@ -195,23 +188,13 @@ pub trait TryFrontExtend<A> {
 /// front must also increase this capacity.
 pub trait TryFrontRemove<A> {
     type Error: Debug + Display;
-    type FrontRemoveIter<'a>: Iterator<Item = A>
-    where
-        Self: 'a;
 
     /// Try to take a number of items from the front of the collection
     ///
     /// The return is an iterator over the items
     /// # Error
     /// `how_many` must not be larger than the length of the implementation.
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error>;
-
-    /// Try to pop the front item
-    ///
-    /// The first item is returned so long as the item is not empty.
-    fn try_front_pop(&mut self) -> Option<A> {
-        self.try_front_remove(1).ok()?.next()
-    }
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error>;
 }
 
 impl<A> TryRemove<A> for &'_ [A]
@@ -219,15 +202,14 @@ where
     A: Copy,
 {
     type Error = BufferError;
-    type RemoveIter<'a> = core::iter::Copied<core::slice::Iter<'a, A>> where Self: 'a, A: 'a;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         if self.len() >= how_many {
-            let (new_this, to_iter) = self.split_at(self.len() - how_many);
+            let (new_this, _) = self.split_at(self.len() - how_many);
 
             *self = new_this;
 
-            Ok(to_iter.iter().copied())
+            Ok(())
         } else {
             Err(BufferError::LengthOfBuffer)
         }
@@ -239,15 +221,14 @@ where
     A: Copy,
 {
     type Error = BufferError;
-    type FrontRemoveIter<'a> = core::iter::Copied<core::slice::Iter<'a, A>> where Self: 'a, A: 'a;
 
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         if self.len() >= how_many {
-            let (to_iter, new_this) = self.split_at(how_many);
+            let (_, new_this) = self.split_at(how_many);
 
             *self = new_this;
 
-            Ok(to_iter.iter().copied())
+            Ok(())
         } else {
             Err(BufferError::LengthOfBuffer)
         }

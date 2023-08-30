@@ -24,93 +24,73 @@ use core::future::Future;
 /// Send safe equivalent of [`Buffer`]
 ///
 /// [`Buffer`]: bo_tie_core::buffer::Buffer
-pub trait SendSafeBuffer<'a>:
+pub trait SendSafeBuffer:
     'static
     + Send
     + Buffer
     + TryExtend<u8, Error = Self::SendSafeTryExtendError>
-    + TryRemove<u8, Error = Self::SendSafeTryRemoveError, RemoveIter<'a> = Self::SendSafeTryRemoveIter>
+    + TryRemove<u8, Error = Self::SendSafeTryRemoveError>
     + TryFrontExtend<u8, Error = Self::SendSafeTryFrontExtendError>
-    + TryFrontRemove<
-        u8,
-        Error = Self::SendSafeTryFrontRemoveError,
-        FrontRemoveIter<'a> = Self::SendSafeTryFrontRemoveIter,
-    >
+    + TryFrontRemove<u8, Error = Self::SendSafeTryFrontRemoveError>
     + IntoExactSizeIterator<IntoExactIter = Self::SendSafeIntoExactIter>
 {
     type SendSafeTryExtendError: Debug + Display + Send;
     type SendSafeTryRemoveError: Debug + Display + Send;
-    type SendSafeTryRemoveIter: Iterator<Item = u8> + Send;
     type SendSafeTryFrontExtendError: Debug + Display + Send;
     type SendSafeTryFrontRemoveError: Debug + Display + Send;
-    type SendSafeTryFrontRemoveIter: Iterator<Item = u8> + Send;
     type SendSafeIntoExactIter: Iterator<Item = u8> + ExactSizeIterator + Send;
 }
 
-impl<'a, T> SendSafeBuffer<'a> for T
+impl<T> SendSafeBuffer for T
 where
     T: 'static + Send + Buffer,
     <T as TryExtend<u8>>::Error: Send,
     <T as TryRemove<u8>>::Error: Send,
-    <T as TryRemove<u8>>::RemoveIter<'a>: Send,
     <T as TryFrontExtend<u8>>::Error: Send,
     <T as TryFrontRemove<u8>>::Error: Send,
-    <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>: Send,
     <T as IntoExactSizeIterator>::IntoExactIter: Send,
 {
     type SendSafeTryExtendError = <T as TryExtend<u8>>::Error;
     type SendSafeTryRemoveError = <T as TryRemove<u8>>::Error;
-    type SendSafeTryRemoveIter = <T as TryRemove<u8>>::RemoveIter<'a>;
     type SendSafeTryFrontExtendError = <T as TryFrontExtend<u8>>::Error;
     type SendSafeTryFrontRemoveError = <T as TryFrontRemove<u8>>::Error;
-    type SendSafeTryFrontRemoveIter = <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>;
     type SendSafeIntoExactIter = <T as IntoExactSizeIterator>::IntoExactIter;
 }
 
 /// Send and Sync safe equivalent of [`Buffer`]
 ///
 /// [`Buffer`]: bo_tie_core::buffer::Buffer
-pub trait SendAndSyncSafeBuffer<'a>:
+pub trait SendAndSyncSafeBuffer:
     'static
     + Send
     + Sync
     + Buffer
     + TryExtend<u8, Error = Self::SendAndSyncSafeTryExtendError>
-    + TryRemove<u8, Error = Self::SendAndSyncSafeTryRemoveError, RemoveIter<'a> = Self::SendAndSyncSafeTryRemoveIter>
+    + TryRemove<u8, Error = Self::SendAndSyncSafeTryRemoveError>
     + TryFrontExtend<u8, Error = Self::SendAndSyncSafeTryFrontExtendError>
-    + TryFrontRemove<
-        u8,
-        Error = Self::SendAndSyncSafeTryFrontRemoveError,
-        FrontRemoveIter<'a> = Self::SendAndSyncSafeTryFrontRemoveIter,
-    >
+    + TryFrontRemove<u8, Error = Self::SendAndSyncSafeTryFrontRemoveError>
     + IntoExactSizeIterator<IntoExactIter = Self::SendSafeIntoExactIter>
 {
     type SendAndSyncSafeTryExtendError: Debug + Display + Send + Sync;
     type SendAndSyncSafeTryRemoveError: Debug + Display + Send + Sync;
-    type SendAndSyncSafeTryRemoveIter: Iterator<Item = u8> + Send + Sync;
     type SendAndSyncSafeTryFrontExtendError: Debug + Display + Send + Sync;
     type SendAndSyncSafeTryFrontRemoveError: Debug + Display + Send + Sync;
-    type SendAndSyncSafeTryFrontRemoveIter: Iterator<Item = u8> + Send + Sync;
     type SendSafeIntoExactIter: Iterator<Item = u8> + ExactSizeIterator + Send + Sync;
 }
 
-impl<'a, T> SendAndSyncSafeBuffer<'a> for T
+impl<T> SendAndSyncSafeBuffer for T
 where
     T: 'static + Send + Sync + Buffer,
     <T as TryExtend<u8>>::Error: Send + Sync,
     <T as TryRemove<u8>>::Error: Send + Sync,
-    <T as TryRemove<u8>>::RemoveIter<'a>: Send + Sync,
     <T as TryFrontExtend<u8>>::Error: Send + Sync,
     <T as TryFrontRemove<u8>>::Error: Send + Sync,
-    <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>: Send + Sync,
     <T as IntoExactSizeIterator>::IntoExactIter: Send + Sync,
 {
     type SendAndSyncSafeTryExtendError = <T as TryExtend<u8>>::Error;
     type SendAndSyncSafeTryRemoveError = <T as TryRemove<u8>>::Error;
-    type SendAndSyncSafeTryRemoveIter = <T as TryRemove<u8>>::RemoveIter<'a>;
     type SendAndSyncSafeTryFrontExtendError = <T as TryFrontExtend<u8>>::Error;
     type SendAndSyncSafeTryFrontRemoveError = <T as TryFrontRemove<u8>>::Error;
-    type SendAndSyncSafeTryFrontRemoveIter = <T as TryFrontRemove<u8>>::FrontRemoveIter<'a>;
     type SendSafeIntoExactIter = <T as IntoExactSizeIterator>::IntoExactIter;
 }
 
@@ -120,14 +100,14 @@ where
 pub trait SendSafeBufferReserve:
     Send + BufferReserve<Buffer = Self::SendSafeBuffer, TakeBuffer = Self::SendSafeTakeBuffer>
 {
-    type SendSafeBuffer: for<'a> SendSafeBuffer<'a>;
+    type SendSafeBuffer: SendSafeBuffer;
     type SendSafeTakeBuffer: Send + Future<Output = Self::SendSafeBuffer>;
 }
 
 impl<T> SendSafeBufferReserve for T
 where
     T: Send + BufferReserve,
-    T::Buffer: for<'a> SendSafeBuffer<'a>,
+    T::Buffer: SendSafeBuffer,
     T::TakeBuffer: Send,
 {
     type SendSafeBuffer = T::Buffer;
@@ -140,14 +120,14 @@ where
 pub trait SendAndSyncSafeBufferReserve:
     Send + Sync + BufferReserve<Buffer = Self::SendAndSyncSafeBuffer, TakeBuffer = Self::SendAndSyncSafeTakeBuffer>
 {
-    type SendAndSyncSafeBuffer: for<'a> SendAndSyncSafeBuffer<'a>;
+    type SendAndSyncSafeBuffer: SendAndSyncSafeBuffer;
     type SendAndSyncSafeTakeBuffer: Send + Sync + Future<Output = Self::SendAndSyncSafeBuffer>;
 }
 
 impl<T> SendAndSyncSafeBufferReserve for T
 where
     T: Send + Sync + BufferReserve,
-    T::Buffer: for<'a> SendAndSyncSafeBuffer<'a>,
+    T::Buffer: SendAndSyncSafeBuffer,
     T::TakeBuffer: Send + Sync,
 {
     type SendAndSyncSafeBuffer = T::Buffer;
@@ -331,8 +311,8 @@ pub trait SendSafeConnectionChannelEnds:
         EventReceiver = Self::SendSafeEventReceiver,
     >
 {
-    type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
-    type SendSafeFromBuffer: for<'a> SendSafeBuffer<'a>;
+    type SendSafeToBuffer: SendSafeBuffer;
+    type SendSafeFromBuffer: SendSafeBuffer;
     type SendSafeTakeBuffer: Send + Future<Output = Self::SendSafeToBuffer>;
     type SendSafeSender: for<'z> SendSafeSender<
         'z,
@@ -348,8 +328,8 @@ pub trait SendSafeConnectionChannelEnds:
 impl<T> SendSafeConnectionChannelEnds for T
 where
     T: Send + ConnectionChannelEnds,
-    T::ToBuffer: for<'a> SendSafeBuffer<'a>,
-    T::FromBuffer: for<'a> SendSafeBuffer<'a>,
+    T::ToBuffer: SendSafeBuffer,
+    T::FromBuffer: SendSafeBuffer,
     T::TakeBuffer: Send,
     T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = FromConnectionIntraMessage<T::ToBuffer>>,
     T::DataReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToConnectionDataIntraMessage<T::FromBuffer>>,
@@ -378,8 +358,8 @@ pub trait SendAndSyncSafeConnectionChannelEnds:
         EventReceiver = Self::SendAndSyncSafeEventReceiver,
     >
 {
-    type SendAndSyncSafeToBuffer: for<'a> SendAndSyncSafeBuffer<'a>;
-    type SendAndSyncSafeFromBuffer: for<'a> SendAndSyncSafeBuffer<'a>;
+    type SendAndSyncSafeToBuffer: SendAndSyncSafeBuffer;
+    type SendAndSyncSafeFromBuffer: SendAndSyncSafeBuffer;
     type SendAndSyncSafeTakeBuffer: Send + Sync + Future<Output = Self::SendAndSyncSafeToBuffer>;
     type SendAndSyncSafeSender: for<'z> SendAndSyncSafeSender<
         'z,
@@ -398,8 +378,8 @@ pub trait SendAndSyncSafeConnectionChannelEnds:
 impl<T> SendAndSyncSafeConnectionChannelEnds for T
 where
     T: Send + Sync + ConnectionChannelEnds,
-    T::ToBuffer: for<'a> SendAndSyncSafeBuffer<'a>,
-    T::FromBuffer: for<'a> SendAndSyncSafeBuffer<'a>,
+    T::ToBuffer: SendAndSyncSafeBuffer,
+    T::FromBuffer: SendAndSyncSafeBuffer,
     T::TakeBuffer: Send + Sync,
     T::Sender: for<'a> SendAndSyncSafeSender<'a, SendAndSyncSafeMessage = FromConnectionIntraMessage<T::ToBuffer>>,
     T::DataReceiver:
@@ -677,8 +657,8 @@ pub trait SendSafeHostChannelEnds:
         ConnectionChannelEnds = Self::SendSafeConnectionChannelEnds,
     >
 {
-    type SendSafeToBuffer: for<'a> SendSafeBuffer<'a>;
-    type SendSafeFromBuffer: for<'a> SendSafeBuffer<'a>;
+    type SendSafeToBuffer: SendSafeBuffer;
+    type SendSafeFromBuffer: SendSafeBuffer;
     type SendSafeTakeBuffer: Send + Future<Output = Self::ToBuffer>;
     type SendSafeSender: for<'a> SendSafeSender<'a, SendSafeMessage = ToInterfaceIntraMessage<Self::SendSafeToBuffer>>;
     type SendSafeCmdReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToHostCommandIntraMessage>;
@@ -692,8 +672,8 @@ pub trait SendSafeHostChannelEnds:
 impl<T> SendSafeHostChannelEnds for T
 where
     T: Send + HostChannelEnds,
-    T::ToBuffer: for<'a> SendSafeBuffer<'a>,
-    T::FromBuffer: for<'a> SendSafeBuffer<'a>,
+    T::ToBuffer: SendSafeBuffer,
+    T::FromBuffer: SendSafeBuffer,
     T::TakeBuffer: Send,
     T::Sender: for<'a> SendSafeSender<'a, SendSafeMessage = ToInterfaceIntraMessage<T::ToBuffer>>,
     T::CmdReceiver: for<'a> SendSafeReceiver<'a, SendSafeMessage = ToHostCommandIntraMessage>,
@@ -708,7 +688,7 @@ where
     type SendSafeGenReceiver = T::GenReceiver;
     type SendSafeConnectionChannelEnds = T::ConnectionChannelEnds;
 }
-
+//
 /// The Send and Sync safe equivalent of [`HostChannelEnds`]
 ///
 /// The main usage of this is with methods and functions that would normally return
@@ -736,8 +716,8 @@ pub trait SendAndSyncSafeHostChannelEnds:
         ConnectionChannelEnds = Self::SendAndSyncSafeConnectionChannelEnds,
     >
 {
-    type SendAndSyncSafeToBuffer: for<'a> SendAndSyncSafeBuffer<'a>;
-    type SendAndSyncSafeFromBuffer: for<'a> SendAndSyncSafeBuffer<'a>;
+    type SendAndSyncSafeToBuffer: SendAndSyncSafeBuffer;
+    type SendAndSyncSafeFromBuffer: SendAndSyncSafeBuffer;
     type SendAndSyncSafeTakeBuffer: Send + Sync + Future<Output = Self::ToBuffer>;
     type SendAndSyncSafeSender: for<'a> SendAndSyncSafeSender<
         'a,
@@ -757,8 +737,8 @@ pub trait SendAndSyncSafeHostChannelEnds:
 impl<T> SendAndSyncSafeHostChannelEnds for T
 where
     T: Send + Sync + HostChannelEnds,
-    T::ToBuffer: for<'a> SendAndSyncSafeBuffer<'a>,
-    T::FromBuffer: for<'a> SendAndSyncSafeBuffer<'a>,
+    T::ToBuffer: SendAndSyncSafeBuffer,
+    T::FromBuffer: SendAndSyncSafeBuffer,
     T::TakeBuffer: Send + Sync,
     T::Sender: for<'a> SendAndSyncSafeSender<'a, SendAndSyncSafeMessage = ToInterfaceIntraMessage<T::ToBuffer>>,
     T::CmdReceiver: for<'a> SendAndSyncSafeReceiver<'a, SendAndSyncSafeMessage = ToHostCommandIntraMessage>,

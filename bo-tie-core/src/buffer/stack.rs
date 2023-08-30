@@ -511,12 +511,11 @@ impl<const SIZE: usize, T> crate::buffer::TryExtend<T> for DeLinearBuffer<SIZE, 
 
 impl<const SIZE: usize, T> crate::buffer::TryRemove<T> for DeLinearBuffer<SIZE, T> {
     type Error = LinearBufferError;
-    type RemoveIter<'a> = DeLinearBufferRemoveIter<'a, T> where Self: 'a,;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
-        let removed = self.try_remove_from_back(how_many)?;
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
+        self.try_remove_from_back(how_many)?;
 
-        Ok(DeLinearBufferRemoveIter(removed.iter_mut()))
+        Ok(())
     }
 }
 
@@ -545,12 +544,11 @@ impl<const SIZE: usize, T> crate::buffer::TryFrontExtend<T> for DeLinearBuffer<S
 
 impl<const SIZE: usize, T> crate::buffer::TryFrontRemove<T> for DeLinearBuffer<SIZE, T> {
     type Error = LinearBufferError;
-    type FrontRemoveIter<'a> = DeLinearBufferRemoveIter<'a, T> where Self: 'a,;
 
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
-        let removed = self.try_remove_from_front(how_many)?;
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
+        self.try_remove_from_front(how_many)?;
 
-        Ok(DeLinearBufferRemoveIter(removed.iter_mut()))
+        Ok(())
     }
 }
 
@@ -565,19 +563,6 @@ impl<const SIZE: usize, T> IntoIterator for DeLinearBuffer<SIZE, T> {
 
 impl<const SIZE: usize, T> IntoExactSizeIterator for DeLinearBuffer<SIZE, T> {
     type IntoExactIter = <DeLinearBuffer<SIZE, T> as IntoIterator>::IntoIter;
-}
-
-/// An iterator over items removed from a `DeLinearBuffer`
-pub struct DeLinearBufferRemoveIter<'a, T>(core::slice::IterMut<'a, MaybeUninit<T>>);
-
-impl<T> Iterator for DeLinearBufferRemoveIter<'_, T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0
-            .next()
-            .map(|maybe| unsafe { replace(maybe, MaybeUninit::uninit()).assume_init() })
-    }
 }
 
 /// Into Iterator for `DeLinearBuffer`
@@ -1329,9 +1314,8 @@ where
     T: crate::buffer::TryRemove<A>,
 {
     type Error = T::Error;
-    type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         self.ubr.try_remove(how_many)
     }
 }
@@ -1355,9 +1339,8 @@ where
     T: crate::buffer::TryFrontRemove<A>,
 {
     type Error = T::Error;
-    type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
 
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         self.ubr.try_front_remove(how_many)
     }
 }
@@ -1470,9 +1453,8 @@ where
     T: crate::buffer::TryRemove<A>,
 {
     type Error = T::Error;
-    type RemoveIter<'a> = T::RemoveIter<'a> where Self: 'a;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         self.0.get_mut().try_remove(how_many)
     }
 }
@@ -1496,9 +1478,8 @@ where
     T: crate::buffer::TryFrontRemove<A>,
 {
     type Error = T::Error;
-    type FrontRemoveIter<'a> = T::FrontRemoveIter<'a> where Self: 'a;
 
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         self.0.get_mut().try_front_remove(how_many)
     }
 }

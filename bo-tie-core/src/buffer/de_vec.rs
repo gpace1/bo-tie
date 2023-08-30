@@ -101,13 +101,12 @@ impl<A> crate::buffer::TryExtend<A> for DeVec<A> {
 
 impl<A> crate::buffer::TryRemove<A> for DeVec<A> {
     type Error = crate::buffer::BufferError;
-    type RemoveIter<'a> = alloc::vec::Drain<'a, A> where A: 'a;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         if self.len() >= how_many {
-            let start = self.vec.len() - how_many;
+            self.vec.truncate(self.vec.len() - how_many);
 
-            Ok(self.vec.drain(start..))
+            Ok(())
         } else {
             Err(crate::buffer::BufferError::LengthOfBuffer)
         }
@@ -141,15 +140,12 @@ where
     A: Copy,
 {
     type Error = crate::buffer::BufferError;
-    type FrontRemoveIter<'a> = DeVecDrain<'a, A> where A: 'a;
 
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         if self.len() >= how_many {
-            let removed = &mut self.vec[self.start..(self.start + how_many)];
-
             self.start += how_many;
 
-            Ok(DeVecDrain { removed, cnt: 0 })
+            Ok(())
         } else {
             Err(crate::buffer::BufferError::LengthOfBuffer)
         }
@@ -169,27 +165,6 @@ impl<T> IntoIterator for DeVec<T> {
 
 impl<T> IntoExactSizeIterator for DeVec<T> {
     type IntoExactIter = <DeVec<T> as IntoIterator>::IntoIter;
-}
-
-/// Drain iterator for a `DeVec`
-pub struct DeVecDrain<'a, T> {
-    removed: &'a mut [T],
-    cnt: usize,
-}
-
-impl<T> Iterator for DeVecDrain<'_, T>
-where
-    T: Copy,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.cnt;
-
-        self.cnt += 1;
-
-        self.removed.get(next).copied()
-    }
 }
 
 /// Into Iterator for `DeVec`

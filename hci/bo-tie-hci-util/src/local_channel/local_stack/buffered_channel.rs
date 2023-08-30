@@ -333,7 +333,6 @@ where
     B: TryRemove<u8>,
 {
     type Error = B::Error;
-    type RemoveIter<'a> = B::RemoveIter<'a> where Self: 'a ;
 
     fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
         self.buffer.try_remove(how_many)
@@ -361,9 +360,8 @@ where
     B: TryFrontRemove<u8>,
 {
     type Error = B::Error;
-    type FrontRemoveIter<'a> = B::FrontRemoveIter<'a> where Self: 'a;
 
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         self.buffer.try_front_remove(how_many)
     }
 }

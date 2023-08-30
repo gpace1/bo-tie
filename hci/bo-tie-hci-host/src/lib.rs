@@ -159,16 +159,20 @@ pub enum HciAclPacketError {
     PacketTooSmall,
     InvalidBroadcastFlag,
     InvalidConnectionHandle(&'static str),
+    InvalidDataTotalLength,
     Other(&'static str),
 }
 
 impl core::fmt::Display for HciAclPacketError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            HciAclPacketError::PacketTooSmall => write!(f, "Packet is too small to be a valid HCI ACL Data"),
-            HciAclPacketError::InvalidBroadcastFlag => write!(f, "Packet has invalid broadcast Flag"),
+            HciAclPacketError::PacketTooSmall => f.write_str("packet is too small to be a valid HCI ACL data packet"),
+            HciAclPacketError::InvalidBroadcastFlag => f.write_str("invalid broadcast flag"),
             HciAclPacketError::InvalidConnectionHandle(reason) => {
-                write!(f, "Invalid connection handle, {}", reason)
+                write!(f, "invalid connection handle, {}", reason)
+            }
+            HciAclPacketError::InvalidDataTotalLength => {
+                f.write_str("the data total length field is larger than the received data")
             }
             HciAclPacketError::Other(reason) => {
                 write!(f, "{}", reason)
@@ -350,8 +354,8 @@ impl<T> HciAclData<T> {
         T: bo_tie_core::buffer::TryFrontRemove<u8> + bo_tie_core::buffer::TryRemove<u8> + Deref<Target = [u8]>,
     {
         let first_2_bytes = <u16>::from_le_bytes([
-            buffer.try_front_pop().ok_or(HciAclPacketError::PacketTooSmall)?,
-            buffer.try_front_pop().ok_or(HciAclPacketError::PacketTooSmall)?,
+            buffer.get(0).copied().ok_or(HciAclPacketError::PacketTooSmall)?,
+            buffer.get(1).copied().ok_or(HciAclPacketError::PacketTooSmall)?,
         ]);
 
         let connection_handle = match bo_tie_hci_util::ConnectionHandle::try_from(first_2_bytes & 0xFFF) {
@@ -367,17 +371,22 @@ impl<T> HciAclData<T> {
         };
 
         let data_length = <u16>::from_le_bytes([
-            buffer.try_front_pop().ok_or(HciAclPacketError::PacketTooSmall)?,
-            buffer.try_front_pop().ok_or(HciAclPacketError::PacketTooSmall)?,
+            buffer.get(2).copied().ok_or(HciAclPacketError::PacketTooSmall)?,
+            buffer.get(3).copied().ok_or(HciAclPacketError::PacketTooSmall)?,
         ]) as usize;
 
-        let remove_len = buffer
+        let data_total_len = buffer
             .len()
             .checked_sub(data_length)
             .ok_or(HciAclPacketError::PacketTooSmall)?;
 
-        // remove_len should have verified how many bytes are to be truncated from it
-        buffer.try_remove(remove_len).ok().unwrap();
+        // remove the HCI ACL data packet header
+        buffer.try_front_remove(4).expect("unexpected invalid ACL packet size");
+
+        // truncate to `data_total_len`
+        buffer
+            .try_remove(data_total_len)
+            .map_err(|_| HciAclPacketError::InvalidDataTotalLength)?;
 
         Ok(HciAclData {
             connection_handle,

@@ -35,17 +35,14 @@ where
     B: TryFrontRemove<u8>,
 {
     type Error = DriverBufferError;
-    type FrontRemoveIter<'a> = DriverBufferIter<A::FrontRemoveIter<'a>, B::FrontRemoveIter<'a>> where Self: 'a;
 
-    fn try_front_remove(&mut self, how_many: usize) -> Result<Self::FrontRemoveIter<'_>, Self::Error> {
+    fn try_front_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         match self {
             DriverBuffer::Cmd(a) => a
                 .try_front_remove(how_many)
-                .map(|a| DriverBufferIter::A(a))
                 .map_err(|_| DriverBufferError::TryFrontRemove),
             DriverBuffer::Data(b) => b
                 .try_front_remove(how_many)
-                .map(|b| DriverBufferIter::B(b))
                 .map_err(|_| DriverBufferError::TryFrontRemove),
         }
     }
@@ -75,18 +72,11 @@ where
     B: TryRemove<u8>,
 {
     type Error = DriverBufferError;
-    type RemoveIter<'a> = DriverBufferIter<A::RemoveIter<'a>, B::RemoveIter<'a>> where Self: 'a;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         match self {
-            DriverBuffer::Cmd(a) => a
-                .try_remove(how_many)
-                .map(|a| DriverBufferIter::A(a))
-                .map_err(|_| DriverBufferError::TryRemove),
-            DriverBuffer::Data(b) => b
-                .try_remove(how_many)
-                .map(|b| DriverBufferIter::B(b))
-                .map_err(|_| DriverBufferError::TryRemove),
+            DriverBuffer::Cmd(a) => a.try_remove(how_many).map_err(|_| DriverBufferError::TryRemove),
+            DriverBuffer::Data(b) => b.try_remove(how_many).map_err(|_| DriverBufferError::TryRemove),
         }
     }
 }
