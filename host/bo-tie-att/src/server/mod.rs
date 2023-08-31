@@ -544,9 +544,9 @@ where
     {
         self.given_permissions = self
             .given_permissions
-            .clone()
-            .into_iter()
+            .iter()
             .filter(|p| !permissions.borrow().contains(p))
+            .copied()
             .collect();
     }
 
