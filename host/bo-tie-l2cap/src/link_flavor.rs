@@ -45,26 +45,27 @@ use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 pub trait LinkFlavor {
     /// The supported Maximum Transmission Unit (MTU)
     ///
-    /// Every device must be able to support a MTU up to this value for this logical link type.
-    /// However, this does not mean two devices cannot use a smaller MTU negotiated at a higher
-    /// layer.
+    /// Every device must be able to support a MTU of this value for this logical link type. In
+    /// general this is used as the default MTU for the link until a negotiation is made to us a
+    /// different MTU.
     ///
     /// # Note
-    /// This is returned by the method [`get_min_supported_mtu`] of `LinkTypePort`.
-    ///
-    /// [`get_min_supported_mtu`]: crate::LinkTypePort::get_min_supported_mtu
-    const MIN_SUPPORTED_MTU: u16;
+    /// Some higher layer protocols may use this this value as the minimum allowable MTU. For these
+    /// protocols, the MTU cannot be negotiated to a smaller value than `SUPPORTED_MTU` (see the
+    /// Attribute Protocol (ATT) for an example of this).
+    const SUPPORTED_MTU: u16;
 
     /// Try to get the channel identifier from its value
     ///
-    /// Channels differ depending on the logical link of the connection. This will map the value
-    /// to the correct channel identifier for this logical link.
+    /// Channels differ depending on the logical link of the connection. This will try to map the
+    /// value to the correct channel identifier for this logical link. If there is no valid
+    /// identifier for `val` then `None` is returned.
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier>;
 
     /// Get the channel identifier for the signaling channel
     ///
-    /// The signalling channel for this logical link is returned if there is a signalling
-    /// channel.
+    /// This returns the identifier of the signalling channel if there is a signalling channel for
+    /// this `LinkFlavor`. `None` is returned where there is not a signalling channel.
     fn get_signaling_channel() -> Option<ChannelIdentifier>;
 }
 
@@ -79,7 +80,7 @@ pub trait LinkFlavor {
 pub struct AclULink;
 
 impl LinkFlavor for AclULink {
-    const MIN_SUPPORTED_MTU: u16 = 48;
+    const SUPPORTED_MTU: u16 = 48;
 
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
@@ -101,7 +102,7 @@ impl LinkFlavor for AclULink {
 pub struct AclUExtLink;
 
 impl LinkFlavor for AclUExtLink {
-    const MIN_SUPPORTED_MTU: u16 = 672;
+    const SUPPORTED_MTU: u16 = 672;
 
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
@@ -122,7 +123,7 @@ impl LinkFlavor for AclUExtLink {
 pub struct ApbLink;
 
 impl LinkFlavor for ApbLink {
-    const MIN_SUPPORTED_MTU: u16 = 48;
+    const SUPPORTED_MTU: u16 = 48;
 
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         crate::channel::id::ApbCid::try_from_raw(val)
@@ -145,7 +146,7 @@ impl LinkFlavor for ApbLink {
 pub struct LeULink;
 
 impl LinkFlavor for LeULink {
-    const MIN_SUPPORTED_MTU: u16 = 23;
+    const SUPPORTED_MTU: u16 = 23;
 
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         LeCid::try_from_raw(val).map(|id| ChannelIdentifier::Le(id)).ok()
