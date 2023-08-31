@@ -5,20 +5,48 @@
 //! and control between the host, the protocols below the host layer (usually this is the HCI
 //! layer), and connected devices.
 //!  
-//! # Logical Links Types
-//! Logical links are how data is transferred via a physical link from one host to another host.
-//! There are two kings of logical links, ACL-U for a BR/ERD physical link and LE-U for a LE
-//! physical link. This library breaks these up these two into for *types* of logical links as each
-//! type has different requirements per the Bluetooth Specification.
+//! # Logical Links Flavors
+//! There are two distinct types of logical links, ACL-U for a BR/ERD physical link and LE-U for a
+//! LE physical link. The Bluetooth Specification further defines different configuration for these
+//! logical links (well only for the ACL-U link) depending on the configuration or implementation of
+//! either the physical link or how the higher protocol use the link. To manage this, this crate
+//! has 'broken up' these two logical links into logical links *flavors*.
 //!
-//! [`AclULink`], [`AclUExtLink`], [`ApbLink`], and [`LeULink`] are the four 'types' of logical links defined within
-//! this library. `AclU`, `AclUExt`, `Apb` are ACL-U logical links and `LeU` is a LE-U logical link.
-//! Each type differs in the Minimum supported Maximum Transmission Unit (MTU) and channel mapping
-//! (as assigned by the Bluetooth SIG).
+//! [`AclULink`], [`AclUExtLink`], [`ApbLink`], and [`LeULink`] are the four 'flavors' of logical
+//! links defined within this library. `AclULink`, `AclUExtLink`, `ApbLink` are flavors of ACL-U
+//! logical links and `LeULink` is the lone flavor for a LE-U logical link. Each type has their own
+//! supported Maximum Transmission Unit (MTU) and channel mapping (as assigned by the Bluetooth SIG)
+//! requirements.
 //!
-//! The most often used case for a logical link type is mapping raw data to a L2CAP data type. A
-//! raw channel value cannot be converted into a valid channel until the logical link type is
-//! defined
+//! Every flavor implements the [`LinkFlavor`] trait. This trait is for ensuring channel mapping is
+//! correct for the flavor and for defining the required supported MTU.
+//!
+//! ```
+//! # use bo_tie_l2cap::link_flavor::{AclUExtLink, AclULink, LeULink, LinkFlavor};
+//! # use bo_tie_l2cap::channel::id::{AclCid, ChannelIdentifier};
+//!
+//! // The `LinkFlavor` trait is mainly used for validating
+//! // raw channel identifiers
+//!
+//! // att channel
+//! assert!(LeULink::try_channel_from_raw(0x4).is_some());
+//!
+//! // invalid channel
+//! assert!(LeULink::try_channel_from_raw(0xFFFF).is_none());
+//!
+//!
+//! // The `SUPPORTED_MTU` constant is the required supported MTU
+//! assert!(672, AclUExtLink::SUPPORTED_MTU);
+//!
+//!
+//! // `LinkFlavor` also has a method to get the signalling channel
+//! assert_eq!(
+//!     Some(ChannelIdentifier::Acl(AclCid::SignalingChannel)),
+//!     AclULink::get_signaling_channel()
+//! );
+//! ```
+//!
+//! [`LinkFlavor`]: link_flavor::LinkFlavor
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]

@@ -34,24 +34,21 @@
 
 use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 
-/// A trait for a logical link type
+/// A trait for a logical link flavor
 ///
-/// Every logical link type of this library implements `LinkType`. For explanation on what a
-/// *logical link type* is see the [library level] documentation.
+/// Every type of logical link in this library implements `LinkFlavor`. For explanation on what a
+/// *logical link flavor* is see the [crate level] documentation.
 ///
-/// Use the trait [`LinkTypeExt`] if you would like to call these methods directly.
-///
-/// [library level]: crate
+/// [crate level]: crate
 pub trait LinkFlavor {
     /// The supported Maximum Transmission Unit (MTU)
     ///
-    /// Every device must be able to support a MTU of this value for this logical link type. In
-    /// general this is used as the default MTU for the link until a negotiation is made to us a
-    /// different MTU.
+    /// Every device must be able to support a MTU of this value for this logical link flavor.
     ///
     /// # Note
-    /// Some higher layer protocols may use this this value as the minimum allowable MTU. For these
-    /// protocols, the MTU cannot be negotiated to a smaller value than `SUPPORTED_MTU`.
+    /// In general this is used as the default MTU for the link until a negotiation is made to use a
+    /// different MTU. This negotiation may occur by L2CAP within the `WAIT_CONNECT` and 
+    /// `WAIT_CONNECT_RSP` (L2CAP) states or in the `OPEN` state by a higher layer protocol.
     const SUPPORTED_MTU: u16;
 
     /// Try to get the channel identifier from its value
