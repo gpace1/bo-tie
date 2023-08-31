@@ -51,8 +51,7 @@ pub trait LinkFlavor {
     ///
     /// # Note
     /// Some higher layer protocols may use this this value as the minimum allowable MTU. For these
-    /// protocols, the MTU cannot be negotiated to a smaller value than `SUPPORTED_MTU` (see the
-    /// Attribute Protocol (ATT) for an example of this).
+    /// protocols, the MTU cannot be negotiated to a smaller value than `SUPPORTED_MTU`.
     const SUPPORTED_MTU: u16;
 
     /// Try to get the channel identifier from its value
