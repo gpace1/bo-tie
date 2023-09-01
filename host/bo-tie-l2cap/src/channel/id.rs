@@ -138,19 +138,22 @@ impl<T> DynChannelId<T> {
 }
 
 impl DynChannelId<LeULink> {
-    pub const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
+    const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
 
-    /// Create a new Dynamic Channel identifier for the LE-U CID name space
+    /// Create a new `LeCid` for a dynamic channel
     ///
-    /// This will return the enum
-    /// [`DynamicallyAllocated`](../enum.LeUserChannelIdentifier.html#variant.DynamicallyAllocated)
-    /// with the `channel_id` if the id is within the bounds of
-    /// [`LE_LOWER`](#const.LE_LOWER) and
-    /// [`LE_UPPER`](#const.LE_UPPER). If the input is not between those bounds, then an error is
-    /// returned containing the infringing input value.
+    /// This returns a [`LeCid`] so long as `channel_id` is within the range of `0x40..=0x007F`.
     pub fn new_le(channel_id: u16) -> Result<LeCid, u16> {
+        Self::new_dyn_le(channel_id).map(|dyn_channel| LeCid::DynamicallyAllocated(dyn_channel))
+    }
+
+    /// Create a new `DynChannelId<LeULink>`
+    ///
+    /// This returns a `DynChannelId<LeULink>` so long as `channel_id` is within the range of
+    /// `0x40..=0x007F`.
+    pub fn new_dyn_le(channel_id: u16) -> Result<DynChannelId<LeULink>, u16> {
         if Self::LE_BOUNDS.contains(&channel_id) {
-            Ok(LeCid::DynamicallyAllocated(DynChannelId::new_unchecked(channel_id)))
+            Ok(DynChannelId::new_unchecked(channel_id))
         } else {
             Err(channel_id)
         }
@@ -158,11 +161,22 @@ impl DynChannelId<LeULink> {
 }
 
 impl DynChannelId<AclULink> {
-    pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
+    const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
 
+    /// Create a new `AclCid` for a dynamic channel
+    ///
+    /// This returns an [`AclCid`] so long as `channel_id` is within the range of `0x40..=0xFFFF`.
     pub fn new_acl(channel_id: u16) -> Result<AclCid, u16> {
+        Self::new_dyn_acl(channel_id).map(|dyn_channel| AclCid::DynamicallyAllocated(dyn_channel))
+    }
+
+    /// Create a new `DynChannelId<AclULink>`
+    ///
+    /// This returns a ``DynChannelId<AclULink>` so long as `channel_id` is within the range of
+    /// `0x40..=0xFFFF`.
+    pub fn new_dyn_acl(channel_id: u16) -> Result<DynChannelId<AclULink>, u16> {
         if Self::ACL_BOUNDS.contains(&channel_id) {
-            Ok(AclCid::DynamicallyAllocated(DynChannelId::new_unchecked(channel_id)))
+            Ok(DynChannelId::new_unchecked(channel_id))
         } else {
             Err(channel_id)
         }
