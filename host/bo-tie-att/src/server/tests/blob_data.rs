@@ -8,9 +8,10 @@ use crate::{
     Attribute, AttributePermissions, AttributeRestriction, TransferFormatError, TransferFormatInto,
     TransferFormatTryFrom, Uuid,
 };
-use bo_tie_l2cap::{BasicFrame, ConnectionChannel, MinimumMtu};
-use bo_tie_util::buffer::de_vec::DeVec;
-use core::sync::Arc;
+use alloc::sync::Arc;
+use bo_tie_core::buffer::de_vec::DeVec;
+use bo_tie_l2cap::pdu::{BasicFrame, L2capFragment};
+use bo_tie_l2cap::PhysicalLink;
 use tokio::sync::Mutex;
 
 /// A connection channel that counts the number of payload bytes sent
@@ -32,14 +33,21 @@ impl SendWatchConnection {
     }
 }
 
-impl ConnectionChannel for SendWatchConnection {
-    type SendBuffer = DeVec<u8>;
+impl PhysicalLink for SendWatchConnection {
     type SendFut<'a> = DummySendFut;
     type SendErr = usize;
-    type RecvBuffer = DeVec<u8>;
     type RecvFut<'a> = DummyRecvFut;
+    type RecvData = <DeVec<u8> as IntoIterator>::IntoIter;
+    type RecvErr = usize;
 
-    fn send(&self, data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> {
+    fn max_transmission_size(&self) -> usize {
+        8 // deliberately small test size
+    }
+
+    fn send<'s, T>(&'s mut self, _: L2capFragment<T>) -> Self::SendFut<'s>
+    where
+        T: 's + IntoIterator<Item = u8>,
+    {
         let pdu_name = ServerPduName::try_from(data.get_payload()[0]);
 
         // add the attribute value bytes and skip the header
@@ -73,20 +81,6 @@ impl ConnectionChannel for SendWatchConnection {
         );
 
         DummySendFut
-    }
-
-    fn set_mtu(&mut self, _: u16) {}
-
-    fn get_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-    }
-
-    fn max_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
-    }
-
-    fn min_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
     }
 
     fn receive_fragment(&mut self) -> Self::RecvFut<'_> {

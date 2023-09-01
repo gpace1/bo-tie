@@ -1686,10 +1686,10 @@ where
 ///
 /// ```
 /// # async fn fun<C: bo_tie_l2cap::ConnectionChannel>(mut channel: C) -> Result<(), bo_tie_att::ConnectionError<C>> {
-/// use bo_tie_att::client::ConnectClient;
+/// use bo_tie_att::client::ConnectFixedClient;
 /// use bo_tie_gatt::Client;
 ///
-/// let gatt_client: Client = ConnectClient::connect(&mut channel, 64).await?.into();
+/// let gatt_client: Client = ConnectFixedClient::connect(&mut channel, 64).await?.into();
 /// # Ok(()) }
 /// ```
 ///

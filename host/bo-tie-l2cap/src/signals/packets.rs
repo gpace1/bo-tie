@@ -99,6 +99,14 @@ macro_rules! max_u16 {
                 &self.val
             }
         }
+
+        impl<T: Into<u16>> From<T> for $name {
+            fn from(val: T) -> Self {
+                $name::new(val.into())
+            }
+        }
+
+
     }
 }
 

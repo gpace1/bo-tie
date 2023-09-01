@@ -62,15 +62,15 @@ impl ConnectionChannel for DummyConnection {
     }
 
     fn get_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
+        bo_tie_l2cap::LeULink::SUPPORTED_MTU
     }
 
     fn max_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
+        bo_tie_l2cap::LeULink::SUPPORTED_MTU
     }
 
     fn min_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
+        bo_tie_l2cap::LeULink::SUPPORTED_MTU
     }
 
     fn receive_fragment(&mut self) -> Self::RecvFut<'_> {
@@ -102,15 +102,15 @@ impl ConnectionChannel for PayloadConnection {
     }
 
     fn get_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
+        bo_tie_l2cap::LeULink::SUPPORTED_MTU
     }
 
     fn max_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
+        bo_tie_l2cap::LeULink::SUPPORTED_MTU
     }
 
     fn min_mtu(&self) -> usize {
-        bo_tie_l2cap::LeULink::MIN_SUPPORTED_MTU
+        bo_tie_l2cap::LeULink::SUPPORTED_MTU
     }
 
     fn receive_fragment(&mut self) -> Self::RecvFut<'_> {

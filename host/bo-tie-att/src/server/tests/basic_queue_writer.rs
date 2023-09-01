@@ -6,7 +6,7 @@ use crate::{
     server::{BasicQueuedWriter, Server, ServerAttributes},
     TransferFormatTryFrom,
 };
-use bo_tie_l2cap::{BasicFrame, ConnectionChannel};
+use bo_tie_l2cap::pdu::BasicFrame;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 

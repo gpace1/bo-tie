@@ -193,6 +193,7 @@ pub trait PhysicalLink {
 pub trait LogicalLink {
     type PhysicalLink: PhysicalLink;
     type UnusedChannelResponse: channel::UnusedChannelResponse;
+    type Flavor: link_flavor::LinkFlavor;
 
     fn get_shared_link(&self) -> &SharedPhysicalLink<Self::PhysicalLink, Self::UnusedChannelResponse>;
 }
@@ -261,6 +262,8 @@ impl<P: PhysicalLink> LeULogicalLink<P> {
 impl<P: PhysicalLink> LogicalLink for LeULogicalLink<P> {
     type PhysicalLink = P;
     type UnusedChannelResponse = Self;
+
+    type Flavor = LeULink;
 
     fn get_shared_link(&self) -> &SharedPhysicalLink<Self::PhysicalLink, Self::UnusedChannelResponse> {
         &self.shared_link

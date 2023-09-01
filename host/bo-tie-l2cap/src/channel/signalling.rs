@@ -235,21 +235,6 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         self.send(c_frame).await
     }
 
-    /// Initialize a LE Credit Based Connection
-    ///
-    /// This will send the request to create a LE credit based connection with the linked device. A
-    /// connection is not completed until a response is received via the method [`receive`].
-    pub async fn init_le_credit_connection(
-        &mut self,
-        request: &LeCreditBasedConnectionRequest,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        self.awaiting_response = true;
-
-        let control_frame = request.as_control_frame(self.channel_id);
-
-        self.send(control_frame).await
-    }
-
     /// Give credits to the peer device
     ///
     /// This sends a *flow control credit indication* to the peer device to increase the credit
@@ -273,6 +258,23 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         let c_frame = credit_ind.as_control_frame(self.channel_id);
 
         self.send(c_frame).await
+    }
+}
+
+impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
+    /// Initialize a LE Credit Based Connection
+    ///
+    /// This will send the request to create a LE credit based connection with the linked device. A
+    /// connection is not completed until a response is received via the method [`receive`].
+    pub async fn init_le_credit_connection(
+        &mut self,
+        request: &LeCreditBasedConnectionRequest,
+    ) -> Result<(), P::SendErr> {
+        self.awaiting_response = true;
+
+        let control_frame = request.as_control_frame(self.channel_id);
+
+        self.send(control_frame).await
     }
 }
 
@@ -303,6 +305,28 @@ pub enum ReceivedSignal {
 }
 
 impl ReceivedSignal {
+    /// Reject or ignore the received Signal
+    ///
+    /// If this `ReceivedSignal` is a request, then a *Command Reject Response* is sent to the other
+    /// device with the command not understood reason. If this is not a request then the received
+    /// signal is ignored and no reject signal is sent.
+    pub async fn reject_or_ignore<L: LogicalLink>(
+        self,
+        signalling_channel: &mut SignallingChannel<'_, L>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+        match self {
+            ReceivedSignal::UnknownSignal(_, _)
+            | ReceivedSignal::CommandRejectRsp(_)
+            | ReceivedSignal::DisconnectResponse(_)
+            | ReceivedSignal::LeCreditBasedConnectionResponse(_)
+            | ReceivedSignal::FlowControlCreditIndication(_) => Ok(()),
+            ReceivedSignal::DisconnectRequest(request) => request.reject_as_not_understood(signalling_channel).await,
+            ReceivedSignal::LeCreditBasedConnectionRequest(request) => {
+                request.reject_as_not_understood(signalling_channel).await
+            }
+        }
+    }
+
     fn try_from<L>(builder: ReceiveSignalRecombineBuilder) -> Result<Self, ConvertSignalError>
     where
         L: crate::link_flavor::LinkFlavor,

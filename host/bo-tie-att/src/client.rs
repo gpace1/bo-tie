@@ -1,8 +1,12 @@
+//! Attribute Client Implementation
+
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
 use bo_tie_l2cap as l2cap;
+use bo_tie_l2cap::channel::id::ChannelIdentifier;
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink};
 
+/// Attribute PDUs sent by the client
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ClientPduName {
     ExchangeMtuRequest,
@@ -125,46 +129,65 @@ where
 
 /// Connect this device to an Attribute Server
 ///
-/// `ConnectClient` is used for initiating and connecting to an attribute server. Unlike a physical
-/// link there is not an extensive process to setup an ATT connection beyond configuring a Maximum
-/// Transmission Unit (MTU). In fact if the default MTU is to be used for the connection (the value
-/// of which is defined at a higher layer) then there is not exchange with the server and the client
-/// automatically "connects".
-/// ```
-pub struct ConnectClient {
+/// This is used for connecting a client on an ATT bearer using a fixed L2CAP channel ID. ATT
+/// bearers on fixed channels need to perform an MTU exchange unless there is a default ATT MTU
+/// specified at by a higher layer protocol.
+///
+// /// (todo) A ATT bearer (or enhanced ATT bearer) using a L2CAP channel with a dynamically allocated channel
+// /// ID does use `ConnectFixedClient` to create a [`Client`]. The MTU of this ATT bearer is defined
+// /// by the Bluetooth Specification to be the same as the MTU of the channel (dynamically allocated
+// /// channel IDs are for either credit based or enhanced credit based channels). To create a `Client`
+// /// for this kind of ATT bearer use the implementation of `From<`[`CreditBasedChannel`]`>` for
+// /// `Client`.
+// ///
+/// ## MTU exchange
+/// The *MTU exchange* is the process of determining the MTU of an ATT bearer with a fixed channel
+/// ID using the ATT protocol. This process is not needed for an ATT bearer that uses a dynamically
+/// allocated channel ID as the MTU is determined by the L2CAP channel creation process.
+///
+/// When creating a fixed client, there can either be a default MTU, a requested MTU, or both (
+/// having neither will produce an error). If just a default MTU is set, then there will be no *MTU
+/// exchange* initiated by this server. If just a requested MTU is set, then the *MTU exchange*
+/// process will occur, but an error is produced if this process fails. If there is a default MTU
+/// and a requested MTU then the *MTU exchange* occurs with the default MTU being used if the
+/// exchange fails.
+///
+// /// [`CreditBasedChannel`]: bo_tie_l2cap::channel::CreditBasedChannel
+pub struct ConnectFixedClient {
     default_mtu: usize,
-    requested_mtu: usize,
+    request_mtu: usize,
     skipped_mtu_request: bool,
+    channel_id: ChannelIdentifier,
 }
 
-impl ConnectClient {
+impl ConnectFixedClient {
     /// Connect to the Attribute server of the peer device
     ///
-    /// `connect` is a shortcut of calling methods `initiate` and then `create_client`. This is a
-    /// simpler, but it doesn't allow for other Bluetooth protocols to transmit PDU's on the same
-    /// physical link until it is complete.
+    /// This method cannot be used if the peer device also has an Attribute client or the Attribute
+    /// server of the peer is configured to immediately send notifications or indications. Use
+    /// method [`initiate`] followed by to [`create_client`] if there is a possibility of the other
+    /// device sending *any* data over this channel other than an *exchange MTU response*.
     ///
-    /// # MTU
-    /// The `default_mtu` is the initial MTU set for this instance of the ATT protocol. This value
-    /// is defined by a higher layer protocol or profile and it is the assumed value of the MTU when
-    /// the client and server initially connect.
+    /// `default_mtu` is the default MTU. This value is the set as the MTU if there is no MTU
+    /// exchange. `request_mtu` is the MTU to be requested within the MTU exchange. See the section
+    /// on [MTU exchange] for more information on the MTU exchange. If both these inputs are `None`,
+    /// then the future returned by `connect` will immediately output an error.
     ///
-    /// The `requested_mtu` is the value that will be sent as part of an *exchange MTU request* that
-    /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
-    /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
-    /// during the MTU exchange will be set as the new MTU.
-    pub async fn connect<T, M>(
-        connection_channel: &mut BasicFrameChannel<'_, T>,
-        default_mtu: u16,
-        requested_mtu: M,
+    /// [`initiate`]: ConnectFixedClient::initiate
+    /// [`create_client`]: ConnectFixedClient::create_client
+    pub async fn connect<T, I, R>(
+        att_bearer: &mut BasicFrameChannel<'_, T>,
+        default_mtu: I,
+        request_mtu: R,
     ) -> Result<Client, super::ConnectionError<T>>
     where
         T: LogicalLink,
-        M: Into<Option<u16>>,
+        I: Into<Option<u16>>,
+        R: Into<Option<u16>>,
     {
-        let connect_client = Self::initiate(connection_channel, default_mtu, requested_mtu).await?;
+        let connect_client = Self::initiate(att_bearer, default_mtu, request_mtu).await?;
 
-        let response = connection_channel
+        let response = att_bearer
             .receive()
             .await
             .map_err(|e| super::ConnectionError::RecvError(e))?;
@@ -183,55 +206,56 @@ impl ConnectClient {
     /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
     /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
     /// during the MTU exchange will be set as the new MTU.
-    pub async fn initiate<T, M>(
-        connection_channel: &mut BasicFrameChannel<'_, T>,
-        default_mtu: u16,
-        requested_mtu: M,
-    ) -> Result<ConnectClient, super::ConnectionError<T>>
+    pub async fn initiate<T, I, R>(
+        att_bearer: &mut BasicFrameChannel<'_, T>,
+        default_mtu: I,
+        request_mtu: R,
+    ) -> Result<ConnectFixedClient, super::ConnectionError<T>>
     where
         T: LogicalLink,
-        M: Into<Option<u16>>,
+        I: Into<Option<u16>>,
+        R: Into<Option<u16>>,
     {
-        let default_mtu = default_mtu.into();
+        let (default_mtu, request_mtu) = match (default_mtu.into(), request_mtu.into()) {
+            (None, None) => return Err(super::ConnectionError::InvalidMtuInputs),
+            (Some(v), None) => {
+                return Ok(ConnectFixedClient {
+                    default_mtu: v.into(),
+                    request_mtu: 0,
+                    skipped_mtu_request: true,
+                    channel_id: att_bearer.get_cid(),
+                })
+            }
+            (None, Some(v)) => (0, v),
+            (Some(d), Some(r)) => (d, r),
+        };
 
-        if let Some(requested_mtu) = requested_mtu.into() {
-            let mtu_req = pdu::exchange_mtu_request(requested_mtu as u16);
+        let request = pdu::exchange_mtu_request(request_mtu);
 
-            let requested_mtu = requested_mtu.into();
+        let acl_data = l2cap::pdu::BasicFrame::new(TransferFormatInto::into(&request), att_bearer.get_cid());
 
-            let acl_data = l2cap::pdu::BasicFrame::new(TransferFormatInto::into(&mtu_req), super::L2CAP_CHANNEL_ID);
+        att_bearer
+            .send(acl_data)
+            .await
+            .map_err(|e| super::ConnectionError::SendError(e))?;
 
-            connection_channel
-                .send(acl_data)
-                .await
-                .map_err(|e| super::ConnectionError::SendError(e))?;
-
-            Ok(ConnectClient {
-                default_mtu,
-                requested_mtu,
-                skipped_mtu_request: false,
-            })
-        } else {
-            let requested_mtu = default_mtu;
-
-            Ok(ConnectClient {
-                default_mtu,
-                requested_mtu,
-                skipped_mtu_request: true,
-            })
-        }
+        Ok(ConnectFixedClient {
+            default_mtu: default_mtu.into(),
+            request_mtu: request_mtu.into(),
+            skipped_mtu_request: false,
+            channel_id: att_bearer.get_cid(),
+        })
     }
 
     /// Finish connecting a client to a attribute server
     ///
     /// This takes the response from the MTU from the server and creates a `Client`. An error will
-    /// occur if the response doesn't contain the correct channel identifier or an unexpected ATT
-    /// PDU was received. The server is expected to respond with either a mtu response PDU or an
+    /// occur if the response doesn't contain the correct channel identifier or an ATT PDU was received. The server is expected to respond with either a mtu response PDU or an
     /// error PDU with request not supported.
     pub async fn create_client(self, response: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Client, super::Error> {
         if self.skipped_mtu_request {
-            Ok(Client::new(self.requested_mtu))
-        } else if response.get_channel_id() != super::L2CAP_CHANNEL_ID {
+            Ok(Client::new(self.default_mtu))
+        } else if response.get_channel_id() != self.channel_id {
             Err(super::Error::IncorrectChannelId(response.get_channel_id()).into())
         } else if ServerPduName::ExchangeMTUResponse.is_convertible_from(response.get_payload()) {
             self.process_mtu_response(response.get_payload())
@@ -248,7 +272,7 @@ impl ConnectClient {
 
         match pdu {
             Ok(received_mtu) => {
-                let mtu: usize = self.requested_mtu.min(received_mtu.get_parameters().0.into());
+                let mtu: usize = self.request_mtu.min(received_mtu.get_parameters().0.into());
 
                 Ok(Client::new(mtu))
             }

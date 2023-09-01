@@ -471,20 +471,28 @@ where
     ///
     /// Creates an attribute server for a client connected with the logical link `connection`, the
     /// attributes of the server are optionally initialized with input `server_attributes`, and the
-    /// `queued_writer` is the manager for queued writes. If `server_attributes` is set to `None`
+    /// `queued_writer` is the operator of queued writes. If `server_attributes` is set to `None`
     /// then a server with no attributes is created.
     ///
+    /// # Maximum Transmission Unit (MTU)
+    /// Input `max_mtu` is the maximum maximum transmission unit (MTU) supported by this `Server`.
+    /// The client will be able to negotiate to set the MTU up to this value.
+    ///
+    /// For an ATT `Server` connected by a dynamically allocated
+    /// The maximum MTU must match the negocia
+    ///
+    /// ## Default Client Permissions
     /// This client will be given the permissions
     /// `AttributePermissions::Read(AttributeRestriction::None)`, and
     /// `AttributePermissions::Write(AttributeRestriction::None)`. These permissions can be revoked
     /// via the method [`revoke_permissions_of_client`].
     ///
     /// [`revoke_permissions_of_client`]: Server::revoke_permissions_of_client
-    pub fn new<A>(default_mtu: u16, server_attributes: A, queued_writer: Q) -> Self
+    pub fn new<A>(max_mtu: u16, server_attributes: A, queued_writer: Q) -> Self
     where
         A: Into<Option<ServerAttributes>>,
     {
-        let mtu = default_mtu.into();
+        let mtu = max_mtu.into();
 
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 

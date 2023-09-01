@@ -1,4 +1,170 @@
 #![doc = include_str!("../README.md")]
+//! # L2CAP Dependency
+//! This module relies on the implementation of a L2CAP within `bo-tie` in order to send data between
+//! the ATT server and client. Both the `Server` and `Client` require an Attribute bearer. Within
+//! the L2CAP implementation, an Attribute bearer is either a [`BasicChannel`] or a
+//! [`CreditBasedChannel`] (todo). While being the most commonly used Attribute channel, a
+//! `BasicChannel` can only be created from a `LeULogicalLink`, whereas a `CreditBasedChannel` can
+//! be created from either a LE-U or ACL-U logical link.
+//!
+//! ### Basic Channel
+//! For an LE logical link, there is a single fixed channel for the Attribute protocol. This channel
+//! can be retrieved using the `get_att_channel` command.
+//!
+//! ```
+//! use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+//! use bo_tie_att::Server;
+//! use bo_tie_att::server::NoQueuedWrites;
+//!
+//! async fn run_server<P: PhysicalLink>(physical_link: P) {
+//!     let logical_link = LeULogicalLink::new(physical_link);
+//!
+//!     let mut att_channel = logical_link.get_att_channel();
+//!
+//!     // note: for a real server you're going
+//!     // to need to add attributes to it
+//!     let mut server = Server::new(256, None, NoQueuedWrites);
+//!
+//!     loop {
+//!         let basic_frame = att_channel.receive()
+//!             .await
+//!             .expect("unexpected failure in receiving ATT data");
+//!
+//!         server.process_att_pdu(&mut att_channel, &basic_frame).await
+//!     }
+//! }
+//! ```
+//!
+// //! ### Credit Based Channel (todo: a credit based channel is not currently supported)
+// //!
+// //! A credit based channel must be created via the signalling commands of L2CAP. There are two sets
+// //! of commands for establishing a `CreditBasedChannel`. These commands are used to create a L2CAP
+// //! credit based connection which can then be used as a channel.
+// //!
+// //! A LE-U logical link can create a `CreditBasedChannel` by either initiating a LE credit based
+// //! connection or an enhanced credit based connection. An ACL-U logical link can only create a
+// //! `CreditBasedChannel` from an enhanced credit based connection.
+// //!
+// //! ```
+// //! use bo_tie_att::ConnectClient;
+// //! use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+// //! use bo_tie_l2cap::channel::id::DynChannelId;
+// //! use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+// //! use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
+// //! use bo_tie_l2cap::signals::packets::{LeCreditBasedConnectionRequest, SimplifiedProtocolServiceMultiplexer};
+// //!
+// //! // In this example a LE credit based connection is
+// //! // established before the credit based connection
+// //! async fn run_server<P: PhysicalLink>(physical_link: P) {
+// //!     let logical_link = LeULogicalLink::new(physical_link);
+// //!
+// //!     let mut signalling_channel = logical_link.get_signalling_channel();
+// //!
+// //!     // These are just arbitrary values
+// //!     let request = LeCreditBasedConnectionRequest {
+// //!         identifier: 1u8.try_into().unwrap(),
+// //!         spsm: SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
+// //!         source_dyn_cid: DynChannelId::new_dyn_le(0x40).unwrap(),
+// //!         mtu: LeULink::SUPPORTED_MTU.into(),
+// //!         mps: 256u16.into(),
+// //!         initial_credits: 32,
+// //!     };
+// //!
+// //!     signalling_channel.init_le_credit_connection(&request)
+// //!         .await
+// //!         .expect("failed to initialize LE credit based connection");
+// //!
+// //!     // need to await the signalling response
+// //!     let mut credit_based_channel = loop {
+// //!         match signalling_channel.receive().await.expect("failed to receive") {
+// //!             ReceivedSignal::LeCreditBasedConnectionResponse(response) => {
+// //!                 break response.create_le_credit_connection(&request, &logical_link);
+// //!             }
+// //!             signal => signal.reject_or_ignore(&mut signalling_channel),
+// //!         }
+// //!     };
+// //!
+// //!     // now the credit based channel can be used
+// //!     // as an ATT bearer
+// //!     let client = ConnectClient::connect(&mut credit_based_channel, 256)
+// //!         .await
+// //!         .expect("failed to init client");
+// //! }
+// //! ```
+// //!
+//! # The Attribute Client
+//! An Attribute client is used for retrieving the Attribute information from an ATT protocol
+//! Server. To create a [`Client`] you need to initiate an ATT protocol connection to the Server.
+//! This is done using the [`ConnectFixedClient`] type.
+//!
+//! ```
+//! use bo_tie_att::ConnectFixedClient;
+//! use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
+//!
+//! # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+//! # async fn run_client<P: PhysicalLink>(physical_link: P) {
+//! let link = LeULogicalLink::new(physical_link);
+//!
+//! let mut att_channel = link.get_att_channel();
+//!
+//! let client = ConnectFixedClient::connect(&mut att_channel, LeULink::SUPPORTED_MTU, None);
+//! # }
+//!
+//! ```
+//!
+//! ### Credit Based Channels
+//!
+//! The
+//!
+//! # The Attribute Server
+//! The server contains a series of Attributes that can be interacted with by the Client. The
+//! Server implementation of this library contains
+//!
+//! ### Attribute Protocol Permissions
+//! When an attribute is created it is given permissions to *to determine* access of if by a
+//! client. Permission are *labels for access* to operations, of barriers granting entry for the
+//! client. No permission has any relation with any other permission, and no permission is
+//! inherently given to an attribute or the user by another permission. It is the operations of the
+//! Attribute Protocol or a higher layer protocol that determine what permissions are required to
+//! perform said operation.
+//!
+//! Attributes can only be written to or read from. Permissions restrict reads and writes for
+//! attribute protocol operations performed under open access, encryption, authentication, and
+//! authorization. Different operations require different restrictions, but most of the implemented
+//! Attribute Protocol operations check the permissions of an attribute before performing the
+//! operation. Most of these operations require that the attribute either be at least readable or
+//! writeable, but will check if those reads or writes also require either encryption,
+//! authentication, or authorization.
+//!
+//! Attribute permissions do not posses hierarchy or hereditary characteristics between one another.
+//! This can lead to seeming odd cases where it would seem that because an attribute was given
+//! a permissions it should have another, but the server will report an access error. If an
+//! attribute was only given the permission `Read(None)`, the server will only read the attribute to
+//! the client when the server grants the client the same permission. If the client had any other
+//! permissions except for `Read(None)`, such as `Read(Encryption(Bits128))`, the server would not
+//! read the attribute and would instead return an error to the client.
+//!
+//! #### Client Granted Permissions
+//! The server matches the required permissions of an operation against the permissions of the
+//! client. The server does not determine the permissions of the client, this is done by 'giving'
+//! permission to the client through either your application or some higher layer protocol. When a
+//! client requests an operation to be performed for specified attributes, the server will check the
+//! permissions of the attribute and the permissions of the client. The client will need the
+//! permissions required by the operation matched against the permissions of the attribute(s). If a
+//! permission check fails, then the server will return an error giving the reason for the failure.
+//!
+//! Operations will generally check a number of permissions (usually every type of Read or Write)
+//! against the permissions of the requested attribute and those given to the client. If any of the
+//! permissions to check for are in both the attribute and client, the operation is successfully
+//! performed for the client.
+//!
+//! #### Permission Errors
+//! If an operation cannot be performed because the client does not have the permission to access
+//! an attribute, an error is returned to the client describing the permission problem. However,
+//! it is often the case there are multiple types of permissions that a client can have to access
+//! the attribute, but only one of the errors can be described with the error PDU sent from the
+//! server to the client.
+
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
@@ -13,7 +179,7 @@ pub mod server;
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
 use bo_tie_l2cap::PhysicalLink;
-pub use client::Client;
+pub use client::{Client, ConnectFixedClient};
 pub use server::Server;
 
 //==================================================================================================
@@ -365,6 +531,7 @@ pub enum ConnectionError<T: bo_tie_l2cap::LogicalLink> {
         >,
     ),
     SendError(<T::PhysicalLink as PhysicalLink>::SendErr),
+    InvalidMtuInputs,
 }
 
 impl<T: bo_tie_l2cap::LogicalLink, E: Into<Error>> From<E> for ConnectionError<T> {
@@ -384,6 +551,7 @@ where
             Self::AttError(e) => write!(f, "AttError({e:?})"),
             Self::RecvError(e) => write!(f, "RecvError({e:?})"),
             Self::SendError(e) => write!(f, "SendError({e:?})"),
+            Self::InvalidMtuInputs => f.write_str("InvalidMtuInputs"),
         }
     }
 }
@@ -399,6 +567,7 @@ where
             Self::AttError(e) => core::fmt::Display::fmt(e, f),
             Self::RecvError(rx) => core::fmt::Display::fmt(rx, f),
             Self::SendError(tx) => core::fmt::Display::fmt(tx, f),
+            Self::InvalidMtuInputs => f.write_str("both the default and requested MTU values cannot be None"),
         }
     }
 }
@@ -944,164 +1113,6 @@ impl TransferFormatTryFrom for bo_tie_core::BluetoothDeviceAddress {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use bo_tie_core::buffer::de_vec::DeVec;
-    use bo_tie_core::buffer::TryExtend;
-    use bo_tie_l2cap::{pdu::BasicFrame, L2capFragment};
-    use std::sync::{Arc, Mutex};
-
-    use crate::server::ServerAttributes;
-    use std::{
-        future::Future,
-        pin::Pin,
-        task::{Context, Poll, Waker},
-    };
-
-    struct TwoWayChannel {
-        b1: Option<Vec<u8>>,
-        w1: Option<Waker>,
-
-        b2: Option<Vec<u8>>,
-        w2: Option<Waker>,
-    }
-
-    struct DummySendFut<const DIRECTION: usize>(Arc<Mutex<TwoWayChannel>>, Vec<u8>);
-
-    impl<const DIRECTION: usize> Future for DummySendFut<DIRECTION> {
-        type Output = Result<(), bo_tie_l2cap::send_future::Error<usize>>;
-
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-            let this = self.get_mut();
-
-            let mut gaurd = this.0.lock().expect("Failed to acquire lock");
-
-            macro_rules! poll {
-                ($b_field:ident, $w_field:ident) => {{
-                    gaurd.$b_field = Some(core::mem::take(&mut this.1));
-
-                    if let Some(waker) = gaurd.$w_field.take() {
-                        waker.wake();
-                    }
-
-                    Poll::Ready(Ok(()))
-                }};
-            }
-
-            match DIRECTION {
-                1 => poll!(b1, w1),
-                2 => poll!(b2, w2),
-                _ => panic!("unknown channel direction"),
-            }
-        }
-    }
-
-    struct DummyRecvFut<const DIRECTION: usize>(Arc<Mutex<TwoWayChannel>>);
-
-    impl<const DIRECTION: usize> Future for DummyRecvFut<DIRECTION> {
-        type Output = Option<Result<L2capFragment<DeVec<u8>>, <DeVec<u8> as TryExtend<u8>>::Error>>;
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let this = self.get_mut();
-
-            let mut gaurd = this.0.lock().expect("Failed to acquire lock");
-
-            macro_rules! poll {
-                ($b_field:ident, $w_field:ident) => {
-                    if let Some(data) = gaurd.$b_field.take() {
-                        let mut buffer = DeVec::<u8>::new();
-
-                        buffer.try_extend(data).unwrap();
-
-                        Poll::Ready(Some(Ok(L2capFragment::new(true, buffer))))
-                    } else {
-                        gaurd.$w_field = Some(cx.waker().clone());
-                        Poll::Pending
-                    }
-                };
-            }
-
-            match DIRECTION {
-                1 => poll!(b1, w1),
-                2 => poll!(b2, w2),
-                _ => panic!("unknown channel direction"),
-            }
-        }
-    }
-
-    /// Channel 1 sends to b1 and receives from b2
-    struct Channel1 {
-        two_way: Arc<Mutex<TwoWayChannel>>,
-    }
-
-    /// Channel 2 sends to b2 and receives from b1
-    struct Channel2 {
-        two_way: Arc<Mutex<TwoWayChannel>>,
-    }
-
-    impl TwoWayChannel {
-        fn new() -> (Channel1, Channel2) {
-            let tc = TwoWayChannel {
-                b1: None,
-                w1: None,
-                b2: None,
-                w2: None,
-            };
-
-            let am_tc = Arc::new(Mutex::new(tc));
-
-            let c1 = Channel1 { two_way: am_tc.clone() };
-            let c2 = Channel2 { two_way: am_tc.clone() };
-
-            (c1, c2)
-        }
-    }
-
-    impl bo_tie_l2cap::LogicalLink for Channel1 {
-        type SendFut<'a> = DummySendFut<1>;
-        type SendErr = usize;
-        type RecvData = DeVec<u8>;
-        type RecvFut<'a> = DummyRecvFut<2>;
-        type RecvErr = usize;
-
-        fn max_transmission_size(&self) -> usize {
-            23
-        }
-
-        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
-        where
-            T: Iterator<Item = u8>,
-        {
-            DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
-        }
-
-        fn recv(&mut self) -> Self::RecvFut<'_> {
-            DummyRecvFut(self.two_way.clone())
-        }
-    }
-
-    impl bo_tie_l2cap::LogicalLink for Channel2 {
-        type SendFut<'a> = DummySendFut<2>;
-        type SendErr = usize;
-        type RecvData = DeVec<u8>;
-        type RecvFut<'a> = DummyRecvFut<1>;
-        type RecvErr = usize;
-
-        fn max_transmission_size(&self) -> usize {
-            23
-        }
-
-        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
-        where
-            T: Iterator<Item = u8>,
-        {
-            DummySendFut(self.two_way.clone(), data.try_into_packet().unwrap())
-        }
-
-        fn recv(&mut self) -> Self::RecvFut<'_> {
-            DummyRecvFut(self.two_way.clone())
-        }
-    }
-
     #[tokio::test]
     async fn test_att_connection() {
         use super::client::ResponseProcessor;

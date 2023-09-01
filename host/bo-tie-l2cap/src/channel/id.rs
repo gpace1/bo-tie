@@ -138,7 +138,7 @@ impl<T> DynChannelId<T> {
 }
 
 impl DynChannelId<LeULink> {
-    const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
+    pub const LE_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0x007F;
 
     /// Create a new `LeCid` for a dynamic channel
     ///
@@ -161,7 +161,7 @@ impl DynChannelId<LeULink> {
 }
 
 impl DynChannelId<AclULink> {
-    const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
+    pub const ACL_BOUNDS: core::ops::RangeInclusive<u16> = 0x0040..=0xFFFF;
 
     /// Create a new `AclCid` for a dynamic channel
     ///
