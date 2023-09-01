@@ -103,6 +103,11 @@ impl<'a, L: LogicalLink> BasicFrameChannel<'a, L> {
 }
 
 impl<L: LogicalLink> BasicFrameChannel<'_, L> {
+    /// Get the Channel Identifier (CID)
+    pub fn get_cid(&self) -> ChannelIdentifier {
+        self.channel_id
+    }
+
     /// Get fragmentation size of L2CAP PDUs
     ///
     /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
