@@ -352,10 +352,9 @@ where
     /// This method is unsafe as it does not check if the caller is the correct `owner`. Before this
     /// method is called, `self.owner` must be checked to ensure the caller is the correct owner.
     async unsafe fn recv_fragment(&self) -> Result<L2capFragment<P::RecvData>, MaybeRecvError<P, U>> {
-        self.physical_link
-            .get()
-            .as_mut()
-            .unwrap()
+        let mut_ref = self.physical_link.get().as_mut().unwrap();
+
+        mut_ref
             .recv()
             .await
             .ok_or(MaybeRecvError::Disconnected)?
