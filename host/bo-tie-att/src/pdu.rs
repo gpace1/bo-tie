@@ -1141,12 +1141,19 @@ pub struct ReadTypeResponse<D> {
 }
 
 impl<D> ReadTypeResponse<D> {
+    /// Create a new `ReadTypeResponse`
     pub fn new(handle: u16, data: D) -> Self {
         ReadTypeResponse { handle, data }
     }
 
+    /// Get the handle
     pub fn get_handle(&self) -> u16 {
         self.handle
+    }
+
+    /// Get the inner data
+    pub fn into_inner(self) -> D {
+        self.data
     }
 }
 
