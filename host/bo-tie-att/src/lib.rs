@@ -807,12 +807,87 @@ impl_transfer_format_for_number! {i32}
 impl_transfer_format_for_number! {u32}
 impl_transfer_format_for_number! {i64}
 impl_transfer_format_for_number! {u64}
-impl_transfer_format_for_number! {isize}
-impl_transfer_format_for_number! {usize}
 impl_transfer_format_for_number! {i128}
 impl_transfer_format_for_number! {u128}
 impl_transfer_format_for_number! {f32}
 impl_transfer_format_for_number! {f64}
+
+impl TransferFormatTryFrom for isize {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+        if raw.len() == 8 {
+            let mut bytes = <[u8; core::mem::size_of::<isize>()]>::default();
+
+            bytes.copy_from_slice(raw);
+
+            let mut val_bytes = <[u8; core::mem::size_of::<usize>()]>::default();
+
+            val_bytes.iter_mut().zip(bytes.iter()).for_each(|(v, b)| *v = *b);
+
+            Ok(Self::from_le_bytes(bytes))
+        } else {
+            Err(TransferFormatError::bad_size(
+                stringify!($num),
+                core::mem::size_of::<isize>(),
+                raw.len(),
+            ))
+        }
+    }
+}
+
+impl TransferFormatInto for isize {
+    fn len_of_into(&self) -> usize {
+        8
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        assert!(
+            *self as usize <= <u64>::MAX as usize,
+            "cannot transfer an isize larger than <i64>::MAX or less than <i64>::MIN"
+        );
+
+        into_ret.copy_from_slice(&self.to_le_bytes())
+    }
+}
+
+impl TransferFormatTryFrom for usize {
+    fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
+        if raw.len() == 8 {
+            let mut bytes = <[u8; 8]>::default();
+
+            bytes.copy_from_slice(raw);
+
+            let mut val_bytes = <[u8; core::mem::size_of::<usize>()]>::default();
+
+            val_bytes.iter_mut().zip(bytes.iter()).for_each(|(v, b)| *v = *b);
+
+            Ok(Self::from_le_bytes(val_bytes))
+        } else {
+            Err(TransferFormatError::bad_size(
+                stringify!($num),
+                core::mem::size_of::<isize>(),
+                raw.len(),
+            ))
+        }
+    }
+}
+
+impl TransferFormatInto for usize {
+    fn len_of_into(&self) -> usize {
+        8
+    }
+
+    fn build_into_ret(&self, into_ret: &mut [u8]) {
+        assert!(
+            *self <= <u64>::MAX as usize,
+            "cannot transfer an usize larger than <u64>::MAX"
+        );
+
+        into_ret.copy_from_slice(&self.to_le_bytes())
+    }
+}
+
+impl_transfer_format_for_vec_of!(isize);
+impl_transfer_format_for_vec_of!(usize);
 
 impl TransferFormatInto for bool {
     fn len_of_into(&self) -> usize {
