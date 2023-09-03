@@ -25,4 +25,4 @@ features = ["rt", "macros", "sync", "time"]
 
 [[test]]
 name = "test_connection"
-path = "tests/att/test_connection.rs"
+path = "tests/att/connection_test.rs"

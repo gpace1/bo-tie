@@ -7,6 +7,9 @@
 //! * write_request -> write_response
 //! * read_request -> read_response
 
+mod common;
+
+use crate::common::Rendezvous;
 use bo_tie_att::server::{NoQueuedWrites, ServerAttributes};
 use bo_tie_att::{
     Attribute, AttributePermissions, AttributeRestriction, Client, ConnectFixedClient, Server, TransferFormatInto,
@@ -16,7 +19,6 @@ use bo_tie_host_tests::{create_le_link, PhysicalLink};
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink};
-use std::future::Future;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -28,24 +30,18 @@ const UUID_3: Uuid = Uuid::from_u16(3);
 async fn test_connection() {
     let (client, server) = create_le_link(LeULink::SUPPORTED_MTU.into());
 
-    let (end_client, end_server) = oneshot::channel();
+    let (rendezvous_client, rendezvous_server) = common::rendezvous();
 
-    let (rendezvous_server, rendezvous_client) = tokio::sync::oneshot::channel();
+    let handle_client = tokio::spawn(test_connection_client(client, rendezvous_client));
 
-    let handle_client = tokio::spawn(test_connection_client(client, end_client, rendezvous_client));
-
-    let handle_server = tokio::spawn(test_connection_server(server, end_server, rendezvous_server));
+    let handle_server = tokio::spawn(test_connection_server(server, rendezvous_server));
 
     handle_client.await.unwrap();
 
     handle_server.await.unwrap();
 }
 
-async fn test_connection_client(
-    link: LeULogicalLink<PhysicalLink>,
-    end_client: oneshot::Sender<()>,
-    rendezvous_client: oneshot::Receiver<()>,
-) {
+async fn test_connection_client(link: LeULogicalLink<PhysicalLink>, rendezvous: common::Rendezvous) {
     let timeout = Duration::from_millis(500);
     let test_val_1: usize = 33;
     let test_val_2: u64 = 64;
@@ -90,67 +86,10 @@ async fn test_connection_client(
 
     assert_eq!(test_val_3, read_val_3, "test and read val 3 do not match");
 
-    end_client.send(()).unwrap();
-
-    rendezvous_client.await.unwrap();
+    rendezvous.rendez().await;
 }
 
-async fn read_att_type<D: TransferFormatTryFrom + TransferFormatInto>(
-    channel: &mut BasicFrameChannel<'_, LeULogicalLink<PhysicalLink>>,
-    client: &mut Client,
-    uuid: Uuid,
-) -> (u16, D) {
-    use bo_tie_att::client::ResponseProcessor;
-
-    let response_processor = client
-        .read_by_type_request::<_, _, D>(channel, 1..0xFFFF, uuid)
-        .await
-        .expect(format!("failed to read type ({:x})", uuid).as_str());
-
-    let b_frame = channel.receive().await.expect("failed to get response");
-
-    let read_type_response = response_processor
-        .process_response(&b_frame)
-        .expect("failed to process response");
-
-    let first = read_type_response.into_iter().next().expect("no items in response");
-
-    (first.get_handle(), first.into_inner())
-}
-
-async fn get_handle(
-    channel: &mut BasicFrameChannel<'_, LeULogicalLink<PhysicalLink>>,
-    client: &mut Client,
-    uuid: Uuid,
-) -> u16 {
-    read_att_type::<Vec<u8>>(channel, client, uuid).await.0
-}
-
-async fn write_request<D: TransferFormatTryFrom + TransferFormatInto>(
-    channel: &mut BasicFrameChannel<'_, LeULogicalLink<PhysicalLink>>,
-    client: &mut Client,
-    handle: u16,
-    data: D,
-) {
-    use bo_tie_att::client::ResponseProcessor;
-
-    let response_processor = client
-        .write_request(channel, handle, data)
-        .await
-        .expect("failed to write test val 1");
-
-    let b_frame = channel.receive().await.expect("failed to get response");
-
-    response_processor
-        .process_response(&b_frame)
-        .expect("failed to process response");
-}
-
-async fn test_connection_server(
-    link: LeULogicalLink<PhysicalLink>,
-    mut end_server: oneshot::Receiver<()>,
-    rendezvous_server: oneshot::Sender<()>,
-) {
+async fn test_connection_server(link: LeULogicalLink<PhysicalLink>, rendezvous: Rendezvous) {
     let attribute_0: Attribute<usize> = Attribute::new(
         UUID_1,
         [
@@ -191,19 +130,69 @@ async fn test_connection_server(
 
     let mut server = Server::new(LeULink::SUPPORTED_MTU, server_attributes, NoQueuedWrites);
 
+    let mut rendez = Box::pin(rendezvous.rendez());
+
     loop {
         tokio::select! {
-            end_server_result = std::pin::pin!(&mut end_server) => {
-                end_server_result.unwrap();
-
-                rendezvous_server.send(()).unwrap();
-
-                break
-            },
+            _ = &mut rendez => break,
 
             rx = att_channel.receive() => {
                 server.process_att_pdu(&mut att_channel, &rx.expect("channel error")).await.expect("att server error");
             }
         }
     }
+}
+
+/*
+ * Helper methods for the client to read and write with the server
+ */
+pub async fn read_att_type<D: TransferFormatTryFrom + TransferFormatInto>(
+    channel: &mut BasicFrameChannel<'_, LeULogicalLink<PhysicalLink>>,
+    client: &mut Client,
+    uuid: Uuid,
+) -> (u16, D) {
+    use bo_tie_att::client::ResponseProcessor;
+
+    let response_processor = client
+        .read_by_type_request::<_, _, D>(channel, 1..0xFFFF, uuid)
+        .await
+        .expect(format!("failed to read type ({:x})", uuid).as_str());
+
+    let b_frame = channel.receive().await.expect("failed to get response");
+
+    let read_type_response = response_processor
+        .process_response(&b_frame)
+        .expect("failed to process response");
+
+    let first = read_type_response.into_iter().next().expect("no items in response");
+
+    (first.get_handle(), first.into_inner())
+}
+
+pub async fn get_handle(
+    channel: &mut BasicFrameChannel<'_, LeULogicalLink<PhysicalLink>>,
+    client: &mut Client,
+    uuid: Uuid,
+) -> u16 {
+    read_att_type::<Vec<u8>>(channel, client, uuid).await.0
+}
+
+pub async fn write_request<D: TransferFormatTryFrom + TransferFormatInto>(
+    channel: &mut BasicFrameChannel<'_, LeULogicalLink<PhysicalLink>>,
+    client: &mut Client,
+    handle: u16,
+    data: D,
+) {
+    use bo_tie_att::client::ResponseProcessor;
+
+    let response_processor = client
+        .write_request(channel, handle, data)
+        .await
+        .expect("failed to write test val 1");
+
+    let b_frame = channel.receive().await.expect("failed to get response");
+
+    response_processor
+        .process_response(&b_frame)
+        .expect("failed to process response");
 }
