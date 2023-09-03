@@ -358,7 +358,7 @@ impl Client {
             Err(err_pdu.into())
         } else {
             match ServerPduName::try_from(bytes[0]) {
-                Ok(_) => Err(super::Error::UnexpectedPdu(bytes[0])),
+                Ok(val) => Err(super::Error::UnexpectedServerPdu(val)),
                 Err(_) => Err(TransferFormatError::from(format!(
                     "Received Unknown PDU '{:#x}', \
                             expected '{} ({:#x})'",

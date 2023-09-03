@@ -176,6 +176,7 @@ use core::borrow::Borrow;
 pub mod client;
 pub mod server;
 
+use crate::server::ServerPduName;
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
 use bo_tie_l2cap::PhysicalLink;
@@ -463,7 +464,7 @@ pub enum Error {
     /// A different pdu was expected
     ///
     /// This contains the opcode value of the unexpectedly received pdu
-    UnexpectedPdu(u8),
+    UnexpectedServerPdu(ServerPduName),
     /// A Transfer format error
     TransferFormatTryFrom(TransferFormatError),
     /// An empty PDU
@@ -489,7 +490,7 @@ impl core::fmt::Display for Error {
             Error::MtuExceeded => write!(f, "Maximum Transmission Unit exceeded"),
             Error::TooSmallMtu => write!(f, "Minimum Transmission Unit larger then specified"),
             Error::Pdu(pdu) => write!(f, "Received Error PDU: {}", pdu),
-            Error::UnexpectedPdu(val) => write!(f, "{}", val),
+            Error::UnexpectedServerPdu(val) => write!(f, "{}", val),
             Error::TransferFormatTryFrom(t_e) => write!(f, "{}", t_e),
             Error::Empty => write!(f, "Received an empty PDU"),
             Error::UnknownOpcode(op) => write!(f, "Opcode not known to the attribute protocol ({:#x})", op),
