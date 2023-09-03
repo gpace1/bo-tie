@@ -1,0 +1,28 @@
+[package]
+name = "bo-tie-host-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+futures = "0.3"
+bo-tie-core = { path = "../../bo-tie-core" }
+bo-tie-l2cap = { path = "../bo-tie-l2cap" }
+
+[dev-dependencies]
+bo-tie-host-util = { path = "../bo-tie-host-util" }
+bo-tie-core = { path = "../../bo-tie-core" }
+bo-tie-l2cap = { path = "../bo-tie-l2cap" }
+bo-tie-gap = { path = "../bo-tie-gap" }
+bo-tie-att = { path = "../bo-tie-att" }
+bo-tie-gatt = { path = "../bo-tie-gatt" }
+bo-tie-sm = { path = "../bo-tie-sm" }
+
+[dev-dependencies.tokio]
+version = "1"
+features = ["rt", "macros", "sync", "time"]
+
+[[test]]
+name = "test_connection"
+path = "tests/att/test_connection.rs"

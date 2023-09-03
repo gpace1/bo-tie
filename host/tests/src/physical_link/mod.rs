@@ -3,10 +3,10 @@
 //! These are used to create spoofs for a physical link.
 
 use bo_tie_l2cap::pdu::L2capFragment;
-use std::sync::{Arc, Mutex, MutexGuard};
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use std::future::Future;
 use std::pin::Pin;
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A physical link spoof
 ///
@@ -68,9 +68,9 @@ impl PhysicalLink {
     /// The sender closure will panic if the `PhysicalLink` is dropped.
     ///
     /// ## Receiver
-    /// This closure is used to *immediately* get fragments 'sent' using the `PhysicalLink`. If 
+    /// This closure is used to *immediately* get fragments 'sent' using the `PhysicalLink`. If
     /// there is no data within the channel the closure will return `None`.
-    /// 
+    ///
     /// ### Panic
     /// The receiver closure will panic if the `PhysicalLink` is dropped.
     pub fn new_false_connection(
@@ -140,16 +140,20 @@ impl PhysicalLink {
     /// The borrow will last until the return is dropped.
     ///
     /// # Panic
-    /// This will panic if this is called more than once
-    pub fn borrow_receiver(&self) ->
+    /// This will panic if this is called to create multiple `BorrowedReceiver`s. The previously
+    /// created `BorrowedReceiver` must be dropped before this method can be called again.
+    pub fn borrow_receiver(&self) -> BorrowedReceiver {
+        BorrowedReceiver::new(self.receiver.clone())
+    }
 }
 
 impl bo_tie_l2cap::PhysicalLink for PhysicalLink {
-    type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + 'a>>;
+    type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + Send + 'a>>;
 
     type SendErr = anyhow::Error;
 
-    type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>> + 'a>>;
+    type RecvFut<'a> =
+        Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>> + Send + 'a>>;
 
     type RecvData = std::vec::IntoIter<u8>;
 
@@ -174,7 +178,7 @@ impl bo_tie_l2cap::PhysicalLink for PhysicalLink {
             "the fragment data length is larger than the maximum allowed transmission size"
         );
 
-        let send = async {
+        let send = async move {
             futures::SinkExt::send(&mut self.sender, (is_start, data)).await?;
 
             Ok(())
@@ -192,8 +196,8 @@ impl bo_tie_l2cap::PhysicalLink for PhysicalLink {
             fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
                 let this = self.get_mut();
 
-                match this.0.try_lock().map(|guard| &mut *guard) {
-                    Ok(rx) => futures::StreamExt::poll_next_unpin(rx, cx),
+                match this.0.try_lock() {
+                    Ok(mut rx) => futures::StreamExt::poll_next_unpin(&mut *rx, cx),
                     _ => std::task::Poll::Pending,
                 }
             }
@@ -213,7 +217,7 @@ impl bo_tie_l2cap::PhysicalLink for PhysicalLink {
 
 pub struct BorrowedReceiver {
     lock: MutexGuard<'static, UnboundedReceiver<(bool, Vec<u8>)>>,
-    receiver: Pin<Arc<Mutex<UnboundedReceiver<(bool, Vec<u8>)>>>>,
+    _receiver: Pin<Arc<Mutex<UnboundedReceiver<(bool, Vec<u8>)>>>>,
 }
 
 impl BorrowedReceiver {
@@ -223,14 +227,16 @@ impl BorrowedReceiver {
         let lock = unsafe { std::mem::transmute(lock_local) };
 
         Self {
-            receiver,
+            _receiver: receiver,
             lock,
         }
     }
 
     /// Await for the next L2CAP Fragment
     pub async fn recv(&mut self) -> L2capFragment<Vec<u8>> {
-        let (is_start, data) = futures::StreamExt::next(&mut *self.lock).await.expect("channel is closed");
+        let (is_start, data) = futures::StreamExt::next(&mut *self.lock)
+            .await
+            .expect("channel is closed");
 
         L2capFragment::new(is_start, data)
     }
