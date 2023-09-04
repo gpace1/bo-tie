@@ -97,6 +97,7 @@ impl core::fmt::Display for ClientPduName {
     }
 }
 
+#[must_use = "ATT requests require processing of the server's response"]
 pub trait ResponseProcessor {
     type Response;
 
