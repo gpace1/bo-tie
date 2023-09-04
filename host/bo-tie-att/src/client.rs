@@ -343,6 +343,19 @@ impl Client {
         Self { mtu }
     }
 
+    /// Get the maximum transfer unit (MTU) for this ATT connection
+    ///
+    /// This is the MTU *set for* the ATT protocol. The return is either the default MTU (as
+    /// specified by a higher protocol layer) or the MTU set as part of the MTU exchange.
+    ///
+    /// ## ATT bearers using a dynamic L2CAP channel ID
+    /// This method will returns `None` for ATT bearers that use a dynamic channel ID. For those
+    /// channels the ATT protocol uses the L2CAP MTU that was determined as part of establishing the
+    /// L2CAP channel, so the MTU must be retrieved from the L2CAP channel instance.
+    pub fn get_mtu(&self) -> Option<u16> {
+        Some(self.mtu as u16)
+    }
+
     fn process_raw_data<P>(expected_response: ServerPduName, bytes: &[u8]) -> Result<P, super::Error>
     where
         P: TransferFormatTryFrom + pdu::ExpectedOpcode,
