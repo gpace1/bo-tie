@@ -410,10 +410,13 @@ impl Client {
 
     /// Send the mtu request
     ///
-    /// The maximum transfer size is part of connecting the client to the server, but if you want
-    /// to try to change the mtu, then this will resend the exchange mtu request PDU to the server.
+    /// The maximum transfer size is *normally* part of connecting the client to the server. Per the
+    /// specification the exchange MTU request shall only be sent once per connection by the
+    /// client. To comply with the specification, *this method shall only be called for an ATT
+    /// bearer with a fixed L2CAP channel ID **and** only the default MTU was used for the
+    /// `ConnectFixedClient` that created this `Client`.
     ///
-    /// The new MTU is returned by the future
+    /// The new MTU is output by the returned `ResponseProcessor`, but it can also .
     pub async fn exchange_mtu_request<T>(
         &mut self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
