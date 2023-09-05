@@ -755,7 +755,7 @@ where
 }
 
 /// A struct that contains an attribute handle and attribute type
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct HandleWithType(u16, crate::Uuid);
 
 /// Formatted handle with type
