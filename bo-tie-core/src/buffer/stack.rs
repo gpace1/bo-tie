@@ -1710,13 +1710,11 @@ mod test {
             .try_extend(to_extend.iter().copied())
             .expect("failed to extend buffer");
 
-        for (index, val) in buffer
+        buffer
             .try_remove(to_extend.len())
-            .expect("failed to remove from buffer")
-            .enumerate()
-        {
-            assert_eq!(to_extend[index], val)
-        }
+            .expect("failed to remove from buffer");
+
+        assert_eq!(buffer.len(), 0)
     }
 
     #[test]
@@ -1731,13 +1729,11 @@ mod test {
             .try_rev_front_extend(to_extend.iter().copied())
             .expect("failed to extend buffer");
 
-        for (index, val) in buffer
+        buffer
             .try_front_remove(to_extend.len())
-            .expect("failed to remove from front of buffer")
-            .enumerate()
-        {
-            assert_eq!(to_extend[index], val)
-        }
+            .expect("failed to remove from front of buffer");
+
+        assert_eq!(buffer.len(), 0)
     }
 
     #[test]
@@ -1758,21 +1754,17 @@ mod test {
             .try_rev_front_extend(to_extend_front.iter().copied())
             .expect("failed to extend front of buffer");
 
-        for (index, val) in buffer
+        buffer
             .try_front_remove(to_extend_front.len())
-            .expect("failed to remove from front")
-            .enumerate()
-        {
-            assert_eq!(to_extend_front[index], val)
-        }
+            .expect("failed to remove from front");
 
-        for (index, val) in buffer
+        assert_eq!(buffer.len(), to_extend_back.len());
+
+        buffer
             .try_remove(to_extend_back.len())
-            .expect("failed to remove from back")
-            .enumerate()
-        {
-            assert_eq!(to_extend_back[index], val)
-        }
+            .expect("failed to remove from back");
+
+        assert_eq!(buffer.len(), 0)
     }
 
     #[test]

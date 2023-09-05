@@ -334,7 +334,7 @@ where
 {
     type Error = B::Error;
 
-    fn try_remove(&mut self, how_many: usize) -> Result<Self::RemoveIter<'_>, Self::Error> {
+    fn try_remove(&mut self, how_many: usize) -> Result<(), Self::Error> {
         self.buffer.try_remove(how_many)
     }
 }
