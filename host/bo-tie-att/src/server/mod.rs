@@ -267,13 +267,6 @@ struct MultiReqData {
 /// consistent between `Server` instances. Different connections need to seem the same to each
 /// client as per the Bluetooth Specification.
 ///
-/// ## Synchronization Attribute Access
-/// Access to the attributes by a `Server` is done through asynchronous operations. The values of
-/// every `Attribute` are required to implement [`AccessValue`] in order to be a added to a `Server`.
-/// The intention is to allow for asynchronous synchronization primitives to allow for safe
-/// "atomic" (as per the Bluetooth Specifications definition of "atomic") access to the values
-/// across multiple `Server` instances.
-///
 /// ## Default Client Permissions
 /// When a new `Server` is created, the client will be given the permissions
 /// `AttributePermissions::Read(AttributeRestriction::None)`, and
