@@ -64,6 +64,7 @@ pub fn create_le_false_link(
 pub struct Rendezvous {
     sender: tokio::sync::oneshot::Sender<()>,
     receiver: tokio::sync::oneshot::Receiver<()>,
+    flipped: bool,
 }
 
 impl Rendezvous {
@@ -71,13 +72,25 @@ impl Rendezvous {
     ///
     /// The return is the output value by the other `Rendezvous`'s task.
     pub async fn rendez(self) {
-        self.sender.send(()).ok();
+        if self.flipped {
+            self.sender.send(()).ok();
 
-        self.receiver.await.expect("other Rendezvous dropped")
+            self.receiver.await.expect("other Rendezvous dropped")
+        } else {
+            self.receiver.await.expect("other Rendezvous dropped");
+
+            self.sender.send(()).ok();
+        }
     }
 }
 
-pub fn rendezvous() -> (Rendezvous, Rendezvous) {
+/// Create a partial rendezvous
+///
+/// This is a partial rendezvous as the returned `Rendezvous` are not interchangeable. The first
+/// returned `Rendezvous` is used for triggering the second one. The first one is used at the end
+/// of test operations of the client task and the second one is `select!`ed along with processing
+/// ATT PDU's from the client of the server thread.
+pub fn directed_rendezvous() -> (Rendezvous, Rendezvous) {
     let (sender_1, receiver_1) = tokio::sync::oneshot::channel();
     let (sender_2, receiver_2) = tokio::sync::oneshot::channel();
 
@@ -85,10 +98,12 @@ pub fn rendezvous() -> (Rendezvous, Rendezvous) {
         Rendezvous {
             sender: sender_1,
             receiver: receiver_2,
+            flipped: true,
         },
         Rendezvous {
             sender: sender_2,
             receiver: receiver_1,
+            flipped: false,
         },
     )
 }

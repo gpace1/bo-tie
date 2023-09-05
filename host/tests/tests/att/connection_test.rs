@@ -1,26 +1,19 @@
 //! Test `test_connection`
 //!
-//! This test is for a client and server communicating with each other
-//!
-//! The following commands are tested by this integration test
-//! * read_by_type_request -> read_by_type_response
-//! * write_request -> write_response
-//! * read_request -> read_response
+//! This test is for a client and server successfully communicating with each other. This is a test
+//! for a general operation of the Attribute protocol.
 
-mod common;
-
-use crate::common::Rendezvous;
 use bo_tie_att::server::{NoQueuedWrites, ServerAttributes};
 use bo_tie_att::{
     Attribute, AttributePermissions, AttributeRestriction, Client, ConnectFixedClient, Server, TransferFormatInto,
     TransferFormatTryFrom,
 };
+use bo_tie_host_tests::Rendezvous;
 use bo_tie_host_tests::{create_le_link, PhysicalLink};
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink};
 use std::time::Duration;
-use tokio::sync::oneshot;
 
 const UUID_1: Uuid = Uuid::from_u16(1);
 const UUID_2: Uuid = Uuid::from_u16(2);
@@ -30,7 +23,7 @@ const UUID_3: Uuid = Uuid::from_u16(3);
 async fn test_connection() {
     let (client, server) = create_le_link(LeULink::SUPPORTED_MTU.into());
 
-    let (rendezvous_client, rendezvous_server) = common::rendezvous();
+    let (rendezvous_client, rendezvous_server) = bo_tie_host_tests::directed_rendezvous();
 
     let handle_client = tokio::spawn(test_connection_client(client, rendezvous_client));
 
@@ -41,7 +34,7 @@ async fn test_connection() {
     handle_server.await.unwrap();
 }
 
-async fn test_connection_client(link: LeULogicalLink<PhysicalLink>, rendezvous: common::Rendezvous) {
+async fn test_connection_client(link: LeULogicalLink<PhysicalLink>, rendezvous: Rendezvous) {
     let timeout = Duration::from_millis(500);
     let test_val_1: usize = 33;
     let test_val_2: u64 = 64;
@@ -128,7 +121,12 @@ async fn test_connection_server(link: LeULogicalLink<PhysicalLink>, rendezvous: 
     assert_eq!(server_attributes.push(attribute_1), 2);
     assert_eq!(server_attributes.push(attribute_2), 3);
 
-    let mut server = Server::new(LeULink::SUPPORTED_MTU, server_attributes, NoQueuedWrites);
+    let mut server = Server::new_fixed(
+        LeULink::SUPPORTED_MTU,
+        LeULink::SUPPORTED_MTU,
+        server_attributes,
+        NoQueuedWrites,
+    );
 
     let mut rendez = Box::pin(rendezvous.rendez());
 
