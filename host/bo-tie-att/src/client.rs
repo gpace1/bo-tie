@@ -174,6 +174,9 @@ impl ConnectFixedClient {
     /// on [MTU exchange] for more information on the MTU exchange. If both these inputs are `None`,
     /// then the future returned by `connect` will immediately output an error.
     ///
+    /// # Panic
+    /// Input `default_mtu` cannot be greater than `request_mtu`.
+    ///
     /// [`initiate`]: ConnectFixedClient::initiate
     /// [`create_client`]: ConnectFixedClient::create_client
     pub async fn connect<T, I, R>(
@@ -207,6 +210,9 @@ impl ConnectFixedClient {
     /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
     /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
     /// during the MTU exchange will be set as the new MTU.
+    ///
+    /// # Panic
+    /// Input `default_mtu` cannot be greater than `request_mtu`.
     pub async fn initiate<T, I, R>(
         att_bearer: &mut BasicFrameChannel<'_, T>,
         default_mtu: I,
@@ -228,7 +234,11 @@ impl ConnectFixedClient {
                 })
             }
             (None, Some(v)) => (0, v),
-            (Some(d), Some(r)) => (d, r),
+            (Some(d), Some(r)) => {
+                assert!(d <= r, "input default_mtu cannot be greater than request_mtu");
+
+                (d, r)
+            }
         };
 
         let request = pdu::exchange_mtu_request(request_mtu);

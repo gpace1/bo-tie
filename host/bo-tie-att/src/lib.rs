@@ -23,7 +23,7 @@
 //!
 //!     // note: for a real server you're going
 //!     // to need to add attributes to it
-//!     let mut server = Server::new(256, None, NoQueuedWrites);
+//!     let mut server = Server::new_fixed(256, None, NoQueuedWrites);
 //!
 //!     loop {
 //!         let basic_frame = att_channel.receive()

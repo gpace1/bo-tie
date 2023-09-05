@@ -250,26 +250,43 @@ struct MultiReqData {
 /// This is an implementation of the server role for the Attribute protocol. A server is made up of
 /// attributes, which consist of a handle, a UUID, and a value.
 ///
+/// ## Attribute Handles
 /// A handle is much like an index of an array and is used to address the attribute. Per the
-/// specification an handle is a u16 value with zero being reserved (attributes will start at handle
-/// one). This server forcibly put all attributes in sequential order, as a vector is used for the
-/// attributes collection.
+/// specification an handle is a `u16` value with zero being reserved (attributes will start at
+/// handle one). This server forcibly put all attributes in sequential order, as a vector is used
+/// for the attributes collection.
 ///
-/// Each server is unique for the connection to the client. Making the server this way allows for a
+/// ## Unique Instances
+/// Each `Server` is unique for the connection to the client. Making the server this way allows for a
 /// unique state for each connection, allowing the commands being processed independent of other
 /// connections. Things like the maximum transfer unit (MTU) and client permissions might be
 /// different per connection. Most importantly, because servers are independent, they can be used
 /// within separate threads.
 ///
-/// Having a unique server per connection does not mean that the attribute values will need to be
-/// wrapped within synchronization containers if they're shared between servers. This is where the
-/// somewhat awkward
-/// [`AccessValue`](crate::server::AccessValue)
-/// can be implemented on the container to perform concurrency safe reading or writing on the
-/// contained value.
+/// However, the issue with this is that it is up to you to ensure that the handles remain
+/// consistent between `Server` instances. Different connections need to seem the same to each
+/// client as per the Bluetooth Specification.
+///
+/// ## Synchronization Attribute Access
+/// Access to the attributes by a `Server` is done through asynchronous operations. The values of
+/// every `Attribute` are required to implement [`AccessValue`] in order to be a added to a `Server`.
+/// The intention is to allow for asynchronous synchronization primitives to allow for safe
+/// "atomic" (as per the Bluetooth Specifications definition of "atomic") access to the values
+/// across multiple `Server` instances.
+///
+/// ## Default Client Permissions
+/// When a new `Server` is created, the client will be given the permissions
+/// `AttributePermissions::Read(AttributeRestriction::None)`, and
+/// `AttributePermissions::Write(AttributeRestriction::None)`. These permissions can be revoked
+/// via the method [`revoke_permissions_of_client`] (Note: these permissions only allow the client
+/// to access Attributes that also have these permissions).
+///
+/// [`revoke_permissions_of_client`]: Server::revoke_permissions_of_client
 pub struct Server<Q> {
     /// The maximum transmission unit
     mtu: usize,
+    /// The maximum, maximum transmission unit. The server will not
+    max_mtu: usize,
     /// The attributes of the server
     attributes: ServerAttributes,
     /// The permissions the client currently has
@@ -467,32 +484,40 @@ impl<Q> Server<Q>
 where
     Q: QueuedWriter,
 {
-    /// Create a new Server
+    /// Create a new `Server` for a fixed L2CAP channel
     ///
-    /// Creates an attribute server for a client connected with the logical link `connection`, the
-    /// attributes of the server are optionally initialized with input `server_attributes`, and the
-    /// `queued_writer` is the operator of queued writes. If `server_attributes` is set to `None`
-    /// then a server with no attributes is created.
+    /// This is used for creating a `Server` on a L2CAP channel that uses a fixed L2CAP channel ID.
+    /// These channels do not have a MTU defined at the L2CAP layer and so the ATT protocol will
+    /// manage the MTU.
     ///
     /// # Maximum Transmission Unit (MTU)
-    /// Input `max_mtu` is the maximum maximum transmission unit (MTU) supported by this `Server`.
-    /// The client will be able to negotiate to set the MTU up to this value.
+    /// For fixed channels, the MTU is determined either by a default MTU (determined by a higher
+    /// layer protocol) or through an exchange process to use a different MTU.
     ///
-    /// For an ATT `Server` connected by a dynamically allocated
-    /// The maximum MTU must match the negocia
+    /// Input `max_mtu` is the maximum, maximum transmission unit (MTU) supported by this `Server`.
+    /// The client will be able to negotiate to set the MTU up to this value by sending a *MTU
+    /// exchange* PDU to this Server.
     ///
-    /// ## Default Client Permissions
-    /// This client will be given the permissions
-    /// `AttributePermissions::Read(AttributeRestriction::None)`, and
-    /// `AttributePermissions::Write(AttributeRestriction::None)`. These permissions can be revoked
-    /// via the method [`revoke_permissions_of_client`].
+    /// ### Default MTU
+    /// The default MTU, practically speaking, should be no less than 21. This is the size of a
+    /// *read by type request* or *read by group type request* with a sixteen bit attribute group
+    /// type. A smaller default MTU can be used, but limitations of functionality will be put on the
+    /// `Server`. There is no minimum size of the `default_mtu` but trying to process request or
+    /// send responses may induce errors if the packet cannot be formed due to the minimum size of
+    /// the packet being larger then the `default_mtu` (this includes the exchange MTU
+    /// request/response).
     ///
-    /// [`revoke_permissions_of_client`]: Server::revoke_permissions_of_client
-    pub fn new<A>(max_mtu: u16, server_attributes: A, queued_writer: Q) -> Self
+    /// # Panic
+    /// Input `default_mtu` must be less than or equal to `max_mtu`.
+    pub fn new_fixed<A>(default_mtu: u16, max_mtu: u16, server_attributes: A, queued_writer: Q) -> Self
     where
         A: Into<Option<ServerAttributes>>,
     {
-        let mtu = max_mtu.into();
+        assert!(default_mtu <= max_mtu);
+
+        let mtu = default_mtu.into();
+
+        let max_mtu = max_mtu.into();
 
         let attributes = server_attributes.into().unwrap_or(ServerAttributes::new());
 
@@ -503,6 +528,7 @@ where
 
         Self {
             mtu,
+            max_mtu,
             attributes,
             given_permissions,
             blob_data: None,
@@ -1151,9 +1177,11 @@ where
     {
         log::info!("(ATT) processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
 
-        self.mtu = client_mtu.into();
+        let new_mtu = self.max_mtu.min(client_mtu.into());
 
-        send_pdu!(channel, pdu::exchange_mtu_response(self.mtu as u16),)
+        self.mtu = new_mtu;
+
+        send_pdu!(channel, pdu::exchange_mtu_response(new_mtu as u16),)
     }
 
     /// Process a Read Request from the client
