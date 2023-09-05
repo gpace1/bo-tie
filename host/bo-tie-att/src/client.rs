@@ -457,7 +457,7 @@ impl Client {
     /// equal to the starting handle
     pub async fn find_information_request<T, R>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
     ) -> Result<impl ResponseProcessor<Response = pdu::FormattedHandlesWithType>, super::ConnectionError<T>>
     where
@@ -468,7 +468,7 @@ impl Client {
             panic!("Invalid handle range")
         }
 
-        self.send(connection_channel, &pdu::find_information_request(handle_range))
+        self.send(channel, &pdu::find_information_request(handle_range))
             .await?;
 
         Ok(ResponseProcessorCheck(|data| {
