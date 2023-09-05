@@ -235,7 +235,7 @@ where
     /// If `short_by_alt` fails it will return an error of the number of bytes that were required of
     /// the buffer to create the structure.
     fn short_by_alt(&self, alt: &str, interim: &mut StructIntermediate) -> Result<(), usize> {
-        let byte_count = alt.borrow().bytes().len();
+        let byte_count = alt.bytes().len();
 
         (byte_count <= interim.remaining_len())
             .then(|| alt.chars().for_each(|c| interim.encode_utf8(c)))
