@@ -2120,7 +2120,9 @@ attributes.push_read_only(device_name);
 
     /// Get the number of Attributes
     pub fn count(&self) -> usize {
-        self.attributes.len()
+        // the attribute at `self.attributes[0]` is the
+        // reserved attribute
+        self.attributes.len() - 1
     }
 
     /// Get the attribute at the provided handle
