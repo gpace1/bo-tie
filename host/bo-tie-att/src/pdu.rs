@@ -497,11 +497,7 @@ impl TransferFormatTryFrom for ErrorResponse {
                 error: Error::from_raw(raw[3]),
             })
         } else {
-            Err(TransferFormatError::bad_size(
-                stringify!(ErrorAttributeParameter),
-                4,
-                raw.len(),
-            ))
+            Err(TransferFormatError::bad_size("ErrorResponse", 4, raw.len()))
         }
     }
 }
