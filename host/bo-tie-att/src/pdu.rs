@@ -656,13 +656,7 @@ impl TransferFormatTryFrom for HandleRange {
                 ending_handle: <u16>::from_le_bytes([raw[2], raw[3]]),
             };
 
-            if range.is_valid() {
-                Ok(range)
-            } else {
-                Err(TransferFormatError::from(alloc::string::String::from(
-                    "Bad handle range",
-                )))
-            }
+            Ok(range)
         } else {
             Err(TransferFormatError::bad_size(stringify!(HandleRange), 4, raw.len()))
         }
