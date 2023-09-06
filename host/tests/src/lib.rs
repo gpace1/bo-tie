@@ -48,8 +48,8 @@ pub fn create_le_false_link(
     max_tx_size: usize,
 ) -> (
     LeULogicalLink<PhysicalLink>,
-    impl Fn(L2capFragment<Vec<u8>>),
-    impl FnMut() -> Option<L2capFragment<Vec<u8>>>,
+    impl futures::Sink<L2capFragment<Vec<u8>>, Error = futures::channel::mpsc::SendError> + Unpin,
+    impl futures::Stream<Item = L2capFragment<Vec<u8>>> + Unpin,
 ) {
     let (phy_link_a, sender, receiver) = PhysicalLink::new_false_connection(max_tx_size);
 

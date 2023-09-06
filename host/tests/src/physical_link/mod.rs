@@ -77,10 +77,10 @@ impl PhysicalLink {
         max_tx_size: usize,
     ) -> (
         Self,
-        impl Fn(L2capFragment<Vec<u8>>),
-        impl FnMut() -> Option<L2capFragment<Vec<u8>>>,
+        impl futures::Sink<L2capFragment<Vec<u8>>, Error = futures::channel::mpsc::SendError> + Unpin,
+        impl futures::Stream<Item = L2capFragment<Vec<u8>>> + Unpin,
     ) {
-        let (sender_a, mut receiver_a) = futures::channel::mpsc::unbounded();
+        let (sender_a, receiver_a) = futures::channel::mpsc::unbounded();
         let (sender_b, receiver_b) = futures::channel::mpsc::unbounded();
 
         let physical_link = PhysicalLink {
@@ -89,23 +89,18 @@ impl PhysicalLink {
             receiver: Arc::pin(Mutex::new(receiver_b)),
         };
 
-        let sender_fn = move |fragment: L2capFragment<Vec<u8>>| {
-            let is_start = fragment.is_start_fragment();
-            let data = fragment.into_inner();
+        let sender = futures::SinkExt::with(sender_b, |fragment: L2capFragment<Vec<u8>>| {
+            Box::pin(async {
+                let is_start = fragment.is_start_fragment();
+                let data = fragment.into_inner();
 
-            sender_b.unbounded_send((is_start, data)).expect("failed to send data")
-        };
+                Ok::<_, futures::channel::mpsc::SendError>((is_start, data))
+            })
+        });
 
-        let receiver_fn = move || {
-            receiver_a
-                .try_next()
-                .transpose()
-                .expect("channel is closed")
-                .ok()
-                .map(|(is_start, data)| L2capFragment::new(is_start, data))
-        };
+        let receiver = futures::StreamExt::map(receiver_a, |(is_start, data)| L2capFragment::new(is_start, data));
 
-        (physical_link, sender_fn, receiver_fn)
+        (physical_link, sender, receiver)
     }
 
     /// Create an injection
