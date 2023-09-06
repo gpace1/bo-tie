@@ -754,6 +754,23 @@ where
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct HandleWithType(u16, crate::Uuid);
 
+impl HandleWithType {
+    /// Create a new `HandleWithType`
+    pub fn new(handle: u16, attribute_type: crate::Uuid) -> Self {
+        HandleWithType(handle, attribute_type)
+    }
+
+    /// Get the handle of the attribute
+    pub fn get_handle(&self) -> u16 {
+        self.0
+    }
+
+    /// Get the type of the attribute
+    pub fn get_type(&self) -> crate::Uuid {
+        self.1
+    }
+}
+
 /// Formatted handle with type
 ///
 /// This struct, when created, will determine if all the UUID's are 16 bit or 128 bit. It is used to
