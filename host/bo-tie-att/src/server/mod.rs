@@ -1253,17 +1253,24 @@ where
                     (LONG_FORMAT) => {
                         create_uuid_data!(DONT_USE, 16, 2)
                     };
-                    (DONT_USE, $size:literal, $indicator:expr) => {
+                    (DONT_USE, $uuid_size:literal, $indicator:expr) => {
                         server
                             .attributes
                             .attributes
                             .get(start..=stop)
                             .into_iter()
                             .flatten()
+                            .take_while(|attribute| {
+                                if 2 == $uuid_size {
+                                    attribute.get_uuid().can_be_16_bit()
+                                } else {
+                                    !attribute.get_uuid().can_be_16_bit()
+                                }
+                            })
                             .enumerate()
-                            .take_while(|(cnt, _)| (cnt + 1) * ($size + 2) < (mtu - 2))
+                            .take_while(|(cnt, _)| (cnt + 1) * ($uuid_size + 2) < (mtu - 2))
                             .fold(vec![$indicator], |mut data, (_, attribute)| {
-                                let mut buffer = [0u8; $size + 2];
+                                let mut buffer = [0u8; $uuid_size + 2];
 
                                 attribute
                                     .get_handle()
@@ -1337,7 +1344,7 @@ where
         let is_size_128 = check_response_uuid_size!(self, start as u16, 128);
 
         if is_size_128 {
-            let response = Response::new(self, self.mtu, start, stop, true);
+            let response = Response::new(self, self.mtu, start, stop, false);
 
             let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
 
