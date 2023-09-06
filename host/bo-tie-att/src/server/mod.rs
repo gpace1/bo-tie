@@ -179,50 +179,25 @@ impl core::fmt::Display for ServerPduName {
 }
 
 impl ServerPduName {
-    /// Check that the given raw pdu is this response pdu
+    /// Check if the `raw_pdu` is this PDU
     ///
-    /// This will loosely check that the size of the pdu is correct and that the opcode value
-    /// matches this response. The size of the packet will only be checked for the minimum possible
-    /// size and not the maximum allowable size by the connection's ATT_MTU.
-    pub(super) fn is_convertible_from(&self, raw_pdu: &[u8]) -> bool {
-        // Each of these check that the size of the packet is correct and the opcode matches
+    /// This just checks the first byte to see if it matches the `ServerPduName`.
+    pub(super) fn is(&self, raw_pdu: &[u8]) -> bool {
         match self {
-            ServerPduName::ErrorResponse => (raw_pdu.len() == 5) && (raw_pdu[0] == ServerPduName::ErrorResponse.into()),
-            ServerPduName::ExchangeMTUResponse => {
-                (raw_pdu.len() == 3) && (raw_pdu[0] == ServerPduName::ExchangeMTUResponse.into())
-            }
-            ServerPduName::FindInformationResponse => {
-                (raw_pdu.len() >= 6) && (raw_pdu[0] == ServerPduName::FindInformationResponse.into())
-            }
-            ServerPduName::FindByTypeValueResponse => {
-                (raw_pdu.len() >= 5) && (raw_pdu[0] == ServerPduName::FindByTypeValueResponse.into())
-            }
-            ServerPduName::ReadByTypeResponse => {
-                (raw_pdu.len() >= 4) && (raw_pdu[0] == ServerPduName::ReadByTypeResponse.into())
-            }
-            ServerPduName::ReadResponse => (raw_pdu.len() >= 1) && (raw_pdu[0] == ServerPduName::ReadResponse.into()),
-            ServerPduName::ReadBlobResponse => {
-                (raw_pdu.len() >= 1) && (raw_pdu[0] == ServerPduName::ReadBlobResponse.into())
-            }
-            ServerPduName::ReadMultipleResponse => {
-                (raw_pdu.len() >= 1) && (raw_pdu[0] == ServerPduName::ReadMultipleResponse.into())
-            }
-            ServerPduName::ReadByGroupTypeResponse => {
-                (raw_pdu.len() >= 6) && (raw_pdu[0] == ServerPduName::ReadByGroupTypeResponse.into())
-            }
-            ServerPduName::WriteResponse => (raw_pdu.len() == 1) && (raw_pdu[0] == ServerPduName::WriteResponse.into()),
-            ServerPduName::PrepareWriteResponse => {
-                (raw_pdu.len() >= 5) && (raw_pdu[0] == ServerPduName::PrepareWriteResponse.into())
-            }
-            ServerPduName::ExecuteWriteResponse => {
-                (raw_pdu.len() == 1) && (raw_pdu[0] == ServerPduName::ExecuteWriteResponse.into())
-            }
-            ServerPduName::HandleValueNotification => {
-                (raw_pdu.len() >= 3) && (raw_pdu[0] == ServerPduName::HandleValueNotification.into())
-            }
-            ServerPduName::HandleValueIndication => {
-                (raw_pdu.len() >= 3) && (raw_pdu[0] == ServerPduName::HandleValueIndication.into())
-            }
+            ServerPduName::ErrorResponse => raw_pdu[0] == ServerPduName::ErrorResponse.into(),
+            ServerPduName::ExchangeMTUResponse => raw_pdu[0] == ServerPduName::ExchangeMTUResponse.into(),
+            ServerPduName::FindInformationResponse => raw_pdu[0] == ServerPduName::FindInformationResponse.into(),
+            ServerPduName::FindByTypeValueResponse => raw_pdu[0] == ServerPduName::FindByTypeValueResponse.into(),
+            ServerPduName::ReadByTypeResponse => raw_pdu[0] == ServerPduName::ReadByTypeResponse.into(),
+            ServerPduName::ReadResponse => raw_pdu[0] == ServerPduName::ReadResponse.into(),
+            ServerPduName::ReadBlobResponse => raw_pdu[0] == ServerPduName::ReadBlobResponse.into(),
+            ServerPduName::ReadMultipleResponse => raw_pdu[0] == ServerPduName::ReadMultipleResponse.into(),
+            ServerPduName::ReadByGroupTypeResponse => raw_pdu[0] == ServerPduName::ReadByGroupTypeResponse.into(),
+            ServerPduName::WriteResponse => raw_pdu[0] == ServerPduName::WriteResponse.into(),
+            ServerPduName::PrepareWriteResponse => raw_pdu[0] == ServerPduName::PrepareWriteResponse.into(),
+            ServerPduName::ExecuteWriteResponse => raw_pdu[0] == ServerPduName::ExecuteWriteResponse.into(),
+            ServerPduName::HandleValueNotification => raw_pdu[0] == ServerPduName::HandleValueNotification.into(),
+            ServerPduName::HandleValueIndication => raw_pdu[0] == ServerPduName::HandleValueIndication.into(),
         }
     }
 }

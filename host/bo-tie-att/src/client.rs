@@ -268,9 +268,9 @@ impl ConnectFixedClient {
             Ok(Client::new(self.default_mtu))
         } else if response.get_channel_id() != self.channel_id {
             Err(super::Error::IncorrectChannelId(response.get_channel_id()).into())
-        } else if ServerPduName::ExchangeMTUResponse.is_convertible_from(response.get_payload()) {
+        } else if ServerPduName::ExchangeMTUResponse.is(response.get_payload()) {
             self.process_mtu_response(response.get_payload())
-        } else if ServerPduName::ErrorResponse.is_convertible_from(response.get_payload()) {
+        } else if ServerPduName::ErrorResponse.is(response.get_payload()) {
             self.process_err_response(response.get_payload())
         } else {
             self.process_incorrect_response(response.get_payload().get(0).cloned())
@@ -372,11 +372,11 @@ impl Client {
     {
         if bytes.len() == 0 {
             Err(super::Error::Empty)
-        } else if expected_response.is_convertible_from(bytes) {
+        } else if expected_response.is(bytes) {
             let pdu: pdu::Pdu<P> = TransferFormatTryFrom::try_from(&bytes)?;
 
             Ok(pdu.into_parameters())
-        } else if ServerPduName::ErrorResponse.is_convertible_from(bytes) {
+        } else if ServerPduName::ErrorResponse.is(bytes) {
             let err_pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&bytes)?;
 
             Err(err_pdu.into())
@@ -468,8 +468,7 @@ impl Client {
             panic!("Invalid handle range")
         }
 
-        self.send(channel, &pdu::find_information_request(handle_range))
-            .await?;
+        self.send(channel, &pdu::find_information_request(handle_range)).await?;
 
         Ok(ResponseProcessorCheck(|data| {
             Self::process_raw_data(ServerPduName::FindInformationResponse, data)
