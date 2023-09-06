@@ -101,7 +101,17 @@ use bo_tie_att::TransferFormatInto;
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::Uuid;
 pub use bo_tie_l2cap as l2cap;
+use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
+
+/// The minimum size of the ATT profile's MTU (running the GATT profile)
+///
+/// This is also the default ATT_MTU when running the GATT profile over a LE physical link.
+///
+/// # Note
+/// This value is only for 'regular' LE ATT protocol operation. This is not the same value for
+/// enhanced LE ATT or BR/EDR.
+const LE_MINIMUM_ATT_MTU: u16 = LeULink::SUPPORTED_MTU;
 
 struct ServiceDefinition;
 
@@ -1247,7 +1257,12 @@ impl ServerBuilder {
         #[cfg(feature = "cryptography")]
         gatt_service_info.initiate_database_hash(&mut self.attributes);
 
-        let server = att::server::Server::new(LE_MINIMUM_ATT_MTU, Some(self.attributes), queue_writer);
+        let server = att::server::Server::new_fixed(
+            LE_MINIMUM_ATT_MTU,
+            LE_MINIMUM_ATT_MTU,
+            Some(self.attributes),
+            queue_writer,
+        );
 
         Server {
             primary_services: self.primary_services,
@@ -1285,7 +1300,7 @@ macro_rules! send_pdu {
     (SKIP_LOG, $channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = bo_tie_att::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, bo_tie_att::L2CAP_CHANNEL_ID);
+        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, bo_tie_att::L2CAP_FIXED_CHANNEL_ID);
 
         $channel
             .send(acl_data)
