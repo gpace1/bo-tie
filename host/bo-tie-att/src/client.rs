@@ -120,7 +120,7 @@ where
     /// The input `acl_data` should be the response from the server to the request that generated
     /// this `ResponseProcessor`.
     fn process_response(self, acl_data: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error> {
-        if acl_data.get_channel_id() == super::L2CAP_CHANNEL_ID {
+        if acl_data.get_channel_id() == super::L2CAP_FIXED_CHANNEL_ID {
             self.0(acl_data.get_payload())
         } else {
             Err(super::Error::IncorrectChannelId(acl_data.get_channel_id()))
@@ -409,7 +409,7 @@ impl Client {
         if payload.len() > self.mtu {
             Err(super::Error::MtuExceeded.into())
         } else {
-            let data = l2cap::pdu::BasicFrame::new(payload.to_vec(), super::L2CAP_CHANNEL_ID);
+            let data = l2cap::pdu::BasicFrame::new(payload.to_vec(), super::L2CAP_FIXED_CHANNEL_ID);
 
             connection_channel
                 .send(data)

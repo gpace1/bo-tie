@@ -413,7 +413,7 @@ macro_rules! send_pdu {
     (SKIP_LOG, $channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = $crate::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, $crate::L2CAP_CHANNEL_ID);
+        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, $crate::L2CAP_FIXED_CHANNEL_ID);
 
         $channel.send(acl_data).await.map_err(|e| ConnectionError::SendError(e))
     }};

@@ -235,7 +235,12 @@ pub mod pdu;
 // End submodules that use the above macros
 //==================================================================================================
 
-pub const L2CAP_CHANNEL_ID: bo_tie_l2cap::channel::id::ChannelIdentifier =
+/// The fixed Channel Identifier for the Attribute protocol
+/// 
+/// This is the fixed channel identifier for the Attribute (ATT) protocol. There can be multiple ATT 
+/// bearers using channels with dynamically assigned channel identifiers, but in L2CAP there is only 
+/// one fixed channel identifier given to the ATT protocol
+pub const L2CAP_FIXED_CHANNEL_ID: bo_tie_l2cap::channel::id::ChannelIdentifier =
     bo_tie_l2cap::channel::id::ChannelIdentifier::Le(bo_tie_l2cap::channel::id::LeCid::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
