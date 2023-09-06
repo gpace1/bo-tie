@@ -174,7 +174,7 @@ impl bo_tie_l2cap::PhysicalLink for PhysicalLink {
         let data: Vec<u8> = fragment.into_inner().into_iter().collect();
 
         assert!(
-            data.len() < max_len,
+            data.len() <= max_len,
             "the fragment data length is larger than the maximum allowed transmission size"
         );
 
