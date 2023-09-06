@@ -1333,8 +1333,15 @@ where
 
         let opt_read_error = check_permissions!(self, start as u16, &crate::FULL_READ_PERMISSIONS);
 
-        if let Err(e) = opt_read_error {
-            return send_error!(channel, start as u16, ClientPduName::FindInformationRequest, e);
+        if let Err(_) = opt_read_error {
+            // all permission errors get mapped to AttributeNotFound
+            // (per the Bluetooth Specification)
+            return send_error!(
+                channel,
+                start as u16,
+                ClientPduName::FindInformationRequest,
+                pdu::Error::AttributeNotFound
+            );
         }
 
         // Check if the server can send a response with 16 bit UUIDs
