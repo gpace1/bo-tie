@@ -15,6 +15,7 @@ use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink};
 use std::future::Future;
 
 const UUID_SHORT_1: Uuid = Uuid::from_u16(1);
+
 const UUID_SHORT_2: Uuid = Uuid::from_u16(2);
 
 const UUID_SHORT_3: Uuid = Uuid::from_u16(3);
