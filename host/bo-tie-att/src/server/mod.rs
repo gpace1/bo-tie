@@ -1316,7 +1316,17 @@ where
         }
 
         // Both the start and ending handles cannot be past the actual length of the attributes
-        let start = min(handle_range.starting_handle as usize, self.attributes.count());
+        let start = if handle_range.starting_handle as usize <= self.attributes.count() {
+            handle_range.starting_handle as usize
+        } else {
+            return send_error!(
+                channel,
+                handle_range.starting_handle,
+                ClientPduName::FindInformationRequest,
+                pdu::Error::AttributeNotFound
+            );
+        };
+
         let stop = min(handle_range.ending_handle as usize, self.attributes.count());
 
         // Check if the Client can read the next attribute
