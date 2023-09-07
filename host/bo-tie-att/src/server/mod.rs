@@ -1227,103 +1227,6 @@ where
             handle_range.ending_handle
         );
 
-        /// Checks if the Response would return 128 bit or 16 bit UUIDs
-        ///
-        /// `true` is returned if the UUID at $at is the correct size and readable by the Client.
-        macro_rules! check_response_uuid_size {
-            ($this:expr, $at:expr, 16) => {
-                check_response_uuid_size!(DONT_USE, $this, $at, true)
-            };
-            ($this:expr, $at:expr, 128) => {
-                check_response_uuid_size!(DONT_USE, $this, $at, false)
-            };
-            (DONT_USE, $this:expr, $at:expr, $is_16:literal) => {
-                $this
-                    .attributes
-                    .get($at)
-                    .map(|attribute| $is_16 == attribute.get_uuid().can_be_16_bit())
-                    .unwrap_or_default()
-            };
-        }
-
-        struct Response {
-            data: Vec<u8>,
-        }
-
-        impl Response {
-            fn try_new<Q>(server: &Server<Q>, mtu: usize, start: usize, stop: usize) -> Option<Self> {
-                let opt_size = core::cell::Cell::new(None);
-
-                let mut data = server
-                    .attributes
-                    .attributes
-                    .get(start..=stop)
-                    .into_iter()
-                    .flatten()
-                    .take_while(|attribute| match opt_size.get() {
-                        None => true,
-                        Some(2) => attribute.get_uuid().can_be_16_bit(),
-                        Some(16) => !attribute.get_uuid().can_be_16_bit(),
-                        _ => unreachable!(),
-                    })
-                    .take_while(|attribute| client_can_read_attribute!(server, attribute).is_ok())
-                    .inspect(|att| {
-                        if opt_size.get().is_none() {
-                            if att.get_uuid().can_be_16_bit() {
-                                opt_size.set(Some(2))
-                            } else {
-                                opt_size.set(Some(16))
-                            }
-                        }
-                    })
-                    .enumerate()
-                    .take_while(|(cnt, _)| (cnt + 1) * (opt_size.get().unwrap() + 2) < (mtu - 2))
-                    .fold(vec![0], |mut data, (_, attribute)| {
-                        macro_rules! buffer {
-                            ($array:expr) => {{
-                                let mut buffer = $array;
-
-                                attribute
-                                    .get_handle()
-                                    .unwrap()
-                                    .build_into_ret(&mut buffer[..2]);
-
-                                attribute.get_uuid().build_into_ret(&mut buffer[2..]);
-
-                                data.extend_from_slice(&buffer);
-
-                                data
-                            }};
-                        }
-
-                        match opt_size.get() {
-                            Some(2) => buffer!([0u8; 2 + 2]),
-                            Some(16) => buffer!([0u8; 16 + 2]),
-                            _ => unreachable!(),
-                        }
-                    });
-
-                // if opt_size is `None`, no attributes were found
-                match opt_size.get()? {
-                    2 => data[0] = 1,
-                    16 => data[0] = 2,
-                    _ => unreachable!(),
-                }
-
-                Some(Self { data })
-            }
-        }
-
-        impl TransferFormatInto for Response {
-            fn len_of_into(&self) -> usize {
-                self.data.len()
-            }
-
-            fn build_into_ret(&self, into_ret: &mut [u8]) {
-                into_ret.copy_from_slice(&self.data)
-            }
-        }
-
         if !handle_range.is_valid() {
             return send_error!(
                 channel,
@@ -1347,23 +1250,72 @@ where
 
         let stop = min(handle_range.ending_handle as usize, self.attributes.count());
 
-        let maybe_response = Response::try_new(self, self.mtu, start, stop);
+        let opt_size = core::cell::Cell::new(None);
 
-        match maybe_response {
-            Some(response) => {
-                let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
+        let mut data = self
+            .attributes
+            .attributes
+            .get(start..=stop)
+            .into_iter()
+            .flatten()
+            .take_while(|attribute| match opt_size.get() {
+                None => true,
+                Some(2) => attribute.get_uuid().can_be_16_bit(),
+                Some(16) => !attribute.get_uuid().can_be_16_bit(),
+                _ => unreachable!(),
+            })
+            .take_while(|attribute| client_can_read_attribute!(self, attribute).is_ok())
+            .inspect(|att| {
+                if opt_size.get().is_none() {
+                    if att.get_uuid().can_be_16_bit() {
+                        opt_size.set(Some(2))
+                    } else {
+                        opt_size.set(Some(16))
+                    }
+                }
+            })
+            .enumerate()
+            .take_while(|(cnt, _)| (cnt + 1) * (opt_size.get().unwrap() + 2) < (self.mtu - 2))
+            .fold(vec![0], |mut data, (_, attribute)| {
+                let mut buffer = [0u8; 16 + 2];
 
-                send_pdu!(channel, pdu)?;
-            }
+                let len = opt_size.get().unwrap() + 2;
+
+                attribute.get_handle().unwrap().build_into_ret(&mut buffer[..2]);
+
+                attribute.get_uuid().build_into_ret(&mut buffer[2..len]);
+
+                data.extend_from_slice(&buffer[..len]);
+
+                data
+            });
+
+        // This is needed because otherwise opt_size
+        // will be added as a 'field' to the generated
+        // future because of `send_err!`. `Cell` cannot
+        // be shared between threads by a reference
+        // which causes the generated future to not
+        // implement `Send`.
+        let opt_size = opt_size.get();
+
+        match opt_size {
+            Some(2) => data[0] = 1,
+            Some(16) => data[0] = 2,
             None => {
-                send_error!(
+                // if opt_size is `None`, no attributes were found
+                return send_error!(
                     channel,
                     start as u16,
                     ClientPduName::FindInformationRequest,
                     pdu::Error::AttributeNotFound,
-                )?;
+                );
             }
+            _ => unreachable!(),
         }
+
+        let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), data);
+
+        send_pdu!(channel, pdu)?;
 
         Ok(())
     }
