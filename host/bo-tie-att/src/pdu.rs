@@ -1002,7 +1002,7 @@ impl TypeValueResponse {
 
 impl TransferFormatTryFrom for TypeValueResponse {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
-        if raw.len() != 4 {
+        if raw.len() == 4 {
             Ok(TypeValueResponse {
                 handle: <u16>::from_le_bytes([raw[0], raw[1]]),
                 group: <u16>::from_le_bytes([raw[2], raw[3]]),
