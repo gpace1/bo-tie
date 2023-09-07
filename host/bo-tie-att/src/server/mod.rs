@@ -1373,6 +1373,7 @@ where
 
                 for att in self.attributes.attributes[start..=end].iter_mut() {
                     if att.get_uuid() == &att_type
+                        && client_can_read_attribute!(self, att).is_ok()
                         && att.get_mut_value().cmp_value_to_raw_transfer_format(raw_value).await
                     {
                         cnt += 1;
