@@ -490,7 +490,7 @@ impl Client {
         handle_range: R,
         uuid: crate::Uuid,
         value: D,
-    ) -> Result<impl ResponseProcessor<Response = pdu::TypeValueResponse>, super::ConnectionError<T>>
+    ) -> Result<impl ResponseProcessor<Response = Vec<pdu::TypeValueResponse>>, super::ConnectionError<T>>
     where
         T: LogicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,

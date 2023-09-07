@@ -980,7 +980,7 @@ pub struct TypeValueResponse {
     group: u16,
 }
 
-impl ExpectedOpcode for TypeValueResponse {
+impl ExpectedOpcode for Vec<TypeValueResponse> {
     fn expected_opcode() -> PduOpcode {
         ServerPduName::FindByTypeValueResponse.into()
     }
