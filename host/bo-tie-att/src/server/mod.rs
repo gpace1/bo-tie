@@ -1411,7 +1411,17 @@ where
             if handle_range.is_valid() {
                 use core::cmp::min;
 
-                let start = min(handle_range.starting_handle as usize, self.attributes.count());
+                let start = if handle_range.starting_handle as usize <= self.attributes.count() {
+                    handle_range.starting_handle as usize
+                } else {
+                    return send_error!(
+                        channel,
+                        handle_range.starting_handle,
+                        ClientPduName::FindByTypeValueRequest,
+                        pdu::Error::AttributeNotFound
+                    );
+                };
+
                 let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
                 let payload_max = self.mtu - 1;
