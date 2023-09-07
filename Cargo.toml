@@ -1,7 +1,11 @@
 [workspace]
 default-members = [
     "bo-tie",
-    "host/*",
+    "host/bo-tie-att",
+    "host/bo-tie-gap",
+    "host/bo-tie-host-util",
+    "host/bo-tie-l2cap",
+    "host/bo-tie-sm",
     "hci/*",
     "bo-tie-macros",
     "bo-tie-core",
