@@ -1,7 +1,6 @@
-//! Tests for the find information request/response
+//! Tests for the find by type value request/response
 
 use bo_tie_att::client::ResponseProcessor;
-use bo_tie_att::pdu::{FormattedHandlesWithType, HandleWithType};
 use bo_tie_att::server::{NoQueuedWrites, ServerAttributes};
 use bo_tie_att::{
     pdu, Attribute, AttributePermissions, AttributeRestriction, Client, ConnectFixedClient, EncryptionKeySize, Server,
@@ -10,21 +9,13 @@ use bo_tie_att::{
 use bo_tie_host_tests::{create_le_false_link, create_le_link, directed_rendezvous, PhysicalLink};
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
-use bo_tie_l2cap::pdu::{BasicFrame, FragmentIterator, L2capFragment};
+use bo_tie_l2cap::pdu::{BasicFrame, L2capFragment};
 use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink};
 use std::future::Future;
 
-const UUID_SHORT_1: Uuid = Uuid::from_u16(1);
+const UUID_1: Uuid = Uuid::from_u16(1);
 
-const UUID_SHORT_2: Uuid = Uuid::from_u16(2);
-
-const UUID_SHORT_3: Uuid = Uuid::from_u16(3);
-
-const UUID_FULL_1: Uuid = Uuid::from_u128(1);
-
-const UUID_FULL_2: Uuid = Uuid::from_u128(2);
-
-const UUID_FULL_3: Uuid = Uuid::from_u128(3);
+const UUID_2: Uuid = Uuid::from_u16(2);
 
 async fn connect_setup<Fun>(test: Fun)
 where
@@ -56,17 +47,17 @@ where
 
         let mut server_attributes = ServerAttributes::new();
 
-        server_attributes.push(Attribute::new(UUID_SHORT_1, FULL_READ_PERMISSIONS, 0u8));
+        server_attributes.push(Attribute::new(UUID_1, FULL_READ_PERMISSIONS, 0u8));
 
-        server_attributes.push(Attribute::new(UUID_SHORT_2, FULL_READ_PERMISSIONS, 0u8));
+        server_attributes.push(Attribute::new(UUID_1, FULL_READ_PERMISSIONS, 0u8));
 
-        server_attributes.push(Attribute::new(UUID_FULL_1, FULL_READ_PERMISSIONS, 0u8));
+        server_attributes.push(Attribute::new(UUID_1, FULL_READ_PERMISSIONS, 1u8));
 
-        server_attributes.push(Attribute::new(UUID_FULL_2, FULL_READ_PERMISSIONS, 0u8));
+        server_attributes.push(Attribute::new(UUID_2, FULL_READ_PERMISSIONS, 0u8));
 
-        server_attributes.push(Attribute::new(UUID_SHORT_3, FULL_READ_PERMISSIONS, 0u8));
+        server_attributes.push(Attribute::new(UUID_2, FULL_READ_PERMISSIONS, 1u8));
 
-        server_attributes.push(Attribute::new(UUID_FULL_3, FULL_READ_PERMISSIONS, 0u8));
+        server_attributes.push(Attribute::new(UUID_2, FULL_READ_PERMISSIONS, 2u8));
 
         let mut server = Server::new_fixed(
             LeULink::SUPPORTED_MTU,
@@ -95,6 +86,72 @@ where
     server_handle.await.unwrap();
 }
 
+#[tokio::test]
+async fn find_success() {
+    // Note: all responses will not have a `group end handle`
+    // as that is defined by a higher layer specification.
+    connect_setup(|channel, client| {
+        macro_rules! test {
+            ($range:expr, $uuid:expr, $value:expr, |$response:ident| $test:block) => {{
+                let response_processor = client
+                    .find_by_type_value_request(channel, $range, $uuid, $value)
+                    .await
+                    .expect("failed to send request");
+
+                let response = channel.receive().await.expect("failed to receive");
+
+                let response = response_processor
+                    .process_response(&response)
+                    .expect("invalid response");
+
+                (|$response: Vec<bo_tie_att::pdu::TypeValueResponse>| $test)(response)
+            }};
+        }
+
+        Box::pin(async {
+            test!(1..=0xFFFF, UUID_1, 0u8, |responses| {
+                let mut expected_handle = 1u16;
+
+                for response in responses {
+                    assert_eq!(expected_handle, response.get_handle());
+                    assert_eq!(expected_handle, response.get_group());
+
+                    expected_handle += 1;
+                }
+            });
+
+            test!(1..=0xFFFF, UUID_1, 1u8, |responses| {
+                for response in responses {
+                    assert_eq!(3, response.get_handle());
+                    assert_eq!(3, response.get_group());
+                }
+            });
+
+            test!(1..=0xFFFF, UUID_2, 0u8, |responses| {
+                for response in responses {
+                    assert_eq!(4, response.get_handle());
+                    assert_eq!(4, response.get_group());
+                }
+            });
+
+            test!(1..=0xFFFF, UUID_2, 1u8, |responses| {
+                for response in responses {
+                    assert_eq!(5, response.get_handle());
+                    assert_eq!(5, response.get_group());
+                }
+            });
+
+            test!(1..=0xFFFF, UUID_2, 2u8, |responses| {
+                for response in responses {
+                    assert_eq!(6, response.get_handle());
+                    assert_eq!(6, response.get_group());
+                }
+            })
+        })
+    })
+    .await
+}
+
 pub fn raw_client_fragments<I>(
     request: bo_tie_att::client::ClientPduName,
     request_data: I,
@@ -117,7 +174,7 @@ where
     let mut first = true;
 
     std::iter::from_fn(move || {
-        fragments.next().map(|data| {
+        bo_tie_l2cap::pdu::FragmentIterator::next(&mut fragments).map(|data| {
             let is_first = first;
 
             first = false;
@@ -125,92 +182,6 @@ where
             L2capFragment::new(is_first, data.collect())
         })
     })
-}
-
-#[tokio::test]
-async fn find_success() {
-    connect_setup(|channel, client| {
-        macro_rules! test {
-            (FULL, $range:expr, |$response:ident| $test:block) => {
-                test!(BOTH, $range, |$response| $test, |_unused| {
-                    panic!("unexpected short UUIDs")
-                })
-            };
-
-            (SHORT, $range:expr, |$response:ident| $test:block) => {
-                test!(
-                    BOTH,
-                    $range,
-                    |_unused| { panic!("unexpected full UUIDs") },
-                    |$response| $test
-                )
-            };
-
-            (BOTH, $range:expr, |$response_full:ident| $full:block, |$response_short:ident| $short:block) => {{
-                let response_processor = client
-                    .find_information_request(channel, $range)
-                    .await
-                    .expect("failed to send request");
-
-                let response = channel.receive().await.expect("failed to receive");
-
-                let handles = response_processor
-                    .process_response(&response)
-                    .expect("invalid response");
-
-                match handles {
-                    FormattedHandlesWithType::HandlesWithFullUuids(response) => {
-                        (|$response_full: Vec<HandleWithType>| $full)(response)
-                    }
-                    FormattedHandlesWithType::HandlesWithShortUuids(response) => {
-                        (|$response_short: Vec<HandleWithType>| $short)(response)
-                    }
-                }
-            }};
-        }
-
-        Box::pin(async {
-            test!(SHORT, 1..=0xFFFF, |handles| {
-                assert_eq!(handles.len(), 2);
-
-                assert_eq!(handles[0], HandleWithType::new(1, UUID_SHORT_1));
-
-                assert_eq!(handles[1], HandleWithType::new(2, UUID_SHORT_2));
-            });
-
-            test!(FULL, 3..=0xFFFF, |handles| {
-                // the MTU dictates that only one u128 UUID can be transferred
-                assert_eq!(handles.len(), 1);
-
-                assert_eq!(handles[0], HandleWithType::new(3, UUID_FULL_1));
-            });
-
-            test!(FULL, 4..=0xFFFF, |handles| {
-                assert_eq!(handles.len(), 1);
-
-                assert_eq!(handles[0], HandleWithType::new(4, UUID_FULL_2));
-            });
-
-            test!(SHORT, 5..=0xFFFF, |handles| {
-                assert_eq!(handles.len(), 1);
-
-                assert_eq!(handles[0], HandleWithType::new(5, UUID_SHORT_3));
-            });
-
-            test!(FULL, 6..=0xFFFF, |handles| {
-                assert_eq!(handles.len(), 1);
-
-                assert_eq!(handles[0], HandleWithType::new(6, UUID_FULL_3));
-            });
-
-            test!(SHORT, 2..=2, |handles| {
-                assert_eq!(handles.len(), 1);
-
-                assert_eq!(handles[0], HandleWithType::new(2, UUID_SHORT_2));
-            });
-        })
-    })
-    .await
 }
 
 async fn false_server_connection<Fun>(test: Fun)
@@ -299,7 +270,7 @@ async fn no_attributes() {
         Box::pin(async {
             fake_loop!(for range in [7..=0xFFFF, 7..=7] {
                 let response_processor = client
-                    .find_information_request(channel, range)
+                    .find_by_type_value_request(channel, range, crate::UUID_2, 2u8)
                     .await
                     .expect("failed to send request");
 
@@ -350,25 +321,25 @@ where
 
         // These attributes are for permission checks
         server_attributes.push(Attribute::new(
-            UUID_SHORT_1,
+            UUID_1,
             [AttributePermissions::Read(AttributeRestriction::None)],
             0u8,
         ));
 
         server_attributes.push(Attribute::new(
-            UUID_SHORT_1,
+            UUID_1,
             [AttributePermissions::Read(AttributeRestriction::Authentication)],
             0u8,
         ));
 
         server_attributes.push(Attribute::new(
-            UUID_SHORT_1,
+            UUID_1,
             [AttributePermissions::Read(AttributeRestriction::Authorization)],
             0u8,
         ));
 
         server_attributes.push(Attribute::new(
-            UUID_SHORT_1,
+            UUID_1,
             [AttributePermissions::Read(AttributeRestriction::Encryption(
                 EncryptionKeySize::Bits128,
             ))],
@@ -376,7 +347,7 @@ where
         ));
 
         server_attributes.push(Attribute::new(
-            UUID_SHORT_1,
+            UUID_1,
             [AttributePermissions::Read(AttributeRestriction::Encryption(
                 EncryptionKeySize::Bits192,
             ))],
@@ -384,7 +355,7 @@ where
         ));
 
         server_attributes.push(Attribute::new(
-            UUID_SHORT_1,
+            UUID_1,
             [AttributePermissions::Read(AttributeRestriction::Encryption(
                 EncryptionKeySize::Bits256,
             ))],
@@ -422,16 +393,12 @@ where
     server_handle.await.unwrap();
 }
 
-/// Creates two test per permission check
-///
-/// The first test is insufficient_{permission} and will test an attribute whereby the client does
-/// not have permissions for it, and the second test sufficient_{permission} will test the same
-/// attribute with the client given permissions to access it.
 macro_rules! permission_tests {
     (
         $permission_name:ident,
         $restriction:ident $( ($encryption:ident) )? ,
-        $handle:literal
+        $uuid:expr,
+        $val:expr
         $(,)?
     ) => {
         ::paste::paste! {
@@ -440,7 +407,7 @@ macro_rules! permission_tests {
                 connect_permission_setup(&[], |channel, client| {
                     Box::pin(async {
                         let response_processor = client
-                            .find_information_request(channel, $handle..=0xFFFF)
+                            .find_by_type_value_request(channel, 1..=0xFFFF, $uuid, $val)
                             .await
                             .expect("failed to send request");
 
@@ -474,7 +441,7 @@ macro_rules! permission_tests {
                 connect_permission_setup(permissions, |channel, client| {
                     Box::pin(async {
                         let response_processor = client
-                            .find_information_request(channel, $handle..=0xFFFF)
+                            .find_by_type_value_request(channel, 1..=0xFFFF, $uuid, $val)
                             .await
                             .expect("failed to send request");
 
@@ -482,12 +449,7 @@ macro_rules! permission_tests {
 
                         match response_processor.process_response(&response) {
                             Err(e) => panic!("unexpected error {:?}", e),
-                            Ok(FormattedHandlesWithType::HandlesWithFullUuids(mut response)) |
-                            Ok(FormattedHandlesWithType::HandlesWithShortUuids(mut response)) => {
-                                let first = response.pop().expect("unexpected empty response");
-
-                                assert_eq!(first.get_handle(), $handle);
-                            },
+                            Ok(responses) => assert_eq!(responses.len(), 1),
                         }
                     })
                 })
@@ -497,14 +459,14 @@ macro_rules! permission_tests {
     };
 }
 
-permission_tests!(read, None, 1);
+permission_tests!(read, None, UUID_1, 0u8);
 
-permission_tests!(authentication, Authentication, 2,);
+permission_tests!(authentication, Authentication, UUID_1, 0u8);
 
-permission_tests!(authorization, Authorization, 3);
+permission_tests!(authorization, Authorization, UUID_1, 0u8);
 
-permission_tests!(encryption_bits_128, Encryption(Bits128), 4);
+permission_tests!(encryption_bits_128, Encryption(Bits128), UUID_1, 0u8);
 
-permission_tests!(encryption_bits_192, Encryption(Bits192), 5);
+permission_tests!(encryption_bits_192, Encryption(Bits192), UUID_1, 0u8);
 
-permission_tests!(encryption_bits_256, Encryption(Bits256), 6);
+permission_tests!(encryption_bits_256, Encryption(Bits256), UUID_1, 0u8);
