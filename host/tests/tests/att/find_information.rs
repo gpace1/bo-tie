@@ -508,3 +508,90 @@ permission_tests!(encryption_bits_128, Encryption(Bits128), 4);
 permission_tests!(encryption_bits_192, Encryption(Bits192), 5);
 
 permission_tests!(encryption_bits_256, Encryption(Bits256), 6);
+
+/// This setups the server to be completely filled with the same attribute
+///
+/// This is for testing the throughput (checking every attribute) of the server with the find
+/// information command.
+async fn connect_benchmark_setup<Fun>(test: Fun)
+where
+    Fun: for<'a> FnOnce(
+            &'a mut BasicFrameChannel<LeULogicalLink<PhysicalLink>>,
+            &'a mut Client,
+        ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>>
+        + Send
+        + 'static,
+{
+    let (client_link, server_link) = create_le_link(LeULink::SUPPORTED_MTU.into());
+
+    let (rendezvous_client, rendezvous_server) = directed_rendezvous();
+
+    let client_handle = tokio::spawn(async move {
+        let mut att_bearer = client_link.get_att_channel();
+
+        let mut client = ConnectFixedClient::connect(&mut att_bearer, <u16>::MAX, <u16>::MAX)
+            .await
+            .expect("exchange MTU failed");
+
+        test(&mut att_bearer, &mut client).await;
+
+        rendezvous_client.rendez().await;
+    });
+
+    let server_handle = tokio::spawn(async move {
+        let mut att_bearer = server_link.get_att_channel();
+
+        let mut server_attributes = ServerAttributes::new();
+
+        // note: `..` is used over `..=` as one less than
+        // the maximum is desired (handle 0 is reserved).
+        for _ in 0..<u16>::MAX {
+            server_attributes.push(Attribute::new(UUID_SHORT_1, FULL_READ_PERMISSIONS, 0u8));
+        }
+
+        let mut server = Server::new_fixed(<u16>::MAX, <u16>::MAX, server_attributes, NoQueuedWrites);
+
+        let mut rendez = Box::pin(rendezvous_server.rendez());
+
+        loop {
+            tokio::select! {
+                _ = &mut rendez => break,
+
+                received = att_bearer.receive() => {
+                    let received = received.expect("receiver closed");
+
+                    server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process ATT PDU");
+                }
+            }
+        }
+    });
+
+    client_handle.await.unwrap();
+
+    server_handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn throughput() {
+    connect_benchmark_setup(|channel, client| {
+        Box::pin(async {
+            for (start, expected_len) in [(1, 16383), (16384, 16383), (32767, 16383), (49150, 16383)] {
+                let response_processor = client
+                    .find_information_request(channel, start..=0xFFFF)
+                    .await
+                    .expect("failed to send request");
+
+                let response = channel.receive().await.expect("failed to receive");
+
+                match response_processor.process_response(&response) {
+                    Err(e) => panic!("unexpected error {:?}", e),
+                    Ok(FormattedHandlesWithType::HandlesWithFullUuids(response))
+                    | Ok(FormattedHandlesWithType::HandlesWithShortUuids(response)) => {
+                        assert_eq!(response.len(), expected_len)
+                    }
+                }
+            }
+        })
+    })
+    .await
+}
