@@ -380,7 +380,10 @@ macro_rules! check_permissions {
 /// Returns the error as to why the client couldn't read the attribute
 macro_rules! client_can_read_attribute {
     ($this:expr, $att:expr $(,)?) => {
-        validate_permissions!($this, $att.get_permissions(), &$crate::FULL_READ_PERMISSIONS)
+        match validate_permissions!($this, $att.get_permissions(), &$crate::FULL_READ_PERMISSIONS) {
+            None => Ok(()),
+            Some(e) => Err(e),
+        }
     };
 }
 
@@ -393,7 +396,10 @@ macro_rules! client_can_read_attribute {
 /// $att: `&super::Attribute<_>`
 macro_rules! client_can_write_attribute {
     ( $this:expr, $att:expr $(,)?) => {
-        validate_permissions!($this, $att.get_permissions(), &$crate::FULL_WRITE_PERMISSIONS)
+        match validate_permissions!($this, $att.get_permissions(), &$crate::FULL_WRITE_PERMISSIONS) {
+            None => Ok(()),
+            Some(e) => Err(e),
+        }
     };
 }
 
@@ -1118,7 +1124,7 @@ where
             client_can_write_attribute!(self, att)
         };
 
-        if let Some(err) = opt_write_error {
+        if let Err(err) = opt_write_error {
             Err(err.into())
         } else {
             match self.get_att_mut(handle) {
@@ -1245,32 +1251,37 @@ where
         }
 
         impl Response {
-            fn new<Q>(server: &Server<Q>, mtu: usize, start: usize, stop: usize, is_16_bit: bool) -> Self {
-                macro_rules! create_uuid_data {
-                    (SHORT_FORMAT) => {
-                        create_uuid_data!(DONT_USE, 2, 1)
-                    };
-                    (LONG_FORMAT) => {
-                        create_uuid_data!(DONT_USE, 16, 2)
-                    };
-                    (DONT_USE, $uuid_size:literal, $indicator:expr) => {
-                        server
-                            .attributes
-                            .attributes
-                            .get(start..=stop)
-                            .into_iter()
-                            .flatten()
-                            .take_while(|attribute| {
-                                if 2 == $uuid_size {
-                                    attribute.get_uuid().can_be_16_bit()
-                                } else {
-                                    !attribute.get_uuid().can_be_16_bit()
-                                }
-                            })
-                            .enumerate()
-                            .take_while(|(cnt, _)| (cnt + 1) * ($uuid_size + 2) < (mtu - 2))
-                            .fold(vec![$indicator], |mut data, (_, attribute)| {
-                                let mut buffer = [0u8; $uuid_size + 2];
+            fn try_new<Q>(server: &Server<Q>, mtu: usize, start: usize, stop: usize) -> Option<Self> {
+                let opt_size = core::cell::Cell::new(None);
+
+                let mut data = server
+                    .attributes
+                    .attributes
+                    .get(start..=stop)
+                    .into_iter()
+                    .flatten()
+                    .take_while(|attribute| match opt_size.get() {
+                        None => true,
+                        Some(2) => attribute.get_uuid().can_be_16_bit(),
+                        Some(16) => !attribute.get_uuid().can_be_16_bit(),
+                        _ => unreachable!(),
+                    })
+                    .take_while(|attribute| client_can_read_attribute!(server, attribute).is_ok())
+                    .inspect(|att| {
+                        if opt_size.get().is_none() {
+                            if att.get_uuid().can_be_16_bit() {
+                                opt_size.set(Some(2))
+                            } else {
+                                opt_size.set(Some(16))
+                            }
+                        }
+                    })
+                    .enumerate()
+                    .take_while(|(cnt, _)| (cnt + 1) * (opt_size.get().unwrap() + 2) < (mtu - 2))
+                    .fold(vec![0], |mut data, (_, attribute)| {
+                        macro_rules! buffer {
+                            ($array:expr) => {{
+                                let mut buffer = $array;
 
                                 attribute
                                     .get_handle()
@@ -1282,17 +1293,24 @@ where
                                 data.extend_from_slice(&buffer);
 
                                 data
-                            })
-                    };
+                            }};
+                        }
+
+                        match opt_size.get() {
+                            Some(2) => buffer!([0u8; 2 + 2]),
+                            Some(16) => buffer!([0u8; 16 + 2]),
+                            _ => unreachable!(),
+                        }
+                    });
+
+                // if opt_size is `None`, no attributes were found
+                match opt_size.get()? {
+                    2 => data[0] = 1,
+                    16 => data[0] = 2,
+                    _ => unreachable!(),
                 }
 
-                let data = if is_16_bit {
-                    create_uuid_data!(SHORT_FORMAT)
-                } else {
-                    create_uuid_data!(LONG_FORMAT)
-                };
-
-                Self { data }
+                Some(Self { data })
             }
         }
 
@@ -1329,54 +1347,25 @@ where
 
         let stop = min(handle_range.ending_handle as usize, self.attributes.count());
 
-        // Check if the Client can read the next attribute
+        let maybe_response = Response::try_new(self, self.mtu, start, stop);
 
-        let opt_read_error = check_permissions!(self, start as u16, &crate::FULL_READ_PERMISSIONS);
+        match maybe_response {
+            Some(response) => {
+                let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
 
-        if let Err(_) = opt_read_error {
-            // all permission errors get mapped to AttributeNotFound
-            // (per the Bluetooth Specification)
-            return send_error!(
-                channel,
-                start as u16,
-                ClientPduName::FindInformationRequest,
-                pdu::Error::AttributeNotFound
-            );
+                send_pdu!(channel, pdu)?;
+            }
+            None => {
+                send_error!(
+                    channel,
+                    start as u16,
+                    ClientPduName::FindInformationRequest,
+                    pdu::Error::AttributeNotFound,
+                )?;
+            }
         }
 
-        // Check if the server can send a response with 16 bit UUIDs
-
-        let is_size_16 = check_response_uuid_size!(self, start as u16, 16);
-
-        if is_size_16 {
-            let response = Response::new(self, self.mtu, start, stop, true);
-
-            let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
-
-            return send_pdu!(channel, pdu);
-        }
-
-        // If there is no 16 bit UUIDs then the UUIDs must be sent in the full 128 bit form.
-
-        let is_size_128 = check_response_uuid_size!(self, start as u16, 128);
-
-        if is_size_128 {
-            let response = Response::new(self, self.mtu, start, stop, false);
-
-            let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), response);
-
-            return send_pdu!(channel, pdu);
-        }
-
-        // If there are still no UUIDs then there are no UUIDs within the given range
-        // or none had the required read permissions for this operation.
-
-        send_error!(
-            channel,
-            start as u16,
-            ClientPduName::FindInformationRequest,
-            pdu::Error::AttributeNotFound,
-        )
+        Ok(())
     }
 
     /// Process find by type value request
@@ -1539,7 +1528,7 @@ where
 
         let read_permissions_result = client_can_read_attribute!(self, first_match);
 
-        if let Some(e) = read_permissions_result {
+        if let Err(e) = read_permissions_result {
             return send_error!(
                 channel,
                 handle_range.starting_handle,
