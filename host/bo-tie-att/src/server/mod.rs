@@ -1407,7 +1407,7 @@ where
                     channel,
                     handle_range.starting_handle,
                     ClientPduName::FindByTypeValueRequest,
-                    pdu::Error::AttributeNotFound,
+                    pdu::Error::InvalidHandle,
                 )
             }
         } else {
