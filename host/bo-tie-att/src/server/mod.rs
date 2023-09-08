@@ -1429,11 +1429,12 @@ where
     where
         T: LogicalLink,
     {
-        macro_rules! single_payload_size {
+        macro_rules! enough_room_in_response {
             ($cnt:expr, $size:expr) => {
                 ($cnt + 1) * ($size + 2) < self.mtu - 2
             };
         }
+
         log::info!(
             "(ATT) processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
             type: {:?} }}",
@@ -1457,12 +1458,22 @@ where
             );
         }
 
-        let start = min(handle_range.starting_handle as usize, self.attributes.count());
+        let start = if handle_range.starting_handle as usize <= self.attributes.count() {
+            handle_range.starting_handle as usize
+        } else {
+            return send_error!(
+                channel,
+                handle_range.starting_handle,
+                ClientPduName::FindByTypeValueRequest,
+                pdu::Error::AttributeNotFound
+            );
+        };
+
         let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
         let payload_max = self.mtu - 2;
 
-        let mut init_iter = self.attributes.attributes[start..end]
+        let mut init_iter = self.attributes.attributes[start..=end]
             .iter_mut()
             .filter(|att| att.get_uuid() == &desired_att_type);
 
@@ -1498,7 +1509,7 @@ where
 
         let mut responses = Vec::new();
 
-        let is_single_payload_size = single_payload_size!(0, first_size);
+        let is_single_payload_size = enough_room_in_response!(0, first_size);
 
         if !is_single_payload_size {
             use core::mem::replace;
@@ -1529,17 +1540,31 @@ where
 
             responses.push(fst_rsp);
 
-            for (cnt, att) in init_iter.enumerate() {
+            let mut cnt = 1;
+
+            for att in init_iter {
+                // break if there isn't enough room in the
+                // response for another attribute value
+                if !enough_room_in_response!(cnt, first_size) {
+                    break;
+                }
+
+                // skip those that the client cannot read
+                if client_can_read_attribute!(self, att).is_err() {
+                    continue;
+                }
+
                 let handle = att.get_handle().unwrap();
 
                 let val = att.get_mut_value();
 
-                // Break if att doesn't have the same transfer size as the
-                // first value or if adding the value would exceed the MTU for
-                // the attribute payload
-                if !single_payload_size!(cnt + 1, first_size) || first_size != val.value_transfer_format_size().await {
-                    break;
+                // skip those that are not the same size
+                // (in their transfer format)
+                if first_size != val.value_transfer_format_size().await {
+                    continue;
                 }
+
+                cnt += 1;
 
                 let response = val.single_read_by_type_response(handle).await;
 
