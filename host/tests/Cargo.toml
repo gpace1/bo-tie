@@ -26,17 +26,21 @@ version = "1"
 features = ["rt", "macros", "sync", "time"]
 
 [[test]]
-name = "att_connection"
+name = "att-connection"
 path = "tests/att/connection_test.rs"
 
 [[test]]
-name = "att_mtu_exchange"
+name = "att-mtu_exchange"
 path = "tests/att/mtu_exchange.rs"
 
 [[test]]
-name = "att_find_information"
+name = "att-find_information"
 path = "tests/att/find_information.rs"
 
 [[test]]
-name = "att_find_by_type_value"
-path = "tests/att/att_find_by_type_value.rs"
+name = "att-find_by_type_value"
+path = "tests/att/find_by_type_value.rs"
+
+[[test]]
+name = "att-read_by_type"
+path = "tests/att/read_by_type.rs"
