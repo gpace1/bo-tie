@@ -227,14 +227,14 @@ async fn invalid_handles() {
     false_server_connection(|into, out| {
         Box::pin(async {
             for request_data in [
-                [0, 0, 0xFF, 0xFF],
-                [0, 0, 0, 0],
-                [1, 0, 0, 0],
-                [2, 0, 1, 0],
-                [0xFF, 0xFF, 1, 0],
+                [0, 0, 0xFF, 0xFF, 1, 0, 0],
+                [0, 0, 0, 0, 1, 0, 0],
+                [1, 0, 0, 0, 1, 0, 0],
+                [2, 0, 1, 0, 1, 0, 0],
+                [0xFF, 0xFF, 1, 0, 1, 0, 0],
             ] {
                 let fragments =
-                    raw_client_fragments(bo_tie_att::client::ClientPduName::FindInformationRequest, request_data);
+                    raw_client_fragments(bo_tie_att::client::ClientPduName::FindByTypeValueRequest, request_data);
 
                 for fragment in fragments {
                     futures::SinkExt::send(into, fragment)
@@ -270,7 +270,7 @@ async fn no_attributes() {
         Box::pin(async {
             fake_loop!(for range in [7..=0xFFFF, 7..=7] {
                 let response_processor = client
-                    .find_by_type_value_request(channel, range, crate::UUID_2, 2u8)
+                    .find_by_type_value_request(channel, range, UUID_2, 2u8)
                     .await
                     .expect("failed to send request");
 
