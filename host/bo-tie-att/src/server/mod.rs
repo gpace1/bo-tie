@@ -300,8 +300,7 @@ macro_rules! validate_permissions {
         match $this
             .given_permissions
             .iter()
-            .skip_while(|&p| !$attribute_permissions.contains(p) || !$operation_permissions.contains(p))
-            .nth(0)
+            .find(|&p| $attribute_permissions.contains(p) && $operation_permissions.contains(p))
         {
             Some(_) => None,
             None => $operation_permissions
@@ -366,12 +365,16 @@ macro_rules! check_permissions {
     $handle:expr,
     $operation_permissions:expr $(,)?
 ) => {{
-        let att = $this.attributes.get($handle).ok_or($crate::pdu::Error::InvalidHandle)?;
-
-        match validate_permissions!($this, att.get_permissions(), $operation_permissions) {
-            None => Ok(()),
-            Some(e) => Err(e),
-        }
+        $this
+            .attributes
+            .get($handle)
+            .map(
+                |att| match validate_permissions!($this, att.get_permissions(), $operation_permissions) {
+                    None => Ok(()),
+                    Some(e) => Err(e),
+                },
+            )
+            .unwrap_or(Err($crate::pdu::Error::InvalidHandle))
     }};
 }
 
