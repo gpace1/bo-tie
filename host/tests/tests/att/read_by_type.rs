@@ -97,7 +97,7 @@ where
 }
 
 #[tokio::test]
-async fn find_success() {
+async fn read_success() {
     // Note: all responses will not have a `group end handle`
     // as that is defined by a higher layer specification.
     connect_setup(|channel, client| {
