@@ -112,10 +112,22 @@
 //!
 //! ```
 //!
-//! ### Credit Based Channels
-//!
-//! The
-//!
+// ### Attribute Bearers using dynamic L2CAP channel IDs
+//
+// (todo) these kinds of Attribute bearers are not supported yet, the following it the intended
+// implementation for the future.
+//
+// These bearers do not perform a MTU exchange nor have a default MTU *at the ATT protocol level*.
+// The MTU is determined at the at the L2CAP level. Creating a `Client` does not go through the
+// `CreateFixedClient` process and instead a client is directly created through a corresponding
+// `new_*` method.
+//
+// ```
+// // Create a client for an Attribute Bearer
+// // using a credit based L2CAP channel
+// let client = Client::new_credit_based(&credit_channel);
+// ```
+//
 //! # The Attribute Server
 //! The server contains a series of Attributes that can be interacted with by the Client. The
 //! Server implementation of this library contains
@@ -236,9 +248,9 @@ pub mod pdu;
 //==================================================================================================
 
 /// The fixed Channel Identifier for the Attribute protocol
-/// 
-/// This is the fixed channel identifier for the Attribute (ATT) protocol. There can be multiple ATT 
-/// bearers using channels with dynamically assigned channel identifiers, but in L2CAP there is only 
+///
+/// This is the fixed channel identifier for the Attribute (ATT) protocol. There can be multiple ATT
+/// bearers using channels with dynamically assigned channel identifiers, but in L2CAP there is only
 /// one fixed channel identifier given to the ATT protocol
 pub const L2CAP_FIXED_CHANNEL_ID: bo_tie_l2cap::channel::id::ChannelIdentifier =
     bo_tie_l2cap::channel::id::ChannelIdentifier::Le(bo_tie_l2cap::channel::id::LeCid::AttributeProtocol);
