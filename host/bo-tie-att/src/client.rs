@@ -627,15 +627,14 @@ impl Client {
     ///
     /// # Panic
     /// The `handle` cannot be the reserved handle 0
-    pub async fn read_blob_request<T, D>(
+    pub async fn read_blob_request<T>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         offset: u16,
-    ) -> Result<impl ResponseProcessor<Response = ReadBlob>, super::ConnectionError<T>>
+    ) -> Result<impl ResponseProcessor<Response = Option<ReadBlob>>, super::ConnectionError<T>>
     where
         T: LogicalLink,
-        D: TransferFormatTryFrom,
     {
         if !pdu::is_valid_handle(handle) {
             panic!("Handle 0 is reserved for future use by the spec.")
@@ -644,14 +643,44 @@ impl Client {
         self.send(connection_channel, &pdu::read_blob_request(handle, offset))
             .await?;
 
-        Ok(ResponseProcessorCheck(move |d| {
-            let rsp: pdu::ReadBlobResponse = Self::process_raw_data(ServerPduName::ReadBlobResponse, d)?;
+        Ok(ResponseProcessorCheck(move |bytes| {
+            let expected_response = ServerPduName::ReadBlobResponse;
 
-            Ok(ReadBlob {
-                handle,
-                offset: offset.into(),
-                blob: rsp.into_inner(),
-            })
+            if bytes.len() == 0 {
+                Err(super::Error::Empty)
+            } else if expected_response.is(bytes) {
+                let pdu: pdu::Pdu<pdu::ReadBlobResponse> = TransferFormatTryFrom::try_from(&bytes)?;
+
+                let parameters = pdu.into_parameters();
+
+                let blob = parameters.into_inner();
+
+                Ok(Some(ReadBlob {
+                    handle,
+                    offset: offset.into(),
+                    blob,
+                }))
+            } else if ServerPduName::ErrorResponse.is(bytes) {
+                let err_pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&bytes)?;
+
+                if let pdu::Error::InvalidOffset = err_pdu.get_parameters().error {
+                    Ok(None)
+                } else {
+                    Err(err_pdu.into())
+                }
+            } else {
+                match ServerPduName::try_from(bytes[0]) {
+                    Ok(val) => Err(super::Error::UnexpectedServerPdu(val)),
+                    Err(_) => Err(TransferFormatError::from(format!(
+                        "Received Unknown PDU '{:#x}', \
+                            expected '{} ({:#x})'",
+                        bytes[0],
+                        expected_response,
+                        Into::<u8>::into(expected_response)
+                    ))
+                    .into()),
+                }
+            }
         }))
     }
 
@@ -842,16 +871,7 @@ impl Client {
 
 /// A blob of data read from the server
 ///
-/// This is a blob of data that was received from the server in response to a read blob request.
-/// Once all blobs are received the client can try to assemble the data into its data type. Each
-/// blob is a pseudo linked list, as they are received then can be combined together until the
-/// combination function determines that all blobs were received.
-///
-/// Blobs can attempt to combine together with the
-/// [`Add`](https://doc.rust-lang.org/std/ops/trait.Add.html), but the offsets and handles need to
-/// be correct. A `ReadBlob` can be combined with another `ReadBlob` when they both have the same
-/// attribute handle, the the offset of the later blob is in the correct position. The offset must
-/// be equal to the offset plus the length of the stored data within the first `ReadBlob`.
+/// See method [`Client::read_blob_request`] for usage.
 pub struct ReadBlob {
     handle: u16,
     offset: usize,
@@ -859,35 +879,79 @@ pub struct ReadBlob {
 }
 
 impl ReadBlob {
+    /// Get the handle of the data of the blob
     pub fn get_handle(&self) -> u16 {
         self.handle
     }
 
+    /// Get the offset
+    ///
+    /// This returns the offset to the first byte in the blob
     pub fn get_offset(&self) -> usize {
         self.offset
     }
 
-    /// Get the offset a `ReadBlob` must have to combine with this `ReadBlob`
-    fn combine_offset(&self) -> usize {
-        self.offset + self.blob.len()
+    /// Get the offset of the end
+    ///
+    /// This returns the offset to the end of the blob. This can be used as the offset to the the
+    /// next blob of data
+    pub fn get_end_offset(&self) -> usize {
+        self.blob.len()
     }
 
     fn try_append_blob(mut self, other: Self) -> Result<Self, ReadBlobError> {
+        self.try_append_blob_ref(other)?;
+
+        Ok(self)
+    }
+
+    #[inline]
+    fn try_append_blob_ref(&mut self, mut other: Self) -> Result<(), ReadBlobError> {
         if self.handle != other.handle {
             return Err(ReadBlobError::IncorrectHandle);
         }
 
-        if self.combine_offset() != other.offset {
-            Err(ReadBlobError::IncorrectOffset)
-        } else {
+        if self.get_end_offset() == other.offset {
+            if self
+                .offset
+                .checked_add(other.blob.len())
+                .map(|val| val > 512)
+                .unwrap_or_default()
+            {
+                return Err(ReadBlobError::MaximumSizeExceeded);
+            }
+
+            self.offset = other.get_offset();
+
             self.blob.extend(other.blob);
 
-            Ok(ReadBlob {
-                handle: self.handle,
-                offset: self.offset,
-                blob: self.blob,
-            })
+            Ok(())
+        } else if other.get_end_offset() == self.offset {
+            if other
+                .offset
+                .checked_add(self.blob.len())
+                .map(|val| val > 512)
+                .unwrap_or_default()
+            {
+                return Err(ReadBlobError::MaximumSizeExceeded);
+            }
+
+            other.blob.extend(core::mem::take(&mut self.blob));
+
+            self.blob = other.blob;
+
+            Ok(())
+        } else {
+            return Err(ReadBlobError::IncorrectOffset);
         }
+    }
+
+    /// Try to convert this blob into an Attributes value
+    pub fn try_into_value<T>(&self) -> Result<T, TransferFormatError>
+    where
+        T: TransferFormatTryFrom,
+    {
+        TransferFormatTryFrom::try_from(&self.blob)
     }
 }
 
@@ -899,16 +963,53 @@ impl core::ops::Add for ReadBlob {
     }
 }
 
-impl core::ops::Add<ReadBlob> for Result<ReadBlob, ReadBlobError> {
-    type Output = Self;
+impl core::ops::Add<Option<ReadBlob>> for ReadBlob {
+    type Output = Result<Self, ReadBlobError>;
 
-    fn add(self, rhs: ReadBlob) -> Self::Output {
-        self.and_then(|rb| rb.try_append_blob(rhs))
+    fn add(self, rhs: Option<ReadBlob>) -> Self::Output {
+        match rhs {
+            Some(blob) => self + blob,
+            None => Ok(self),
+        }
     }
 }
 
+impl bo_tie_core::buffer::TryExtend<ReadBlob> for ReadBlob {
+    type Error = ReadBlobError;
+
+    fn try_extend<T>(&mut self, read_blob_iter: T) -> Result<(), Self::Error>
+    where
+        T: IntoIterator<Item = ReadBlob>,
+    {
+        for blob in read_blob_iter {
+            self.try_append_blob_ref(blob)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Error for
 #[derive(Debug)]
 pub enum ReadBlobError {
     IncorrectHandle,
     IncorrectOffset,
+    MaximumSizeExceeded,
 }
+
+impl core::fmt::Display for ReadBlobError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ReadBlobError::IncorrectHandle => f.write_str("blob handles do not match"),
+            ReadBlobError::IncorrectOffset => {
+                f.write_str("expected the end offset of the left blob to be equal to the other blob's starting offset")
+            }
+            ReadBlobError::MaximumSizeExceeded => {
+                f.write_str("combined blob would exceed the maximum size of a long Attribute value")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ReadBlobError {}
