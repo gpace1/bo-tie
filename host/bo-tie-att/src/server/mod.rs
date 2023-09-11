@@ -1721,7 +1721,7 @@ where
         let max_payload = self.mtu - 1;
 
         match offset as usize {
-            o if o > data.len() => Err(pdu::Error::InvalidOffset),
+            o if o >= data.len() => Err(pdu::Error::InvalidOffset),
 
             o if o + max_payload <= data.len() => Ok((
                 pdu::LocalReadBlobResponse::new(&data[o..(o + max_payload)]).into(),
