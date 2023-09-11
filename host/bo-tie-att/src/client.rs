@@ -361,7 +361,8 @@ impl Client {
     /// ## ATT bearers using a dynamic L2CAP channel ID
     /// This method will returns `None` for ATT bearers that use a dynamic channel ID. For those
     /// channels the ATT protocol uses the L2CAP MTU that was determined as part of establishing the
-    /// L2CAP channel, so the MTU must be retrieved from the L2CAP channel instance.
+    /// L2CAP channel. The MTU for these connections can be acquired from the instance of the L2CAP
+    /// channel.
     pub fn get_mtu(&self) -> Option<u16> {
         Some(self.mtu as u16)
     }
