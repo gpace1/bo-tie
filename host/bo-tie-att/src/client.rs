@@ -571,10 +571,62 @@ impl Client {
 
     /// Read blob request
     ///
-    /// Reading data that must be blobbed is a multi-request process. Once all data is received will
+    /// This is used for reading a blob of data from the server. The most common usage of this is
+    /// to do a basic fragmentation of an Attributes value so that it can be sent over multiple ATT
+    /// PDUs.
+    ///
+    /// ```
+    /// # use bo_tie_att::Client;
+    /// # use bo_tie_l2cap::BasicFrameChannel;
+    /// # async fn example<T>(channel: &mut BasicFrameChannel<'_, T>, client: Client) {
+    /// # let handle = 1;
+    /// let mut offset = 0;
+    /// let mut full_blob = None;
+    ///
+    /// loop {
+    ///     let response_processor = client.read_blob_request(channel, handle, offset)
+    ///         .await
+    ///         .expect("failed to send request");
+    ///
+    ///     let response = channel.receive().await.expect("failed to receive PDU");
+    ///
+    ///     match response_processor.process_response(&response)
+    ///         .expect("invalid response")
+    ///     {
+    ///         // You can add a `Option<ReadBlob>` to a `ReadBlob`,
+    ///         // but it must be on the right side of the `+` and
+    ///         // the operation outputs a `Result<ReadBlob, _>`.
+    ///         Some(blob) => {
+    ///             full_blob = (blob + full_blob).expect("bad blob").into();
+    ///             
+    ///             offset = blob.get_end_offset() as u16;
+    ///         }
+    ///
+    ///         // If the transfer size of the attribute data is
+    ///         // unknown, then `read_blob_request` needs to be
+    ///         // called until `None` is returned.
+    ///         None => break,
+    ///     }
+    /// }
+    ///
+    /// let value: String = full_blob.unwrap()
+    ///     .try_into_value()
+    ///     .expect("invalid string");
+    ///
+    /// # }
+    /// ```
+    ///
+    /// ## Large Attribute Values
+    /// As per the specification for *long Attribute values*, the maximum size of a blob can be 512
+    /// bytes. However, this is only true for the currently read value, there is no requirement for
+    /// the value to be static for the lifetime of the Attribute (hey... this is a rust library,
+    /// rust like explanations *should* be used :). A higher layer protocol could implement the
+    /// Attribute value to change on every read operation, or after the current value is fully read.
+    /// This could permit multiple read operations to create a service data much larger than 512
+    /// bytes.
     ///
     /// # Panic
-    /// A handle cannot be the reserved handle 0x0000
+    /// The `handle` cannot be the reserved handle 0
     pub async fn read_blob_request<T, D>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
