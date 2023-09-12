@@ -48,3 +48,7 @@ path = "tests/att/read_by_type.rs"
 [[test]]
 name = "att_read"
 path = "tests/att/read.rs"
+
+[[test]]
+name = "att_read_blob"
+path = "tests/att/read_blob.rs"
