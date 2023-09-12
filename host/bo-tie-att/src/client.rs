@@ -686,10 +686,11 @@ impl Client {
 
     /// Read multiple handles
     ///
-    /// If handles has length of 0 an error is returned
+    /// # Errors
+    /// An error is returned if handles is an empty iterator.
     ///
     /// # Panic
-    /// A handle cannot be the reserved handle 0x0000
+    /// A handle within `handles` cannot be the reserved handle 0x0000.
     pub async fn read_multiple_request<T, D, I>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
