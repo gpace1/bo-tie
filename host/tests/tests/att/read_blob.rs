@@ -6,7 +6,7 @@
 use bo_tie_att::client::{ClientPduName, ReadBlob, ResponseProcessor};
 use bo_tie_att::server::{NoQueuedWrites, ServerAttributes};
 use bo_tie_att::{
-    pdu, Attribute, AttributePermissions, AttributeRestriction, Client, ConnectFixedClient, EncryptionKeySize, Server,
+    Attribute, AttributePermissions, AttributeRestriction, Client, ConnectFixedClient, EncryptionKeySize, Server,
     FULL_READ_PERMISSIONS,
 };
 use bo_tie_host_tests::{create_le_link, directed_rendezvous, PhysicalLink};
