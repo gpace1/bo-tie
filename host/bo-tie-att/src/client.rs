@@ -691,31 +691,38 @@ impl Client {
     ///
     /// # Panic
     /// A handle within `handles` cannot be the reserved handle 0x0000.
-    pub async fn read_multiple_request<T, D, I>(
+    pub async fn read_multiple_request<T, I>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
         handles: I,
-    ) -> Result<impl ResponseProcessor<Response = Vec<D>>, super::ConnectionError<T>>
+    ) -> Result<impl ResponseProcessor<Response = ReadMultiple>, super::ConnectionError<T>>
     where
         T: LogicalLink,
         I: IntoIterator<Item = u16> + Clone,
-        Vec<D>: TransferFormatTryFrom + TransferFormatInto,
     {
-        handles.clone().into_iter().for_each(|h| {
-            if !pdu::is_valid_handle(h) {
-                panic!("Handle 0 is reserved for future use by the spec.")
-            }
-        });
+        let mut att_count = 0;
 
-        self.send(
-            connection_channel,
-            &pdu::read_multiple_request(handles.into_iter().collect())?,
-        )
-        .await?;
+        let handles = handles
+            .into_iter()
+            .inspect(|h| {
+                att_count += 1;
 
-        Ok(ResponseProcessorCheck(|d| {
-            Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)
-                .map(|rsp: pdu::ReadMultipleResponse<D>| rsp.0)
+                if !pdu::is_valid_handle(*h) {
+                    panic!("Handle 0 is reserved for future use by the spec.")
+                }
+            })
+            .collect();
+
+        self.send(connection_channel, &pdu::read_multiple_request(handles)?)
+            .await?;
+
+        Ok(ResponseProcessorCheck(move |d| {
+            let read_multiple_response: pdu::ReadMultipleResponse =
+                Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)?;
+
+            let read_multiple = ReadMultiple::new(att_count, read_multiple_response.0);
+
+            Ok(read_multiple)
         }))
     }
 
@@ -990,7 +997,9 @@ impl bo_tie_core::buffer::TryExtend<ReadBlob> for ReadBlob {
     }
 }
 
-/// Error for
+/// Error for [`read_blob_request`]
+///
+/// [`read_blob_request`]: Client::read_blob_request
 #[derive(Debug)]
 pub enum ReadBlobError {
     IncorrectHandle,
@@ -1014,3 +1023,187 @@ impl core::fmt::Display for ReadBlobError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for ReadBlobError {}
+
+/// Read Multiple
+///
+/// This is response from the server to the `read_multiple_request` command. See the method
+/// [`read_multiple_request`] for details.
+///
+/// [`read_multiple_request`]: Client::read_multiple_request
+pub struct ReadMultiple {
+    att_count: usize,
+    offset: core::cell::Cell<usize>,
+    val_count: core::cell::Cell<usize>,
+    data: Vec<u8>,
+}
+
+impl ReadMultiple {
+    /// Create a new `ReadMultiple`
+    fn new(att_count: usize, response_data: Vec<u8>) -> Self {
+        let offset = core::cell::Cell::new(0);
+        let val_count = core::cell::Cell::new(0);
+        let data = response_data;
+
+        Self {
+            att_count,
+            offset,
+            val_count,
+            data,
+        }
+    }
+
+    /// Get the read multiple data
+    ///
+    /// This is useful when trying to parse the data with a higher layer protocol.
+    pub fn get_data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Iterate through the multiple values
+    ///
+    /// This returns an iterator through the values returned in the read multiple response. There is
+    /// no indication on the transfer format size nor the number of values
+    pub fn iter(&mut self) -> impl Iterator<Item = ReadMultipleValue<'_>> + '_ {
+        struct Iter<'a>(&'a ReadMultiple);
+
+        impl<'a> Iterator for Iter<'a> {
+            type Item = ReadMultipleValue<'a>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.0.offset.get() < self.0.data.len() {
+                    Some(ReadMultipleValue::new(self.0))
+                } else if self.0.offset.get() > self.0.data.len() {
+                    None
+                } else {
+                    // offset == self.data.len()
+                    if self.0.val_count.get() == self.0.att_count {
+                        self.0.offset.set(self.0.offset.get() + 1);
+                        None
+                    } else {
+                        Some(ReadMultipleValue::new_invalid_count())
+                    }
+                }
+            }
+        }
+
+        self.offset.set(0);
+
+        self.val_count.set(0);
+
+        Iter(self)
+    }
+
+    /// Iterate through the same kind of values
+    ///
+    /// This is used to iterate over a `ReadMultiple` that only contains the same *sized* value.
+    /// The returned iterator effectively just divides the read multiple response by the number of
+    /// attributes to be read.
+    ///
+    /// This method cannot be called if the response has the possibility to overflow. An overflow
+    /// occurs when the total transfer size of the values is larger than the `MTU - 1`. If the
+    /// response were to overflow, then the correct transfer size for `V` would not be correctly
+    /// calculated.
+    ///
+    /// # Error
+    /// If a value fails to be converted from the response data, the iterator will output an error
+    /// on the current iteration and then return `None` on the next.
+    ///
+    /// # Panic
+    /// The returned response must be cleanly divisible by the
+    pub fn iter_same<V>(&mut self) -> impl Iterator<Item = Result<V, ReadMultipleValueError>> + '_
+    where
+        V: TransferFormatTryFrom,
+    {
+        let size = self.data.len() / self.att_count;
+
+        self.iter().map(move |v| v.try_into_value(size))
+    }
+}
+
+/// A read multiple value
+///
+/// This is output by the iterator returned by the method `into_iter` of `ReadMultiple`. This is
+/// used for converting the transfer format of a value in the read multiple request into the value.
+/// See the method [`into_iter`] for more details.
+pub struct ReadMultipleValue<'a> {
+    inner: ReadMultipleValueInner<'a>,
+}
+
+impl<'a> ReadMultipleValue<'a> {
+    /// Create a normal, new `ReadMultipleValue`
+    fn new(read_multiple: &'a ReadMultiple) -> Self {
+        let inner = ReadMultipleValueInner::Value(read_multiple);
+
+        Self { inner }
+    }
+
+    /// Create an invalid count `ReadMultipleValue`
+    fn new_invalid_count() -> Self {
+        let inner = ReadMultipleValueInner::InvalidCount;
+
+        Self { inner }
+    }
+
+    /// Try to convert this `ReadMultipleValue` into a real value
+    ///
+    /// This tries to convert this into a value. The size of the transfer format for the value must
+    /// be provided as in input as the read multiple response has no size markers for any of the
+    /// Attribute values within the `set of values`.
+    pub fn try_into_value<V>(self, value_size: usize) -> Result<V, ReadMultipleValueError>
+    where
+        V: TransferFormatTryFrom,
+    {
+        match self.inner {
+            ReadMultipleValueInner::InvalidCount => Err(ReadMultipleValueError::InvalidCount),
+            ReadMultipleValueInner::Value(read_multiple) => {
+                let old_offset = read_multiple.offset.get();
+
+                read_multiple.offset.set(old_offset + value_size);
+
+                if read_multiple.offset.get() > read_multiple.data.len() {
+                    return Err(ReadMultipleValueError::InvalidValueSize);
+                }
+
+                read_multiple.val_count.set(read_multiple.val_count.get() + 1);
+
+                let end = old_offset + value_size;
+
+                TransferFormatTryFrom::try_from(&read_multiple.data[old_offset..end]).map_err(|e| {
+                    read_multiple.offset.set(read_multiple.data.len() + 1);
+
+                    ReadMultipleValueError::TransferFormatError(e)
+                })
+            }
+        }
+    }
+}
+
+/// Inner value of `ReadMultipleValue`
+enum ReadMultipleValueInner<'a> {
+    Value(&'a ReadMultiple),
+    InvalidCount,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ReadMultipleValueError {
+    InvalidCount,
+    InvalidValueSize,
+    TransferFormatError(TransferFormatError),
+}
+
+impl core::fmt::Display for ReadMultipleValueError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            ReadMultipleValueError::InvalidCount => {
+                f.write_str("the amount of values does not match the number of Attributes in the request")
+            }
+            ReadMultipleValueError::InvalidValueSize => {
+                f.write_str("size of value exceeds end of read multiple response")
+            }
+            ReadMultipleValueError::TransferFormatError(e) => core::fmt::Display::fmt(e, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ReadMultipleValueError {}

@@ -1555,27 +1555,21 @@ pub fn read_multiple_request(handles: Vec<u16>) -> Result<Pdu<ReadMultipleReques
 
 /// Parameter for a Read Multiple Request
 #[derive(Debug)]
-pub struct ReadMultipleResponse<D>(pub Vec<D>);
+pub struct ReadMultipleResponse(pub Vec<u8>);
 
-impl<D> ExpectedOpcode for ReadMultipleResponse<D> {
+impl ExpectedOpcode for ReadMultipleResponse {
     fn expected_opcode() -> PduOpcode {
         ServerPduName::ReadMultipleResponse.into()
     }
 }
 
-impl<D> TransferFormatTryFrom for ReadMultipleResponse<D>
-where
-    Vec<D>: TransferFormatTryFrom,
-{
+impl TransferFormatTryFrom for ReadMultipleResponse {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         Ok(Self(TransferFormatTryFrom::try_from(raw)?))
     }
 }
 
-impl<D> TransferFormatInto for ReadMultipleResponse<D>
-where
-    Vec<D>: TransferFormatInto,
-{
+impl TransferFormatInto for ReadMultipleResponse {
     fn len_of_into(&self) -> usize {
         self.0.len_of_into()
     }
@@ -1588,10 +1582,10 @@ where
 /// Read Multiple Response
 ///
 /// Server response to a read multiple request
-pub fn read_multiple_response<D>(values: Vec<D>) -> Pdu<ReadMultipleResponse<D>> {
+pub fn read_multiple_response(set_of_values: Vec<u8>) -> Pdu<ReadMultipleResponse> {
     Pdu {
         opcode: From::from(ServerPduName::ReadMultipleResponse),
-        parameters: ReadMultipleResponse(values),
+        parameters: ReadMultipleResponse(set_of_values),
     }
 }
 
