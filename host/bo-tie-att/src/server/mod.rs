@@ -91,6 +91,7 @@ pub enum ServerPduName {
     ReadBlobResponse,
     ReadMultipleResponse,
     ReadByGroupTypeResponse,
+    ReadMultipleVariableResponse,
     WriteResponse,
     PrepareWriteResponse,
     ExecuteWriteResponse,
@@ -124,6 +125,7 @@ impl From<ServerPduName> for u8 {
             ServerPduName::ReadBlobResponse => 0xD,
             ServerPduName::ReadMultipleResponse => 0xF,
             ServerPduName::ReadByGroupTypeResponse => 0x11,
+            ServerPduName::ReadMultipleVariableResponse => 0x21,
             ServerPduName::WriteResponse => 0x13,
             ServerPduName::PrepareWriteResponse => 0x17,
             ServerPduName::ExecuteWriteResponse => 0x19,
@@ -147,6 +149,7 @@ impl TryFrom<u8> for ServerPduName {
             0xD => Ok(ServerPduName::ReadBlobResponse),
             0xF => Ok(ServerPduName::ReadMultipleResponse),
             0x11 => Ok(ServerPduName::ReadByGroupTypeResponse),
+            0x21 => Ok(ServerPduName::ReadMultipleVariableResponse),
             0x13 => Ok(ServerPduName::WriteResponse),
             0x17 => Ok(ServerPduName::PrepareWriteResponse),
             0x19 => Ok(ServerPduName::ExecuteWriteResponse),
@@ -169,6 +172,7 @@ impl core::fmt::Display for ServerPduName {
             ServerPduName::ReadBlobResponse => write!(f, "Read Blob Response"),
             ServerPduName::ReadMultipleResponse => write!(f, "Read Multiple Response"),
             ServerPduName::ReadByGroupTypeResponse => write!(f, "Read By Group Type Response"),
+            ServerPduName::ReadMultipleVariableResponse => write!(f, "Read Multiple Variable Response"),
             ServerPduName::WriteResponse => write!(f, "Write Response"),
             ServerPduName::PrepareWriteResponse => write!(f, "Prepare Write Response"),
             ServerPduName::ExecuteWriteResponse => write!(f, "Execute Write Response"),
@@ -193,6 +197,9 @@ impl ServerPduName {
             ServerPduName::ReadBlobResponse => raw_pdu[0] == ServerPduName::ReadBlobResponse.into(),
             ServerPduName::ReadMultipleResponse => raw_pdu[0] == ServerPduName::ReadMultipleResponse.into(),
             ServerPduName::ReadByGroupTypeResponse => raw_pdu[0] == ServerPduName::ReadByGroupTypeResponse.into(),
+            ServerPduName::ReadMultipleVariableResponse => {
+                raw_pdu[0] == ServerPduName::ReadMultipleVariableResponse.into()
+            }
             ServerPduName::WriteResponse => raw_pdu[0] == ServerPduName::WriteResponse.into(),
             ServerPduName::PrepareWriteResponse => raw_pdu[0] == ServerPduName::PrepareWriteResponse.into(),
             ServerPduName::ExecuteWriteResponse => raw_pdu[0] == ServerPduName::ExecuteWriteResponse.into(),
@@ -739,11 +746,12 @@ where
 
             ClientPduName::HandleValueConfirmation => return Ok(Status::IndicationConfirmed),
 
-            pdu_name @ ClientPduName::ReadMultipleRequest
-            | pdu_name @ ClientPduName::WriteCommand
-            | pdu_name @ ClientPduName::SignedWriteCommand
-            | pdu_name @ ClientPduName::ReadByGroupTypeRequest => {
-                send_error!(channel, 0, pdu_name, pdu::Error::RequestNotSupported)?
+            ClientPduName::ReadMultipleRequest
+            | ClientPduName::WriteCommand
+            | ClientPduName::SignedWriteCommand
+            | ClientPduName::ReadByGroupTypeRequest
+            | ClientPduName::ReadMultipleVariable => {
+                send_error!(channel, 0, pdu_type, pdu::Error::RequestNotSupported)?
             }
         };
 
