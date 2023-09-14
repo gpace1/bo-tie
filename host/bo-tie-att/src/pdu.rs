@@ -2076,10 +2076,10 @@ impl TransferFormatInto for PreparedWriteRequest<'_> {
 ///
 /// ```
 /// # use bo_tie_att::pdu::PreparedWriteRequests;
-///
+/// #
 /// # let handle = 0x1;
 /// # let mtu = 30;
-///
+/// #
 /// let data = "Holey cow this is way to much data to be sent within one Attribute protocol data \
 ///     unit, you need to break this up bud";
 ///
