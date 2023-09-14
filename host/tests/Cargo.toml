@@ -60,3 +60,7 @@ path = "tests/att/read_multiple.rs"
 [[test]]
 name = "att_write"
 path = "tests/att/write.rs"
+
+[[test]]
+name = "att_queued_write"
+path = "tests/att/queued_write.rs"
