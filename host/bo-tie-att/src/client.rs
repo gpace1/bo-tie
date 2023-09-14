@@ -819,14 +819,13 @@ impl Client {
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
-    pub async fn prepare_write_request<T, D>(
+    pub async fn prepare_write_request<T>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
         pwr: pdu::Pdu<pdu::PreparedWriteRequest<'_>>,
     ) -> Result<impl ResponseProcessor<Response = pdu::PreparedWriteResponse>, super::ConnectionError<T>>
     where
         T: LogicalLink,
-        D: TransferFormatTryFrom + TransferFormatInto,
     {
         self.send(connection_channel, &pwr).await?;
 
