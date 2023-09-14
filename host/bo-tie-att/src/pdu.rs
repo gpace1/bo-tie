@@ -2153,7 +2153,7 @@ impl PreparedWriteRequests {
 }
 
 #[derive(Debug)]
-pub struct PreparedWriteRequestIter<'a> {
+struct PreparedWriteRequestIter<'a> {
     handle: u16,
     tf_data: &'a [u8],
     offset: usize,
