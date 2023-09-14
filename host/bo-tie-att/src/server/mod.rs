@@ -1759,6 +1759,8 @@ where
 
         let check_permissions_result = check_permissions!(self, handle, &super::FULL_WRITE_PERMISSIONS);
 
+        println!("check_permissions_result: {:?}", check_permissions_result);
+
         if let Err(e) = check_permissions_result {
             return send_error!(channel, handle, ClientPduName::PrepareWriteRequest, e);
         }
@@ -1787,9 +1789,14 @@ where
         match match self.queued_writer.process_execute(request_flag) {
             Ok(Some(iter)) => {
                 for queued_data in iter.into_iter() {
-                    check_permissions!(self, queued_data.0, &super::FULL_WRITE_PERMISSIONS)?;
+                    let permission_check = check_permissions!(self, queued_data.0, &super::FULL_WRITE_PERMISSIONS);
 
-                    self.write_att(queued_data.0, &queued_data.1).await?;
+                    if permission_check.is_ok() {
+                        match self.write_att(queued_data.0, &queued_data.1).await {
+                            Ok(_) => (),
+                            Err(e) => send_error!(channel, 0, ClientPduName::ExecuteWriteRequest, e)?,
+                        };
+                    }
                 }
 
                 Ok(())
