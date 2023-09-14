@@ -2729,15 +2729,27 @@ pub struct BasicQueuedWriter {
 }
 
 impl BasicQueuedWriter {
-    /// Create a new BasicQueuedWriter
+    /// Create a new `BasicQueuedWriter`
     ///
-    /// The input `capacity` can be used to set the initial capacity of the internal buffer.
-    pub fn new<T>(capacity: T) -> Self
-    where
-        T: Into<Option<usize>>,
-    {
+    /// This creates a `BasicQueuedWriter` with the maximum capacity for a long attribute value (512
+    /// bytes).
+    pub fn new() -> Self {
         Self {
-            data: Vec::with_capacity(capacity.into().unwrap_or_default()),
+            data: Vec::with_capacity(512),
+            state: BasicQueuedWriterState::NoQueuedWrites,
+        }
+    }
+
+    /// Create a new `BasicQueuedWriter` with a custom capacity
+    ///
+    /// This creates a `BasicQueuedWriter` with a custom capacity, but there is no limit check on
+    /// this `capacity`. It can be larger than the Bluetooth Specification defined maximum of 512
+    /// bytes for a long attribute value, or smaller than the maximum transfer size for the current
+    /// ATT bearer. However, to ensure server usability and maintain compliance, a reasonable size
+    /// in-between those two values should be used for the `capacity`.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
             state: BasicQueuedWriterState::NoQueuedWrites,
         }
     }
