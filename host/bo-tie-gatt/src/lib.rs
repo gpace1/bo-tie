@@ -3,15 +3,6 @@
 
 extern crate alloc;
 
-/// The minimum size of the ATT profile's MTU (running the GATT profile)
-///
-/// This is also the default ATT_MTU when running the GATT profile over a LE physical link.
-///
-/// # Note
-/// This value is only for 'regular' LE ATT protocol operation. This is not the same value for
-/// enhanced LE ATT or BR/EDR.
-const LE_MINIMUM_ATT_MTU: u16 = 23;
-
 /// macro to ensure that `$to` is filled only with unique items of `$from`.
 macro_rules! unique_only {
     ($to:expr, $from:expr) => {
