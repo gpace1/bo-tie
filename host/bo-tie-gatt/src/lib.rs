@@ -95,12 +95,12 @@ macro_rules! map_restrictions {
 pub mod characteristic;
 pub mod uuid;
 
-pub use bo_tie_att as att;
+use bo_tie_att as att;
 use bo_tie_att::server::QueuedWriter;
 use bo_tie_att::TransferFormatInto;
 use bo_tie_core::buffer::stack::LinearBuffer;
-pub use bo_tie_host_util::Uuid;
-pub use bo_tie_l2cap as l2cap;
+use bo_tie_host_util::Uuid;
+use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 
