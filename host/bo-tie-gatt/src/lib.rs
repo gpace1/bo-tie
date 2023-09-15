@@ -1157,11 +1157,8 @@ impl ServerBuilder {
     ///
     /// This is used to add a service to the Server. A services consists of a declaration, included
     /// services, and a number of characteristics. The return is a `ServiceBuilder` designed to walk
-    /// through the process of setting up the new service within the attributes of the (to be)
-    /// constructed GATT server.
+    /// through the process of setting up the new service.
     ///
-    /// # Service Including
-    /// Services may be included after they are put within
     /// ```
     /// # use bo_tie_gatt::characteristic::Properties;
     /// # use bo_tie_gatt::ServerBuilder;
@@ -1173,6 +1170,7 @@ impl ServerBuilder {
     /// # let characteristic_uuid = Uuid::from_u128(0xfffff);
     /// # let value = 1234;
     ///
+    /// // this adds a service with a single characteristic
     /// let service_reference = server_builder.new_service(service_uuid_1)
     ///     .add_characteristics()
     ///     .new_characteristic(|characteristic_builder| {
@@ -1190,6 +1188,7 @@ impl ServerBuilder {
     ///     .finish_service()
     ///     .as_record();
     ///
+    /// // this adds a service that includes the prior service
     /// server_builder.new_service(service_uuid_2)
     ///     .make_secondary()
     ///     .into_includes_adder()
@@ -1368,7 +1367,7 @@ where
                 Ok(bo_tie_att::server::Status::None)
             }
             att::client::ClientPduName::ExchangeMtuRequest => {
-                if self.check_mtu_request(channel, payload).await? {
+                if Self::check_mtu_request(channel, payload).await? {
                     self.server.process_parsed_att_pdu(channel, pdu_type, payload).await
                 } else {
                     Ok(bo_tie_att::server::Status::None)
@@ -1506,7 +1505,9 @@ where
             );
         }
 
-        let response = match Response::try_new(self, request.handle_range.to_range_bounds()) {
+        let maybe_response = Response::try_new(self, request.handle_range.to_range_bounds());
+
+        let response = match maybe_response {
             Err(e) => return send_error!(channel, 0, att::client::ClientPduName::ReadByGroupTypeRequest, e),
             Ok(response) => response,
         };
@@ -1535,7 +1536,6 @@ where
 
     /// Check a MTU request to ensure it does not contain a MTU less than [`LE_MINIMUM_ATT_MTU`]
     async fn check_mtu_request<T>(
-        &self,
         channel: &mut BasicFrameChannel<'_, T>,
         payload: &[u8],
     ) -> Result<bool, att::ConnectionError<T>>
@@ -2199,7 +2199,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(1.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_FIXED_CHANNEL_ID);
 
         assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
 
@@ -2221,7 +2221,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(11.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_FIXED_CHANNEL_ID);
 
         assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
 
@@ -2238,7 +2238,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(15.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_FIXED_CHANNEL_ID);
 
         // Request was made for for a attribute that was out of range
         assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
