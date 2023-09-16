@@ -1702,12 +1702,12 @@ where
 /// [`Client`]: bo_tie_att::client::Client
 pub struct Client {
     att_client: att::client::Client,
-    known_services: Vec<ServiceRecord>,
+    known_services: alloc::vec::Vec<ServiceRecord>,
 }
 
 impl Client {
     fn new(att_client: att::client::Client) -> Self {
-        let known_services = Vec::new();
+        let known_services = alloc::vec::Vec::new();
 
         Client {
             att_client,
@@ -1742,20 +1742,14 @@ impl core::ops::Deref for Client {
 /// This struct is created from the method [`query_services`]. See its documentation for details.
 pub struct ServicesDiscovery<'a> {
     client: &'a mut Client,
-    service_record_index: usize,
     current_handle: u16,
 }
 
 impl<'a> ServicesDiscovery<'a> {
     fn new(client: &'a mut Client) -> Self {
-        let service_record_index = 0;
         let current_handle = 1;
 
-        ServicesDiscovery {
-            client,
-            current_handle,
-            service_record_index,
-        }
+        ServicesDiscovery { client, current_handle }
     }
 
     /// Query the ATT Server for GATT services
@@ -1790,12 +1784,12 @@ impl<'a> ServicesDiscovery<'a> {
 
             fn process_response(
                 self,
-                b_frame: &bo_tie_l2cap::pdu::BasicFrame<Vec<u8>>,
+                b_frame: &bo_tie_l2cap::pdu::BasicFrame<alloc::vec::Vec<u8>>,
             ) -> Result<Self::Response, bo_tie_att::Error> {
                 let response = match self.response_processor.process_response(b_frame) {
                     Ok(response) => response.into_inner(),
                     Err(bo_tie_att::Error::Pdu(pdu)) => match pdu.get_parameters().error {
-                        bo_tie_att::pdu::Error::AttributeNotFound => Vec::new(),
+                        bo_tie_att::pdu::Error::AttributeNotFound => alloc::vec::Vec::new(),
                         e => return Err(e.into()),
                     },
                     Err(e) => return Err(e.into()),
