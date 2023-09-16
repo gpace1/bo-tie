@@ -1702,21 +1702,24 @@ where
 /// [`Client`]: bo_tie_att::client::Client
 pub struct Client {
     att_client: att::client::Client,
+    known_services: Vec<ServiceRecord>,
 }
 
 impl Client {
     fn new(att_client: att::client::Client) -> Self {
-        Client { att_client }
+        let known_services = Vec::new();
+
+        Client {
+            att_client,
+            known_services,
+        }
     }
 
     /// Query the services
     ///
     /// This returns a `ServicesQuery` which is used to get the services on the remote device.
-    pub fn query_services<'a, T: LogicalLink>(
-        &'a self,
-        channel: &'a mut BasicFrameChannel<'a, T>,
-    ) -> ServicesQuery<'a, T> {
-        ServicesQuery::new(channel, self)
+    pub fn query_services<'a>(&'a mut self) -> ServicesDiscovery<'a> {
+        ServicesDiscovery::new(self)
     }
 }
 
@@ -1737,110 +1740,105 @@ impl core::ops::Deref for Client {
 /// A querier for Services on a GATT server.
 ///
 /// This struct is created from the method [`query_services`]. See its documentation for details.
-pub struct ServicesQuery<'a, T: LogicalLink> {
-    channel: &'a mut BasicFrameChannel<'a, T>,
-    client: &'a Client,
-    iter: Option<alloc::vec::IntoIter<bo_tie_att::pdu::ReadGroupTypeData<Uuid>>>,
-    handle: u16,
+pub struct ServicesDiscovery<'a> {
+    client: &'a mut Client,
+    service_record_index: usize,
+    current_handle: u16,
 }
 
-impl<'a, T: LogicalLink> ServicesQuery<'a, T> {
-    fn new(channel: &'a mut BasicFrameChannel<'a, T>, client: &'a Client) -> Self {
-        let iter = None;
-        let handle = 1;
+impl<'a> ServicesDiscovery<'a> {
+    fn new(client: &'a mut Client) -> Self {
+        let service_record_index = 0;
+        let current_handle = 1;
 
-        ServicesQuery {
-            channel,
+        ServicesDiscovery {
             client,
-            iter,
-            handle,
+            current_handle,
+            service_record_index,
         }
     }
 
-    /// Send the *Read By Group Type Request* for primary services
-    async fn send_request_for_primary_services(
-        &mut self,
+    /// Query the ATT Server for GATT services
+    pub async fn query<T: LogicalLink + 'a>(
+        &'a mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
     ) -> Result<
-        Option<impl bo_tie_att::client::ResponseProcessor<Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>>,
+        impl bo_tie_att::client::ResponseProcessor<Response = Option<&'a [ServiceRecord]>> + 'a,
         bo_tie_att::ConnectionError<T>,
     > {
-        if self.handle == <u16>::MAX {
-            return Ok(None);
+        use bo_tie_att::client::ResponseProcessor;
+
+        struct QueryResponseProcessor<'a, T> {
+            discovery: &'a mut ServicesDiscovery<'a>,
+            response_processor: T,
         }
 
-        self.client
-            .att_client
-            .read_by_group_type_request(
-                self.channel,
-                self.handle..<u16>::MAX,
-                ServiceDefinition::PRIMARY_SERVICE_TYPE,
-            )
-            .await
-            .map(|rp| Some(rp))
-    }
-
-    /// Await and process the *Read By Group Type Response*
-    async fn await_response(
-        &mut self,
-        response_processor: impl bo_tie_att::client::ResponseProcessor<
-            Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>,
-        >,
-    ) -> Result<Option<bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>>, bo_tie_att::ConnectionError<T>> {
-        use bo_tie_att::pdu::Error;
-
-        let frame = self
-            .channel
-            .receive()
-            .await
-            .map_err(|e| bo_tie_att::ConnectionError::RecvError(e))?;
-
-        match response_processor.process_response(&frame) {
-            Ok(response) => Ok(Some(response)),
-            Err(bo_tie_att::Error::Pdu(pdu)) if pdu.get_parameters().error == Error::AttributeNotFound => Ok(None), // no more services
-            Err(e) => Err(e.into()),
+        impl<'a, T> QueryResponseProcessor<'a, T> {
+            fn new(discovery: &'a mut ServicesDiscovery<'a>, response_processor: T) -> Self {
+                Self {
+                    discovery,
+                    response_processor,
+                }
+            }
         }
-    }
 
-    /// Query the next Service
-    ///
-    /// This will return the next primary service on the Server. If there is no more services then
-    /// `None` is returned.
-    pub async fn query_next(&mut self) -> Result<Option<ServiceRecord>, bo_tie_att::ConnectionError<T>> {
-        loop {
-            if self.iter.is_none() {
-                let response = match self.send_request_for_primary_services().await? {
-                    None => break Ok(None),
-                    Some(processor) => match self.await_response(processor).await {
-                        Ok(None) => {
-                            // set the handle to have `send_request` always return `Ok(None)`
-                            self.handle = <u16>::MAX;
+        impl<'a, T> ResponseProcessor for QueryResponseProcessor<'a, T>
+        where
+            T: ResponseProcessor<Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>> + 'a,
+        {
+            type Response = Option<&'a [ServiceRecord]>;
 
-                            break Ok(None);
-                        } // no more services
-                        Err(e) => break Err(e),
-                        Ok(Some(response)) => response,
+            fn process_response(
+                self,
+                b_frame: &bo_tie_l2cap::pdu::BasicFrame<Vec<u8>>,
+            ) -> Result<Self::Response, bo_tie_att::Error> {
+                let response = match self.response_processor.process_response(b_frame) {
+                    Ok(response) => response.into_inner(),
+                    Err(bo_tie_att::Error::Pdu(pdu)) => match pdu.get_parameters().error {
+                        bo_tie_att::pdu::Error::AttributeNotFound => Vec::new(),
+                        e => return Err(e.into()),
                     },
+                    Err(e) => return Err(e.into()),
                 };
 
-                self.iter = response.into_inner().into_iter().into()
-            }
+                if response.is_empty() {
+                    return Ok(Some(self.discovery.client.known_services.as_slice()));
+                }
 
-            match self.iter.as_mut().and_then(|iter| iter.next()) {
-                None => self.iter = None,
-                Some(group_data) => {
-                    let record = ServiceGroupData {
+                for group_data in response {
+                    let service_group_data = ServiceGroupData {
                         is_primary: true,
                         service_handle: group_data.get_handle(),
                         end_group_handle: group_data.get_end_group_handle(),
                         service_uuid: *group_data.get_data(),
                     };
 
-                    self.handle = group_data.get_end_group_handle().checked_add(1).unwrap_or(<u16>::MAX);
+                    self.discovery.current_handle =
+                        service_group_data.end_group_handle.checked_add(1).unwrap_or(<u16>::MAX);
 
-                    break Ok(Some(ServiceRecord { group_data: record }));
+                    let record = ServiceRecord {
+                        group_data: service_group_data,
+                    };
+
+                    self.discovery.client.known_services.push(record);
+                }
+
+                if self.discovery.current_handle == <u16>::MAX {
+                    Ok(Some(self.discovery.client.known_services.as_slice()))
+                } else {
+                    Ok(None)
                 }
             }
         }
+
+        let request_future =
+            self.client
+                .att_client
+                .read_by_group_type_request(channel, self.current_handle.., uuid::PRIMARY_SERVICE);
+
+        let response_processor = request_future.await?;
+
+        Ok(QueryResponseProcessor::new(self, response_processor))
     }
 }
 
