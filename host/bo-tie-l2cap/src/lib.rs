@@ -46,6 +46,10 @@
 //! );
 //! ```
 //!
+//! [`AclULink`]: link_flavor::AclULink
+//! [`AclUExtLink`]: link_flavor::AclUExtLink,
+//! [`ApbLink`]: link_flavor::ApbLink,
+//! [`LeULink`]: link_flavor::LeULink,
 //! [`LinkFlavor`]: link_flavor::LinkFlavor
 
 #![cfg_attr(not(feature = "std"), no_std)]
