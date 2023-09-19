@@ -1715,11 +1715,74 @@ impl Client {
         }
     }
 
-    /// Query the services
+    /// Partially discover the services of the peer device
     ///
-    /// This returns a `ServicesQuery` which is used to get the services on the remote device.
-    pub fn query_services<'a>(&'a mut self) -> ServicesDiscovery<'a> {
-        ServicesDiscovery::new(self)
+    /// This sends a single read by group type request for the GATT services of the peer device.
+    /// This method may need to be repeatedly called in order to get all services from the peer.
+    /// The return is a [`ResponseProcessor`] for the read by group type response (or error) from
+    /// the peer device. When the response processor outputs `true`, then all services have been
+    /// discovered.
+    ///
+    /// ```
+    /// # use bo_tie_l2cap::LogicalLink;
+    /// # use bo_tie_l2cap::BasicFrameChannel;
+    /// # use bo_tie_gatt::Client;
+    /// # async fn test<T: LogicalLink>(mut channel: BasicFrameChannel<T>, mut client: Client) {
+    /// use bo_tie_att::client::ResponseProcessor;
+    ///
+    /// loop {
+    ///     let query_next = client.partial_discovery(&mut channel)
+    ///         .await
+    ///         .expect("failed to send request");
+    ///
+    ///     let response = channel.receive()
+    ///         .await
+    ///         .expect("failed to receive response");
+    ///
+    ///     // When true is returned by `process_response`
+    ///     // then all services were discovered on the
+    ///     // peer device.
+    ///     if query_next.process_response(&response)
+    ///         .expect("unexpected response")
+    ///     {
+    ///         break;
+    ///     }
+    /// }
+    ///
+    /// let services = client.get_known_services();
+    /// # }
+    /// ```
+    pub async fn partial_discovery<'a, T: LogicalLink>(
+        &'a mut self,
+        channel: &mut BasicFrameChannel<'_, T>,
+    ) -> Result<QueryResponseProcessor<'a>, bo_tie_att::ConnectionError<T>> {
+        let start_handle = self
+            .known_services
+            .last()
+            .map(|last| last.get_range().end().checked_add(1).unwrap_or(<u16>::MAX))
+            .unwrap_or(1);
+
+        let request_future = self
+            .att_client
+            .read_by_group_type_request(channel, start_handle.., uuid::PRIMARY_SERVICE);
+
+        let response_processor = request_future.await?;
+
+        Ok(QueryResponseProcessor {
+            client: self,
+            response_processor,
+        })
+    }
+
+    /// Get the discovered services
+    ///
+    /// This returns the services that were discovered on the remote's Attribute server.
+    ///
+    /// # Note
+    /// Any services that have yet to be discovered must be discovered via the method
+    /// `partial_discover`
+    pub fn get_known_services(&self) -> &[ServiceRecord] {
+        &self.known_services
     }
 }
 
@@ -1737,102 +1800,52 @@ impl core::ops::Deref for Client {
     }
 }
 
-/// A querier for Services on a GATT server.
-///
-/// This struct is created from the method [`query_services`]. See its documentation for details.
-pub struct ServicesDiscovery<'a> {
+pub struct QueryResponseProcessor<'a> {
     client: &'a mut Client,
-    current_handle: u16,
+    response_processor: bo_tie_att::client::response_processor::ReadByGroupTypeResponseProcessor<Uuid>,
 }
 
-impl<'a> ServicesDiscovery<'a> {
-    fn new(client: &'a mut Client) -> Self {
-        let current_handle = 1;
+impl bo_tie_att::client::ResponseProcessor for QueryResponseProcessor<'_> {
+    type Response = bool;
 
-        ServicesDiscovery { client, current_handle }
-    }
+    fn process_response(
+        self,
+        b_frame: &bo_tie_l2cap::pdu::BasicFrame<alloc::vec::Vec<u8>>,
+    ) -> Result<Self::Response, bo_tie_att::Error> {
+        let response = match self.response_processor.process_response(b_frame) {
+            Ok(response) => response.into_inner(),
+            Err(bo_tie_att::Error::Pdu(pdu)) => match pdu.get_parameters().error {
+                bo_tie_att::pdu::Error::AttributeNotFound => alloc::vec::Vec::new(),
+                e => return Err(e.into()),
+            },
+            Err(e) => return Err(e.into()),
+        };
 
-    /// Query the ATT Server for GATT services
-    pub async fn query<T: LogicalLink + 'a>(
-        &'a mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
-    ) -> Result<
-        impl bo_tie_att::client::ResponseProcessor<Response = Option<&'a [ServiceRecord]>> + 'a,
-        bo_tie_att::ConnectionError<T>,
-    > {
-        use bo_tie_att::client::ResponseProcessor;
-
-        struct QueryResponseProcessor<'a, T> {
-            discovery: &'a mut ServicesDiscovery<'a>,
-            response_processor: T,
+        if response.is_empty() {
+            return Ok(true);
         }
 
-        impl<'a, T> QueryResponseProcessor<'a, T> {
-            fn new(discovery: &'a mut ServicesDiscovery<'a>, response_processor: T) -> Self {
-                Self {
-                    discovery,
-                    response_processor,
-                }
+        for group_data in response {
+            let service_group_data = ServiceGroupData {
+                is_primary: true,
+                service_handle: group_data.get_handle(),
+                end_group_handle: group_data.get_end_group_handle(),
+                service_uuid: *group_data.get_data(),
+            };
+
+            let record = ServiceRecord {
+                group_data: service_group_data,
+            };
+
+            self.client.known_services.push(record);
+
+            if service_group_data.end_group_handle == <u16>::MAX {
+                // reached the last handle
+                return Ok(true);
             }
         }
 
-        impl<'a, T> ResponseProcessor for QueryResponseProcessor<'a, T>
-        where
-            T: ResponseProcessor<Response = bo_tie_att::pdu::ReadByGroupTypeResponse<Uuid>> + 'a,
-        {
-            type Response = Option<&'a [ServiceRecord]>;
-
-            fn process_response(
-                self,
-                b_frame: &bo_tie_l2cap::pdu::BasicFrame<alloc::vec::Vec<u8>>,
-            ) -> Result<Self::Response, bo_tie_att::Error> {
-                let response = match self.response_processor.process_response(b_frame) {
-                    Ok(response) => response.into_inner(),
-                    Err(bo_tie_att::Error::Pdu(pdu)) => match pdu.get_parameters().error {
-                        bo_tie_att::pdu::Error::AttributeNotFound => alloc::vec::Vec::new(),
-                        e => return Err(e.into()),
-                    },
-                    Err(e) => return Err(e.into()),
-                };
-
-                if response.is_empty() {
-                    return Ok(Some(self.discovery.client.known_services.as_slice()));
-                }
-
-                for group_data in response {
-                    let service_group_data = ServiceGroupData {
-                        is_primary: true,
-                        service_handle: group_data.get_handle(),
-                        end_group_handle: group_data.get_end_group_handle(),
-                        service_uuid: *group_data.get_data(),
-                    };
-
-                    self.discovery.current_handle =
-                        service_group_data.end_group_handle.checked_add(1).unwrap_or(<u16>::MAX);
-
-                    let record = ServiceRecord {
-                        group_data: service_group_data,
-                    };
-
-                    self.discovery.client.known_services.push(record);
-                }
-
-                if self.discovery.current_handle == <u16>::MAX {
-                    Ok(Some(self.discovery.client.known_services.as_slice()))
-                } else {
-                    Ok(None)
-                }
-            }
-        }
-
-        let request_future =
-            self.client
-                .att_client
-                .read_by_group_type_request(channel, self.current_handle.., uuid::PRIMARY_SERVICE);
-
-        let response_processor = request_future.await?;
-
-        Ok(QueryResponseProcessor::new(self, response_processor))
+        Ok(false)
     }
 }
 
