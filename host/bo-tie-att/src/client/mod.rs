@@ -1,10 +1,19 @@
 //! Attribute Client Implementation
 
+pub mod response_processor;
+
+use crate::client::response_processor::{
+    ExchangeMtuResponseProcessor, ExecuteWriteResponseProcessor, FindByTypeValueResponseProcessor,
+    FindInformationResponseProcessor, PrepareWriteResponseProcessor, ReadBlobResponseProcessor,
+    ReadByGroupTypeResponseProcessor, ReadByTypeResponseProcessor, ReadMultipleResponseProcessor,
+    ReadResponseProcessor, WriteResponseProcessor,
+};
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
 use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::channel::id::ChannelIdentifier;
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink};
+pub use response_processor::ResponseProcessor;
 
 /// Attribute PDUs sent by the client
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
@@ -97,37 +106,6 @@ impl core::fmt::Display for ClientPduName {
             ClientPduName::ExecuteWriteRequest => write!(f, "Execute Write Request"),
             ClientPduName::HandleValueConfirmation => write!(f, "Handle Value Confirmation"),
             ClientPduName::SignedWriteCommand => write!(f, "Signed Write Command"),
-        }
-    }
-}
-
-#[must_use = "ATT requests require processing of the server's response"]
-pub trait ResponseProcessor {
-    type Response;
-
-    fn process_response(self, b_frame: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error>;
-}
-
-/// Process a server response of a client request
-struct ResponseProcessorCheck<F, R>(F)
-where
-    F: FnOnce(&[u8]) -> Result<R, super::Error>;
-
-impl<F, R> ResponseProcessor for ResponseProcessorCheck<F, R>
-where
-    F: FnOnce(&[u8]) -> Result<R, super::Error>,
-{
-    type Response = R;
-
-    /// Process the response
-    ///
-    /// The input `acl_data` should be the response from the server to the request that generated
-    /// this `ResponseProcessor`.
-    fn process_response(self, acl_data: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Self::Response, super::Error> {
-        if acl_data.get_channel_id() == super::L2CAP_FIXED_CHANNEL_ID {
-            self.0(acl_data.get_payload())
-        } else {
-            Err(super::Error::IncorrectChannelId(acl_data.get_channel_id()))
         }
     }
 }
@@ -371,35 +349,6 @@ impl Client {
         Some(self.mtu as u16)
     }
 
-    fn process_raw_data<P>(expected_response: ServerPduName, bytes: &[u8]) -> Result<P, super::Error>
-    where
-        P: TransferFormatTryFrom + pdu::ExpectedOpcode,
-    {
-        if bytes.len() == 0 {
-            Err(super::Error::Empty)
-        } else if expected_response.is(bytes) {
-            let pdu: pdu::Pdu<P> = TransferFormatTryFrom::try_from(&bytes)?;
-
-            Ok(pdu.into_parameters())
-        } else if ServerPduName::ErrorResponse.is(bytes) {
-            let err_pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&bytes)?;
-
-            Err(err_pdu.into())
-        } else {
-            match ServerPduName::try_from(bytes[0]) {
-                Ok(val) => Err(super::Error::UnexpectedServerPdu(val)),
-                Err(_) => Err(TransferFormatError::from(format!(
-                    "Received Unknown PDU '{:#x}', \
-                            expected '{} ({:#x})'",
-                    bytes[0],
-                    expected_response,
-                    Into::<u8>::into(expected_response)
-                ))
-                .into()),
-            }
-        }
-    }
-
     async fn send<T, P>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
@@ -432,11 +381,11 @@ impl Client {
     /// `ConnectFixedClient` that created this `Client`.
     ///
     /// The new MTU is output by the returned `ResponseProcessor`, but it can also .
-    pub async fn exchange_mtu_request<T>(
-        &mut self,
+    pub async fn exchange_mtu_request<'a, T>(
+        &'a mut self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
         mtu: u16,
-    ) -> Result<impl ResponseProcessor<Response = ()> + '_, super::ConnectionError<T>>
+    ) -> Result<ExchangeMtuResponseProcessor<'a>, super::ConnectionError<T>>
     where
         T: LogicalLink,
     {
@@ -445,13 +394,7 @@ impl Client {
         } else {
             self.send(connection_channel, &pdu::exchange_mtu_request(mtu)).await?;
 
-            Ok(ResponseProcessorCheck(move |data| {
-                let response: pdu::MtuResponse = Self::process_raw_data(ServerPduName::ExchangeMTUResponse, data)?;
-
-                self.mtu = core::cmp::min(mtu, response.0).into();
-
-                Ok(())
-            }))
+            Ok(ExchangeMtuResponseProcessor::new(self, mtu))
         }
     }
 
@@ -464,7 +407,7 @@ impl Client {
         &self,
         channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
-    ) -> Result<impl ResponseProcessor<Response = pdu::FormattedHandlesWithType>, super::ConnectionError<T>>
+    ) -> Result<FindInformationResponseProcessor, super::ConnectionError<T>>
     where
         T: LogicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
@@ -475,9 +418,7 @@ impl Client {
 
         self.send(channel, &pdu::find_information_request(handle_range)).await?;
 
-        Ok(ResponseProcessorCheck(|data| {
-            Self::process_raw_data(ServerPduName::FindInformationResponse, data)
-        }))
+        Ok(FindInformationResponseProcessor)
     }
 
     /// Find by type and value request
@@ -495,7 +436,7 @@ impl Client {
         handle_range: R,
         uuid: crate::Uuid,
         value: D,
-    ) -> Result<impl ResponseProcessor<Response = Vec<pdu::TypeValueResponse>>, super::ConnectionError<T>>
+    ) -> Result<FindByTypeValueResponseProcessor, super::ConnectionError<T>>
     where
         T: LogicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
@@ -511,9 +452,7 @@ impl Client {
             Ok(pdu) => {
                 self.send(connection_channel, &pdu).await?;
 
-                Ok(ResponseProcessorCheck(|d| {
-                    Self::process_raw_data(ServerPduName::FindByTypeValueResponse, d)
-                }))
+                Ok(FindByTypeValueResponseProcessor)
             }
             Err(_) => Err(super::Error::Other("Cannot convert UUID to a 16 bit short version").into()),
         }
@@ -529,7 +468,7 @@ impl Client {
         connection_channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
         attr_type: crate::Uuid,
-    ) -> Result<impl ResponseProcessor<Response = Vec<pdu::ReadTypeResponse<D>>>, super::ConnectionError<T>>
+    ) -> Result<ReadByTypeResponseProcessor<D>, super::ConnectionError<T>>
     where
         T: LogicalLink,
         R: Into<pdu::HandleRange>,
@@ -544,20 +483,18 @@ impl Client {
         self.send(connection_channel, &pdu::read_by_type_request(handle_range, attr_type))
             .await?;
 
-        Ok(ResponseProcessorCheck(|d| {
-            Self::process_raw_data(ServerPduName::ReadByTypeResponse, d).map(|rsp: pdu::ReadByTypeResponse<D>| rsp.0)
-        }))
+        Ok(ReadByTypeResponseProcessor::new())
     }
 
-    /// Read request
+    /// Send a read request
     ///
     /// # Panic
-    /// A handle cannot be the reserved handle 0x0000
+    /// The input `handle` cannot be the reserved handle 0x0000
     pub async fn read_request<T, D>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
-    ) -> Result<impl ResponseProcessor<Response = D>, super::ConnectionError<T>>
+    ) -> Result<ReadResponseProcessor<D>, super::ConnectionError<T>>
     where
         T: LogicalLink,
         D: TransferFormatTryFrom,
@@ -568,9 +505,7 @@ impl Client {
 
         self.send(connection_channel, &pdu::read_request(handle)).await?;
 
-        Ok(ResponseProcessorCheck(|d| {
-            Self::process_raw_data(ServerPduName::ReadResponse, d).map(|rsp: pdu::ReadResponse<D>| rsp.0)
-        }))
+        Ok(ReadResponseProcessor::new())
     }
 
     /// Read blob request
@@ -636,7 +571,7 @@ impl Client {
         connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         offset: u16,
-    ) -> Result<impl ResponseProcessor<Response = Option<ReadBlob>>, super::ConnectionError<T>>
+    ) -> Result<ReadBlobResponseProcessor, super::ConnectionError<T>>
     where
         T: LogicalLink,
     {
@@ -647,45 +582,7 @@ impl Client {
         self.send(connection_channel, &pdu::read_blob_request(handle, offset))
             .await?;
 
-        Ok(ResponseProcessorCheck(move |bytes| {
-            let expected_response = ServerPduName::ReadBlobResponse;
-
-            if bytes.len() == 0 {
-                Err(super::Error::Empty)
-            } else if expected_response.is(bytes) {
-                let pdu: pdu::Pdu<pdu::ReadBlobResponse> = TransferFormatTryFrom::try_from(&bytes)?;
-
-                let parameters = pdu.into_parameters();
-
-                let blob = parameters.into_inner();
-
-                Ok(Some(ReadBlob {
-                    handle,
-                    offset: offset.into(),
-                    blob,
-                }))
-            } else if ServerPduName::ErrorResponse.is(bytes) {
-                let err_pdu: pdu::Pdu<pdu::ErrorResponse> = TransferFormatTryFrom::try_from(&bytes)?;
-
-                if let pdu::Error::InvalidOffset = err_pdu.get_parameters().error {
-                    Ok(None)
-                } else {
-                    Err(err_pdu.into())
-                }
-            } else {
-                match ServerPduName::try_from(bytes[0]) {
-                    Ok(val) => Err(super::Error::UnexpectedServerPdu(val)),
-                    Err(_) => Err(TransferFormatError::from(format!(
-                        "Received Unknown PDU '{:#x}', \
-                            expected '{} ({:#x})'",
-                        bytes[0],
-                        expected_response,
-                        Into::<u8>::into(expected_response)
-                    ))
-                    .into()),
-                }
-            }
-        }))
+        Ok(ReadBlobResponseProcessor::new(handle, offset))
     }
 
     /// Read multiple handles
@@ -720,14 +617,7 @@ impl Client {
         self.send(connection_channel, &pdu::read_multiple_request(handles)?)
             .await?;
 
-        Ok(ResponseProcessorCheck(move |d| {
-            let read_multiple_response: pdu::ReadMultipleResponse =
-                Self::process_raw_data(ServerPduName::ReadMultipleResponse, d)?;
-
-            let read_multiple = ReadMultiple::new(att_count, read_multiple_response.0);
-
-            Ok(read_multiple)
-        }))
+        Ok(ReadMultipleResponseProcessor::new(att_count))
     }
 
     /// Read by group type
@@ -739,7 +629,7 @@ impl Client {
         connection_channel: &mut BasicFrameChannel<'_, T>,
         handle_range: R,
         group_type: crate::Uuid,
-    ) -> Result<impl ResponseProcessor<Response = pdu::ReadByGroupTypeResponse<D>>, super::ConnectionError<T>>
+    ) -> Result<ReadByGroupTypeResponseProcessor<D>, super::ConnectionError<T>>
     where
         T: LogicalLink,
         R: Into<pdu::HandleRange> + core::ops::RangeBounds<u16>,
@@ -755,9 +645,7 @@ impl Client {
         )
         .await?;
 
-        Ok(ResponseProcessorCheck(|d| {
-            Self::process_raw_data(ServerPduName::ReadByGroupTypeResponse, d)
-        }))
+        Ok(ReadByGroupTypeResponseProcessor::new())
     }
 
     /// Request to write data to a handle on the server
@@ -772,7 +660,7 @@ impl Client {
         connection_channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
         data: D,
-    ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<T>>
+    ) -> Result<WriteResponseProcessor, super::ConnectionError<T>>
     where
         T: LogicalLink,
         D: TransferFormatTryFrom + TransferFormatInto,
@@ -783,9 +671,7 @@ impl Client {
 
         self.send(connection_channel, &pdu::write_request(handle, data)).await?;
 
-        Ok(ResponseProcessorCheck(|d| {
-            Self::process_raw_data(ServerPduName::WriteResponse, d).map(|_: pdu::WriteResponse| ())
-        }))
+        Ok(WriteResponseProcessor)
     }
 
     /// Command the server to write data to a handle
@@ -823,31 +709,27 @@ impl Client {
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
         pwr: pdu::Pdu<pdu::PreparedWriteRequest<'_>>,
-    ) -> Result<impl ResponseProcessor<Response = pdu::PreparedWriteResponse>, super::ConnectionError<T>>
+    ) -> Result<PrepareWriteResponseProcessor, super::ConnectionError<T>>
     where
         T: LogicalLink,
     {
         self.send(connection_channel, &pwr).await?;
 
-        Ok(ResponseProcessorCheck(|d| {
-            Self::process_raw_data(ServerPduName::PrepareWriteResponse, d)
-        }))
+        Ok(PrepareWriteResponseProcessor)
     }
 
     pub async fn execute_write_request<T>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
         execute: pdu::ExecuteWriteFlag,
-    ) -> Result<impl ResponseProcessor<Response = ()>, super::ConnectionError<T>>
+    ) -> Result<ExecuteWriteResponseProcessor, super::ConnectionError<T>>
     where
         T: LogicalLink,
     {
         self.send(connection_channel, &pdu::execute_write_request(execute))
             .await?;
 
-        Ok(ResponseProcessorCheck(|d| {
-            Self::process_raw_data(ServerPduName::ExecuteWriteResponse, d).map(|_: pdu::ExecuteWriteResponse| ())
-        }))
+        Ok(ExecuteWriteResponseProcessor)
     }
 
     /// Send a custom command to the server
@@ -855,6 +737,10 @@ impl Client {
     /// This can be used by higher layer protocols to send a command to the server that is not
     /// implemented at the ATT protocol level. However, if the provided pdu contains an opcode
     /// already used by the ATT protocol, then an error is returned.
+    ///
+    /// # Note
+    /// This is not supported by the Specification, and should generally only be used by
+    /// applications deliberately out of spec (tooling, debugging, ect.).
     pub async fn custom_command<T, D>(
         &self,
         connection_channel: &mut BasicFrameChannel<'_, T>,
