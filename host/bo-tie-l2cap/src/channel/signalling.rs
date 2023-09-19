@@ -3,10 +3,8 @@
 use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 use crate::channel::shared::{ReceiveDataProcessor, UnusedChannelResponse};
 use crate::channel::{BasicHeadedFragment, ConnectionChannel, CreditBasedChannel, MaybeRecvError};
-use crate::pdu::control_frame::RecombineError;
-use crate::pdu::{
-    ControlFrame, FragmentIterator, FragmentL2capPdu, L2capFragment, RecombineL2capPdu, RecombinePayloadIncrementally,
-};
+use crate::pdu::control_frame::{ControlFrame, RecombineError};
+use crate::pdu::{FragmentIterator, FragmentL2capPdu, L2capFragment, RecombineL2capPdu, RecombinePayloadIncrementally};
 use crate::signals::packets::{
     CommandRejectResponse, DisconnectRequest, DisconnectResponse, FlowControlCreditInd, LeCreditBasedConnectionRequest,
     LeCreditBasedConnectionResponse, LeCreditMps, LeCreditMtu, Signal, SignalCode,
@@ -109,9 +107,9 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         }
     }
 
-    async fn send_inner(
+    async fn send_inner<T: FragmentL2capPdu>(
         &mut self,
-        c_frame: impl FragmentL2capPdu,
+        c_frame: T,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let mut is_first = true;
 
@@ -132,7 +130,10 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
     ///
     /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
     /// may be called by protocol at a higher layer than L2CAP.
-    async fn send(&mut self, c_frame: impl FragmentL2capPdu) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+    async fn send<T: FragmentL2capPdu>(
+        &mut self,
+        c_frame: T,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let output = self.send_inner(c_frame).await;
 
         self.logical_link.get_shared_link().clear_owner();
@@ -230,7 +231,7 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
 
         let disconnect_request = DisconnectRequest::new(NonZeroU8::new(1).unwrap(), destination_id, source_id);
 
-        let c_frame = disconnect_request.as_control_frame(self.channel_id);
+        let c_frame = disconnect_request.into_control_frame(self.channel_id);
 
         self.send(c_frame).await
     }
@@ -255,7 +256,7 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
 
         let credit_ind = FlowControlCreditInd::new_le(NonZeroU8::new(1).unwrap(), dyn_cid, credits);
 
-        let c_frame = credit_ind.as_control_frame(self.channel_id);
+        let c_frame = credit_ind.into_control_frame(self.channel_id);
 
         self.send(c_frame).await
     }
@@ -268,11 +269,11 @@ impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
     /// connection is not completed until a response is received via the method [`receive`].
     pub async fn init_le_credit_connection(
         &mut self,
-        request: &LeCreditBasedConnectionRequest,
+        request: LeCreditBasedConnectionRequest,
     ) -> Result<(), P::SendErr> {
         self.awaiting_response = true;
 
-        let control_frame = request.as_control_frame(self.channel_id);
+        let control_frame = request.into_control_frame(self.channel_id);
 
         self.send(control_frame).await
     }
@@ -640,7 +641,7 @@ impl<T> Request<T> {
     {
         let rejection = CommandRejectResponse::new_command_not_understood(self.request.get_identifier());
 
-        let c_frame = rejection.as_control_frame(signalling_channel.channel_id);
+        let c_frame = rejection.into_control_frame(signalling_channel.channel_id);
 
         signalling_channel.send(c_frame).await
     }
@@ -671,7 +672,7 @@ impl Request<CommandRejectResponse> {
         self,
         signalling_channel: &mut SignallingChannel<'_, L>,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let c_frame = self.request.as_control_frame(signalling_channel.channel_id);
+        let c_frame = self.request.into_control_frame(signalling_channel.channel_id);
 
         signalling_channel.send(c_frame).await
     }
@@ -719,7 +720,7 @@ impl Request<DisconnectRequest> {
             source_cid: self.request.source_cid,
         };
 
-        let c_frame = response.as_control_frame(signalling_channel.channel_id);
+        let c_frame = response.into_control_frame(signalling_channel.channel_id);
 
         signalling_channel.send(c_frame).await
     }
@@ -761,7 +762,7 @@ impl Request<LeCreditBasedConnectionRequest> {
         let response = LeCreditBasedConnectionResponse::new_rejected(self.request.identifier, reason);
 
         signal_channel
-            .send(response.as_control_frame(signal_channel.channel_id))
+            .send(response.into_control_frame(signal_channel.channel_id))
             .await
     }
 }
@@ -830,7 +831,7 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
         };
 
         signals_channel
-            .send(response.as_control_frame(signals_channel.channel_id))
+            .send(response.into_control_frame(signals_channel.channel_id))
             .await?;
 
         let this_channel_id = ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.destination_dyn_cid));

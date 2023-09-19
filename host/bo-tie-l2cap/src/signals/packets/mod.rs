@@ -1,7 +1,9 @@
 //! Definitions of L2CAP signaling packets
 
+mod iter;
+
 use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
-use crate::pdu::{ControlFrame, FragmentL2capPdu};
+use crate::pdu::control_frame::ControlFrame;
 use crate::signals::{SignalError, TryIntoSignal};
 use core::fmt::{self, Display, Formatter};
 use core::num::NonZeroU8;
@@ -45,6 +47,7 @@ macro_rules! max_u16 {
 
     ($( #[ $def_doc:meta ], )* ; $( #[ $new_doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
         $( # [ $def_doc ] )*
+        #[derive(Clone, Copy, Debug)]
         pub struct $name {
             val: u16,
         }
@@ -507,8 +510,8 @@ impl CommandRejectResponse {
     ///
     /// # Panic
     /// `channel_id` can only be a signalling channel
-    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new(IntoCmdRejectRspIter(self), channel_id)
+    pub(crate) fn into_control_frame(self, channel_id: ChannelIdentifier) -> ControlFrame<iter::CmdRejectRspIter> {
+        ControlFrame::new(iter::CmdRejectRspIter::new(self), channel_id)
     }
 
     /// Try to create a `CommandRejectResponse` from raw L2CAP data.
@@ -585,64 +588,10 @@ impl TryIntoSignal for CommandRejectResponse {
     }
 }
 
-struct IntoCmdRejectRspIter<'a>(&'a CommandRejectResponse);
-
-impl<'a> IntoIterator for IntoCmdRejectRspIter<'a> {
-    type Item = u8;
-    type IntoIter = CmdRejectRspIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        CmdRejectRspIter::new(self.0)
-    }
-}
-
-struct CmdRejectRspIter<'a> {
-    reject: &'a CommandRejectResponse,
-    pos: usize,
-}
-
-impl<'a> CmdRejectRspIter<'a> {
-    fn new(reject: &'a CommandRejectResponse) -> Self {
-        let pos = 0;
-
-        CmdRejectRspIter { reject, pos }
-    }
-}
-
-impl Iterator for CmdRejectRspIter<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self.pos {
-            0 => Some(CommandRejectResponse::CODE),
-            1 => Some(self.reject.identifier.get()),
-
-            // using `to_le_bytes` here is kinda dirty without
-            // converting to u16, but the logic is the same.
-            2 => self.reject.data.len().to_le_bytes().get(0).copied(),
-            3 => self.reject.data.len().to_le_bytes().get(1).copied(),
-            4 => self.reject.reason.into_val().to_le_bytes().get(0).copied(),
-            5 => self.reject.reason.into_val().to_le_bytes().get(1).copied(),
-            _ => self.reject.data.iter_pos(self.pos - 6),
-        };
-
-        self.pos += 1;
-
-        ret
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = (6 + self.reject.data.len()).checked_sub(self.pos).unwrap_or_default();
-
-        (size, Some(size))
-    }
-}
-
-impl ExactSizeIterator for CmdRejectRspIter<'_> {}
-
 /// Disconnection Request Signal
 ///
 /// This signal is used for terminating a dynamically allocated L2CAP channel
+#[derive(Clone, Copy, Debug)]
 pub struct DisconnectRequest {
     pub identifier: NonZeroU8,
     pub destination_cid: ChannelIdentifier,
@@ -675,8 +624,8 @@ impl DisconnectRequest {
     ///
     /// # Panic
     /// `channel_id` can only be a signalling channel
-    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new(IntoDisconnectRequestIter(self), channel_id)
+    pub(crate) fn into_control_frame(self, channel_id: ChannelIdentifier) -> ControlFrame<iter::DisconnectRequestIter> {
+        ControlFrame::new(iter::DisconnectRequestIter::new(self), channel_id)
     }
 
     /// Try to create a `CommandRejectResponse` from raw L2CAP data.
@@ -752,66 +701,10 @@ impl TryIntoSignal for DisconnectRequest {
     }
 }
 
-struct IntoDisconnectRequestIter<'a>(&'a DisconnectRequest);
-
-impl<'a> IntoIterator for IntoDisconnectRequestIter<'a> {
-    type Item = u8;
-    type IntoIter = DisconnectRequestIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        DisconnectRequestIter::new(self.0)
-    }
-}
-
-struct DisconnectRequestIter<'a> {
-    request: &'a DisconnectRequest,
-    pos: usize,
-}
-
-impl<'a> DisconnectRequestIter<'a> {
-    fn new(request: &'a DisconnectRequest) -> Self {
-        let pos = 0;
-
-        DisconnectRequestIter { request, pos }
-    }
-}
-
-impl Iterator for DisconnectRequestIter<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self.pos {
-            0 => Some(DisconnectRequest::CODE),
-            1 => Some(self.request.identifier.get()),
-
-            // using `to_le_bytes` here is kinda dirty without
-            // converting to u16, but the logic is the same.
-            2 => 4u16.to_le_bytes().get(0).copied(),
-            3 => 4u16.to_le_bytes().get(1).copied(),
-            4 => self.request.destination_cid.to_val().to_le_bytes().get(0).copied(),
-            5 => self.request.destination_cid.to_val().to_le_bytes().get(1).copied(),
-            6 => self.request.source_cid.to_val().to_le_bytes().get(0).copied(),
-            7 => self.request.source_cid.to_val().to_le_bytes().get(1).copied(),
-            _ => None,
-        };
-
-        self.pos += 1;
-
-        ret
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = 8usize.checked_sub(self.pos).unwrap_or_default();
-
-        (size, Some(size))
-    }
-}
-
-impl ExactSizeIterator for DisconnectRequestIter<'_> {}
-
 /// Disconnection Response Signal
 ///
 /// This signal is used for terminating a dynamically allocated L2CAP channel
+#[derive(Clone, Copy, Debug)]
 pub struct DisconnectResponse {
     pub identifier: NonZeroU8,
     pub destination_cid: ChannelIdentifier,
@@ -825,8 +718,11 @@ impl DisconnectResponse {
     ///
     /// # Panic
     /// `channel_id` can only be a signalling channel
-    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new(IntoDisconnectResponseIter(self), channel_id)
+    pub(crate) fn into_control_frame(
+        self,
+        channel_id: ChannelIdentifier,
+    ) -> ControlFrame<iter::DisconnectResponseIter> {
+        ControlFrame::new(iter::DisconnectResponseIter::new(self), channel_id)
     }
 
     /// Try to create a `CommandRejectResponse` from raw L2CAP data.
@@ -902,63 +798,6 @@ impl TryIntoSignal for DisconnectResponse {
     }
 }
 
-struct IntoDisconnectResponseIter<'a>(&'a DisconnectResponse);
-
-impl<'a> IntoIterator for IntoDisconnectResponseIter<'a> {
-    type Item = u8;
-    type IntoIter = DisconnectResponseIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        DisconnectResponseIter::new(self.0)
-    }
-}
-
-struct DisconnectResponseIter<'a> {
-    request: &'a DisconnectResponse,
-    pos: usize,
-}
-
-impl<'a> DisconnectResponseIter<'a> {
-    fn new(request: &'a DisconnectResponse) -> Self {
-        let pos = 0;
-
-        DisconnectResponseIter { request, pos }
-    }
-}
-
-impl Iterator for DisconnectResponseIter<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self.pos {
-            0 => Some(DisconnectRequest::CODE),
-            1 => Some(self.request.identifier.get()),
-
-            // using `to_le_bytes` here is kinda dirty without
-            // converting to u16, but the logic is the same.
-            2 => 4u16.to_le_bytes().get(0).copied(),
-            3 => 4u16.to_le_bytes().get(1).copied(),
-            4 => self.request.destination_cid.to_val().to_le_bytes().get(0).copied(),
-            5 => self.request.destination_cid.to_val().to_le_bytes().get(1).copied(),
-            6 => self.request.source_cid.to_val().to_le_bytes().get(0).copied(),
-            7 => self.request.source_cid.to_val().to_le_bytes().get(1).copied(),
-            _ => None,
-        };
-
-        self.pos += 1;
-
-        ret
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = 8usize.checked_sub(self.pos).unwrap_or_default();
-
-        (size, Some(size))
-    }
-}
-
-impl ExactSizeIterator for DisconnectResponseIter<'_> {}
-
 /// Simplified Protocol/Service Multiplexer
 ///
 /// This is used to label the kind of L2CAP credit based connection being made. Some codes are fixed
@@ -1022,6 +861,7 @@ max_u16!(#[doc = "Credit based connection maximum PDU payload size"], LeCreditMp
 max_u16!(#[doc = "Credit based connection maximum transmission size"], LeCreditMtu, 23);
 
 /// LE credit based connection request
+#[derive(Clone, Copy, Debug)]
 pub struct LeCreditBasedConnectionRequest {
     pub identifier: NonZeroU8,
     pub spsm: SimplifiedProtocolServiceMultiplexer,
@@ -1045,8 +885,8 @@ impl LeCreditBasedConnectionRequest {
     ///
     /// # Panic
     /// `channel_id` can only be a signalling channel
-    pub fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new(IntoLeCreditRequestIter(self), channel_id)
+    pub fn into_control_frame(self, channel_id: ChannelIdentifier) -> ControlFrame<iter::LeCreditRequestIter> {
+        ControlFrame::new(iter::LeCreditRequestIter::new(self), channel_id)
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
@@ -1054,7 +894,7 @@ impl LeCreditBasedConnectionRequest {
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        crate::pdu::ControlFrame::try_from_slice::<L>(c_frame)
+        ControlFrame::try_from_slice::<L>(c_frame)
     }
 }
 
@@ -1156,66 +996,6 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
     }
 }
 
-struct IntoLeCreditRequestIter<'a>(&'a LeCreditBasedConnectionRequest);
-
-impl<'a> IntoIterator for IntoLeCreditRequestIter<'a> {
-    type Item = u8;
-    type IntoIter = LeCreditRequestIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        LeCreditRequestIter::new(self.0)
-    }
-}
-
-struct LeCreditRequestIter<'a> {
-    req: &'a LeCreditBasedConnectionRequest,
-    pos: usize,
-}
-
-impl<'a> LeCreditRequestIter<'a> {
-    fn new(req: &'a LeCreditBasedConnectionRequest) -> Self {
-        let pos = 0;
-
-        LeCreditRequestIter { req, pos }
-    }
-}
-
-impl Iterator for LeCreditRequestIter<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self.pos {
-            0 => Some(LeCreditBasedConnectionRequest::CODE),
-            1 => Some(self.req.identifier.get()),
-            2 => Some(10),
-            3 => Some(0),
-            4 => self.req.spsm.0.to_le_bytes().get(0).copied(),
-            5 => self.req.spsm.0.to_le_bytes().get(1).copied(),
-            6 => self.req.get_source_cid().to_val().to_le_bytes().get(0).copied(),
-            7 => self.req.get_source_cid().to_val().to_le_bytes().get(1).copied(),
-            8 => self.req.mtu.to_le_bytes().get(0).copied(),
-            9 => self.req.mtu.to_le_bytes().get(1).copied(),
-            10 => self.req.mps.to_le_bytes().get(0).copied(),
-            11 => self.req.mps.to_le_bytes().get(1).copied(),
-            12 => self.req.initial_credits.to_le_bytes().get(0).copied(),
-            13 => self.req.initial_credits.to_le_bytes().get(1).copied(),
-            _ => None,
-        };
-
-        self.pos += 1;
-
-        ret
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = 14usize.checked_sub(self.pos).unwrap_or_default();
-
-        (size, Some(size))
-    }
-}
-
-impl ExactSizeIterator for LeCreditRequestIter<'_> {}
-
 /// Errors for the *result* field of a [`LeCreditBasedConnectionResponse`]
 ///
 /// These are the errors that are sent in response to
@@ -1274,6 +1054,7 @@ impl LeCreditBasedConnectionResponseError {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct LeCreditBasedConnectionResponse {
     pub identifier: NonZeroU8,
     pub destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
@@ -1314,8 +1095,8 @@ impl LeCreditBasedConnectionResponse {
     ///
     /// # Panic
     /// `channel_id` can only be a signalling channel
-    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new(IntoLeCreditResponseIter(self), channel_id)
+    pub(crate) fn into_control_frame(self, channel_id: ChannelIdentifier) -> ControlFrame<iter::LeCreditResponseIter> {
+        ControlFrame::new(iter::LeCreditResponseIter::new(self), channel_id)
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
@@ -1429,79 +1210,8 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
     }
 }
 
-struct IntoLeCreditResponseIter<'a>(&'a LeCreditBasedConnectionResponse);
-
-impl<'a> IntoIterator for IntoLeCreditResponseIter<'a> {
-    type Item = u8;
-    type IntoIter = LeCreditResponseIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        LeCreditResponseIter::new(self.0)
-    }
-}
-
-struct LeCreditResponseIter<'a> {
-    rsp: &'a LeCreditBasedConnectionResponse,
-    pos: usize,
-}
-
-impl<'a> LeCreditResponseIter<'a> {
-    fn new(rsp: &'a LeCreditBasedConnectionResponse) -> Self {
-        let pos = 0;
-
-        LeCreditResponseIter { rsp, pos }
-    }
-}
-
-impl Iterator for LeCreditResponseIter<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self.pos {
-            0 => Some(LeCreditBasedConnectionResponse::CODE),
-            1 => Some(self.rsp.identifier.get()),
-            2 => Some(10),
-            3 => Some(0),
-            4 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(0).copied(),
-            5 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(1).copied(),
-            6 => self.rsp.mtu.to_le_bytes().get(0).copied(),
-            7 => self.rsp.mtu.to_le_bytes().get(1).copied(),
-            8 => self.rsp.mps.to_le_bytes().get(0).copied(),
-            9 => self.rsp.mps.to_le_bytes().get(1).copied(),
-            10 => self.rsp.initial_credits.to_le_bytes().get(0).copied(),
-            11 => self.rsp.initial_credits.to_le_bytes().get(1).copied(),
-            12 => self
-                .rsp
-                .result
-                .map_or_else(|e| e.to_val(), |_| 0)
-                .to_le_bytes()
-                .get(0)
-                .copied(),
-            13 => self
-                .rsp
-                .result
-                .map_or_else(|e| e.to_val(), |_| 0)
-                .to_le_bytes()
-                .get(1)
-                .copied(),
-            _ => None,
-        };
-
-        self.pos += 1;
-
-        ret
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = 14usize.checked_sub(self.pos).unwrap_or_default();
-
-        (size, Some(size))
-    }
-}
-
-impl ExactSizeIterator for LeCreditResponseIter<'_> {}
-
-/// Flow control credit indication
+/// Flow control credit indication PDU
+#[derive(Clone, Copy, Debug)]
 pub struct FlowControlCreditInd {
     identifier: NonZeroU8,
     cid: ChannelIdentifier,
@@ -1552,8 +1262,11 @@ impl FlowControlCreditInd {
     ///
     /// # Panic
     /// `channel_id` can only be a signalling channel
-    pub(crate) fn as_control_frame(&self, channel_id: ChannelIdentifier) -> impl FragmentL2capPdu + '_ {
-        ControlFrame::new(IntoFlowControlCreditIndIter(self), channel_id)
+    pub(crate) fn into_control_frame(
+        self,
+        channel_id: ChannelIdentifier,
+    ) -> ControlFrame<iter::FlowControlCreditIndIter> {
+        ControlFrame::new(iter::FlowControlCreditIndIter::new(self), channel_id)
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
@@ -1611,57 +1324,3 @@ impl TryIntoSignal for FlowControlCreditInd {
             || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
 }
-
-struct IntoFlowControlCreditIndIter<'a>(&'a FlowControlCreditInd);
-
-impl<'a> IntoIterator for IntoFlowControlCreditIndIter<'a> {
-    type Item = u8;
-    type IntoIter = FlowControlCreditIndIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        FlowControlCreditIndIter::new(self.0)
-    }
-}
-
-struct FlowControlCreditIndIter<'a> {
-    ind: &'a FlowControlCreditInd,
-    pos: usize,
-}
-
-impl<'a> FlowControlCreditIndIter<'a> {
-    fn new(ind: &'a FlowControlCreditInd) -> Self {
-        let pos = 0;
-
-        FlowControlCreditIndIter { ind, pos }
-    }
-}
-
-impl Iterator for FlowControlCreditIndIter<'_> {
-    type Item = u8;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ret = match self.pos {
-            0 => Some(FlowControlCreditInd::CODE),
-            1 => Some(self.ind.identifier.get()),
-            2 => Some(4),
-            3 => Some(0),
-            4 => self.ind.cid.to_val().to_le_bytes().get(0).copied(),
-            5 => self.ind.cid.to_val().to_le_bytes().get(1).copied(),
-            6 => self.ind.credits.to_le_bytes().get(0).copied(),
-            7 => self.ind.credits.to_le_bytes().get(0).copied(),
-            _ => None,
-        };
-
-        self.pos += 1;
-
-        ret
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = 14usize.checked_sub(self.pos).unwrap_or_default();
-
-        (size, Some(size))
-    }
-}
-
-impl ExactSizeIterator for FlowControlCreditIndIter<'_> {}

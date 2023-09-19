@@ -7,10 +7,11 @@ use core::num::{NonZeroU16, NonZeroU8};
 
 /// Control Frame
 ///
-/// Control frames (C-frames) are used for sending signaling packets between two devices connected
-/// via L2CAP. A `ControlFrame` can be created from one of the signaling data types within the
-/// [`signals`] module.
-pub(crate) struct ControlFrame<T> {
+/// Control frames (C-frames) are used for sending signaling packets between two devices via a L2CAP
+/// logical link.
+// A `ControlFrame` can be created from one of the signaling data types within the [`signals`]
+// module.
+pub struct ControlFrame<T> {
     channel_id: ChannelIdentifier,
     payload: T,
 }
@@ -20,7 +21,7 @@ impl<T> ControlFrame<T> {
     ///
     /// # Panic
     /// There must be a signalling channel associated with the logical link `L`.
-    pub fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
+    pub(crate) fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
         match channel_id {
             ChannelIdentifier::Acl(AclCid::SignalingChannel) | ChannelIdentifier::Le(LeCid::LeSignalingChannel) => (),
             _ => panic!("invalid signalling channel {channel_id}"),
@@ -38,7 +39,7 @@ impl<T> ControlFrame<T> {
     /// * The length field in the input `data` must be less than or equal to the length of the
     ///   payload field. Any bytes beyond the payload in `data` are ignored.
     /// * The channel id field must be valid for the signaling message.
-    pub fn try_from_slice<L>(data: &[u8]) -> Result<T, ControlFrameError>
+    pub(crate) fn try_from_slice<L>(data: &[u8]) -> Result<T, ControlFrameError>
     where
         L: crate::link_flavor::LinkFlavor,
         T: crate::signals::TryIntoSignal,
@@ -60,7 +61,7 @@ impl<T> ControlFrame<T> {
         }
     }
 
-    pub fn into_payload(self) -> T {
+    pub(crate) fn into_payload(self) -> T {
         self.payload
     }
 }
@@ -248,7 +249,7 @@ where
     }
 }
 
-pub(crate) struct ControlFrameRecombiner<T> {
+pub struct ControlFrameRecombiner<T> {
     payload_len: usize,
     channel_id: ChannelIdentifier,
     byte_count: usize,
