@@ -68,3 +68,7 @@ path = "tests/att/queued_write.rs"
 [[test]]
 name = "gatt_read_by_group_type"
 path = "tests/gatt/read_by_group_type.rs"
+
+[[test]]
+name = "l2cap_credit_channel"
+path = "tests/l2cap/credit_channel.rs"
