@@ -10,26 +10,21 @@ use crate::{LogicalLink, PhysicalLink};
 /// When a credit based channel runs out of peer credits it must halt sending of Credit Based Frames
 /// (k-frames) until the peer device sends a *L2CAP flow control credit ind* containing one or more
 /// credits.
-pub struct UnsentCreditFrames<'a, L, T>
-where
-    L: LogicalLink,
-    T: Iterator,
-{
-    credit_based_channel: &'a mut CreditBasedChannel<'a, L>,
+pub struct CreditServiceData<T: Iterator> {
+    destination_channel: crate::channel::id::ChannelIdentifier,
     packets_iterator: PacketsIterator<T>,
 }
 
-impl<'a, L, T> UnsentCreditFrames<'a, L, T>
+impl<T> CreditServiceData<T>
 where
-    L: LogicalLink,
     T: Iterator<Item = u8> + ExactSizeIterator,
 {
     pub(crate) fn new(
-        credit_based_channel: &'a mut CreditBasedChannel<'a, L>,
+        destination_channel: crate::channel::id::ChannelIdentifier,
         packets_iterator: PacketsIterator<T>,
     ) -> Self {
         Self {
-            credit_based_channel,
+            destination_channel,
             packets_iterator,
         }
     }
@@ -44,17 +39,28 @@ where
     ///
     /// Input `amount` should be the number of credits as indicated from a received *L2CAP flow
     /// control credit ind* signal.
-    pub async fn inc_and_send(
+    ///
+    /// # Error
+    /// The `credit_based_channel` must be the same channel that created this `UnsentCreditFrames`.
+    pub async fn inc_and_send<L: LogicalLink>(
         mut self,
+        credit_based_channel: &mut CreditBasedChannel<'_, L>,
         amount: u16,
-    ) -> Result<Option<UnsentCreditFrames<'a, L, T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        self.credit_based_channel.add_credits(amount);
+    ) -> Result<Option<CreditServiceData<T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
+        if credit_based_channel.peer_channel_id != self.destination_channel {
+            return Err(SendSduError::IncorrectChannel);
+        }
 
-        while self.credit_based_channel.peer_credits != 0 {
-            self.credit_based_channel.peer_credits -= 1;
+        credit_based_channel.add_credits(amount);
 
-            if let Some(pdu) = self.packets_iterator.next() {
-                self.credit_based_channel.send_pdu(pdu).await?;
+        while credit_based_channel.peer_credits != 0 {
+            credit_based_channel.peer_credits -= 1;
+
+            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
+            let next = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter());
+
+            if let Some(pdu) = next {
+                credit_based_channel.send_pdu(pdu).await?;
             } else {
                 return Ok(None);
             }

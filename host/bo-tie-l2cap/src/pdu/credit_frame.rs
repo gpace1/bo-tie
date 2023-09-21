@@ -295,6 +295,22 @@ impl<P> CreditBasedFrame<P> {
             payload,
         }
     }
+
+    /// (Todo remove method) mapping a credit based frame
+    ///
+    /// This maps the payload type to a `Vec::IntoIter<Item = u8>`
+    ///
+    /// This is used to mitigate a rust compile error (which is probably a rust bug) in the code.
+    pub(crate) fn map_to_vec_iter(self) -> CreditBasedFrame<alloc::vec::IntoIter<u8>>
+    where
+        P: IntoIterator<Item = u8>,
+    {
+        CreditBasedFrame {
+            channel_id: self.channel_id,
+            sdu_len: self.sdu_len,
+            payload: self.payload.into_iter().collect::<alloc::vec::Vec<u8>>().into_iter(),
+        }
+    }
 }
 
 impl<'a> CreditBasedFrame<&'a [u8]> {

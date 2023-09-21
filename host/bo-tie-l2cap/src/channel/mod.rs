@@ -17,7 +17,7 @@ use crate::pdu::{
 use crate::pdu::{RecombineL2capPdu, SduPacketsIterator};
 use crate::{pdu, pdu::L2capFragment, LogicalLink, PhysicalLink};
 use bo_tie_core::buffer::TryExtend;
-pub use credit_based::UnsentCreditFrames;
+pub use credit_based::CreditServiceData;
 pub(crate) use shared::{SharedPhysicalLink, UnusedChannelResponse};
 pub use signalling::SignallingChannel;
 
@@ -458,28 +458,41 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
     /// may be called by protocol at a higher layer than L2CAP.
     pub async fn send<T>(
-        &'a mut self,
+        &mut self,
         sdu: T,
-    ) -> Result<Option<UnsentCreditFrames<'a, L, T::IntoIter>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>>
+    ) -> Result<Option<CreditServiceData<T::IntoIter>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>>
     where
         T: IntoIterator<Item = u8>,
-        T::IntoIter: ExactSizeIterator + 'a,
+        T::IntoIter: ExactSizeIterator,
     {
         let sdu = CreditBasedSdu::new(sdu, self.peer_channel_id, self.maximum_pdu_payload_size as u16);
 
         let mut packets = sdu.into_packets().map_err(|e| SendSduError::SduPacketError(e))?;
 
         while self.peer_credits != 0 {
-            self.peer_credits -= 1;
+            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
+            let next = packets.next().map(|cfb| cfb.map_to_vec_iter());
 
-            if let Some(pdu) = packets.next() {
+            if let Some(pdu) = next {
                 self.send_pdu(pdu).await?;
             } else {
                 return Ok(None);
             }
         }
 
-        Ok(Some(UnsentCreditFrames::new(self, packets)))
+        Ok(Some(CreditServiceData::new(self.peer_channel_id, packets)))
+    }
+
+    async fn test(mut self)
+    where
+        L: Sync,
+        for<'z> <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendFut<'z>: Send,
+    {
+        fn send<T: Send>(t: T) {}
+
+        send(async move {
+            self.send([0, 1, 2, 3, 4]).await;
+        });
     }
 
     /// Inner method of `receive_frame`
@@ -734,6 +747,7 @@ enum ReceiveErrorInner<L: LogicalLink, E, C> {
 pub enum SendSduError<E> {
     SendErr(E),
     SduPacketError(PacketsError),
+    IncorrectChannel,
 }
 
 impl<E> core::fmt::Display for SendSduError<E>
@@ -744,6 +758,7 @@ where
         match self {
             SendSduError::SendErr(e) => write!(f, "error sending PDU, {e:}"),
             SendSduError::SduPacketError(e) => write!(f, "error converting SDU to PDUs, {e:}"),
+            SendSduError::IncorrectChannel => f.write_str("incorrect channel used for this operation"),
         }
     }
 }

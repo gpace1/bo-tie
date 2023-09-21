@@ -1251,6 +1251,11 @@ impl FlowControlCreditInd {
         }
     }
 
+    /// Get the credit amount
+    pub fn get_credits(&self) -> u16 {
+        self.credits
+    }
+
     /// Get the channel identifier given credit
     ///
     /// This returns the channel that indicated as having a credit increase by the sending device.
