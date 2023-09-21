@@ -21,8 +21,8 @@ async fn le_credit_channel() {
     let r_barrier = l_barrier.clone();
 
     tokio::spawn(async move {
-        let mtu = LeCreditMtu::new(280 as u16);
-        let mps = LeCreditMps::new(60 as u16);
+        let mtu = LeCreditMtu::new(280);
+        let mps = LeCreditMps::new(60);
 
         let mut signal_channel = l_link.get_signalling_channel();
 
@@ -36,7 +36,7 @@ async fn le_credit_channel() {
         };
 
         signal_channel
-            .init_le_credit_connection(request)
+            .request_le_credit_connection(request)
             .await
             .expect("failed to send init credit connection");
 
@@ -70,6 +70,22 @@ async fn le_credit_channel() {
             }
         }
 
+        loop {
+            let signal = signal_channel.receive().await.expect("failed to receive");
+
+            if let ReceivedSignal::DisconnectRequest(request) = signal {
+                assert_eq!(request.source_cid, credit_based_channel.get_peer_channel_id());
+                assert_eq!(request.destination_cid, credit_based_channel.get_this_channel_id());
+
+                request
+                    .send_disconnect_response(&mut signal_channel)
+                    .await
+                    .expect("failed to send response");
+
+                break;
+            }
+        }
+
         l_barrier.wait().await;
     });
 
@@ -90,6 +106,19 @@ async fn le_credit_channel() {
         let message = std::str::from_utf8(&data).expect("invalid utf8");
 
         assert_eq!(TEST_MESSAGE, message);
+
+        signal_channel
+            .request_connection_disconnection(&credit_based_channel)
+            .await
+            .expect("failed to send disconnection request");
+
+        let response = signal_channel.receive().await.expect("failed to receive disconnect");
+
+        if let ReceivedSignal::DisconnectResponse(_) = response {
+            // nothing to do if response received
+        } else {
+            panic!("unexpected received signal")
+        }
 
         r_barrier.wait().await;
     });
