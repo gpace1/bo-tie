@@ -214,7 +214,7 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         output
     }
 
-    /// Initiate a L2CAP Disconnection
+    /// Request a disconnection of a L2CAP connection
     ///
     /// This sends the *disconnection request* to the linked device for the specific channel. Only
     /// L2CAP connection may be disconnected via this command.
@@ -222,7 +222,7 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
     /// # Note
     /// The disconnection of the L2CAP connection does not occur until after a disconnection
     /// response is received by this device (with the correct fields).
-    pub async fn init_connection_disconnection<C: ConnectionChannel>(
+    pub async fn request_connection_disconnection<C: ConnectionChannel>(
         &mut self,
         channel: &C,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
@@ -247,12 +247,13 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         credit_channel: &mut CreditBasedChannel<'_, L>,
         credits: u16,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let dyn_cid =
-            if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel)) = credit_channel.this_channel_id.get_channel() {
-                dyn_channel
-            } else {
-                unreachable!()
-            };
+        let dyn_cid = if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel)) =
+            credit_channel.this_channel_id.get_channel()
+        {
+            dyn_channel
+        } else {
+            unreachable!()
+        };
 
         let credit_ind = FlowControlCreditInd::new_le(NonZeroU8::new(1).unwrap(), dyn_cid, credits);
 
@@ -263,11 +264,11 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
 }
 
 impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
-    /// Initialize a LE Credit Based Connection
+    /// Request a LE Credit Based Connection
     ///
     /// This will send the request to create a LE credit based connection with the linked device. A
     /// connection is not completed until a response is received via the method [`receive`].
-    pub async fn init_le_credit_connection(
+    pub async fn request_le_credit_connection(
         &mut self,
         request: LeCreditBasedConnectionRequest,
     ) -> Result<(), P::SendErr> {
