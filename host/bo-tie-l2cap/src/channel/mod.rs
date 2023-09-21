@@ -21,10 +21,36 @@ pub use credit_based::CreditServiceData;
 pub(crate) use shared::{SharedPhysicalLink, UnusedChannelResponse};
 pub use signalling::SignallingChannel;
 
+/// Enumeration for dynamic channel source and destination CIDs
+pub(crate) enum ChannelDirection {
+    Source(ChannelIdentifier),
+    Destination(ChannelIdentifier),
+}
+
+impl ChannelDirection {
+    fn get_channel(&self) -> ChannelIdentifier {
+        match self {
+            ChannelDirection::Source(c) => *c,
+            ChannelDirection::Destination(d) => *d,
+        }
+    }
+}
+
 /// A L2CAP connection channel
 ///
 /// Channels that implement this form a L2CAP connection between the two linked devices.
 pub trait ConnectionChannel {
+    /// Get the source channel identifier for the connection
+    ///
+    /// The return is the channel identifier used as the *source* identifier for the connection.
+    fn get_source_channel_id(&self) -> ChannelIdentifier;
+
+    /// Get the destination channel identifier for the connection
+    ///
+    /// The return is the channel identifier used as the *destination* identifier for the
+    /// connection.
+    fn get_destination_channel_id(&self) -> ChannelIdentifier;
+
     /// Get the channel identifier used on this device
     ///
     /// This returns the channel identifier used by this device for the connection. The peer device
@@ -265,8 +291,8 @@ impl<L: LogicalLink> Drop for BasicFrameChannel<'_, L> {
 ///
 /// A `CreditBasedChannel` is created via signalling packets
 pub struct CreditBasedChannel<'a, L: LogicalLink> {
-    this_channel_id: ChannelIdentifier,
-    peer_channel_id: ChannelIdentifier,
+    this_channel_id: ChannelDirection,
+    peer_channel_id: ChannelDirection,
     logical_link: &'a L,
     maximum_pdu_payload_size: usize,
     maximum_transmission_size: usize,
@@ -275,15 +301,17 @@ pub struct CreditBasedChannel<'a, L: LogicalLink> {
 
 impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     pub(crate) fn new(
-        this_channel_id: ChannelIdentifier,
-        peer_channel_id: ChannelIdentifier,
+        this_channel_id: ChannelDirection,
+        peer_channel_id: ChannelDirection,
         logical_link: &'a L,
         maximum_packet_size: usize,
         maximum_transmission_size: usize,
         initial_peer_credits: usize,
     ) -> Self {
         assert!(
-            logical_link.get_shared_link().add_channel(this_channel_id),
+            logical_link
+                .get_shared_link()
+                .add_channel(this_channel_id.get_channel()),
             "channel already exists"
         );
 
@@ -297,6 +325,30 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         }
     }
 
+    /// Get the source channel identifier for this connection
+    ///
+    /// The return is the source channel identifier in the initialization request PDU that was used
+    /// to create this credit based channel.
+    pub fn get_source_channel_id(&self) -> ChannelIdentifier {
+        match (&self.this_channel_id, &self.peer_channel_id) {
+            (ChannelDirection::Source(c), _) => *c,
+            (_, ChannelDirection::Source(c)) => *c,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Get the destination channel identifier for this connection
+    ///
+    /// The return is the destination channel identifier in the initialization response PDU that was
+    /// used to create this credit based channel.
+    pub fn get_destination_channel_id(&self) -> ChannelIdentifier {
+        match (&self.this_channel_id, &self.peer_channel_id) {
+            (ChannelDirection::Destination(d), _) => *d,
+            (_, ChannelDirection::Destination(d)) => *d,
+            _ => unreachable!(),
+        }
+    }
+
     /// Get this channel identifier
     ///
     /// This is the identifier used by this link to receive credit based frames for this
@@ -304,7 +356,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// *source* id within the connection request. If this connection was accepted by this device
     /// then this was the *destination* id within the connection response.
     pub fn get_this_channel_id(&self) -> ChannelIdentifier {
-        self.this_channel_id
+        self.this_channel_id.get_channel()
     }
 
     /// Get the peer's channel identifier
@@ -314,7 +366,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// *source* id within the connection request. If this connection was accepted by the peer
     /// device then this was the *destination* id within the connection response.
     pub fn get_peer_channel_id(&self) -> ChannelIdentifier {
-        self.peer_channel_id
+        self.peer_channel_id.get_channel()
     }
 
     /// Get the maximum payload size (MPS)
@@ -378,7 +430,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         core::future::poll_fn(move |_| {
             self.logical_link
                 .get_shared_link()
-                .maybe_send(self.this_channel_id, fragment.take().unwrap())
+                .maybe_send(self.this_channel_id.get_channel(), fragment.take().unwrap())
         })
         .await
         .await
@@ -394,7 +446,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             match self
                 .logical_link
                 .get_shared_link()
-                .maybe_recv(self.this_channel_id)
+                .maybe_recv(self.this_channel_id.get_channel())
                 .await
             {
                 Ok(Ok(f)) => break Ok(f),
@@ -465,7 +517,11 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
-        let sdu = CreditBasedSdu::new(sdu, self.peer_channel_id, self.maximum_pdu_payload_size as u16);
+        let sdu = CreditBasedSdu::new(
+            sdu,
+            self.peer_channel_id.get_channel(),
+            self.maximum_pdu_payload_size as u16,
+        );
 
         let mut packets = sdu.into_packets().map_err(|e| SendSduError::SduPacketError(e))?;
 
@@ -480,19 +536,10 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             }
         }
 
-        Ok(Some(CreditServiceData::new(self.peer_channel_id, packets)))
-    }
-
-    async fn test(mut self)
-    where
-        L: Sync,
-        for<'z> <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendFut<'z>: Send,
-    {
-        fn send<T: Send>(t: T) {}
-
-        send(async move {
-            self.send([0, 1, 2, 3, 4]).await;
-        });
+        Ok(Some(CreditServiceData::new(
+            self.peer_channel_id.get_channel(),
+            packets,
+        )))
     }
 
     /// Inner method of `receive_frame`
@@ -514,7 +561,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         let mut meta = pdu::credit_frame::RecombineMeta::new(self.maximum_pdu_payload_size as u16);
 
         let mut first_recombiner =
-            CreditBasedFrame::<T>::recombine(headed_fragment.length, self.peer_channel_id, &mut meta);
+            CreditBasedFrame::<T>::recombine(headed_fragment.length, self.peer_channel_id.get_channel(), &mut meta);
 
         let k_frame = if let Some(first_k_frame) = first_recombiner
             .add(headed_fragment.fragment.data)
@@ -599,12 +646,20 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 }
 
 impl<L: LogicalLink> ConnectionChannel for CreditBasedChannel<'_, L> {
+    fn get_source_channel_id(&self) -> ChannelIdentifier {
+        self.get_source_channel_id()
+    }
+
+    fn get_destination_channel_id(&self) -> ChannelIdentifier {
+        self.get_destination_channel_id()
+    }
+
     fn get_this_channel_id(&self) -> ChannelIdentifier {
-        self.this_channel_id
+        self.get_this_channel_id()
     }
 
     fn get_peer_channel_id(&self) -> ChannelIdentifier {
-        self.peer_channel_id
+        self.get_peer_channel_id()
     }
 
     fn get_mtu(&self) -> Option<usize> {
@@ -618,7 +673,9 @@ impl<L: LogicalLink> ConnectionChannel for CreditBasedChannel<'_, L> {
 
 impl<L: LogicalLink> Drop for CreditBasedChannel<'_, L> {
     fn drop(&mut self) {
-        self.logical_link.get_shared_link().remove_channel(self.this_channel_id)
+        self.logical_link
+            .get_shared_link()
+            .remove_channel(self.this_channel_id.get_channel())
     }
 }
 

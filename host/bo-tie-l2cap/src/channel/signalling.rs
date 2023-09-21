@@ -248,7 +248,7 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         credits: u16,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let dyn_cid =
-            if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel)) = credit_channel.this_channel_id {
+            if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel)) = credit_channel.this_channel_id.get_channel() {
                 dyn_channel
             } else {
                 unreachable!()
@@ -834,9 +834,11 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
             .send(response.into_control_frame(signals_channel.channel_id))
             .await?;
 
-        let this_channel_id = ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.destination_dyn_cid));
+        let this_channel_id = crate::channel::ChannelDirection::Destination(ChannelIdentifier::Le(
+            LeCid::DynamicallyAllocated(self.destination_dyn_cid),
+        ));
 
-        let peer_channel_id = self.request.get_source_cid();
+        let peer_channel_id = crate::channel::ChannelDirection::Source(self.request.get_source_cid());
 
         let maximum_packet_size = min(self.mps, self.request.mps.get()).into();
 
@@ -898,9 +900,9 @@ impl Response<LeCreditBasedConnectionResponse> {
         request: &LeCreditBasedConnectionRequest,
         link: &'a LeULogicalLink<P>,
     ) -> CreditBasedChannel<'a, LeULogicalLink<P>> {
-        let this_channel_id = request.get_source_cid();
+        let this_channel_id = crate::channel::ChannelDirection::Source(request.get_source_cid());
 
-        let peer_channel_id = self.response.get_destination_cid();
+        let peer_channel_id = crate::channel::ChannelDirection::Destination(self.response.get_destination_cid());
 
         let maximum_packet_size = core::cmp::min(self.response.mps.get(), request.mps.get()).into();
 

@@ -47,7 +47,7 @@ where
         credit_based_channel: &mut CreditBasedChannel<'_, L>,
         amount: u16,
     ) -> Result<Option<CreditServiceData<T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        if credit_based_channel.peer_channel_id != self.destination_channel {
+        if credit_based_channel.peer_channel_id.get_channel() != self.destination_channel {
             return Err(SendSduError::IncorrectChannel);
         }
 
