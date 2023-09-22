@@ -9,7 +9,7 @@
 //! fragment. Once the channel identifier is processed, the logical link is "owned" by the
 //! respective channel until all bytes of the PDU are received.
 
-use crate::channel::id::ChannelIdentifier;
+use crate::channel::id::{ChannelIdentifier, LeCid};
 pub(crate) use crate::channel::shared::unused::{ReceiveDataProcessor, UnusedChannelResponse};
 use crate::channel::InvalidChannel;
 use crate::pdu::L2capFragment;
@@ -224,6 +224,7 @@ enum ProcessorChannelIdentifier {
 pub struct SharedPhysicalLink<P: PhysicalLink, U: UnusedChannelResponse> {
     owner: Cell<PhysicalLinkOwner>,
     channels: RefCell<alloc::vec::Vec<ChannelIdentifier>>,
+    next_new_dyn_channel: Cell<ChannelIdentifier>,
     physical_link: UnsafeCell<P>,
     basic_header_processor: BasicHeaderProcessor,
     stasis_fragment: Cell<Option<L2capFragment<P::RecvData>>>,
@@ -242,6 +243,8 @@ where
 
         let channels = RefCell::default();
 
+        let next_new_dyn_channel = Cell::new(crate::channel::id::DynChannelId::new_le(0x40).unwrap().into());
+
         let basic_header_processor = BasicHeaderProcessor::init();
 
         let stasis_fragment = Cell::new(None);
@@ -253,6 +256,7 @@ where
         Self {
             owner,
             channels,
+            next_new_dyn_channel,
             physical_link,
             basic_header_processor,
             stasis_fragment,
@@ -299,23 +303,35 @@ where
         use crate::channel::id::DynChannelId;
         use crate::link_flavor::LeULink;
 
-        let mut channel_val = *DynChannelId::<LeULink>::LE_BOUNDS.start();
+        let orig_next = self.next_new_dyn_channel.get();
 
-        while let Ok(channel) = DynChannelId::<LeULink>::new_le(channel_val) {
-            let channel = ChannelIdentifier::Le(channel);
-
+        loop {
             let mut channels_mref = self.channels.borrow_mut();
+
+            let channel = self.next_new_dyn_channel.get();
+
+            self.next_new_dyn_channel.set({
+                let next_val = channel.to_val() + 1;
+
+                if next_val <= *DynChannelId::<LeULink>::LE_BOUNDS.end() {
+                    ChannelIdentifier::Le(LeCid::DynamicallyAllocated(DynChannelId::new_unchecked(next_val)))
+                } else {
+                    ChannelIdentifier::Le(LeCid::DynamicallyAllocated(DynChannelId::new_unchecked(
+                        *DynChannelId::<LeULink>::LE_BOUNDS.start(),
+                    )))
+                }
+            });
 
             if let Err(index) = channels_mref.binary_search(&channel) {
                 channels_mref.insert(index, channel);
 
-                return Some(DynChannelId::new_unchecked(channel_val));
+                break Some(DynChannelId::new_unchecked(channel.to_val()));
             } else {
-                channel_val += 1
+                if self.next_new_dyn_channel.get().to_val() == orig_next.to_val() {
+                    break None;
+                }
             }
         }
-
-        None
     }
 
     /// Remove a channel from sharing the physical link.
