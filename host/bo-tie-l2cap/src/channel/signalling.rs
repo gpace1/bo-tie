@@ -804,11 +804,11 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
         self.mps = core::cmp::min(mps, self.request.mps.get())
     }
 
-    /// Set the maximum transmission size (MPS)
+    /// Set the maximum transmission unit (MTU)
     ///
-    /// This sets the MTS within the *LE Credit Based Connection Response* only if it is smaller
+    /// This sets the MTU within the *LE Credit Based Connection Response* only if it is smaller
     /// than the request's MTS.
-    pub fn set_responded_mts(&mut self, mtu: u16) {
+    pub fn set_responded_mtu(&mut self, mtu: u16) {
         self.mtu = core::cmp::min(mtu, self.request.mtu.get())
     }
 
