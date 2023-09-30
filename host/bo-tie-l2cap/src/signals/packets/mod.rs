@@ -1211,6 +1211,10 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
 }
 
 /// Flow control credit indication PDU
+///
+/// A flow control credit indication contains a number of credits for sending to the channel
+/// identified within the same indication. These credits are additional, they increase the amount
+/// of frames that can be sent to the specified channel.
 #[derive(Clone, Copy, Debug)]
 pub struct FlowControlCreditInd {
     identifier: NonZeroU8,
@@ -1221,7 +1225,29 @@ pub struct FlowControlCreditInd {
 impl FlowControlCreditInd {
     const CODE: u8 = 0x16;
 
+    /// Create a new `FlowControlCreditInd`
+    ///
+    /// Input `cid` is the identifier for the channel providing the credits.
+    ///
+    /// # Panic
+    /// Input `cid` must be channel identifier that is valid for a credit based connection.
+    pub fn new(identifier: NonZeroU8, cid: ChannelIdentifier, credits: u16) -> Self {
+        match cid {
+            ChannelIdentifier::Le(LeCid::DynamicallyAllocated(_))
+            | ChannelIdentifier::Acl(AclCid::DynamicallyAllocated(_)) => (),
+            _ => panic!("{cid} is not a valid channel identifier for use with "),
+        }
+
+        Self {
+            identifier,
+            cid,
+            credits,
+        }
+    }
+
     /// Create a new `FlowControlCreditInd` for an ACL-U credit based connection
+    ///
+    /// Input `cid` is the identifier for the channel providing the credits.
     pub fn new_acl(
         identifier: NonZeroU8,
         dyn_cid: crate::channel::id::DynChannelId<crate::AclULink>,
@@ -1237,6 +1263,8 @@ impl FlowControlCreditInd {
     }
 
     /// Create a new `FlowControlCreditInd` for a LE-U credit based connection
+    ///
+    /// Input `cid` is the identifier for the channel providing the credits.
     pub fn new_le(
         identifier: NonZeroU8,
         dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,

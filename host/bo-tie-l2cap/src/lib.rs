@@ -56,8 +56,6 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 extern crate alloc;
-extern crate core;
-
 pub mod channel;
 pub mod link_flavor;
 pub mod pdu;

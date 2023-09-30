@@ -2,6 +2,7 @@
 //!
 //! [`ConnectionChannel`]: ConnectionChannel
 
+pub mod collection;
 mod credit_based;
 pub mod id;
 mod shared;
@@ -87,13 +88,13 @@ impl InvalidChannel {
         InvalidChannel(raw_channel, "LE-U")
     }
 
-    fn new_acl(raw_channel: u16) -> Self {
-        InvalidChannel(raw_channel, "ACL-U")
-    }
-
-    fn new_apb(raw_channel: u16) -> Self {
-        InvalidChannel(raw_channel, "APB-U")
-    }
+    // fn new_acl(raw_channel: u16) -> Self {
+    //     InvalidChannel(raw_channel, "ACL-U")
+    // }
+    //
+    // fn new_apb(raw_channel: u16) -> Self {
+    //     InvalidChannel(raw_channel, "APB-U")
+    // }
 }
 
 impl core::fmt::Display for InvalidChannel {
@@ -170,12 +171,15 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
         MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
     > {
         loop {
-            match self.logical_link.get_shared_link().maybe_recv(self.channel_id).await {
+            match self
+                .logical_link
+                .get_shared_link()
+                .maybe_recv::<L>(self.channel_id)
+                .await
+            {
                 Ok(Ok(f)) => break Ok(f),
                 Ok(Err(reject_response)) => {
                     let output = self.send_inner(reject_response).await;
-
-                    self.logical_link.get_shared_link().clear_owner();
 
                     output.map_err(|_| MaybeRecvError::Disconnected)?;
                 }
@@ -371,9 +375,9 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
     /// Get the maximum payload size (MPS)
     ///
-    /// This is the maximum payload size of a credit based frame. When a SDU is transmitted it is
-    /// fragmented to this size (with the exception of the first fragment being two less) and each
-    /// fragment is transmitted in a separate k-frame.
+    /// This is the maximum PDU payload size of a credit based frame. When a SDU is transmitted it
+    /// is fragmented to this size (with the exception of the first fragment being two less) and
+    /// each fragment is transmitted in a separate k-frame.
     pub fn get_mps(&self) -> u16 {
         self.maximum_pdu_payload_size as u16
     }
@@ -385,16 +389,16 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         self.maximum_transmission_size as u16
     }
 
-    /// Get the current number of peer credits
+    /// Get the current number of credits given to this channel by the connected device
     pub fn get_peer_credits(&self) -> u16 {
         self.peer_credits as u16
     }
 
-    /// Add peer credits
+    /// Add credits given by the peer
     ///
     /// This adds credits given by the peer device. These credits should come from a *L2CAP flow
     /// control credit ind* signal.
-    pub fn add_credits(&mut self, amount: u16) {
+    pub fn add_peer_credits(&mut self, amount: u16) {
         self.peer_credits = if let Some(amount) = self.peer_credits.checked_add(amount.into()) {
             core::cmp::min(amount, <u16>::MAX.into())
         } else {
@@ -434,36 +438,6 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         })
         .await
         .await
-    }
-
-    async fn receive_fragment(
-        &mut self,
-    ) -> Result<
-        BasicHeadedFragment<<L::PhysicalLink as PhysicalLink>::RecvData>,
-        MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
-    > {
-        loop {
-            match self
-                .logical_link
-                .get_shared_link()
-                .maybe_recv(self.this_channel_id.get_channel())
-                .await
-            {
-                Ok(Ok(f)) => break Ok(f),
-                Ok(Err(reject_response)) => {
-                    let output = self.send_pdu_inner(reject_response).await;
-
-                    self.logical_link.get_shared_link().clear_owner();
-
-                    output.map_err(|_| MaybeRecvError::Disconnected)?;
-                }
-                Err(e) => {
-                    self.logical_link.get_shared_link().clear_owner();
-
-                    break Err(e);
-                }
-            }
-        }
     }
 
     async fn send_pdu_inner<T>(
@@ -517,16 +491,12 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
-        let sdu = CreditBasedSdu::new(
-            sdu,
-            self.peer_channel_id.get_channel(),
-            self.maximum_pdu_payload_size as u16,
-        );
+        let sdu = CreditBasedSdu::new(sdu, self.get_peer_channel_id(), self.maximum_pdu_payload_size as u16);
 
         let mut packets = sdu.into_packets().map_err(|e| SendSduError::SduPacketError(e))?;
 
         while self.peer_credits != 0 {
-            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
+            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better with async)
             let next = packets.next().map(|cfb| cfb.map_to_vec_iter());
 
             if let Some(pdu) = next {
@@ -540,6 +510,34 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             self.peer_channel_id.get_channel(),
             packets,
         )))
+    }
+
+    async fn receive_fragment(
+        &mut self,
+    ) -> Result<
+        BasicHeadedFragment<<L::PhysicalLink as PhysicalLink>::RecvData>,
+        MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
+    > {
+        loop {
+            match self
+                .logical_link
+                .get_shared_link()
+                .maybe_recv::<L>(self.this_channel_id.get_channel())
+                .await
+            {
+                Ok(Ok(f)) => break Ok(f),
+                Ok(Err(reject_response)) => {
+                    let output = self.send_pdu_inner(reject_response).await;
+
+                    output.map_err(|_| MaybeRecvError::Disconnected)?;
+                }
+                Err(e) => {
+                    self.logical_link.get_shared_link().clear_owner();
+
+                    break Err(e);
+                }
+            }
+        }
     }
 
     /// Inner method of `receive_frame`
@@ -607,11 +605,22 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
     /// Receive a SDU from this Channel
     ///
-    /// This awaits until a complete SDU is received. This means that one or more credit based
-    /// frames were received and recombined into the SDU.
+    /// This returns a future for awaiting until a complete SDU is received. The future will keep
+    /// awaiting receiving credit based frames (k-frames) until every k-frame that was used to
+    /// transport the SDU is received.
+    ///
+    /// The first k-frame received will be used to determine the size of the SDU. The output future
+    /// counts the bytes in the first k-frame and subsequent received k-frames until the number
+    /// matches the determined SDU size. The future will not poll to completion until either the
+    /// entire SDU is received or an error occurs.
     ///
     /// # Note
-    /// The `Ok(_)` output contains the `sdu`.
+    /// This returned future may get 'forever pend' if the peer of this credit based channel has
+    /// run out of credits to be able send k-frames to this device. The method
+    /// [`give_credits_to_peer`] can be used on the signalling channel in order to give the peer
+    /// more credits so it can complete the sending of the SDU.
+    ///
+    /// [`give_credits_to_peer`]
     pub async fn receive<T>(
         &mut self,
     ) -> Result<T, ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
@@ -714,6 +723,12 @@ impl<L: LogicalLink, E, C> ReceiveError<L, E, C> {
 
         Self { inner }
     }
+
+    fn new_disconnected() -> Self {
+        let inner = ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected);
+
+        Self { inner }
+    }
 }
 
 impl<L, E, C> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveError<L, E, C>
@@ -731,7 +746,8 @@ impl<L, E, C> core::fmt::Debug for ReceiveError<L, E, C>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error: core::fmt::Debug,
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
+        core::fmt::Debug,
     E: core::fmt::Debug,
     C: core::fmt::Debug,
 {
@@ -754,7 +770,7 @@ impl<L, E, C> core::fmt::Display for ReceiveError<L, E, C>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error:
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
         core::fmt::Display,
     E: core::fmt::Display,
     C: core::fmt::Display,
@@ -779,7 +795,7 @@ impl<L, E, C> std::error::Error for ReceiveError<L, E, C>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error:
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
         std::error::Error,
     E: std::error::Error,
     C: std::error::Error,

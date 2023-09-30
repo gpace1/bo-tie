@@ -51,7 +51,7 @@ where
             return Err(SendSduError::IncorrectChannel);
         }
 
-        credit_based_channel.add_credits(amount);
+        credit_based_channel.add_peer_credits(amount);
 
         while credit_based_channel.peer_credits != 0 {
             credit_based_channel.peer_credits -= 1;

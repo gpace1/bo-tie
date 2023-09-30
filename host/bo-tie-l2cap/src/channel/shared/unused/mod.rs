@@ -20,8 +20,8 @@ use crate::pdu::{FragmentL2capPdu, L2capFragment};
 /// e.g. for a LE logical link, this will return *pairing not supported* for the Security Manager
 /// channel.
 pub trait UnusedChannelResponse {
-    /// The data required to create a response
-    type ReceiveData: ReceiveDataProcessor;
+    /// The processor of a received L2CAP PDU
+    type ReceiveProcessor: ReceiveDataProcessor;
 
     /// The response sent back to the peer device
     type Response: FragmentL2capPdu;
@@ -30,10 +30,17 @@ pub trait UnusedChannelResponse {
     ///
     /// A response is only generated for fixed channels. `None` is returned for dynamically
     /// allocated channels.
-    fn try_generate_response(request_data: Self::ReceiveData) -> Option<Self::Response>;
+    fn try_generate_response(request_data: Self::ReceiveProcessor) -> Option<Self::Response>;
 
     /// Create a new `ReceiveData`
-    fn new_request_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveData;
+    fn new_request_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor;
+
+    /// Create a new junking `ReceiveData`
+    ///
+    /// This is called whenever a channel is dropped in the middle of receiving a L2CAP PDU.
+    ///
+    /// Input `pdu_bytes` is the amount of bytes received so far.
+    fn new_junked_data(pdu_len: usize, pdu_bytes: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor;
 }
 
 /// Data from a received PDU

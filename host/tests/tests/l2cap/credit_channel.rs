@@ -48,7 +48,7 @@ async fn le_credit_channel() {
         };
 
         let mut maybe_send_task = credit_based_channel
-            .send([1, 2, 3, 4])
+            .send(TEST_MESSAGE.bytes())
             .await
             .expect("failed to initially send data");
 

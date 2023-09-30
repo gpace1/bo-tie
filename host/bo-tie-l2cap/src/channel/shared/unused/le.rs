@@ -7,7 +7,7 @@ use crate::{LeULogicalLink, PhysicalLink};
 use core::num::NonZeroU8;
 
 impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
-    type ReceiveData = UnusedFixedChannelPduData;
+    type ReceiveProcessor = UnusedFixedChannelPduData;
     type Response = BasicFrame<UnusedPduResp>;
 
     fn try_generate_response(request_data: UnusedFixedChannelPduData) -> Option<Self::Response> {
@@ -41,8 +41,16 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
         }
     }
 
-    fn new_request_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveData {
+    fn new_request_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor {
         UnusedFixedChannelPduData::new(pdu_len, channel_id)
+    }
+
+    fn new_junked_data(pdu_len: usize, pdu_bytes: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor {
+        if pdu_bytes == 0 {
+            UnusedFixedChannelPduData::new(pdu_len, channel_id)
+        } else {
+            UnusedFixedChannelPduData::junk(channel_id)
+        }
     }
 }
 
@@ -69,6 +77,20 @@ impl UnusedFixedChannelPduData {
             ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => UnusedFixedChannelPduChannelData::None,
             _ => UnusedFixedChannelPduChannelData::Ignored,
         };
+
+        Self {
+            byte_cnt,
+            pdu_len,
+            channel_id,
+            channel_data,
+        }
+    }
+
+    fn junk(channel_id: ChannelIdentifier) -> Self {
+        let byte_cnt = 0;
+        let pdu_len = 0;
+
+        let channel_data = UnusedFixedChannelPduChannelData::Ignored;
 
         Self {
             byte_cnt,

@@ -89,7 +89,12 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
     > {
         loop {
-            match self.logical_link.get_shared_link().maybe_recv(self.channel_id).await {
+            match self
+                .logical_link
+                .get_shared_link()
+                .maybe_recv::<L>(self.channel_id)
+                .await
+            {
                 Ok(Ok(f)) => break Ok(f),
                 Ok(Err(reject_response)) => {
                     let output = self.send_inner(reject_response).await;
@@ -244,18 +249,14 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
     /// of PDUs plus any amount credits that the peer already had.
     pub async fn give_credits_to_peer(
         &mut self,
-        credit_channel: &mut CreditBasedChannel<'_, L>,
+        credit_channel: &CreditBasedChannel<'_, L>,
         credits: u16,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let dyn_cid = if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel)) =
-            credit_channel.this_channel_id.get_channel()
-        {
-            dyn_channel
-        } else {
-            unreachable!()
-        };
-
-        let credit_ind = FlowControlCreditInd::new_le(NonZeroU8::new(1).unwrap(), dyn_cid, credits);
+        let credit_ind = FlowControlCreditInd::new(
+            NonZeroU8::new(1).unwrap(),
+            credit_channel.get_this_channel_id(),
+            credits,
+        );
 
         let c_frame = credit_ind.into_control_frame(self.channel_id);
 
@@ -388,7 +389,9 @@ impl ReceivedSignal {
 pub enum ReceiveSignalError<L: LogicalLink> {
     Disconnected,
     RecvErr(<L::PhysicalLink as PhysicalLink>::RecvErr),
-    DumpRecvError(<<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error),
+    DumpRecvError(
+        <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error,
+    ),
     InvalidChannel(crate::channel::InvalidChannel),
     Convert(ConvertSignalError),
     Recombine(RecombineError),
@@ -400,7 +403,8 @@ impl<L> core::fmt::Debug for ReceiveSignalError<L>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error: core::fmt::Debug,
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
+        core::fmt::Debug,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -420,7 +424,7 @@ impl<L> core::fmt::Display for ReceiveSignalError<L>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveData as ReceiveDataProcessor>::Error:
+    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
         core::fmt::Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {

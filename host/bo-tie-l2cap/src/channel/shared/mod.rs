@@ -13,15 +13,17 @@ use crate::channel::id::{ChannelIdentifier, LeCid};
 pub(crate) use crate::channel::shared::unused::{ReceiveDataProcessor, UnusedChannelResponse};
 use crate::channel::InvalidChannel;
 use crate::pdu::L2capFragment;
-use crate::PhysicalLink;
+use crate::{LogicalLink, PhysicalLink};
 use core::cell::{Cell, RefCell, UnsafeCell};
 use core::task::Poll;
 
 mod unused;
 
-/// A [`L2capFragment`] with its attached header
+/// A [`L2capFragment`] with its attached basic header
 ///
-/// This is used to pass a L2CAP fragment with its associated header.
+/// This is used to pass a L2CAP fragment with its associated basic header. If this is the start
+/// fragment, the actual fragment data will also contain all or part of the basic header in the raw
+/// L2CAP PDU form.
 pub struct BasicHeadedFragment<T> {
     pub length: u16,
     pub channel_id: ChannelIdentifier,
@@ -75,13 +77,14 @@ impl BasicHeaderProcessor {
     ///    `active_channels`.
     /// * `Ready(Err(InvalidChannel))` => The peer send a channel that was invalid for this L2CAP
     ///    logical link (the physical link should be closed by the user in this case).
-    fn process<T>(
+    fn process<L, T>(
         &self,
         fragment: &mut L2capFragment<T>,
-        this_channel: ChannelIdentifier,
+        this_channel: Option<ChannelIdentifier>,
         active_channels: &[ChannelIdentifier],
     ) -> Result<BasicHeadProcessOutput, InvalidChannel>
     where
+        L: LogicalLink,
         T: Iterator<Item = u8>,
     {
         if fragment.is_start_fragment() {
@@ -103,22 +106,12 @@ impl BasicHeaderProcessor {
                 (ProcessorLengthState::Complete(_), ProcessorChannelIdentifier::FirstByte(v)) => {
                     let raw_channel = <u16>::from_le_bytes([v, byte]);
 
-                    // the top level enum is used as the way to check the
-                    // logical link type. Every call to `process_start`
-                    // is done by the same logical link.
-
-                    let channel_id = match this_channel {
-                        ChannelIdentifier::Le(_) => ChannelIdentifier::le_try_from_raw(raw_channel)
-                            .map_err(|_| InvalidChannel::new_le(raw_channel)),
-                        ChannelIdentifier::Acl(_) => ChannelIdentifier::acl_try_from_raw(raw_channel)
-                            .map_err(|_| InvalidChannel::new_acl(raw_channel)),
-                        ChannelIdentifier::Apb(_) => ChannelIdentifier::apb_try_from_raw(raw_channel)
-                            .map_err(|_| InvalidChannel::new_apb(raw_channel)),
-                    }?;
+                    let channel_id = <L::Flavor as crate::link_flavor::LinkFlavor>::try_channel_from_raw(raw_channel)
+                        .ok_or_else(|| InvalidChannel::new_le(raw_channel))?;
 
                     self.channel_id.set(ProcessorChannelIdentifier::Complete(channel_id));
 
-                    return if channel_id == this_channel {
+                    return if Some(channel_id) == this_channel {
                         // the channel calling this method is the same as
                         // the destination channel for this PDU
                         let (len, cid) = self.get_basic_header().unwrap();
@@ -228,7 +221,7 @@ pub struct SharedPhysicalLink<P: PhysicalLink, U: UnusedChannelResponse> {
     physical_link: UnsafeCell<P>,
     basic_header_processor: BasicHeaderProcessor,
     stasis_fragment: Cell<Option<L2capFragment<P::RecvData>>>,
-    drop_data: Cell<Option<U::ReceiveData>>,
+    drop_data: Cell<Option<U::ReceiveProcessor>>,
 }
 
 unsafe impl<P: PhysicalLink, U: UnusedChannelResponse> Sync for SharedPhysicalLink<P, U> {}
@@ -237,6 +230,7 @@ impl<P, U> SharedPhysicalLink<P, U>
 where
     P: PhysicalLink,
     U: UnusedChannelResponse,
+    U::ReceiveProcessor: Copy,
 {
     pub fn new(physical_link: P) -> Self {
         let owner = Cell::new(PhysicalLinkOwner::None);
@@ -335,14 +329,42 @@ where
     }
 
     /// Remove a channel from sharing the physical link.
-    pub fn remove_channel(&self, id: ChannelIdentifier) {
+    pub fn remove_channel(&self, channel_id: ChannelIdentifier) {
+        match self.owner.get() {
+            PhysicalLinkOwner::Sender(id) if id == channel_id => {
+                self.owner.set(PhysicalLinkOwner::None);
+
+                self.basic_header_processor.clear_basic_header();
+            }
+            PhysicalLinkOwner::Receiver(id, count) if id == channel_id => {
+                self.owner.set(PhysicalLinkOwner::AnyReceiver);
+
+                debug_assert_eq!(self.drop_data.get(), None);
+
+                if let Some((len, cid)) = self.basic_header_processor.get_basic_header() {
+                    // the basic header was processed, the dropped
+                    // channel would have any previously received
+                    // PDU fragments.
+
+                    let receive_data = U::new_junked_data(len.into(), count, cid);
+
+                    self.drop_data.set(Some(receive_data));
+                }
+            }
+            _ => (),
+        }
+
         let mut borrowed_channels = self.channels.borrow_mut();
 
-        if let Ok(index) = borrowed_channels.binary_search(&id) {
+        if let Ok(index) = borrowed_channels.binary_search(&channel_id) {
             borrowed_channels.remove(index);
         }
     }
 
+    /// Maybe send a fragment
+    ///
+    /// This is used for maybe sending a fragment through the link. For the 'first' channel that
+    /// calls this method, it takes ownership and
     pub fn maybe_send<'s, T>(&'s self, owner: ChannelIdentifier, fragment: L2capFragment<T>) -> Poll<P::SendFut<'s>>
     where
         T: 's + IntoIterator<Item = u8>,
@@ -377,40 +399,6 @@ where
             .map_err(|e| MaybeRecvError::RecvError(e))
     }
 
-    pub async fn maybe_recv(
-        &self,
-        owner: ChannelIdentifier,
-    ) -> Result<Result<BasicHeadedFragment<P::RecvData>, U::Response>, MaybeRecvError<P, U>> {
-        loop {
-            core::future::poll_fn(|_| {
-                if self.owner.get().is_none() {
-                    self.owner.set(PhysicalLinkOwner::Receiver(owner));
-                } else if self.owner.get() != PhysicalLinkOwner::Receiver(owner) {
-                    return Poll::Pending;
-                }
-
-                Poll::Ready(())
-            })
-            .await;
-
-            let fragment = unsafe { self.recv_fragment().await? };
-
-            if self.drop_data.get().is_some() {
-                if let Some(rsp) = self.process_dumped_fragment(fragment)? {
-                    break Ok(Err(rsp));
-                }
-            } else {
-                match self.maybe_recv_header_process(owner, fragment)? {
-                    MaybeReceiveOutput::HeadedFragment(f) => break Ok(Ok(f)),
-                    MaybeReceiveOutput::UnusedChannelPduResponse(rsp) => break Ok(Err(rsp)),
-                    MaybeReceiveOutput::Undetermined
-                    | MaybeReceiveOutput::PduIsForDifferentChannel
-                    | MaybeReceiveOutput::UnusedChannelFragmentForgotten => continue,
-                }
-            }
-        }
-    }
-
     /// Maybe receive the header
     ///
     /// # Output
@@ -426,13 +414,51 @@ where
     /// ## PDU Drop/Reject (recap)
     /// Dropping or Rejecting occurs whenever a PDU is received with a channel identifier of a
     /// channel that is not currently used by the link layer instance.
-    fn maybe_recv_header_process(
+    fn maybe_recv_header_process<L: LogicalLink>(
         &self,
         owner: ChannelIdentifier,
-        fragment: L2capFragment<P::RecvData>,
+        mut fragment: L2capFragment<P::RecvData>,
     ) -> Result<MaybeReceiveOutput<P, U>, MaybeRecvError<P, U>> {
         if let Some((len, cid)) = self.basic_header_processor.get_basic_header() {
-            return if owner == cid {
+            let ret = if owner == cid {
+                let header_fragment = BasicHeadedFragment {
+                    length: len,
+                    channel_id: cid,
+                    fragment,
+                };
+
+                MaybeReceiveOutput::HeadedFragment(header_fragment)
+            } else {
+                MaybeReceiveOutput::PduIsForDifferentChannel
+            };
+
+            return Ok(ret);
+        }
+
+        let active_channels = self.channels.borrow();
+
+        let process_output =
+            self.basic_header_processor
+                .process::<L, _>(&mut fragment, Some(owner), &**active_channels)?;
+
+        drop(active_channels);
+
+        match process_output {
+            BasicHeadProcessOutput::Undetermined => {
+                self.owner.set(PhysicalLinkOwner::AnyReceiver);
+
+                Ok(MaybeReceiveOutput::Undetermined)
+            }
+            BasicHeadProcessOutput::PduIsForDifferentChannel(cid) => {
+                self.owner.set(PhysicalLinkOwner::Receiver(cid, 0));
+
+                self.stasis_fragment.set(Some(fragment));
+
+                Ok(MaybeReceiveOutput::PduIsForDifferentChannel)
+            }
+            BasicHeadProcessOutput::PduIsForThisChannel(len, cid) => {
+                self.owner.set(PhysicalLinkOwner::Receiver(cid, 0));
+
                 let header_fragment = BasicHeadedFragment {
                     length: len,
                     channel_id: cid,
@@ -440,53 +466,137 @@ where
                 };
 
                 Ok(MaybeReceiveOutput::HeadedFragment(header_fragment))
-            } else {
-                Ok(MaybeReceiveOutput::PduIsForDifferentChannel)
-            };
-        }
-
-        let mut fragment = Some(fragment);
-
-        let active_channels = self.channels.borrow();
-
-        let process_output =
-            self.basic_header_processor
-                .process(fragment.as_mut().unwrap(), owner, &**active_channels)?;
-
-        drop(active_channels);
-
-        match process_output {
-            BasicHeadProcessOutput::Undetermined => Ok(MaybeReceiveOutput::Undetermined),
-            BasicHeadProcessOutput::PduIsForDifferentChannel(cid) => {
-                self.owner.set(PhysicalLinkOwner::Receiver(cid));
-
-                self.stasis_fragment.set(fragment.take());
-
-                Ok(MaybeReceiveOutput::PduIsForDifferentChannel)
-            }
-            BasicHeadProcessOutput::PduIsForThisChannel(len, cid) => {
-                let header_fragment = BasicHeadedFragment {
-                    length: len,
-                    channel_id: cid,
-                    fragment: fragment.take().unwrap(),
-                };
-
-                Ok(MaybeReceiveOutput::HeadedFragment(header_fragment))
             }
             BasicHeadProcessOutput::PduIsForUnusedChannel(len, cid) => {
-                // set this channel to deal with the
-                // to be dumped PDU
-                self.owner.set(PhysicalLinkOwner::Receiver(owner));
+                self.owner.set(PhysicalLinkOwner::AnyReceiver);
 
                 let receive_data = U::new_request_data(len.into(), cid);
 
                 self.drop_data.set(Some(receive_data));
 
-                let fragment = fragment.take().unwrap();
-
                 match self.process_dumped_fragment(fragment)? {
                     Some(response) => Ok(MaybeReceiveOutput::UnusedChannelPduResponse(response)),
                     None => Ok(MaybeReceiveOutput::UnusedChannelFragmentForgotten),
+                }
+            }
+        }
+    }
+
+    /// Maybe receive BasicHeadedFragment`
+    ///
+    /// This is used by *all* channels for *maybe* receiving a [`BasicHeadedFragment`].
+    ///
+    /// This is a first-come-maybe-served operation. Before any data is processed, the 'first'
+    /// channel to call `maybe_recv` after being awoken is given the job to process the received
+    /// bytes. This may continue multiple times if the fragment size is smaller than the basic
+    /// header (the initial receiver will be the only one able to continue receiving) .
+    ///
+    /// Every channel's data type starts with a basic header. For channels that use a more complex
+    /// PDU they will need to further clarify the fields of the PDU within their own implementation.
+    ///
+    /// # Input Owner
+    /// For channels, `owner` must always be `Some(id)` where id is the channel identifier. The only
+    /// exception where `owner` is be `None` is for a collection.
+    pub async fn maybe_recv<L: LogicalLink>(
+        &self,
+        owner: ChannelIdentifier,
+    ) -> Result<Result<BasicHeadedFragment<P::RecvData>, U::Response>, MaybeRecvError<P, U>> {
+        loop {
+            let count = core::future::poll_fn(|_| match self.owner.get() {
+                PhysicalLinkOwner::Receiver(current, count) if current == owner => return Poll::Ready(count),
+                PhysicalLinkOwner::None | PhysicalLinkOwner::AnyReceiver => Poll::Ready(0),
+                _ => Poll::Pending,
+            })
+            .await;
+
+            let fragment = if let Some(fragment) = self.stasis_fragment.take() {
+                fragment
+            } else {
+                unsafe { self.recv_fragment().await? }
+            };
+
+            if self.drop_data.get().is_some() {
+                if let Some(rsp) = self.process_dumped_fragment(fragment)? {
+                    break Ok(Err(rsp));
+                }
+            } else {
+                match self.maybe_recv_header_process::<L>(owner, fragment)? {
+                    MaybeReceiveOutput::HeadedFragment(f) => {
+                        let new_count = count + f.fragment.get_data().len();
+
+                        self.owner.set(PhysicalLinkOwner::Receiver(owner, new_count));
+
+                        break Ok(Ok(f));
+                    }
+                    MaybeReceiveOutput::UnusedChannelPduResponse(rsp) => break Ok(Err(rsp)),
+                    MaybeReceiveOutput::Undetermined
+                    | MaybeReceiveOutput::PduIsForDifferentChannel
+                    | MaybeReceiveOutput::UnusedChannelFragmentForgotten => continue,
+                }
+            }
+        }
+    }
+
+    /// Determining if a channel in the collection has received the beginning of a L2CAP PDU
+    ///
+    /// Input `query_collection` is used for querying the collection to determine if a received PDU
+    /// is for a channel within that collection.
+    pub async fn pre_receive_collection<L, F, O>(&self, query_collection: F) -> Result<Option<O>, MaybeRecvError<P, U>>
+    where
+        L: LogicalLink,
+        F: Fn(ChannelIdentifier) -> Option<O>,
+    {
+        loop {
+            if let Some(o) = core::future::poll_fn(|_| match self.owner.get() {
+                PhysicalLinkOwner::Receiver(channel, _) => {
+                    if let Some(o) = query_collection(channel) {
+                        Poll::Ready(Some(o))
+                    } else {
+                        Poll::Pending
+                    }
+                }
+                PhysicalLinkOwner::None => Poll::Ready(None),
+                _ => Poll::Pending,
+            })
+            .await
+            {
+                // there will be a fragment within `self.statis_fragment`
+
+                return Ok(Some(o));
+            }
+
+            // only the starting fragment or dumped
+            // fragments should be received here
+            let mut fragment = unsafe { self.recv_fragment().await? };
+
+            let active_channels = self.channels.borrow();
+
+            let process_output =
+                self.basic_header_processor
+                    .process::<L, _>(&mut fragment, None, &**active_channels)?;
+
+            drop(active_channels);
+
+            match process_output {
+                BasicHeadProcessOutput::Undetermined => continue,
+                BasicHeadProcessOutput::PduIsForDifferentChannel(channel) => {
+                    self.stasis_fragment.set(Some(fragment));
+
+                    if let Some(o) = query_collection(channel) {
+                        break Ok(Some(o));
+                    }
+                }
+                BasicHeadProcessOutput::PduIsForThisChannel(_, _) => unreachable!(),
+                BasicHeadProcessOutput::PduIsForUnusedChannel(len, cid) => {
+                    self.owner.set(PhysicalLinkOwner::AnyReceiver);
+
+                    let receive_data = U::new_request_data(len.into(), cid);
+
+                    self.drop_data.set(Some(receive_data));
+
+                    self.stasis_fragment.set(Some(fragment));
+
+                    break Ok(None);
                 }
             }
         }
@@ -516,6 +626,32 @@ where
             Ok(None)
         }
     }
+
+    /// Process a dumbed frame
+    ///
+    /// This is used by collections where `maybe_recv` cannot be used for dump data
+    pub async fn dump_frame(&self) -> Result<Option<U::Response>, MaybeRecvError<P, U>> {
+        loop {
+            let fragment = match self.stasis_fragment.take() {
+                Some(fragment) => fragment,
+                None => unsafe { self.recv_fragment().await? },
+            };
+
+            let mut recv_data = self.drop_data.get().unwrap();
+
+            if recv_data
+                .process(fragment)
+                .map_err(|e| MaybeRecvError::DumpRecvError(e))?
+            {
+                self.clear_owner();
+                self.drop_data.take();
+
+                break Ok(U::try_generate_response(recv_data));
+            } else {
+                self.drop_data.set(Some(recv_data));
+            }
+        }
+    }
 }
 
 enum MaybeReceiveOutput<P: PhysicalLink, U: UnusedChannelResponse> {
@@ -526,11 +662,15 @@ enum MaybeReceiveOutput<P: PhysicalLink, U: UnusedChannelResponse> {
     UnusedChannelFragmentForgotten,
 }
 
+/// Errors for the methods [`maybe_recv`] and [`maybe_recv_collection`]
+///
+/// [`maybe_recv`]: SharedPhysicalLink::maybe_recv
+/// [`maybe_recv_collection`]: SharedPhysicalLink::pre_receive_collection
 pub enum MaybeRecvError<P: PhysicalLink, U: UnusedChannelResponse> {
     Disconnected,
     RecvError(P::RecvErr),
     InvalidChannel(InvalidChannel),
-    DumpRecvError(<U::ReceiveData as ReceiveDataProcessor>::Error),
+    DumpRecvError(<U::ReceiveProcessor as ReceiveDataProcessor>::Error),
 }
 
 impl<P: PhysicalLink, U: UnusedChannelResponse> From<InvalidChannel> for MaybeRecvError<P, U> {
@@ -546,7 +686,25 @@ enum PhysicalLinkOwner {
     /// Occupied by a channel sending a L2CAP PDU
     Sender(ChannelIdentifier),
     /// Occupied by a channel receiving a L2CAP PDU
-    Receiver(ChannelIdentifier),
+    ///
+    /// The second field is the number of bytes received so far (excluding the basic header).
+    ///
+    /// If the receiving channel is dropped while the current owner, this state changes to
+    /// `AnyReceiver(_)` and the current L2CAP PDU is treated like a [*junked*] frame.
+    ///
+    /// [*junked*]: UnusedChannelResponse::new_junked_data
+    Receiver(ChannelIdentifier, usize),
+    /// Receiving a L2CAP PDU that any channel can process
+    ///
+    /// This occurs whenever:
+    /// * the basic header hasn't been completed received
+    /// * a channel does not exist for the received PDU (figured out after the basic header)
+    ///
+    /// This allows any receiving channel to process the current L2CAP PDU. This state will probably
+    /// change to `Receiver(_, _)` after the basic header is fully processed as it is likely the
+    /// basic header contains an ID of an active channel, but if the ID is for no channel, then this
+    /// state will not change.
+    AnyReceiver,
 }
 
 impl PhysicalLinkOwner {
