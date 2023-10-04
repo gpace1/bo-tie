@@ -15,14 +15,6 @@ use crate::{CreditBasedChannel, LogicalLink, PhysicalLink, SignallingChannel};
 use alloc::vec::Vec;
 use bo_tie_core::buffer::TryExtend;
 
-/// Trait for exact sized iterators that output `u8`
-///
-/// This is used for creating a boxed equivalent of the dyn object `Iterator<Item = u8> +
-/// ExactSizedIterator`.
-trait ExactIteratorU8: Iterator<Item = u8> + ExactSizeIterator {}
-
-impl<X> ExactIteratorU8 for X where X: Iterator<Item = u8> + ExactSizeIterator {}
-
 macro_rules! send_credit_packets {
     ($channel:expr, $packets:expr, $opt_sdu_packets:expr) => {{
         use crate::pdu::SduPacketsIterator;
@@ -55,14 +47,14 @@ macro_rules! send_credit_packets {
     }};
 }
 
-struct SharedCreditItem<'a, L: LogicalLink> {
+struct SharedCreditItem<'a, L: LogicalLink, S: Iterator> {
     channel: CreditBasedChannel<'a, L>,
-    to_send_sdu: Option<crate::pdu::credit_frame::PacketsIterator<Box<dyn ExactIteratorU8>>>,
+    to_send_sdu: Option<crate::pdu::credit_frame::PacketsIterator<S>>,
     to_recv_sdu: Vec<CreditBasedFrame<Vec<u8>>>,
     to_recv_required_credits: usize,
 }
 
-impl<'a, L: LogicalLink> SharedCreditItem<'a, L> {
+impl<'a, L: LogicalLink, S: Iterator> SharedCreditItem<'a, L, S> {
     fn new(channel: CreditBasedChannel<'a, L>) -> Self {
         let to_send_sdu = None;
         let to_recv_sdu = alloc::vec::Vec::new();
@@ -88,13 +80,17 @@ impl<'a, L: LogicalLink> SharedCreditItem<'a, L> {
 /// this is done in order to call `send` and `remove`
 ///
 /// [`get_this_channel_id`]: CreditBasedChannel::get_this_channel_id
-pub struct SharedCredit<'a, L: LogicalLink> {
+pub struct SharedCredit<'a, L: LogicalLink, S: Iterator> {
     extra_credits: usize,
     next_to_credit: usize,
-    channels: alloc::vec::Vec<SharedCreditItem<'a, L>>,
+    channels: alloc::vec::Vec<SharedCreditItem<'a, L, S>>,
 }
 
-impl<'a, L: LogicalLink> SharedCredit<'a, L> {
+impl<'a, L, S> SharedCredit<'a, L, S>
+where
+    L: LogicalLink,
+    S: Iterator<Item = u8> + ExactSizeIterator,
+{
     /// Create a new `SharedCreditCollection`
     ///
     /// This creates a new `SharedCreditCollection` with input `shared_credits` as the staring
@@ -254,8 +250,8 @@ impl<'a, L: LogicalLink> SharedCredit<'a, L> {
     /// this method can be called again with a new `sdu`.
     pub async fn saved_send<T>(&mut self, sdu: T, id: ChannelIdentifier) -> Result<bool, SharedCreditError<L>>
     where
-        T: IntoIterator<Item = u8>,
-        T::IntoIter: ExactSizeIterator + 'static,
+        T: IntoIterator<Item = u8, IntoIter = S>,
+        S: Iterator<Item = u8> + ExactSizeIterator,
     {
         use crate::pdu::FragmentL2capSdu;
 
@@ -275,30 +271,38 @@ impl<'a, L: LogicalLink> SharedCredit<'a, L> {
             return Err(SharedCreditError::PendingSdu);
         }
 
-        let sdu = Box::new(sdu.into_iter()) as Box<dyn ExactIteratorU8>;
+        let sdu_iter = sdu.into_iter();
 
-        let c_sdu = CreditBasedSdu::new(sdu, channel.get_peer_channel_id(), channel.get_mps());
+        let c_sdu = CreditBasedSdu::new(sdu_iter, channel.get_peer_channel_id(), channel.get_mps());
 
         let mut packets = c_sdu.into_packets().map_err(|e| SharedCreditError::PacketsError(e))?;
 
         send_credit_packets!(channel, packets, opt_sdu_packets)
     }
 
-    /// Increment peer credits
+    /// Add peer provided credits for sending
     ///
-    /// This will increment the peer allocated credits for the channel within the
+    /// If the channel within the `indication` exists within this collection, it will be given the
+    /// credits in the `indication`. If this channel is in the middle of sending a SDU (due to
+    /// previously not having any more credits) this method will use the new credits within the
+    /// `indication` to continue sending k-frames until either the rest of SDU is sent or all
+    /// credits within the indication were used.
+    ///
+    /// Credits are saved if either there was no pending SDU data to be sent, or there were credits
+    /// left over after fully sending a stored SDU.
     ///
     /// # Output
-    /// `true` is returned if the a new SDU can be sent for the channel that was given the credits.
+    /// The output is `true` unless the amount of credits given were not enough to finish sending
+    /// the currently stored SDU to the channel.
     ///
     /// # Error
-    /// An error is output by the returned future if there is no channel with the channel id within
-    /// the input flow control credit indication.
-    pub async fn inc_peer_credits(
+    /// An error is output by the returned future if there is no channel within this collection with
+    /// the same channel ID as in the input `indication`.
+    pub async fn add_peer_credits(
         &mut self,
-        ind: crate::signals::packets::FlowControlCreditInd,
+        indication: crate::signals::packets::FlowControlCreditInd,
     ) -> Result<bool, SharedCreditError<L>> {
-        let id = ind.get_cid();
+        let id = indication.get_cid();
 
         if let Ok(index) = self
             .channels
@@ -306,7 +310,7 @@ impl<'a, L: LogicalLink> SharedCredit<'a, L> {
         {
             let item = self.channels.get_mut(index).unwrap();
 
-            item.channel.add_peer_credits(ind.get_credits());
+            item.channel.add_peer_credits(indication.get_credits());
 
             if let Some(mut packets) = item.to_send_sdu.take() {
                 send_credit_packets!(&mut item.channel, packets, &mut item.to_send_sdu)
