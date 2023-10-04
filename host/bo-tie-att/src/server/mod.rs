@@ -1759,8 +1759,6 @@ where
 
         let check_permissions_result = check_permissions!(self, handle, &super::FULL_WRITE_PERMISSIONS);
 
-        println!("check_permissions_result: {:?}", check_permissions_result);
-
         if let Err(e) = check_permissions_result {
             return send_error!(channel, handle, ClientPduName::PrepareWriteRequest, e);
         }
