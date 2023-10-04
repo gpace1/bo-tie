@@ -509,7 +509,9 @@ where
             })
             .await;
 
-            let fragment = if let Some(fragment) = self.stasis_fragment.take() {
+            let maybe_stasis_fragment = self.stasis_fragment.take();
+
+            let fragment = if let Some(fragment) = maybe_stasis_fragment {
                 fragment
             } else {
                 unsafe { self.recv_fragment().await? }
@@ -632,7 +634,9 @@ where
     /// This is used by collections where `maybe_recv` cannot be used for dump data
     pub async fn dump_frame(&self) -> Result<Option<U::Response>, MaybeRecvError<P, U>> {
         loop {
-            let fragment = match self.stasis_fragment.take() {
+            let maybe_stasis_fragment = self.stasis_fragment.take();
+
+            let fragment = match maybe_stasis_fragment {
                 Some(fragment) => fragment,
                 None => unsafe { self.recv_fragment().await? },
             };
