@@ -24,10 +24,10 @@ impl Iterator for LeCreditRequestIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = match self.pos {
-            0 => Some(LeCreditBasedConnectionRequest::CODE),
-            1 => Some(self.req.identifier.get()),
-            2 => Some(10),
-            3 => Some(0),
+            0 => Some(10),
+            1 => Some(0),
+            2 => Some(LeCreditBasedConnectionRequest::CODE),
+            3 => Some(self.req.identifier.get()),
             4 => self.req.spsm.0.to_le_bytes().get(0).copied(),
             5 => self.req.spsm.0.to_le_bytes().get(1).copied(),
             6 => self.req.get_source_cid().to_val().to_le_bytes().get(0).copied(),
@@ -74,13 +74,12 @@ impl Iterator for CmdRejectRspIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = match self.pos {
-            0 => Some(CommandRejectResponse::CODE),
-            1 => Some(self.reject.identifier.get()),
-
             // using `to_le_bytes` here is kinda dirty without
             // converting to u16, but the logic is the same.
-            2 => self.reject.data.len().to_le_bytes().get(0).copied(),
-            3 => self.reject.data.len().to_le_bytes().get(1).copied(),
+            0 => self.reject.data.len().to_le_bytes().get(0).copied(),
+            1 => self.reject.data.len().to_le_bytes().get(1).copied(),
+            2 => Some(CommandRejectResponse::CODE),
+            3 => Some(self.reject.identifier.get()),
             4 => self.reject.reason.into_val().to_le_bytes().get(0).copied(),
             5 => self.reject.reason.into_val().to_le_bytes().get(1).copied(),
             _ => self.reject.data.iter_pos(self.pos - 6),
@@ -119,13 +118,12 @@ impl Iterator for DisconnectRequestIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = match self.pos {
-            0 => Some(DisconnectRequest::CODE),
-            1 => Some(self.request.identifier.get()),
-
             // using `to_le_bytes` here is kinda dirty without
             // converting to u16, but the logic is the same.
-            2 => 4u16.to_le_bytes().get(0).copied(),
-            3 => 4u16.to_le_bytes().get(1).copied(),
+            0 => 4u16.to_le_bytes().get(0).copied(),
+            1 => 4u16.to_le_bytes().get(1).copied(),
+            2 => Some(DisconnectRequest::CODE),
+            3 => Some(self.request.identifier.get()),
             4 => self.request.destination_cid.to_val().to_le_bytes().get(0).copied(),
             5 => self.request.destination_cid.to_val().to_le_bytes().get(1).copied(),
             6 => self.request.source_cid.to_val().to_le_bytes().get(0).copied(),
@@ -166,13 +164,12 @@ impl Iterator for DisconnectResponseIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = match self.pos {
-            0 => Some(DisconnectRequest::CODE),
-            1 => Some(self.request.identifier.get()),
-
             // using `to_le_bytes` here is kinda dirty without
             // converting to u16, but the logic is the same.
-            2 => 4u16.to_le_bytes().get(0).copied(),
-            3 => 4u16.to_le_bytes().get(1).copied(),
+            0 => 4u16.to_le_bytes().get(0).copied(),
+            1 => 4u16.to_le_bytes().get(1).copied(),
+            2 => Some(DisconnectRequest::CODE),
+            3 => Some(self.request.identifier.get()),
             4 => self.request.destination_cid.to_val().to_le_bytes().get(0).copied(),
             5 => self.request.destination_cid.to_val().to_le_bytes().get(1).copied(),
             6 => self.request.source_cid.to_val().to_le_bytes().get(0).copied(),
@@ -213,10 +210,10 @@ impl Iterator for LeCreditResponseIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = match self.pos {
-            0 => Some(LeCreditBasedConnectionResponse::CODE),
-            1 => Some(self.rsp.identifier.get()),
-            2 => Some(10),
-            3 => Some(0),
+            0 => Some(10),
+            1 => Some(0),
+            2 => Some(LeCreditBasedConnectionResponse::CODE),
+            3 => Some(self.rsp.identifier.get()),
             4 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(0).copied(),
             5 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(1).copied(),
             6 => self.rsp.mtu.to_le_bytes().get(0).copied(),
@@ -274,10 +271,10 @@ impl Iterator for FlowControlCreditIndIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = match self.pos {
-            0 => Some(FlowControlCreditInd::CODE),
-            1 => Some(self.ind.identifier.get()),
-            2 => Some(4),
-            3 => Some(0),
+            0 => Some(4),
+            1 => Some(0),
+            2 => Some(FlowControlCreditInd::CODE),
+            3 => Some(self.ind.identifier.get()),
             4 => self.ind.cid.to_val().to_le_bytes().get(0).copied(),
             5 => self.ind.cid.to_val().to_le_bytes().get(1).copied(),
             6 => self.ind.credits.to_le_bytes().get(0).copied(),
