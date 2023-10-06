@@ -5,7 +5,6 @@ mod iter;
 use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 use crate::pdu::control_frame::ControlFrame;
 use crate::signals::{SignalError, TryIntoSignal};
-use core::fmt::{self, Display, Formatter};
 use core::num::NonZeroU8;
 
 macro_rules! max_u16 {
@@ -247,8 +246,8 @@ impl SignalCode {
     }
 }
 
-impl Display for SignalCode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl core::fmt::Display for SignalCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("L2CAP ")?;
 
         match self {
@@ -294,8 +293,8 @@ impl TryFrom<u8> for SignalCode {
 #[derive(Debug, Copy, Clone)]
 pub struct InvalidSignalCode(u8);
 
-impl Display for InvalidSignalCode {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+impl core::fmt::Display for InvalidSignalCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "code {} is not a valid L2CAP signal packet type", self.0)
     }
 }
@@ -378,8 +377,8 @@ impl TryFrom<u16> for CommandRejectReason {
 #[derive(Debug, Copy, Clone)]
 pub struct InvalidCommandRejectReason(u16);
 
-impl Display for InvalidCommandRejectReason {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+impl core::fmt::Display for InvalidCommandRejectReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "value {} is not a valid command reject reason", self.0)
     }
 }
@@ -441,8 +440,8 @@ pub enum CommandRejectReasonDataError {
     InvalidSize,
 }
 
-impl Display for CommandRejectReasonDataError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+impl core::fmt::Display for CommandRejectReasonDataError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Self::InvalidSize => f.write_str("reason data has an invalid size"),
         }
@@ -514,12 +513,12 @@ impl CommandRejectResponse {
         ControlFrame::new(iter::CmdRejectRspIter::new(self), channel_id)
     }
 
-    /// Try to create a `CommandRejectResponse` from raw L2CAP data.
-    pub fn try_from_raw_control_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    /// Try to create a `CommandRejectResponse` from a c-frame's payload.
+    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        ControlFrame::try_from_slice::<L>(data)
+        <Self as TryIntoSignal>::try_from::<L>(payload)
     }
 }
 
@@ -628,12 +627,12 @@ impl DisconnectRequest {
         ControlFrame::new(iter::DisconnectRequestIter::new(self), channel_id)
     }
 
-    /// Try to create a `CommandRejectResponse` from raw L2CAP data.
-    pub fn try_from_raw_control_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    /// Try to create a `CommandRejectResponse` from a c-frame's payload.
+    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        ControlFrame::try_from_slice::<L>(data)
+        <Self as TryIntoSignal>::try_from::<L>(payload)
     }
 }
 
@@ -725,12 +724,12 @@ impl DisconnectResponse {
         ControlFrame::new(iter::DisconnectResponseIter::new(self), channel_id)
     }
 
-    /// Try to create a `CommandRejectResponse` from raw L2CAP data.
-    pub fn try_from_raw_control_frame<L>(data: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    /// Try to create a `CommandRejectResponse` from a c-frame's payload.
+    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        ControlFrame::try_from_slice::<L>(data)
+        <Self as TryIntoSignal>::try_from::<L>(payload)
     }
 }
 
@@ -845,8 +844,8 @@ pub enum BoundsError {
     TooLarge(&'static str, &'static str),
 }
 
-impl Display for BoundsError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+impl core::fmt::Display for BoundsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             BoundsError::TooSmall(what, bound) => write!(f, "value for {what} is smaller than {bound}"),
             BoundsError::TooLarge(what, bound) => write!(f, "value for {what} is larger than {bound}"),
@@ -889,12 +888,12 @@ impl LeCreditBasedConnectionRequest {
         ControlFrame::new(iter::LeCreditRequestIter::new(self), channel_id)
     }
 
-    /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_raw_control_frame<L>(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    /// Try to create a `LeCreditBasedConnectionRequest` from a c-frame's payload.
+    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        ControlFrame::try_from_slice::<L>(c_frame)
+        <Self as TryIntoSignal>::try_from::<L>(payload)
     }
 }
 
@@ -968,13 +967,13 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
             raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(9).copied().ok_or(SignalError::InvalidSize)?,
         ]))
-        .map_err(|_| SignalError::InvalidValue)?;
+        .map_err(|_| SignalError::InvalidField("MTU"))?;
 
         let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
             raw.get(10).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(11).copied().ok_or(SignalError::InvalidSize)?,
         ]))
-        .map_err(|_| SignalError::InvalidValue)?;
+        .map_err(|_| SignalError::InvalidField("MPS"))?;
 
         let initial_credits = <u16>::from_le_bytes([
             raw.get(12).copied().ok_or(SignalError::InvalidSize)?,
@@ -996,11 +995,10 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
     }
 }
 
-/// Errors for the *result* field of a [`LeCreditBasedConnectionResponse`]
-///
-/// These are the errors that are sent in response to
-#[derive(Debug, Copy, Clone)]
-pub enum LeCreditBasedConnectionResponseError {
+/// The result field of a LE credit based connection response
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum LeCreditBasedConnectionResponseResult {
+    ConnectionSuccessful,
     SpsmNotSupported,
     NoResourcesAvailable,
     InsufficientAuthentication,
@@ -1010,26 +1008,22 @@ pub enum LeCreditBasedConnectionResponseError {
     InvalidSourceCid,
     SourceCidAlreadyAllocated,
     UnacceptableParameters,
-    /// Used when an error value is received and is not defined by the current Bluetooth Spec. This
-    /// should not be used to set the error when responding to a *LE Credit Based Connection
-    /// Request*.
-    Unknown(u16),
 }
 
-impl LeCreditBasedConnectionResponseError {
+impl LeCreditBasedConnectionResponseResult {
     /// Convert a `LeCreditBasedConnectionResponseError` to its value
     pub fn to_val(&self) -> u16 {
         match self {
-            LeCreditBasedConnectionResponseError::SpsmNotSupported => 0x2,
-            LeCreditBasedConnectionResponseError::NoResourcesAvailable => 0x4,
-            LeCreditBasedConnectionResponseError::InsufficientAuthentication => 0x5,
-            LeCreditBasedConnectionResponseError::InsufficientAuthorization => 0x6,
-            LeCreditBasedConnectionResponseError::EncryptionKeySizeTooShort => 0x7,
-            LeCreditBasedConnectionResponseError::InsufficientEncryption => 0x8,
-            LeCreditBasedConnectionResponseError::InvalidSourceCid => 0x9,
-            LeCreditBasedConnectionResponseError::SourceCidAlreadyAllocated => 0xa,
-            LeCreditBasedConnectionResponseError::UnacceptableParameters => 0xb,
-            LeCreditBasedConnectionResponseError::Unknown(_) => panic!(""),
+            LeCreditBasedConnectionResponseResult::ConnectionSuccessful => 0x0,
+            LeCreditBasedConnectionResponseResult::SpsmNotSupported => 0x2,
+            LeCreditBasedConnectionResponseResult::NoResourcesAvailable => 0x4,
+            LeCreditBasedConnectionResponseResult::InsufficientAuthentication => 0x5,
+            LeCreditBasedConnectionResponseResult::InsufficientAuthorization => 0x6,
+            LeCreditBasedConnectionResponseResult::EncryptionKeySizeTooShort => 0x7,
+            LeCreditBasedConnectionResponseResult::InsufficientEncryption => 0x8,
+            LeCreditBasedConnectionResponseResult::InvalidSourceCid => 0x9,
+            LeCreditBasedConnectionResponseResult::SourceCidAlreadyAllocated => 0xa,
+            LeCreditBasedConnectionResponseResult::UnacceptableParameters => 0xb,
         }
     }
 
@@ -1037,58 +1031,163 @@ impl LeCreditBasedConnectionResponseError {
     ///
     /// This will convert the value into an error unless the value is zero. If the return is an
     /// `Err(_)` then the result of the connection request was *connection successful*
-    pub fn try_from_raw(value: u16) -> Result<LeCreditBasedConnectionResponseError, ()> {
+    ///
+    /// # Panic
+    /// Input `value` cannot be zero, as this method will panic if the success value is used as the
+    /// input.
+    pub fn try_from_raw(value: u16) -> Result<LeCreditBasedConnectionResponseResult, SignalError> {
         match value {
-            0 => Err(()),
-            0x2 => Ok(LeCreditBasedConnectionResponseError::SpsmNotSupported),
-            0x4 => Ok(LeCreditBasedConnectionResponseError::NoResourcesAvailable),
-            0x5 => Ok(LeCreditBasedConnectionResponseError::InsufficientAuthentication),
-            0x6 => Ok(LeCreditBasedConnectionResponseError::InsufficientAuthorization),
-            0x7 => Ok(LeCreditBasedConnectionResponseError::EncryptionKeySizeTooShort),
-            0x8 => Ok(LeCreditBasedConnectionResponseError::InsufficientEncryption),
-            0x9 => Ok(LeCreditBasedConnectionResponseError::InvalidSourceCid),
-            0xa => Ok(LeCreditBasedConnectionResponseError::SourceCidAlreadyAllocated),
-            0xb => Ok(LeCreditBasedConnectionResponseError::UnacceptableParameters),
-            v => Ok(LeCreditBasedConnectionResponseError::Unknown(v)),
+            0 => Ok(LeCreditBasedConnectionResponseResult::ConnectionSuccessful),
+            0x2 => Ok(LeCreditBasedConnectionResponseResult::SpsmNotSupported),
+            0x4 => Ok(LeCreditBasedConnectionResponseResult::NoResourcesAvailable),
+            0x5 => Ok(LeCreditBasedConnectionResponseResult::InsufficientAuthentication),
+            0x6 => Ok(LeCreditBasedConnectionResponseResult::InsufficientAuthorization),
+            0x7 => Ok(LeCreditBasedConnectionResponseResult::EncryptionKeySizeTooShort),
+            0x8 => Ok(LeCreditBasedConnectionResponseResult::InsufficientEncryption),
+            0x9 => Ok(LeCreditBasedConnectionResponseResult::InvalidSourceCid),
+            0xa => Ok(LeCreditBasedConnectionResponseResult::SourceCidAlreadyAllocated),
+            0xb => Ok(LeCreditBasedConnectionResponseResult::UnacceptableParameters),
+            _ => Err(SignalError::InvalidField("Result")),
         }
     }
 }
 
+impl core::fmt::Display for LeCreditBasedConnectionResponseResult {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            LeCreditBasedConnectionResponseResult::ConnectionSuccessful => f.write_str("connection successfull"),
+            LeCreditBasedConnectionResponseResult::SpsmNotSupported => f.write_str("SPSM not supported"),
+            LeCreditBasedConnectionResponseResult::NoResourcesAvailable => f.write_str("no resources available"),
+            LeCreditBasedConnectionResponseResult::InsufficientAuthentication => {
+                f.write_str("insufficient authentication")
+            }
+            LeCreditBasedConnectionResponseResult::InsufficientAuthorization => {
+                f.write_str("insufficient authorization")
+            }
+            LeCreditBasedConnectionResponseResult::EncryptionKeySizeTooShort => {
+                f.write_str("encryption key size too short")
+            }
+            LeCreditBasedConnectionResponseResult::InsufficientEncryption => f.write_str("insufficient encryption"),
+            LeCreditBasedConnectionResponseResult::InvalidSourceCid => f.write_str("invalid source CID"),
+            LeCreditBasedConnectionResponseResult::SourceCidAlreadyAllocated => {
+                f.write_str("source CID already allocated")
+            }
+            LeCreditBasedConnectionResponseResult::UnacceptableParameters => f.write_str("unacceptable parameters"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for LeCreditBasedConnectionResponseResult {}
+
+/// The LE credit based connection response signal
 #[derive(Clone, Copy, Debug)]
 pub struct LeCreditBasedConnectionResponse {
     pub identifier: NonZeroU8,
-    pub destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
-    pub mtu: LeCreditMtu,
-    pub mps: LeCreditMps,
-    pub initial_credits: u16,
-    pub result: Result<(), LeCreditBasedConnectionResponseError>,
+    destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
+    mtu: LeCreditMtu,
+    mps: LeCreditMps,
+    initial_credits: u16,
+    result: LeCreditBasedConnectionResponseResult,
 }
 
 impl LeCreditBasedConnectionResponse {
     const CODE: u8 = 0x15;
 
+    /// Create a new **successful** `LeCreditBasedConnectionResponse`
+    ///
+    /// This creates a new `LeCreditBasedConnectionResponse` with the result field as
+    /// [`ConnectionSuccessful`]
+    ///
+    /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
+    pub fn new(
+        identifier: NonZeroU8,
+        destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
+        mtu: LeCreditMtu,
+        mps: LeCreditMps,
+        initial_credits: u16,
+    ) -> Self {
+        let result = LeCreditBasedConnectionResponseResult::ConnectionSuccessful;
+
+        LeCreditBasedConnectionResponse {
+            identifier,
+            destination_dyn_cid,
+            mtu,
+            mps,
+            initial_credits,
+            result,
+        }
+    }
+
     /// Create a new `LeCreditBasedConnectionResponse` for rejecting the request.
     ///
     /// # Note
-    /// The `identifier` must the the same identifier used within the request.
-    pub fn new_rejected(identifier: NonZeroU8, reason: LeCreditBasedConnectionResponseError) -> Self {
+    /// The `identifier` must the the same identifier used within the received LE credit based
+    /// connection request.
+    ///
+    /// # Panic
+    /// The input `reason` cannot be [`ConnectionSuccessful`].
+    ///
+    /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
+    pub fn new_rejected(identifier: NonZeroU8, reason: LeCreditBasedConnectionResponseResult) -> Self {
+        assert_ne!(
+            reason,
+            LeCreditBasedConnectionResponseResult::ConnectionSuccessful,
+            "expected an enumeration other than `ConnectionSuccessful` for input reason"
+        );
+
         Self {
             identifier,
             destination_dyn_cid: crate::channel::id::DynChannelId::new_unchecked(0),
             mtu: LeCreditMtu { val: 0 },
             mps: LeCreditMps { val: 0 },
             initial_credits: 0,
-            result: Err(reason),
+            result: reason,
         }
     }
 
-    /// Get the destination CID
+    /// Get the destination channel ID
     ///
-    /// This will map `destination_dyn_cid` to the full channel identifier.
-    pub fn get_destination_cid(&self) -> ChannelIdentifier {
-        ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(
-            self.destination_dyn_cid,
-        ))
+    /// The return is the destination channel identifier if the result field in the response is
+    /// [`ConnectionSuccessful`].
+    ///
+    /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
+    pub fn get_destination_cid(&self) -> Option<ChannelIdentifier> {
+        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful)
+            .then(|| ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.destination_dyn_cid)))
+    }
+
+    /// Get the maximum transmission unit (MTU)
+    ///
+    /// The return is the the MTU if the result field in the response is [`ConnectionSuccessful`].
+    ///
+    /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
+    pub fn get_mtu(&self) -> Option<LeCreditMtu> {
+        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful).then(|| self.mtu)
+    }
+
+    /// Get the maximum PDU payload size (MPS)
+    ///
+    /// The return is the MPS if the result field in the response is [`ConnectionSuccessful`].
+    ///
+    /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
+    pub fn get_mps(&self) -> Option<LeCreditMps> {
+        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful).then(|| self.mps)
+    }
+
+    /// Get the initial credits
+    ///
+    /// The return is the initial credits provided by the responding device if the result field in
+    /// the response is [`ConnectionSuccessful`].
+    ///
+    /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
+    pub fn get_initial_credits(&self) -> Option<u16> {
+        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful).then(|| self.initial_credits)
+    }
+
+    /// Get the result within the response
+    pub fn get_result(&self) -> LeCreditBasedConnectionResponseResult {
+        self.result
     }
 
     /// Create a c-frame from this signal
@@ -1099,12 +1198,12 @@ impl LeCreditBasedConnectionResponse {
         ControlFrame::new(iter::LeCreditResponseIter::new(self), channel_id)
     }
 
-    /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_raw_control_frame<L>(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    /// Try to create a `LeCreditBasedConnectionRequest` from the payload of a control frame.
+    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        ControlFrame::try_from_slice::<L>(c_frame)
+        <Self as TryIntoSignal>::try_from::<L>(payload)
     }
 }
 
@@ -1155,54 +1254,55 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
             return Err(SignalError::InvalidLengthField);
         }
 
-        let destination_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
-            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidSpsm)?;
-
-        let destination_dyn_cid =
-            if let ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
-                dyn_cid
-            } else {
-                return Err(SignalError::InvalidChannel);
-            };
-
-        let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
-            raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidValue)?;
-
-        let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
-            raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(9).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidValue)?;
-
-        let initial_credits = <u16>::from_le_bytes([
-            raw.get(10).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(11).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
-
         let result_raw = <u16>::from_le_bytes([
             raw.get(12).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(13).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
-        let result = match LeCreditBasedConnectionResponseError::try_from_raw(result_raw) {
-            Ok(error) => Err(error),
-            Err(_) => Ok(()),
-        };
+        let result = LeCreditBasedConnectionResponseResult::try_from_raw(result_raw)?;
 
-        Ok(LeCreditBasedConnectionResponse {
-            identifier,
-            destination_dyn_cid,
-            mtu,
-            mps,
-            initial_credits,
-            result,
-        })
+        if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = result {
+            let destination_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
+                raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
+                raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidChannel)?;
+
+            let destination_dyn_cid =
+                if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
+                    dyn_cid
+                } else {
+                    return Err(SignalError::InvalidChannel);
+                };
+
+            let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
+                raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
+                raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidField("MTU"))?;
+
+            let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
+                raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
+                raw.get(9).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidField("MPS"))?;
+
+            let initial_credits = <u16>::from_le_bytes([
+                raw.get(10).copied().ok_or(SignalError::InvalidSize)?,
+                raw.get(11).copied().ok_or(SignalError::InvalidSize)?,
+            ]);
+
+            Ok(LeCreditBasedConnectionResponse {
+                identifier,
+                destination_dyn_cid,
+                mtu,
+                mps,
+                initial_credits,
+                result,
+            })
+        } else {
+            Ok(LeCreditBasedConnectionResponse::new_rejected(identifier, result))
+        }
     }
 
     fn correct_channel(raw_channel_id: u16) -> bool {
@@ -1302,12 +1402,12 @@ impl FlowControlCreditInd {
         ControlFrame::new(iter::FlowControlCreditIndIter::new(self), channel_id)
     }
 
-    /// Try to create a `LeCreditBasedConnectionRequest` from a C-frame
-    pub fn try_from_raw_control_frame<L>(c_frame: &[u8]) -> Result<Self, crate::pdu::ControlFrameError>
+    /// Try to create a `LeCreditBasedConnectionRequest` from a c-frame's payload.
+    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        ControlFrame::try_from_slice::<L>(c_frame)
+        <Self as TryIntoSignal>::try_from::<L>(payload)
     }
 }
 

@@ -30,37 +30,6 @@ impl<T> ControlFrame<T> {
         ControlFrame { channel_id, payload }
     }
 
-    /// Try to create a signaling packet from a slice of bytes
-    ///
-    /// The input `data` must be a slice of bytes containing a complete control frame.
-    ///
-    /// # Requirements
-    /// * The length of the input `data` must be > 4
-    /// * The length field in the input `data` must be less than or equal to the length of the
-    ///   payload field. Any bytes beyond the payload in `data` are ignored.
-    /// * The channel id field must be valid for the signaling message.
-    pub(crate) fn try_from_slice<L>(data: &[u8]) -> Result<T, ControlFrameError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        T: crate::signals::TryIntoSignal,
-    {
-        if data.len() >= 4 {
-            let len: usize = <u16>::from_le_bytes([data[0], data[1]]).into();
-
-            let raw_channel_id = <u16>::from_le_bytes([data[2], data[3]]);
-
-            if T::correct_channel(raw_channel_id) {
-                Err(ControlFrameError::InvalidChannelId)
-            } else if len == data[4..].len() {
-                T::try_from::<L>(&data[4..]).map_err(|e| ControlFrameError::SignalError(e))
-            } else {
-                Err(ControlFrameError::PayloadLengthIncorrect)
-            }
-        } else {
-            Err(ControlFrameError::RawDataTooSmall)
-        }
-    }
-
     pub(crate) fn into_payload(self) -> T {
         self.payload
     }
@@ -104,8 +73,6 @@ where
 /// These are errors that can occur when trying to translate raw data into a L2CAP signal frame.
 #[derive(Debug, Clone, Copy)]
 pub enum ControlFrameError {
-    /// Raw data is too small for an ACL frame
-    RawDataTooSmall,
     /// Specified payload length didn't match the actual payload length
     PayloadLengthIncorrect,
     InvalidChannelId,
@@ -122,7 +89,6 @@ pub enum ControlFrameError {
 impl core::fmt::Display for ControlFrameError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            ControlFrameError::RawDataTooSmall => write!(f, "raw data is too small for a control frame"),
             ControlFrameError::PayloadLengthIncorrect => {
                 write!(f, "the payload length field didn't match the actual payload length")
             }

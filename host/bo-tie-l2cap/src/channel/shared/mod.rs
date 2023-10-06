@@ -107,7 +107,7 @@ impl BasicHeaderProcessor {
                     let raw_channel = <u16>::from_le_bytes([v, byte]);
 
                     let channel_id = <L::Flavor as crate::link_flavor::LinkFlavor>::try_channel_from_raw(raw_channel)
-                        .ok_or_else(|| InvalidChannel::new_le(raw_channel))?;
+                        .ok_or_else(|| InvalidChannel::new::<L::Flavor>(raw_channel))?;
 
                     self.channel_id.set(ProcessorChannelIdentifier::Complete(channel_id));
 
@@ -274,8 +274,8 @@ where
 
     /// Add a channel to this `SharedPhysicalLink`
     ///
-    /// `true` is returned if the channel is successfully added, however if the channel already
-    /// exists `false` is returned.
+    /// `true` is returned if the channel is successfully added, but `false` is returned if the
+    /// channel already exists with the input `id`.
     pub fn add_channel(&self, id: ChannelIdentifier) -> bool {
         let mut borrowed_channels = self.channels.borrow_mut();
 

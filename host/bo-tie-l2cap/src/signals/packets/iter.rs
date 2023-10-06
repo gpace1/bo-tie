@@ -217,28 +217,24 @@ impl Iterator for LeCreditResponseIter {
             1 => Some(self.rsp.identifier.get()),
             2 => Some(10),
             3 => Some(0),
-            4 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(0).copied(),
-            5 => self.rsp.get_destination_cid().to_val().to_le_bytes().get(1).copied(),
+            4 => self
+                .rsp
+                .get_destination_cid()
+                .map(|cid| cid.to_val().to_le_bytes().get(0).copied())
+                .unwrap_or(Some(0)),
+            5 => self
+                .rsp
+                .get_destination_cid()
+                .map(|cid| cid.to_val().to_le_bytes().get(1).copied())
+                .unwrap_or(Some(0)),
             6 => self.rsp.mtu.to_le_bytes().get(0).copied(),
             7 => self.rsp.mtu.to_le_bytes().get(1).copied(),
             8 => self.rsp.mps.to_le_bytes().get(0).copied(),
             9 => self.rsp.mps.to_le_bytes().get(1).copied(),
             10 => self.rsp.initial_credits.to_le_bytes().get(0).copied(),
             11 => self.rsp.initial_credits.to_le_bytes().get(1).copied(),
-            12 => self
-                .rsp
-                .result
-                .map_or_else(|e| e.to_val(), |_| 0)
-                .to_le_bytes()
-                .get(0)
-                .copied(),
-            13 => self
-                .rsp
-                .result
-                .map_or_else(|e| e.to_val(), |_| 0)
-                .to_le_bytes()
-                .get(1)
-                .copied(),
+            12 => self.rsp.result.to_val().to_le_bytes().get(0).copied(),
+            13 => self.rsp.result.to_val().to_le_bytes().get(1).copied(),
             _ => None,
         };
 

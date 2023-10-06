@@ -491,7 +491,7 @@ pub struct FragmentationIterator<T: Iterator> {
     sdu_len: Option<u16>,
     payload: core::iter::Peekable<core::iter::Fuse<T>>,
     fragmentation_size: usize,
-    header_size: usize,
+    header_byte_state: usize,
 }
 
 impl<'a, T: Iterator> FragmentationIterator<T> {
@@ -505,15 +505,17 @@ impl<'a, T: Iterator> FragmentationIterator<T> {
 
         let payload = k_frame.payload.into_iter().fuse().peekable();
 
-        // extra `+ 1` is for iterator algorithm of `DataIter`
-        let header_size = if k_frame.sdu_len.is_none() { 4 } else { 6 } + 1;
+        // see the implementation of Iterator on DataIter
+        // for why these values are picked as the initial
+        // header_byte_state.
+        let header_byte_state = if k_frame.sdu_len.is_none() { 6 } else { 0 };
 
         Self {
             channel_id,
             sdu_len,
             payload,
             fragmentation_size,
-            header_size,
+            header_byte_state,
         }
     }
 }
@@ -526,7 +528,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
         self.payload.peek().is_some().then(|| {
-            self.header_size += self.fragmentation_size;
+            self.header_byte_state += self.fragmentation_size;
 
             DataIter {
                 fragmentation_iter: self,
@@ -554,18 +556,24 @@ where
 
         self.byte += 1;
 
-        self.fragmentation_iter.header_size = self.fragmentation_iter.header_size.checked_sub(1).unwrap_or_default();
+        self.fragmentation_iter.header_byte_state = self
+            .fragmentation_iter
+            .header_byte_state
+            .checked_add(1)
+            .unwrap_or(<usize>::MAX);
 
-        match self.fragmentation_iter.header_size {
-            0 => self.fragmentation_iter.payload.next(),
-            1 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[0]),
-            2 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[1]),
-            3 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[0]),
-            4 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[1]),
-            // Because of how `header_size` is initialized, `sdu_len` is always `Some(_)`
+        match self.fragmentation_iter.header_byte_state {
+            1 | 7 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[0]),
+            2 | 8 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[1]),
+            3 | 9 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[0]),
+            4 | 10 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[1]),
             5 => Some(self.fragmentation_iter.sdu_len.unwrap().to_le_bytes()[0]),
-            6 => Some(self.fragmentation_iter.sdu_len.unwrap().to_le_bytes()[1]),
-            _ => unreachable!(),
+            6 => {
+                self.fragmentation_iter.header_byte_state += 4;
+
+                Some(self.fragmentation_iter.sdu_len.unwrap().to_le_bytes()[1])
+            }
+            _ => self.fragmentation_iter.payload.next(),
         }
     }
 }

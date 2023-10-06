@@ -84,17 +84,9 @@ pub trait ConnectionChannel {
 pub struct InvalidChannel(u16, &'static str);
 
 impl InvalidChannel {
-    fn new_le(raw_channel: u16) -> Self {
-        InvalidChannel(raw_channel, "LE-U")
+    fn new<L: crate::link_flavor::LinkFlavor>(raw_channel: u16) -> Self {
+        InvalidChannel(raw_channel, core::any::type_name::<L>())
     }
-
-    // fn new_acl(raw_channel: u16) -> Self {
-    //     InvalidChannel(raw_channel, "ACL-U")
-    // }
-    //
-    // fn new_apb(raw_channel: u16) -> Self {
-    //     InvalidChannel(raw_channel, "APB-U")
-    // }
 }
 
 impl core::fmt::Display for InvalidChannel {
@@ -312,13 +304,6 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         maximum_transmission_size: usize,
         initial_peer_credits: usize,
     ) -> Self {
-        assert!(
-            logical_link
-                .get_shared_link()
-                .add_channel(this_channel_id.get_channel()),
-            "channel already exists"
-        );
-
         CreditBasedChannel {
             this_channel_id,
             peer_channel_id,
@@ -382,10 +367,10 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         self.maximum_pdu_payload_size as u16
     }
 
-    /// Get the maximum transmission size (MTS)
+    /// Get the maximum transmission unit (MTU)
     ///
     /// This is the maximum size of a SDU.
-    pub fn get_mts(&self) -> u16 {
+    pub fn get_mtu(&self) -> u16 {
         self.maximum_transmission_size as u16
     }
 

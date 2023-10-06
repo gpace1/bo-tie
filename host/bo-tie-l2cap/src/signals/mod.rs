@@ -37,7 +37,7 @@ pub enum SignalError {
     InvalidCommandRejectReasonData(packets::CommandRejectReasonDataError),
     InvalidSpsm,
     InvalidChannel,
-    InvalidValue,
+    InvalidField(&'static str),
 }
 
 impl core::fmt::Display for SignalError {
@@ -51,7 +51,7 @@ impl core::fmt::Display for SignalError {
             Self::InvalidCommandRejectReasonData(r) => core::fmt::Display::fmt(&r, f),
             Self::InvalidSpsm => f.write_str("invalid simplified protocol/service multiplexer"),
             Self::InvalidChannel => f.write_str("invalid channel identifier"),
-            Self::InvalidValue => f.write_str("a value of a field within this signal is invalid"),
+            Self::InvalidField(field) => write!(f, "the signal's '{field}' field is invalid"),
         }
     }
 }
