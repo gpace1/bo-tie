@@ -196,6 +196,8 @@ where
     ///
     /// # Note
     /// If it is desired to disconnect the channel, call the method [`disconnect`]
+    /// 
+    /// [`disconnect`]: SharedCredit::disconnect
     pub fn remove(&mut self, identifer: ChannelIdentifier) -> Option<CreditBasedChannel<'a, L>> {
         match self
             .channels

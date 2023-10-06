@@ -322,8 +322,10 @@ where
 
 /// Basic Frame Recombination Error
 ///
-/// This error is returned by the implementation of the method [`FragmentL2capPdu::recombine`] for
-/// `BasicFrame`
+/// This error is returned by the implementation of the method
+/// [`RecombinePayloadIncrementally::add`] for [`BasicFrameRecombiner`]
+///
+/// [`RecombinePayloadIncrementally::add`]: crate::pdu::RecombinePayloadIncrementally::add
 #[derive(Debug)]
 pub enum RecombineError {
     BufferTooSmall,

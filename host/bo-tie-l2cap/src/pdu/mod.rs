@@ -16,16 +16,26 @@ pub use credit_frame::CreditBasedSdu;
 
 /// A L2CAP PDU Fragment
 ///
-/// A L2CAP PDU may be larger than the maximum buffer size of the controller, or maximum transfer
-/// size of the connection. A `L2capFragment` is either a complete `L2CAP` PDU or a part of one.
+/// Fragmentation is required as the physical link may use a smaller maximum transmission size than
+/// the L2CAP layer. A single L2CAP PDU will be converted into one or more `L2capFragment`s, with
+/// the first fragment marked as the 'starting fragment'. L2CAP fragments are either created from or
+/// recombined into L2CAP PDUs by the logical link implementations within this library.
 ///
-/// Fragmentation and defragmentation is done by the implementation of [`ConnectionChannel`] and
-/// [`ConnectionChannelExt`].
+/// # Fragmentation Requirements
+/// 1) A `L2capFragment` only contains data from a single L2CAP PDU.
+/// 2) Whenever a fragment is sent to or received from the physical layer, all fragments are
+///    expected to be in the data order of the L2CAP PDU they recombine into.
 ///
-/// A `L2capFragment` only contains a flag to indicate if it is the start fragment and raw data
-/// of the L2CAP PDU. There is no distinction for what kind of L2CAP PDU it is and no fragment order
-/// information (besides the start flag). It is up to the user to ensure that fragments are
-/// delivered from the starting one to the ending one in order.
+/// ## Sent Fragments
+/// Just before a L2CAP PDU is sent to the physical layer, it is broken into one or more fragments.
+/// Each fragment is sent one at a time to the physical layer, and the physical layer is allowed to
+/// block whenever any fragment is sent.
+///
+/// ## Received Fragments
+/// As fragments are received from the physical link, they are recombined into L2CAP PDUs by the
+/// logical link implementations within this library. The PDU length information within the basic
+/// header (of every L2CAP PDU) is used to determine how many `L2capFragment`s need to be received
+/// before the L2CAP PDU is complete.
 pub struct L2capFragment<T> {
     pub(crate) start_fragment: bool,
     pub(crate) data: T,
@@ -167,6 +177,9 @@ pub trait RecombineL2capPdu {
 /// Method `add` input is a type that can be converted into an iterator over bytes. These bytes are
 /// added to the *recombiner* until the number of bytes matches the *payload length* field that was
 /// part of the basic header.
+///
+/// [`recombine`]: RecombineL2capPdu::recombine
+/// [`add`]: RecombinePayloadIncrementally::add
 pub trait RecombinePayloadIncrementally {
     type Pdu: Sized;
 
@@ -211,7 +224,9 @@ pub trait SduPacketsIterator {
     fn next(&mut self) -> Option<Self::Item<'_>>;
 }
 
-/// Error returned by [`as_fragments`] of `FragmentL2capPdu`
+/// Error returned by [`into_fragments`] of `FragmentL2capPdu`
+///
+/// [`into_fragments`]: FragmentL2capPdu::into_fragments
 #[derive(Debug, Copy, Clone)]
 pub enum FragmentationError {
     FragmentationSizeIsZero,
@@ -230,7 +245,9 @@ impl core::fmt::Display for FragmentationError {
 #[cfg(feature = "std")]
 impl std::error::Error for FragmentationError {}
 
-/// Error returned by [`as_packets`] of `FragmentL2capSdu`
+/// Error returned by [`into_packets`] of `FragmentL2capSdu`
+///
+/// [`into_packets`]: FragmentL2capSdu::into_packets
 #[derive(Debug, Copy, Clone)]
 pub enum PacketsError {
     SduTooLarge,

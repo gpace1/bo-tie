@@ -61,6 +61,13 @@ macro_rules! max_u16 {
                 }
             }
 
+            #[doc = "Create a new `"]
+            #[doc = stringify!($name)]
+            #[doc = "` using the minimum allowed value"]
+            pub fn new_min() -> Self {
+                $name { val: $min }
+            }
+
             #[doc = "Try to create a new `"]
             #[doc = stringify!($name)]
             #[doc = "`\n"]
@@ -69,9 +76,7 @@ macro_rules! max_u16 {
             #[doc = "An error is returned if the panic condition as stated for method [`new`] "]
             #[doc = "were to occur\n"]
             #[doc = "\n"]
-            #[doc = "[`new`]: "]
-            #[doc = stringify!($new)]
-            #[doc = "::new"]
+            #[doc = concat!("[`new`]: ", stringify!($name), "::new")]
             pub fn try_new(val: u16) -> Result<Self, BoundsError> {
                 #[allow(unused_comparisons)]
                 if val > $max {

@@ -306,7 +306,9 @@ impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
     /// The output is a copy of the request sent to the linked device.
     ///
     /// # Error
-    ///
+    /// An error is returned if all dynamic channels for the logical link are already used.
+    /// 
+    /// [`receive`]: SignallingChannel::receive
     pub async fn request_le_credit_connection(
         &mut self,
         spsm: SimplifiedProtocolServiceMultiplexer,
@@ -874,12 +876,11 @@ pub struct LeCreditBasedConnectionResponseBuilder<'a> {
 }
 
 impl LeCreditBasedConnectionResponseBuilder<'_> {
-    /// Get the destination channel
+    /// Get the destination channel identifier
+    /// 
+    /// This will be the identifier of the channel created by the output of [`send_response`]
     ///
-    /// This channel is selected as the destination channel as part of calling the method
-    /// [`create_le_credit_based_connection`].
-    ///
-    /// [`create_le_credit_based_connection`]
+    /// [`send_response`]: LeCreditBasedConnectionResponseBuilder::send_response 
     pub fn get_destination_channel(&self) -> ChannelIdentifier {
         ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.destination_dyn_cid))
     }

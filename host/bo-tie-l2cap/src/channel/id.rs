@@ -172,7 +172,7 @@ impl DynChannelId<AclULink> {
 
     /// Create a new `DynChannelId<AclULink>`
     ///
-    /// This returns a ``DynChannelId<AclULink>` so long as `channel_id` is within the range of
+    /// This returns a `DynChannelId<AclULink>` so long as `channel_id` is within the range of
     /// `0x40..=0xFFFF`.
     pub fn new_dyn_acl(channel_id: u16) -> Result<DynChannelId<AclULink>, u16> {
         if Self::ACL_BOUNDS.contains(&channel_id) {

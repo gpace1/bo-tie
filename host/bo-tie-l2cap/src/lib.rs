@@ -47,9 +47,9 @@
 //! ```
 //!
 //! [`AclULink`]: link_flavor::AclULink
-//! [`AclUExtLink`]: link_flavor::AclUExtLink,
-//! [`ApbLink`]: link_flavor::ApbLink,
-//! [`LeULink`]: link_flavor::LeULink,
+//! [`AclUExtLink`]: link_flavor::AclUExtLink
+//! [`ApbLink`]: link_flavor::ApbLink
+//! [`LeULink`]: link_flavor::LeULink
 //! [`LinkFlavor`]: link_flavor::LinkFlavor
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -160,6 +160,8 @@ pub trait PhysicalLink {
     /// What 'sent' means is subjective to the implementation. For an HCI implementation it could
     /// mean that the data has been sent to the Controller. For a single system implementation it
     /// may mean that the data has fully transmitted to the peer device.
+    ///
+    /// [`max_transmission_size`]: PhysicalLink::max_transmission_size
     fn send<'s, T>(&'s mut self, fragment: L2capFragment<T>) -> Self::SendFut<'s>
     where
         T: 's + IntoIterator<Item = u8>;
@@ -189,7 +191,7 @@ pub trait PhysicalLink {
 /// This trait is used to mark a type as a L2CAP logical. It is not intended to be implemented by
 /// types outside the bounds of `bo-tie-l2cap`.
 ///
-/// Its only method is `get_shared_link` which is used to return a [`SharedPhysicalLink`]. This
+/// Its only method is `get_shared_link` which is used to return a `SharedPhysicalLink`. This
 /// return is used to ensure that multiple channels can be 'selected' within one async context. See
 /// the library level doc for details on this.
 pub trait LogicalLink {
@@ -357,9 +359,10 @@ impl<P: PhysicalLink> LogicalLink for LeULogicalLink<P> {
 ///
 /// This is a wrapper around the numerical number of the PSM. There are two ways to create a `Psm`.
 /// One way is to convert one of the enumerations of
-/// [`PsmAssignedNum`](PsmAssignedNum)
-/// into this, the other way is to create a dynamic PSM with the function
-/// [`new_dyn`](#method.new_dyn).
+/// [`PsmAssignedNum`] into this, the other way is to create a dynamic PSM with the function
+/// [`new_dyn`].
+///
+/// [`new_dyn`]: Psm::new_dyn
 pub struct Psm {
     val: u16,
 }

@@ -24,9 +24,7 @@ pub(crate) trait TryIntoSignal {
     fn correct_channel(raw_channel_id: u16) -> bool;
 }
 
-/// Error for converting into a Signal from a [`ControlFrame`]
-///
-/// [`ControlFrame`]: crate::ControlFrame
+/// Error for converting into a Signal from a `ControlFrame`
 #[derive(Debug, Copy, Clone)]
 pub enum SignalError {
     IncorrectCode,

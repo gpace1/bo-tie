@@ -400,6 +400,8 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// This not the maximum credit based frame size (k_frame). Instead it is the size in which
     /// credit based frames are fragmented to. Use method [`get_mps`] to get the maximum size of a
     /// k_frame for this channel.
+    ///
+    /// [`get_mps`]: CreditBasedChannel::get_mps
     pub fn fragmentation_size(&self) -> usize {
         self.logical_link.get_shared_link().get_fragmentation_size()
     }
@@ -605,7 +607,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// [`give_credits_to_peer`] can be used on the signalling channel in order to give the peer
     /// more credits so it can complete the sending of the SDU.
     ///
-    /// [`give_credits_to_peer`]
+    /// [`give_credits_to_peer`]: SignallingChannel::give_credits_to_peer
     pub async fn receive<T>(
         &mut self,
     ) -> Result<T, ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
@@ -673,7 +675,9 @@ impl<L: LogicalLink> Drop for CreditBasedChannel<'_, L> {
     }
 }
 
-/// Error output by the future [`FragmentReceiver`]
+/// Error output by the method [`receive`] of `CreditBasedChannel`
+///
+/// [`receive`]: CreditBasedChannel::receive
 pub struct ReceiveError<L: LogicalLink, E, C> {
     inner: ReceiveErrorInner<L, E, C>,
 }
