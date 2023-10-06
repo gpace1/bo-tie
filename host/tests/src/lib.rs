@@ -7,6 +7,7 @@
 //! actual integration tests.
 mod physical_link;
 
+use crate::physical_link::BoundedPhysicalLink;
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::LeULogicalLink;
 pub use physical_link::PhysicalLink;
@@ -26,14 +27,15 @@ pub fn create_le_link(max_tx_size: usize) -> (LeULogicalLink<PhysicalLink>, LeUL
     (le_link_a, le_link_b)
 }
 
-/// Create a spoofed *false* connected LE logical link
+/// Create a spoofed *false* LE logical link
 ///
-/// This creates a single `LeULogicalLink` and 'connects'  to the sender and receiver also returned.
+/// This creates a single `LeULogicalLink` and 'connects' it to the sender and receiver also
+/// returned.
 ///
-/// The return of `create_le_false_link` is the logical link, a sender, and a receiver in that
-/// order. The sender and receiver are closures for directly injecting fragments into the physical
-/// link. Calling the send closure will induce a reception of that fragment by the physical link and
-/// calling the recv closure will receive a fragment sent by the physical link.
+/// The return of this method is a logical link, a sender, and a receiver in that order. The sender
+/// and receiver are closures for directly injecting fragments into the physical link. Calling the
+/// send closure will induce a reception of that fragment by the physical link and calling the recv
+/// closure will receive a fragment sent by the physical link.
 ///
 /// The input `max_tx_size` is the maximum transmission size of the created physical link, however
 /// it is not the maximum size for the sender closure (there is no max size for this closure).
@@ -52,6 +54,61 @@ pub fn create_le_false_link(
     impl futures::Stream<Item = L2capFragment<Vec<u8>>> + Unpin,
 ) {
     let (phy_link_a, sender, receiver) = PhysicalLink::new_false_connection(max_tx_size);
+
+    (LeULogicalLink::new(phy_link_a), sender, receiver)
+}
+
+/// Create a spoofed bounded LE logical link
+///
+/// This returns two `LeULogicalLink`s that are "connected" to each other. When one sends L2CAP data
+/// the other will receive that data. The channels are bounded, meaning there is a limited number of
+/// messages that can be sent before the sender will await until the receiver receives a message.
+///
+/// # Inputs
+/// * `max_tx_size` is the maximum transmission size *of both physical links*.
+/// * `channel_size` is the maximum number of messages the underlying channel in the spoofed
+///   physical can send a once before awaiting for the receiver to remove messages from the channel
+///   by receiving a message.
+pub fn create_le_bounded_link(
+    max_tx_size: usize,
+    channel_size: usize,
+) -> (LeULogicalLink<BoundedPhysicalLink>, LeULogicalLink<BoundedPhysicalLink>) {
+    let (phy_link_a, phy_link_b) = BoundedPhysicalLink::new_connection(max_tx_size, channel_size);
+
+    let le_link_a = LeULogicalLink::new(phy_link_a);
+    let le_link_b = LeULogicalLink::new(phy_link_b);
+
+    (le_link_a, le_link_b)
+}
+
+/// Create a spoofed *false* bounded LE logical link
+///
+/// This creates a single `LeULogicalLink` and 'connects' it to the sender and receiver also
+/// returned.
+///
+/// The return of this method is a logical link, a sender, and a receiver in that order. The sender
+/// and receiver are closures for directly injecting fragments into the physical link. Calling the
+/// send closure will induce a reception of that fragment by the physical link and calling the recv
+/// closure will receive a fragment sent by the physical link.
+///
+/// The input `max_tx_size` is the maximum transmission size of the created physical link, however
+/// it is not the maximum size for the sender closure (there is no max size for this closure).
+///
+/// If the receiver is called and there is no data in channel to the logical link, then `None` is
+/// returned by the closure.
+///
+/// # Panics
+/// There is no panic calling this method, but the returned sender and receiver will panic if
+/// called and the logical link has been dropped.
+pub fn create_bounded_le_false_link(
+    max_tx_size: usize,
+    channel_size: usize,
+) -> (
+    LeULogicalLink<BoundedPhysicalLink>,
+    impl futures::Sink<L2capFragment<Vec<u8>>, Error = futures::channel::mpsc::SendError> + Unpin,
+    impl futures::Stream<Item = L2capFragment<Vec<u8>>> + Unpin,
+) {
+    let (phy_link_a, sender, receiver) = BoundedPhysicalLink::new_false_connection(max_tx_size, channel_size);
 
     (LeULogicalLink::new(phy_link_a), sender, receiver)
 }
