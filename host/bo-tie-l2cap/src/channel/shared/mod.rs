@@ -232,7 +232,7 @@ where
     U: UnusedChannelResponse,
     U::ReceiveProcessor: Copy,
 {
-    pub fn new(physical_link: P) -> Self {
+    pub(crate) fn new(physical_link: P) -> Self {
         let owner = Cell::new(PhysicalLinkOwner::None);
 
         let channels = RefCell::default();
@@ -258,15 +258,15 @@ where
         }
     }
 
-    pub fn get_fragmentation_size(&self) -> usize {
+    pub(crate) fn get_fragmentation_size(&self) -> usize {
         unsafe { &*self.physical_link.get() }.max_transmission_size()
     }
 
-    pub fn is_channel_used(&self, id: ChannelIdentifier) -> bool {
+    pub(crate) fn is_channel_used(&self, id: ChannelIdentifier) -> bool {
         self.channels.borrow().binary_search(&id).is_ok()
     }
 
-    pub fn clear_owner(&self) {
+    pub(crate) fn clear_owner(&self) {
         self.basic_header_processor.clear_basic_header();
 
         self.owner.set(PhysicalLinkOwner::None);
@@ -276,7 +276,7 @@ where
     ///
     /// `true` is returned if the channel is successfully added, but `false` is returned if the
     /// channel already exists with the input `id`.
-    pub fn add_channel(&self, id: ChannelIdentifier) -> bool {
+    pub(crate) fn add_channel(&self, id: ChannelIdentifier) -> bool {
         let mut borrowed_channels = self.channels.borrow_mut();
 
         if let Err(index) = borrowed_channels.binary_search(&id) {
@@ -293,7 +293,7 @@ where
     /// This will create a new dynamically created channel and return the channel identifier.
     ///
     /// `None` is returned if all dynamic allocated channels are already used
-    pub fn new_le_dyn_channel(&self) -> Option<crate::channel::id::DynChannelId<crate::LeULink>> {
+    pub(crate) fn new_le_dyn_channel(&self) -> Option<crate::channel::id::DynChannelId<crate::LeULink>> {
         use crate::channel::id::DynChannelId;
         use crate::link_flavor::LeULink;
 
@@ -329,7 +329,7 @@ where
     }
 
     /// Remove a channel from sharing the physical link.
-    pub fn remove_channel(&self, channel_id: ChannelIdentifier) {
+    pub(crate) fn remove_channel(&self, channel_id: ChannelIdentifier) {
         match self.owner.get() {
             PhysicalLinkOwner::Sender(id) if id == channel_id => {
                 self.owner.set(PhysicalLinkOwner::None);
@@ -365,7 +365,7 @@ where
     ///
     /// This is used for maybe sending a fragment through the link. For the 'first' channel that
     /// calls this method, it takes ownership and
-    pub fn maybe_send<'s, T>(&'s self, owner: ChannelIdentifier, fragment: L2capFragment<T>) -> Poll<P::SendFut<'s>>
+    pub(crate) fn maybe_send<'s, T>(&'s self, owner: ChannelIdentifier, fragment: L2capFragment<T>) -> Poll<P::SendFut<'s>>
     where
         T: 's + IntoIterator<Item = u8>,
     {
@@ -497,7 +497,7 @@ where
     /// # Input Owner
     /// For channels, `owner` must always be `Some(id)` where id is the channel identifier. The only
     /// exception where `owner` is be `None` is for a collection.
-    pub async fn maybe_recv<L: LogicalLink>(
+    pub(crate) async fn maybe_recv<L: LogicalLink>(
         &self,
         owner: ChannelIdentifier,
     ) -> Result<Result<BasicHeadedFragment<P::RecvData>, U::Response>, MaybeRecvError<P, U>> {
@@ -543,7 +543,7 @@ where
     ///
     /// Input `query_collection` is used for querying the collection to determine if a received PDU
     /// is for a channel within that collection.
-    pub async fn pre_receive_collection<L, F, O>(&self, query_collection: F) -> Result<Option<O>, MaybeRecvError<P, U>>
+    pub(crate) async fn pre_receive_collection<L, F, O>(&self, query_collection: F) -> Result<Option<O>, MaybeRecvError<P, U>>
     where
         L: LogicalLink,
         F: Fn(ChannelIdentifier) -> Option<O>,
@@ -632,7 +632,7 @@ where
     /// Process a dumbed frame
     ///
     /// This is used by collections where `maybe_recv` cannot be used for dump data
-    pub async fn dump_frame(&self) -> Result<Option<U::Response>, MaybeRecvError<P, U>> {
+    pub(crate) async fn dump_frame(&self) -> Result<Option<U::Response>, MaybeRecvError<P, U>> {
         loop {
             let maybe_stasis_fragment = self.stasis_fragment.take();
 
