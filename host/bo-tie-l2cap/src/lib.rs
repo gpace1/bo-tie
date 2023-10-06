@@ -201,6 +201,87 @@ pub trait LogicalLink {
 }
 
 /// A LE-U Logical Link
+///
+/// This is the logical link for two devices connected via Bluetooth LE. Channels can be created for
+/// the link through the methods `LeULogicalLink`.
+///
+/// A `LeULogicalLink` requires a `PhysicalLink` to be created. This `PhysicalLink` is a trait that
+/// is either directly implemented by the physical layer or some interface to the physical layer
+/// (typically a host controller interface (HCI) implementation).
+///
+/// ## Channels
+/// Channels are used to sending and receiving data between two linked devices. Fixed channels are
+/// directly created via a method of a `LeULogicalLink`, but dynamically allocated channels must be
+/// created through a connection process initiated using the signalling channel.
+///
+/// ### Fixed Channels
+/// Fixed channels are assigned by the Bluetooth SIG and are either defined within the Bluetooth
+/// Specification or the assigned numbers document (but as of right now the list within the assigned
+/// numbers document is empty). There is no special process to establish a fixed channel at the
+/// L2CAP layer, so any fixed channel can be created using the appropriate method of
+/// `LeULogicalLink`.
+///
+/// ```
+/// # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+/// # async fn example<P: PhysicalLink>(le_u_logical_link: LeULogicalLink<P>) {
+/// // create the signalling and ATT channels
+///
+/// let signalling_channel = le_u_logical_link.get_signalling_channel();
+///
+/// let att_channel = le_u_logical_link.get_att_channel();
+/// # }
+/// ```
+///
+/// ### Dynamic Channels
+/// Dynamic channels must be created using the signalling channel. There is a L2CAP connection
+/// process that goes through the establishing of the channel identities (and any other information
+/// used for the connection) of the dynamically allocated channels.
+///
+/// ```
+/// # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+/// # use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+/// # use bo_tie_l2cap::signals::packets::{LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer};
+/// # async fn example<P: PhysicalLink>(le_u_logical_link: LeULogicalLink<P>)
+/// # where  
+/// #     <P as PhysicalLink>::SendErr: std::fmt::Debug,
+/// #     <P as PhysicalLink>::RecvErr: std::fmt::Debug,
+/// # {
+/// // This is the process for initializing a LE credit based
+/// // channel. This channel uses a dynamically allocated CID,
+/// // so it must go through a L2CAP connection process before
+/// // it can be created.
+///
+/// let mut signalling_channel = le_u_logical_link.get_signalling_channel();
+///
+/// // request the creation of a LE credit based channel
+/// let request = signalling_channel
+///     .request_le_credit_connection(
+///         SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
+///         LeCreditMtu::new_min(),
+///         LeCreditMps::new_min(),
+///         10,
+///     )
+///     .await
+///     .expect("failed to send request");
+///
+/// // Process the response from the linked peer device and
+/// // create a new credit_based_channel.
+/// let credit_based_channel = match signalling_channel
+///     .receive()
+///     .await
+///     .expect("failed to get response")
+/// {
+///     ReceivedSignal::LeCreditBasedConnectionResponse(response) => response
+///         .create_le_credit_connection(&request, &le_u_logical_link)
+///         .expect("linked device rejected LE credit based connection request"),
+///
+///     ReceivedSignal::CommandRejectRsp(response) => {
+///          panic!("LE credit based channels not supported by the linked device")
+///     }
+///     _ => panic!("received unexpected signal"),
+/// };
+/// # }
+/// ```
 pub struct LeULogicalLink<P: PhysicalLink> {
     shared_link: SharedPhysicalLink<P, Self>,
 }
