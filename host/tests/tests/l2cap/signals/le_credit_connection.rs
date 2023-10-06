@@ -1,13 +1,12 @@
 //! Tests for L2CAP signals
 
-use bo_tie_l2cap::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
-use bo_tie_l2cap::channel::signalling::{ReceiveSignalError, ReceivedSignal};
-use bo_tie_l2cap::channel::InvalidChannel;
+use bo_tie_l2cap::channel::id::{ChannelIdentifier, DynChannelId};
+use bo_tie_l2cap::channel::signalling::ReceivedSignal;
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::signals::packets::{
-    LeCreditBasedConnectionResponse, LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu,
-    SimplifiedProtocolServiceMultiplexer,
+    LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer,
 };
+use bo_tie_l2cap::signals::SignalError;
 use futures::{SinkExt, StreamExt};
 
 #[tokio::test]
@@ -107,7 +106,9 @@ pub async fn invalid_channel_id_in_response() {
         let err_response = signal_channel.receive().await.err().expect("expected an error");
 
         assert!(
-            err_response.to_string().contains("invalid channel identifier"),
+            err_response
+                .to_string()
+                .contains(&SignalError::InvalidChannel.to_string()),
             "actual error: {}",
             err_response.to_string()
         )
@@ -143,7 +144,9 @@ pub async fn invalid_mtu_in_response() {
         let err_response = signal_channel.receive().await.err().expect("expected an error");
 
         assert!(
-            err_response.to_string().contains("the signal's 'MTU' field is invalid"),
+            err_response
+                .to_string()
+                .contains(&SignalError::InvalidField("MTU").to_string()),
             "actual error: {}",
             err_response.to_string()
         )
@@ -182,7 +185,9 @@ pub async fn invalid_mps_in_response() {
         let err_response = signal_channel.receive().await.err().expect("expected an error");
 
         assert!(
-            err_response.to_string().contains("the signal's 'MPS' field is invalid"),
+            err_response
+                .to_string()
+                .contains(&SignalError::InvalidField("MPS").to_string()),
             "actual error: {}",
             err_response.to_string()
         )
@@ -223,7 +228,7 @@ pub async fn invalid_result_response() {
         assert!(
             err_response
                 .to_string()
-                .contains("the signal's 'Result' field is invalid"),
+                .contains(&SignalError::InvalidField("Result").to_string()),
             "actual error: {}",
             err_response.to_string()
         )
@@ -240,7 +245,7 @@ pub async fn invalid_result_response() {
 }
 
 #[tokio::test]
-pub async fn rejected_request() {
+pub async fn response_with_rejected_request() {
     let (requesting_link, response_link) = bo_tie_host_tests::create_le_link(15);
 
     let req_handle = tokio::spawn(async move {
@@ -286,5 +291,111 @@ pub async fn rejected_request() {
     });
 
     req_handle.await.expect("requesting task failed");
+    res_handle.await.expect("responding task failed");
+}
+
+#[tokio::test]
+async fn invalid_spsm_in_request() {
+    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+
+    let res_handle = tokio::spawn(async move {
+        let mut signal_channel = response_link.get_signalling_channel();
+
+        let err_response = signal_channel.receive().await.err().expect("expected an error");
+
+        assert!(
+            err_response.to_string().contains(&SignalError::InvalidSpsm.to_string()),
+            "actual error: {}",
+            err_response.to_string()
+        )
+    });
+
+    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0, 0, 0x40, 0, 23, 0, 23, 0, 100, 0];
+
+    let fragment = L2capFragment::new(true, request);
+
+    tx.send(fragment).await.expect("failed to send request");
+
+    res_handle.await.expect("responding task failed");
+}
+
+#[tokio::test]
+async fn invalid_source_cid_in_request() {
+    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+
+    let res_handle = tokio::spawn(async move {
+        let mut signal_channel = response_link.get_signalling_channel();
+
+        let err_response = signal_channel.receive().await.err().expect("expected an error");
+
+        assert!(
+            err_response
+                .to_string()
+                .contains(&SignalError::InvalidChannel.to_string()),
+            "actual error: {}",
+            err_response.to_string()
+        )
+    });
+
+    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0, 0, 23, 0, 23, 0, 100, 0];
+
+    let fragment = L2capFragment::new(true, request);
+
+    tx.send(fragment).await.expect("failed to send request");
+
+    res_handle.await.expect("responding task failed");
+}
+
+#[tokio::test]
+async fn invalid_mtu_in_request() {
+    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+
+    let res_handle = tokio::spawn(async move {
+        let mut signal_channel = response_link.get_signalling_channel();
+
+        let err_response = signal_channel.receive().await.err().expect("expected an error");
+
+        assert!(
+            err_response
+                .to_string()
+                .contains(&SignalError::InvalidField("MTU").to_string()),
+            "actual error: {}",
+            err_response.to_string()
+        )
+    });
+
+    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 10, 0, 23, 0, 100, 0];
+
+    let fragment = L2capFragment::new(true, request);
+
+    tx.send(fragment).await.expect("failed to send request");
+
+    res_handle.await.expect("responding task failed");
+}
+
+#[tokio::test]
+async fn invalid_mps_in_request() {
+    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+
+    let res_handle = tokio::spawn(async move {
+        let mut signal_channel = response_link.get_signalling_channel();
+
+        let err_response = signal_channel.receive().await.err().expect("expected an error");
+
+        assert!(
+            err_response
+                .to_string()
+                .contains(&SignalError::InvalidField("MPS").to_string()),
+            "actual error: {}",
+            err_response.to_string()
+        )
+    });
+
+    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 23, 0, 10, 0, 100, 0];
+
+    let fragment = L2capFragment::new(true, request);
+
+    tx.send(fragment).await.expect("failed to send request");
+
     res_handle.await.expect("responding task failed");
 }
