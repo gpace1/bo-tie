@@ -527,13 +527,9 @@ where
     type Item<'a> = DataIter<'a, T> where Self: 'a;
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
-        self.payload.peek().is_some().then(|| {
-            self.header_byte_state += self.fragmentation_size;
-
-            DataIter {
-                fragmentation_iter: self,
-                byte: 0,
-            }
+        self.payload.peek().is_some().then(|| DataIter {
+            fragmentation_iter: self,
+            byte: 0,
         })
     }
 }
@@ -562,9 +558,15 @@ where
             .checked_add(1)
             .unwrap_or(<usize>::MAX);
 
+        // The `header_byte_state` is used to determine what
+        // credit based frame is sent.
+        //
+        // 1..=6  => PDU header with sdu length
+        // 7..=10 => PDU header without sdu length
+        // 10..   => PDU payload bytes
         match self.fragmentation_iter.header_byte_state {
-            1 | 7 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[0]),
-            2 | 8 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[1]),
+            1 => Some(((self.fragmentation_iter.payload.len() + 2) as u16).to_le_bytes()[0]),
+            2 => Some(((self.fragmentation_iter.payload.len() + 2) as u16).to_le_bytes()[1]),
             3 | 9 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[0]),
             4 | 10 => Some(self.fragmentation_iter.channel_id.to_val().to_le_bytes()[1]),
             5 => Some(self.fragmentation_iter.sdu_len.unwrap().to_le_bytes()[0]),
@@ -573,6 +575,8 @@ where
 
                 Some(self.fragmentation_iter.sdu_len.unwrap().to_le_bytes()[1])
             }
+            7 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[0]),
+            8 => Some((self.fragmentation_iter.payload.len() as u16).to_le_bytes()[1]),
             _ => self.fragmentation_iter.payload.next(),
         }
     }
