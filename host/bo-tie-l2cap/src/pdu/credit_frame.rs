@@ -559,7 +559,9 @@ where
             .unwrap_or(<usize>::MAX);
 
         // The `header_byte_state` is used to determine what
-        // credit based frame is sent.
+        // credit based frame is sent. Depending on the state
+        // this iterator either outputs a k-frame with a sdu
+        // length or a k-frame without one.
         //
         // 1..=6  => PDU header with sdu length
         // 7..=10 => PDU header without sdu length
