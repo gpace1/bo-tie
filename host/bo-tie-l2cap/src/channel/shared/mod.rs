@@ -365,7 +365,11 @@ where
     ///
     /// This is used for maybe sending a fragment through the link. For the 'first' channel that
     /// calls this method, it takes ownership and
-    pub(crate) fn maybe_send<'s, T>(&'s self, owner: ChannelIdentifier, fragment: L2capFragment<T>) -> Poll<P::SendFut<'s>>
+    pub(crate) fn maybe_send<'s, T>(
+        &'s self,
+        owner: ChannelIdentifier,
+        fragment: L2capFragment<T>,
+    ) -> Poll<P::SendFut<'s>>
     where
         T: 's + IntoIterator<Item = u8>,
     {
@@ -543,7 +547,10 @@ where
     ///
     /// Input `query_collection` is used for querying the collection to determine if a received PDU
     /// is for a channel within that collection.
-    pub(crate) async fn pre_receive_collection<L, F, O>(&self, query_collection: F) -> Result<Option<O>, MaybeRecvError<P, U>>
+    pub(crate) async fn pre_receive_collection<L, F, O>(
+        &self,
+        query_collection: F,
+    ) -> Result<Option<O>, MaybeRecvError<P, U>>
     where
         L: LogicalLink,
         F: Fn(ChannelIdentifier) -> Option<O>,
