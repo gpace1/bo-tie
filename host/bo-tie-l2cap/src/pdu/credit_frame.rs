@@ -727,7 +727,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
                 .try_extend(payload_iter)
                 .map_err(|_| RecombineError::BufferTooSmall)?;
 
-            if self.payload_len == self.byte_count {
+            if self.payload_len == (self.byte_count + if self.meta.first { 2 } else { 0 }) {
                 let sdu_size = self.get_sdu_len().unwrap(); // unwrap will never panic
 
                 let payload = self.payload.take().unwrap();
