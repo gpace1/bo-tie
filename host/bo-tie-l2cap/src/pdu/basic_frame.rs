@@ -335,11 +335,9 @@ pub enum RecombineError {
 impl core::fmt::Display for RecombineError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            RecombineError::BufferTooSmall => {
-                f.write_str("buffer too small to contain a basic frame's information payload")
-            }
+            RecombineError::BufferTooSmall => f.write_str("buffer is too small to fit PDU"),
             RecombineError::PayloadLargerThanStatedLength => {
-                f.write_str("payload is larger than payload length field in basic header")
+                f.write_str("payload is larger than the payload length field")
             }
         }
     }
