@@ -592,15 +592,13 @@ async fn connection_disconnection() {
         if let ReceivedSignal::DisconnectResponse(_) = response {
             // nothing to do if response received
         } else {
-            panic!("unexpected received signal")
+            panic!("unexpected response signal: {response:?}")
         }
 
         r_barrier.wait().await;
     });
 
-    l_handle.await.expect("l task failed");
-
-    r_handle.await.expect("r task failed");
+    tokio::try_join!(r_handle, l_handle).expect("task failed");
 }
 //
 // #[tokio::test]

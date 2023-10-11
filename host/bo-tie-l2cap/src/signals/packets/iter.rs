@@ -166,7 +166,7 @@ impl Iterator for DisconnectResponseIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ret = match self.pos {
-            0 => Some(DisconnectRequest::CODE),
+            0 => Some(DisconnectResponse::CODE),
             1 => Some(self.request.identifier.get()),
 
             // using `to_le_bytes` here is kinda dirty without

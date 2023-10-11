@@ -307,7 +307,7 @@ impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
     ///
     /// # Error
     /// An error is returned if all dynamic channels for the logical link are already used.
-    /// 
+    ///
     /// [`receive`]: SignallingChannel::receive
     pub async fn request_le_credit_connection(
         &mut self,
@@ -377,6 +377,7 @@ impl<S> std::error::Error for CreditConnectionRequestError<S> where S: std::erro
 
 /// Signal received from the linked device
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum ReceivedSignal {
     /// `UnknownSignal` is used when a signal that cannot be interpreted by this L2CAP
     /// implementation is received by this device.
@@ -711,6 +712,7 @@ impl UnknownSignal {
 ///
 /// This is returned whenever a request is received by a Signalling Channel. Depending on the type
 /// of request (`T`) there are different operations done.
+#[derive(Debug, Copy, Clone)]
 pub struct Request<T> {
     request: T,
 }
@@ -877,10 +879,10 @@ pub struct LeCreditBasedConnectionResponseBuilder<'a> {
 
 impl LeCreditBasedConnectionResponseBuilder<'_> {
     /// Get the destination channel identifier
-    /// 
+    ///
     /// This will be the identifier of the channel created by the output of [`send_response`]
     ///
-    /// [`send_response`]: LeCreditBasedConnectionResponseBuilder::send_response 
+    /// [`send_response`]: LeCreditBasedConnectionResponseBuilder::send_response
     pub fn get_destination_channel(&self) -> ChannelIdentifier {
         ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.destination_dyn_cid))
     }
@@ -962,6 +964,7 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
 }
 
 /// A response signal from the linked device
+#[derive(Debug, Copy, Clone)]
 pub struct Response<T> {
     response: T,
 }
