@@ -53,19 +53,19 @@ where
 
         credit_based_channel.add_peer_credits(amount);
 
-        while credit_based_channel.peer_credits != 0 {
+        while credit_based_channel.peer_credits != 0 && !self.packets_iterator.is_complete() {
+            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
+            let next_pdu = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter()).unwrap();
+
             credit_based_channel.peer_credits -= 1;
 
-            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
-            let next = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter());
-
-            if let Some(pdu) = next {
-                credit_based_channel.send_pdu(pdu).await?;
-            } else {
-                return Ok(None);
-            }
+            credit_based_channel.send_pdu(next_pdu).await?;
         }
 
-        Ok(Some(self))
+        if self.packets_iterator.is_complete() {
+            Ok(None)
+        } else {
+            Ok(Some(self))
+        }
     }
 }

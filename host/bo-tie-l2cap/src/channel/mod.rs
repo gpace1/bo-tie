@@ -530,6 +530,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// Inner method of `receive_frame`
     async fn receive_frame_inner<T>(
         &mut self,
+        meta: &mut pdu::credit_frame::RecombineMeta,
     ) -> Result<
         CreditBasedFrame<T>,
         ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>,
@@ -543,10 +544,8 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             return Err(ReceiveError::new_expect_first_err());
         }
 
-        let mut meta = pdu::credit_frame::RecombineMeta::new(self.maximum_pdu_payload_size as u16);
-
         let mut first_recombiner =
-            CreditBasedFrame::<T>::recombine(headed_fragment.length, self.peer_channel_id.get_channel(), &mut meta);
+            CreditBasedFrame::<T>::recombine(headed_fragment.length, self.peer_channel_id.get_channel(), meta);
 
         let k_frame = if let Some(first_k_frame) = first_recombiner
             .add(headed_fragment.fragment.data)
@@ -570,12 +569,16 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             }
         };
 
+        // for subsequent fragments of a k-frame
+        meta.first = false;
+
         Ok(k_frame)
     }
 
     /// Receive a Credit Based Frame for this channel
     async fn receive_frame<T>(
         &mut self,
+        meta: &mut pdu::credit_frame::RecombineMeta,
     ) -> Result<
         CreditBasedFrame<T>,
         ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>,
@@ -583,7 +586,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     where
         T: TryExtend<u8> + Default,
     {
-        let output = self.receive_frame_inner().await;
+        let output = self.receive_frame_inner(meta).await;
 
         self.logical_link.get_shared_link().clear_owner();
 
@@ -614,7 +617,12 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     where
         T: TryExtend<u8> + Default + core::ops::Deref<Target = [u8]>,
     {
-        let first_k_frame = self.receive_frame::<T>().await?;
+        let mut meta = pdu::credit_frame::RecombineMeta {
+            first: true,
+            mps: self.get_mps(),
+        };
+
+        let first_k_frame = self.receive_frame::<T>(&mut meta).await?;
 
         let sdu_len = first_k_frame.get_sdu_length().unwrap();
 
@@ -624,7 +632,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             return Err(ReceiveError::new_invalid_sdu_length());
         } else if (sdu_len as usize) > sdu.len() {
             loop {
-                let subsequent_k_frame = self.receive_frame::<T>().await?;
+                let subsequent_k_frame = self.receive_frame::<T>(&mut meta).await?;
 
                 sdu.try_extend(subsequent_k_frame.into_payload().iter().copied())
                     .map_err(|e| ReceiveError::new_extend_err(e))?;

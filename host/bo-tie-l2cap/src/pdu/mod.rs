@@ -217,11 +217,11 @@ pub trait FragmentL2capSdu {
 ///
 /// [`PacketsIterator`]: FragmentL2capSdu::PacketsIterator
 pub trait SduPacketsIterator {
-    type Item<'a>: FragmentL2capPdu
+    type Frame<'a>: FragmentL2capPdu
     where
         Self: 'a;
 
-    fn next(&mut self) -> Option<Self::Item<'_>>;
+    fn next(&mut self) -> Option<Self::Frame<'_>>;
 }
 
 /// Error returned by [`into_fragments`] of `FragmentL2capPdu`

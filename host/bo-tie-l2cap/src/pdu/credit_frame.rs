@@ -100,15 +100,23 @@ impl<T: Iterator> PacketsIterator<T> {
             first,
         }
     }
+
+    /// Returns true if there is no more packets output by this iterator
+    pub fn is_complete(&self) -> bool
+    where
+        T: ExactSizeIterator,
+    {
+        self.sdu.len() == 0
+    }
 }
 
 impl<T> SduPacketsIterator for PacketsIterator<T>
 where
     T: Iterator<Item = u8> + ExactSizeIterator,
 {
-    type Item<'a> = CreditBasedFrame<SduSubIter<'a, T>> where Self: 'a;
+    type Frame<'a> = CreditBasedFrame<SduSubIter<'a, T>> where Self: 'a;
 
-    fn next(&mut self) -> Option<Self::Item<'_>> {
+    fn next(&mut self) -> Option<Self::Frame<'_>> {
         self.sdu.peek().is_some().then(|| {
             if self.first {
                 self.first = false;
@@ -620,22 +628,16 @@ impl std::error::Error for RecombineError {}
 
 /// Meta information required for recombining Credit Based Frames.
 pub struct RecombineMeta {
-    first: bool,
-    mps: u16,
-}
-
-impl RecombineMeta {
-    pub fn new(mps: u16) -> Self {
-        RecombineMeta { first: true, mps }
-    }
+    pub first: bool,
+    pub mps: u16,
 }
 
 /// A recombiner of fragments into a Credit Based PDU.
 pub struct CreditBasedFrameRecombiner<'a, P> {
     payload_len: usize,
     channel_id: ChannelIdentifier,
-    meta: &'a RecombineMeta,
-    sdu: SduState,
+    meta: &'a mut RecombineMeta,
+    sdu_state: SduState,
     byte_count: usize,
     payload: Option<P>,
 }
@@ -649,7 +651,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
             payload_len: len,
             channel_id,
             meta,
-            sdu: SduState::None,
+            sdu_state: SduState::None,
             byte_count: 0,
             payload: Some(P::default()),
         }
@@ -666,9 +668,13 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
         T: Iterator<Item = u8>,
     {
         loop {
-            match self.sdu {
-                SduState::None => self.sdu = SduState::First(payload.next()?),
-                SduState::First(first) => self.sdu = SduState::Complete(<u16>::from_le_bytes([first, payload.next()?])),
+            match self.sdu_state {
+                SduState::None => self.sdu_state = SduState::First(payload.next()?),
+                SduState::First(first) => {
+                    self.byte_count += 2;
+
+                    self.sdu_state = SduState::Complete(<u16>::from_le_bytes([first, payload.next()?]))
+                }
                 SduState::Complete(_) => break Some(()),
             }
         }
@@ -678,7 +684,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
     ///
     /// `None` is returned if the SDU length was never processed or never existed.
     fn get_sdu_len(&self) -> Option<u16> {
-        match self.sdu {
+        match self.sdu_state {
             SduState::Complete(val) => Some(val),
             _ => None,
         }
@@ -687,11 +693,21 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
     /// Update the Payload Byte Count
     ///
     /// This updates the count for the number of bytes within the PDU payload.
-    fn update_byte_count(&mut self, payload_len: usize) -> Result<(), RecombineError> {
-        if self.byte_count + payload_len > self.meta.mps.into() {
+    fn extend_payload<T>(&mut self, payload: T) -> Result<(), RecombineError>
+    where
+        P: TryExtend<u8>,
+        T: Iterator<Item = u8> + ExactSizeIterator,
+    {
+        if self.byte_count + payload.len() > self.meta.mps.into() {
             Err(RecombineError::PayloadLargerThanMps)
         } else {
-            self.byte_count += payload_len;
+            self.byte_count += payload.len();
+
+            self.payload
+                .as_mut()
+                .unwrap()
+                .try_extend(payload)
+                .map_err(|_| RecombineError::BufferTooSmall)?;
 
             Ok(())
         }
@@ -719,15 +735,9 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
         let mut payload_iter = payload.into_iter();
 
         if self.recombine_sdu_len(&mut payload_iter).is_some() {
-            self.update_byte_count(payload_iter.len())?;
+            self.extend_payload(payload_iter)?;
 
-            self.payload
-                .as_mut()
-                .unwrap()
-                .try_extend(payload_iter)
-                .map_err(|_| RecombineError::BufferTooSmall)?;
-
-            if self.payload_len == (self.byte_count + if self.meta.first { 2 } else { 0 }) {
+            if self.payload_len == self.byte_count {
                 let sdu_size = self.get_sdu_len().unwrap(); // unwrap will never panic
 
                 let payload = self.payload.take().unwrap();
@@ -757,15 +767,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
-        let payload_iter = payload.into_iter();
-
-        self.update_byte_count(payload_iter.len())?;
-
-        self.payload
-            .as_mut()
-            .unwrap()
-            .try_extend(payload_iter)
-            .map_err(|_| RecombineError::BufferTooSmall)?;
+        self.extend_payload(payload.into_iter())?;
 
         if self.payload_len == self.byte_count {
             let payload = self.payload.take().unwrap();

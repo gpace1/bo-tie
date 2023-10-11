@@ -104,7 +104,7 @@ macro_rules! connect_response {
 async fn send_single_pdu() {
     let (link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(100);
 
-    tokio::spawn(async move {
+    let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = request_connect!(link, 256, 256, 0);
 
         credit_channel.send([0, 1, 2, 3, 4]).await.expect("failed to send SDU");
@@ -125,13 +125,15 @@ async fn send_single_pdu() {
     assert!(received.is_start_fragment());
 
     assert_eq!(received.get_data(), &[7, 0, 0x40, 0, 5, 0, 0, 1, 2, 3, 4,]);
+
+    task_handle.await.expect("test task failed");
 }
 
 #[tokio::test]
 async fn send_single_pdu_multiple_fragments() {
     let (link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(10);
 
-    tokio::spawn(async move {
+    let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = request_connect!(link, 256, 256, 0);
 
         credit_channel
@@ -166,13 +168,15 @@ async fn send_single_pdu_multiple_fragments() {
     let receive_3 = rx.next().await.expect("unexpected channel closure");
 
     assert_eq!(receive_3.get_data(), &[14, 15]);
+
+    task_handle.await.expect("test task failed");
 }
 
 #[tokio::test]
-async fn send_multiple_pdu() {
+async fn send_multiple_pdu_for_sdu() {
     let (link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(10);
 
-    tokio::spawn(async move {
+    let task_handle = tokio::spawn(async move {
         let (mut credit_channel, mut signalling_channel) = request_connect!(link, 256, 23, 0);
 
         let mut maybe_service_data = credit_channel
@@ -184,21 +188,37 @@ async fn send_multiple_pdu() {
             .await
             .expect("failed to send SDU");
 
-        while let Some(service_data) = maybe_service_data {
-            let inc = match signalling_channel
-                .receive()
-                .await
-                .expect("failed to receive flow control inc")
-            {
-                ReceivedSignal::FlowControlCreditIndication(inc) => inc,
-                _ => panic!("received unexpected signal"),
-            };
+        let inc = match signalling_channel
+            .receive()
+            .await
+            .expect("failed to receive flow control inc")
+        {
+            ReceivedSignal::FlowControlCreditIndication(inc) => inc,
+            _ => panic!("received unexpected signal"),
+        };
 
-            maybe_service_data = service_data
-                .inc_and_send(&mut credit_channel, inc.get_credits())
-                .await
-                .expect("failed to send more k-frames");
-        }
+        maybe_service_data = maybe_service_data
+            .expect("maybe_service_data is None")
+            .inc_and_send(&mut credit_channel, inc.get_credits())
+            .await
+            .expect("failed to send more k-frames");
+
+        let inc = match signalling_channel
+            .receive()
+            .await
+            .expect("failed to receive flow control inc")
+        {
+            ReceivedSignal::FlowControlCreditIndication(inc) => inc,
+            _ => panic!("received unexpected signal"),
+        };
+
+        maybe_service_data = maybe_service_data
+            .expect("maybe_service_data is None")
+            .inc_and_send(&mut credit_channel, inc.get_credits())
+            .await
+            .expect("failed to send more k-frames");
+
+        assert!(maybe_service_data.is_none());
     });
 
     // two fragments will be received as the MTU of
@@ -299,17 +319,15 @@ async fn send_multiple_pdu() {
     let recv = rx.next().await.expect("unexpected channel closure");
 
     assert_eq!(recv.get_data(), third_k_frame[2]);
+
+    task_handle.await.expect("test task failed");
 }
 
 #[tokio::test]
 async fn recv_single_pdu() {
     let (link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(100);
 
-    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
-
-    let task_barrier = barrier.clone();
-
-    tokio::spawn(async move {
+    let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
         assert_eq!(credit_channel.get_this_channel_id().to_val(), 0x40);
@@ -319,8 +337,6 @@ async fn recv_single_pdu() {
         let sdu: Vec<u8> = credit_channel.receive().await.expect("failed to receive");
 
         assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5]);
-
-        task_barrier.wait().await;
     });
 
     let connect_request = L2capFragment::new(
@@ -336,7 +352,169 @@ async fn recv_single_pdu() {
 
     tx.send(k_frame).await.expect("failed to send");
 
-    barrier.wait().await;
+    task_handle.await.expect("test task failed");
+}
+
+#[tokio::test]
+async fn recv_single_pdu_multi_fragments() {
+    let (link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(10);
+
+    let task_handle = tokio::spawn(async move {
+        let (mut credit_channel, _) = connect_response!(link, 1);
+
+        let sdu: Vec<u8> = credit_channel.receive().await.expect("failed to receive");
+
+        assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    });
+
+    let connect_request_1 = L2capFragment::new(true, vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0]);
+
+    let connect_request_2 = L2capFragment::new(false, vec![0x40, 0, 0xFF, 0, 0xFF, 0, 0, 0]);
+
+    tx.send(connect_request_1).await.expect("channel closed");
+
+    tx.send(connect_request_2).await.expect("channel closed");
+
+    // 2x rx for full response
+    rx.next().await.expect("failed to receive connect response");
+    rx.next().await.expect("failed to receive connect response");
+
+    // send the data
+    let fragment_1 = L2capFragment::new(true, vec![13, 0, 0x40, 0, 11, 0, 0, 1, 2, 3]);
+    let fragment_2 = L2capFragment::new(false, vec![4, 5, 6, 7, 8, 9, 10]);
+
+    tx.send(fragment_1).await.expect("channel closed");
+    tx.send(fragment_2).await.expect("channel closed");
+
+    task_handle.await.expect("test task failed");
+}
+
+#[tokio::test]
+async fn recv_single_pdu_bad_fragment_start_indicator() {
+    let (link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(10);
+
+    let task_handle = tokio::spawn(async move {
+        let (mut credit_channel, _) = connect_response!(link, 1);
+
+        match credit_channel.receive::<Vec<_>>().await {
+            Err(e) => assert_eq!("unexpected first fragment of PDU", &e.to_string()),
+            Ok(_) => panic!("unexpected data return"),
+        }
+    });
+
+    let connect_request_1 = L2capFragment::new(true, vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0]);
+
+    let connect_request_2 = L2capFragment::new(false, vec![0x40, 0, 0xFF, 0, 0xFF, 0, 0, 0]);
+
+    tx.send(connect_request_1).await.expect("channel closed");
+
+    tx.send(connect_request_2).await.expect("channel closed");
+
+    // 2x rx for full response
+    rx.next().await.expect("failed to receive connect response");
+    rx.next().await.expect("failed to receive connect response");
+
+    // >> both fragments are start fragments <<
+    let fragment_1 = L2capFragment::new(true, vec![13, 0, 0x40, 0, 11, 0, 0, 1, 2, 3]);
+    let fragment_2 = L2capFragment::new(true, vec![4, 5, 6, 7, 8, 9, 10]);
+
+    tx.send(fragment_1).await.expect("channel closed");
+    tx.send(fragment_2).await.expect("channel closed");
+
+    task_handle.await.expect("test task failed");
+}
+
+#[tokio::test]
+async fn receive_multiple_pdu_for_sdu() {
+    let (link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(10);
+
+    let task_handle = tokio::spawn(async move {
+        let (mut credit_channel, _) = connect_response!(link, 1);
+
+        let sdu: Vec<u8> = credit_channel.receive().await.expect("failed to receive");
+
+        assert_eq!(
+            &sdu,
+            &[
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+                28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,
+                54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+                80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+            ]
+        );
+    });
+
+    let connect_request = L2capFragment::new(
+        true,
+        vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 0xFF, 0, 23, 0, 0, 0],
+    );
+
+    tx.send(connect_request).await.expect("channel closed");
+
+    let fragments = [
+        // first pdu
+        L2capFragment::new(true, vec![23, 0, 0x40, 0, 100, 0, 0, 1, 2, 3]),
+        L2capFragment::new(false, vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
+        L2capFragment::new(false, vec![14, 15, 16, 17, 18, 19, 20]),
+        // second
+        L2capFragment::new(true, vec![23, 0, 0x40, 0, 21, 22, 23, 24, 25, 26]),
+        L2capFragment::new(false, vec![27, 28, 29, 30, 31, 32, 33, 34, 35, 36]),
+        L2capFragment::new(false, vec![37, 38, 39, 40, 41, 42, 43]),
+        // third
+        L2capFragment::new(true, vec![23, 0, 0x40, 0, 44, 45, 46, 47, 48, 49]),
+        L2capFragment::new(false, vec![50, 51, 52, 53, 54, 55, 56, 57, 58, 59]),
+        L2capFragment::new(false, vec![60, 61, 62, 63, 64, 65, 66]),
+        // forth
+        L2capFragment::new(true, vec![23, 0, 0x40, 0, 67, 68, 69, 70, 71, 72]),
+        L2capFragment::new(false, vec![73, 74, 75, 76, 77, 78, 79, 80, 81, 82]),
+        L2capFragment::new(false, vec![83, 84, 85, 86, 87, 88, 89]),
+        // forth
+        L2capFragment::new(true, vec![10, 0, 0x40, 0, 90, 91, 92, 93, 94, 95]),
+        L2capFragment::new(false, vec![96, 97, 98, 99]),
+    ];
+
+    for fragment in fragments {
+        tx.send(fragment).await.expect("failed to send fragment")
+    }
+
+    task_handle.await.expect("test task failed")
+}
+
+#[tokio::test]
+async fn incorrect_sdu_length() {
+    let (link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(10);
+
+    let task_handle = tokio::spawn(async move {
+        let (mut credit_channel, _) = connect_response!(link, 1);
+
+        match credit_channel.receive::<Vec<u8>>().await {
+            Err(e) => assert_eq!("SDU length field does not match SDU size", &e.to_string()),
+            Ok(_) => panic!("unexpected SDU data"),
+        }
+    });
+
+    let connect_request = L2capFragment::new(
+        true,
+        vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 0xFF, 0, 23, 0, 0, 0],
+    );
+
+    tx.send(connect_request).await.expect("channel closed");
+
+    let fragments = [
+        // first pdu
+        L2capFragment::new(true, vec![23, 0, 0x40, 0, 29, 0, 0, 1, 2, 3]),
+        L2capFragment::new(false, vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13]),
+        L2capFragment::new(false, vec![14, 15, 16, 17, 18, 19, 20]),
+        // second
+        L2capFragment::new(true, vec![9, 0, 0x40, 0, 21, 22, 23, 24, 25, 26]),
+        L2capFragment::new(false, vec![27, 28, 29]),
+    ];
+
+    for fragment in fragments {
+        tx.send(fragment).await.expect("failed to send fragment")
+    }
+
+    task_handle.await.expect("test task failed")
 }
 
 #[tokio::test]

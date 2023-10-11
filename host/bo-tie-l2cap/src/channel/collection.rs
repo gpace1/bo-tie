@@ -196,7 +196,7 @@ where
     ///
     /// # Note
     /// If it is desired to disconnect the channel, call the method [`disconnect`]
-    /// 
+    ///
     /// [`disconnect`]: SharedCredit::disconnect
     pub fn remove(&mut self, identifer: ChannelIdentifier) -> Option<CreditBasedChannel<'a, L>> {
         match self
@@ -344,7 +344,19 @@ where
     ) -> Result<Option<(ChannelIdentifier, Vec<u8>)>, CollectionReceiveError<L>> {
         let item = &mut self.channels[index];
 
-        let k_frame = item.channel.receive_frame().await?;
+        let mut meta = if item.to_recv_sdu.is_empty() {
+            crate::pdu::credit_frame::RecombineMeta {
+                first: true,
+                mps: item.channel.get_mps(),
+            }
+        } else {
+            crate::pdu::credit_frame::RecombineMeta {
+                first: false,
+                mps: item.channel.get_mps(),
+            }
+        };
+
+        let k_frame = item.channel.receive_frame(&mut meta).await?;
 
         item.to_recv_sdu.push(k_frame);
 
