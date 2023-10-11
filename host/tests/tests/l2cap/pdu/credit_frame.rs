@@ -1,4 +1,4 @@
-//! Tests for credit based channel implementations
+//! Tests for credit based frames
 
 use bo_tie_l2cap::channel::signalling::ReceivedSignal;
 use bo_tie_l2cap::pdu::L2capFragment;
