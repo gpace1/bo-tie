@@ -81,6 +81,11 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         self.channel_id
     }
 
+    /// Get the logical link of the channel
+    pub fn get_link(&self) -> &L {
+        self.logical_link
+    }
+
     /// Get fragmentation size of L2CAP PDUs
     ///
     /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
