@@ -36,6 +36,7 @@ pub use credit_frame::CreditBasedSdu;
 /// logical link implementations within this library. The PDU length information within the basic
 /// header (of every L2CAP PDU) is used to determine how many `L2capFragment`s need to be received
 /// before the L2CAP PDU is complete.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct L2capFragment<T> {
     pub(crate) start_fragment: bool,
     pub(crate) data: T,
