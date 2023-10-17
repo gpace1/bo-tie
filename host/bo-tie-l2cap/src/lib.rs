@@ -52,7 +52,7 @@
 //! [`LeULink`]: link_flavor::LeULink
 //! [`LinkFlavor`]: link_flavor::LinkFlavor
 
-#![cfg_attr(not(feature = "std"), no_std)]
+//#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 extern crate alloc;

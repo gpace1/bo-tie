@@ -180,26 +180,29 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
     }
 
     async fn receive_inner(&mut self) -> Result<ReceivedSignal, ReceiveSignalError<L>> {
-        let fragment = self.receive_fragment().await?;
+        let basic_headed_fragment = self.receive_fragment().await?;
 
-        if !fragment.fragment.is_start_fragment() {
+        if !basic_headed_fragment.is_start_of_data() {
             return Err(ReceiveSignalError::ExpectedFirstFragment);
         }
 
-        let mut recombiner =
-            ControlFrame::<ReceiveSignalRecombineBuilder>::recombine(fragment.length, fragment.channel_id, &mut ());
+        let mut recombiner = ControlFrame::<ReceiveSignalRecombineBuilder>::recombine(
+            basic_headed_fragment.get_pdu_length(),
+            basic_headed_fragment.get_channel_id(),
+            &mut (),
+        );
 
-        let c_frame = if let Some(c_frame) = recombiner.add(fragment.fragment.data)? {
+        let c_frame = if let Some(c_frame) = recombiner.add(basic_headed_fragment.into_data())? {
             c_frame
         } else {
             loop {
-                let fragment = self.receive_fragment().await?;
+                let basic_headed_fragment = self.receive_fragment().await?;
 
-                if fragment.fragment.is_start_fragment() {
+                if basic_headed_fragment.is_start_of_data() {
                     return Err(ReceiveSignalError::UnexpectedFirstFragment);
                 }
 
-                if let Some(c_frame) = recombiner.add(fragment.fragment.data)? {
+                if let Some(c_frame) = recombiner.add(basic_headed_fragment.into_data())? {
                     break c_frame;
                 }
             }

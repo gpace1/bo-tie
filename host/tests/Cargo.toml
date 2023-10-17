@@ -28,25 +28,7 @@ rand_chacha = "0.3"
 version = "1"
 features = ["rt", "macros", "sync", "time"]
 
-[[test]]
-name = "l2cap_le_u_link"
-path = "tests/l2cap/le_u_link.rs"
-
-[[test]]
-name = "l2cap_signals_le_credit_connection"
-path = "tests/l2cap/signals/le_credit_connection.rs"
-
-[[test]]
-name = "l2cap_basic_frame"
-path = "tests/l2cap/pdu/basic_frame.rs"
-
-[[test]]
-name = "l2cap_credit_frame"
-path = "tests/l2cap/pdu/credit_frame.rs"
-
-[[test]]
-name = "l2cap_multiple_channels"
-path = "tests/l2cap/collections.rs"
+# tests are organized below by their directory listing within folder `tests`
 
 [[test]]
 name = "att_connection"
@@ -91,3 +73,27 @@ path = "tests/att/queued_write.rs"
 [[test]]
 name = "gatt_read_by_group_type"
 path = "tests/gatt/read_by_group_type.rs"
+
+[[test]]
+name = "l2cap_basic_frame"
+path = "tests/l2cap/pdu/basic_frame.rs"
+
+[[test]]
+name = "l2cap_credit_frame"
+path = "tests/l2cap/pdu/credit_frame.rs"
+
+[[test]]
+name = "l2cap_signals_le_credit_connection"
+path = "tests/l2cap/signals/le_credit_connection.rs"
+
+[[test]]
+name = "l2cap_channel_collections"
+path = "tests/l2cap/collections.rs"
+
+[[test]]
+name = "l2cap_le_u_link"
+path = "tests/l2cap/le_u_link.rs"
+
+[[test]]
+name = "l2cap_multi_channel"
+path = "tests/l2cap/multi_channel.rs"

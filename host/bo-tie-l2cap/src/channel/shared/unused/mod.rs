@@ -9,7 +9,8 @@
 pub mod le;
 
 use crate::channel::id::ChannelIdentifier;
-use crate::pdu::{FragmentL2capPdu, L2capFragment};
+use crate::channel::shared::BasicHeadedFragment;
+use crate::pdu::FragmentL2capPdu;
 
 /// Response for a PDU for an unused channel
 ///
@@ -33,7 +34,7 @@ pub trait UnusedChannelResponse {
     fn try_generate_response(request_data: Self::ReceiveProcessor) -> Option<Self::Response>;
 
     /// Create a new `ReceiveData`
-    fn new_request_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor;
+    fn new_response_data(pdu_len: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor;
 
     /// Create a new junking `ReceiveData`
     ///
@@ -56,7 +57,7 @@ pub trait ReceiveDataProcessor: Copy + Clone + core::fmt::Debug + PartialEq {
     ///
     /// # Note
     /// `fragment` will only contain bytes after the basic header of the PDU.
-    fn process<T>(&mut self, fragment: L2capFragment<T>) -> Result<bool, Self::Error>
+    fn process<T>(&mut self, fragment: BasicHeadedFragment<T>) -> Result<bool, Self::Error>
     where
         T: Iterator<Item = u8> + ExactSizeIterator;
 }

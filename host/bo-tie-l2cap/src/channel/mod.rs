@@ -228,29 +228,33 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
     where
         T: TryExtend<u8> + Default,
     {
-        let fragment = self.receive_fragment().await?;
+        let basic_headed_fragment = self.receive_fragment().await?;
 
-        if !fragment.fragment.is_start_fragment() {
+        if !basic_headed_fragment.is_start_of_data() {
             return Err(ReceiveError::new_expect_first_err());
         }
 
-        let mut recombiner = BasicFrame::recombine(fragment.length, fragment.channel_id, &mut ());
+        let mut recombiner = BasicFrame::recombine(
+            basic_headed_fragment.get_pdu_length(),
+            basic_headed_fragment.get_channel_id(),
+            &mut (),
+        );
 
         if let Some(b_frame) = recombiner
-            .add(fragment.fragment.data)
+            .add(basic_headed_fragment.into_data())
             .map_err(|e| ReceiveError::new_recombine(e))?
         {
             Ok(b_frame)
         } else {
             loop {
-                let fragment = self.receive_fragment().await?;
+                let basic_headed_fragment = self.receive_fragment().await?;
 
-                if fragment.fragment.is_start_fragment() {
+                if basic_headed_fragment.is_start_of_data() {
                     return Err(ReceiveError::new_unexpect_first_err());
                 }
 
                 if let Some(b_frame) = recombiner
-                    .add(fragment.fragment.data)
+                    .add(basic_headed_fragment.into_data())
                     .map_err(|e| ReceiveError::new_recombine(e))?
                 {
                     return Ok(b_frame);
@@ -538,30 +542,33 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     where
         T: TryExtend<u8> + Default,
     {
-        let headed_fragment = self.receive_fragment().await?;
+        let basic_headed_fragment = self.receive_fragment().await?;
 
-        if !headed_fragment.fragment.is_start_fragment() {
+        if !basic_headed_fragment.is_start_of_data() {
             return Err(ReceiveError::new_expect_first_err());
         }
 
-        let mut first_recombiner =
-            CreditBasedFrame::<T>::recombine(headed_fragment.length, self.peer_channel_id.get_channel(), meta);
+        let mut first_recombiner = CreditBasedFrame::<T>::recombine(
+            basic_headed_fragment.get_pdu_length(),
+            self.peer_channel_id.get_channel(),
+            meta,
+        );
 
         let k_frame = if let Some(first_k_frame) = first_recombiner
-            .add(headed_fragment.fragment.data)
+            .add(basic_headed_fragment.into_data())
             .map_err(|e| ReceiveError::new_recombine(e))?
         {
             first_k_frame
         } else {
             loop {
-                let bh_fragment = self.receive_fragment().await?;
+                let basic_headed_fragment = self.receive_fragment().await?;
 
-                if bh_fragment.fragment.is_start_fragment() {
+                if basic_headed_fragment.is_start_of_data() {
                     return Err(ReceiveError::new_unexpect_first_err());
                 }
 
                 if let Some(b_frame) = first_recombiner
-                    .add(bh_fragment.fragment.data)
+                    .add(basic_headed_fragment.into_data())
                     .map_err(|e| ReceiveError::new_recombine(e))?
                 {
                     break b_frame;
@@ -698,7 +705,7 @@ impl<L: LogicalLink, E, C> ReceiveError<L, E, C> {
     }
 
     fn new_expect_first_err() -> Self {
-        let inner = ReceiveErrorInner::ExpectedFirstFragment;
+        let inner = ReceiveErrorInner::ExpectedPduBeginning;
 
         Self { inner }
     }
@@ -756,7 +763,7 @@ where
             ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "DumpRecvError({d:?})"),
             ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:?}"),
             ReceiveErrorInner::Recombine(e) => write!(f, "Recombine({e:?})"),
-            ReceiveErrorInner::ExpectedFirstFragment => f.write_str("ExpectedFirstFragment"),
+            ReceiveErrorInner::ExpectedPduBeginning => f.write_str("ExpectedPduBeginning"),
             ReceiveErrorInner::UnexpectedFirstFragment => f.write_str("UnexpectedFirstFragment"),
             ReceiveErrorInner::InvalidSduLength => f.write_str("InvalidSduLength"),
         }
@@ -780,7 +787,7 @@ where
             ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "receive error (dump): {d:?}"),
             ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:}"),
             ReceiveErrorInner::Recombine(e) => write!(f, "recombine error: {e:}"),
-            ReceiveErrorInner::ExpectedFirstFragment => f.write_str("expected first fragment of PDU"),
+            ReceiveErrorInner::ExpectedPduBeginning => f.write_str("expected first fragment of PDU"),
             ReceiveErrorInner::UnexpectedFirstFragment => f.write_str("unexpected first fragment of PDU"),
             ReceiveErrorInner::InvalidSduLength => f.write_str("SDU length field does not match SDU size"),
         }
@@ -803,7 +810,7 @@ enum ReceiveErrorInner<L: LogicalLink, E, C> {
     Maybe(MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>),
     TryExtend(E),
     Recombine(C),
-    ExpectedFirstFragment,
+    ExpectedPduBeginning,
     UnexpectedFirstFragment,
     InvalidSduLength,
 }
