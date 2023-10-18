@@ -404,6 +404,12 @@ where
 
                     println!("{channel_id}: setting drop data ({}:{})", file!(), line!());
                     self.drop_data.set(Some(receive_data));
+                } else {
+                    println!(
+                        "{channel_id}: basic header does not exist, no requirements for drop data ({}:{})",
+                        file!(),
+                        line!()
+                    );
                 }
             }
             _ => (),
@@ -480,7 +486,7 @@ where
     ) -> Result<MaybeReceiveHeaderOutput, MaybeRecvError<P, U>> {
         println!("{owner}: >maybe recv header process< ({}:{})", file!(), line!());
 
-        debug_assert!(self.basic_header_processor.get_basic_header().is_none());
+        self.basic_header_processor.clear_basic_header();
 
         let active_channels = self.channels.borrow();
 

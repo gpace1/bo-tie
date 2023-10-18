@@ -1,7 +1,6 @@
 //! Tests for multiple channels sending/receiving at the same time
 
 use bo_tie_host_tests::PhysicalLink;
-use bo_tie_l2cap::channel::id::ChannelIdentifier;
 use bo_tie_l2cap::channel::signalling::ReceivedSignal;
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::{BasicFrameChannel, CreditBasedChannel, LeULogicalLink, SignallingChannel};
@@ -151,6 +150,7 @@ fn gen_k_frame_fragments(
     ret
 }
 
+/// Test for multiple channels receiving at the "same time"
 #[tokio::test]
 async fn le_multiple_receiving() {
     let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
@@ -294,6 +294,8 @@ async fn multiple_sending_credit_based_channel_2<'a>(
     }
 }
 
+/// Test for when L2CAP PDUs are receiving for channels that were not created at the time of
+/// receiving the PDU.
 #[tokio::test]
 async fn le_unused_channel_receive() {
     let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
@@ -368,6 +370,14 @@ async fn le_unused_channel_receive() {
     // supported.
     assert_eq!(received.get_data().as_slice(), &[2, 0, 6, 0, 0x5, 0x5]);
 
+    // send a PDU for a credit based channel
+    tx.send(L2capFragment::new(true, vec![8, 0, 0x40, 0, 6, 0, 1, 2, 3, 4, 5, 6]))
+        .await
+        .expect("failed to send");
+
+    // this should timeout as there is no default error
+    // response for a credit based channel
+
     barrier_1.wait().await;
 
     // send a PDU for the signalling channel
@@ -388,4 +398,105 @@ async fn le_unused_channel_receive() {
     barrier_2.wait().await;
 
     task_handle.await.expect("test task failed");
+}
+
+/// Test for a channel dropped in the middle of receiving a L2CAP PDU
+#[tokio::test]
+async fn le_channel_dropped_while_receiving() {
+    let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
+
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let task_barrier = barrier.clone();
+
+    let (exit_sender, mut exit_receiver) = tokio::sync::oneshot::channel();
+
+    let task_handle = tokio::spawn(async move {
+        let mut signalling_channel = l_link.get_signalling_channel();
+        let mut att_channel = l_link.get_att_channel();
+
+        task_barrier.wait().await;
+
+        if let Some(_) = futures::future::poll_immediate(att_channel.receive::<Vec<_>>()).await {
+            panic!("unexpected PDU received by ATT channel")
+        }
+
+        task_barrier.wait().await;
+
+        drop(att_channel);
+
+        loop {
+            tokio::select! {
+                _ = &mut exit_receiver => break,
+                request = signalling_channel.receive() => match request.expect("receive failed") {
+                    ReceivedSignal::LeCreditBasedConnectionRequest(request) => {
+                        request.create_le_credit_based_connection(&l_link, 0)
+                            .send_response(&mut signalling_channel)
+                            .await
+                            .expect("failed to send response");
+                    }
+                    s => panic!("unexpected signal received ({s:?})")
+                },
+            }
+        }
+    });
+
+    tx.send(L2capFragment::new(true, vec![0xFF, 0, 0x4, 0, 1, 2, 3, 4, 5, 6, 7, 8]))
+        .await
+        .expect("failed to send");
+
+    barrier.wait().await;
+
+    barrier.wait().await;
+
+    for _ in 0..((0xFF - 8) / 12) {
+        tx.send(L2capFragment::new(false, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]))
+            .await
+            .expect("failed to send");
+    }
+
+    tx.send(L2capFragment::new(
+        false,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12][..(0xFF - 8) % 12].to_vec(),
+    ))
+    .await
+    .expect("failed to send");
+
+    // the receiver is expected to be empty, no response
+    // is made if the att channel is dropped in the middle
+    // of receiving a L2CAP PDU.
+    tokio::time::timeout(std::time::Duration::from_millis(10), rx.next())
+        .await
+        .expect_err("expected timeout");
+
+    // verify the link is still working by creating
+    // a LE credit based connection
+
+    tx.send(L2capFragment::new(
+        true,
+        vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0],
+    ))
+    .await
+    .expect("failed to send");
+
+    tx.send(L2capFragment::new(false, vec![23, 0, 23, 0, 0, 0]))
+        .await
+        .expect("failed to send");
+
+    let fragment_1 = rx.next().await.expect("failed to receive");
+
+    assert_eq!(
+        fragment_1.get_data().as_slice(),
+        &[14, 0, 5, 0, 0x15, 1, 10, 0, 0x40, 0, 23, 0]
+    );
+
+    let fragment_2 = rx.next().await.expect("failed to receive");
+
+    assert_eq!(fragment_2.get_data().as_slice(), &[23, 0, 0, 0, 0, 0]);
+
+    exit_sender.send(()).expect("failed to send");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), task_handle)
+        .await
+        .expect("timeout")
+        .expect("test task failed");
 }

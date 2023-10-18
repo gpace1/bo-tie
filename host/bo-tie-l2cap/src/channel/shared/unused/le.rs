@@ -21,7 +21,8 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
         match request_data.channel_id {
             ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
                 let UnusedFixedChannelPduChannelData::Attribute(attribute_data) = request_data.channel_data else {
-                    unreachable!()
+                    // `None` is returned for junked L2CAP data
+                    return None;
                 };
 
                 let (request, handle) = attribute_data.into_inner()?;
@@ -32,7 +33,8 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
             }
             ChannelIdentifier::Le(LeCid::LeSignalingChannel) => {
                 let UnusedFixedChannelPduChannelData::Signalling(signal_data) = request_data.channel_data else {
-                    unreachable!()
+                    // `None` is returned for junked L2CAP data
+                    return None;
                 };
 
                 let rsp = UnusedPduResp::SigCmd(signal_data.into_inner()?);
@@ -53,11 +55,17 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
         UnusedFixedChannelPduData::new(pdu_len, channel_id)
     }
 
-    fn new_junked_data(pdu_len: usize, pdu_bytes: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor {
-        if pdu_bytes == 0 {
+    fn new_junked_data(pdu_len: usize, bytes_so_far: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor {
+        println!(
+            "{channel_id} creating new junked data {{ pdu_len: {pdu_len}, bytes_so_far: {bytes_so_far} }} ({}:{})",
+            file!(),
+            line!()
+        );
+
+        if bytes_so_far == 0 {
             UnusedFixedChannelPduData::new(pdu_len, channel_id)
         } else {
-            UnusedFixedChannelPduData::junk(channel_id)
+            UnusedFixedChannelPduData::junk(pdu_len, bytes_so_far, channel_id)
         }
     }
 }
@@ -94,10 +102,7 @@ impl UnusedFixedChannelPduData {
         }
     }
 
-    fn junk(channel_id: ChannelIdentifier) -> Self {
-        let byte_cnt = 0;
-        let pdu_len = 0;
-
+    fn junk(pdu_len: usize, byte_cnt: usize, channel_id: ChannelIdentifier) -> Self {
         let channel_data = UnusedFixedChannelPduChannelData::Ignored;
 
         Self {
@@ -121,6 +126,7 @@ impl ReceiveDataProcessor for UnusedFixedChannelPduData {
             UnusedFixedChannelPduChannelData::Signalling(sig) => {
                 println!("XXX processing dump data signalling channel");
                 for byte in fragment.data.by_ref() {
+                    println!("BYTE");
                     if self.byte_cnt == 1 {
                         sig.identifier =
                             Some(NonZeroU8::try_from(byte).map_err(|_| UnusedError::InvalidSignalIdentifier)?);
@@ -136,10 +142,14 @@ impl ReceiveDataProcessor for UnusedFixedChannelPduData {
                         Some(0x2) => (),
                         Some(0x4 | 0x6 | 0x8 | 0xa | 0xc | 0xe | 0x10 | 0x20) => match self.byte_cnt {
                             1 => att.handle_b0 = Some(byte),
-                            2 => att.handle_b1 = Some(byte),
+                            2 => {
+                                att.handle_b1 = Some(byte);
+
+                                break;
+                            }
                             _ => (),
                         },
-                        _ => break,
+                        _ => (),
                     }
                     self.byte_cnt += 1
                 }
@@ -150,10 +160,19 @@ impl ReceiveDataProcessor for UnusedFixedChannelPduData {
 
         self.byte_cnt += fragment.data.len();
 
+        println!(
+            "{}: byte_count: {}, pdu_len: {} ({}:{})",
+            self.channel_id,
+            self.byte_cnt,
+            self.pdu_len,
+            file!(),
+            line!()
+        );
+
         if self.byte_cnt == self.pdu_len {
             Ok(true)
         } else if self.byte_cnt > self.pdu_len {
-            Err(UnusedError::InvalidSignalIdentifier)
+            Err(UnusedError::InvalidLength)
         } else {
             Ok(false)
         }
@@ -297,12 +316,14 @@ impl ExactSizeIterator for UnusedPduRespIter {}
 
 #[derive(Debug)]
 pub enum UnusedError {
+    InvalidLength,
     InvalidSignalIdentifier,
 }
 
 impl core::fmt::Display for UnusedError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
+            UnusedError::InvalidLength => f.write_str("invalid length field in PDU"),
             UnusedError::InvalidSignalIdentifier => f.write_str("invalid signalling command identifier"),
         }
     }
