@@ -138,11 +138,13 @@ where
 
         let mut rendez = Box::pin(rendezvous_server.rendez());
 
+        let buffer = &mut Vec::new();
+
         loop {
             tokio::select! {
                 _ = &mut rendez => break,
 
-                received = att_bearer.receive() => {
+                received = att_bearer.receive(buffer) => {
                     let received = received.expect("receiver closed");
 
                     server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process ATT PDU");
@@ -160,10 +162,12 @@ where
 async fn discovery_success() {
     connect_setup(|channel, client| {
         Box::pin(async {
+            let buffer = &mut Vec::new();
+
             loop {
                 let query_next = client.partial_discovery(channel).await.expect("failed to send query");
 
-                let response = channel.receive().await.expect("failed to receive response");
+                let response = channel.receive(buffer).await.expect("failed to receive response");
 
                 if query_next.process_response(&response).expect("unexpected response") {
                     break;

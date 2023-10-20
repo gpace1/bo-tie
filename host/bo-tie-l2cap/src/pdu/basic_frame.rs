@@ -63,10 +63,17 @@ where
 {
     type RecombineError = RecombineError;
     type RecombineMeta = ();
-    type PayloadRecombiner<'a> = BasicFrameRecombiner<T>;
+    type RecombineBuffer = T;
+    type PayloadRecombiner<'a> = BasicFrameRecombiner<'a, Self::RecombineBuffer>
+        where Self::RecombineBuffer: 'a;
 
-    fn recombine(payload_length: u16, channel_id: ChannelIdentifier, _: &mut ()) -> Self::PayloadRecombiner<'_> {
-        BasicFrameRecombiner::new(payload_length.into(), channel_id)
+    fn recombine<'a>(
+        payload_length: u16,
+        channel_id: ChannelIdentifier,
+        buffer: &'a mut Self::RecombineBuffer,
+        _: &'a mut Self::RecombineMeta,
+    ) -> Self::PayloadRecombiner<'a> {
+        BasicFrameRecombiner::new(buffer, payload_length.into(), channel_id)
     }
 }
 
@@ -259,21 +266,20 @@ where
 }
 
 /// Recombiner of fragments into a Basic Frame PDU
-pub struct BasicFrameRecombiner<T> {
+pub struct BasicFrameRecombiner<'a, T> {
     payload_len: usize,
     channel_id: ChannelIdentifier,
     byte_count: usize,
-    payload: Option<T>,
+    payload: &'a mut T,
 }
 
-impl<T> BasicFrameRecombiner<T> {
+impl<'a, T> BasicFrameRecombiner<'a, T> {
     /// Create a new `BasicFrameRecombiner` with a default payload
-    fn new(payload_len: usize, channel_id: ChannelIdentifier) -> Self
+    fn new(payload: &'a mut T, payload_len: usize, channel_id: ChannelIdentifier) -> Self
     where
         T: Default,
     {
         let byte_count = 0;
-        let payload = T::default().into();
 
         BasicFrameRecombiner {
             payload_len,
@@ -284,12 +290,13 @@ impl<T> BasicFrameRecombiner<T> {
     }
 }
 
-impl<P> crate::pdu::RecombinePayloadIncrementally for BasicFrameRecombiner<P>
+impl<P> crate::pdu::RecombinePayloadIncrementally for BasicFrameRecombiner<'_, P>
 where
-    P: TryExtend<u8>,
+    P: TryExtend<u8> + Default,
 {
     type Pdu = BasicFrame<P>;
     type RecombineError = RecombineError;
+    type RecombineBuffer = P;
 
     fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
     where
@@ -302,13 +309,11 @@ where
             self.byte_count += payload_iter.len();
 
             self.payload
-                .as_mut()
-                .unwrap()
                 .try_extend(payload_iter)
                 .map_err(|_| RecombineError::BufferTooSmall)?;
 
             if self.payload_len == self.byte_count {
-                let b_frame = BasicFrame::new(self.payload.take().unwrap(), self.channel_id);
+                let b_frame = BasicFrame::new(std::mem::take(self.payload), self.channel_id);
 
                 Ok(Some(b_frame))
             } else {

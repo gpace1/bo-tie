@@ -60,11 +60,13 @@ where
 
         let mut rendez = Box::pin(rendezvous_server.rendez());
 
+        let buffer = &mut Vec::new();
+
         loop {
             tokio::select! {
                 _ = &mut rendez => break,
 
-                received = att_bearer.receive() => {
+                received = att_bearer.receive(buffer) => {
                     let received = received.expect("receiver closed");
 
                     server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process ATT PDU");
@@ -98,7 +100,7 @@ async fn read_success() {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor
                             .process_response(&response)
@@ -214,11 +216,13 @@ async fn connect_permission_setup<Fun>(
 
         let mut rendez = Box::pin(rendezvous_server.rendez());
 
+        let buffer = &mut Vec::new();
+
         loop {
             tokio::select! {
                 _ = &mut rendez => break,
 
-                received = att_bearer.receive() => {
+                received = att_bearer.receive(buffer) => {
                     let received = received.expect("receiver closed");
 
                     server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process ATT PDU");
@@ -256,7 +260,7 @@ macro_rules! permission_tests {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(bo_tie_att::Error::Pdu(pdu)) => {
@@ -299,7 +303,7 @@ macro_rules! permission_tests {
                                 .await
                                 .expect("failed to send request");
 
-                            let response = channel.receive().await.expect("failed to receive");
+                            let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                             match response_processor.process_response(&response)
                                 .expect("invalid response")
@@ -334,7 +338,7 @@ macro_rules! permission_tests {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response)
                             .expect("invalid response")
@@ -350,7 +354,7 @@ macro_rules! permission_tests {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(bo_tie_att::Error::Pdu(pdu)) => {

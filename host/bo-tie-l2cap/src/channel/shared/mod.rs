@@ -268,6 +268,7 @@ pub struct SharedPhysicalLink<P: PhysicalLink, U: UnusedChannelResponse> {
     basic_header_processor: BasicHeaderProcessor,
     stasis_fragment: Cell<Option<BasicHeadedFragment<P::RecvData>>>,
     drop_data: Cell<Option<U::ReceiveProcessor>>,
+    wakeup: Cell<Option<core::task::Waker>>,
 }
 
 unsafe impl<P: PhysicalLink + Sync, U: UnusedChannelResponse + Sync> Sync for SharedPhysicalLink<P, U> {}
@@ -293,6 +294,8 @@ where
 
         let drop_data = Cell::default();
 
+        let wakeup = Cell::default();
+
         Self {
             owner,
             channels,
@@ -301,6 +304,7 @@ where
             basic_header_processor,
             stasis_fragment,
             drop_data,
+            wakeup,
         }
     }
 
@@ -316,6 +320,8 @@ where
         self.basic_header_processor.clear_basic_header();
 
         self.owner.set(PhysicalLinkOwner::None);
+
+        self.wakeup.take().map(|waker| waker.wake());
     }
 
     /// Add a channel to this `SharedPhysicalLink`
@@ -381,10 +387,14 @@ where
             PhysicalLinkOwner::Sender(id) if id == channel_id => {
                 self.owner.set(PhysicalLinkOwner::None);
 
+                self.wakeup.take().map(|waker| waker.wake());
+
                 self.basic_header_processor.clear_basic_header();
             }
             PhysicalLinkOwner::Receiver(id, count) if id == channel_id => {
                 self.owner.set(PhysicalLinkOwner::AnyReceiver);
+
+                self.wakeup.take().map(|waker| waker.wake());
 
                 if self.drop_data.get().is_some() {
                     return;
@@ -428,6 +438,7 @@ where
     /// calls this method, it takes ownership and
     pub(crate) fn maybe_send<'s, T>(
         &'s self,
+        context: &mut core::task::Context,
         owner: ChannelIdentifier,
         fragment: L2capFragment<T>,
     ) -> Poll<P::SendFut<'s>>
@@ -439,6 +450,8 @@ where
 
             self.owner.set(PhysicalLinkOwner::Sender(owner))
         } else if self.owner.get() != PhysicalLinkOwner::Sender(owner) {
+            self.wakeup.set(context.waker().clone().into());
+
             return Poll::Pending;
         }
 
@@ -547,7 +560,7 @@ where
             line!()
         );
         loop {
-            let count = core::future::poll_fn(|_| match self.owner.get() {
+            let count = core::future::poll_fn(|context| match self.owner.get() {
                 PhysicalLinkOwner::Receiver(current, count) if current == owner => {
                     println!("{owner}: is current receiver ({}:{})", file!(), line!());
 
@@ -567,7 +580,11 @@ where
 
                     Poll::Ready(0)
                 }
-                _ => Poll::Pending,
+                _ => {
+                    self.wakeup.set(context.waker().clone().into());
+
+                    Poll::Pending
+                }
             })
             .await;
 
@@ -597,6 +614,8 @@ where
                         if let Some(rsp) = self.process_dumped_fragment(drop_data, basic_headed_fragment)? {
                             self.owner.set(PhysicalLinkOwner::None);
 
+                            self.wakeup.take().map(|waker| waker.wake());
+
                             break Ok(Err(rsp));
                         }
                     }
@@ -619,6 +638,8 @@ where
                             }
                             MaybeReceiveHeaderOutput::PduIsForDifferentChannel(basic_header) => {
                                 self.owner.set(PhysicalLinkOwner::Receiver(basic_header.channel_id, 0));
+
+                                self.wakeup.take().map(|waker| waker.wake());
 
                                 println!(
                                     "{owner}: setting stasis fragment ({}) ({}:{})",
@@ -763,6 +784,8 @@ where
                 BasicHeadProcessOutput::PduIsForThisChannel(_) => unreachable!(),
                 BasicHeadProcessOutput::PduIsForUnusedChannel(basic_header) => {
                     self.owner.set(PhysicalLinkOwner::AnyReceiver);
+
+                    self.wakeup.take().map(|waker| waker.wake());
 
                     let receive_data = U::new_response_data(basic_header.length.into(), basic_header.channel_id);
 

@@ -64,11 +64,13 @@ where
 
         let mut rendez = Box::pin(rendezvous_server.rendez());
 
+        let buffer = &mut Vec::new();
+
         loop {
             tokio::select! {
                 _ = &mut rendez => break,
 
-                received = att_bearer.receive() => {
+                received = att_bearer.receive(buffer) => {
                     let received = received.expect("receiver closed");
 
                     server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process ATT PDU");
@@ -100,7 +102,10 @@ async fn write_success() {
                     .await
                     .expect("failed to send prepare write request");
 
-                let response = channel.receive().await.expect("failed to receive response");
+                let response = channel
+                    .receive(&mut Vec::new())
+                    .await
+                    .expect("failed to receive response");
 
                 let prepared_write_response = response_processor
                     .process_response(&response)
@@ -130,7 +135,7 @@ async fn write_success() {
                 .expect("failed to send execute write request");
 
             let response = channel
-                .receive()
+                .receive(&mut Vec::new())
                 .await
                 .expect("failed to received prepare write response");
 
@@ -162,7 +167,10 @@ async fn execute_cancel_success() {
                     .await
                     .expect("failed to send prepare write request");
 
-                let response = channel.receive().await.expect("failed to receive response");
+                let response = channel
+                    .receive(&mut Vec::new())
+                    .await
+                    .expect("failed to receive response");
 
                 let prepared_write_response = response_processor
                     .process_response(&response)
@@ -192,7 +200,7 @@ async fn execute_cancel_success() {
                 .expect("failed to send execute write request");
 
             let response = channel
-                .receive()
+                .receive(&mut Vec::new())
                 .await
                 .expect("failed to received prepare write response");
 
@@ -226,7 +234,10 @@ async fn full_queue() {
                     .await
                     .expect("failed to send prepare write request");
 
-                let response = channel.receive().await.expect("failed to receive response");
+                let response = channel
+                    .receive(&mut Vec::new())
+                    .await
+                    .expect("failed to receive response");
 
                 match response_processor.process_response(&response) {
                     Ok(_) => counter += 1,
@@ -264,7 +275,10 @@ async fn invalid_value_size() {
                 .await
                 .expect("failed to send prepare write request");
 
-            let response = channel.receive().await.expect("failed to receive response");
+            let response = channel
+                .receive(&mut Vec::new())
+                .await
+                .expect("failed to receive response");
 
             match response_processor.process_response(&response) {
                 Ok(_) => (),
@@ -276,7 +290,10 @@ async fn invalid_value_size() {
                 .await
                 .expect("failed to send execute write request");
 
-            let response = channel.receive().await.expect("failed to receive response");
+            let response = channel
+                .receive(&mut Vec::new())
+                .await
+                .expect("failed to receive response");
 
             match response_processor.process_response(&response) {
                 Err(bo_tie_att::Error::Pdu(pdu)) => {
@@ -394,11 +411,13 @@ where
 
         let mut rendez = Box::pin(rendezvous_server.rendez());
 
+        let buffer = &mut Vec::new();
+
         loop {
             tokio::select! {
                 _ = &mut rendez => break,
 
-                received = att_bearer.receive() => {
+                received = att_bearer.receive(buffer) => {
                     let received = received.expect("receiver closed");
 
                     server.revoke_permissions_of_client(set_permissions);
@@ -442,7 +461,7 @@ macro_rules! prepare_permission_tests {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(bo_tie_att::Error::Pdu(pdu)) => {
@@ -482,7 +501,7 @@ macro_rules! prepare_permission_tests {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(e) => panic!("unexpected error {:?}", e),
@@ -527,7 +546,7 @@ macro_rules! prepare_permission_tests {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(e) => panic!("unexpected error {:?}", e),
@@ -545,7 +564,7 @@ macro_rules! prepare_permission_tests {
                             .await
                             .expect("failed to send request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(bo_tie_att::Error::Pdu(pdu)) => {
@@ -623,7 +642,7 @@ macro_rules! execute_permission_tests {
                             .await
                             .expect("failed to send prepare request");
 
-                        let response = channel.receive().await
+                        let response = channel.receive(&mut Vec::new()).await
                             .expect("failed to receive prepare response");
 
                         match response_processor.process_response(&response) {
@@ -638,7 +657,7 @@ macro_rules! execute_permission_tests {
                             .await
                             .expect("failed to send execute request");
 
-                        let response = channel.receive().await
+                        let response = channel.receive(&mut Vec::new()).await
                             .expect("failed to receive execute response");
 
                         match response_processor.process_response(&response) {
@@ -657,7 +676,7 @@ macro_rules! execute_permission_tests {
                             .await
                             .expect("failed read request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(e) => panic!("unexpected error {:?}", e),
@@ -691,7 +710,7 @@ macro_rules! execute_permission_tests {
                             .await
                             .expect("failed to send prepare request");
 
-                        let response = channel.receive().await
+                        let response = channel.receive(&mut Vec::new()).await
                             .expect("failed to receive prepare response");
 
                         match response_processor.process_response(&response) {
@@ -704,7 +723,7 @@ macro_rules! execute_permission_tests {
                             .await
                             .expect("failed to send execute request");
 
-                        let response = channel.receive().await
+                        let response = channel.receive(&mut Vec::new()).await
                             .expect("failed to receive execute response");
 
                         match response_processor.process_response(&response) {
@@ -717,7 +736,7 @@ macro_rules! execute_permission_tests {
                             .await
                             .expect("failed read request");
 
-                        let response = channel.receive().await.expect("failed to receive");
+                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
 
                         match response_processor.process_response(&response) {
                             Err(e) => panic!("unexpected error 3 {:?}", e),

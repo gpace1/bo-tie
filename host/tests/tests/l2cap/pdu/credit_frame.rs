@@ -334,7 +334,10 @@ async fn recv_single_pdu() {
 
         assert_eq!(credit_channel.get_peer_channel_id().to_val(), 0x40);
 
-        let sdu: Vec<u8> = credit_channel.receive().await.expect("failed to receive");
+        let sdu: Vec<u8> = credit_channel
+            .receive(&mut Vec::new())
+            .await
+            .expect("failed to receive");
 
         assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5]);
     });
@@ -362,7 +365,10 @@ async fn recv_single_pdu_multi_fragments() {
     let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
-        let sdu: Vec<u8> = credit_channel.receive().await.expect("failed to receive");
+        let sdu: Vec<u8> = credit_channel
+            .receive(&mut Vec::new())
+            .await
+            .expect("failed to receive");
 
         assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     });
@@ -396,7 +402,7 @@ async fn recv_single_pdu_bad_fragment_start_indicator() {
     let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
-        match credit_channel.receive::<Vec<_>>().await {
+        match credit_channel.receive(&mut Vec::new()).await {
             Err(e) => assert_eq!("unexpected first fragment of PDU", &e.to_string()),
             Ok(_) => panic!("unexpected data return"),
         }
@@ -431,7 +437,10 @@ async fn receive_multiple_pdu_for_sdu() {
     let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
-        let sdu: Vec<u8> = credit_channel.receive().await.expect("failed to receive");
+        let sdu = credit_channel
+            .receive(&mut Vec::new())
+            .await
+            .expect("failed to receive");
 
         assert_eq!(
             &sdu,
@@ -487,7 +496,7 @@ async fn incorrect_sdu_length() {
     let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
-        match credit_channel.receive::<Vec<u8>>().await {
+        match credit_channel.receive(&mut Vec::new()).await {
             Err(e) => assert_eq!("SDU length field does not match SDU size", &e.to_string()),
             Ok(_) => panic!("unexpected SDU data"),
         }
@@ -571,7 +580,10 @@ async fn connection_disconnection() {
     let r_handle = tokio::spawn(async move {
         let (mut credit_based_channel, mut signalling_channel) = connect_response!(r_link, 5);
 
-        let data: Vec<u8> = credit_based_channel.receive().await.expect("failed to receive");
+        let data = credit_based_channel
+            .receive(&mut Vec::new())
+            .await
+            .expect("failed to receive");
 
         let message = std::str::from_utf8(&data).expect("invalid utf8");
 
@@ -580,7 +592,7 @@ async fn connection_disconnection() {
         // send disconnection
 
         signalling_channel
-            .request_connection_disconnection(&credit_based_channel)
+            .request_disconnection(&mut credit_based_channel)
             .await
             .expect("failed to send disconnection request");
 

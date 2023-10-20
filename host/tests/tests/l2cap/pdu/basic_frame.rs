@@ -58,7 +58,7 @@ async fn receive_single_pdu() {
         let mut att_channel = link.get_att_channel();
 
         let frame = att_channel
-            .receive::<Vec<_>>()
+            .receive(&mut Vec::new())
             .await
             .expect("failed to receive b-frame");
 
@@ -82,7 +82,7 @@ async fn receive_single_pdu_multiple_fragments() {
         let mut att_channel = link.get_att_channel();
 
         let frame = att_channel
-            .receive::<Vec<_>>()
+            .receive(&mut Vec::new())
             .await
             .expect("failed to receive b-frame");
 
@@ -113,7 +113,7 @@ async fn receive_bad_pdu_len() {
         // use it for the ATT protocol.
         let mut att_channel = link.get_att_channel();
 
-        match att_channel.receive::<Vec<_>>().await {
+        match att_channel.receive(&mut Vec::new()).await {
             Err(e) => assert!(e
                 .to_string()
                 .contains("payload is larger than the payload length field")),
@@ -145,7 +145,7 @@ async fn receive_bad_start_fragment() {
         // use it for the ATT protocol.
         let mut att_channel = link.get_att_channel();
 
-        match att_channel.receive::<Vec<_>>().await {
+        match att_channel.receive(&mut Vec::new()).await {
             Err(e) => assert_eq!("unexpected first fragment of PDU", e.to_string()),
             Ok(_) => panic!("unexpected b-frame received"),
         }
@@ -155,7 +155,7 @@ async fn receive_bad_start_fragment() {
         .await
         .expect("failed to send frame");
 
-    tx.send(L2capFragment::new(true, vec![1, 2, 3, 4, 5]))
+    tx.send(L2capFragment::new(true, vec![1, 2, 4, 0, 5]))
         .await
         .expect("failed to send frame");
 

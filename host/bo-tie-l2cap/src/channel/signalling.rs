@@ -43,53 +43,13 @@ impl InterimCreditConnectionData {
     }
 }
 
-/// A Signalling Channel
-///
-/// L2CAP has two Signalling Channels, one for an ACL-U logical link and one for a LE-U logical
-/// link. This type is used for either of the two.
-///
-/// For a LE-U logical link, a Signalling Channel can be created via the [`get_signalling_channel`]
-/// method of `LeULogicalLink`
-///
-/// [`get_signalling_channel`]: crate::LeULogicalLink::get_signalling_channel
-pub struct SignallingChannel<'a, L: LogicalLink> {
+/// The 'inner' field of `SignallingChannel`
+struct SignallingChannelInner<'a, L> {
     channel_id: ChannelIdentifier,
     logical_link: &'a L,
-    awaited_response: AwaitedSignalResponse,
 }
 
-impl<'a, L: LogicalLink> SignallingChannel<'a, L> {
-    pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: &'a L) -> Self {
-        assert!(
-            logical_link.get_shared_link().add_channel(channel_id),
-            "channel already exists"
-        );
-
-        let awaited_response = AwaitedSignalResponse::None;
-
-        Self {
-            channel_id,
-            logical_link,
-            awaited_response,
-        }
-    }
-}
-
-impl<L: LogicalLink> SignallingChannel<'_, L> {
-    /// Get the channel identifier for this Signalling Channel
-    pub fn get_channel_id(&self) -> ChannelIdentifier {
-        self.channel_id
-    }
-
-    /// Get the logical link of the channel
-    pub fn get_link(&self) -> &L {
-        self.logical_link
-    }
-
-    /// Get fragmentation size of L2CAP PDUs
-    ///
-    /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
-    /// channel. Every L2CAP PDU is fragmented to this in both sending a receiving of L2CAP data.
+impl<L: LogicalLink> SignallingChannelInner<'_, L> {
     pub fn fragmentation_size(&self) -> usize {
         self.logical_link.get_shared_link().get_fragmentation_size()
     }
@@ -106,13 +66,32 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |_| {
+        core::future::poll_fn(move |context| {
             self.logical_link
                 .get_shared_link()
-                .maybe_send(self.channel_id, fragment.take().unwrap())
+                .maybe_send(context, self.channel_id, fragment.take().unwrap())
         })
         .await
         .await
+    }
+
+    async fn send_inner<T: FragmentL2capPdu>(
+        &mut self,
+        c_frame: T,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+        let mut is_first = true;
+
+        let mut fragments_iter = c_frame.into_fragments(self.fragmentation_size()).unwrap();
+
+        while let Some(data) = fragments_iter.next() {
+            let fragment = L2capFragment::new(is_first, data);
+
+            is_first = false;
+
+            self.send_fragment(fragment).await?;
+        }
+
+        Ok(())
     }
 
     async fn receive_fragment(
@@ -145,51 +124,23 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
         }
     }
 
-    async fn send_inner<T: FragmentL2capPdu>(
+    async fn receive_inner(
         &mut self,
-        c_frame: T,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let mut is_first = true;
-
-        let mut fragments_iter = c_frame.into_fragments(self.fragmentation_size()).unwrap();
-
-        while let Some(data) = fragments_iter.next() {
-            let fragment = L2capFragment::new(is_first, data);
-
-            is_first = false;
-
-            self.send_fragment(fragment).await?;
-        }
-
-        Ok(())
-    }
-
-    /// Send a Signal
-    ///
-    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
-    /// may be called by protocol at a higher layer than L2CAP.
-    async fn send<T: FragmentL2capPdu>(
-        &mut self,
-        c_frame: T,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let output = self.send_inner(c_frame).await;
-
-        self.logical_link.get_shared_link().clear_owner();
-
-        output
-    }
-
-    async fn receive_inner(&mut self) -> Result<ReceivedSignal, ReceiveSignalError<L>> {
+        buffer: &mut ReceiveSignalRecombineBuilder,
+    ) -> Result<ReceivedSignal, ReceiveSignalError<L>> {
         let basic_headed_fragment = self.receive_fragment().await?;
 
         if !basic_headed_fragment.is_start_of_data() {
             return Err(ReceiveSignalError::ExpectedFirstFragment);
         }
 
-        let mut recombiner = ControlFrame::<ReceiveSignalRecombineBuilder>::recombine(
+        let meta = &mut ();
+
+        let mut recombiner = ControlFrame::recombine(
             basic_headed_fragment.get_pdu_length(),
             basic_headed_fragment.get_channel_id(),
-            &mut (),
+            buffer,
+            meta,
         );
 
         let c_frame = if let Some(c_frame) = recombiner.add(basic_headed_fragment.into_data())? {
@@ -220,6 +171,80 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
 
         Ok(received_signal)
     }
+}
+
+/// A Signalling Channel
+///
+/// L2CAP has two Signalling Channels, one for an ACL-U logical link and one for a LE-U logical
+/// link. This type is used for either of the two.
+///
+/// For a LE-U logical link, a Signalling Channel can be created via the [`get_signalling_channel`]
+/// method of `LeULogicalLink`
+///
+/// [`get_signalling_channel`]: crate::LeULogicalLink::get_signalling_channel
+pub struct SignallingChannel<'a, L: LogicalLink> {
+    inner: SignallingChannelInner<'a, L>,
+    awaited_response: AwaitedSignalResponse,
+    receiving_signal: ReceiveSignalRecombineBuilder,
+}
+
+impl<'a, L: LogicalLink> SignallingChannel<'a, L> {
+    pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: &'a L) -> Self {
+        assert!(
+            logical_link.get_shared_link().add_channel(channel_id),
+            "channel already exists"
+        );
+
+        let inner = SignallingChannelInner {
+            channel_id,
+            logical_link,
+        };
+
+        let awaited_response = AwaitedSignalResponse::None;
+
+        let receiving_signal = ReceiveSignalRecombineBuilder::default();
+
+        Self {
+            inner,
+            awaited_response,
+            receiving_signal,
+        }
+    }
+}
+
+impl<L: LogicalLink> SignallingChannel<'_, L> {
+    /// Get the channel identifier for this Signalling Channel
+    pub fn get_channel_id(&self) -> ChannelIdentifier {
+        self.inner.channel_id
+    }
+
+    /// Get the logical link of the channel
+    pub fn get_link(&self) -> &L {
+        self.inner.logical_link
+    }
+
+    /// Get fragmentation size of L2CAP PDUs
+    ///
+    /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
+    /// channel. Every L2CAP PDU is fragmented to this in both sending a receiving of L2CAP data.
+    pub fn fragmentation_size(&self) -> usize {
+        self.inner.fragmentation_size()
+    }
+
+    /// Send a Signal
+    ///
+    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
+    /// may be called by protocol at a higher layer than L2CAP.
+    async fn send<T: FragmentL2capPdu>(
+        &mut self,
+        c_frame: T,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+        let output = self.inner.send_inner(c_frame).await;
+
+        self.inner.logical_link.get_shared_link().clear_owner();
+
+        output
+    }
 
     /// Receive a Signal on this Channel
     ///
@@ -247,13 +272,23 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
     ///     }
     /// # }}
     /// ```
+    /// Receive a Basic Frame for this Channel
+    ///
+    /// This creates a `receive` future which will output the next `BasicFrame` sent to this
+    /// channel.
+    ///
+    /// # Note
+    /// The signalling channels' `receive` future does not suffer from the issues listed within the
+    /// [channel] module documentation.
+    ///
+    /// [channel]: self
     pub async fn receive(&mut self) -> Result<ReceivedSignal, ReceiveSignalError<L>> {
-        let output = self.receive_inner().await;
+        let output = self.inner.receive_inner(&mut self.receiving_signal).await;
 
-        self.logical_link.get_shared_link().clear_owner();
+        self.inner.logical_link.get_shared_link().clear_owner();
 
         if let Ok(ReceivedSignal::CommandRejectRsp(_)) = &output {
-            self.awaited_response.on_fail(self.logical_link)
+            self.awaited_response.on_fail(self.inner.logical_link)
         }
 
         output
@@ -267,16 +302,16 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
     /// # Note
     /// The disconnection of the L2CAP connection does not occur until after a disconnection
     /// response is received by this device (with the correct fields).
-    pub async fn request_connection_disconnection<C: ConnectionChannel>(
+    pub async fn request_disconnection<C: ConnectionChannel>(
         &mut self,
-        channel: &C,
+        channel: &mut C,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let destination_id = channel.get_peer_channel_id();
         let source_id = channel.get_this_channel_id();
 
         let disconnect_request = DisconnectRequest::new(NonZeroU8::new(1).unwrap(), destination_id, source_id);
 
-        let c_frame = disconnect_request.into_control_frame(self.channel_id);
+        let c_frame = disconnect_request.into_control_frame(self.inner.channel_id);
 
         self.send(c_frame).await
     }
@@ -298,7 +333,7 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
             credits,
         );
 
-        let c_frame = credit_ind.into_control_frame(self.channel_id);
+        let c_frame = credit_ind.into_control_frame(self.inner.channel_id);
 
         self.send(c_frame).await
     }
@@ -325,6 +360,7 @@ impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
         initial_credits: u16,
     ) -> Result<LeCreditBasedConnectionRequest, CreditConnectionRequestError<P::SendErr>> {
         let channel_id = self
+            .inner
             .logical_link
             .get_shared_link()
             .new_le_dyn_channel()
@@ -345,7 +381,7 @@ impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
 
         self.awaited_response = AwaitedSignalResponse::LeCreditConnection(interim_data);
 
-        let control_frame = request.into_control_frame(self.channel_id);
+        let control_frame = request.into_control_frame(self.inner.channel_id);
 
         self.send(control_frame)
             .await
@@ -357,7 +393,10 @@ impl<P: PhysicalLink> SignallingChannel<'_, LeULogicalLink<P>> {
 
 impl<L: LogicalLink> Drop for SignallingChannel<'_, L> {
     fn drop(&mut self) {
-        self.logical_link.get_shared_link().remove_channel(self.channel_id)
+        self.inner
+            .logical_link
+            .get_shared_link()
+            .remove_channel(self.inner.channel_id)
     }
 }
 
@@ -744,7 +783,7 @@ impl<T> Request<T> {
     {
         let rejection = CommandRejectResponse::new_command_not_understood(self.request.get_identifier());
 
-        let c_frame = rejection.into_control_frame(signalling_channel.channel_id);
+        let c_frame = rejection.into_control_frame(signalling_channel.inner.channel_id);
 
         signalling_channel.send(c_frame).await
     }
@@ -775,7 +814,7 @@ impl Request<CommandRejectResponse> {
         self,
         signalling_channel: &mut SignallingChannel<'_, L>,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let c_frame = self.request.into_control_frame(signalling_channel.channel_id);
+        let c_frame = self.request.into_control_frame(signalling_channel.inner.channel_id);
 
         signalling_channel.send(c_frame).await
     }
@@ -823,7 +862,7 @@ impl Request<DisconnectRequest> {
             source_cid: self.request.source_cid,
         };
 
-        let c_frame = response.into_control_frame(signalling_channel.channel_id);
+        let c_frame = response.into_control_frame(signalling_channel.inner.channel_id);
 
         signalling_channel.send(c_frame).await
     }
@@ -871,7 +910,7 @@ impl Request<LeCreditBasedConnectionRequest> {
         let response = LeCreditBasedConnectionResponse::new_rejected(self.request.identifier, reason);
 
         signal_channel
-            .send(response.into_control_frame(signal_channel.channel_id))
+            .send(response.into_control_frame(signal_channel.inner.channel_id))
             .await
     }
 }
@@ -943,7 +982,7 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
         );
 
         signals_channel
-            .send(response.into_control_frame(signals_channel.channel_id))
+            .send(response.into_control_frame(signals_channel.inner.channel_id))
             .await?;
 
         let this_channel_id = crate::channel::ChannelDirection::Destination(ChannelIdentifier::Le(
@@ -961,7 +1000,7 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
         let new_channel = CreditBasedChannel::new(
             this_channel_id,
             peer_channel_id,
-            signals_channel.logical_link,
+            signals_channel.inner.logical_link,
             maximum_packet_size,
             maximum_transmission_size,
             initial_peer_credits,

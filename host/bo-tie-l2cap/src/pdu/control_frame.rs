@@ -57,14 +57,16 @@ where
 {
     type RecombineMeta = ();
     type RecombineError = RecombineError;
-    type PayloadRecombiner<'a> = ControlFrameRecombiner<T>;
+    type RecombineBuffer = T;
+    type PayloadRecombiner<'a> = ControlFrameRecombiner<'a, Self::RecombineBuffer> where Self::RecombineBuffer: 'a;
 
-    fn recombine(
+    fn recombine<'a>(
         payload_length: u16,
         channel_id: ChannelIdentifier,
+        buffer: &'a mut Self::RecombineBuffer,
         _: &mut Self::RecombineMeta,
-    ) -> Self::PayloadRecombiner<'_> {
-        ControlFrameRecombiner::new(payload_length.into(), channel_id)
+    ) -> Self::PayloadRecombiner<'a> {
+        ControlFrameRecombiner::new(buffer, payload_length.into(), channel_id)
     }
 }
 
@@ -215,21 +217,20 @@ where
     }
 }
 
-pub struct ControlFrameRecombiner<T> {
+pub struct ControlFrameRecombiner<'a, T> {
     payload_len: usize,
     channel_id: ChannelIdentifier,
     byte_count: usize,
-    payload: Option<T>,
+    payload: &'a mut T,
 }
 
-impl<T> ControlFrameRecombiner<T> {
+impl<'a, T> ControlFrameRecombiner<'a, T> {
     /// Create a new `BasicFrameRecombiner` with a default payload
-    fn new(payload_len: usize, channel_id: ChannelIdentifier) -> Self
+    fn new(payload: &'a mut T, payload_len: usize, channel_id: ChannelIdentifier) -> Self
     where
         T: Default,
     {
         let byte_count = 0;
-        let payload = T::default().into();
 
         ControlFrameRecombiner {
             payload_len,
@@ -240,12 +241,13 @@ impl<T> ControlFrameRecombiner<T> {
     }
 }
 
-impl<P> crate::pdu::RecombinePayloadIncrementally for ControlFrameRecombiner<P>
+impl<P> crate::pdu::RecombinePayloadIncrementally for ControlFrameRecombiner<'_, P>
 where
-    P: TryExtend<u8>,
+    P: TryExtend<u8> + Default,
 {
     type Pdu = ControlFrame<P>;
     type RecombineError = RecombineError;
+    type RecombineBuffer = P;
 
     fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
     where
@@ -258,14 +260,12 @@ where
             self.byte_count += payload_iter.len();
 
             self.payload
-                .as_mut()
-                .unwrap()
                 .try_extend(payload_iter)
                 .map_err(|_| RecombineError::BufferTooSmall)?;
 
             if self.payload_len == self.byte_count {
                 let c_frame = ControlFrame {
-                    payload: self.payload.take().unwrap(),
+                    payload: core::mem::take(self.payload),
                     channel_id: self.channel_id,
                 };
 

@@ -1,6 +1,21 @@
-//! Implementation of various [`ConnectionChannel`] implementations
+//! L2CAP Channels
 //!
-//! [`ConnectionChannel`]: ConnectionChannel
+//! This modules defines different types of channels based on the PDU formats and connections
+//! defined within the L2CAP Bluetooth Specification.
+//!
+//! # [`BasicChannel`]
+//! This channel is used for a L2CAP channel that exchanges basic frames.
+//!
+//! # [`SignallingChannel`]
+//! This channel is the signalling channel of a logical link. Control frames are passed between the
+//! two ends of a signalling channel.
+//!
+//! # [`CreditBasedChannel`]
+//! A credit based channel is created after a L2CAP credit based connection is made between the two
+//! linked devices. Both a LE credit based connection and enhanced credit based connection use
+//! the `CreditBasedChannel` type to passed credit based data over the link.
+//!
+//! [flavor]: crate::link_flavor
 
 pub mod collection;
 mod credit_based;
@@ -105,6 +120,7 @@ impl std::error::Error for InvalidChannel {}
 pub struct BasicFrameChannel<'a, L: LogicalLink> {
     channel_id: ChannelIdentifier,
     logical_link: &'a L,
+    receiving_pdu_length: core::cell::Cell<usize>,
 }
 
 impl<'a, L: LogicalLink> BasicFrameChannel<'a, L> {
@@ -114,9 +130,12 @@ impl<'a, L: LogicalLink> BasicFrameChannel<'a, L> {
             "channel already exists"
         );
 
+        let receiving_pdu_length = core::cell::Cell::new(0);
+
         BasicFrameChannel {
             channel_id,
             logical_link,
+            receiving_pdu_length,
         }
     }
 }
@@ -147,10 +166,10 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |_| {
+        core::future::poll_fn(move |context| {
             self.logical_link
                 .get_shared_link()
-                .maybe_send(self.channel_id, fragment.take().unwrap())
+                .maybe_send(context, self.channel_id, fragment.take().unwrap())
         })
         .await
         .await
@@ -224,26 +243,36 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
 
     async fn receive_inner<T>(
         &mut self,
-    ) -> Result<BasicFrame<T>, ReceiveError<L, T::Error, pdu::basic_frame::RecombineError>>
+        buffer: &mut T,
+    ) -> Result<BasicFrame<T>, ReceiveError<L, pdu::basic_frame::RecombineError>>
     where
         T: TryExtend<u8> + Default,
     {
         let basic_headed_fragment = self.receive_fragment().await?;
 
-        if !basic_headed_fragment.is_start_of_data() {
+        if self.receiving_pdu_length.get() == 0 && !basic_headed_fragment.is_start_of_data() {
             return Err(ReceiveError::new_expect_first_err());
         }
+
+        let meta = &mut ();
 
         let mut recombiner = BasicFrame::recombine(
             basic_headed_fragment.get_pdu_length(),
             basic_headed_fragment.get_channel_id(),
-            &mut (),
+            buffer,
+            meta,
         );
 
-        if let Some(b_frame) = recombiner
-            .add(basic_headed_fragment.into_data())
-            .map_err(|e| ReceiveError::new_recombine(e))?
-        {
+        let recombine_output = recombiner
+            .add(
+                basic_headed_fragment
+                    .into_data()
+                    .into_iter()
+                    .inspect(|_| self.receiving_pdu_length.set(self.receiving_pdu_length.get() + 1)),
+            )
+            .map_err(|e| ReceiveError::new_recombine(e))?;
+
+        if let Some(b_frame) = recombine_output {
             Ok(b_frame)
         } else {
             loop {
@@ -254,7 +283,12 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
                 }
 
                 if let Some(b_frame) = recombiner
-                    .add(basic_headed_fragment.into_data())
+                    .add(
+                        basic_headed_fragment
+                            .into_data()
+                            .into_iter()
+                            .inspect(|_| self.receiving_pdu_length.set(self.receiving_pdu_length.get() + 1)),
+                    )
                     .map_err(|e| ReceiveError::new_recombine(e))?
                 {
                     return Ok(b_frame);
@@ -263,14 +297,25 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
         }
     }
 
-    /// Receive a Basic Frame for this Channel
+    /// Receive a Basic Frame
+    ///
+    /// The `receive` future is used to output the next `BasicFrame` sent to this channel. The input
+    /// `buffer` is used to temporarily contain received data until all fragments of a L2CAP PDU are
+    /// received.
+    ///
+    /// The returned `receive` future will poll until a complete L2CAP PDU is received. Internally,
+    /// the future polls the physical layer, which only returns fragments of L2CAP PDUs. The PDU
+    /// payload within these fragments is stored within `buffer`, stopping once all the fragments
+    /// of the L2CAP PDU are received. The data within `buffer` is taken (and is replaced with
+    /// `T::default()`) and set as the payload within the output `BasicFrame`.
     pub async fn receive<T>(
         &mut self,
-    ) -> Result<BasicFrame<T>, ReceiveError<L, T::Error, pdu::basic_frame::RecombineError>>
+        buffer: &mut T,
+    ) -> Result<BasicFrame<T>, ReceiveError<L, pdu::basic_frame::RecombineError>>
     where
         T: TryExtend<u8> + Default,
     {
-        let output = self.receive_inner().await;
+        let output = self.receive_inner(buffer).await;
 
         self.logical_link.get_shared_link().clear_owner();
 
@@ -297,6 +342,8 @@ pub struct CreditBasedChannel<'a, L: LogicalLink> {
     maximum_pdu_payload_size: usize,
     maximum_transmission_size: usize,
     peer_credits: usize,
+    receive_sdu_len: core::cell::Cell<usize>,
+    receive_count_so_far: core::cell::Cell<usize>,
 }
 
 impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
@@ -308,6 +355,10 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         maximum_transmission_size: usize,
         initial_peer_credits: usize,
     ) -> Self {
+        let receive_sdu_len = core::cell::Cell::new(0);
+
+        let receive_count_so_far = core::cell::Cell::new(0);
+
         CreditBasedChannel {
             this_channel_id,
             peer_channel_id,
@@ -315,6 +366,8 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             maximum_pdu_payload_size: maximum_packet_size,
             maximum_transmission_size,
             peer_credits: initial_peer_credits,
+            receive_sdu_len,
+            receive_count_so_far,
         }
     }
 
@@ -422,10 +475,12 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |_| {
-            self.logical_link
-                .get_shared_link()
-                .maybe_send(self.this_channel_id.get_channel(), fragment.take().unwrap())
+        core::future::poll_fn(move |context| {
+            self.logical_link.get_shared_link().maybe_send(
+                context,
+                self.this_channel_id.get_channel(),
+                fragment.take().unwrap(),
+            )
         })
         .await
         .await
@@ -534,11 +589,9 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// Inner method of `receive_frame`
     async fn receive_frame_inner<T>(
         &mut self,
+        buffer: &mut T,
         meta: &mut pdu::credit_frame::RecombineMeta,
-    ) -> Result<
-        CreditBasedFrame<T>,
-        ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>,
-    >
+    ) -> Result<CreditBasedFrame<T>, ReceiveError<L, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
     where
         T: TryExtend<u8> + Default,
     {
@@ -548,9 +601,10 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             return Err(ReceiveError::new_expect_first_err());
         }
 
-        let mut first_recombiner = CreditBasedFrame::<T>::recombine(
+        let mut first_recombiner = CreditBasedFrame::recombine(
             basic_headed_fragment.get_pdu_length(),
             self.peer_channel_id.get_channel(),
+            buffer,
             meta,
         );
 
@@ -567,11 +621,11 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
                     return Err(ReceiveError::new_unexpect_first_err());
                 }
 
-                if let Some(b_frame) = first_recombiner
+                if let Some(k_frame) = first_recombiner
                     .add(basic_headed_fragment.into_data())
                     .map_err(|e| ReceiveError::new_recombine(e))?
                 {
-                    break b_frame;
+                    break k_frame;
                 }
             }
         };
@@ -585,17 +639,68 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// Receive a Credit Based Frame for this channel
     async fn receive_frame<T>(
         &mut self,
+        sdu_buffer: &mut T,
         meta: &mut pdu::credit_frame::RecombineMeta,
-    ) -> Result<
-        CreditBasedFrame<T>,
-        ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>,
-    >
+    ) -> Result<CreditBasedFrame<T>, ReceiveError<L, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
     where
         T: TryExtend<u8> + Default,
     {
-        let output = self.receive_frame_inner(meta).await;
+        let output = self.receive_frame_inner(sdu_buffer, meta).await;
 
         self.logical_link.get_shared_link().clear_owner();
+
+        output
+    }
+
+    /// Receive a Credit Based Frame but dont touch the buffer
+    ///
+    /// Unlike `receive_frame` this returns a `CreditBasedFrame` where the payload is a the same
+    /// reference as `sdu_buffer`.
+    async fn receive_frame_into<'z, T>(
+        &mut self,
+        sdu_buffer: &'z mut T,
+        meta: &mut pdu::credit_frame::RecombineMeta,
+    ) -> Result<CreditBasedFrame<&'z mut T>, ReceiveError<L, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
+    where
+        T: TryExtend<u8> + Default,
+    {
+        /// A wrapper that can be taken once
+        ///
+        /// This 'abuses' the credit frame recombine logic within the bowls of the implementation
+        /// of the method `receive_frame_inner`. Within that logic there is a part that occurs once;
+        /// the data within the buffer is taken using the method `core::mem::take` and placed within
+        /// the output `CreditBasedFrame`. This is used to circumvent this by providing a wrapper
+        /// around an `Option` to the reference.
+        #[derive(Default)]
+        pub(crate) struct TakeOnce<'a, T>(Option<&'a mut T>);
+
+        impl<T: TryExtend<u8>> TryExtend<u8> for TakeOnce<'_, T> {
+            type Error = T::Error;
+
+            fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
+            where
+                I: IntoIterator<Item = u8>,
+            {
+                self.0
+                    .as_mut()
+                    .expect("cannot extend the default TakenOnce")
+                    .try_extend(iter)
+            }
+        }
+
+        let mut buffer = TakeOnce(Some(sdu_buffer));
+
+        let output = self.receive_frame_inner(&mut buffer, meta).await;
+
+        self.logical_link.get_shared_link().clear_owner();
+
+        // map the frame back to a reference
+        let output = output.map(|k_frame| match k_frame.get_sdu_length() {
+            Some(sdu_size) => {
+                CreditBasedFrame::new_first(sdu_size, k_frame.get_channel_id(), k_frame.into_payload().0.unwrap())
+            }
+            None => CreditBasedFrame::new_subsequent(k_frame.get_channel_id(), k_frame.into_payload().0.unwrap()),
+        });
 
         output
     }
@@ -611,6 +716,14 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// matches the determined SDU size. The future will not poll to completion until either the
     /// entire SDU is received or an error occurs.
     ///
+    /// # Output
+    /// The returned `receive` future will poll until a complete SDU is received. A SDU is made up
+    /// of one or more credit based frames (k-frame), but this future polls the physical layer for
+    /// fragments of k-frames. The input `buffer` will be used to contain the SDU data received
+    /// within every fragment of every k-frame used to send the full SDU. Once the SDU is received,
+    /// the data within `buffer` is *taken (it's replaced with `T::default()`) and output by the
+    /// receive future*.
+    ///
     /// # Note
     /// This returned future may get 'forever pend' if the peer of this credit based channel has
     /// run out of credits to be able send k-frames to this device. The method
@@ -620,39 +733,62 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// [`give_credits_to_peer`]: SignallingChannel::give_credits_to_peer
     pub async fn receive<T>(
         &mut self,
-    ) -> Result<T, ReceiveError<L, T::Error, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
+        sdu_buffer: &mut T,
+    ) -> Result<T, ReceiveError<L, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
     where
         T: TryExtend<u8> + Default + core::ops::Deref<Target = [u8]>,
     {
-        let mut meta = pdu::credit_frame::RecombineMeta {
-            first: true,
-            mps: self.get_mps(),
+        let mut meta = if self.receive_sdu_len.get() == 0 {
+            if sdu_buffer.len() != 0 {
+                return Err(ReceiveError::new_unexpected_length(sdu_buffer.len(), 0));
+            }
+
+            let mut meta = pdu::credit_frame::RecombineMeta {
+                first: true,
+                mps: self.get_mps(),
+            };
+
+            let first_k_frame = self.receive_frame_into::<T>(sdu_buffer, &mut meta).await?;
+
+            self.receive_sdu_len.set(first_k_frame.get_sdu_length().unwrap().into());
+
+            meta
+        } else {
+            if sdu_buffer.len() != self.receive_count_so_far.get() {
+                return Err(ReceiveError::new_unexpected_length(
+                    sdu_buffer.len(),
+                    self.receive_count_so_far.get(),
+                ));
+            }
+
+            pdu::credit_frame::RecombineMeta {
+                first: false,
+                mps: self.get_mps(),
+            }
         };
 
-        let first_k_frame = self.receive_frame::<T>(&mut meta).await?;
-
-        let sdu_len = first_k_frame.get_sdu_length().unwrap();
-
-        let mut sdu: T = first_k_frame.into_payload();
-
-        if (sdu_len as usize) < sdu.len() {
+        if self.receive_sdu_len.get() < sdu_buffer.len() {
             return Err(ReceiveError::new_invalid_sdu_length());
-        } else if (sdu_len as usize) > sdu.len() {
+        } else if self.receive_sdu_len.get() > sdu_buffer.len() {
             loop {
-                let subsequent_k_frame = self.receive_frame::<T>(&mut meta).await?;
+                println!("sdu len: {}, received {}", self.receive_sdu_len.get(), sdu_buffer.len());
+                let _subsequent_k_frame = self.receive_frame_into(sdu_buffer, &mut meta).await?;
 
-                sdu.try_extend(subsequent_k_frame.into_payload().iter().copied())
-                    .map_err(|e| ReceiveError::new_extend_err(e))?;
-
-                if (sdu_len as usize) == sdu.len() {
+                if self.receive_sdu_len.get() == sdu_buffer.len() {
                     break;
-                } else if (sdu_len as usize) < sdu.len() {
+                } else if self.receive_sdu_len.get() < sdu_buffer.len() {
                     return Err(ReceiveError::new_invalid_sdu_length());
                 }
+
+                self.receive_count_so_far.set(sdu_buffer.len())
             }
         }
 
-        Ok(sdu)
+        self.receive_sdu_len.set(0);
+
+        self.receive_count_so_far.set(0);
+
+        Ok(std::mem::take(sdu_buffer))
     }
 }
 
@@ -690,20 +826,19 @@ impl<L: LogicalLink> Drop for CreditBasedChannel<'_, L> {
     }
 }
 
-/// Error output by the method [`receive`] of `CreditBasedChannel`
+/// Errors output by the `receive*` methods of channels
 ///
-/// [`receive`]: CreditBasedChannel::receive
-pub struct ReceiveError<L: LogicalLink, E, C> {
-    inner: ReceiveErrorInner<L, E, C>,
+/// A receive error is a non-recoverable error. If this error does occur then the logical link (not
+/// just the channel) must be closed between the two devices. Afterwards the link can be
+/// reestablished.
+///
+/// These errors are not something that should ever occur. They only occur whenever the this device
+/// receives badly formatted L2CAP PDU data or the `receive` future was used incorrectly.
+pub struct ReceiveError<L: LogicalLink, C> {
+    inner: ReceiveErrorInner<L, C>,
 }
 
-impl<L: LogicalLink, E, C> ReceiveError<L, E, C> {
-    fn new_extend_err(extend_err: E) -> Self {
-        let inner = ReceiveErrorInner::TryExtend(extend_err);
-
-        Self { inner }
-    }
-
+impl<L: LogicalLink, C> ReceiveError<L, C> {
     fn new_expect_first_err() -> Self {
         let inner = ReceiveErrorInner::ExpectedPduBeginning;
 
@@ -733,9 +868,15 @@ impl<L: LogicalLink, E, C> ReceiveError<L, E, C> {
 
         Self { inner }
     }
+
+    fn new_unexpected_length(buffer_len: usize, expected_len: usize) -> Self {
+        let inner = ReceiveErrorInner::UnexpectedBufferLength(buffer_len, expected_len);
+
+        Self { inner }
+    }
 }
 
-impl<L, E, C> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveError<L, E, C>
+impl<L, C> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveError<L, C>
 where
     L: LogicalLink,
 {
@@ -746,18 +887,16 @@ where
     }
 }
 
-impl<L, E, C> core::fmt::Debug for ReceiveError<L, E, C>
+impl<L, C> core::fmt::Debug for ReceiveError<L, C>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
     <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
         core::fmt::Debug,
-    E: core::fmt::Debug,
     C: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match &self.inner {
-            ReceiveErrorInner::TryExtend(e) => write!(f, "TryExtend({e:?})"),
             ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("Disconnected"),
             ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "RecvError({r:?})"),
             ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "DumpRecvError({d:?})"),
@@ -766,22 +905,25 @@ where
             ReceiveErrorInner::ExpectedPduBeginning => f.write_str("ExpectedPduBeginning"),
             ReceiveErrorInner::UnexpectedFirstFragment => f.write_str("UnexpectedFirstFragment"),
             ReceiveErrorInner::InvalidSduLength => f.write_str("InvalidSduLength"),
+            ReceiveErrorInner::UnexpectedBufferLength(buffer_len, expected_len) => f
+                .debug_struct("UnexpectedBufferLength")
+                .field("buffer_len", buffer_len)
+                .field("expected_len", expected_len)
+                .finish(),
         }
     }
 }
 
-impl<L, E, C> core::fmt::Display for ReceiveError<L, E, C>
+impl<L, C> core::fmt::Display for ReceiveError<L, C>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
     <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
         core::fmt::Display,
-    E: core::fmt::Display,
     C: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match &self.inner {
-            ReceiveErrorInner::TryExtend(e) => write!(f, "failed to extend buffer {e:}"),
             ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("peer device disconnected"),
             ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "receive error: {r:}"),
             ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "receive error (dump): {d:?}"),
@@ -790,29 +932,33 @@ where
             ReceiveErrorInner::ExpectedPduBeginning => f.write_str("expected first fragment of PDU"),
             ReceiveErrorInner::UnexpectedFirstFragment => f.write_str("unexpected first fragment of PDU"),
             ReceiveErrorInner::InvalidSduLength => f.write_str("SDU length field does not match SDU size"),
+            ReceiveErrorInner::UnexpectedBufferLength(buffer_len, expected_len) => write!(
+                f,
+                "the buffer length is {}, not the expected length of {}",
+                buffer_len, expected_len,
+            ),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl<L, E, C> std::error::Error for ReceiveError<L, E, C>
+impl<L, C> std::error::Error for ReceiveError<L, C>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
     <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
         std::error::Error,
-    E: std::error::Error,
     C: std::error::Error,
 {
 }
 
-enum ReceiveErrorInner<L: LogicalLink, E, C> {
+enum ReceiveErrorInner<L: LogicalLink, C> {
     Maybe(MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>),
-    TryExtend(E),
     Recombine(C),
     ExpectedPduBeginning,
     UnexpectedFirstFragment,
     InvalidSduLength,
+    UnexpectedBufferLength(usize, usize),
 }
 
 /// Error when sending a SDU

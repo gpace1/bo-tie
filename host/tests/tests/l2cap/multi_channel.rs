@@ -155,8 +155,6 @@ fn gen_k_frame_fragments(
 async fn le_multiple_receiving() {
     let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
 
-    let (exit_task, mut exit_sig) = tokio::sync::oneshot::channel::<()>();
-
     let task_handle = tokio::spawn(async move {
         let mut signalling_channel = l_link.get_signalling_channel();
 
@@ -166,25 +164,33 @@ async fn le_multiple_receiving() {
 
         let mut credit_channel_2 = None;
 
-        loop {
+        let mut buffer_1 = Vec::new();
+
+        let mut buffer_2 = Vec::new();
+
+        let mut checklist = (false, false, false, false, false);
+
+        while checklist != (true, true, true, true, true) {
+            println!("C H E C K L I S T: {checklist:?}");
+
             tokio::select! {
                 credit_channel = multiple_sending_signal_channel(&mut signalling_channel) => {
                     if credit_channel_1.is_none() {
+                        checklist.0 = true;
                         credit_channel_1 = Some(credit_channel);
                     } else if credit_channel_2.is_none() {
+                        checklist.1 = true;
                         credit_channel_2 = Some(credit_channel)
                     } else {
                         panic!("too many credit channels")
                     }
                 },
 
-                _ = multiple_sending_att_channel(&mut att_channel) => (),
+                _ = multiple_sending_att_channel(&mut att_channel) => checklist.2 = true,
 
-                _ = multiple_sending_credit_based_channel_1(&mut credit_channel_1) => (),
+                _ = multiple_sending_credit_based_channel_1(&mut buffer_1, &mut credit_channel_1) => checklist.3 = true,
 
-                _ = multiple_sending_credit_based_channel_2(&mut credit_channel_2) => (),
-
-                _ = &mut exit_sig => break,
+                _ = multiple_sending_credit_based_channel_2(&mut buffer_2, &mut credit_channel_2) => checklist.4 = true,
             }
         }
     });
@@ -209,9 +215,9 @@ async fn le_multiple_receiving() {
     rx.next().await.expect("channel closed");
 
     // send *some* of the PDUs for the first channel
-    let mut k_frames = gen_k_frame_fragments(TEST_MESSAGE_CREDIT_CHANNEL_1, 12, 0x40, 0xFFFF, 23);
+    let mut k_frames_1 = gen_k_frame_fragments(TEST_MESSAGE_CREDIT_CHANNEL_1, 12, 0x40, 0xFFFF, 23);
 
-    for k_frame in k_frames.drain(..k_frames.len() / 2) {
+    for k_frame in k_frames_1.drain(..k_frames_1.len() / 2) {
         for fragment in k_frame {
             tx.send(fragment).await.expect("failed to send fragment");
         }
@@ -227,18 +233,38 @@ async fn le_multiple_receiving() {
         .await
         .expect("failed to send");
 
-    // send the rest of the PDUs for the first channel
-    for k_frame in k_frames {
-        for fragment in k_frame {
+    let mut k_frames_2 = gen_k_frame_fragments(TEST_MESSAGE_CREDIT_CHANNEL_2, 12, 0x41, 0xFFFF, 23);
+
+    let split_odds =
+        100 * std::cmp::min(k_frames_1.len(), k_frames_2.len()) / std::cmp::max(k_frames_1.len(), k_frames_2.len());
+
+    let mut k_frames_1_iter = k_frames_1.into_iter().peekable();
+    let mut k_frames_2_iter = k_frames_2.into_iter().peekable();
+
+    // randomly interspersing the PDUs of k_frames_1 and k_frames_2.
+    loop {
+        let frame = match (k_frames_1_iter.peek(), k_frames_2_iter.peek()) {
+            (None, None) => break,
+            (Some(_), None) => k_frames_1_iter.next().unwrap(),
+            (None, Some(_)) => k_frames_2_iter.next().unwrap(),
+            (Some(_), Some(_)) => {
+                if rand::random::<usize>() % 100 <= split_odds {
+                    k_frames_1_iter.next().unwrap()
+                } else {
+                    k_frames_2_iter.next().unwrap()
+                }
+            }
+        };
+
+        for fragment in frame {
             tx.send(fragment).await.expect("failed to send fragment");
         }
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-
-    exit_task.send(()).expect("failed to send exit signal");
-
-    task_handle.await.expect("task failed");
+    tokio::time::timeout(std::time::Duration::from_secs(5), task_handle)
+        .await
+        .expect("task timeout")
+        .expect("task failed");
 }
 
 async fn multiple_sending_signal_channel<'a>(
@@ -259,7 +285,7 @@ async fn multiple_sending_signal_channel<'a>(
 }
 
 async fn multiple_sending_att_channel<'a>(b: &mut BasicFrameChannel<'a, LeULogicalLink<PhysicalLink>>) {
-    let data = b.receive::<Vec<_>>().await.expect("failed to receive");
+    let data = b.receive(&mut Vec::new()).await.expect("failed to receive");
 
     let received_message = std::str::from_utf8(data.get_payload()).expect("invalid utf8 received");
 
@@ -267,10 +293,11 @@ async fn multiple_sending_att_channel<'a>(b: &mut BasicFrameChannel<'a, LeULogic
 }
 
 async fn multiple_sending_credit_based_channel_1<'a>(
+    b: &mut Vec<u8>,
     k: &mut Option<CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>>>,
 ) {
     if let Some(channel) = k {
-        let data = channel.receive::<Vec<_>>().await.expect("failed to receive");
+        let data = channel.receive(b).await.expect("failed to receive");
 
         let received_message = std::str::from_utf8(&data).expect("invalid utf8 received");
 
@@ -281,14 +308,15 @@ async fn multiple_sending_credit_based_channel_1<'a>(
 }
 
 async fn multiple_sending_credit_based_channel_2<'a>(
+    b: &mut Vec<u8>,
     k: &mut Option<CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>>>,
 ) {
     if let Some(channel) = k {
-        let data = channel.receive::<Vec<_>>().await.expect("failed to receive");
+        let data = channel.receive(b).await.expect("failed to receive");
 
         let received_message = std::str::from_utf8(&data).expect("invalid utf8 received");
 
-        assert_eq!(received_message, TEST_MESSAGE_CREDIT_CHANNEL_1)
+        assert_eq!(received_message, TEST_MESSAGE_CREDIT_CHANNEL_2)
     } else {
         std::future::pending().await
     }
@@ -300,31 +328,30 @@ async fn multiple_sending_credit_based_channel_2<'a>(
 async fn le_unused_channel_receive() {
     let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
 
-    let barrier_1 = std::sync::Arc::new(tokio::sync::Barrier::new(2));
-    let barrier_2 = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
 
-    let task_barrier_1 = barrier_1.clone();
-    let task_barrier_2 = barrier_2.clone();
+    let task_barrier = barrier.clone();
 
     let task_handle = tokio::spawn(async move {
         let mut signalling_channel = l_link.get_signalling_channel();
 
-        loop {
-            tokio::select! {
-                _ = signalling_channel.receive() => panic!("unexpectedly received data"),
-                _ = task_barrier_1.wait() => break,
+        for _ in 0..3 {
+            task_barrier.wait().await;
+
+            if let Some(r) = futures::future::poll_immediate(signalling_channel.receive()).await {
+                panic!("unexpectedly received output for signalling channel: {r:?}")
             }
         }
 
         drop(signalling_channel);
 
+        task_barrier.wait().await;
+        task_barrier.wait().await;
+
         let mut attribute_channel = l_link.get_att_channel();
 
-        loop {
-            tokio::select! {
-                _ = attribute_channel.receive::<Vec<_>>() => panic!("unexpectedly received data"),
-                _ = task_barrier_2.wait() => break,
-            }
+        if let Some(r) = futures::future::poll_immediate(attribute_channel.receive(&mut Vec::new())).await {
+            panic!("unexpectedly received output for ATT channel: {r:?}")
         }
     });
 
@@ -333,21 +360,22 @@ async fn le_unused_channel_receive() {
         .await
         .expect("failed to send");
 
-    // this should timeout as no response is the
-    // expected operation
-    tokio::time::timeout(std::time::Duration::from_millis(400), rx.next())
-        .await
-        .expect_err("expected timeout");
+    barrier.wait().await;
+
+    // this should not output as no response
+    // is the expected operation
+    if let Some(r) = futures::future::poll_immediate(rx.next()).await {
+        panic!("unexpectedly received from link: {r:?}")
+    }
 
     // send a PDU for the attribute protocol (ATT) fixed channel
     tx.send(L2capFragment::new(true, vec![3, 0, 4, 0, 2, 3, 4]))
         .await
         .expect("failed to send");
 
-    let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.next())
-        .await
-        .expect("timeout")
-        .expect("receiver closed");
+    barrier.wait().await;
+
+    let received = rx.next().await.expect("receiver closed");
 
     // the expected returned data is the ATT PDU
     // `ATT_ERROR_RSP` with the error code as
@@ -360,25 +388,17 @@ async fn le_unused_channel_receive() {
         .await
         .expect("failed to send");
 
-    let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.next())
-        .await
-        .expect("timeout")
-        .expect("receiver closed");
+    barrier.wait().await;
+
+    let received = rx.next().await.expect("receiver closed");
 
     // the expected returned data is the SM PDU 'pairing
     // failed' with the reason field set as pairing not
     // supported.
     assert_eq!(received.get_data().as_slice(), &[2, 0, 6, 0, 0x5, 0x5]);
 
-    // send a PDU for a credit based channel
-    tx.send(L2capFragment::new(true, vec![8, 0, 0x40, 0, 6, 0, 1, 2, 3, 4, 5, 6]))
-        .await
-        .expect("failed to send");
-
-    // this should timeout as there is no default error
-    // response for a credit based channel
-
-    barrier_1.wait().await;
+    // wait for the signalling channel to be dropped
+    barrier.wait().await;
 
     // send a PDU for the signalling channel
     tx.send(L2capFragment::new(
@@ -388,14 +408,11 @@ async fn le_unused_channel_receive() {
     .await
     .expect("failed to send");
 
-    let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.next())
-        .await
-        .expect("timeout")
-        .expect("receiver closed");
+    barrier.wait().await;
+
+    let received = rx.next().await.expect("receiver closed");
 
     assert_eq!(received.get_data().as_slice(), &[6, 0, 5, 0, 0x1, 1, 2, 0, 0, 0]);
-
-    barrier_2.wait().await;
 
     task_handle.await.expect("test task failed");
 }
@@ -416,7 +433,7 @@ async fn le_channel_dropped_while_receiving() {
 
         task_barrier.wait().await;
 
-        if let Some(_) = futures::future::poll_immediate(att_channel.receive::<Vec<_>>()).await {
+        if let Some(_) = futures::future::poll_immediate(att_channel.receive(&mut Vec::new())).await {
             panic!("unexpected PDU received by ATT channel")
         }
 

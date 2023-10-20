@@ -130,11 +130,13 @@ async fn test_connection_server(link: LeULogicalLink<PhysicalLink>, rendezvous: 
 
     let mut rendez = Box::pin(rendezvous.rendez());
 
+    let buffer = &mut Vec::new();
+
     loop {
         tokio::select! {
             _ = &mut rendez => break,
 
-            rx = att_channel.receive() => {
+            rx = att_channel.receive(buffer) => {
                 server.process_att_pdu(&mut att_channel, &rx.expect("channel error")).await.expect("att server error");
             }
         }
@@ -156,7 +158,7 @@ pub async fn read_att_type<D: TransferFormatTryFrom + TransferFormatInto>(
         .await
         .expect(format!("failed to read type ({:x})", uuid).as_str());
 
-    let b_frame = channel.receive().await.expect("failed to get response");
+    let b_frame = channel.receive(&mut Vec::new()).await.expect("failed to get response");
 
     let read_type_response = response_processor
         .process_response(&b_frame)
@@ -188,7 +190,7 @@ pub async fn write_request<D: TransferFormatTryFrom + TransferFormatInto>(
         .await
         .expect("failed to write test val 1");
 
-    let b_frame = channel.receive().await.expect("failed to get response");
+    let b_frame = channel.receive(&mut Vec::new()).await.expect("failed to get response");
 
     response_processor
         .process_response(&b_frame)

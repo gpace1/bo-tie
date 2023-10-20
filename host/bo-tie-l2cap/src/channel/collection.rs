@@ -13,7 +13,6 @@ use crate::pdu::credit_frame::CreditBasedFrame;
 use crate::pdu::{CreditBasedSdu, RecombineL2capPdu};
 use crate::{CreditBasedChannel, LogicalLink, PhysicalLink, SignallingChannel};
 use alloc::vec::Vec;
-use bo_tie_core::buffer::TryExtend;
 
 macro_rules! send_credit_packets {
     ($channel:expr, $packets:expr, $opt_sdu_packets:expr) => {{
@@ -51,6 +50,7 @@ struct SharedCreditItem<'a, L: LogicalLink, S: Iterator> {
     channel: CreditBasedChannel<'a, L>,
     to_send_sdu: Option<crate::pdu::credit_frame::PacketsIterator<S>>,
     to_recv_sdu: Vec<CreditBasedFrame<Vec<u8>>>,
+    next_k_frame_data: Vec<u8>,
     to_recv_required_credits: usize,
 }
 
@@ -58,13 +58,15 @@ impl<'a, L: LogicalLink, S: Iterator> SharedCreditItem<'a, L, S> {
     fn new(channel: CreditBasedChannel<'a, L>) -> Self {
         let to_send_sdu = None;
         let to_recv_sdu = alloc::vec::Vec::new();
-        let to_recv_given_credits = 0;
+        let next_k_frame_data = alloc::vec::Vec::new();
+        let to_recv_required_credits = 0;
 
         Self {
             channel,
             to_send_sdu,
             to_recv_sdu,
-            to_recv_required_credits: to_recv_given_credits,
+            next_k_frame_data,
+            to_recv_required_credits,
         }
     }
 }
@@ -225,12 +227,12 @@ where
         signalling_channel: &mut SignallingChannel<'a, L>,
         identifier: ChannelIdentifier,
     ) -> Result<CreditBasedChannel<'a, L>, SharedCreditError<L>> {
-        let channel = self
+        let mut channel = self
             .remove(identifier)
             .ok_or_else(|| SharedCreditError::ChannelDoesNotExist)?;
 
         signalling_channel
-            .request_connection_disconnection(&channel)
+            .request_disconnection(&mut channel)
             .await
             .map_err(|e| SharedCreditError::SendError(e))?;
 
@@ -356,9 +358,12 @@ where
             }
         };
 
-        let k_frame = item.channel.receive_frame(&mut meta).await?;
+        let ref_k_frame = item
+            .channel
+            .receive_frame(&mut item.next_k_frame_data, &mut meta)
+            .await?;
 
-        item.to_recv_sdu.push(k_frame);
+        item.to_recv_sdu.push(ref_k_frame);
 
         let sdu_len = item
             .to_recv_sdu
@@ -449,8 +454,12 @@ where
 
             let shared_link = self.channels.first().unwrap().channel.logical_link.get_shared_link();
 
-            core::future::poll_fn(move |_| {
-                shared_link.maybe_send(L::Flavor::get_signaling_channel().unwrap(), fragment.take().unwrap())
+            core::future::poll_fn(move |context| {
+                shared_link.maybe_send(
+                    context,
+                    L::Flavor::get_signaling_channel().unwrap(),
+                    fragment.take().unwrap(),
+                )
             })
             .await
             .await
@@ -576,25 +585,13 @@ impl<L: LogicalLink> std::error::Error for SharedCreditError<L> where
 pub enum CollectionReceiveError<L: LogicalLink> {
     CollectionIsEmpty,
     ChannelNoLongerExistsInCollection,
-    ReceiveError(
-        ReceiveError<
-            L,
-            <Vec<u8> as TryExtend<u8>>::Error,
-            <CreditBasedFrame<Vec<u8>> as RecombineL2capPdu>::RecombineError,
-        >,
-    ),
+    ReceiveError(ReceiveError<L, <CreditBasedFrame<Vec<u8>> as RecombineL2capPdu>::RecombineError>),
     SendIndicationError(<L::PhysicalLink as PhysicalLink>::SendErr),
 }
 
 impl<T, L: LogicalLink> From<T> for CollectionReceiveError<L>
 where
-    T: Into<
-        ReceiveError<
-            L,
-            <Vec<u8> as TryExtend<u8>>::Error,
-            <CreditBasedFrame<Vec<u8>> as RecombineL2capPdu>::RecombineError,
-        >,
-    >,
+    T: Into<ReceiveError<L, <CreditBasedFrame<Vec<u8>> as RecombineL2capPdu>::RecombineError>>,
 {
     fn from(e: T) -> Self {
         CollectionReceiveError::ReceiveError(e.into())

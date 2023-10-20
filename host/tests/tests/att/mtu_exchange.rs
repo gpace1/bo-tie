@@ -29,11 +29,13 @@ async fn mtu_setup(client_mtu: u16, server_mtu: u16, expected_mtu: u16) {
 
         let mut rendez = Box::pin(rendezvous_server.rendez());
 
+        let buffer = &mut Vec::new();
+
         loop {
             tokio::select! {
                 _ = &mut rendez => break,
 
-                received = att_bearer.receive() => {
+                received = att_bearer.receive(buffer) => {
                     let received = received.expect("receiver closed");
 
                     server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process L2CAP data");

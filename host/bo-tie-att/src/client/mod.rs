@@ -156,6 +156,49 @@ impl ConnectFixedClient {
     /// on [MTU exchange] for more information on the MTU exchange. If both these inputs are `None`,
     /// then the future returned by `connect` will immediately output an error.
     ///
+    /// # Note for `select!` macros
+    /// Do not use the `connect` directly within a `select!` unless it is used by mutable reference.
+    /// It can lead to issues with missing L2CAP PDU fragments if another future polls to completion
+    /// before the connect future. This is because there is a buffer within the future that stores
+    /// the fragment data until the entire fragmented PDU is received. If the future drops, so does
+    /// the buffer, and an error will occur with the `att_bearer` channel the next time it tries to
+    /// receive any data.
+    ///
+    /// Do not do this...
+    ///```
+    /// # use bo_tie_att::ConnectFixedClient;
+    /// # use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink, LogicalLink};
+    /// # async fn example<L: LogicalLink>(att_bearer: &mut BasicFrameChannel<'_, L>) {
+    /// tokio::select! {
+    ///    _ = ConnectFixedClient::connect(att_bearer, None, None) => {
+    ///        // handle connection
+    ///    }
+    ///    
+    ///    // other futures
+    /// }
+    /// # }
+    ///```
+    ///
+    /// But this is OK...
+    ///```
+    /// # use bo_tie_att::ConnectFixedClient;
+    /// # use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink, LogicalLink};
+    /// # async fn example<L: LogicalLink>(att_bearer: &mut BasicFrameChannel<'_, L>) {
+    /// // binding the future outside of the `select!`
+    /// // so it will not be dropped because of it.
+    /// let mut connect_future = ConnectFixedClient::connect(
+    ///    att_bearer,
+    ///    None,
+    ///    None);
+    ///
+    /// tokio::select! {
+    ///    _ = &mut connect_future => { /* handle connection */ }
+    ///    
+    ///    // other futures
+    /// }
+    /// # }
+    /// ```
+    ///
     /// # Panic
     /// Input `default_mtu` cannot be greater than `request_mtu`.
     ///
@@ -173,8 +216,10 @@ impl ConnectFixedClient {
     {
         let connect_client = Self::initiate(att_bearer, default_mtu, request_mtu).await?;
 
+        let mut buffer = alloc::vec::Vec::new();
+
         let response = att_bearer
-            .receive()
+            .receive(&mut buffer)
             .await
             .map_err(|e| super::ConnectionError::RecvError(e))?;
 

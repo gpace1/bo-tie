@@ -136,8 +136,17 @@ pub trait RecombineL2capPdu {
     /// Error when trying to recombine fragments.
     type RecombineError;
 
+    /// Buffer type used for recombination
+    type RecombineBuffer;
+
     /// The type for recombining fragments into a PDU
-    type PayloadRecombiner<'a>: RecombinePayloadIncrementally<Pdu = Self, RecombineError = Self::RecombineError>;
+    type PayloadRecombiner<'a>: RecombinePayloadIncrementally<
+        Pdu = Self,
+        RecombineBuffer = Self::RecombineBuffer,
+        RecombineError = Self::RecombineError,
+    >
+    where
+        Self::RecombineBuffer: 'a;
 
     /// Recombine fragments into this PDU
     ///
@@ -161,11 +170,12 @@ pub trait RecombineL2capPdu {
     /// # Note
     /// The L2CAP basic header consists of the L2CAP *PDU length* and the *channel ID* fields. These
     /// make up the first four bytes of every L2CAP data type.
-    fn recombine(
+    fn recombine<'a>(
         payload_length: u16,
         channel_id: ChannelIdentifier,
-        meta: &mut Self::RecombineMeta,
-    ) -> Self::PayloadRecombiner<'_>;
+        buffer: &'a mut Self::RecombineBuffer,
+        meta: &'a mut Self::RecombineMeta,
+    ) -> Self::PayloadRecombiner<'a>;
 }
 
 /// A trait for Incrementally Recombining L2CAP fragments into the Payload of a PDU
@@ -183,6 +193,8 @@ pub trait RecombineL2capPdu {
 /// [`add`]: RecombinePayloadIncrementally::add
 pub trait RecombinePayloadIncrementally {
     type Pdu: Sized;
+
+    type RecombineBuffer;
 
     type RecombineError;
 

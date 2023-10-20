@@ -483,14 +483,16 @@ where
 {
     type RecombineError = RecombineError;
     type RecombineMeta = RecombineMeta;
-    type PayloadRecombiner<'a> = CreditBasedFrameRecombiner<'a, P>;
+    type RecombineBuffer = P;
+    type PayloadRecombiner<'a> = CreditBasedFrameRecombiner<'a, P> where P: 'a;
 
-    fn recombine(
+    fn recombine<'a>(
         payload_length: u16,
         channel_id: ChannelIdentifier,
-        meta: &mut Self::RecombineMeta,
-    ) -> Self::PayloadRecombiner<'_> {
-        CreditBasedFrameRecombiner::new(payload_length.into(), channel_id, meta)
+        buffer: &'a mut Self::RecombineBuffer,
+        meta: &'a mut Self::RecombineMeta,
+    ) -> Self::PayloadRecombiner<'a> {
+        CreditBasedFrameRecombiner::new(buffer, payload_length.into(), channel_id, meta)
     }
 }
 
@@ -639,11 +641,11 @@ pub struct CreditBasedFrameRecombiner<'a, P> {
     meta: &'a mut RecombineMeta,
     sdu_state: SduState,
     byte_count: usize,
-    payload: Option<P>,
+    payload: &'a mut P,
 }
 
 impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
-    fn new(len: usize, channel_id: ChannelIdentifier, meta: &'a mut RecombineMeta) -> Self
+    fn new(payload: &'a mut P, len: usize, channel_id: ChannelIdentifier, meta: &'a mut RecombineMeta) -> Self
     where
         P: Default,
     {
@@ -653,7 +655,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
             meta,
             sdu_state: SduState::None,
             byte_count: 0,
-            payload: Some(P::default()),
+            payload,
         }
     }
 
@@ -704,8 +706,6 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
             self.byte_count += payload.len();
 
             self.payload
-                .as_mut()
-                .unwrap()
                 .try_extend(payload)
                 .map_err(|_| RecombineError::BufferTooSmall)?;
 
@@ -728,7 +728,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
     ///   agreed MPS for the credit based channel.
     fn recombine_first<T>(&mut self, payload: T) -> Result<Option<CreditBasedFrame<P>>, RecombineError>
     where
-        P: TryExtend<u8>,
+        P: TryExtend<u8> + Default,
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
@@ -740,7 +740,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
             if self.payload_len == self.byte_count {
                 let sdu_size = self.get_sdu_len().unwrap(); // unwrap will never panic
 
-                let payload = self.payload.take().unwrap();
+                let payload = core::mem::take(self.payload);
 
                 let k_frame = CreditBasedFrame::new_first(sdu_size, self.channel_id, payload);
 
@@ -763,14 +763,14 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
     /// `CreditBasedFrame` is returned.
     fn recombine_subsequent<T>(&mut self, payload: T) -> Result<Option<CreditBasedFrame<P>>, RecombineError>
     where
-        P: TryExtend<u8>,
+        P: TryExtend<u8> + Default,
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
         self.extend_payload(payload.into_iter())?;
 
         if self.payload_len == self.byte_count {
-            let payload = self.payload.take().unwrap();
+            let payload = core::mem::take(self.payload);
 
             let k_frame = CreditBasedFrame::new_subsequent(self.channel_id, payload);
 
@@ -783,9 +783,10 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
 
 impl<P> crate::pdu::RecombinePayloadIncrementally for CreditBasedFrameRecombiner<'_, P>
 where
-    P: TryExtend<u8>,
+    P: TryExtend<u8> + Default,
 {
     type Pdu = CreditBasedFrame<P>;
+    type RecombineBuffer = P;
     type RecombineError = RecombineError;
 
     fn add<T>(&mut self, payload: T) -> Result<Option<Self::Pdu>, Self::RecombineError>

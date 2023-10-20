@@ -541,13 +541,7 @@ impl From<TransferFormatError> for Error {
 /// channel for the Attribute Protocol.
 pub enum ConnectionError<T: bo_tie_l2cap::LogicalLink> {
     AttError(Error),
-    RecvError(
-        bo_tie_l2cap::channel::ReceiveError<
-            T,
-            <bo_tie_core::buffer::de_vec::DeVec<u8> as bo_tie_core::buffer::TryExtend<u8>>::Error,
-            bo_tie_l2cap::pdu::basic_frame::RecombineError,
-        >,
-    ),
+    RecvError(bo_tie_l2cap::channel::ReceiveError<T, bo_tie_l2cap::pdu::basic_frame::RecombineError>),
     SendError(<T::PhysicalLink as PhysicalLink>::SendErr),
     InvalidMtuInputs,
 }
