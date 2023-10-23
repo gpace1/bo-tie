@@ -651,6 +651,7 @@ where
 }
 
 #[tokio::test]
+#[cfg_attr(miri, ignore)]
 async fn throughput() {
     connect_benchmark_setup(|channel, client| {
         Box::pin(async {
