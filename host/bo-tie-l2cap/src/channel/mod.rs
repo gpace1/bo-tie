@@ -771,7 +771,6 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             return Err(ReceiveError::new_invalid_sdu_length());
         } else if self.receive_sdu_len.get() > sdu_buffer.len() {
             loop {
-                println!("sdu len: {}, received {}", self.receive_sdu_len.get(), sdu_buffer.len());
                 let _subsequent_k_frame = self.receive_frame_into(sdu_buffer, &mut meta).await?;
 
                 if self.receive_sdu_len.get() == sdu_buffer.len() {

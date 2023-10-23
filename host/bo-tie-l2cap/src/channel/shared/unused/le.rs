@@ -12,12 +12,6 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
     type Response = BasicFrame<UnusedPduResp>;
 
     fn try_generate_response(request_data: UnusedFixedChannelPduData) -> Option<Self::Response> {
-        println!(
-            "generate response channel id: {} ({}:{})",
-            request_data.channel_id,
-            file!(),
-            line!()
-        );
         match request_data.channel_id {
             ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
                 let UnusedFixedChannelPduChannelData::Attribute(attribute_data) = request_data.channel_data else {
@@ -42,7 +36,6 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
                 Some(BasicFrame::new(rsp, request_data.channel_id))
             }
             ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                println!("generate security manager response ({}:{})", file!(), line!());
                 let rsp = UnusedPduResp::SecurityManager;
 
                 Some(BasicFrame::new(rsp, request_data.channel_id))
@@ -56,12 +49,6 @@ impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
     }
 
     fn new_junked_data(pdu_len: usize, bytes_so_far: usize, channel_id: ChannelIdentifier) -> Self::ReceiveProcessor {
-        println!(
-            "{channel_id} creating new junked data {{ pdu_len: {pdu_len}, bytes_so_far: {bytes_so_far} }} ({}:{})",
-            file!(),
-            line!()
-        );
-
         if bytes_so_far == 0 {
             UnusedFixedChannelPduData::new(pdu_len, channel_id)
         } else {
@@ -124,9 +111,7 @@ impl ReceiveDataProcessor for UnusedFixedChannelPduData {
         match &mut self.channel_data {
             UnusedFixedChannelPduChannelData::None | UnusedFixedChannelPduChannelData::Ignored => (),
             UnusedFixedChannelPduChannelData::Signalling(sig) => {
-                println!("XXX processing dump data signalling channel");
                 for byte in fragment.data.by_ref() {
-                    println!("BYTE");
                     if self.byte_cnt == 1 {
                         sig.identifier =
                             Some(NonZeroU8::try_from(byte).map_err(|_| UnusedError::InvalidSignalIdentifier)?);
@@ -159,15 +144,6 @@ impl ReceiveDataProcessor for UnusedFixedChannelPduData {
         // determine the end of the L2CAP PDU
 
         self.byte_cnt += fragment.data.len();
-
-        println!(
-            "{}: byte_count: {}, pdu_len: {} ({}:{})",
-            self.channel_id,
-            self.byte_cnt,
-            self.pdu_len,
-            file!(),
-            line!()
-        );
 
         if self.byte_cnt == self.pdu_len {
             Ok(true)
