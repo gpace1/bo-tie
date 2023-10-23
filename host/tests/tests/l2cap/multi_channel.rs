@@ -233,7 +233,7 @@ async fn le_multiple_receiving() {
         .await
         .expect("failed to send");
 
-    let mut k_frames_2 = gen_k_frame_fragments(TEST_MESSAGE_CREDIT_CHANNEL_2, 12, 0x41, 0xFFFF, 23);
+    let k_frames_2 = gen_k_frame_fragments(TEST_MESSAGE_CREDIT_CHANNEL_2, 12, 0x41, 0xFFFF, 23);
 
     let split_odds =
         100 * std::cmp::min(k_frames_1.len(), k_frames_2.len()) / std::cmp::max(k_frames_1.len(), k_frames_2.len());

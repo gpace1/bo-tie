@@ -422,7 +422,7 @@ async fn recv_single_pdu_bad_fragment_start_indicator() {
 
     // >> both fragments are start fragments <<
     let fragment_1 = L2capFragment::new(true, vec![13, 0, 0x40, 0, 11, 0, 0, 1, 2, 3]);
-    let fragment_2 = L2capFragment::new(true, vec![4, 5, 6, 7, 8, 9, 10]);
+    let fragment_2 = L2capFragment::new(true, vec![4, 0, 0x40, 0, 4, 5, 6, 7]);
 
     tx.send(fragment_1).await.expect("channel closed");
     tx.send(fragment_2).await.expect("channel closed");
