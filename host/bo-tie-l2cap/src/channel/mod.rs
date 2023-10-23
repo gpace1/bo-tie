@@ -17,7 +17,6 @@
 //!
 //! [flavor]: crate::link_flavor
 
-pub mod collection;
 mod credit_based;
 pub mod id;
 mod shared;
@@ -636,22 +635,6 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         Ok(k_frame)
     }
 
-    /// Receive a Credit Based Frame for this channel
-    async fn receive_frame<T>(
-        &mut self,
-        sdu_buffer: &mut T,
-        meta: &mut pdu::credit_frame::RecombineMeta,
-    ) -> Result<CreditBasedFrame<T>, ReceiveError<L, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
-    where
-        T: TryExtend<u8> + Default,
-    {
-        let output = self.receive_frame_inner(sdu_buffer, meta).await;
-
-        self.logical_link.get_shared_link().clear_owner();
-
-        output
-    }
-
     /// Receive a Credit Based Frame but dont touch the buffer
     ///
     /// Unlike `receive_frame` this returns a `CreditBasedFrame` where the payload is a the same
@@ -858,12 +841,6 @@ impl<L: LogicalLink, C> ReceiveError<L, C> {
 
     fn new_invalid_sdu_length() -> Self {
         let inner = ReceiveErrorInner::InvalidSduLength;
-
-        Self { inner }
-    }
-
-    fn new_disconnected() -> Self {
-        let inner = ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected);
 
         Self { inner }
     }

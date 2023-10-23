@@ -644,88 +644,6 @@ where
         }
     }
 
-    /// Determining if a channel in the collection has received the beginning of a L2CAP PDU
-    ///
-    /// Input `query_collection` is used for querying the collection to determine if a received PDU
-    /// is for a channel within that collection.
-    pub(crate) async fn pre_receive_collection<L, F, O>(
-        &self,
-        query_collection: F,
-    ) -> Result<Option<O>, MaybeRecvError<P, U>>
-    where
-        L: LogicalLink,
-        F: Fn(ChannelIdentifier) -> Option<O>,
-    {
-        loop {
-            if let Some(o) = core::future::poll_fn(|_| match self.owner.get() {
-                PhysicalLinkOwner::Receiver(channel, _) => {
-                    if let Some(o) = query_collection(channel) {
-                        Poll::Ready(Some(o))
-                    } else {
-                        Poll::Pending
-                    }
-                }
-                PhysicalLinkOwner::None => Poll::Ready(None),
-                _ => Poll::Pending,
-            })
-            .await
-            {
-                // there will be a fragment within `self.statis_fragment`
-
-                return Ok(Some(o));
-            }
-
-            // only the starting fragment or dumped
-            // fragments should be received here
-            let mut fragment = unsafe { self.recv_fragment().await? };
-
-            let active_channels = self.channels.borrow();
-
-            let process_output =
-                self.basic_header_processor
-                    .process::<L, _>(&mut fragment, None, &**active_channels)?;
-
-            drop(active_channels);
-
-            match process_output {
-                BasicHeadProcessOutput::Undetermined => continue,
-                BasicHeadProcessOutput::PduIsForDifferentChannel(basic_header) => {
-                    let basic_headed_fragment = BasicHeadedFragment {
-                        header: basic_header,
-                        is_beginning: true,
-                        data: fragment.into_inner(),
-                    };
-
-                    self.stasis_fragment.set(Some(basic_headed_fragment));
-
-                    if let Some(o) = query_collection(basic_header.channel_id) {
-                        break Ok(Some(o));
-                    }
-                }
-                BasicHeadProcessOutput::PduIsForThisChannel(_) => unreachable!(),
-                BasicHeadProcessOutput::PduIsForUnusedChannel(basic_header) => {
-                    self.owner.set(PhysicalLinkOwner::AnyReceiver);
-
-                    self.wakeup.take().map(|waker| waker.wake());
-
-                    let receive_data = U::new_response_data(basic_header.length.into(), basic_header.channel_id);
-
-                    self.drop_data.set(Some(receive_data));
-
-                    let basic_headed_fragment = BasicHeadedFragment {
-                        header: basic_header,
-                        is_beginning: fragment.is_start_fragment(),
-                        data: fragment.into_inner(),
-                    };
-
-                    self.stasis_fragment.set(Some(basic_headed_fragment));
-
-                    break Ok(None);
-                }
-            }
-        }
-    }
-
     /// Process a dumped fragment
     ///
     /// This will only return a `U::Response` whenever there is a response to send. Otherwise it
@@ -748,48 +666,6 @@ where
             self.drop_data.set(Some(drop_data));
 
             Ok(None)
-        }
-    }
-
-    /// Process a dumbed frame
-    ///
-    /// This is used by collections where `maybe_recv` cannot be used for dump data
-    pub(crate) async fn dump_frame(&self) -> Result<Option<U::Response>, MaybeRecvError<P, U>> {
-        loop {
-            let maybe_stasis_fragment = self.stasis_fragment.take();
-
-            let basic_headed_fragment = match maybe_stasis_fragment {
-                Some(fragment) => fragment,
-                None => {
-                    let fragment = unsafe { self.recv_fragment().await? };
-
-                    let header = self
-                        .basic_header_processor
-                        .get_basic_header()
-                        .expect("missing expected header");
-
-                    BasicHeadedFragment {
-                        header,
-                        is_beginning: fragment.is_start_fragment(),
-                        data: fragment.into_inner(),
-                    }
-                }
-            };
-
-            let mut recv_data = self.drop_data.get().unwrap();
-
-            if recv_data
-                .process(basic_headed_fragment)
-                .map_err(|e| MaybeRecvError::DumpRecvError(e))?
-            {
-                self.clear_owner();
-
-                self.drop_data.take();
-
-                break Ok(U::try_generate_response(recv_data));
-            } else {
-                self.drop_data.set(Some(recv_data));
-            }
         }
     }
 }
