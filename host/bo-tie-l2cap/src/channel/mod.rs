@@ -762,7 +762,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
         self.receive_count_so_far.set(0);
 
-        Ok(std::mem::take(sdu_buffer))
+        Ok(core::mem::take(sdu_buffer))
     }
 }
 

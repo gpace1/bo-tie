@@ -309,7 +309,7 @@ where
                 .map_err(|_| RecombineError::BufferTooSmall)?;
 
             if self.payload_len == self.byte_count {
-                let b_frame = BasicFrame::new(std::mem::take(self.payload), self.channel_id);
+                let b_frame = BasicFrame::new(core::mem::take(self.payload), self.channel_id);
 
                 Ok(Some(b_frame))
             } else {
