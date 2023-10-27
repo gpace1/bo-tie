@@ -48,7 +48,8 @@
 //! [`accepted_bonding_keys`]: SecurityManagerBuilder::accepted_bonding_keys
 
 use crate::AuthenticationInput;
-use bo_tie::host::l2cap::{BasicFrame, ConnectionChannel};
+use bo_tie::host::l2cap::pdu::BasicFrame;
+use bo_tie::host::l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 use bo_tie::host::sm::pairing::{PairingFailed, PairingFailedReason};
 use bo_tie::host::sm::responder::{NumberComparison, PasskeyInput, SecurityManager, SecurityManagerBuilder, Status};
 use bo_tie::host::sm::{IdentityAddress, Keys};
@@ -297,9 +298,14 @@ impl Security {
     /// The return is a boolean indicating if the client sent a pairing request message (while the
     /// connection is unencrypted). This is used to signal the connection async task to send a
     /// `ConnectionToMain` message to alert the user that a device is
-    pub async fn process<C>(&mut self, connection_channel: &C, pdu: &mut BasicFrame<Vec<u8>>) -> Option<SecurityStage>
+    pub async fn process<L>(
+        &mut self,
+        sm_channel: &mut BasicFrameChannel<'_, L>,
+        pdu: &mut BasicFrame<Vec<u8>>,
+    ) -> Option<SecurityStage>
     where
-        C: ConnectionChannel,
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         use bo_tie::host::sm::CommandType;
 
@@ -311,11 +317,7 @@ impl Security {
             return Some(SecurityStage::AwaitUserAcceptPairingRequest);
         }
 
-        let status = self
-            .security_manager
-            .process_command(connection_channel, pdu)
-            .await
-            .unwrap();
+        let status = self.security_manager.process_command(sm_channel, pdu).await.unwrap();
 
         if let Ok(CommandType::PairingRequest) = (&*pdu).try_into() {
             Some(SecurityStage::AwaitUserAcceptPairingRequest)
@@ -370,9 +372,11 @@ impl Security {
     }
 
     /// Called when encryption is established between the two devices
-    pub async fn on_encryption<C>(&mut self, connection_channel: &C)
+    pub async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>)
     where
-        C: ConnectionChannel,
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         self.is_encrypted = true;
 
@@ -381,7 +385,7 @@ impl Security {
         // self.keys is only `Some(_)` when bonding has
         // completed (at some point) between the two devices.
         if self.keys.is_none() {
-            if self.security_manager.start_bonding(connection_channel).await.unwrap() {
+            if self.security_manager.start_bonding(sm_channel).await.unwrap() {
                 // The only time `start_bonding` returns `true` is
                 // when the initiator does not have any keys to send
                 self.keys = self.security_manager.get_keys().copied();
@@ -399,9 +403,10 @@ impl Security {
         self.security_manager.get_keys().and_then(|keys| keys.get_ltk())
     }
 
-    pub async fn allow_pairing<C>(&mut self, connection_channel: &C)
+    pub async fn allow_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<'_, L>)
     where
-        C: ConnectionChannel,
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         let pairing_message = match self.pairing_request.take() {
             Some(pairing_message) => pairing_message,
@@ -414,9 +419,10 @@ impl Security {
             .unwrap();
     }
 
-    pub async fn reject_pairing<C>(&mut self, connection_channel: &C)
+    pub async fn reject_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<'_, L>)
     where
-        C: ConnectionChannel,
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         if self.pairing_request.take().is_none() {
             return;
@@ -432,13 +438,14 @@ impl Security {
         sm_command.send(connection_channel).await.unwrap();
     }
 
-    pub async fn process_authentication<C>(
+    pub async fn process_authentication<L>(
         &mut self,
-        connection_channel: &C,
+        connection_channel: &mut BasicFrameChannel<'_, L>,
         authentication: AuthenticationInput,
     ) -> Option<SecurityStage>
     where
-        C: ConnectionChannel,
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         match (authentication, self.authentication.take()) {
             (_, None) => None, // pairing probably failed

@@ -53,6 +53,20 @@ impl<T> DeVec<T> {
 
         Self { start: front, vec }
     }
+
+    /// Convert this into a `Vec<T>`
+    ///
+    /// # Note
+    /// This method is O(1) if the front capacity is zero, otherwise it is O(n)
+    pub fn to_vec(mut self) -> Vec<T> {
+        if self.start != 0 {
+            for i in 0..self.vec.len() - self.start {
+                self.vec.swap(i, self.start + i)
+            }
+        }
+
+        self.vec
+    }
 }
 
 impl crate::buffer::Buffer for DeVec<u8> {
@@ -167,6 +181,12 @@ impl<T> IntoExactSizeIterator for DeVec<T> {
     type IntoExactIter = <DeVec<T> as IntoIterator>::IntoIter;
 }
 
+impl<T> From<DeVec<T>> for Vec<T> {
+    fn from(de_vec: DeVec<T>) -> Self {
+        de_vec.to_vec()
+    }
+}
+
 /// Into Iterator for `DeVec`
 pub struct DeVecIntoIter<T> {
     iter: core::iter::Skip<alloc::vec::IntoIter<T>>,
@@ -233,5 +253,22 @@ impl<T: Unpin> Future for TakeFuture<T> {
 
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(self.get_mut().0.take().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::TryExtend;
+
+    #[test]
+    fn de_vec_to_vec() {
+        let mut de_vec: DeVec<usize> = DeVec::with_capacity(20, 10);
+
+        de_vec.try_extend(vec![1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+
+        let vec = de_vec.to_vec();
+
+        assert_eq!(vec, vec![1, 2, 3, 4, 5, 6, 7, 8])
     }
 }

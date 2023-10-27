@@ -141,7 +141,7 @@ where
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
-    let queue_writer = att::server::BasicQueuedWriter::new(1024);
+    let queue_writer = att::server::BasicQueuedWriter::new();
 
     let mut server = gatt::ServerBuilder::from(gsb).make_server(queue_writer);
 
@@ -149,8 +149,10 @@ where
 
     let mut att_channel = logical_link.get_att_channel();
 
+    let att_buffer = &mut Vec::new();
+
     loop {
-        let basic_frame = att_channel.receive().await.unwrap();
+        let basic_frame = att_channel.receive(att_buffer).await.unwrap();
 
         match server.process_att_pdu(&mut att_channel, &basic_frame).await {
             Ok(_) => (),

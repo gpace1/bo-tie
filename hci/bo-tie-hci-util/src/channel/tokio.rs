@@ -2,7 +2,7 @@
 //!
 //! [tokio]: tokio
 
-use crate::impl_trait_ext::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
+use bo_tie_core::buffer::de_vec::DeVec;
 use core::fmt::Debug;
 use core::future::Future;
 use core::pin::Pin;
@@ -25,6 +25,9 @@ where
     }
 }
 
+/// Type used as the `SendFuture` of the implementation of [`Sender`] for `UnboundedSender`
+///
+/// [`Sender`]: crate::Sender
 pub struct UnboundedSenderFuture<'a, T>(&'a UnboundedSender<T>, Option<T>);
 
 impl<T> Future for UnboundedSenderFuture<'_, T>
@@ -62,6 +65,9 @@ where
     }
 }
 
+/// Type used as the `ReceiveFuture` of the implementation of [`Receiver`] for `UnboundedReceiver`
+///
+/// [`Receiver`]: crate::Receiver
 pub struct UnboundedReceiverFuture<'a, T>(&'a mut UnboundedReceiver<T>);
 
 impl<T> Future for UnboundedReceiverFuture<'_, T>
@@ -75,6 +81,68 @@ where
     }
 }
 
+/// The [`ChannelReserve`] type as implemented by `tokio`'s unbounded channels
+///
+/// [`ChannelReserve`]: crate::channel::ChannelReserve
+pub type UnboundedChannelReserve = crate::channel::ChannelReserve<
+    UnboundedSender<crate::ToHostCommandIntraMessage>,
+    UnboundedSender<
+        crate::ToHostGeneralIntraMessage<
+            crate::channel::ConnectionEnds<
+                UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+                UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+                UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+            >,
+        >,
+    >,
+    UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+    UnboundedSender<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    UnboundedSender<crate::ToConnectionEventIntraMessage>,
+    UnboundedReceiver<crate::ToInterfaceIntraMessage<DeVec<u8>>>,
+    UnboundedReceiver<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+    fn() -> (
+        UnboundedSender<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+        UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    ),
+    fn() -> (
+        UnboundedSender<crate::ToConnectionEventIntraMessage>,
+        UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+    ),
+    UnboundedSender<crate::ToInterfaceIntraMessage<DeVec<u8>>>,
+    UnboundedReceiver<crate::ToHostCommandIntraMessage>,
+    UnboundedReceiver<
+        crate::ToHostGeneralIntraMessage<
+            crate::channel::ConnectionEnds<
+                UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+                UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+                UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+            >,
+        >,
+    >,
+    UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+>;
+
+/// The [`HostChannelEnds`] type as implemented by `tokio`'s unbounded channels
+///
+/// [`HostChannelEnds`]: crate::channel::HostChannelEnds
+pub type UnboundedHostChannelEnds = crate::channel::HostChannelEnds<
+    UnboundedSender<crate::ToInterfaceIntraMessage<DeVec<u8>>>,
+    UnboundedReceiver<crate::ToHostCommandIntraMessage>,
+    UnboundedReceiver<
+        crate::ToHostGeneralIntraMessage<
+            crate::channel::ConnectionEnds<
+                UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+                UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+                UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+            >,
+        >,
+    >,
+    UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+    UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+>;
+
 /// Create a [`ChannelReserve`] and [`HostChannelEnds`] using [tokio's] unbounded channels
 ///
 /// The created `ChannelReserve` (and `HostChannelEnds`) use tokio's unbounded channels for
@@ -87,10 +155,7 @@ where
 /// [`ChannelReserve`]: crate::ChannelReserve
 /// [`HostChannelEnds`]: crate::HostChannelEnds
 /// [`ChannelReserveBuilder::new`]:
-pub fn tokio_unbounded(
-    front_size: usize,
-    tail_size: usize,
-) -> (impl SendAndSyncSafeChannelReserve, impl SendAndSyncSafeHostChannelEnds) {
+pub fn tokio_unbounded(front_size: usize, tail_size: usize) -> (UnboundedChannelReserve, UnboundedHostChannelEnds) {
     use tokio::sync::mpsc::unbounded_channel;
 
     super::ChannelReserveBuilder::new(front_size, tail_size)
@@ -98,7 +163,7 @@ pub fn tokio_unbounded(
         .set_c2(unbounded_channel)
         .set_c3(unbounded_channel)
         .set_c4(unbounded_channel)
-        .set_c5(unbounded_channel)
-        .set_c6(unbounded_channel)
+        .set_c5(unbounded_channel as fn() -> (_, _))
+        .set_c6(unbounded_channel as fn() -> (_, _))
         .build()
 }

@@ -5,9 +5,9 @@
 use crate::security::{Security, SecurityStage};
 use crate::server::Server;
 use crate::{ConnectionToMain, ConnectionToMainMessage, MainToConnection};
-use bo_tie::hci::channel::SendAndSyncSafeConnectionChannelEnds;
-use bo_tie::hci::{ConnectionChannelEnds, LeLink};
-use bo_tie::host::l2cap::{channels::ChannelIdentifier, channels::LeCid, BasicFrame, ConnectionChannelExt};
+use bo_tie::hci::{ConnectionChannelEnds, ConnectionHandle, LeLink};
+use bo_tie::host::l2cap::pdu::BasicFrame;
+use bo_tie::host::l2cap::{BasicFrameChannel, LeULogicalLink, LogicalLink, PhysicalLink};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone)]
@@ -25,18 +25,15 @@ impl ConnectedStatus {
     }
 }
 
-pub(crate) struct Connection<C: ConnectionChannelEnds> {
-    le_l2cap: LeLink<C>,
-    security: Security,
-    server: Server,
-    to: UnboundedSender<ConnectionToMain>,
-    notification_interval: tokio::time::Interval,
+pub(crate) struct Connection<P: PhysicalLink> {
+    le_l2cap: LeULogicalLink<P>,
+    inner: ConnectionInner,
 }
 
-impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
+impl<C: ConnectionChannelEnds> Connection<LeLink<C>> {
     const NOTIFICATION_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 
-    pub fn new(
+    pub fn new_le(
         le_l2cap: LeLink<C>,
         security: Security,
         server: Server,
@@ -44,36 +41,84 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
     ) -> Self {
         let notification_interval = tokio::time::interval(Self::NOTIFICATION_PERIOD);
 
-        Self {
-            le_l2cap,
+        let connection_handle = le_l2cap.get_handle();
+
+        let le_l2cap = LeULogicalLink::new(le_l2cap);
+
+        let inner = ConnectionInner {
+            connection_handle,
             security,
             server,
             to,
             notification_interval,
-        }
+        };
+
+        Self { le_l2cap, inner }
     }
 
-    pub(crate) async fn run(mut self, mut from: UnboundedReceiver<MainToConnection>) {
-        let mut frames = Frames::new();
+    pub(crate) async fn run_le(mut self, mut from: UnboundedReceiver<MainToConnection>) {
+        let mut att_channel = self.le_l2cap.get_att_channel();
+        let mut sm_channel = self.le_l2cap.get_sm_channel();
+
+        let att_buffer = &mut Vec::new();
+        let sm_buffer = &mut Vec::new();
 
         loop {
             tokio::select! {
-                frame = frames.receive_frame(&mut self.le_l2cap) => match frame {
-                    Some(mut frame) => self.process_frame(&mut frame).await,
-                    None => break, // connection closed
-                },
+                att_frame = att_channel.receive(att_buffer) => {
+                    self.inner
+                        .process_att(&mut att_channel, &att_frame.expect("received bad frame"))
+                        .await
+                }
+
+                sm_frame = sm_channel.receive(sm_buffer) => {
+                    self.inner
+                        .process_sm(&mut sm_channel, &mut sm_frame.expect("received bad frame"))
+                        .await
+                }
 
                 opt_msg = from.recv() => match opt_msg {
-                    Some(message) => self.process_msg(message).await,
+                    Some(message) => self.inner.process_msg(&mut sm_channel, message).await,
                     None => break, // another way to know the connection closed
                 },
 
-                _ = self.notification_interval.tick() => self.server.send_hrd_notification(&self.le_l2cap).await,
+                _ = self.inner.notification_interval.tick() => {
+                    self.inner.send_hrd_notification(&mut att_channel).await
+                }
             }
         }
 
-        if let Some(mut bonding_info_guard) = self.security.get_bonding_info().await {
-            bonding_info_guard.set_notification_enabled(self.server.is_notifying())
+        if let Some(mut bonding_info_guard) = self.inner.security.get_bonding_info().await {
+            bonding_info_guard.set_notification_enabled(self.inner.server.is_notifying())
+        }
+    }
+}
+
+struct ConnectionInner {
+    connection_handle: ConnectionHandle,
+    security: Security,
+    server: Server,
+    to: UnboundedSender<ConnectionToMain>,
+    notification_interval: tokio::time::Interval,
+}
+
+impl ConnectionInner {
+    async fn process_att<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>, packet: &BasicFrame<Vec<u8>>)
+    where
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
+    {
+        self.server.process(att_channel, packet).await
+    }
+
+    async fn process_sm<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, packet: &mut BasicFrame<Vec<u8>>)
+    where
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+    {
+        if let Some(security_stage) = self.security.process(sm_channel, packet).await {
+            self.send_security_stage(security_stage)
         }
     }
 
@@ -81,42 +126,40 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
         let kind = ConnectionToMainMessage::Security(security_stage);
 
         let message = ConnectionToMain {
-            handle: self.le_l2cap.get_handle(),
+            handle: self.connection_handle,
             kind,
         };
 
         self.to.send(message).unwrap();
     }
 
-    async fn process_frame(&mut self, frame: &mut BasicFrame<Vec<u8>>) {
-        match frame.get_channel_id() {
-            ChannelIdentifier::Le(LeCid::AttributeProtocol) => self.server.process(&mut self.le_l2cap, frame).await,
-            ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                if let Some(security_stage) = self.security.process(&mut self.le_l2cap, frame).await {
-                    self.send_security_stage(security_stage)
-                }
-            }
-            id => eprintln!("received unexpected basic frame with channel identifier {}", id),
-        }
-    }
-
-    async fn process_msg(&mut self, msg: MainToConnection) {
+    async fn process_msg<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, msg: MainToConnection)
+    where
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
+    {
         match msg {
-            MainToConnection::Encryption(is_encrypted) => self.on_encryption(is_encrypted).await,
+            MainToConnection::Encryption(is_encrypted) => self.on_encryption(sm_channel, is_encrypted).await,
             MainToConnection::LtkRequest => self.on_ltk_request(),
-            MainToConnection::PairingAccepted => self.security.allow_pairing(&self.le_l2cap).await,
-            MainToConnection::PairingRejected => self.security.reject_pairing(&self.le_l2cap).await,
+            MainToConnection::PairingAccepted => self.security.allow_pairing(sm_channel).await,
+            MainToConnection::PairingRejected => self.security.reject_pairing(sm_channel).await,
             MainToConnection::AuthenticationInput(ai) => {
-                if let Some(security_stage) = self.security.process_authentication(&self.le_l2cap, ai).await {
+                if let Some(security_stage) = self.security.process_authentication(sm_channel, ai).await {
                     self.send_security_stage(security_stage)
                 }
             }
         }
     }
 
-    async fn on_encryption(&mut self, is_encrypted: bool) {
+    async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, is_encrypted: bool)
+    where
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
+    {
         if is_encrypted {
-            self.security.on_encryption(&mut self.le_l2cap).await;
+            self.security.on_encryption(sm_channel).await;
 
             self.server.on_encryption();
         } else {
@@ -127,7 +170,8 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
     }
 
     fn on_ltk_request(&mut self) {
-        let handle = self.le_l2cap.get_handle();
+        let handle = self.connection_handle;
+
         let opt_ltk = self.security.get_ltk();
 
         let kind = ConnectionToMainMessage::LongTermKey(opt_ltk);
@@ -136,29 +180,13 @@ impl<C: SendAndSyncSafeConnectionChannelEnds> Connection<C> {
 
         self.to.send(message).unwrap();
     }
-}
 
-struct Frames {
-    frames: std::vec::IntoIter<BasicFrame<Vec<u8>>>,
-}
-
-impl Frames {
-    fn new() -> Self {
-        let frames = Vec::new().into_iter();
-
-        Self { frames }
-    }
-
-    async fn receive_frame<C: ConnectionChannelEnds>(
-        &mut self,
-        le_l2cap: &mut LeLink<C>,
-    ) -> Option<BasicFrame<Vec<u8>>> {
-        loop {
-            if let Some(frame) = self.frames.next() {
-                return Some(frame);
-            } else {
-                self.frames = le_l2cap.receive_b_frame().await.map(|vec| vec.into_iter()).ok()?
-            }
-        }
+    async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>)
+    where
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
+    {
+        self.server.send_hrd_notification(att_channel).await
     }
 }

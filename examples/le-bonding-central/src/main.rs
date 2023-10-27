@@ -4,6 +4,7 @@ mod io;
 mod privacy;
 
 use bo_tie::hci::{Host, HostChannelEnds, Next};
+use bo_tie::host::l2cap::LeULogicalLink;
 
 /// Scan for a device with the specific local name
 ///
@@ -180,68 +181,71 @@ where
 }
 
 /// Pair with a connected device
-async fn pair<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> Option<u128>
+async fn pair<P>(
+    connection_channel: &mut LeULogicalLink<P>,
+    sm: &mut bo_tie::host::sm::initiator::SecurityManager,
+) -> Option<u128>
 where
-    C: bo_tie::host::l2cap::ConnectionChannel,
+    P: bo_tie::host::l2cap::PhysicalLink,
+    P::SendErr: std::fmt::Debug,
+    P::RecvErr: std::fmt::Debug,
 {
-    use bo_tie::host::l2cap::ConnectionChannelExt;
     use bo_tie::host::sm::initiator::Status;
+
+    let mut sm_channel = connection_channel.get_sm_channel();
 
     let mut number_comparison = None;
     let mut passkey_input = None;
 
-    sm.start_pairing(connection_channel).await.unwrap();
+    let buffer = &mut Vec::new();
+
+    sm.start_pairing(&mut sm_channel).await.unwrap();
 
     'outer: loop {
         tokio::select! {
-            frames = connection_channel.receive_b_frame() => for basic_frame in frames.unwrap() {
-                // All data that is not Security Manager related is ignored for this example, the
-                // peripheral device should not be sending anything to this device other than
-                // Security Manager packets.
-                if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
-                    match sm.continue_pairing(connection_channel, &basic_frame).await.unwrap() {
-                        Status::PairingComplete => {
-                            break 'outer sm.get_keys().unwrap().get_ltk().unwrap().into()
-                        },
-                        Status::NumberComparison(n) => {
-                            println!(
-                                "To proceed with pairing, compare this number ({n}) with the \
-                                number displayed on the other device"
-                            );
-                            println!("Does {n} match the number on the other device? [y/n]");
+            basic_frame = sm_channel.receive(buffer) => {
+                match sm.continue_pairing(&mut sm_channel, &basic_frame.expect("received bad data")).await.unwrap() {
+                    Status::PairingComplete => {
+                        break 'outer sm.get_keys().unwrap().get_ltk().unwrap().into()
+                    },
+                    Status::NumberComparison(n) => {
+                        println!(
+                            "To proceed with pairing, compare this number ({n}) with the \
+                            number displayed on the other device"
+                        );
+                        println!("Does {n} match the number on the other device? [y/n]");
 
-                            number_comparison = Some(n);
-                        },
-                        Status::PasskeyOutput(o) => {
-                            println!("enter this passkey on the other device: {o}")
-                        },
-                        Status::PasskeyInput(i) => {
-                            io::passkey_input_message(&i);
+                        number_comparison = Some(n);
+                    },
+                    Status::PasskeyOutput(o) => {
+                        println!("enter this passkey on the other device: {o}")
+                    },
+                    Status::PasskeyInput(i) => {
+                        io::passkey_input_message(&i);
 
-                            passkey_input = Some(i);
-                        },
-                        Status::PairingFailed(reason) => {
-                            eprintln!("pairing failed: {reason}");
-                            return None;
-                        },
-                        _ => (),
-                    }
+                        passkey_input = Some(i);
+                    },
+                    Status::PairingFailed(reason) => {
+                        eprintln!("pairing failed: {reason}");
+                        return None;
+                    },
+                    _ => (),
                 }
             },
 
             user_auth = io::user_authentication_input(&number_comparison, &passkey_input) => {
                 match user_auth {
                     io::UserAuthentication::NumberComparison(is_accepted) => if is_accepted {
-                        number_comparison.take().unwrap().yes(sm, connection_channel).await.unwrap();
+                        number_comparison.take().unwrap().yes(sm, &mut sm_channel).await.unwrap();
                     } else {
-                        number_comparison.take().unwrap().no(sm, connection_channel).await.unwrap();
+                        number_comparison.take().unwrap().no(sm, &mut sm_channel).await.unwrap();
                     },
                     io::UserAuthentication::PasskeyInput(passkey) =>if let Some(input) = io::process_passkey(passkey) {
                 passkey_input.as_mut().unwrap().write(input).unwrap();
 
-                passkey_input.take().unwrap().complete(sm, connection_channel).await.unwrap();
+                passkey_input.take().unwrap().complete(sm, &mut sm_channel).await.unwrap();
             } else {
-                passkey_input.take().unwrap().fail(sm, connection_channel).await.unwrap();
+                passkey_input.take().unwrap().fail(sm, &mut sm_channel).await.unwrap();
             },
                     io::UserAuthentication::Exit => break None,
                 }
@@ -290,25 +294,24 @@ async fn encrypt<H: HostChannelEnds>(
 ///
 /// # Note
 /// This must be called after method `encrypt`
-async fn bond<C>(connection_channel: &mut C, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> Option<()>
+async fn bond<P>(channel: &mut LeULogicalLink<P>, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> Option<()>
 where
-    C: bo_tie::host::l2cap::ConnectionChannel,
+    P: bo_tie::host::l2cap::PhysicalLink,
+    P::SendErr: std::fmt::Debug,
+    P::RecvErr: std::fmt::Debug,
 {
-    use bo_tie::host::l2cap::ConnectionChannelExt;
+    let mut sm_channel = channel.get_sm_channel();
 
     sm.set_encrypted(true);
 
     'outer: loop {
-        for basic_frame in connection_channel.receive_b_frame().await.unwrap() {
-            // All data that is not Security Manager related is ignored for this example
-            if basic_frame.get_channel_id() == bo_tie::host::sm::L2CAP_CHANNEL_ID {
-                if sm.process_bonding(connection_channel, &basic_frame).await.unwrap() {
-                    // once the peripheral has sent its bonding
-                    // information then this bonding information
-                    // is sent to the device.
-                    break 'outer Some(());
-                }
-            }
+        let basic_frame = sm_channel.receive(&mut Vec::new()).await.expect("receiver closed");
+
+        if sm.process_bonding(&mut sm_channel, &basic_frame).await.unwrap() {
+            // once the peripheral has sent its bonding
+            // information then this bonding information
+            // is sent to the device.
+            break 'outer Some(());
         }
     }
 }
@@ -317,21 +320,30 @@ where
 ///
 /// # Note
 /// If there is not GATT server, then this will print out a messages stating as such
-async fn query_gatt_services<C>(connection: &mut C)
+async fn query_gatt_services<P>(link: &mut LeULogicalLink<P>)
 where
-    C: bo_tie::host::l2cap::ConnectionChannel,
+    P: bo_tie::host::l2cap::PhysicalLink,
+    P::SendErr: std::fmt::Debug,
+    P::RecvErr: std::fmt::Debug,
 {
-    use bo_tie::host::att::client::ConnectClient;
+    use bo_tie::host::att::client::{ConnectFixedClient, ResponseProcessor};
     use bo_tie::host::gatt::Client;
     use std::time::Duration;
     use tokio::time::timeout;
+
+    let mut att_bearer = link.get_att_channel();
 
     // Normally you can assume that there exists a
     // GATT server on the peer device (I think it is
     // part of the Bluetooth certification process for
     // every LE device to have some basic GATT server
     // or client), but here it is not assumed.
-    let gatt_client: Client = match timeout(Duration::from_secs(5), ConnectClient::connect(connection, 64)).await {
+    let mut gatt_client: Client = match timeout(
+        Duration::from_secs(5),
+        ConnectFixedClient::connect(&mut att_bearer, None, 64),
+    )
+    .await
+    {
         Err(_timeout) => {
             println!("failed to connect to GATT (timeout)");
             return;
@@ -343,20 +355,24 @@ where
         Ok(Ok(att_client)) => att_client.into(),
     };
 
-    let mut querier = gatt_client.query_services(connection);
+    loop {
+        // It may take multiple queries before
+        // all the services are discovered.
+        let querier = gatt_client.partial_discovery(&mut att_bearer).await.unwrap();
 
-    let mut services = Vec::new();
+        let response = att_bearer.receive(&mut Vec::new()).await.unwrap();
 
-    while let Some(service) = querier.query_next().await.unwrap() {
-        services.push(service);
+        if querier.process_response(&response).unwrap() {
+            break;
+        }
     }
 
-    if services.is_empty() {
+    if gatt_client.get_known_services().is_empty() {
         println!("no services found on connected device")
     } else {
         println!("found services:");
 
-        for service in services {
+        for service in gatt_client.get_known_services() {
             println!("\t{:#x}", service.get_uuid())
         }
     }
@@ -402,7 +418,7 @@ macro_rules! create_hci {
 }
 
 macro_rules! await_or_disconnect {
-    ($host:expr, $connection:expr, $task:expr) => {
+    ($host:expr, $handle:expr, $task:expr) => {
         loop {
             tokio::select! {
                 next = $host.next() => {
@@ -413,7 +429,7 @@ macro_rules! await_or_disconnect {
 
                 ret = $task => match ret {
                     None => {
-                        disconnect(&mut $host, $connection.get_handle()).await;
+                        disconnect(&mut $host, $handle).await;
 
                         return Ok(());
                     }
@@ -425,12 +441,12 @@ macro_rules! await_or_disconnect {
 }
 
 macro_rules! await_or_exit {
-    ($host:expr, $connection:expr, $task:expr) => {
+    ($host:expr, $handle:expr, $task:expr) => {
         loop {
             tokio::select! {
                 ret = $task => match ret {
                     Err(e) => {
-                        disconnect(&mut $host, $connection.get_handle()).await;
+                        disconnect(&mut $host, $handle).await;
 
                         return Err(e);
                     }
@@ -438,7 +454,7 @@ macro_rules! await_or_exit {
                 },
 
                 _ = io::exit_signal() => {
-                    disconnect(&mut $host, $connection.get_handle()).await;
+                    disconnect(&mut $host, $handle).await;
 
                     return Ok(())
                 }
@@ -494,7 +510,7 @@ async fn main() -> Result<(), &'static str> {
 
     println!("connecting to '{}'", report.1);
 
-    let mut connection = tokio::select! {
+    let connection = tokio::select! {
         connection = connect(&mut host, &report.0) => connection,
         _ = io::exit_signal() => {
             cancel_connect(&mut host).await;
@@ -502,6 +518,10 @@ async fn main() -> Result<(), &'static str> {
             return Ok(())
         }
     };
+
+    let mut handle = connection.get_handle();
+
+    let mut link = LeULogicalLink::new(connection);
 
     println!("pairing and bonding with {}", report.1);
 
@@ -520,19 +540,15 @@ async fn main() -> Result<(), &'static str> {
     .enable_number_comparison()
     .build();
 
-    let long_term_key = await_or_disconnect!(host, connection, pair(&mut connection, &mut security_manager));
+    let long_term_key = await_or_disconnect!(host, handle, pair(&mut link, &mut security_manager));
 
     println!("pairing completed");
 
-    await_or_exit!(
-        host,
-        connection,
-        encrypt(&mut host, connection.get_handle(), long_term_key)
-    );
+    await_or_exit!(host, handle, encrypt(&mut host, handle, long_term_key));
 
     println!("encryption established");
 
-    await_or_disconnect!(host, connection, bond(&mut connection, &mut security_manager));
+    await_or_disconnect!(host, handle, bond(&mut link, &mut security_manager));
 
     println!("bonding completed");
 
@@ -545,7 +561,7 @@ async fn main() -> Result<(), &'static str> {
             .await
             .unwrap();
 
-        query_gatt_services(&mut connection).await;
+        query_gatt_services(&mut link).await;
 
         println!("press 'enter' to disconnect peripheral device and reconnect using 'privacy'");
 
@@ -554,9 +570,9 @@ async fn main() -> Result<(), &'static str> {
                 println!("peer device disconnected")
             },
             is_enter = io::detect_enter() => if is_enter {
-                disconnect(&mut host, connection.get_handle()).await;
+                disconnect(&mut host, handle).await;
             } else { // this branch is ctrl-c
-                disconnect(&mut host, connection.get_handle()).await;
+                disconnect(&mut host, handle).await;
 
                 return Ok(())
             }
@@ -568,7 +584,11 @@ async fn main() -> Result<(), &'static str> {
         );
 
         tokio::select! {
-            new_conneciton = reconnect(&mut host, &mut privacy) => connection = new_conneciton,
+            new_conneciton = reconnect(&mut host, &mut privacy) => {
+                handle = new_conneciton.get_handle();
+
+                link = LeULogicalLink::new(new_conneciton);
+            }
             _ = io::exit_signal() => {
                 cancel_connect(&mut host).await;
 

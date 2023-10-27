@@ -4,6 +4,7 @@
 //! data. The main purpose of this library is for formatting user data within the various headers
 //! and for asynchronous flow control.
 
+#![feature(error_in_core)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(feature = "alloc")]

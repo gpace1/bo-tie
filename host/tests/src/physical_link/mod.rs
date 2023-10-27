@@ -145,7 +145,7 @@ impl PhysicalLink {
 }
 
 impl bo_tie_l2cap::PhysicalLink for PhysicalLink {
-    type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + Send + 'a>>;
+    type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + Send + 'a>> where Self: 'a;
 
     type SendErr = anyhow::Error;
 
@@ -160,9 +160,9 @@ impl bo_tie_l2cap::PhysicalLink for PhysicalLink {
         self.max_tx_size
     }
 
-    fn send<'s, T>(&'s mut self, fragment: L2capFragment<T>) -> Self::SendFut<'s>
+    fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
     where
-        T: 's + IntoIterator<Item = u8>,
+        T: IntoIterator<Item = u8>,
     {
         let max_len = self.max_tx_size;
 
@@ -382,9 +382,9 @@ impl bo_tie_l2cap::PhysicalLink for BoundedPhysicalLink {
         self.max_tx_size
     }
 
-    fn send<'s, T>(&'s mut self, fragment: L2capFragment<T>) -> Self::SendFut<'s>
+    fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
     where
-        T: 's + IntoIterator<Item = u8>,
+        T: IntoIterator<Item = u8>,
     {
         let max_len = self.max_tx_size;
 

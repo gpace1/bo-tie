@@ -2,7 +2,7 @@
 //!
 //! [futures-rs]: futures
 
-use crate::impl_trait_ext::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
+use bo_tie_core::buffer::de_vec::DeVec;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use futures::channel::mpsc;
@@ -38,6 +38,68 @@ where
     }
 }
 
+/// The [`ChannelReserve`] type as implemented by `futures`'s unbounded channels
+///
+/// [`ChannelReserve`]: crate::channel::ChannelReserve
+pub type UnboundedChannelReserve = crate::channel::ChannelReserve<
+    mpsc::UnboundedSender<crate::ToHostCommandIntraMessage>,
+    mpsc::UnboundedSender<
+        crate::ToHostGeneralIntraMessage<
+            crate::channel::ConnectionEnds<
+                mpsc::UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+                mpsc::UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+                mpsc::UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+            >,
+        >,
+    >,
+    mpsc::UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedSender<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedSender<crate::ToConnectionEventIntraMessage>,
+    mpsc::UnboundedReceiver<crate::ToInterfaceIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedReceiver<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+    fn() -> (
+        mpsc::UnboundedSender<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+        mpsc::UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    ),
+    fn() -> (
+        mpsc::UnboundedSender<crate::ToConnectionEventIntraMessage>,
+        mpsc::UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+    ),
+    mpsc::UnboundedSender<crate::ToInterfaceIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedReceiver<crate::ToHostCommandIntraMessage>,
+    mpsc::UnboundedReceiver<
+        crate::ToHostGeneralIntraMessage<
+            crate::channel::ConnectionEnds<
+                mpsc::UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+                mpsc::UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+                mpsc::UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+            >,
+        >,
+    >,
+    mpsc::UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+>;
+
+/// The [`HostChannelEnds`] type as implemented by `futures`'s unbounded channels
+///
+/// [`HostChannelEnds`]: crate::channel::HostChannelEnds
+pub type UnboundedHostChannelEnds = crate::channel::HostChannelEnds<
+    mpsc::UnboundedSender<crate::ToInterfaceIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedReceiver<crate::ToHostCommandIntraMessage>,
+    mpsc::UnboundedReceiver<
+        crate::ToHostGeneralIntraMessage<
+            crate::channel::ConnectionEnds<
+                mpsc::UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+                mpsc::UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+                mpsc::UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+            >,
+        >,
+    >,
+    mpsc::UnboundedSender<crate::FromConnectionIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedReceiver<crate::ToConnectionDataIntraMessage<DeVec<u8>>>,
+    mpsc::UnboundedReceiver<crate::ToConnectionEventIntraMessage>,
+>;
+
 /// Create a [`ChannelReserve`] and [`HostChannelEnds`] using [tokio's] unbounded channels
 ///
 /// The created `ChannelReserve` (and `HostChannelEnds`) use tokio's unbounded channels for
@@ -49,10 +111,7 @@ where
 /// [tokio's]: tokio::sync::mpsc
 /// [`ChannelReserve`]: crate::ChannelReserve
 /// [`HostChannelEnds`]: crate::HostChannelEnds
-pub fn futures_unbounded(
-    front_size: usize,
-    tail_size: usize,
-) -> (impl SendAndSyncSafeChannelReserve, impl SendAndSyncSafeHostChannelEnds) {
+pub fn futures_unbounded(front_size: usize, tail_size: usize) -> (UnboundedChannelReserve, UnboundedHostChannelEnds) {
     use futures::channel::mpsc::unbounded;
 
     super::ChannelReserveBuilder::new(front_size, tail_size)
@@ -60,7 +119,7 @@ pub fn futures_unbounded(
         .set_c2(unbounded)
         .set_c3(unbounded)
         .set_c4(unbounded)
-        .set_c5(unbounded)
-        .set_c6(unbounded)
+        .set_c5(unbounded as fn() -> (_, _))
+        .set_c6(unbounded as fn() -> (_, _))
         .build()
 }

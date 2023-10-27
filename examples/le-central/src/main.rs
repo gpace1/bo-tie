@@ -3,7 +3,9 @@
 mod io;
 
 use bo_tie::hci::events::parameters::LeAdvertisingReportData;
-use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds, LeLink, Next};
+use bo_tie::hci::{ConnectionChannelEnds, ConnectionHandle, Host, HostChannelEnds, LeLink, Next};
+use bo_tie::host::att::client::ResponseProcessor;
+use bo_tie::host::l2cap::LeULogicalLink;
 
 /// Scan for a device with the specific local name
 ///
@@ -177,21 +179,30 @@ where
 ///
 /// # Note
 /// If there is not GATT server, then this will print out a messages stating as such
-async fn query_gatt_services<C>(connection: &mut C)
+async fn query_gatt_services<C>(connection: &mut LeLink<C>)
 where
-    C: bo_tie::host::l2cap::ConnectionChannel,
+    C: ConnectionChannelEnds,
 {
-    use bo_tie::host::att::client::ConnectClient;
+    use bo_tie::host::att::client::ConnectFixedClient;
     use bo_tie::host::gatt::Client;
     use std::time::Duration;
     use tokio::time::timeout;
+
+    let logical_link = LeULogicalLink::new(connection);
+
+    let mut att_channel = logical_link.get_att_channel();
 
     // Normally you can assume that there exists a
     // GATT server on the peer device (I think it is
     // part of the Bluetooth certification process for
     // every LE device to have some basic GATT server
     // or client), but here it is not assumed.
-    let gatt_client: Client = match timeout(Duration::from_secs(5), ConnectClient::connect(connection, 64)).await {
+    let mut gatt_client: Client = match timeout(
+        Duration::from_secs(5),
+        ConnectFixedClient::connect(&mut att_channel, None, 64),
+    )
+    .await
+    {
         Err(_timeout) => {
             println!("failed to connect to GATT (timeout)");
             return;
@@ -203,20 +214,24 @@ where
         Ok(Ok(att_client)) => att_client.into(),
     };
 
-    let mut querier = gatt_client.query_services(connection);
+    loop {
+        // It may take multiple queries before
+        // all the services are discovered.
+        let querier = gatt_client.partial_discovery(&mut att_channel).await.unwrap();
 
-    let mut services = Vec::new();
+        let response = att_channel.receive(&mut Vec::new()).await.unwrap();
 
-    while let Some(service) = querier.query_next().await.unwrap() {
-        services.push(service);
+        if querier.process_response(&response).unwrap() {
+            break;
+        }
     }
 
-    if services.is_empty() {
+    if gatt_client.get_known_services().is_empty() {
         println!("no services found on connected device")
     } else {
         println!("found services:");
 
-        for service in services {
+        for service in gatt_client.get_known_services() {
             println!("\t{:#x}", service.get_uuid())
         }
     }

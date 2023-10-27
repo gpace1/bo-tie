@@ -38,13 +38,12 @@
 //! [`run`]: LinuxInterface::run
 //!
 
-use bo_tie_hci_util::channel::{SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds};
 use bo_tie_hci_util::{ChannelReserve, HciPacket};
 use std::error;
 use std::fmt;
 use std::ops::Drop;
 use std::option::Option;
-use std::os::unix::io::RawFd;
+use std::os::fd::RawFd;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::mpsc::{error::SendError, UnboundedReceiver, UnboundedSender};
@@ -331,8 +330,8 @@ impl<T: ChannelReserve> LinuxInterface<T> {
 fn from_adapter_id(
     adapter_id: usize,
 ) -> (
-    LinuxInterface<impl SendAndSyncSafeChannelReserve>,
-    impl SendAndSyncSafeHostChannelEnds,
+    LinuxInterface<bo_tie_hci_util::channel::tokio::UnboundedChannelReserve>,
+    bo_tie_hci_util::channel::tokio::UnboundedHostChannelEnds,
 ) {
     use nix::libc;
     use nix::sys::epoll::{epoll_create1, epoll_ctl, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
@@ -460,8 +459,8 @@ impl<C> Drop for LinuxInterface<C> {
 pub fn new<T>(
     adapter_id: T,
 ) -> (
-    LinuxInterface<impl SendAndSyncSafeChannelReserve>,
-    impl SendAndSyncSafeHostChannelEnds,
+    LinuxInterface<bo_tie_hci_util::channel::tokio::UnboundedChannelReserve>,
+    bo_tie_hci_util::channel::tokio::UnboundedHostChannelEnds,
 )
 where
     T: Into<Option<usize>>,

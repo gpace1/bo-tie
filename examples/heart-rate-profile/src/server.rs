@@ -10,8 +10,9 @@ use bo_tie::host::att::{
 };
 use bo_tie::host::gatt::characteristic::{ClientConfiguration, Properties};
 use bo_tie::host::gatt::{GapServiceBuilder, ServerBuilder};
-use bo_tie::host::l2cap::link_flavor::LeULink;
-use bo_tie::host::l2cap::MinimumMtu;
+use bo_tie::host::l2cap::link_flavor::{LeULink, LinkFlavor};
+use bo_tie::host::l2cap::pdu::BasicFrame;
+use bo_tie::host::l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 use bo_tie::host::{gatt, Uuid};
 use std::any::Any;
 use std::collections::VecDeque;
@@ -193,18 +194,30 @@ impl Server {
     ///
     /// This will send a notification to the Client containing the heart rate data **if** the client
     /// has enabled notifications for the heart rate data characteristic.
-    pub async fn send_hrd_notification<C: bo_tie::host::l2cap::ConnectionChannel>(&mut self, channel: &C) {
+    pub async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>)
+    where
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
+    {
         if self.notify_hrd.load(Ordering::Relaxed) {
-            self.server.send_notification(channel, self.hrd_handle).await.unwrap();
+            self.server
+                .send_notification(att_channel, self.hrd_handle)
+                .await
+                .unwrap();
         }
     }
 
     /// Process a L2CAP packet containing ATT protocol data
-    pub async fn process<C: bo_tie::host::l2cap::ConnectionChannel>(
+    pub async fn process<L: LogicalLink>(
         &mut self,
-        channel: &mut C,
-        packet: &bo_tie::host::l2cap::BasicFrame<Vec<u8>>,
-    ) {
+        channel: &mut BasicFrameChannel<'_, L>,
+        packet: &BasicFrame<Vec<u8>>,
+    ) where
+        L: LogicalLink,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
+        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
+    {
         let parse_result = self.server.parse_att_pdu(packet);
 
         if let Ok((ClientPduName::ExchangeMtuRequest, payload)) = parse_result {
@@ -308,7 +321,7 @@ struct LocalHeartRateMeasurementArc {
 
 impl LocalHeartRateMeasurementArc {
     fn new(shared: HeartRateMeasurementArc) -> Self {
-        let mtu = LeULink::MIN_SUPPORTED_MTU;
+        let mtu = LeULink::SUPPORTED_MTU.into();
         let rr_offset = None;
 
         let local = LocalHeartRateMeasurement { rr_offset, mtu, shared };
@@ -325,7 +338,7 @@ impl LocalHeartRateMeasurementArc {
     ///
     /// ['blobbed']: /bo_tie/host/att/server/index.html#data-blobbing
     async fn set_mtu(&mut self, mtu: usize) {
-        if mtu >= LeULink::MIN_SUPPORTED_MTU {
+        if mtu >= LeULink::SUPPORTED_MTU.into() {
             self.arc.lock().await.mtu = mtu;
         }
     }

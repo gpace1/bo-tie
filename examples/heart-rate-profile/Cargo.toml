@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bo-tie = { path = "../../bo-tie", features = ["serde"] }
+bo-tie = { path = "../../bo-tie", features = ["serde", "tokio"] }
 simplelog = "0.12.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "io-util", "io-std"] }
 rand = "0.8"

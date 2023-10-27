@@ -165,13 +165,10 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |context| {
-            self.logical_link
-                .get_shared_link()
-                .maybe_send(context, self.channel_id, fragment.take().unwrap())
-        })
-        .await
-        .await
+        self.logical_link
+            .get_shared_link()
+            .maybe_send(self.channel_id, fragment.take().unwrap())
+            .await
     }
 
     async fn receive_fragment(
@@ -474,15 +471,10 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |context| {
-            self.logical_link.get_shared_link().maybe_send(
-                context,
-                self.this_channel_id.get_channel(),
-                fragment.take().unwrap(),
-            )
-        })
-        .await
-        .await
+        self.logical_link
+            .get_shared_link()
+            .maybe_send(self.this_channel_id.get_channel(), fragment.take().unwrap())
+            .await
     }
 
     async fn send_pdu_inner<T>(

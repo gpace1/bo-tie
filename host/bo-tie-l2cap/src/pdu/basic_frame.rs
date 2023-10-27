@@ -217,17 +217,13 @@ where
     type Item<'a> = DataIter<'a, core::iter::Peekable<core::iter::Fuse<T>>> where Self: 'a;
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
-        self.payload.peek().is_some().then(|| {
-            let data_iter = DataIter {
-                channel_id: self.channel_id,
-                payload: &mut self.payload,
-                len: self.len,
-                header_count: &mut self.header_count,
-                fragmentation_size: self.fragmentation_size,
-                byte: 0,
-            };
-
-            data_iter
+        self.payload.peek().is_some().then(|| DataIter {
+            channel_id: self.channel_id,
+            payload: &mut self.payload,
+            len: self.len,
+            header_count: &mut self.header_count,
+            fragmentation_size: self.fragmentation_size,
+            byte: 0,
         })
     }
 }

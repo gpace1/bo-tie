@@ -114,20 +114,14 @@ macro_rules! make_error {
         }
     };
 }
-
-// pub use crate::impl_trait_ext::{
-//     SendAndSyncSafeChannelReserve, SendAndSyncSafeConnectionChannelEnds, SendAndSyncSafeHostChannelEnds,
-//     SendSafeChannelReserve, SendSafeConnectionChannelEnds, SendSafeHostChannelEnds,
-// };
-
 #[cfg(feature = "tokio")]
-mod tokio;
+pub mod tokio;
 
 #[cfg(feature = "async-std")]
-mod async_std;
+pub mod async_std;
 
 #[cfg(feature = "futures-rs")]
-mod futures_rs;
+pub mod futures_rs;
 
 #[cfg(feature = "tokio")]
 pub use self::tokio::tokio_unbounded;
@@ -138,6 +132,9 @@ pub use self::async_std::async_std_unbounded;
 #[cfg(feature = "futures-rs")]
 pub use self::futures_rs::futures_unbounded;
 
+pub use crate::impl_trait_ext::{
+    SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds, SendSafeChannelReserve, SendSafeHostChannelEnds,
+};
 use crate::{
     BufferReserve, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannel,
     ConnectionChannelEnds, FlowCtrlReceiver, FromConnectionIntraMessage, HostChannelEnds as HostChannelEndsTrait,

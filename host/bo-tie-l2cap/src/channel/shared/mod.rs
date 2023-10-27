@@ -405,31 +405,34 @@ where
     ///
     /// This is used for maybe sending a fragment through the link. For the 'first' channel that
     /// calls this method, it takes ownership and
-    pub(crate) fn maybe_send<'s, T>(
-        &'s self,
-        context: &mut core::task::Context,
+    pub(crate) async fn maybe_send<T>(
+        &self,
         owner: ChannelIdentifier,
         fragment: L2capFragment<T>,
-    ) -> Poll<P::SendFut<'s>>
+    ) -> Result<(), P::SendErr>
     where
-        T: 's + IntoIterator<Item = u8>,
+        T: IntoIterator<Item = u8>,
     {
-        if self.owner.get().is_none() {
-            debug_assert!(fragment.is_start_fragment(), "expected starting fragment");
+        core::future::poll_fn(|context| {
+            if self.owner.get().is_none() {
+                debug_assert!(fragment.is_start_fragment(), "expected starting fragment");
 
-            self.owner.set(PhysicalLinkOwner::Sender(owner))
-        } else if self.owner.get() != PhysicalLinkOwner::Sender(owner) {
-            self.wakeup.set(context.waker().clone().into());
+                self.owner.set(PhysicalLinkOwner::Sender(owner));
 
-            return Poll::Pending;
-        }
+                Poll::Ready(())
+            } else if self.owner.get() != PhysicalLinkOwner::Sender(owner) {
+                self.wakeup.set(context.waker().clone().into());
 
-        let fragment = L2capFragment {
-            start_fragment: fragment.start_fragment,
-            data: fragment.data.into_iter(),
-        };
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+        .await;
 
-        unsafe { self.physical_link.get().as_mut().unwrap().send(fragment).into() }
+        let physical_link = unsafe { self.physical_link.get().as_mut() }.unwrap();
+
+        physical_link.send(fragment).await
     }
 
     /// Receive a Fragment

@@ -11,7 +11,7 @@ rc = ["serde/rc"]
 
 [dependencies]
 serde = { version="1.0", default-features = false }
-thiserror = "1.0"
+thiserror = { package = "thiserror-core", version = "1" , default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true

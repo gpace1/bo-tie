@@ -66,13 +66,10 @@ impl<L: LogicalLink> SignallingChannelInner<'_, L> {
             data: fragment.data.into_iter(),
         });
 
-        core::future::poll_fn(move |context| {
-            self.logical_link
-                .get_shared_link()
-                .maybe_send(context, self.channel_id, fragment.take().unwrap())
-        })
-        .await
-        .await
+        self.logical_link
+            .get_shared_link()
+            .maybe_send(self.channel_id, fragment.take().unwrap())
+            .await
     }
 
     async fn send_inner<T: FragmentL2capPdu>(

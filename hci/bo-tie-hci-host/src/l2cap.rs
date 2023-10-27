@@ -4,12 +4,13 @@
 //! contains the types that implement the traits of `bo-tie-l2cap` so they can be used by the L2CAP
 //! protocol.
 
-use crate::{AclBroadcastFlag, AclPacketBoundary, Connection, HciAclData, HciAclPacketError, TryIntoLeL2capError};
+mod recv_future;
+mod send_future;
+
+use crate::{AclPacketBoundary, Connection, HciAclData, HciAclPacketError, TryIntoLeL2capError};
 use bo_tie_core::buffer::IntoExactSizeIterator;
-use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle, Receiver, Sender, ToConnectionDataIntraMessage};
+use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle, Sender};
 use bo_tie_l2cap::LeULogicalLink;
-use core::future::Future;
-use core::pin::Pin;
 
 /// A L2CAP connection for LE
 ///
@@ -38,7 +39,7 @@ use core::pin::Pin;
 /// ```
 ///
 /// [`PhysicalLink`]: bo_tie_l2cap::PhysicalLink
-pub struct LeLink<C: ConnectionChannelEnds> {
+pub struct LeLink<C> {
     handle: ConnectionHandle,
     front_cap: usize,
     back_cap: usize,
@@ -99,9 +100,9 @@ impl<C> bo_tie_l2cap::PhysicalLink for LeLink<C>
 where
     C: ConnectionChannelEnds,
 {
-    type SendFut<'a> = Pin<alloc::boxed::Box<dyn Future<Output = Result<(), Self::SendErr>> + 'a>> where Self: 'a;
+    type SendFut<'a> = send_future::SendFuture<'a, C> where Self: 'a;
     type SendErr = <C::Sender as Sender>::Error;
-    type RecvFut<'a> = Pin<alloc::boxed::Box<dyn Future<Output = Option<Result<bo_tie_l2cap::pdu::L2capFragment<Self::RecvData>, Self::RecvErr>>> + 'a>> where Self: 'a;
+    type RecvFut<'a> = recv_future::RecvFuture<'a, C> where Self: 'a;
     type RecvData = <C::FromBuffer as IntoExactSizeIterator>::IntoExactIter;
     type RecvErr = HciAclPacketError;
 
@@ -109,85 +110,41 @@ where
         self.fragment_size()
     }
 
-    fn send<'s, T>(&'s mut self, fragment: bo_tie_l2cap::pdu::L2capFragment<T>) -> Self::SendFut<'s>
+    fn send<T>(&mut self, fragment: bo_tie_l2cap::pdu::L2capFragment<T>) -> Self::SendFut<'_>
     where
-        T: 's + IntoIterator<Item = u8>,
+        T: IntoIterator<Item = u8>,
     {
-        use bo_tie_core::buffer::TryExtend;
-
-        let connection_handle = self.handle;
-
-        let packet_boundary_flag = if fragment.is_start_fragment() {
-            AclPacketBoundary::FirstNonFlushable
-        } else {
-            AclPacketBoundary::ContinuingFragment
-        };
-
-        let broadcast_flag = AclBroadcastFlag::NoBroadcast;
-
-        let payload = fragment.into_inner();
-
-        let future = async move {
-            let mut buffer = self.channel_ends.take_to_buffer(self.front_cap, self.back_cap).await;
-
-            buffer.try_extend(payload).unwrap();
-
-            log::info!(
-                "(HCI) sending L2CAP {}fragment: {:?}",
-                if let AclPacketBoundary::FirstNonFlushable = packet_boundary_flag {
-                    "starting "
-                } else {
-                    ""
-                },
-                &*buffer
-            );
-
-            let acl_data = HciAclData::new(connection_handle, packet_boundary_flag, broadcast_flag, buffer);
-
-            let packet = acl_data.into_inner_packet().unwrap();
-
-            let message = bo_tie_hci_util::FromConnectionIntraMessage::Acl(packet).into();
-
-            self.channel_ends.get_sender().send(message).await
-        };
-
-        alloc::boxed::Box::pin(future)
+        send_future::SendFuture::new_le(self, fragment)
     }
 
     fn recv(&mut self) -> Self::RecvFut<'_> {
-        let future = async move {
-            let data = self.channel_ends.get_mut_data_receiver().recv().await;
+        recv_future::RecvFuture::new_le(self)
+    }
+}
 
-            match data {
-                Some(ToConnectionDataIntraMessage::Acl(data)) => {
-                    let hci_data = match HciAclData::try_from_buffer(data) {
-                        Ok(data) => data,
-                        Err(e) => return Some(Err(e)),
-                    };
+impl<C> bo_tie_l2cap::PhysicalLink for &mut LeLink<C>
+where
+    C: ConnectionChannelEnds,
+{
+    type SendFut<'a> = send_future::SendFuture<'a, C> where Self: 'a;
+    type SendErr = <C::Sender as Sender>::Error;
+    type RecvFut<'a> = recv_future::RecvFuture<'a, C> where Self: 'a;
+    type RecvData = <C::FromBuffer as IntoExactSizeIterator>::IntoExactIter;
+    type RecvErr = HciAclPacketError;
 
-                    log::info!(
-                        "(HCI) received L2CAP {}fragment: {:?}",
-                        if let AclPacketBoundary::FirstNonFlushable = hci_data.packet_boundary_flag {
-                            "starting "
-                        } else {
-                            ""
-                        },
-                        hci_data.get_payload().iter().copied().collect::<Vec<u8>>()
-                    );
+    fn max_transmission_size(&self) -> usize {
+        (**self).max_transmission_size()
+    }
 
-                    Some(Ok(hci_data.into_l2cap_fragment()))
-                }
-                Some(ToConnectionDataIntraMessage::Sco(_)) => Some(Err(HciAclPacketError::Other(
-                    "synchronous connection data is not implemented",
-                ))),
-                Some(ToConnectionDataIntraMessage::Iso(_)) => Some(Err(HciAclPacketError::Other(
-                    "isochronous connection data is not implemented",
-                ))),
-                None | Some(ToConnectionDataIntraMessage::Disconnect(_)) => None,
-            }
-        };
+    fn send<T>(&mut self, fragment: bo_tie_l2cap::pdu::L2capFragment<T>) -> Self::SendFut<'_>
+    where
+        T: IntoIterator<Item = u8>,
+    {
+        (**self).send(fragment)
+    }
 
-        alloc::boxed::Box::pin(future)
+    fn recv(&mut self) -> Self::RecvFut<'_> {
+        (**self).recv()
     }
 }
 
@@ -196,6 +153,15 @@ where
     C: ConnectionChannelEnds,
 {
     fn from(physical_link: LeLink<C>) -> Self {
+        LeULogicalLink::new(physical_link)
+    }
+}
+
+impl<'a, C> From<&'a mut LeLink<C>> for LeULogicalLink<&'a mut LeLink<C>>
+where
+    C: ConnectionChannelEnds + 'a,
+{
+    fn from(physical_link: &'a mut LeLink<C>) -> Self {
         LeULogicalLink::new(physical_link)
     }
 }

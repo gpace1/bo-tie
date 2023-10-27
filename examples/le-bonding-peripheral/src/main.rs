@@ -189,7 +189,7 @@ where
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
-    let queue_writer = att::server::BasicQueuedWriter::new(1024);
+    let queue_writer = att::server::BasicQueuedWriter::new();
 
     let mut gatt_server = gatt::ServerBuilder::from(gsb).make_server(queue_writer);
 
@@ -217,16 +217,19 @@ where
     let mut number_comparison = None;
     let mut passkey_input = None;
 
+    let att_buffer = &mut Vec::new();
+    let sm_buffer = &mut Vec::new();
+
     loop {
         tokio::select! {
-            att_packet = att_channel.receive() => {
+            att_packet = att_channel.receive(att_buffer) => {
                 gatt_server
                     .process_att_pdu(&mut att_channel, &att_packet.unwrap())
                     .await
                     .unwrap();
             }
 
-            sm_packet = sm_channel.receive() => {
+            sm_packet = sm_channel.receive(sm_buffer) => {
                     match security_manager
                         .process_command(&mut sm_channel, &sm_packet.unwrap())
                         .await
