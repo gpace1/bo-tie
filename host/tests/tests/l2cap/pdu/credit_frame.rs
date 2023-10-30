@@ -341,7 +341,7 @@ async fn recv_single_pdu() {
 
         assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5]);
 
-        assert_eq!(credit_channel.get_pdu_receive_counter(), 1);
+        assert_eq!(credit_channel.get_received_pdu_count(), 1);
     });
 
     let connect_request = L2capFragment::new(
@@ -593,10 +593,10 @@ async fn connection_disconnection() {
 
         assert_eq!(
             TEST_MESSAGE.bytes().len() / 60 /* the mps */ + if 0 == TEST_MESSAGE.bytes().len() % 60 { 0 } else { 1},
-            credit_based_channel.get_pdu_receive_counter()
+            credit_based_channel.get_received_pdu_count()
         );
 
-        assert_eq!(credit_based_channel.get_pdu_receive_counter(), 0);
+        assert_eq!(credit_based_channel.get_received_pdu_count(), 0);
 
         // send disconnection
 

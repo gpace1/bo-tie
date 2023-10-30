@@ -436,14 +436,14 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         self.peer_credits as u16
     }
 
-    /// Get the number of PDUs that were received since the last time this was called
+    /// Get the number of PDUs that were received since the last time this method was called
     ///
     /// This returns a counter of the number of credit based frames that were received by this
     /// channel since the last time this method was called.
     ///
     /// # Note
     /// The the receive counter saturates to [`<usize>::MAX`].
-    pub fn get_pdu_receive_counter(&mut self) -> usize {
+    pub fn get_received_pdu_count(&mut self) -> usize {
         core::mem::take(&mut self.received_pdu_count)
     }
 
