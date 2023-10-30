@@ -340,6 +340,8 @@ async fn recv_single_pdu() {
             .expect("failed to receive");
 
         assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5]);
+
+        assert_eq!(credit_channel.get_pdu_receive_counter(), 1);
     });
 
     let connect_request = L2capFragment::new(
@@ -535,7 +537,7 @@ async fn connection_disconnection() {
     let r_barrier = l_barrier.clone();
 
     let l_handle = tokio::spawn(async move {
-        let (mut credit_based_channel, mut signalling_channel) = request_connect!(l_link, 280, 60, 10);
+        let (mut credit_based_channel, mut signalling_channel) = request_connect!(l_link, 0xFFFF, 60, 10);
 
         let mut maybe_send_task = credit_based_channel
             .send(TEST_MESSAGE.bytes())
@@ -588,6 +590,13 @@ async fn connection_disconnection() {
         let message = std::str::from_utf8(&data).expect("invalid utf8");
 
         assert_eq!(TEST_MESSAGE, message);
+
+        assert_eq!(
+            TEST_MESSAGE.bytes().len() / 60 /* the mps */ + if 0 == TEST_MESSAGE.bytes().len() % 60 { 0 } else { 1},
+            credit_based_channel.get_pdu_receive_counter()
+        );
+
+        assert_eq!(credit_based_channel.get_pdu_receive_counter(), 0);
 
         // send disconnection
 

@@ -101,6 +101,19 @@ impl<T: Iterator> PacketsIterator<T> {
         }
     }
 
+    /// Get the number of bytes left of the SDU
+    ///
+    /// The return is the number of bytes yet to be iterated over of the SDU.
+    ///
+    /// # Note
+    /// This value is also relative to the bytes that were iterated  
+    pub fn get_remaining_count(&self) -> usize
+    where
+        T: ExactSizeIterator,
+    {
+        self.sdu.len()
+    }
+
     /// Returns true if there is no more packets output by this iterator
     pub fn is_complete(&self) -> bool
     where

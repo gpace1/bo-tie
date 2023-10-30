@@ -338,6 +338,7 @@ pub struct CreditBasedChannel<'a, L: LogicalLink> {
     maximum_pdu_payload_size: usize,
     maximum_transmission_size: usize,
     peer_credits: usize,
+    received_pdu_count: usize,
     receive_sdu_len: core::cell::Cell<usize>,
     receive_count_so_far: core::cell::Cell<usize>,
 }
@@ -355,6 +356,8 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
         let receive_count_so_far = core::cell::Cell::new(0);
 
+        let received_pdu_count = 0;
+
         CreditBasedChannel {
             this_channel_id,
             peer_channel_id,
@@ -362,6 +365,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             maximum_pdu_payload_size: maximum_packet_size,
             maximum_transmission_size,
             peer_credits: initial_peer_credits,
+            received_pdu_count,
             receive_sdu_len,
             receive_count_so_far,
         }
@@ -430,6 +434,17 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
     /// Get the current number of credits given to this channel by the connected device
     pub fn get_peer_credits(&self) -> u16 {
         self.peer_credits as u16
+    }
+
+    /// Get the number of PDUs that were received since the last time this was called
+    ///
+    /// This returns a counter of the number of credit based frames that were received by this
+    /// channel since the last time this method was called.
+    ///
+    /// # Note
+    /// The the receive counter saturates to [`<usize>::MAX`].
+    pub fn get_pdu_receive_counter(&mut self) -> usize {
+        core::mem::take(&mut self.received_pdu_count)
     }
 
     /// Add credits given by the peer
@@ -532,6 +547,10 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
         let mut packets = sdu.into_packets().map_err(|e| SendSduError::SduPacketError(e))?;
 
+        if packets.get_remaining_count() > self.maximum_transmission_size {
+            return Err(SendSduError::SduLargerThanMtu);
+        }
+
         while self.peer_credits != 0 {
             // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better with async)
             let next = packets.next().map(|cfb| cfb.map_to_vec_iter());
@@ -623,6 +642,8 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
         // for subsequent fragments of a k-frame
         meta.first = false;
+
+        self.received_pdu_count = self.received_pdu_count.saturating_add(1);
 
         Ok(k_frame)
     }
@@ -939,6 +960,7 @@ pub enum SendSduError<E> {
     SendErr(E),
     SduPacketError(PacketsError),
     IncorrectChannel,
+    SduLargerThanMtu,
 }
 
 impl<E> core::fmt::Display for SendSduError<E>
@@ -950,6 +972,9 @@ where
             SendSduError::SendErr(e) => write!(f, "error sending PDU, {e:}"),
             SendSduError::SduPacketError(e) => write!(f, "error converting SDU to PDUs, {e:}"),
             SendSduError::IncorrectChannel => f.write_str("incorrect channel used for this operation"),
+            SendSduError::SduLargerThanMtu => {
+                f.write_str("the SDU is larger than the maximum transmission unit for this channel")
+            }
         }
     }
 }
