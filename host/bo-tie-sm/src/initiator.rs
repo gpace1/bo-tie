@@ -2497,7 +2497,7 @@ impl OutOfBandOutput {
     /// Convert the underlying buffer to a `SequenceVec`
     ///
     /// This is necessary if there needs to be more than 64 bytes of data within the out of band
-    /// output. A `SequenceVec` can contain
+    /// output. The length of a `SequenceVec` is only limited by the allocator.
     pub fn to_sequence_vec(self) -> bo_tie_gap::assigned::SequenceVec {
         bo_tie_gap::assigned::SequenceVec::from(self.0)
     }
