@@ -518,7 +518,7 @@ impl SecurityManagerBuilder {
 
     /// Try to create the `SlaveSecurityManager`
     ///
-    /// This equivalent to [`build`] except an error is returned instead of panicking.
+    /// This equivalent to method `build` except an error is returned instead of causing a panic.
     pub fn try_build(self) -> Result<SecurityManager, crate::SecurityManagerBuilderError> {
         let initiator_key_distribution = self.distributed_bonding_keys.into_keys(if self.this_address_is_random {
             IdentityAddress::StaticRandom(self.this_address)
