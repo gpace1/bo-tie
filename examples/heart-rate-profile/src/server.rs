@@ -12,7 +12,7 @@ use bo_tie::host::gatt::characteristic::{ClientConfiguration, Properties};
 use bo_tie::host::gatt::{GapServiceBuilder, ServerBuilder};
 use bo_tie::host::l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie::host::l2cap::pdu::BasicFrame;
-use bo_tie::host::l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
+use bo_tie::host::l2cap::{BasicFrameChannel, LogicalLink};
 use bo_tie::host::{gatt, Uuid};
 use std::any::Any;
 use std::collections::VecDeque;
@@ -197,8 +197,6 @@ impl Server {
     pub async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         if self.notify_hrd.load(Ordering::Relaxed) {
             self.server
@@ -215,8 +213,6 @@ impl Server {
         packet: &BasicFrame<Vec<u8>>,
     ) where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         let parse_result = self.server.parse_att_pdu(packet);
 

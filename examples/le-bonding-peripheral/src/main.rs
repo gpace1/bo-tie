@@ -136,8 +136,6 @@ async fn on_encryption_change<L, Q>(
 ) where
     L: bo_tie::host::l2cap::LogicalLink,
     Q: bo_tie::host::att::server::QueuedWriter,
-    <<L as bo_tie::host::l2cap::LogicalLink>::PhysicalLink as bo_tie::host::l2cap::PhysicalLink>::SendErr:
-        std::fmt::Debug,
 {
     use bo_tie::host::att::{AttributePermissions, AttributeRestriction, EncryptionKeySize};
 

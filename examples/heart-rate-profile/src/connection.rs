@@ -106,8 +106,6 @@ impl ConnectionInner {
     async fn process_att<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>, packet: &BasicFrame<Vec<u8>>)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         self.server.process(att_channel, packet).await
     }
@@ -115,7 +113,6 @@ impl ConnectionInner {
     async fn process_sm<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, packet: &mut BasicFrame<Vec<u8>>)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         if let Some(security_stage) = self.security.process(sm_channel, packet).await {
             self.send_security_stage(security_stage)
@@ -136,8 +133,6 @@ impl ConnectionInner {
     async fn process_msg<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, msg: MainToConnection)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         match msg {
             MainToConnection::Encryption(is_encrypted) => self.on_encryption(sm_channel, is_encrypted).await,
@@ -155,8 +150,6 @@ impl ConnectionInner {
     async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, is_encrypted: bool)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         if is_encrypted {
             self.security.on_encryption(sm_channel).await;
@@ -184,8 +177,6 @@ impl ConnectionInner {
     async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         self.server.send_hrd_notification(att_channel).await
     }

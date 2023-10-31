@@ -49,7 +49,7 @@
 
 use crate::AuthenticationInput;
 use bo_tie::host::l2cap::pdu::BasicFrame;
-use bo_tie::host::l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
+use bo_tie::host::l2cap::{BasicFrameChannel, LogicalLink};
 use bo_tie::host::sm::pairing::{PairingFailed, PairingFailedReason};
 use bo_tie::host::sm::responder::{NumberComparison, PasskeyInput, SecurityManager, SecurityManagerBuilder, Status};
 use bo_tie::host::sm::{IdentityAddress, Keys};
@@ -305,7 +305,6 @@ impl Security {
     ) -> Option<SecurityStage>
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         use bo_tie::host::sm::CommandType;
 
@@ -375,8 +374,6 @@ impl Security {
     pub async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::fmt::Debug,
     {
         self.is_encrypted = true;
 
@@ -406,7 +403,6 @@ impl Security {
     pub async fn allow_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<'_, L>)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         let pairing_message = match self.pairing_request.take() {
             Some(pairing_message) => pairing_message,
@@ -422,7 +418,6 @@ impl Security {
     pub async fn reject_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<'_, L>)
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         if self.pairing_request.take().is_none() {
             return;
@@ -445,7 +440,6 @@ impl Security {
     ) -> Option<SecurityStage>
     where
         L: LogicalLink,
-        <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::fmt::Debug,
     {
         match (authentication, self.authentication.take()) {
             (_, None) => None, // pairing probably failed

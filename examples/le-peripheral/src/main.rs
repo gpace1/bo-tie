@@ -134,8 +134,6 @@ async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Opt
 async fn server_loop<P>(logical_link: LeULogicalLink<P>, local_name: &str) -> !
 where
     P: PhysicalLink,
-    P::SendErr: core::fmt::Debug,
-    P::RecvErr: core::fmt::Debug,
 {
     use bo_tie::host::{att, gatt};
 

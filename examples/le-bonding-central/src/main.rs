@@ -187,8 +187,6 @@ async fn pair<P>(
 ) -> Option<u128>
 where
     P: bo_tie::host::l2cap::PhysicalLink,
-    P::SendErr: std::fmt::Debug,
-    P::RecvErr: std::fmt::Debug,
 {
     use bo_tie::host::sm::initiator::Status;
 
@@ -297,8 +295,6 @@ async fn encrypt<H: HostChannelEnds>(
 async fn bond<P>(channel: &mut LeULogicalLink<P>, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> Option<()>
 where
     P: bo_tie::host::l2cap::PhysicalLink,
-    P::SendErr: std::fmt::Debug,
-    P::RecvErr: std::fmt::Debug,
 {
     let mut sm_channel = channel.get_sm_channel();
 
@@ -323,8 +319,6 @@ where
 async fn query_gatt_services<P>(link: &mut LeULogicalLink<P>)
 where
     P: bo_tie::host::l2cap::PhysicalLink,
-    P::SendErr: std::fmt::Debug,
-    P::RecvErr: std::fmt::Debug,
 {
     use bo_tie::host::att::client::{ConnectFixedClient, ResponseProcessor};
     use bo_tie::host::gatt::Client;
