@@ -171,8 +171,6 @@ async fn le_multiple_receiving() {
         let mut checklist = (false, false, false, false, false);
 
         while checklist != (true, true, true, true, true) {
-            println!("C H E C K L I S T: {checklist:?}");
-
             tokio::select! {
                 credit_channel = multiple_sending_signal_channel(&mut signalling_channel) => {
                     if credit_channel_1.is_none() {
