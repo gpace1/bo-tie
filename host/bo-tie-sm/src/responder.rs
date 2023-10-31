@@ -303,7 +303,7 @@ impl SecurityManagerBuilder {
 
     /// Use GAP's Security Mode Two for the Configuration the Security Manager
     ///
-    /// This method ensures that the Security Manager meets the requirements fo the `level` for
+    /// This method ensures that the Security Manager meets the requirements of the `level` for
     /// Security Mode Two.
     ///
     /// Security Mode two defines the security aspects of signed data. For the Security Manager this
