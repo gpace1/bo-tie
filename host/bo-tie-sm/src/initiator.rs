@@ -1517,10 +1517,10 @@ impl SecurityManager {
     /// method [`set_encrypted`] needs to be called to indicate the link is encrypted before this
     /// method can be called without it returning an error.
     ///
-    /// Once all bonding key information is received from the responding Security Manager, this
-    /// method will send the bonding keys of this Security Manager to the peer device. *After all
-    /// bonding keys are sent by this Security Manager, `process_bonding` will return true to
-    /// indicate bonding has finished*.
+    /// After all of bonding information of the peer device is received from the responding Security
+    /// Manager, this method will send the bonding keys of this Security Manager to the peer device.
+    /// *After all bonding keys are sent by this Security Manager, `process_bonding` will return
+    /// true to indicate that bonding has finished*.
     ///
     /// # Errors
     /// This method can only process Security Manager commands containing Bonding information.
