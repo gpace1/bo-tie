@@ -1018,6 +1018,7 @@ impl EnabledIdKeysBuilder {
     }
 
     /// Finish configuring the Identity Keys
+    #[must_use]
     pub fn done(self) -> DistributedBondingKeysBuilder {
         self.0
     }
@@ -1049,6 +1050,7 @@ impl EnabledSigningKeyBuilder {
     }
 
     /// Finish configuring the Signing Key
+    #[must_use]
     pub fn done(self) -> DistributedBondingKeysBuilder {
         self.0
     }
