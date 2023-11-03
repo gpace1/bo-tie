@@ -1111,10 +1111,10 @@ impl<C: ConnectionChannelEnds> Connection<C> {
             ConnectionKind::Le(CC { status, .. }) | ConnectionKind::LeEnh(ECC { status, .. }) => {
                 if status == errors::Error::NoError {
                     let le = l2cap::LeLink::new(
-                        self.get_handle(),
                         self.buffer_header_size + HciAclData::HEADER_SIZE,
                         self.buffer_tail_size + self.hci_max,
                         self.hci_max,
+                        self.kind,
                         self.ends,
                     );
 

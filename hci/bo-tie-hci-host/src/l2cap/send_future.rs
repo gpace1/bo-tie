@@ -77,7 +77,7 @@ impl<'a, C: ConnectionChannelEnds> SendFuture<'a, C> {
     where
         T: IntoIterator<Item = u8>,
     {
-        let connection_handle = link.handle;
+        let connection_handle = link.get_handle();
 
         let packet_boundary_flag = if fragment.is_start_fragment() {
             AclPacketBoundary::FirstNonFlushable

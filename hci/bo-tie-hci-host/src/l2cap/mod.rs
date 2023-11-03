@@ -7,8 +7,9 @@
 mod recv_future;
 mod send_future;
 
-use crate::{AclPacketBoundary, Connection, HciAclData, HciAclPacketError, TryIntoLeL2capError};
+use crate::{AclPacketBoundary, Connection, ConnectionKind, HciAclData, HciAclPacketError, TryIntoLeL2capError};
 use bo_tie_core::buffer::IntoExactSizeIterator;
+use bo_tie_hci_util::events::parameters::{LeConnectionCompleteData, LeEnhancedConnectionCompleteData};
 use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle, Sender};
 use bo_tie_l2cap::LeULogicalLink;
 
@@ -40,10 +41,10 @@ use bo_tie_l2cap::LeULogicalLink;
 ///
 /// [`PhysicalLink`]: bo_tie_l2cap::PhysicalLink
 pub struct LeLink<C> {
-    handle: ConnectionHandle,
     front_cap: usize,
     back_cap: usize,
     hci_max_payload_size: usize,
+    kind: ConnectionKind,
     channel_ends: C,
 }
 
@@ -57,24 +58,19 @@ impl<C: ConnectionChannelEnds> TryFrom<Connection<C>> for LeLink<C> {
 
 impl<C: ConnectionChannelEnds> LeLink<C> {
     pub(crate) fn new(
-        handle: ConnectionHandle,
         front_cap: usize,
         back_cap: usize,
         hci_max_payload_size: usize,
+        kind: ConnectionKind,
         channel_ends: C,
     ) -> Self {
         Self {
-            handle,
             front_cap,
             back_cap,
             hci_max_payload_size,
+            kind,
             channel_ends,
         }
-    }
-
-    /// Get the connection handle
-    pub fn get_handle(&self) -> ConnectionHandle {
-        self.handle
     }
 
     /// Get the receiver
@@ -93,6 +89,77 @@ impl<C: ConnectionChannelEnds> LeLink<C> {
     /// equivalent to the Controller's maximum size of the payload for a HCI ACL packet of LE data.
     pub fn fragment_size(&self) -> usize {
         self.hci_max_payload_size
+    }
+
+    /// Get the connection handle
+    pub fn get_handle(&self) -> ConnectionHandle {
+        match &self.kind {
+            ConnectionKind::Le(c) => c.connection_handle,
+            ConnectionKind::LeEnh(c) => c.connection_handle,
+            ConnectionKind::BrEdr(_) | ConnectionKind::BrEdrSco(_) => unreachable!(),
+        }
+    }
+
+    /// Get the peer address
+    ///
+    /// This returns the address of the connected device.
+    pub fn get_peer_address(&self) -> bo_tie_core::BluetoothDeviceAddress {
+        match &self.kind {
+            ConnectionKind::Le(c) => c.peer_address,
+            ConnectionKind::LeEnh(c) => c.peer_address,
+            ConnectionKind::BrEdr(_) | ConnectionKind::BrEdrSco(_) => unreachable!(),
+        }
+    }
+
+    /// Check if the peer is using a public address
+    pub fn is_peer_address_public(&self) -> bool {
+        use crate::events::parameters::LeConnectionAddressType;
+        use crate::le::AddressType;
+
+        match &self.kind {
+            ConnectionKind::BrEdr(_) | ConnectionKind::BrEdrSco(_) => unreachable!(),
+            ConnectionKind::Le(c) => c.peer_address_type == LeConnectionAddressType::PublicDeviceAddress,
+            ConnectionKind::LeEnh(c) => c.peer_address_type == AddressType::PublicDeviceAddress,
+        }
+    }
+
+    /// Check if the peer is using a random address
+    pub fn is_peer_address_random(&self) -> bool {
+        use crate::events::parameters::LeConnectionAddressType;
+        use crate::le::AddressType;
+
+        match &self.kind {
+            ConnectionKind::BrEdr(_) | ConnectionKind::BrEdrSco(_) => unreachable!(),
+            ConnectionKind::Le(c) => c.peer_address_type == LeConnectionAddressType::RandomDeviceAddress,
+            ConnectionKind::LeEnh(c) => c.peer_address_type == AddressType::RandomDeviceAddress,
+        }
+    }
+
+    /// Get the LE connection data
+    ///
+    /// This returns the connection data if the HCI sent the LE [`ConnectionComplete`] event.
+    ///
+    /// [`ConnectionComplete`]: crate::events::LeMeta::ConnectionComplete
+    pub fn get_le_connection_data(&self) -> Option<&LeConnectionCompleteData> {
+        if let ConnectionKind::Le(data) = &self.kind {
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    /// Get the LE enhanced connection data
+    ///
+    /// This returns the enhanced connection data if the HCI sent the LE
+    /// [`EnhancedConnectionComplete`] event.
+    ///
+    /// [`EnhancedConnectionComplete`]: crate::events::LeMeta::EnhancedConnectionComplete
+    pub fn get_le_enhanced_connection_data(&self) -> Option<&LeEnhancedConnectionCompleteData> {
+        if let ConnectionKind::LeEnh(data) = &self.kind {
+            Some(data)
+        } else {
+            None
+        }
     }
 }
 
