@@ -1010,20 +1010,16 @@ pub struct Connection<C> {
     buffer_header_size: usize,
     buffer_tail_size: usize,
     hci_max: usize,
-    bounded: bool,
     kind: ConnectionKind,
     ends: C,
 }
 
 impl<C> Connection<C> {
     fn new(buffer_header_size: usize, buffer_tail_size: usize, hci_mtu: usize, kind: ConnectionKind, ends: C) -> Self {
-        let bounded = false;
-
         Self {
             buffer_header_size,
             buffer_tail_size,
             hci_max: hci_mtu,
-            bounded,
             kind,
             ends,
         }
@@ -1082,29 +1078,6 @@ impl<C> Connection<C> {
     /// [`try_into_le`]: Connection::try_into_le
     pub fn get_kind(&self) -> ConnectionKind {
         self.kind.clone()
-    }
-
-    /// Bound the maximum MTU to the maximum size of the HCI data packet
-    ///
-    /// See [**Maximum Transmission Unit**].
-    ///
-    /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
-    #[cfg(feature = "l2cap")]
-    pub fn set_mtu_max_to_hci(&mut self) {
-        self.bounded = true
-    }
-
-    /// Bound the maximum MTU to the maximum size of an L2CAP data packet
-    ///
-    /// See [**Maximum Transmission Unit**].
-    ///
-    /// # Note
-    /// This is the default maximum MTU.
-    ///
-    /// [**Maximum Transmission Unit**]: struct.Connections.html#Maximum-Transmission-Unit
-    #[cfg(feature = "l2cap")]
-    pub fn set_mtu_max_to_l2cap(&mut self) {
-        self.bounded = false
     }
 
     /// Convert this into its inner channel ends
