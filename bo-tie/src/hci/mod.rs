@@ -15,6 +15,7 @@ pub use bo_tie_hci_util::channel;
 pub use bo_tie_hci_util::local_channel::local_dynamic::{LocalChannelReserve, LocalChannelReserveBuilder};
 #[cfg(feature = "unstable")]
 pub use bo_tie_hci_util::local_channel::local_stack::{LocalStackChannelReserve, LocalStackChannelReserveData};
+pub use bo_tie_hci_util::trait_ext;
 pub use bo_tie_hci_util::ConnectionHandle;
 pub use bo_tie_hci_util::{ChannelReserve, ConnectionChannelEnds, EventRoutingPolicy, HostChannelEnds};
 
