@@ -132,9 +132,6 @@ pub use self::async_std::async_std_unbounded;
 #[cfg(feature = "futures-rs")]
 pub use self::futures_rs::futures_unbounded;
 
-pub use crate::impl_trait_ext::{
-    SendAndSyncSafeChannelReserve, SendAndSyncSafeHostChannelEnds, SendSafeChannelReserve, SendSafeHostChannelEnds,
-};
 use crate::{
     BufferReserve, Channel as ChannelTrait, ChannelReserve as ChannelReserveTrait, ConnectionChannel,
     ConnectionChannelEnds, FlowCtrlReceiver, FromConnectionIntraMessage, HostChannelEnds as HostChannelEndsTrait,

@@ -1,11 +1,35 @@
-//! Traits that extend the bounds of traits within this library
+//! Send and Sync bound trait extensions
 //!
-//! Methods that use `impl Trait` for returning a [`ChannelReserve`] or [`HostChannelEnds`] do not
-//! have the necessary `Send` restrictions for use with something like `tokio::send`. To combat
-//! this, the traits [`SendSafeChannelReserve`] and [`SendSafeHostChannelEnds`] were created to add
-//! the required `Send` bounds on *all* the associated types within the original traits. Instead of
-//! returning `impl ChannelReserve` methods will instead return `impl SendSafeChannelReserve` (and
-//! the same is true for `HostChannelEnds`).
+//! The normal way for adding `Send` and `Sync` bounds is to just add them as bounds to wherever the
+//! generic or `impl Trait` is used. However this quickly becomes inconvenient when there are
+//! associated types as they also require bounding. This only gets compounded if the associated
+//! types have associated types that need bounding.
+//!
+//! This library uses lots of nested associated types for defining the futures used for sending and
+//! receiving data from both the lower layers and higher layers, and the different destinations
+//! within those layers. It is quite the effort to bind every single nested associated types. These
+//! extension types have come with either `Send + 'static` or `Send + Sync + 'static` as a trait
+//! bound and all associated types are bound to traits that also have the same bounds. This means
+//! that the trait, its associated types, and all nested associated types are bound with the same
+//! requirements.
+//!
+//! The most common usage of this is with methods that spawn a connection within a thread.
+//!
+//! ```
+//! # use bo_tie_hci_host::l2cap::LeLink;
+//! # use bo_tie_hci_util::Receiver;
+//! # use bo_tie_hci_util::trait_ext::SendAndSyncSafeConnectionChannelEnds;
+//! fn connection_task<C>(mut connection: LeLink<C>)
+//! where
+//!     C: SendAndSyncSafeConnectionChannelEnds
+//! {
+//!     tokio::spawn(async move {
+//!         // this would panic if `C` was bound as
+//!         // `C: ConnectionChannelEnds + Send + 'static`
+//!         let data = connection.get_receiver().recv().await;
+//!     });
+//! }
+//! ```
 //!
 //! In a practical sense, just using these traits is not enough. Calling   
 //!
@@ -23,7 +47,7 @@ use core::future::Future;
 
 /// Send safe equivalent of [`Buffer`]
 ///
-/// [`Buffer`]: bo_tie_core::buffer::Buffer
+/// [`Buffer`]: Buffer
 pub trait SendSafeBuffer:
     'static
     + Send
@@ -98,7 +122,7 @@ where
 ///
 /// [`BufferReserve`]: crate::BufferReserve
 pub trait SendSafeBufferReserve:
-    Send + BufferReserve<Buffer = Self::SendSafeBuffer, TakeBuffer = Self::SendSafeTakeBuffer>
+    'static + Send + BufferReserve<Buffer = Self::SendSafeBuffer, TakeBuffer = Self::SendSafeTakeBuffer>
 {
     type SendSafeBuffer: SendSafeBuffer;
     type SendSafeTakeBuffer: Send + Future<Output = Self::SendSafeBuffer>;
@@ -106,7 +130,7 @@ pub trait SendSafeBufferReserve:
 
 impl<T> SendSafeBufferReserve for T
 where
-    T: Send + BufferReserve,
+    T: 'static + Send + BufferReserve,
     T::Buffer: SendSafeBuffer,
     T::TakeBuffer: Send,
 {
@@ -118,7 +142,10 @@ where
 ///
 /// [`BufferReserve`]: crate::BufferReserve
 pub trait SendAndSyncSafeBufferReserve:
-    Send + Sync + BufferReserve<Buffer = Self::SendAndSyncSafeBuffer, TakeBuffer = Self::SendAndSyncSafeTakeBuffer>
+    'static
+    + Send
+    + Sync
+    + BufferReserve<Buffer = Self::SendAndSyncSafeBuffer, TakeBuffer = Self::SendAndSyncSafeTakeBuffer>
 {
     type SendAndSyncSafeBuffer: SendAndSyncSafeBuffer;
     type SendAndSyncSafeTakeBuffer: Send + Sync + Future<Output = Self::SendAndSyncSafeBuffer>;
@@ -126,7 +153,7 @@ pub trait SendAndSyncSafeBufferReserve:
 
 impl<T> SendAndSyncSafeBufferReserve for T
 where
-    T: Send + Sync + BufferReserve,
+    T: 'static + Send + Sync + BufferReserve,
     T::Buffer: SendAndSyncSafeBuffer,
     T::TakeBuffer: Send + Sync,
 {
@@ -236,7 +263,8 @@ where
 ///
 /// [`Channel`]: crate::Channel
 pub trait SendSafeChannel:
-    Send
+    'static
+    + Send
     + Channel<
         SenderError = Self::SendSafeSenderError,
         Message = Self::SendSafeMessage,
@@ -252,7 +280,7 @@ pub trait SendSafeChannel:
 
 impl<T> SendSafeChannel for T
 where
-    T: Send + Channel,
+    T: 'static + Send + Channel,
     T::SenderError: Send,
     T::Message: Send,
     T::Sender: for<'z> SendSafeSender<'z>,
@@ -268,7 +296,8 @@ where
 ///
 /// [`Channel`]: crate::Channel
 pub trait SendAndSyncSafeChannel:
-    Send
+    'static
+    + Send
     + Sync
     + Channel<
         SenderError = Self::SendAndSyncSafeSenderError,
@@ -285,7 +314,7 @@ pub trait SendAndSyncSafeChannel:
 
 impl<T> SendAndSyncSafeChannel for T
 where
-    T: Send + Sync + Channel,
+    T: 'static + Send + Sync + Channel,
     T::SenderError: Send + Sync,
     T::Message: Send + Sync,
     T::Sender: for<'z> SendAndSyncSafeSender<'z>,
@@ -301,7 +330,8 @@ where
 ///
 /// [`ConnectionChannelEnds`]: crate::ConnectionChannelEnds
 pub trait SendSafeConnectionChannelEnds:
-    Send
+    'static
+    + Send
     + ConnectionChannelEnds<
         ToBuffer = Self::SendSafeToBuffer,
         FromBuffer = Self::SendSafeFromBuffer,
@@ -327,7 +357,7 @@ pub trait SendSafeConnectionChannelEnds:
 
 impl<T> SendSafeConnectionChannelEnds for T
 where
-    T: Send + ConnectionChannelEnds,
+    T: 'static + Send + ConnectionChannelEnds,
     T::ToBuffer: SendSafeBuffer,
     T::FromBuffer: SendSafeBuffer,
     T::TakeBuffer: Send,
@@ -347,7 +377,8 @@ where
 ///
 /// [`ConnectionChannelEnds`]: crate::ConnectionChannelEnds
 pub trait SendAndSyncSafeConnectionChannelEnds:
-    Send
+    'static
+    + Send
     + Sync
     + ConnectionChannelEnds<
         ToBuffer = Self::SendAndSyncSafeToBuffer,
@@ -377,7 +408,7 @@ pub trait SendAndSyncSafeConnectionChannelEnds:
 
 impl<T> SendAndSyncSafeConnectionChannelEnds for T
 where
-    T: Send + Sync + ConnectionChannelEnds,
+    T: 'static + Send + Sync + ConnectionChannelEnds,
     T::ToBuffer: SendAndSyncSafeBuffer,
     T::FromBuffer: SendAndSyncSafeBuffer,
     T::TakeBuffer: Send + Sync,
@@ -410,7 +441,8 @@ where
 ///
 /// [`ChannelReserve`]: crate::ChannelReserve
 pub trait SendSafeChannelReserve:
-    Send
+    'static
+    + Send
     + ChannelReserve<
         Error = Self::SendSafeError,
         SenderError = Self::SendSafeSenderError,
@@ -465,7 +497,7 @@ pub trait SendSafeChannelReserve:
 
 impl<T> SendSafeChannelReserve for T
 where
-    T: Send + ChannelReserve,
+    T: 'static + Send + ChannelReserve,
     T::Error: Send,
     T::SenderError: Send,
     T::ToHostCmdChannel:
@@ -525,7 +557,8 @@ where
 ///
 /// [`ChannelReserve`]: crate::ChannelReserve
 pub trait SendAndSyncSafeChannelReserve:
-    Send
+    'static
+    + Send
     + Sync
     + ChannelReserve<
         Error = Self::SendAndSyncSafeError,
@@ -581,7 +614,7 @@ pub trait SendAndSyncSafeChannelReserve:
 
 impl<T> SendAndSyncSafeChannelReserve for T
 where
-    T: Send + Sync + ChannelReserve,
+    T: 'static + Send + Sync + ChannelReserve,
     T::Error: Send + Sync,
     T::SenderError: Send + Sync,
     T::ToHostCmdChannel: SendAndSyncSafeChannel<
@@ -646,7 +679,8 @@ where
 ///
 /// [`HostChannelEnds`]: crate::HostChannelEnds
 pub trait SendSafeHostChannelEnds:
-    Send
+    'static
+    + Send
     + HostChannelEnds<
         ToBuffer = Self::SendSafeToBuffer,
         FromBuffer = Self::SendSafeFromBuffer,
@@ -671,7 +705,7 @@ pub trait SendSafeHostChannelEnds:
 
 impl<T> SendSafeHostChannelEnds for T
 where
-    T: Send + HostChannelEnds,
+    T: 'static + Send + HostChannelEnds,
     T::ToBuffer: SendSafeBuffer,
     T::FromBuffer: SendSafeBuffer,
     T::TakeBuffer: Send,
@@ -704,7 +738,8 @@ where
 ///
 /// [`HostChannelEnds`]: crate::HostChannelEnds
 pub trait SendAndSyncSafeHostChannelEnds:
-    Send
+    'static
+    + Send
     + Sync
     + HostChannelEnds<
         ToBuffer = Self::SendAndSyncSafeToBuffer,
@@ -736,7 +771,7 @@ pub trait SendAndSyncSafeHostChannelEnds:
 
 impl<T> SendAndSyncSafeHostChannelEnds for T
 where
-    T: Send + Sync + HostChannelEnds,
+    T: 'static + Send + Sync + HostChannelEnds,
     T::ToBuffer: SendAndSyncSafeBuffer,
     T::FromBuffer: SendAndSyncSafeBuffer,
     T::TakeBuffer: Send + Sync,
