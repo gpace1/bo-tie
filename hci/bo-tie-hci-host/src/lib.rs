@@ -1080,14 +1080,6 @@ impl<C> Connection<C> {
     /// Get the kind of connection that was made
     ///
     /// A `ConnectionKind` contains the connection information sent by the controller.
-    ///
-    /// ### LE vs BR/EDR
-    /// A `LeL2cap` can be constructed from a `Connection` by the method [`try_into_le`] when
-    /// `ConnectionKind` is either [`Le`] or [`LeEnh`].
-    ///
-    /// [`Le`]: ConnectionKind::Le
-    /// [`LeEnh`]: ConnectionKind::LeEnh
-    /// [`try_into_le`]: Connection::try_into_le
     pub fn get_kind(&self) -> ConnectionKind {
         self.kind.clone()
     }
