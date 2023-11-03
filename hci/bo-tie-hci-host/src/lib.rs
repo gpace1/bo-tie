@@ -1073,10 +1073,7 @@ impl<C> Connection<C> {
         match &self.kind {
             ConnectionKind::BrEdr(_) | ConnectionKind::BrEdrSco(_) => false,
             ConnectionKind::Le(c) => c.peer_address_type == LeConnectionAddressType::RandomDeviceAddress,
-            ConnectionKind::LeEnh(c) => {
-                c.peer_address_type == AddressType::RandomDeviceAddress
-                    || c.peer_address_type == AddressType::RandomIdentityAddress
-            }
+            ConnectionKind::LeEnh(c) => c.peer_address_type == AddressType::RandomDeviceAddress,
         }
     }
 
