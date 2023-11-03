@@ -1047,7 +1047,22 @@ impl<C> Connection<C> {
         }
     }
 
-    /// Check if the peer address is random
+    /// Check if the peer is using a public address
+    ///
+    /// # Note
+    /// For a BR/EDR connection this function always returns true.
+    pub fn is_peer_address_public(&self) -> bool {
+        use events::parameters::LeConnectionAddressType;
+        use le::AddressType;
+
+        match &self.kind {
+            ConnectionKind::BrEdr(_) | ConnectionKind::BrEdrSco(_) => true,
+            ConnectionKind::Le(c) => c.peer_address_type == LeConnectionAddressType::PublicDeviceAddress,
+            ConnectionKind::LeEnh(c) => c.peer_address_type == AddressType::PublicDeviceAddress,
+        }
+    }
+
+    /// Check if the peer is using a random address
     ///
     /// # Note
     /// For a BR/EDR connection this function always returns false.
