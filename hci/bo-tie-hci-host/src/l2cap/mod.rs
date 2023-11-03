@@ -78,8 +78,8 @@ impl<C: ConnectionChannelEnds> LeLink<C> {
     }
 
     /// Get the receiver
-    pub fn get_receiver(&self) -> &C::DataReceiver {
-        self.channel_ends.get_data_receiver()
+    pub fn get_receiver(&mut self) -> &mut C::DataReceiver {
+        self.channel_ends.get_mut_data_receiver()
     }
 
     /// Get the sender
