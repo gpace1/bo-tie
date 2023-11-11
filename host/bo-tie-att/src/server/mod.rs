@@ -2335,11 +2335,10 @@ where
 ///
 /// This is the same as [`AccessValue`] except this cannot be written to and the associated type
 /// `Value` may be a dynamically sized type. The value types only need to implement
-/// [`TransferFormatInto`] and not [`TransferFormatTryFrom`]. However, not only can the client not
-/// be able to write to this value, it also *cannot search by value for the attribute containing
-/// this*. This is because in order to compare
+/// [`TransferFormatInto`] and not [`TransferFormatTryFrom`].
 ///
-/// [`TransferFormatTryFrom`]: crate::TransferFormatTryFrom
+/// An attribute value that implements this trait can only be read from. The server will return a
+/// permissions error to the client for all *write* requests send to this attribute.
 pub trait AccessReadOnly: Send {
     type Value: ?Sized + Send;
 
