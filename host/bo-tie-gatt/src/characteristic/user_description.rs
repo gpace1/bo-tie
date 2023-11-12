@@ -1,8 +1,7 @@
 //! Characteristic user description descriptor implementation
 
 use crate::characteristic::AddCharacteristicComponent;
-use bo_tie_att::server::access_value::Trivial;
-use bo_tie_att::server::{AccessReadOnly, AccessValue, ServerAttributes};
+use bo_tie_att::server::{AccessReadOnly, AccessValue, ServerAttributes, TrivialAccessor};
 use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
 use bo_tie_core::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
@@ -26,12 +25,12 @@ impl UserDescriptionBuilder<SetDescription> {
     }
 
     /// Set the user description
-    pub fn set_description<S>(self, description: S) -> UserDescriptionBuilder<SetPermissions<Trivial<S>>>
+    pub fn set_description<S>(self, description: S) -> UserDescriptionBuilder<SetPermissions<TrivialAccessor<S>>>
     where
         S: Borrow<str> + From<alloc::string::String> + Send,
     {
         let current = SetPermissions {
-            description: UserDescription(Trivial(description)),
+            description: UserDescription(TrivialAccessor::new(description)),
         };
 
         UserDescriptionBuilder { current }
@@ -89,7 +88,7 @@ impl<S> UserDescriptionBuilder<SetReadOnlyPermissions<S>> {
     pub fn set_read_only_restrictions<R>(
         self,
         restrictions: R,
-    ) -> UserDescriptionBuilder<Complete<RoUserDescription<Trivial<S>>>>
+    ) -> UserDescriptionBuilder<Complete<RoUserDescription<TrivialAccessor<S>>>>
     where
         R: Borrow<[AttributeRestriction]>,
     {
@@ -104,7 +103,7 @@ impl<S> UserDescriptionBuilder<SetReadOnlyPermissions<S>> {
         unique_only_owned!(permissions, attribute_permissions);
 
         let current = Complete::ReadOnly {
-            description: RoUserDescription(Trivial(self.current.description)),
+            description: RoUserDescription(TrivialAccessor::new(self.current.description)),
             permissions,
         };
 

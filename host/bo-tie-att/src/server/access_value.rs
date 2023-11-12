@@ -3,7 +3,7 @@
 use crate::server::{Comparable, PinnedFuture, ServerAttribute};
 use crate::{pdu, TransferFormatInto, TransferFormatTryFrom};
 use core::any::Any;
-use core::future::Future;
+use core::future::{Future, Ready};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
@@ -504,46 +504,40 @@ where
 
 /// The trivial implementation of [`AccessValue`] or [`AccessReadOnly`]
 ///
-/// This is the trivial implementation of an `AccessValue`. The implementations of the `Read` and
-/// `Write` types directly read and write to the inner value without any extra logic. `Trivial` is
-/// intended to be used where attribute values are unique to a single [`Server`].
+/// This is a wrapper for an attribute value type that does not require any async operation to read
+/// or write to the value. This is mainly used by either static types or values that are local to
+/// the instance of an ATT [`Server`].
 ///
-/// # Downcasting
-/// The implementation of `as_any` and `as_mut_any` return a reference to the inner value instead
-/// of a `Trivial<V>`. When calling the methods [`get_value`] and [`get_mut_value`] of
-/// `ServerAttributes`, use `V` for the generic `T` instead of `Trivial<V>`.
+/// ##
+///
+/// ## Methods `as_any` and `as_mut_any`
+/// The methods `as_any` and `as_mut_any` within `AccessValue` and `AccessReadOnly` are implemented
+/// to return a reference to the inner value.
 ///
 /// [`Server`]: crate::server::Server
-/// [`Attribute`]: crate::Attribute
-/// [`get_value`]: crate::server::ServerAttributes::get_value
-/// [`get_mut_value`]: crate::server::ServerAttributes::get_mut_value
-pub struct Trivial<V: ?Sized>(pub V);
+pub struct TrivialAccessor<V: ?Sized>(pub V);
 
-/// The trivially accessible value
-///
-/// A `Trivial` should be used whenever the value is not shared between other Attribute Server
-/// instances and there is no special requirements for reading and/or writing the value.  
-///
-/// # Attribute Value Access
-/// When directly accessing the value of an attribute containing a `Trivial`, the methods
-/// [`get_value`] and [`get_mut_value`] of `ServerAttributes` should use the type `V` instead of
-/// `Trivial<V>`.
-///
-/// [`get_value`]: crate::server::ServerAttributes::get_value
-/// [`get_mut_value`]: crate::server::ServerAttributes::get_mut_value
-impl<V: Unpin + Send + Sync + 'static> AccessValue for Trivial<V> {
+impl<V> TrivialAccessor<V> {
+    pub fn new(value: V) -> Self {
+        TrivialAccessor(value)
+    }
+}
+
+impl<V: Unpin + Send + Sync + 'static> AccessValue for TrivialAccessor<V> {
     type ReadValue = V;
     type ReadGuard<'a> = &'a V where V: 'a;
-    type Read<'a> = ReadReady<&'a V> where Self: 'a;
+    type Read<'a> = Ready<&'a V> where Self: 'a;
     type WriteValue = V;
-    type Write<'a> = WriteReady<'a, Self::WriteValue> where Self: 'a;
+    type Write<'a> = Ready<Result<(), pdu::Error>>;
 
     fn read(&self) -> Self::Read<'_> {
-        ReadReady(&self.0)
+        core::future::ready(&self.0)
     }
 
     fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
-        WriteReady::new(&mut self.0, val)
+        self.0 = val;
+
+        core::future::ready(Ok(()))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -555,13 +549,13 @@ impl<V: Unpin + Send + Sync + 'static> AccessValue for Trivial<V> {
     }
 }
 
-impl<V: ?Sized + Send + Sync> AccessReadOnly for Trivial<V> {
+impl<V: ?Sized + Send + Sync> AccessReadOnly for TrivialAccessor<V> {
     type Value = V;
     type ReadGuard<'a> = &'a V where Self: 'a;
-    type Read<'a> = ReadReady<&'a V> where Self: 'a;
+    type Read<'a> = Ready<&'a V> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        ReadReady(&self.0)
+        core::future::ready(&self.0)
     }
 }
 
@@ -576,16 +570,18 @@ where
 {
     type ReadValue = D::Target;
     type ReadGuard<'a> = &'a D::Target where Self: 'a;
-    type Read<'a> = ReadReady<&'a D::Target> where Self: 'a;
+    type Read<'a> = Ready<&'a D::Target> where Self: 'a;
     type WriteValue = <D::Target as ToOwned>::Owned;
-    type Write<'a> = OwnedWriteReady<'a, D, Self::WriteValue> where Self: 'a;
+    type Write<'a> = Ready<Result<(), pdu::Error>>;
 
     fn read(&self) -> Self::Read<'_> {
-        ReadReady(&*self.0)
+        core::future::ready(&*self.0)
     }
 
     fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
-        OwnedWriteReady::new(&mut self.0, val)
+        self.0 = D::from(val);
+
+        core::future::ready(Ok(()))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -594,69 +590,6 @@ where
 
     fn as_mut_any(&mut self) -> &mut dyn Any {
         &mut self.0
-    }
-}
-
-/// Future that always returns `Poll::Ready(T)`
-pub struct ReadReady<T>(T);
-
-impl<T> ReadReady<T> {
-    pub fn new(t: T) -> Self {
-        ReadReady(t)
-    }
-}
-
-impl<T: Copy + Unpin> Future for ReadReady<T> {
-    type Output = T;
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(self.get_mut().0)
-    }
-}
-
-/// Future that immediately writes to the value
-pub struct WriteReady<'a, T>(&'a mut T, Option<T>);
-
-impl<'a, T> WriteReady<'a, T> {
-    pub fn new(dest: &'a mut T, src: T) -> Self {
-        WriteReady(dest, Some(src))
-    }
-}
-
-impl<T: Unpin> Future for WriteReady<'_, T> {
-    type Output = Result<(), pdu::Error>;
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        if let Some(val) = this.1.take() {
-            *this.0 = val
-        }
-
-        Poll::Ready(Ok(()))
-    }
-}
-
-/// Future that immediately writes the owned value
-pub struct OwnedWriteReady<'a, T, O>(&'a mut T, Option<O>);
-
-impl<'a, T, O> OwnedWriteReady<'a, T, O> {
-    pub fn new(dest: &'a mut T, src: O) -> Self {
-        OwnedWriteReady(dest, Some(src))
-    }
-}
-
-impl<T: Unpin + From<O>, O: Unpin> Future for OwnedWriteReady<'_, T, O> {
-    type Output = Result<(), pdu::Error>;
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        if let Some(val) = this.1.take() {
-            *this.0 = T::from(val);
-        }
-
-        Poll::Ready(Ok(()))
     }
 }
 

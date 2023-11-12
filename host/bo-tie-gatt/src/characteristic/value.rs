@@ -1,8 +1,7 @@
 //! Characteristic value declaration implementation
 
 use crate::characteristic::AddCharacteristicComponent;
-use bo_tie_att::server::access_value::Trivial;
-use bo_tie_att::server::{AccessValue, Comparable, ServerAttributes};
+use bo_tie_att::server::{AccessValue, Comparable, ServerAttributes, TrivialAccessor};
 use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction, TransferFormatInto, TransferFormatTryFrom};
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_host_util::Uuid;
@@ -40,18 +39,45 @@ impl ValueBuilder<SetValue> {
     /// Set the initial value for the Characteristic value
     ///
     /// Whenever a client reads or writes to this value it is directly read from or written to.
-    pub fn set_value<V>(self, value: V) -> ValueBuilder<SetPermissions<Trivial<V>>>
+    pub fn set_value<V>(self, value: V) -> ValueBuilder<SetPermissions<TrivialAccessor<V>>>
     where
         V: bo_tie_att::TransferFormatTryFrom + bo_tie_att::TransferFormatInto + PartialEq + Send + 'static,
     {
-        let current = SetPermissions { value: Trivial(value) };
+        let current = SetPermissions {
+            value: TrivialAccessor::new(value),
+        };
 
         ValueBuilder { current }
     }
 
-    /// Set an initial, accessible value
+    /// Use an accessor for reading and writing the value.
     ///
-    /// This value is accessed whenever a client reads or writes to it.
+    /// The main purpose of an `AccessValue` is to allow for access to things outside of the Server.
+    /// Both reads and writes to values (including *find by type value*) go through the process of
+    /// awaiting until the respective read or write access future is complete before the [`Server`]
+    /// will send a response.
+    ///
+    /// ## Operation
+    /// The general order of operations with an accessor is:
+    /// 1) The Server processes a request received from the client.
+    /// 2) The access future is created via [`read`] or [`write`] and polled to completion.
+    /// 3) A response is then sent to the Server.
+    ///
+    /// ## Issues
+    /// Its fine to be quite creative with the implementation of `AccessValue`, but the response of
+    /// the system should be reasonable to the Client. It should not take an *unexpectedly*
+    /// exuberant amount of time for the server to generate a response to a Client's ATT request.
+    ///
+    /// ## Concurrent Value Access
+    /// A common use for an accessor is for a shared value between instances of a [`Server`] and
+    /// other things on the system. The `AccessValue` trait is already implemented for a few of the
+    /// major async libraries' locking primitives, but their gated behind .
+    ///
+    /// ```
+    ///
+    /// ```
+    ///
+    /// [`Server`]: crate::Server
     pub fn set_accessible_value<A>(self, accessor: A) -> ValueBuilder<SetPermissions<A>>
     where
         A: AccessValue + 'static,

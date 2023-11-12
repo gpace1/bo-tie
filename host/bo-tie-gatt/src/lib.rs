@@ -2031,7 +2031,7 @@ mod tests {
     use crate::l2cap::L2capFragment;
     use crate::Uuid;
     use att::TransferFormatInto;
-    use bo_tie_att::server::access_value::Trivial;
+    use bo_tie_att::server::access_value::TrivialAccessor;
     use bo_tie_att::{AttributePermissions, AttributeRestriction};
     use bo_tie_core::buffer::de_vec::DeVec;
     use bo_tie_core::buffer::TryExtend;
@@ -2101,7 +2101,7 @@ mod tests {
                     })
                     .set_server_configuration(|| {
                         characteristic::ServerConfigurationBuilder::new()
-                            .set_config(Trivial(characteristic::ServerConfiguration::new()))
+                            .set_config(TrivialAccessor(characteristic::ServerConfiguration::new()))
                             .set_write_restrictions([AttributeRestriction::None])
                     })
             })

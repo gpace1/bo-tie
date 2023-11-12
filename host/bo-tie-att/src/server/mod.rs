@@ -63,7 +63,7 @@
 //! [`ServerAttributes`]: crate::server::ServerAttributes
 //! [`Attribute`]: crate::Attribute
 
-pub mod access_value;
+mod access_value;
 #[cfg(test)]
 mod tests;
 
@@ -73,7 +73,7 @@ use crate::{
 };
 #[cfg(feature = "async-trait")]
 pub use access_value::AsyncAccessValue;
-pub use access_value::{AccessReadOnly, AccessValue};
+pub use access_value::{AccessReadOnly, AccessValue, TrivialAccessor};
 use access_value::{AccessibleValue, ReadOnly};
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
@@ -1879,7 +1879,7 @@ impl ServerAttributes {
             ty: attribute.ty,
             handle: attribute.handle,
             permissions: attribute.permissions,
-            value: access_value::Trivial(attribute.value),
+            value: access_value::TrivialAccessor(attribute.value),
         };
 
         self.push_accessor(trivial)

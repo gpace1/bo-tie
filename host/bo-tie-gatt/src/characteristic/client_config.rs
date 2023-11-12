@@ -1,7 +1,6 @@
 //! Characteristic client configuration descriptor implementation
 
 use crate::characteristic::{AddCharacteristicComponent, VecArray};
-use bo_tie_att::server::access_value::{ReadReady, WriteReady};
 use bo_tie_att::server::{AccessValue, ServerAttributes};
 use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
 use bo_tie_core::buffer::stack::LinearBuffer;
@@ -218,16 +217,18 @@ struct ClientConfigurationAccessor<F> {
 impl AccessValue for ClientConfigurationAccessor<ReadOnlyClientConfiguration> {
     type ReadValue = ClientConfigVec;
     type ReadGuard<'a> = &'a ClientConfigVec where Self: 'a;
-    type Read<'a> = ReadReady<Self::ReadGuard<'a>> where Self: 'a;
+    type Read<'a> = core::future::Ready<Self::ReadGuard<'a>> where Self: 'a;
     type WriteValue = ClientConfigVec;
-    type Write<'a> = WriteReady<'a, ClientConfigVec> where Self: 'a;
+    type Write<'a> = core::future::Ready<Result<(), bo_tie_att::pdu::Error>>;
 
     fn read(&self) -> Self::Read<'_> {
-        ReadReady::new(&self.config)
+        core::future::ready(&self.config)
     }
 
     fn write(&mut self, client_config: Self::WriteValue) -> Self::Write<'_> {
-        WriteReady::new(&mut self.config, client_config)
+        self.config = client_config;
+
+        core::future::ready(Ok(()))
     }
 
     fn as_any(&self) -> &dyn core::any::Any {
@@ -246,12 +247,12 @@ where
 {
     type ReadValue = ClientConfigVec;
     type ReadGuard<'a> = &'a ClientConfigVec where Self: 'a;
-    type Read<'a> = ReadReady<Self::ReadGuard<'a>> where Self: 'a;
+    type Read<'a> = core::future::Ready<Self::ReadGuard<'a>> where Self: 'a;
     type WriteValue = ClientConfigVec;
     type Write<'a> = WriteAccessor<'a, Fun, Fut> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        ReadReady::new(&self.config)
+        core::future::ready(&self.config)
     }
 
     fn write(&mut self, config: Self::WriteValue) -> Self::Write<'_> {
