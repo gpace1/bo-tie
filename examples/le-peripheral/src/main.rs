@@ -55,7 +55,7 @@ async fn advertise_setup<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str)
     set_advertising_enable::send(hi, true).await.unwrap();
 }
 
-async fn wait_for_connection<H: bo_tie::hci::channel::SendSafeHostChannelEnds>(
+async fn wait_for_connection<H: bo_tie::hci::trait_ext::SendSafeHostChannelEnds>(
     hi: &mut Host<H>,
 ) -> bo_tie::hci::LeLink<H::SendSafeConnectionChannelEnds> {
     use bo_tie::hci::events::{Events, LeMeta};

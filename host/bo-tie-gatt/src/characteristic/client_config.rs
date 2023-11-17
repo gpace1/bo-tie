@@ -217,12 +217,12 @@ struct ClientConfigurationAccessor<F> {
 impl AccessValue for ClientConfigurationAccessor<ReadOnlyClientConfiguration> {
     type ReadValue = ClientConfigVec;
     type ReadGuard<'a> = &'a ClientConfigVec where Self: 'a;
-    type Read<'a> = core::future::Ready<Self::ReadGuard<'a>> where Self: 'a;
+    type Read<'a> = core::future::Ready<Result<Self::ReadGuard<'a>, bo_tie_att::pdu::Error>> where Self: 'a;
     type WriteValue = ClientConfigVec;
     type Write<'a> = core::future::Ready<Result<(), bo_tie_att::pdu::Error>>;
 
-    fn read(&self) -> Self::Read<'_> {
-        core::future::ready(&self.config)
+    fn read(&mut self) -> Self::Read<'_> {
+        core::future::ready(Ok(&self.config))
     }
 
     fn write(&mut self, client_config: Self::WriteValue) -> Self::Write<'_> {
@@ -247,12 +247,12 @@ where
 {
     type ReadValue = ClientConfigVec;
     type ReadGuard<'a> = &'a ClientConfigVec where Self: 'a;
-    type Read<'a> = core::future::Ready<Self::ReadGuard<'a>> where Self: 'a;
+    type Read<'a> = core::future::Ready<Result<Self::ReadGuard<'a>, bo_tie_att::pdu::Error>> where Self: 'a;
     type WriteValue = ClientConfigVec;
     type Write<'a> = WriteAccessor<'a, Fun, Fut> where Self: 'a;
 
-    fn read(&self) -> Self::Read<'_> {
-        core::future::ready(&self.config)
+    fn read(&mut self) -> Self::Read<'_> {
+        core::future::ready(Ok(&self.config))
     }
 
     fn write(&mut self, config: Self::WriteValue) -> Self::Write<'_> {

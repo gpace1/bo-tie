@@ -7,6 +7,102 @@ use core::future::{Future, Ready};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
+/// Read guard
+///
+/// This is the trait bound requirement for the associated type `ReadGuard` of [`AccessValue`]
+///
+/// The read guard is used for accessing the data within an Attribute value. Unlike writing, an
+/// Attribute's value may need to be read for other reasons than for transferring the value to the
+/// client. Furthermore reading may occur and the server may determine that the Client will not be
+/// sent the value.
+///
+/// ## Implementing
+/// Anything that implements [`Deref`] also implements `ReadGuard`. Most implementations of an
+/// `AccessValue` will just use a deref type for its `ReadGuard` associated type. When a
+/// de-referential type cannot be used is when the 'value' of an Attribute is implemented to 'take'
+/// on a read access.
+///
+/// If reading *takes* a value from some underlying type, the *Access Value* needs to take ownership
+/// of the value until method `access` is called. If the *Read Guard* were to take ownership, it
+/// could be possibly dropped without ever being sent to the Client.
+///
+/// Here is an example where a successive iterator is only proceeded to the next item if
+/// ```
+/// # use bo_tie_att::server;
+/// # use std::iter;
+///
+/// // This read guard borrows a peekable iterator from
+/// // (presumably) a type that implements `AccessValue`.
+/// // The value within the peekable iterator is only
+/// // dropped if `was_sent` is set to true.
+/// struct ReadGuard<'a, F>
+/// where
+///     F: Fn(usize) -> Option<usize>
+/// {
+///     was_sent: bool,
+///     value: &'a mut iter::Peekable<iter::Successors<usize, F>>
+/// };
+///
+/// impl<F> server::ReadGuard for ReadGuard<'_, F>
+/// where
+///     F: Fn(usize) -> Option<usize>
+/// {
+///     type Target = usize;
+///
+///     fn access(&mut self) -> &Self::Target {
+///         self.was_sent = true;
+///
+///         // For this example, the closure `F` is
+///         // expected to always return `Some(_)`.
+///         self.value.peek().unwrap()
+///     }
+///
+///     fn access_meta(&self) -> Option<&Self::Target> {
+///         self.value.peek()
+///     }
+/// }
+///
+/// impl<F> Drop for ReadGuard<'_, F>
+/// where
+///     F: Fn(usize) -> usize
+/// {
+///     fn drop(&mut self) {
+///         if self.was_sent {
+///             self.value.next();
+///         }
+///     }
+/// }
+/// ```
+pub trait ReadGuard {
+    type Target: ?Sized;
+
+    /// Access the value
+    ///
+    /// This is *only* called when the value is going to be read in order to send the transfer
+    /// format of the value to the Client. Method `access` is guaranteed to be called at most once
+    /// per read operation, and never called for find operations.
+    fn access(&mut self) -> &Self::Target;
+
+    /// Access the value for `Server` purposes
+    ///
+    /// This is called whenever the `Server` needs to determine something with value, but not send
+    /// the value to the `Client`. The operation may call `access` later, or it may not, but either
+    /// way `access_meta` will only be called before `access`.
+    fn access_meta(&self) -> &Self::Target;
+}
+
+impl<T: core::ops::Deref> ReadGuard for T {
+    type Target = T::Target;
+
+    fn access(&mut self) -> &Self::Target {
+        core::ops::Deref::deref(self)
+    }
+
+    fn access_meta(&self) -> &Self::Target {
+        core::ops::Deref::deref(self)
+    }
+}
+
 /// A value accessor
 ///
 /// In order to share a value between connections, the value must be behind an accessor. An accessor
@@ -22,11 +118,11 @@ use core::task::{Context, Poll};
 pub trait AccessValue: Send {
     type ReadValue: ?Sized + Send;
 
-    type ReadGuard<'a>: core::ops::Deref<Target = Self::ReadValue>
+    type ReadGuard<'a>: ReadGuard<Target = Self::ReadValue>
     where
         Self: 'a;
 
-    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send
+    type Read<'a>: Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send
     where
         Self: 'a;
 
@@ -36,13 +132,60 @@ pub trait AccessValue: Send {
     where
         Self: 'a;
 
-    fn read(&self) -> Self::Read<'_>;
+    /// Read the Attribute value
+    ///
+    /// `read` returns a future for accessing the Attribute value in order to read it. This future
+    /// either outputs the `ReadGuard` or an ATT PDU `Error` code.
+    ///
+    /// # `ReadGuard`
+    /// The purpose of the `ReadGuard` type is to provide some protection whenever accessing an
+    /// Attribute's value. A common example implementation is to assign `ReadGuard` as a mutex
+    /// guard.
+    ///
+    /// Most of the time, something that implements [`Deref`], where the target is equal
+    /// to the `ReadValue` associated type, is used as the `ReadGuard`. However, there is some cases
+    /// where a accessor specific [`ReadGuard`] type my need to be used. Values that have limited
+    /// time access, or abstract over a channel may require the usage of a
+    ///
+    /// ### *IMPORTANT*: The `ReadGuard` `send_hint`
+    /// The trait [`ReadGuard`] is mainly intended for protecting access to a read value, but it
+    /// also servers as an indicator for when the value is to be sent to the Client. At times the
+    /// `Server` needs to read the value for some other operation other then transferring it to
+    /// the client. This consists of either checking the size of the value or comparing the value
+    /// to another value provided by the Client.
+    ///
+    /// To know when the value is going to be read in order to send it to the Client, the
+    /// `ReadGuard` trait provides the `send_hint` input to its `access` method. This input is
+    /// true whenever the value is being read *to send* it to the Client. Furthermore this input is
+    /// guaranteed to only be true once per processed request.
+    ///
+    /// # Custom Errors
+    /// Any error can be output by the returned `Read` future, but errors that are neither an
+    /// [application error] nor a [common error code] have already been checked by the Server.
+    ///
+    /// [`Deref`]: core::ops::Deref
+    /// [application error]: pdu::ErrorConversionError::ApplicationError
+    /// [common error coe]: pdu::ErrorConversionError::CommonErrorCode
+    fn read(&mut self) -> Self::Read<'_>;
 
+    /// Write an Attribute vale
+    ///
+    /// `write` returns a future for safely accessing the value in order to write to it. This future
+    /// either outputs the `WriteGuard` or an ATT PDU [`Error`] code. Unlike the `ReadGuard` the
+    /// only time the `WriteGuard` is dereference is when the value received from the Client is to
+    /// be written to the Attribute.
+    ///
+    /// # Custom Errors
+    /// Any error can be output by the returned `Read` future, but errors that are neither an
+    /// [application error] nor a [common error code] have already been checked by the Server.
+    ///
+    /// [application error]: pdu::ErrorConversionError::ApplicationError
+    /// [common error coe]: pdu::ErrorConversionError::CommonErrorCode
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_>;
 
-    fn as_any(&self) -> &dyn core::any::Any;
+    fn as_any(&self) -> &dyn Any;
 
-    fn as_mut_any(&mut self) -> &mut dyn core::any::Any;
+    fn as_mut_any(&mut self) -> &mut dyn Any;
 }
 
 #[cfg(feature = "tokio")]
@@ -52,12 +195,12 @@ where
 {
     type ReadValue = V;
     type ReadGuard<'a> = tokio::sync::MutexGuard<'a, V> where V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
     type WriteValue = V;
     type Write<'a> = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>> where Self: 'a;
 
-    fn read(&self) -> Self::Read<'_> {
-        Box::pin(self.lock())
+    fn read(&mut self) -> Self::Read<'_> {
+        Box::pin(async move { Ok(self.lock().await) })
     }
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
@@ -84,12 +227,12 @@ where
 {
     type ReadValue = V;
     type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V> where V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
     type WriteValue = V;
     type Write<'a> = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>> where Self: 'a;
 
-    fn read(&self) -> Self::Read<'_> {
-        Box::pin(tokio::sync::RwLock::read(self))
+    fn read(&mut self) -> Self::Read<'_> {
+        Box::pin(async move { Ok(tokio::sync::RwLock::read(self).await) })
     }
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
@@ -116,16 +259,16 @@ where
 {
     type ReadValue = V;
     type ReadGuard<'a> = futures::lock::MutexGuard<'a, V> where Self: 'a;
-    type Read<'a> = futures::lock::MutexLockFuture<'a, V> where Self: 'a;
+    type Read<'a> = FuturesRead<futures::lock::MutexLockFuture<'a, V>> where Self: 'a;
     type WriteValue = V;
-    type Write<'a> = Write<futures::lock::MutexLockFuture<'a, Self::WriteValue>, Self::WriteValue> where Self: 'a;
+    type Write<'a> = FuturesWrite<futures::lock::MutexLockFuture<'a, Self::WriteValue>, Self::WriteValue> where Self: 'a;
 
-    fn read(&self) -> Self::Read<'_> {
-        self.lock()
+    fn read(&mut self) -> Self::Read<'_> {
+        FuturesRead(self.lock())
     }
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
-        Write(self.lock(), Some(v))
+        FuturesWrite(self.lock(), Some(v))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -144,12 +287,12 @@ where
 {
     type ReadValue = V;
     type ReadGuard<'a> = async_std::sync::MutexGuard<'a, V> where Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
     type WriteValue = V;
     type Write<'a> = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>> where Self: 'a;
 
-    fn read(&self) -> Self::Read<'_> {
-        Box::pin(self.lock())
+    fn read(&mut self) -> Self::Read<'_> {
+        Box::pin(async move { Ok(self.lock().await) })
     }
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
@@ -175,12 +318,12 @@ where
 {
     type ReadValue = V;
     type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V> where Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
     type WriteValue = V;
     type Write<'a> = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>> where Self: 'a;
 
-    fn read(&self) -> Self::Read<'_> {
-        Box::pin(async_std::sync::RwLock::read(self))
+    fn read(&mut self) -> Self::Read<'_> {
+        Box::pin(async move { Ok(async_std::sync::RwLock::read(self).await) })
     }
 
     fn write(&mut self, v: Self::WriteValue) -> Self::Write<'_> {
@@ -198,24 +341,6 @@ where
         self
     }
 }
-
-/// Extension method for `AccessValue`
-trait AccessValueExt: AccessValue {
-    /// Read the value and call `f` with a reference to it.
-    fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
-    where
-        F: FnOnce(&Self::ReadValue) -> T + Unpin + Send,
-    {
-        let read = self.read();
-
-        ReadAnd {
-            reader: read,
-            job: Some(f),
-        }
-    }
-}
-
-impl<S: AccessValue> AccessValueExt for S {}
 
 /// Trait `AccessValue` with `async fn`
 ///
@@ -237,24 +362,24 @@ pub trait AsyncAccessValue: Send {
 
     type WriteValue: Unpin + Send;
 
-    async fn read(&self) -> Self::ReadGuard<'_>;
+    async fn read(&self) -> Result<Self::ReadGuard<'_>, pdu::Error>;
 
     async fn write(&mut self, v: Self::WriteValue) -> Result<(), pdu::Error>;
 
-    fn as_any(&self) -> &dyn core::any::Any;
+    fn as_any(&self) -> &dyn Any;
 
-    fn as_mut_any(&mut self) -> &mut dyn core::any::Any;
+    fn as_mut_any(&mut self) -> &mut dyn Any;
 }
 
 #[cfg(feature = "async-trait")]
 impl<T: AsyncAccessValue> AccessValue for T {
     type ReadValue = T::ReadValue;
     type ReadGuard<'a> = T::ReadGuard<'a> where Self: 'a;
-    type Read<'a> =  Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> =  Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
     type WriteValue = T::WriteValue;
     type Write<'a> = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>> where Self: 'a ;
 
-    fn read(&self) -> Self::Read<'_> {
+    fn read(&mut self) -> Self::Read<'_> {
         AsyncAccessValue::read(self)
     }
 
@@ -262,11 +387,11 @@ impl<T: AsyncAccessValue> AccessValue for T {
         AsyncAccessValue::write(self, v)
     }
 
-    fn as_any(&self) -> &dyn core::any::Any {
+    fn as_any(&self) -> &dyn Any {
         AsyncAccessValue::as_any(self)
     }
 
-    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+    fn as_mut_any(&mut self) -> &mut dyn Any {
         AsyncAccessValue::as_mut_any(self)
     }
 }
@@ -280,20 +405,48 @@ where
     A::ReadValue: TransferFormatInto + Comparable,
     A::WriteValue: TransferFormatTryFrom,
 {
-    fn read(&self) -> PinnedFuture<Vec<u8>> {
-        Box::pin(self.0.read_and(|v| TransferFormatInto::into(v)))
+    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>> {
+        let read_fut = self.0.read();
+
+        let task = async move {
+            let mut val = read_fut.await?;
+
+            Ok(TransferFormatInto::into(val.access()))
+        };
+
+        Box::pin(task)
     }
 
-    fn read_response(&self) -> PinnedFuture<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
-        Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
+    fn read_response(&mut self) -> PinnedFuture<Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>> {
+        let read_fut = self.0.read();
+
+        let task = async move {
+            let mut val = read_fut.await?;
+
+            Ok(pdu::read_response(TransferFormatInto::into(val.access())))
+        };
+
+        Box::pin(task)
     }
 
-    fn single_read_by_type_response(&mut self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
-        Box::pin(self.0.read_and(move |v| {
-            let tf = TransferFormatInto::into(v);
+    fn read_type_response(
+        &mut self,
+        handle: u16,
+        size: usize,
+    ) -> PinnedFuture<'_, Result<Option<pdu::ReadTypeResponse<Vec<u8>>>, pdu::Error>> {
+        let read_fut = self.0.read();
 
-            pdu::ReadTypeResponse::new(handle, tf)
-        }))
+        let task = async move {
+            let mut val = read_fut.await?;
+
+            let len = TransferFormatInto::len_of_into(val.access_meta());
+
+            let ret = (len == size).then(|| pdu::ReadTypeResponse::new(handle, TransferFormatInto::into(val.access())));
+
+            Ok(ret)
+        };
+
+        Box::pin(task)
     }
 
     fn try_set_value_from_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'a, Result<(), pdu::Error>> {
@@ -304,23 +457,23 @@ where
         })
     }
 
-    fn value_transfer_format_size(&mut self) -> PinnedFuture<usize> {
-        let read_and_fut = self.0.read_and(|v: &A::ReadValue| v.len_of_into());
-
-        Box::pin(async move { read_and_fut.await })
-    }
-
     fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
         let read_fut = self.read();
 
-        Box::pin(async { read_fut.await.cmp_tf_data(raw) })
+        let task = async move {
+            let Ok(val) = read_fut.await else { return false };
+
+            val.cmp_tf_data(raw)
+        };
+
+        Box::pin(task)
     }
 
-    fn as_any(&self) -> &dyn core::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self.0.as_any()
     }
 
-    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+    fn as_mut_any(&mut self) -> &mut dyn Any {
         self.0.as_mut_any()
     }
 }
@@ -336,11 +489,11 @@ where
 pub trait AccessReadOnly: Send {
     type Value: ?Sized + Send;
 
-    type ReadGuard<'a>: core::ops::Deref<Target = Self::Value>
+    type ReadGuard<'a>: ReadGuard<Target = Self::Value>
     where
         Self: 'a;
 
-    type Read<'a>: Future<Output = Self::ReadGuard<'a>> + Send
+    type Read<'a>: Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send
     where
         Self: 'a;
 
@@ -351,10 +504,10 @@ pub trait AccessReadOnly: Send {
 impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<tokio::sync::Mutex<V>> {
     type Value = V;
     type ReadGuard<'a> = tokio::sync::MutexGuard<'a, V> where V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        Box::pin(self.lock())
+        Box::pin(async move { Ok(self.lock().await) })
     }
 }
 
@@ -362,10 +515,10 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<tokio::sync::Mutex<V>> 
 impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwLock<V>> {
     type Value = V;
     type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V> where V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        Box::pin(tokio::sync::RwLock::read(self))
+        Box::pin(async move { Ok(tokio::sync::RwLock::read(self).await) })
     }
 }
 
@@ -373,10 +526,10 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwL
 impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<futures::lock::Mutex<V>> {
     type Value = V;
     type ReadGuard<'a> = futures::lock::MutexGuard<'a, V> where Self: 'a;
-    type Read<'a> = futures::lock::MutexLockFuture<'a, V> where Self: 'a;
+    type Read<'a> = FuturesRead<futures::lock::MutexLockFuture<'a, V>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        self.lock()
+        FuturesRead(self.lock())
     }
 }
 
@@ -384,10 +537,10 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<futures::lock::Mutex<V>
 impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<async_std::sync::Mutex<V>> {
     type Value = V;
     type ReadGuard<'a> = async_std::sync::MutexGuard<'a, V> where Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        Box::pin(self.lock())
+        Box::pin(async move { Ok(self.lock().await) })
     }
 }
 
@@ -395,29 +548,12 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<async_std::sync::Mutex<
 impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<async_std::sync::RwLock<V>> {
     type Value = V;
     type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V> where Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output = Self::ReadGuard<'a>> + Send + 'a>> where Self: 'a;
+    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        Box::pin(async_std::sync::RwLock::read(self))
+        Box::pin(async move { Ok(async_std::sync::RwLock::read(self).await) })
     }
 }
-
-pub(super) trait AccessReadOnlyExt: AccessReadOnly {
-    /// Read the value and call `f` with a reference to it.
-    fn read_and<F, T>(&self, f: F) -> ReadAnd<Self::Read<'_>, F>
-    where
-        F: FnOnce(&Self::Value) -> T + Unpin + Send,
-    {
-        let read = self.read();
-
-        ReadAnd {
-            reader: read,
-            job: Some(f),
-        }
-    }
-}
-
-impl<T: AccessReadOnly> AccessReadOnlyExt for T {}
 
 /// Wrapper around a type that implements `AccessReadOnly`
 ///
@@ -435,43 +571,71 @@ where
     R: AccessReadOnly + 'static,
     R::Value: TransferFormatInto + Comparable,
 {
-    fn read(&self) -> PinnedFuture<Vec<u8>> {
-        Box::pin(self.0.read_and(|v| TransferFormatInto::into(v)))
+    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>> {
+        let read_fut = self.0.read();
+
+        let task = async move {
+            let mut val = read_fut.await?;
+
+            Ok(TransferFormatInto::into(val.access()))
+        };
+
+        Box::pin(task)
     }
 
-    fn read_response(&self) -> PinnedFuture<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
-        Box::pin(self.0.read_and(|v| pdu::read_response(TransferFormatInto::into(v))))
+    fn read_response(&mut self) -> PinnedFuture<Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>> {
+        let read_fut = self.0.read();
+
+        let task = async move {
+            let mut val = read_fut.await?;
+
+            Ok(pdu::read_response(TransferFormatInto::into(val.access())))
+        };
+
+        Box::pin(task)
     }
 
-    fn single_read_by_type_response(&mut self, handle: u16) -> PinnedFuture<pdu::ReadTypeResponse<Vec<u8>>> {
-        Box::pin(self.0.read_and(move |v| {
-            let tf = TransferFormatInto::into(v);
+    fn read_type_response(
+        &mut self,
+        handle: u16,
+        size: usize,
+    ) -> PinnedFuture<'_, Result<Option<pdu::ReadTypeResponse<Vec<u8>>>, pdu::Error>> {
+        let read_fut = self.0.read();
 
-            pdu::ReadTypeResponse::new(handle, tf)
-        }))
+        let task = async move {
+            let mut val = read_fut.await?;
+
+            let len = TransferFormatInto::len_of_into(val.access_meta());
+
+            let ret = (len == size).then(|| pdu::ReadTypeResponse::new(handle, TransferFormatInto::into(val.access())));
+
+            Ok(ret)
+        };
+
+        Box::pin(task)
     }
 
     fn try_set_value_from_transfer_format<'a>(&'a mut self, _: &'a [u8]) -> PinnedFuture<'a, Result<(), pdu::Error>> {
         unreachable!()
     }
 
-    fn value_transfer_format_size(&mut self) -> PinnedFuture<usize> {
-        let read_and_fut = self.0.read_and(|v: &R::Value| v.len_of_into());
-
-        Box::pin(async move { read_and_fut.await })
-    }
-
     fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'a, bool> {
         let read_fut = self.read();
 
-        Box::pin(async move { read_fut.await.cmp_tf_data(raw) })
+        let task = async move {
+            let Ok(val) = read_fut.await else { return false };
+
+            val.cmp_tf_data(&raw)
+        };
+
+        Box::pin(task)
     }
 
-    fn as_any(&self) -> &dyn core::any::Any {
+    fn as_any(&self) -> &dyn Any {
         &self.0
     }
 
-    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+    fn as_mut_any(&mut self) -> &mut dyn Any {
         &mut self.0
     }
 }
@@ -486,10 +650,10 @@ impl<R, G, V, F, T> Future for ReadAnd<R, F>
 where
     R: Future<Output = G>,
     G: core::ops::Deref<Target = V>,
-    F: FnOnce(&V) -> T + Unpin,
+    F: FnOnce(&V) -> Result<T, pdu::Error> + Unpin,
     V: ?Sized,
 {
-    type Output = T;
+    type Output = Result<T, pdu::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         unsafe {
@@ -526,12 +690,12 @@ impl<V> TrivialAccessor<V> {
 impl<V: Unpin + Send + Sync + 'static> AccessValue for TrivialAccessor<V> {
     type ReadValue = V;
     type ReadGuard<'a> = &'a V where V: 'a;
-    type Read<'a> = Ready<&'a V> where Self: 'a;
+    type Read<'a> = Ready<Result<&'a V, pdu::Error>> where Self: 'a;
     type WriteValue = V;
     type Write<'a> = Ready<Result<(), pdu::Error>>;
 
-    fn read(&self) -> Self::Read<'_> {
-        core::future::ready(&self.0)
+    fn read(&mut self) -> Self::Read<'_> {
+        core::future::ready(Ok(&self.0))
     }
 
     fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
@@ -552,10 +716,10 @@ impl<V: Unpin + Send + Sync + 'static> AccessValue for TrivialAccessor<V> {
 impl<V: ?Sized + Send + Sync> AccessReadOnly for TrivialAccessor<V> {
     type Value = V;
     type ReadGuard<'a> = &'a V where Self: 'a;
-    type Read<'a> = Ready<&'a V> where Self: 'a;
+    type Read<'a> = Ready<Result<&'a V, pdu::Error>> where Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
-        core::future::ready(&self.0)
+        core::future::ready(Ok(&self.0))
     }
 }
 
@@ -570,12 +734,12 @@ where
 {
     type ReadValue = D::Target;
     type ReadGuard<'a> = &'a D::Target where Self: 'a;
-    type Read<'a> = Ready<&'a D::Target> where Self: 'a;
+    type Read<'a> = Ready<Result<&'a D::Target, pdu::Error>> where Self: 'a;
     type WriteValue = <D::Target as ToOwned>::Owned;
     type Write<'a> = Ready<Result<(), pdu::Error>>;
 
-    fn read(&self) -> Self::Read<'_> {
-        core::future::ready(&*self.0)
+    fn read(&mut self) -> Self::Read<'_> {
+        core::future::ready(Ok(&*self.0))
     }
 
     fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
@@ -593,12 +757,29 @@ where
     }
 }
 
-/// Future used by the implementation of `AccessValue` of `futures-rs`
+/// Future used by teh implementation of `AccessValue::Read` for `futures-rs`
 #[cfg(feature = "futures-rs")]
-pub struct Write<F, V>(F, Option<V>);
+pub struct FuturesRead<T>(T);
 
 #[cfg(feature = "futures-rs")]
-impl<V> Future for Write<futures::lock::MutexLockFuture<'_, V>, V> {
+impl<'a, V: ?Sized> Future for FuturesRead<futures::lock::MutexLockFuture<'a, V>> {
+    type Output = Result<futures::lock::MutexGuard<'a, V>, pdu::Error>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        unsafe {
+            let this = self.get_unchecked_mut();
+
+            Pin::new_unchecked(&mut this.0).poll(cx).map(|guard| Ok(guard))
+        }
+    }
+}
+
+/// Future used by the implementation of `AccessValue::Write` for `futures-rs`
+#[cfg(feature = "futures-rs")]
+pub struct FuturesWrite<T, V>(T, Option<V>);
+
+#[cfg(feature = "futures-rs")]
+impl<V> Future for FuturesWrite<futures::lock::MutexLockFuture<'_, V>, V> {
     type Output = Result<(), pdu::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

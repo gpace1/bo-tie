@@ -73,7 +73,7 @@ use crate::{
 };
 #[cfg(feature = "async-trait")]
 pub use access_value::AsyncAccessValue;
-pub use access_value::{AccessReadOnly, AccessValue, TrivialAccessor};
+pub use access_value::{AccessReadOnly, AccessValue, ReadGuard, TrivialAccessor};
 use access_value::{AccessibleValue, ReadOnly};
 use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
@@ -706,6 +706,23 @@ where
     where
         T: LogicalLink,
     {
+        // #[cfg(test)]
+        fn _send_assurance<P>(
+            mut server: Server<BasicQueuedWriter>,
+            channel: &mut BasicFrameChannel<'_, bo_tie_l2cap::LeULogicalLink<P>>,
+            pdu_type: ClientPduName,
+            payload: &[u8],
+        ) where
+            P: PhysicalLink + Send + Sync,
+            for<'a> P::SendFut<'a>: Send + Sync,
+            P::SendErr: Send,
+            P::RecvErr: Send,
+        {
+            fn send_test<F: Send>(f: F) {}
+
+            send_test(server.process_parsed_att_pdu(channel, pdu_type, payload))
+        }
+
         match pdu_type {
             ClientPduName::ExchangeMtuRequest => {
                 self.process_exchange_mtu_request(channel, TransferFormatTryFrom::try_from(&payload)?)
@@ -789,7 +806,9 @@ where
 
                 let read_fut = attribute.get_mut_value().read();
 
-                let mut notification = pdu::create_notification(handle, read_fut.await);
+                let data = read_fut.await.map_err(|e| ServerInitiatedError::FailedToRead(e))?;
+
+                let mut notification = pdu::create_notification(handle, data);
 
                 if notification.get_parameters().0.get_data().len() > (self.mtu - 3) {
                     use core::mem::replace;
@@ -910,11 +929,15 @@ where
     where
         T: LogicalLink,
     {
-        match self.attributes.get(handle) {
+        match self.attributes.get_mut(handle) {
             Some(attribute) => {
                 let mut ret_val = true;
 
-                let mut indication = pdu::create_indication(handle, attribute.get_value().read().await);
+                let read_fut = attribute.get_mut_value().read();
+
+                let data = read_fut.await.map_err(|e| ServerInitiatedError::FailedToRead(e))?;
+
+                let mut indication = pdu::create_indication(handle, data);
 
                 if indication.get_parameters().0.get_data().len() > (self.mtu - 3) {
                     use core::mem::replace;
@@ -1186,9 +1209,16 @@ where
             return send_error!(channel, handle, ClientPduName::ReadRequest, e);
         }
 
-        let future = self.attributes.get(handle).unwrap().get_value().read_response();
+        let future = self.attributes.get_mut(handle).unwrap().get_mut_value().read_response();
 
-        let mut read_response = future.await;
+        let future_result = future.await;
+
+        let mut read_response = match future_result {
+            Ok(read_response) => read_response,
+            Err(e) => {
+                return send_error!(channel, handle, ClientPduName::ReadRequest, e);
+            }
+        };
 
         if read_response.get_parameters().0.len() > (self.mtu - 1) {
             use core::mem::replace;
@@ -1516,47 +1546,54 @@ where
 
         let first_val = first_match.get_mut_value();
 
-        let first_size = first_val.value_transfer_format_size().await;
+        let read_fut = first_val.read();
+
+        let future_result = read_fut.await;
+
+        let first_response = match future_result {
+            Ok(first_data) => first_data,
+            Err(e) => {
+                return send_error!(
+                    channel,
+                    handle_range.starting_handle,
+                    ClientPduName::ReadByTypeRequest,
+                    e
+                )
+            }
+        };
+
+        let tf_data_len = first_response.len();
 
         let mut responses = Vec::new();
 
-        let is_single_payload_size = enough_room_in_response!(0, first_size);
+        let fits_in_pdu = enough_room_in_response!(0, tf_data_len);
 
-        if !is_single_payload_size {
-            use core::mem::replace;
-
+        if !fits_in_pdu {
             // This is where the data to be transferred of the first found attribute
-            // is too large or equal to the connection MTU. Here, a read by type
-            // response is generated with as much of the value transfer format that
-            // can fit into the payload. A read blob request from the client is then
-            // required to complete the full read.
+            // is too large or equal to the connection MTU (minus the header length).
+            // Here, a read by type response is generated with as much of the value
+            // transfer format that can fit into the payload. A read blob request from
+            // the client is then required to complete the full read.
 
             // Read type response includes a 2 byte handle, so the maximum byte
             // size for the data is the payload - 2
             let max_size = payload_max - 2;
 
-            let mut rsp = first_val.single_read_by_type_response(first_handle).await;
+            let sent = first_response[0..max_size].to_vec();
 
-            let sent = rsp[0..max_size].to_vec();
+            // Move the full response to a blob data
+            self.set_blob_data(first_response, first_handle);
 
-            let sent_response = replace(&mut *rsp, sent);
-
-            // Move the complete data to a blob data while replacing it with the
-            // sent amount
-            self.set_blob_data(sent_response, rsp.get_handle());
-
-            responses.push(rsp);
+            responses.push(pdu::ReadTypeResponse::new(first_handle, sent));
         } else {
-            let fst_rsp = first_val.single_read_by_type_response(first_handle).await;
-
-            responses.push(fst_rsp);
+            responses.push(pdu::ReadTypeResponse::new(first_handle, first_response));
 
             let mut cnt = 1;
 
             for att in init_iter {
                 // break if there isn't enough room in the
                 // response for another attribute value
-                if !enough_room_in_response!(cnt, first_size) {
+                if !enough_room_in_response!(cnt, tf_data_len) {
                     break;
                 }
 
@@ -1569,17 +1606,18 @@ where
 
                 let val = att.get_mut_value();
 
-                // skip those that are not the same size
-                // (in their transfer format)
-                if first_size != val.value_transfer_format_size().await {
-                    continue;
+                let read_response_fut = val.read_type_response(handle, tf_data_len);
+
+                let read_response_result = read_response_fut.await;
+
+                match read_response_result {
+                    Ok(None) | Err(_) => continue,
+                    Ok(Some(response)) => {
+                        cnt += 1;
+
+                        responses.push(response)
+                    }
                 }
-
-                cnt += 1;
-
-                let response = val.single_read_by_type_response(handle).await;
-
-                responses.push(response);
             }
         }
 
@@ -1652,30 +1690,32 @@ where
         T: LogicalLink,
     {
         let read_future = {
-            let attribute = self.attributes.get(br.handle).unwrap();
+            let attribute = self.attributes.get_mut(br.handle).unwrap();
 
-            attribute.get_value().read()
+            attribute.get_mut_value().read()
         };
 
-        let data = read_future.await;
+        let read_result = read_future.await;
 
-        let rsp = match self.new_read_blob_response(&data, br.offset)? {
-            // when true is returned the data is blobbed
-            (rsp, true) => {
-                self.blob_data = MultiReqData {
-                    handle: br.handle,
-                    tf_data: data.clone(),
-                    temporary_read_restrictions: None,
-                }
-                .into();
+        let data = match read_result {
+            Ok(data) => data,
+            Err(e) => return send_error!(channel, br.handle, ClientPduName::ReadBlobRequest, e),
+        };
 
-                rsp
+        let (response, will_blob) = self.new_read_blob_response(&data, br.offset)?;
+
+        let ret = send_pdu!(channel, response);
+
+        if will_blob {
+            self.blob_data = MultiReqData {
+                handle: br.handle,
+                tf_data: data,
+                temporary_read_restrictions: None,
             }
+            .into();
+        }
 
-            (rsp, false) => rsp,
-        };
-
-        send_pdu!(channel, rsp)
+        ret
     }
 
     /// Use the current blob and send the blob response
@@ -2210,25 +2250,12 @@ trait ServerAttribute: core::any::Any {
     /// Read the data
     ///
     /// The returned data is in its transfer format
-    fn read(&self) -> PinnedFuture<Vec<u8>>;
+    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>>;
 
     /// Generate a 'Read Response'
     ///
     /// This will create a read response PDU in its transfer bytes format.
-    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>>;
-
-    /// Generate a 'Read by Type Response'
-    ///
-    /// This creates a
-    /// [`ReadByTypeResponse`](crate::pdu::ReadByTypeResponse)
-    /// with the data of the response already in the transfer format. If the first found type cannot
-    /// fit within the attribute MTU for the att payload, then max_size can be used to truncate the
-    /// raw transfer format data of self to max_size. If max_size is None, then truncating is not
-    /// performed.
-    ///
-    /// # Panic
-    /// This should panic if the attribute has not been assigned a handle
-    fn single_read_by_type_response(&mut self, handle: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>>;
+    fn read_response(&mut self) -> PinnedFuture<'_, Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>>;
 
     /// Try to convert raw data from the interface and write to the attribute value
     fn try_set_value_from_transfer_format<'a>(
@@ -2236,10 +2263,20 @@ trait ServerAttribute: core::any::Any {
         tf_data: &'a [u8],
     ) -> PinnedFuture<'a, Result<(), pdu::Error>>;
 
-    /// The number of bytes in the interface format
-    fn value_transfer_format_size(&mut self) -> PinnedFuture<'_, usize>;
+    fn read_type_response(
+        &mut self,
+        handle: u16,
+        size: usize,
+    ) -> PinnedFuture<'_, Result<Option<pdu::ReadTypeResponse<Vec<u8>>>, pdu::Error>>;
 
     /// Compare the value with the data received from the interface
+    ///
+    /// # Read Only
+    /// This is only used when processing read and find operations. The returned boolean must be the
+    /// the `raw` compared to the transfer format of the read value.
+    ///
+    /// # Read Errors
+    /// If the value would produce an error on a read, `false` is output by the returned future.   
     fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'a, bool>;
 
     /// Get an reference to self as a `dyn Any`
@@ -2310,25 +2347,31 @@ impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttributeValue>> {
 }
 
 impl ServerAttribute for ReservedHandle {
-    fn read(&self) -> PinnedFuture<Vec<u8>> {
-        log::error!("(ATT) client tried to read the reserved handle");
+    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>> {
+        Box::pin(async move {
+            log::error!("(ATT) client tried to read the reserved handle");
 
-        Box::pin(async { Vec::new() })
-    }
-
-    fn read_response(&self) -> PinnedFuture<'_, pdu::Pdu<pdu::ReadResponse<Vec<u8>>>> {
-        Box::pin(async {
-            log::error!("(ATT) client tried to read the reserved handle for a read response");
-
-            pdu::read_response(Vec::new())
+            Err(pdu::Error::InvalidHandle)
         })
     }
 
-    fn single_read_by_type_response(&mut self, _: u16) -> PinnedFuture<'_, pdu::ReadTypeResponse<Vec<u8>>> {
+    fn read_response(&mut self) -> PinnedFuture<'_, Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>> {
         Box::pin(async {
-            log::error!("(ATT) client tried to read the reserved handle for a read by type response");
+            log::error!("(ATT) client tried to read the reserved handle for a read response");
 
-            pdu::ReadTypeResponse::new(0, Vec::new())
+            Err(pdu::Error::InvalidHandle)
+        })
+    }
+
+    fn read_type_response(
+        &mut self,
+        _: u16,
+        _: usize,
+    ) -> PinnedFuture<'_, Result<Option<pdu::ReadTypeResponse<Vec<u8>>>, pdu::Error>> {
+        Box::pin(async {
+            log::error!("(ATT) client tried to read the reserved handle for a read by type request data");
+
+            Err(pdu::Error::InvalidHandle)
         })
     }
 
@@ -2338,10 +2381,6 @@ impl ServerAttribute for ReservedHandle {
 
             Err(pdu::Error::WriteNotPermitted)
         })
-    }
-
-    fn value_transfer_format_size(&mut self) -> PinnedFuture<'_, usize> {
-        Box::pin(async { 0 })
     }
 
     fn cmp_value_to_raw_transfer_format(&mut self, _: &[u8]) -> PinnedFuture<'_, bool> {
@@ -2591,6 +2630,7 @@ impl QueuedWriter for NoQueuedWrites {
 pub enum ServerInitiatedError<T: LogicalLink> {
     InvalidHandle(u16),
     ConnectionError(ConnectionError<T>),
+    FailedToRead(pdu::Error),
 }
 
 impl<T> core::fmt::Debug for ServerInitiatedError<T>
@@ -2603,6 +2643,7 @@ where
         match self {
             ServerInitiatedError::InvalidHandle(handle) => write!(f, "InvalidHandle({})", handle),
             ServerInitiatedError::ConnectionError(c) => core::fmt::Debug::fmt(&c, f),
+            ServerInitiatedError::FailedToRead(e) => write!(f, "FailedToRead({e:?}"),
         }
     }
 }
@@ -2617,6 +2658,7 @@ where
         match self {
             ServerInitiatedError::InvalidHandle(handle) => write!(f, "no attribute for handle {}", handle),
             ServerInitiatedError::ConnectionError(c) => core::fmt::Display::fmt(c, f),
+            ServerInitiatedError::FailedToRead(e) => write!(f, "failed to read attribute value: {e}"),
         }
     }
 }

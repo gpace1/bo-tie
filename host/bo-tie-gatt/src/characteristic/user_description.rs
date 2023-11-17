@@ -6,7 +6,6 @@ use bo_tie_att::{Attribute, AttributePermissions, AttributeRestriction};
 use bo_tie_core::buffer::stack::LinearBuffer;
 use core::borrow::Borrow;
 use core::future::Future;
-use core::ops::Deref;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
@@ -222,7 +221,7 @@ where
     type WriteValue = alloc::string::String;
     type Write<'a> = A::Write<'a> where Self: 'a;
 
-    fn read(&self) -> Self::Read<'_> {
+    fn read(&mut self) -> Self::Read<'_> {
         ReadUserDescription { future: self.0.read() }
     }
 
@@ -241,15 +240,19 @@ where
 
 pub struct ReadGuard<T>(T);
 
-impl<T> Deref for ReadGuard<T>
+impl<T> bo_tie_att::server::ReadGuard for ReadGuard<T>
 where
-    T: Deref,
+    T: bo_tie_att::server::ReadGuard,
     T::Target: Borrow<str>,
 {
     type Target = str;
 
-    fn deref(&self) -> &Self::Target {
-        self.0.deref().borrow()
+    fn access(&mut self) -> &Self::Target {
+        self.0.access().borrow()
+    }
+
+    fn access_meta(&self) -> &Self::Target {
+        self.0.access_meta().borrow()
     }
 }
 
@@ -257,19 +260,19 @@ pub struct ReadUserDescription<F> {
     future: F,
 }
 
-impl<F> Future for ReadUserDescription<F>
+impl<F, O> Future for ReadUserDescription<F>
 where
-    F: Future,
-    F::Output: Deref,
-    <F::Output as Deref>::Target: Borrow<str>,
+    F: Future<Output = Result<O, bo_tie_att::pdu::Error>>,
+    O: bo_tie_att::server::ReadGuard,
+    <O as bo_tie_att::server::ReadGuard>::Target: Borrow<str>,
 {
-    type Output = ReadGuard<F::Output>;
+    type Output = Result<ReadGuard<O>, bo_tie_att::pdu::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         unsafe {
             self.map_unchecked_mut(|this| &mut this.future)
                 .poll(cx)
-                .map(|output| ReadGuard(output))
+                .map(|output| output.map(|output| ReadGuard(output)))
         }
     }
 }
