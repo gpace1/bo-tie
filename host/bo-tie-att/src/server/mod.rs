@@ -706,23 +706,6 @@ where
     where
         T: LogicalLink,
     {
-        // #[cfg(test)]
-        fn _send_assurance<P>(
-            mut server: Server<BasicQueuedWriter>,
-            channel: &mut BasicFrameChannel<'_, bo_tie_l2cap::LeULogicalLink<P>>,
-            pdu_type: ClientPduName,
-            payload: &[u8],
-        ) where
-            P: PhysicalLink + Send + Sync,
-            for<'a> P::SendFut<'a>: Send + Sync,
-            P::SendErr: Send,
-            P::RecvErr: Send,
-        {
-            fn send_test<F: Send>(f: F) {}
-
-            send_test(server.process_parsed_att_pdu(channel, pdu_type, payload))
-        }
-
         match pdu_type {
             ClientPduName::ExchangeMtuRequest => {
                 self.process_exchange_mtu_request(channel, TransferFormatTryFrom::try_from(&payload)?)
