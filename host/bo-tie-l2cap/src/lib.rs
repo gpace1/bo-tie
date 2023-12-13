@@ -36,7 +36,7 @@
 //!
 //!
 //! // The `SUPPORTED_MTU` constant is the required supported MTU
-//! assert!(672, AclUExtLink::SUPPORTED_MTU);
+//! assert_eq!(672, AclUExtLink::SUPPORTED_MTU);
 //!
 //!
 //! // `LinkFlavor` also has a method to get the signalling channel
