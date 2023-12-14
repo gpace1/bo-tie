@@ -12,7 +12,7 @@ use crate::{LogicalLink, PhysicalLink};
 /// (k-frames) until the peer device sends a *L2CAP flow control credit ind* containing one or more
 /// credits.
 pub struct CreditServiceData<T: Iterator> {
-    destination_channel: crate::channel::id::ChannelIdentifier,
+    destination_channel: ChannelIdentifier,
     packets_iterator: PacketsIterator<T>,
 }
 
@@ -20,14 +20,27 @@ impl<T> CreditServiceData<T>
 where
     T: Iterator<Item = u8> + ExactSizeIterator,
 {
-    pub(crate) fn new(
-        destination_channel: crate::channel::id::ChannelIdentifier,
-        packets_iterator: PacketsIterator<T>,
-    ) -> Self {
+    pub(crate) fn new(destination_channel: ChannelIdentifier, packets_iterator: PacketsIterator<T>) -> Self {
         Self {
             destination_channel,
             packets_iterator,
         }
+    }
+
+    async fn send<L: LogicalLink>(
+        &mut self,
+        credit_based_channel: &mut CreditBasedChannel<'_, L>,
+    ) -> Result<bool, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
+        while credit_based_channel.peer_credits != 0 && !self.packets_iterator.is_complete() {
+            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
+            let next_pdu = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter()).unwrap();
+
+            credit_based_channel.send_pdu(next_pdu).await?;
+
+            credit_based_channel.peer_credits -= 1;
+        }
+
+        Ok(self.packets_iterator.is_complete())
     }
 
     /// Increase the peer credit count and send more credit based PDUs
@@ -54,20 +67,43 @@ where
 
         credit_based_channel.add_peer_credits(amount);
 
-        while credit_based_channel.peer_credits != 0 && !self.packets_iterator.is_complete() {
-            // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
-            let next_pdu = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter()).unwrap();
+        self.send(credit_based_channel)
+            .await
+            .map(|complete| complete.then_some(self))
+    }
 
-            credit_based_channel.send_pdu(next_pdu).await?;
-
-            credit_based_channel.peer_credits -= 1;
+    /// Continue sending the service data unit (SDU)
+    ///
+    /// This can be used if credits were given directly to the `credit_based_channel`. This method will continue sending
+    /// credit based frames until either the SDU was finished sending or the number of credits within the channel is
+    /// zero. This method is typically called after [`add_peer_credits`].
+    ///
+    /// ```
+    /// # use std::vec::IntoIter;
+    /// # use bo_tie_l2cap::channel::{CreditServiceData, SendSduError};
+    /// # use bo_tie_l2cap::{CreditBasedChannel, LogicalLink, PhysicalLink};
+    /// # use bo_tie_l2cap::signals::packets::FlowControlCreditInd;
+    /// # async fn example<L: LogicalLink>(credit_service_data: CreditServiceData<IntoIter<u8>>, mut credit_based_channel: CreditBasedChannel<'_, L>, flow_control_credit_ind: FlowControlCreditInd)
+    /// # -> Result<(), SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
+    /// credit_based_channel.add_peer_credits(flow_control_credit_ind.get_credits());
+    ///
+    /// credit_service_data.continue_sending(&mut credit_based_channel).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`add_peer_credits`]: CreditBasedChannel::add_peer_credits
+    pub async fn continue_sending<L: LogicalLink>(
+        mut self,
+        credit_based_channel: &mut CreditBasedChannel<'_, L>,
+    ) -> Result<Option<CreditServiceData<T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
+        if credit_based_channel.peer_channel_id.get_channel() != self.destination_channel {
+            return Err(SendSduError::IncorrectChannel);
         }
 
-        if self.packets_iterator.is_complete() {
-            Ok(None)
-        } else {
-            Ok(Some(self))
-        }
+        self.send(credit_based_channel)
+            .await
+            .map(|complete| complete.then_some(self))
     }
 }
 
