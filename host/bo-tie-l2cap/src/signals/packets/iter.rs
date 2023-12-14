@@ -277,7 +277,7 @@ impl Iterator for FlowControlCreditIndIter {
             4 => self.ind.cid.to_val().to_le_bytes().get(0).copied(),
             5 => self.ind.cid.to_val().to_le_bytes().get(1).copied(),
             6 => self.ind.credits.to_le_bytes().get(0).copied(),
-            7 => self.ind.credits.to_le_bytes().get(0).copied(),
+            7 => self.ind.credits.to_le_bytes().get(1).copied(),
             _ => None,
         };
 
@@ -287,7 +287,7 @@ impl Iterator for FlowControlCreditIndIter {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = 14usize.checked_sub(self.pos).unwrap_or_default();
+        let size = 8usize.checked_sub(self.pos).unwrap_or_default();
 
         (size, Some(size))
     }

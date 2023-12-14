@@ -204,7 +204,7 @@ async fn le_multiple_receiving() {
         .await
         .expect("failed to send");
 
-    tx.send(L2capFragment::new(false, vec![0x40, 0, 0xFF, 0xFF, 23, 0, 10, 0]))
+    tx.send(L2capFragment::new(false, vec![0x40, 0, 0xFF, 0xFF, 23, 0, 0xFF, 0xFF]))
         .await
         .expect("failed to send");
 
@@ -272,7 +272,7 @@ async fn multiple_sending_signal_channel<'a>(
         match s.receive().await.expect("failed to receive ") {
             ReceivedSignal::LeCreditBasedConnectionRequest(request) => {
                 break request
-                    .create_le_credit_based_connection(s.get_link(), 10)
+                    .create_le_credit_based_connection(s.get_link(), 0xFFFF)
                     .send_response(s)
                     .await
                     .expect("failed to send LE credit based response")
@@ -295,7 +295,11 @@ async fn multiple_sending_credit_based_channel_1<'a>(
     k: &mut Option<CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>>>,
 ) {
     if let Some(channel) = k {
-        let data = channel.receive(b).await.expect("failed to receive");
+        let data = channel
+            .receive(b, false)
+            .await
+            .expect("failed to receive")
+            .expect("SDU");
 
         let received_message = std::str::from_utf8(&data).expect("invalid utf8 received");
 
@@ -310,7 +314,11 @@ async fn multiple_sending_credit_based_channel_2<'a>(
     k: &mut Option<CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>>>,
 ) {
     if let Some(channel) = k {
-        let data = channel.receive(b).await.expect("failed to receive");
+        let data = channel
+            .receive(b, false)
+            .await
+            .expect("failed to receive")
+            .expect("SDU");
 
         let received_message = std::str::from_utf8(&data).expect("invalid utf8 received");
 

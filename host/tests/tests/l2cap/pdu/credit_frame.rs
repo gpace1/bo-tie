@@ -335,9 +335,10 @@ async fn recv_single_pdu() {
         assert_eq!(credit_channel.get_peer_channel_id().to_val(), 0x40);
 
         let sdu: Vec<u8> = credit_channel
-            .receive(&mut Vec::new())
+            .receive(&mut Vec::new(), false)
             .await
-            .expect("failed to receive");
+            .expect("failed to receive")
+            .expect("expected SDU");
 
         assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5]);
 
@@ -368,9 +369,10 @@ async fn recv_single_pdu_multi_fragments() {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
         let sdu: Vec<u8> = credit_channel
-            .receive(&mut Vec::new())
+            .receive(&mut Vec::new(), false)
             .await
-            .expect("failed to receive");
+            .expect("failed to receive")
+            .expect("expected SDU");
 
         assert_eq!(&sdu, &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     });
@@ -404,7 +406,7 @@ async fn recv_single_pdu_bad_fragment_start_indicator() {
     let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
-        match credit_channel.receive(&mut Vec::new()).await {
+        match credit_channel.receive(&mut Vec::new(), false).await {
             Err(e) => assert_eq!("unexpected first fragment of PDU", &e.to_string()),
             Ok(_) => panic!("unexpected data return"),
         }
@@ -437,12 +439,13 @@ async fn receive_multiple_pdu_for_sdu() {
     let (link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(10);
 
     let task_handle = tokio::spawn(async move {
-        let (mut credit_channel, _) = connect_response!(link, 1);
+        let (mut credit_channel, _) = connect_response!(link, 0xFFFF);
 
         let sdu = credit_channel
-            .receive(&mut Vec::new())
+            .receive(&mut Vec::new(), false)
             .await
-            .expect("failed to receive");
+            .expect("failed to receive")
+            .expect("expected SDU");
 
         assert_eq!(
             &sdu,
@@ -498,7 +501,7 @@ async fn incorrect_sdu_length() {
     let task_handle = tokio::spawn(async move {
         let (mut credit_channel, _) = connect_response!(link, 1);
 
-        match credit_channel.receive(&mut Vec::new()).await {
+        match credit_channel.receive(&mut Vec::new(), false).await {
             Err(e) => assert_eq!("SDU length field does not match SDU size", &e.to_string()),
             Ok(_) => panic!("unexpected SDU data"),
         }
@@ -583,9 +586,10 @@ async fn connection_disconnection() {
         let (mut credit_based_channel, mut signalling_channel) = connect_response!(r_link, 5);
 
         let data = credit_based_channel
-            .receive(&mut Vec::new())
+            .receive(&mut Vec::new(), false)
             .await
-            .expect("failed to receive");
+            .expect("failed to receive")
+            .expect("expected SDU");
 
         let message = std::str::from_utf8(&data).expect("invalid utf8");
 
@@ -621,48 +625,76 @@ async fn connection_disconnection() {
 
     tokio::try_join!(r_handle, l_handle).expect("task failed");
 }
-//
-// #[tokio::test]
-// async fn drop_channel_in_middle_of_sending() {
-//     let (l_link, r_link) = bo_tie_host_tests::create_le_link(LeULink::SUPPORTED_MTU.into());
-//
-//     let l_barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
-//
-//     let r_barrier = l_barrier.clone();
-//
-//     let l_handle = tokio::spawn(async move {
-//         let (mut credit_based_channel, mut signalling_channel) = connect_left!(l_link, 256, 32, 10);
-//
-//         // only two k-frames will be sent as the other
-//         // credit based channel has only given two credits.
-//         credit_based_channel
-//             .send(TEST_MESSAGE.bytes())
-//             .await
-//             .expect("failed to initially send data");
-//
-//         // deliberately dropped to indicate the intention of this test
-//         drop(credit_based_channel);
-//
-//         l_barrier.wait().await;
-//     });
-//
-//     let r_handle = tokio::spawn(async move {
-//         let (mut credit_based_channel, mut signalling_channel) = connect_right!(r_link, 2);
-//
-//         tokio::time::timeout(std::time::Duration::from_millis(500), async {
-//             let data: Vec<u8> = credit_based_channel.receive().await.expect("failed to receive");
-//
-//             let message = std::str::from_utf8(&data).expect("invalid utf8");
-//
-//             assert_ne!(TEST_MESSAGE, message);
-//         })
-//         .await
-//         .expect_err("timeout waiting for credit based channel");
-//
-//         r_barrier.wait().await;
-//     });
-//
-//     l_handle.await.expect("l handle failed");
-//
-//     r_handle.await.expect("r handle failed");
-// }
+
+#[tokio::test]
+async fn credit_crunch() {
+    let (l_link, r_link) = bo_tie_host_tests::create_le_link(10); // arbitrary size less than the mps
+
+    let l_barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+
+    let r_barrier = l_barrier.clone();
+
+    let l_handle = tokio::spawn(async move {
+        let (mut credit_based_channel, mut signalling_channel) = request_connect!(l_link, 0xFFFF, 60, 0);
+
+        let mut test_message = TEST_MESSAGE.bytes();
+
+        let mut sdu_sender = credit_based_channel
+            .send(&mut test_message)
+            .await
+            .expect("failed to send data")
+            .expect("expected data to be incomplete");
+
+        loop {
+            let signal = signalling_channel.receive().await.expect("receive failed");
+
+            if let ReceivedSignal::FlowControlCreditIndication(ind) = signal {
+                sdu_sender = match sdu_sender
+                    .inc_and_send(&mut credit_based_channel, ind.get_credits())
+                    .await
+                    .expect("failed to send")
+                {
+                    Some(sdu_sender) => sdu_sender,
+                    None => break,
+                };
+            }
+        }
+
+        l_barrier.wait().await;
+    });
+
+    let r_handle = tokio::spawn(async move {
+        let (mut credit_based_channel, mut signalling_channel) = connect_response!(r_link, 2);
+
+        let buffer = &mut Vec::new();
+
+        let data = loop {
+            if let Some(data) = credit_based_channel
+                .receive(buffer, true)
+                .await
+                .expect("failed to receive")
+            {
+                break data;
+            } else {
+                credit_based_channel
+                    .give_credits_to_peer(&mut signalling_channel, 1)
+                    .await
+                    .expect("peer credits");
+
+                assert_eq!(credit_based_channel.get_credits_given(), 1)
+            }
+        };
+
+        let message = std::str::from_utf8(&data).expect("invalid utf8");
+
+        assert_eq!(TEST_MESSAGE, message);
+
+        r_barrier.wait().await;
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        tokio::try_join!(r_handle, l_handle).expect("task failed")
+    })
+    .await
+    .expect("timeout");
+}

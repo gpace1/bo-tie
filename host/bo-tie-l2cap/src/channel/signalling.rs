@@ -319,15 +319,14 @@ impl<L: LogicalLink> SignallingChannel<'_, L> {
     /// amount for this channel by `credits`. The number of credits will be increased for the
     /// provided `credit_channel` and the peer device will be able to send up to `credits` amount
     /// of PDUs plus any amount credits that the peer already had.
-    pub async fn give_credits_to_peer(
+    pub(crate) async fn give_credits_to_peer(
         &mut self,
-        credit_channel: &CreditBasedChannel<'_, L>,
-        credits: u16,
+        channel_credits: crate::channel::ChannelCredits,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let credit_ind = FlowControlCreditInd::new(
             NonZeroU8::new(1).unwrap(),
-            credit_channel.get_this_channel_id(),
-            credits,
+            channel_credits.get_channel_id(),
+            channel_credits.get_credits(),
         );
 
         let c_frame = credit_ind.into_control_frame(self.inner.channel_id);
@@ -994,6 +993,8 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
 
         let initial_peer_credits = self.request.initial_credits.into();
 
+        let initial_this_credits = self.initial_credits.into();
+
         let new_channel = CreditBasedChannel::new(
             this_channel_id,
             peer_channel_id,
@@ -1001,6 +1002,7 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
             maximum_packet_size,
             maximum_transmission_size,
             initial_peer_credits,
+            initial_this_credits,
         );
 
         Ok(new_channel)
@@ -1068,6 +1070,8 @@ impl Response<LeCreditBasedConnectionResponse> {
 
             let initial_peer_credits = self.response.get_initial_credits().unwrap().into();
 
+            let initial_this_credits = request.initial_credits.into();
+
             Ok(CreditBasedChannel::new(
                 this_channel_id,
                 peer_channel_id,
@@ -1075,6 +1079,7 @@ impl Response<LeCreditBasedConnectionResponse> {
                 maximum_packet_size,
                 maximum_transmission_size,
                 initial_peer_credits,
+                initial_this_credits,
             ))
         } else {
             Err(self.get_result())

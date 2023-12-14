@@ -7,7 +7,7 @@ edition = "2021"
 bo-tie-core = { path = "../../bo-tie-core" }
 
 [dev-dependencies]
-tokio = "1"
+tokio = { version = "1", features = ["full"] }
 
 [features]
 std = []

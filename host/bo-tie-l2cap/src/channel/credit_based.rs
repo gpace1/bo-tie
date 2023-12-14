@@ -1,5 +1,6 @@
 //! Structures for credit based channels
 
+use crate::channel::id::ChannelIdentifier;
 use crate::channel::{CreditBasedChannel, SendSduError};
 use crate::pdu::credit_frame::PacketsIterator;
 use crate::pdu::SduPacketsIterator;
@@ -57,9 +58,9 @@ where
             // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
             let next_pdu = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter()).unwrap();
 
-            credit_based_channel.peer_credits -= 1;
-
             credit_based_channel.send_pdu(next_pdu).await?;
+
+            credit_based_channel.peer_credits -= 1;
         }
 
         if self.packets_iterator.is_complete() {
@@ -67,5 +68,35 @@ where
         } else {
             Ok(Some(self))
         }
+    }
+}
+
+/// Credits to give for a [`CreditBasedChannel`]
+///
+/// This is used for giving credits to the other device for a specific credit based channel. See method
+/// [`prepare_credits_for_peer`] for how it is created and used.
+///
+/// [`prepare_credits_for_peer`]: CreditBasedChannel::prepare_credits_for_peer
+#[must_use]
+pub struct ChannelCredits {
+    channel_id: ChannelIdentifier,
+    how_many: u16,
+}
+
+impl ChannelCredits {
+    pub(super) fn new(channel_id: ChannelIdentifier, how_many: u16) -> Self {
+        ChannelCredits { channel_id, how_many }
+    }
+
+    /// Get the channel identifier of the channel the credits are for
+    pub fn get_channel_id(&self) -> ChannelIdentifier {
+        self.channel_id
+    }
+
+    /// Get the number of credits to be given
+    ///
+    /// This is the additional number of credits to be given to a linked device.
+    pub fn get_credits(&self) -> u16 {
+        self.how_many
     }
 }

@@ -32,6 +32,7 @@ use crate::pdu::{
 use crate::pdu::{RecombineL2capPdu, SduPacketsIterator};
 use crate::{pdu, pdu::L2capFragment, LogicalLink, PhysicalLink};
 use bo_tie_core::buffer::TryExtend;
+pub(crate) use credit_based::ChannelCredits;
 pub use credit_based::CreditServiceData;
 pub(crate) use shared::{SharedPhysicalLink, UnusedChannelResponse};
 pub use signalling::SignallingChannel;
@@ -338,6 +339,7 @@ pub struct CreditBasedChannel<'a, L: LogicalLink> {
     maximum_pdu_payload_size: usize,
     maximum_transmission_size: usize,
     peer_credits: usize,
+    this_credits: usize,
     received_pdu_count: usize,
     receive_sdu_len: core::cell::Cell<usize>,
     receive_count_so_far: core::cell::Cell<usize>,
@@ -351,6 +353,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         maximum_packet_size: usize,
         maximum_transmission_size: usize,
         initial_peer_credits: usize,
+        initial_this_credits: usize,
     ) -> Self {
         let receive_sdu_len = core::cell::Cell::new(0);
 
@@ -365,6 +368,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             maximum_pdu_payload_size: maximum_packet_size,
             maximum_transmission_size,
             peer_credits: initial_peer_credits,
+            this_credits: initial_this_credits,
             received_pdu_count,
             receive_sdu_len,
             receive_count_so_far,
@@ -436,6 +440,16 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         self.peer_credits as u16
     }
 
+    /// Get the current number of credits that were given to the peer device for this channel
+    ///
+    /// This is the estimated count for the number of credits the peer device has for this channel. This number may be
+    /// different then the number of credits for this channel on the connected device. There may be credit based frames
+    /// sent by the connected device that have not yet been received by this channel. This can be because they're either
+    /// in the lower (than L2CAP) protocol layers of the connected device or the lower protocol layers of this device.
+    pub fn get_credits_given(&self) -> u16 {
+        self.this_credits as u16
+    }
+
     /// Get the number of PDUs that were received since the last time this method was called
     ///
     /// This returns a counter of the number of credit based frames that were received by this
@@ -457,6 +471,23 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         } else {
             <u16>::MAX.into()
         }
+    }
+
+    /// Give the peer device more credits
+    ///
+    /// This is used for giving credits for this channel to a peer device. The internal counter of peer credits in
+    /// increased by the number of credits input to this method. The returned future is used for giving the credit
+    /// indication over the input signalling channel.
+    pub async fn give_credits_to_peer(
+        &mut self,
+        signalling_channel: &mut SignallingChannel<'_, L>,
+        amount: u16,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+        self.this_credits = core::cmp::min(self.this_credits.saturating_add(amount as usize), <u16>::MAX as usize);
+
+        let new_credits = ChannelCredits::new(self.get_this_channel_id(), self.this_credits as u16);
+
+        signalling_channel.give_credits_to_peer(new_credits).await
     }
 
     /// Get fragmentation size of L2CAP PDUs
@@ -533,8 +564,94 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
     /// Send a complete SDU to the lower layers
     ///
-    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
-    /// may be called by protocol at a higher layer than L2CAP.
+    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device.
+    ///
+    /// ## Output
+    /// Output of the future returned by `send` depends on the number of credits this `CreditBasedChannel` has been
+    /// given in order to send credit based frames. If the future outputs `None` then the entire `sdu` has been sent
+    /// over this `CreditBasedChannel`, but if the future outputs a `CreditServiceData` then this ran out of credits
+    /// before it could finish sending.
+    ///
+    /// ### Out of Credits
+    /// This is a very basic and flawed example of how to handle the send future.
+    ///
+    /// ```
+    /// # use tokio::select;
+    /// # use bo_tie_l2cap::{CreditBasedChannel, LogicalLink, PhysicalLink, SignallingChannel};
+    /// # use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+    /// # async fn example<T, L>(sdu: T, mut credit_based_channel: CreditBasedChannel<'_, L>, mut signalling_channel: SignallingChannel<'_, L>)
+    /// # -> Result<(), Box<dyn std::error::Error>>
+    /// # where
+    /// #     T: IntoIterator<Item = u8>,
+    /// #     T::IntoIter: ExactSizeIterator,
+    /// #     L: LogicalLink + 'static,
+    /// #     <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::error::Error + 'static,
+    /// #     <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error + 'static,
+    /// # {
+    /// if let Some(mut more_to_send) = credit_based_channel.send(sdu).await? {
+    ///     loop {
+    ///         let signal = signalling_channel.receive().await?;
+    ///
+    ///         if let ReceivedSignal::FlowControlCreditIndication(ind) = signal {
+    ///            more_to_send = match more_to_send
+    ///                .inc_and_send(&mut credit_based_channel, ind.get_credits())
+    ///                .await?
+    ///            {
+    ///                Some(sdu_sender) => sdu_sender,
+    ///                None => break,
+    ///            };
+    ///        }
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    /// This example assumes that the peer device will not send any data on the credit based connection nor are there
+    /// any other existing channels besides the obvious signalling channel. A more practical way of doing things is to
+    /// select the 'more_to_send' over all the other channels along with the `credit_based_channel`.
+    ///
+    /// ```
+    /// # use tokio::select;
+    /// # use bo_tie_l2cap::{CreditBasedChannel, LogicalLink, PhysicalLink, SignallingChannel};
+    /// # use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+    /// # async fn example<T, L>(sdu: T, mut credit_based_channel: CreditBasedChannel<'_, L>, mut signalling_channel: SignallingChannel<'_, L>)
+    /// # -> Result<(), Box<dyn std::error::Error>>
+    /// # where
+    /// #     T: IntoIterator<Item = u8>,
+    /// #     T::IntoIter: ExactSizeIterator,
+    /// #     L: LogicalLink + 'static,
+    /// #     <<L as LogicalLink>::PhysicalLink as PhysicalLink>::SendErr: std::error::Error + 'static,
+    /// #     <<L as LogicalLink>::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error + 'static,
+    /// # {
+    /// let mut more_to_send = None;
+    ///
+    /// let mut sdu_buffer = &mut Vec::new();
+    ///
+    /// loop {
+    ///     select! {
+    ///         maybe_rx = credit_based_channel.receive(sdu_buffer, false) => /* process received SDU */
+    /// # continue,
+    ///
+    ///         maybe_signal = signalling_channel.receive() => {
+    ///             if let ReceivedSignal::FlowControlCreditIndication(ind) = maybe_signal? {
+    ///                 let credits = ind.get_credits();
+    ///
+    ///                 if let Some(more_to_send) = more_to_send {
+    ///                     more_to_send = more_to_send
+    ///                         .inc_and_send(&mut credit_based_channel, credits)
+    ///                         .await?
+    ///                 } else {
+    ///                     credit_based_channel.add_peer_credit(credits)
+    ///                 }
+    ///             }
+    ///         }
+    ///
+    ///         /* any other active channels */
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send<T>(
         &mut self,
         sdu: T,
@@ -557,6 +674,8 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
             if let Some(pdu) = next {
                 self.send_pdu(pdu).await?;
+
+                self.peer_credits -= 1;
             } else {
                 return Ok(None);
             }
@@ -701,36 +820,35 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         output
     }
 
-    /// Receive a SDU from this Channel
+    /// Receive a Service Data Unit (SDU) from this Channel
     ///
     /// This returns a future for awaiting until a complete SDU is received. The future will keep
-    /// awaiting receiving credit based frames (k-frames) until every k-frame that was used to
-    /// transport the SDU is received.
+    /// awaiting receiving credit based frames (k-frames) until either every k-frame that was used to
+    /// transport the SDU is received, or the peer has run out of credits issued for this channel.
     ///
-    /// The first k-frame received will be used to determine the size of the SDU. The output future
-    /// counts the bytes in the first k-frame and subsequent received k-frames until the number
-    /// matches the determined SDU size. The future will not poll to completion until either the
-    /// entire SDU is received or an error occurs.
+    /// ## Buffering
+    /// The field `sdu_buffer` is the holding location for k-frames until the entire SDU is received. This allows for
+    /// the returned future to be dropped before the full SDU is received as it does not own the buffer. When `receive`
+    /// is called on an non-empty buffer, it will calculate where the current state of the to be received SDU based on
+    /// the bytes within the buffer.
     ///
-    /// # Output
-    /// The returned `receive` future will poll until a complete SDU is received. A SDU is made up
-    /// of one or more credit based frames (k-frame), but this future polls the physical layer for
-    /// fragments of k-frames. The input `buffer` will be used to contain the SDU data received
-    /// within every fragment of every k-frame used to send the full SDU. Once the SDU is received,
-    /// the data within `buffer` is *taken (it's replaced with `T::default()`) and output by the
-    /// receive future*.
+    /// `sdu_buffer` must default to an empty buffer as observed by its implementation of `Deref<Target = [u8]>` (The
+    /// expression `T::default().is_empty()` must evaluate to true). The purpose of the buffer is to store k-frame
+    /// fragments until all frames are received. This allows the future returned by receive to be dropped without
+    /// loosing any received data. If the future owns the buffer, it could not be dropped until a SDU was output by it.
     ///
-    /// # Note
-    /// This returned future may get 'forever pend' if the peer of this credit based channel has
-    /// run out of credits to be able send k-frames to this device. The method
-    /// [`give_credits_to_peer`] can be used on the signalling channel in order to give the peer
-    /// more credits so it can complete the sending of the SDU.
+    /// ## Output
+    /// The future returned by `receive` will output a SDU when it detects that `sdu_buffer` contains all bytes of the
+    /// SDU. The data within `sdu_buffer`` is taken (the reference is replaced with a default `T`) and output by the
+    /// future.
     ///
-    /// [`give_credits_to_peer`]: SignallingChannel::give_credits_to_peer
+    /// The future can also output `None` if input `check_credits` is true and the channel has determined that the
+    /// peer device is out of credits to send k-frames. When `check_credits` is flase, the future never outputs `None`.
     pub async fn receive<T>(
         &mut self,
         sdu_buffer: &mut T,
-    ) -> Result<T, ReceiveError<L, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
+        check_credits: bool,
+    ) -> Result<Option<T>, ReceiveError<L, <CreditBasedFrame<T> as RecombineL2capPdu>::RecombineError>>
     where
         T: TryExtend<u8> + Default + core::ops::Deref<Target = [u8]>,
     {
@@ -739,12 +857,21 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
                 return Err(ReceiveError::new_unexpected_length(sdu_buffer.len(), 0));
             }
 
+            if check_credits && self.this_credits == 0 {
+                return Ok(None);
+            }
+
             let mut meta = pdu::credit_frame::RecombineMeta {
                 first: true,
                 mps: self.get_mps(),
             };
 
             let first_k_frame = self.receive_frame_into::<T>(sdu_buffer, &mut meta).await?;
+
+            self.this_credits = self
+                .this_credits
+                .checked_sub(1)
+                .ok_or(ReceiveError::peer_out_of_credits())?;
 
             self.receive_sdu_len.set(first_k_frame.get_sdu_length().unwrap().into());
 
@@ -767,13 +894,24 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
             return Err(ReceiveError::new_invalid_sdu_length());
         } else if self.receive_sdu_len.get() > sdu_buffer.len() {
             loop {
-                let _subsequent_k_frame = self.receive_frame_into(sdu_buffer, &mut meta).await?;
+                if check_credits && self.this_credits == 0 {
+                    return Ok(None);
+                }
+
+                self.receive_frame_into(sdu_buffer, &mut meta).await?;
 
                 if self.receive_sdu_len.get() == sdu_buffer.len() {
                     break;
-                } else if self.receive_sdu_len.get() < sdu_buffer.len() {
+                }
+
+                if self.receive_sdu_len.get() < sdu_buffer.len() {
                     return Err(ReceiveError::new_invalid_sdu_length());
                 }
+
+                self.this_credits = self
+                    .this_credits
+                    .checked_sub(1)
+                    .ok_or(ReceiveError::peer_out_of_credits())?;
 
                 self.receive_count_so_far.set(sdu_buffer.len())
             }
@@ -783,7 +921,7 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
 
         self.receive_count_so_far.set(0);
 
-        Ok(core::mem::take(sdu_buffer))
+        Ok(Some(core::mem::take(sdu_buffer)))
     }
 }
 
@@ -863,6 +1001,12 @@ impl<L: LogicalLink, C> ReceiveError<L, C> {
 
         Self { inner }
     }
+
+    fn peer_out_of_credits() -> Self {
+        let inner = ReceiveErrorInner::PeerSentWithNoCredits;
+
+        Self { inner }
+    }
 }
 
 impl<L, C> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveError<L, C>
@@ -899,6 +1043,7 @@ where
                 .field("buffer_len", buffer_len)
                 .field("expected_len", expected_len)
                 .finish(),
+            ReceiveErrorInner::PeerSentWithNoCredits => f.write_str("PeerSentWithNoCredits"),
         }
     }
 }
@@ -926,6 +1071,9 @@ where
                 "the buffer length is {}, not the expected length of {}",
                 buffer_len, expected_len,
             ),
+            ReceiveErrorInner::PeerSentWithNoCredits => {
+                f.write_str("linked device sent credit based frame without having credits to send")
+            }
         }
     }
 }
@@ -948,6 +1096,7 @@ enum ReceiveErrorInner<L: LogicalLink, C> {
     UnexpectedFirstFragment,
     InvalidSduLength,
     UnexpectedBufferLength(usize, usize),
+    PeerSentWithNoCredits,
 }
 
 /// Error when sending a SDU
