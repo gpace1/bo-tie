@@ -69,7 +69,7 @@ where
 
         self.send(credit_based_channel)
             .await
-            .map(|complete| complete.then_some(self))
+            .map(|complete| (!complete).then_some(self))
     }
 
     /// Continue sending the service data unit (SDU)
@@ -103,7 +103,7 @@ where
 
         self.send(credit_based_channel)
             .await
-            .map(|complete| complete.then_some(self))
+            .map(|complete| (!complete).then_some(self))
     }
 }
 

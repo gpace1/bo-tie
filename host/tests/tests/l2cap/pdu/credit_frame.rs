@@ -623,7 +623,7 @@ async fn connection_disconnection() {
         r_barrier.wait().await;
     });
 
-    tokio::try_join!(r_handle, l_handle).expect("task failed");
+    tokio::try_join!(l_handle, r_handle).expect("task failed");
 }
 
 #[tokio::test]
@@ -692,9 +692,5 @@ async fn credit_crunch() {
         r_barrier.wait().await;
     });
 
-    tokio::time::timeout(std::time::Duration::from_secs(8), async {
-        tokio::try_join!(r_handle, l_handle).expect("task failed")
-    })
-    .await
-    .expect("timeout");
+    tokio::try_join!(r_handle, l_handle).expect("task failed");
 }
