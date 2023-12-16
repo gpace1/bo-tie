@@ -852,7 +852,7 @@ where
     ) -> Result<bool, ServerInitiatedError<T>>
     where
         T: LogicalLink,
-        V: TransferFormatInto,
+        V: TransferFormatInto + ?Sized,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
         if self.attributes.get(handle).is_some() {
@@ -983,7 +983,7 @@ where
     ) -> Result<bool, ServerInitiatedError<T>>
     where
         T: LogicalLink,
-        V: TransferFormatInto,
+        V: TransferFormatInto + ?Sized,
         R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
     {
         if self.attributes.get(handle).is_some() {
