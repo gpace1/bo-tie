@@ -843,7 +843,7 @@ where
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
-    pub async fn send_notification_with<T, V, R>(
+    pub async fn send_notification_with<'a, T, V, R>(
         &mut self,
         channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
@@ -853,7 +853,7 @@ where
     where
         T: LogicalLink,
         V: TransferFormatInto + ?Sized,
-        R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
+        R: Into<Option<&'a [AttributeRestriction]>>,
     {
         if self.attributes.get(handle).is_some() {
             let mut ret_val = true;
@@ -974,7 +974,7 @@ where
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
-    pub async fn send_indication_with<T, V, R>(
+    pub async fn send_indication_with<'a, T, V, R>(
         &mut self,
         channel: &mut BasicFrameChannel<'_, T>,
         handle: u16,
@@ -984,7 +984,7 @@ where
     where
         T: LogicalLink,
         V: TransferFormatInto + ?Sized,
-        R: for<'a> Into<Option<&'a [AttributeRestriction]>>,
+        R: Into<Option<&'a [AttributeRestriction]>>,
     {
         if self.attributes.get(handle).is_some() {
             let mut ret_val = true;
