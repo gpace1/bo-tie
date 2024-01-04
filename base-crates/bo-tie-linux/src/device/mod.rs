@@ -163,7 +163,7 @@ unsafe fn hci_get_dev_info(fd: nix::libc::c_int, info: &mut bindings::hci_dev_in
     nix::errno::Errno::result(raw_errno)
 }
 
-/// A 'boxxed' `hci_dev_list_req`
+/// A boxed `hci_dev_list_req`
 struct BoxedHciDevListReq(std::alloc::Layout, *mut bindings::hci_dev_list_req);
 
 impl BoxedHciDevListReq {
@@ -175,7 +175,7 @@ impl BoxedHciDevListReq {
         use std::alloc::{alloc, Layout};
 
         let layout = Layout::new::<u16>()
-            .extend(Layout::array::<Self>(Self::REQUEST_COUNT.into()).unwrap())
+            .extend(Layout::array::<bindings::hci_dev_req>(Self::REQUEST_COUNT.into()).unwrap())
             .unwrap()
             .0
             .pad_to_align();
