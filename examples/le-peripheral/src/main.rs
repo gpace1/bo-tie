@@ -44,7 +44,7 @@ async fn advertise_setup<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str)
 
     adv_prams.own_address_type = bo_tie::hci::commands::le::OwnAddressType::RandomDeviceAddress;
 
-    set_random_address::send(hi, BluetoothDeviceAddress::new_random_static())
+    set_random_address::send(hi, BluetoothDeviceAddress::new_static_random())
         .await
         .unwrap();
 

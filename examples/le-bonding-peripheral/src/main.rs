@@ -436,7 +436,7 @@ async fn main() {
     println!("beginning undirected advertising");
 
     let own_address_info = AddressInfo {
-        address: bo_tie::BluetoothDeviceAddress::new_random_static(),
+        address: bo_tie::BluetoothDeviceAddress::new_static_random(),
         is_pub: false,
     };
 

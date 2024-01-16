@@ -523,7 +523,7 @@ impl Display for AddressError {
 }
 
 /// Error type for
-/// [BluetoothDeviceAddress::try_from_static](crate::BluetoothDeviceAddress::try_from_static)
+/// [BluetoothDeviceAddress::try_from_static](crate::BluetoothDeviceAddress::try_from_static_random)
 pub type StaticDeviceError = AddressError;
 
 /// Error type for

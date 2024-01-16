@@ -2720,7 +2720,7 @@ mod tests {
     #[tokio::test]
     async fn just_works_pairing() {
         let initiator_address = BluetoothDeviceAddress([0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
-        let responder_address = BluetoothDeviceAddress::new_random_static();
+        let responder_address = BluetoothDeviceAddress::new_static_random();
 
         let a = PairingAddress::new(&initiator_address, false);
         let b = PairingAddress::new(&responder_address, true);
