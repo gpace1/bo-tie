@@ -174,6 +174,11 @@ where
         self.name.borrow()
     }
 
+    /// Convert this `LocalName` into its name type
+    pub fn into_name(self) -> N {
+        self.name
+    }
+
     /// Check if the name is complete
     pub fn is_complete(&self) -> bool {
         self.is_complete
