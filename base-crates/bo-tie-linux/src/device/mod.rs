@@ -5,251 +5,261 @@
 //! functionality used by this library. These are linux specific and have no relation to the
 //! bluetooth specification.
 
-use bo_tie_core::buffer::Buffer;
-use bo_tie_core::BluetoothDeviceAddress;
-use bo_tie_hci_util::HciPacket;
+use crate::{ArcFileDesc, InterfaceThread, LinuxInterface, PollEvent};
 
 #[allow(non_camel_case_types, dead_code)]
 pub(crate) mod bindings;
+#[allow(non_camel_case_types, dead_code)]
+pub(crate) mod bindings_errata;
+pub(crate) mod legacy;
+mod mgmt;
 
-const HCI_RAW: usize = 6;
-
-fn test_flag(bit: usize, field: &[u32]) -> bool {
-    1 == (field[bit >> 5] >> (bit as u32 & 31))
+enum ControllerInterfaceType {
+    Legacy(legacy::LegacySocket),
+    Management(mgmt::ManagementSocket),
 }
 
-/// Get a file descriptor to a bluetooth controller
+/// Interface to the controllers attached to the Linux kernel
 ///
-/// This will get a file descriptor for the bluetooth controller with the provided *public
-/// address* (the address either hard coded or burned onto the controller). If any bluetooth
-/// controller will do, then `None` can be provided to get a controller.
-///
-/// This will match the first device that does not contain the `HCI_RAW` flag. This flag
-/// indicates that the interface is unconfigured and an unconfigured device cannot be bound
-/// to with `HCI_CHANNEL_USER`
-///
-/// # Note
-/// This function will scan a maximum 16 devices. Looking at the kernel the limit seems more
-/// in line with the PAGE_SCAN, specifically ( PAGE_SCAN * 2 ) / size_of(hci_dev_req) in
-/// hci_get_dev_list in /net/bluetooth/hci_core.c. When `const_generics` is stable, this
-/// function should be implemented to accept a const generic for the device count.
-pub fn get_dev_id<A>(device_address: A) -> Result<usize, nix::Error>
-where
-    A: Into<Option<BluetoothDeviceAddress>>,
-{
-    use nix::libc;
-
-    let mut boxed_list = BoxedHciDevListReq::new();
-
-    let sock = unsafe {
-        let raw_fd = libc::socket(
-            libc::AF_BLUETOOTH,
-            libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-            bindings::BTPROTO_HCI as i32,
-        );
-
-        if raw_fd < 0 {
-            return Err(nix::errno::Errno::last().into());
-        }
-
-        // Deliberately bind HCI_DEV_NONE as we only want
-        // to interface with the linux bluetooth driver.
-        let sa_p = &bindings::sockaddr_hci {
-            hci_family: libc::AF_BLUETOOTH as u16,
-            hci_dev: bindings::HCI_DEV_NONE as std::os::raw::c_ushort,
-            hci_channel: bindings::HCI_CHANNEL_RAW as std::os::raw::c_ushort,
-        } as *const bindings::sockaddr_hci as *const libc::sockaddr;
-
-        let sa_len = std::mem::size_of::<bindings::sockaddr_hci>() as libc::socklen_t;
-
-        if libc::bind(raw_fd, sa_p, sa_len) < 0 {
-            return Err(nix::errno::Errno::last().into());
-        }
-
-        crate::FileDescriptor(raw_fd)
-    };
-
-    unsafe { hci_get_dev_list(sock.0, &mut boxed_list)? };
-
-    let device_address_opt = device_address.into();
-
-    unsafe { boxed_list.1.as_ref().unwrap() }
-        .iter()
-        .map(|dev_req| dev_req.dev_id)
-        .find_map(|id| {
-            let mut dev_info = bindings::hci_dev_info::default();
-
-            dev_info.dev_id = id;
-
-            let di_rslt = unsafe { hci_get_dev_info(sock.0, &mut dev_info) };
-
-            if di_rslt.is_err() || test_flag(HCI_RAW, &[dev_info.flags]) {
-                return None;
-            }
-
-            match device_address_opt {
-                None => Some(<usize>::from(id)),
-                Some(addr) if addr.0 == dev_info.bdaddr.b => Some(<usize>::from(id)),
-                _ => None,
-            }
-        })
-        .ok_or(nix::errno::Errno::ENODEV)
+/// This is used to interact with the kennel for finding out the Bluetooth controllers that are currently registered
+/// with it.
+pub struct ControllersInterface {
+    inner: ControllerInterfaceType,
 }
 
-/// Send a HCI packet to the controller
-pub fn send_to_controller(dev: &crate::FileDescriptor, packet: &mut HciPacket<impl Buffer>) -> nix::Result<usize> {
-    let is_command = if let HciPacket::Command(_) = packet {
-        true
-    } else {
-        false
-    };
+impl ControllersInterface {
+    /// Create a new `ControllerInterface`
+    pub(crate) fn new() -> Result<ControllersInterface, Box<dyn std::error::Error>> {
+        let inner = if mgmt::ManagementSocket::can_use()? {
+            let mgmt = mgmt::ManagementSocket::new()?;
 
-    // Uart is used here at it is the same system used by linux for labeling HCI packets.
-    let message =
-        bo_tie_hci_interface::uart::PacketIndicator::prepend(packet).expect("failed to prepend packet indicator");
+            ControllerInterfaceType::Management(mgmt)
+        } else {
+            let legacy = legacy::LegacySocket::new()?;
 
-    if is_command {
-        loop {
-            match nix::unistd::write(dev.0, &message) {
-                Err(nix::Error::EAGAIN) | Err(nix::Error::EINTR) => continue,
-                result => break result,
-            }
-        }
-    } else {
-        let flags = nix::sys::socket::MsgFlags::MSG_DONTWAIT;
-
-        nix::sys::socket::send(dev.0, &message, flags)
-    }
-}
-
-///////////
-// ioctl structures
-////
-
-// ioclt magic for the IOCTL values
-const HCI_IOC_MAGIC: u8 = b'H';
-
-const HCI_IOC_HCIDEVUP: u8 = 201;
-const HCI_IOC_HCIDEVDOWN: u8 = 202;
-const HCI_IOC_HCIGETDEVLIST: u8 = 210;
-const HCI_IOC_HCIGETDEVINFO: u8 = 211;
-
-nix::ioctl_write_int!(hci_dev_up, HCI_IOC_MAGIC, HCI_IOC_HCIDEVUP);
-nix::ioctl_write_int!(hci_dev_down, HCI_IOC_MAGIC, HCI_IOC_HCIDEVDOWN);
-
-//////
-// The following functions cannot use nix's handy ioctl_read! macros because the request code
-// does not use the same type as `hci_dev_list_req`
-
-unsafe fn hci_get_dev_list(fd: nix::libc::c_int, boxed_req: &mut BoxedHciDevListReq) -> nix::Result<nix::libc::c_int> {
-    use nix::libc::{c_int, c_void};
-    use std::mem::size_of;
-
-    let request_code = nix::request_code_read!(HCI_IOC_MAGIC, HCI_IOC_HCIGETDEVLIST, size_of::<c_int>());
-
-    let raw_errno = nix::libc::ioctl(fd, request_code, boxed_req.get_mut_ptr() as *mut c_void);
-
-    nix::errno::Errno::result(raw_errno)
-}
-
-unsafe fn hci_get_dev_info(fd: nix::libc::c_int, info: &mut bindings::hci_dev_info) -> nix::Result<nix::libc::c_int> {
-    use nix::libc::{c_int, c_void};
-    use std::mem::size_of;
-
-    let request_code = nix::request_code_read!(HCI_IOC_MAGIC, HCI_IOC_HCIGETDEVINFO, size_of::<c_int>());
-
-    let raw_errno = nix::libc::ioctl(fd, request_code, info as *mut _ as *mut c_void);
-
-    nix::errno::Errno::result(raw_errno)
-}
-
-/// A boxed `hci_dev_list_req`
-struct BoxedHciDevListReq(std::alloc::Layout, *mut bindings::hci_dev_list_req);
-
-impl BoxedHciDevListReq {
-    // we're really only looking to use the first one found, so this can be one
-    const REQUEST_COUNT: u16 = 1;
-
-    /// Create a new BoxedHciDevListReq
-    fn new() -> Self {
-        use std::alloc::{alloc, Layout};
-
-        let layout = Layout::new::<u16>()
-            .extend(Layout::array::<bindings::hci_dev_req>(Self::REQUEST_COUNT.into()).unwrap())
-            .unwrap()
-            .0
-            .pad_to_align();
-
-        let list = unsafe {
-            let list = alloc(layout) as *mut bindings::hci_dev_list_req;
-
-            (*list).dev_num = Self::REQUEST_COUNT;
-
-            for i in 0usize..Self::REQUEST_COUNT.into() {
-                (*list)
-                    .dev_req
-                    .as_mut_ptr()
-                    .add(i)
-                    .write(bindings::hci_dev_req::default())
-            }
-
-            list
+            ControllerInterfaceType::Legacy(legacy)
         };
 
-        Self(layout, list)
+        Ok(ControllersInterface { inner })
     }
 
-    fn get_mut_ptr(&mut self) -> *mut bindings::hci_dev_list_req {
-        self.1
+    /// Check if this is using legacy mode
+    ///
+    /// The management interface was added to the Linux kernel v3.4. If this is running on an earlier kernel then the
+    /// controller interface will be in legacy mode.
+    #[cfg(feature = "ctrls_intf")]
+    pub fn in_legacy_mode(&self) -> bool {
+        if let ControllerInterfaceType::Legacy(_) = self.inner {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the indexes of the controller on the system
+    #[cfg(feature = "ctrls_intf")]
+    pub fn get_controller_info(&mut self) -> Result<Vec<ControllerInformation>, Box<dyn std::error::Error>> {
+        match &mut self.inner {
+            ControllerInterfaceType::Legacy(l) => l
+                .get_index_list()?
+                .into_iter()
+                .map(|i| l.get_dev_info(i).map(|d| ControllerInformation::from_device_info(d)))
+                .try_fold(Vec::new(), |mut v, ci_rslt| {
+                    v.push(ci_rslt?);
+
+                    Ok(v)
+                })
+                .map_err(|e: nix::Error| e.into()),
+            ControllerInterfaceType::Management(m) => m
+                .read_controller_index_list()?
+                .into_iter()
+                .map(|i| {
+                    m.read_controller_info(i)
+                        .map(|c| ControllerInformation::from_controller_info(c))
+                })
+                .try_fold(Vec::new(), |mut v, ci_rslt| {
+                    v.push(ci_rslt?);
+
+                    Ok(v)
+                }),
+        }
+    }
+
+    /// Create an HCI to a controller.
+    ///
+    /// The input index
+    pub(crate) fn create_interface(
+        &mut self,
+        index: u16,
+    ) -> Result<
+        (
+            LinuxInterface<bo_tie_hci_util::channel::tokio::UnboundedChannelReserve>,
+            bo_tie_hci_util::channel::tokio::UnboundedHostChannelEnds,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        use nix::sys::{epoll, eventfd};
+
+        // Create the shared file descriptor to the Bluetooth controller
+        let controller_socket = ArcFileDesc::from(match &mut self.inner {
+            ControllerInterfaceType::Legacy(l) => l.make_socket(index)?,
+            ControllerInterfaceType::Management(m) => m.make_socket(index)?,
+        });
+
+        let exit_event = ArcFileDesc::from(eventfd::eventfd(0, eventfd::EfdFlags::empty())?);
+
+        let epoll = epoll::Epoll::new(epoll::EpollCreateFlags::empty())?;
+
+        epoll.add(&controller_socket, PollEvent::BluetoothController.into())?;
+
+        epoll.add(&exit_event, PollEvent::TaskExit.into())?;
+
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        let (reserve, host_ends) = bo_tie_hci_util::channel::tokio_unbounded(1, 0);
+
+        let interface = bo_tie_hci_interface::Interface::new(reserve);
+
+        let join_handle = InterfaceThread {
+            sender,
+            controller_socket: controller_socket.clone(),
+            _exit_event: exit_event.clone(),
+            epoll,
+        }
+        .spawn()
+        .into();
+
+        let this = LinuxInterface {
+            controller_socket,
+            exit_event,
+            receiver,
+            interface,
+            join_handle,
+        };
+
+        Ok((this, host_ends))
     }
 }
 
-impl Drop for BoxedHciDevListReq {
-    fn drop(&mut self) {
-        unsafe { std::alloc::dealloc(self.1 as *mut u8, self.0) }
-    }
+#[cfg(feature = "ctrls_intf")]
+enum ControllerInformationInner {
+    Legacy(legacy::DeviceInfo),
+    Management(mgmt::ControllerInfo),
 }
 
-impl bindings::hci_dev_list_req {
-    fn iter(&self) -> std::slice::Iter<bindings::hci_dev_req> {
-        unsafe { self.dev_req.as_slice(BoxedHciDevListReq::REQUEST_COUNT.into()).iter() }
-    }
+/// Information on a controller
+///
+/// This is information that is collected from the Linux kernel about a Bluetooth Controller. If the Bluetooth
+/// management interface was used there will be much more information about the controllers on this system, but in
+/// legacy mode there should be enough data to support selecting the desired Bluetooth controller.
+///
+/// ### Legacy Mode
+/// Legacy is only used when the kernel does not support the Bluetooth management interface. The management interface
+/// has been supported since v3.4 of Linux, so legacy will only be used if the kernel is an earlier version.
+#[cfg(feature = "ctrls_intf")]
+pub struct ControllerInformation {
+    inner: ControllerInformationInner,
 }
 
-impl Default for bindings::hci_dev_info {
-    fn default() -> Self {
-        bindings::hci_dev_info {
-            dev_id: 0,
-            name: Default::default(),
-            bdaddr: bindings::bdaddr_t { b: Default::default() },
-            flags: 0,
-            type_: 0,
-            features: Default::default(),
-            pkt_type: 0,
-            link_policy: 0,
-            link_mode: 0,
-            acl_mtu: 0,
-            acl_pkts: 0,
-            sco_mtu: 0,
-            sco_pkts: 0,
-            stat: bindings::hci_dev_stats {
-                err_rx: 0,
-                err_tx: 0,
-                cmd_tx: 0,
-                evt_rx: 0,
-                acl_tx: 0,
-                acl_rx: 0,
-                sco_tx: 0,
-                sco_rx: 0,
-                byte_rx: 0,
-                byte_tx: 0,
-            },
+#[cfg(feature = "ctrls_intf")]
+impl ControllerInformation {
+    /// Create a `ControllerInformation` from a `legacy::DeviceInfo`
+    fn from_device_info(device_info: legacy::DeviceInfo) -> Self {
+        let inner = ControllerInformationInner::Legacy(device_info);
+
+        ControllerInformation { inner }
+    }
+
+    /// Create a `ControllerInformation` from a 'mgmt::ControllerInfo`
+    fn from_controller_info(controller_info: mgmt::ControllerInfo) -> Self {
+        let inner = ControllerInformationInner::Management(controller_info);
+
+        ControllerInformation { inner }
+    }
+
+    /// Get the ID of the Controller
+    ///
+    /// This returns the identifier assigned by Linux to a Bluetooth controller.
+    pub fn get_index(&self) -> u16 {
+        match &self.inner {
+            ControllerInformationInner::Legacy(l) => l.get_index(),
+            ControllerInformationInner::Management(m) => m.get_index(),
+        }
+    }
+
+    /// Get the public Address of the Controller
+    ///
+    /// # Note
+    /// This can return an all zero address if the Controller is LE only
+    pub fn get_address(&self) -> bo_tie_core::BluetoothDeviceAddress {
+        match &self.inner {
+            ControllerInformationInner::Legacy(l) => l.get_address(),
+            ControllerInformationInner::Management(m) => m.get_address(),
+        }
+    }
+
+    /// Check if this is legacy information
+    ///
+    /// This returns a boolean to indicate that the legacy interface for Bluetooth was used for interacting with the
+    /// kernel. In legacy mode there is less information shared to the user about the controller.
+    ///
+    /// This will return true if the Linux kernel version is less than v3.4.
+    pub fn is_using_legacy(&self) -> bool {
+        if let ControllerInformationInner::Legacy(_) = &self.inner {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the name of the device
+    ///
+    /// This returns the assigned name of the device.
+    ///
+    /// On legacy mode the full name shortened to seven characters, regardless of whether a complete local name or a
+    /// shortened local name is assigned.
+    pub fn get_name(&self) -> &str {
+        match &self.inner {
+            ControllerInformationInner::Legacy(l) => l.get_name(),
+            ControllerInformationInner::Management(m) => m.get_name(),
+        }
+    }
+
+    /// Check if the device supports LE
+
+    /// Get the company identifier
+    ///
+    /// This returns the identifier of the manufacturer. The manufacture's name corresponding to the identifier can be
+    /// looked up within the *assigned numbers* document on the Bluetooth SIG website.
+    ///
+    /// This information is only available via the management interface.
+    pub fn get_company_identifier(&self) -> Option<u16> {
+        match &self.inner {
+            ControllerInformationInner::Legacy(_) => None,
+            ControllerInformationInner::Management(m) => Some(m.get_company_identifier()),
+        }
+    }
+
+    /// Get the class of the device
+    ///
+    /// This returns the raw class of device for the controller. Information on the meaning of the the returned raw
+    /// class of device can be found within the *assigned numbers* document on the Bluetooth SIG website.
+    ///
+    /// This information is only available if both the controller supports BR/EDR and the managment interface was used.
+    pub fn get_raw_class_of_device(&self) -> Option<[u8; 3]> {
+        match &self.inner {
+            ControllerInformationInner::Legacy(_) => None,
+            ControllerInformationInner::Management(m) => m.get_raw_class_of_device(),
         }
     }
 }
 
-impl Default for bindings::hci_dev_req {
-    fn default() -> Self {
-        bindings::hci_dev_req { dev_id: 0, dev_opt: 0 }
+#[cfg(feature = "ctrls_intf")]
+impl std::fmt::Display for ControllerInformation {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match &self.inner {
+            ControllerInformationInner::Legacy(l) => std::fmt::Display::fmt(&l, f),
+            ControllerInformationInner::Management(m) => std::fmt::Display::fmt(&m, f),
+        }
     }
 }

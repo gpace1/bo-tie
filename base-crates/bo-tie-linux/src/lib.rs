@@ -38,41 +38,40 @@
 //! [`run`]: LinuxInterface::run
 //!
 
+#[cfg(feature = "ctrls_intf")]
+pub use crate::device::ControllersInterface;
+use bo_tie_core::buffer::Buffer;
 use bo_tie_hci_util::{ChannelReserve, HciPacket};
-use std::error;
-use std::fmt;
-use std::ops::Drop;
-use std::option::Option;
 use std::os::fd::RawFd;
 use std::sync::Arc;
-use std::thread;
 use tokio::sync::mpsc::{error::SendError, UnboundedReceiver, UnboundedSender};
 
 mod device;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct FileDescriptor(RawFd);
+#[derive(Debug, Clone)]
+pub struct ArcFileDesc(Arc<std::os::fd::OwnedFd>);
 
-impl Drop for FileDescriptor {
-    fn drop(&mut self) {
-        use nix::unistd::close;
-
-        close(self.0).unwrap();
+impl std::os::fd::FromRawFd for ArcFileDesc {
+    unsafe fn from_raw_fd(raw_fd: RawFd) -> Self {
+        ArcFileDesc(Arc::new(std::os::fd::FromRawFd::from_raw_fd(raw_fd)))
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ArcFileDesc(Arc<FileDescriptor>);
-
-impl From<RawFd> for ArcFileDesc {
-    fn from(rfd: RawFd) -> Self {
-        ArcFileDesc(Arc::new(FileDescriptor(rfd)))
+impl std::os::fd::AsRawFd for ArcFileDesc {
+    fn as_raw_fd(&self) -> RawFd {
+        std::os::fd::AsRawFd::as_raw_fd(&self.0)
     }
 }
 
-impl ArcFileDesc {
-    fn raw_fd(&self) -> RawFd {
-        (*self.0).0
+impl std::os::fd::AsFd for ArcFileDesc {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        std::os::fd::AsFd::as_fd(&self.0)
+    }
+}
+
+impl From<std::os::fd::OwnedFd> for ArcFileDesc {
+    fn from(owned_fd: std::os::fd::OwnedFd) -> Self {
+        ArcFileDesc(Arc::new(owned_fd))
     }
 }
 
@@ -80,104 +79,92 @@ impl ArcFileDesc {
 /// * 0 -> BluetoothController,
 /// * 1 -> TaskExit,
 /// * else -> Timeout
-enum EPollResult {
+enum PollEvent {
     BluetoothController,
     TaskExit,
-    TaskTerm,
 }
 
-impl From<u64> for EPollResult {
+impl From<u64> for PollEvent {
     fn from(val: u64) -> Self {
         match val {
-            0 => EPollResult::BluetoothController,
-            1 => EPollResult::TaskExit,
-            2 => EPollResult::TaskTerm,
+            0 => PollEvent::BluetoothController,
+            1 => PollEvent::TaskExit,
             _ => panic!("Invalid EPollResult '{}'", val),
         }
     }
 }
 
-impl From<EPollResult> for u64 {
-    fn from(epr: EPollResult) -> Self {
+impl From<PollEvent> for nix::sys::epoll::EpollEvent {
+    fn from(epr: PollEvent) -> Self {
         match epr {
-            EPollResult::BluetoothController => 0,
-            EPollResult::TaskExit => 1,
-            EPollResult::TaskTerm => 2,
+            PollEvent::BluetoothController => nix::sys::epoll::EpollEvent::new(nix::sys::epoll::EpollFlags::EPOLLIN, 0),
+            PollEvent::TaskExit => nix::sys::epoll::EpollEvent::new(nix::sys::epoll::EpollFlags::EPOLLIN, 1),
         }
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
-pub enum Error {
-    EventNotSentFromController(String),
-    IoError(nix::Error),
-    MPSCError(String),
-    Timeout,
-    Other(String),
-}
+// #[derive(Clone, PartialEq, Debug)]
+// pub enum Error {
+//     EventNotSentFromController(String),
+//     IoError(nix::Error),
+//     MPSCError(String),
+//     Timeout,
+//     Other(String),
+// }
+//
+// impl fmt::Display for Error {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         write!(f, "(from base-crate: bo-tie-linux) ")?;
+//
+//         match *self {
+//             Error::EventNotSentFromController(ref reason) => write!(f, "Event not sent from controller {}", reason),
+//
+//             Error::IoError(ref errno) => write!(f, "IO error: {}", errno),
+//
+//             Error::MPSCError(ref msg) => write!(f, "{}", msg),
+//
+//             Error::Timeout => write!(f, "Timeout Occurred"),
+//
+//             Error::Other(ref msg) => write!(f, "{}", msg),
+//         }
+//     }
+// }
+//
+// impl std::error::Error for Error {
+//     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+//         match *self {
+//             Error::EventNotSentFromController(_) => None,
+//             Error::IoError(ref errno) => errno.source().clone(),
+//             Error::MPSCError(_) => None,
+//             Error::Timeout => None,
+//             Error::Other(_) => None,
+//         }
+//     }
+// }
+//
+// impl From<nix::Error> for Error {
+//     fn from(e: nix::Error) -> Self {
+//         Error::IoError(e)
+//     }
+// }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "(from base-crate: bo-tie-linux) ")?;
-
-        match *self {
-            Error::EventNotSentFromController(ref reason) => write!(f, "Event not sent from controller {}", reason),
-
-            Error::IoError(ref errno) => write!(f, "IO error: {}", errno),
-
-            Error::MPSCError(ref msg) => write!(f, "{}", msg),
-
-            Error::Timeout => write!(f, "Timeout Occurred"),
-
-            Error::Other(ref msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match *self {
-            Error::EventNotSentFromController(_) => None,
-            Error::IoError(ref errno) => errno.source().clone(),
-            Error::MPSCError(_) => None,
-            Error::Timeout => None,
-            Error::Other(_) => None,
-        }
-    }
-}
-
-impl From<nix::Error> for Error {
-    fn from(e: nix::Error) -> Self {
-        Error::IoError(e)
-    }
-}
-
-struct AdapterThread {
+/// A struct for creating a thread to directly interface with the Bluetooth controller
+///
+/// This is used to create a thread to be a middle man between the Linux operating system and the the async executor
+/// running the application using the bo-tie library.
+struct InterfaceThread {
     sender: UnboundedSender<HciPacket<Vec<u8>>>,
-    adapter_fd: ArcFileDesc,
-    exit_fd: ArcFileDesc,
-    epoll_fd: ArcFileDesc,
+    controller_socket: ArcFileDesc,
+    _exit_event: ArcFileDesc,
+    epoll: nix::sys::epoll::Epoll,
 }
 
-impl AdapterThread {
+impl InterfaceThread {
     /// Spawn self
-    fn spawn(self) -> thread::JoinHandle<()> {
-        thread::spawn(move || {
+    fn spawn(self) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
             self.task();
         })
-    }
-
-    /// Ignores the Unix errors EAGAIN and EINTR
-    fn ignore_eagain_and_eintr<F, R>(mut func: F) -> Result<R, Error>
-    where
-        F: FnMut() -> Result<R, Error>,
-    {
-        loop {
-            match func() {
-                Err(Error::IoError(nix::Error::EAGAIN)) | Err(Error::IoError(nix::Error::EINTR)) => continue,
-                result => break result,
-            }
-        }
     }
 
     /// Task for processing HCI messages from the controller
@@ -188,50 +175,38 @@ impl AdapterThread {
     /// polls the device id of the adapter to wait for
     ///
     /// This task can only exit by closing the device.
-    fn task(mut self) {
+    fn task(self) {
+        self.task_inner().expect("linux interface thread panicked")
+    }
+
+    fn task_inner(mut self) -> Result<(), Box<dyn std::error::Error>> {
         use nix::sys::epoll;
-        use nix::unistd::read;
+        use nix::sys::socket::{recv, MsgFlags};
 
         // Buffer used for receiving data.
-        let mut buffer = [0u8; 1024];
+        let mut hci_rx_buffer = Vec::with_capacity(1024);
 
-        'task: loop {
-            let epoll_events = &mut [epoll::EpollEvent::empty(); 256];
+        hci_rx_buffer.resize(1024, 0);
 
-            let event_count = match Self::ignore_eagain_and_eintr(|| {
-                epoll::epoll_wait(self.epoll_fd.raw_fd(), epoll_events, -1).map_err(|e| Error::from(e))
-            }) {
-                Ok(size) => size,
-                Err(e) => panic!("Epoll Error: {}", Error::from(e)),
-            };
+        let epoll_events = &mut [epoll::EpollEvent::empty(); 2];
 
-            for epoll_event in epoll_events[..event_count].iter() {
-                match EPollResult::from(epoll_event.data()) {
-                    EPollResult::BluetoothController => {
-                        // received the data
-                        let len = match Self::ignore_eagain_and_eintr(|| {
-                            read(self.adapter_fd.raw_fd(), &mut buffer).map_err(|e| Error::from(e))
-                        }) {
-                            Ok(val) => val,
-                            Err(e) => panic!(
-                                "Cannot read from Bluetooth Controller file descriptor: {}",
-                                Error::from(e)
-                            ),
-                        };
+        loop {
+            let event_count = self.epoll.wait(epoll_events, -1)?;
 
-                        if let Err(e) = self.process_received_message(&buffer[..len]) {
-                            log::error!("failed to send message from linux driver {}", e);
-                            break 'task;
-                        }
+            for epoll_event in &epoll_events[..event_count] {
+                match PollEvent::from(epoll_event.data()) {
+                    PollEvent::BluetoothController => {
+                        // using 'DONTWAIT' as `recv` returning an
+                        // error is better than hanging forever.
+                        let flags = MsgFlags::MSG_DONTWAIT;
+
+                        let raw_fd = std::os::fd::AsRawFd::as_raw_fd(&self.controller_socket);
+
+                        let rx_len = recv(raw_fd, &mut hci_rx_buffer, flags)?;
+
+                        self.process_received_message(&hci_rx_buffer[..rx_len])?
                     }
-
-                    EPollResult::TaskExit => {
-                        // Clear the block for the main task
-                        read(self.exit_fd.raw_fd(), &mut [0u8; 8]).unwrap();
-                        break 'task;
-                    }
-
-                    EPollResult::TaskTerm => break 'task,
+                    PollEvent::TaskExit => return Ok(()),
                 }
             }
         }
@@ -282,38 +257,41 @@ impl AdapterThread {
 /// ```
 /// [`run`]: LinuxInterface::run
 pub struct LinuxInterface<C> {
-    adapter_fd: ArcFileDesc,
-    exit_fd: ArcFileDesc,
+    controller_socket: ArcFileDesc,
+    exit_event: ArcFileDesc,
     receiver: UnboundedReceiver<HciPacket<Vec<u8>>>,
     interface: bo_tie_hci_interface::Interface<C>,
+    join_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl<T: ChannelReserve> LinuxInterface<T> {
     /// Run the interface
     ///
-    /// This launches the interface to begin processing HCI packets sent to and received from the
-    /// Bluetooth Controller.
+    /// This launches the interface to begin processing HCI packets sent to and received from the Bluetooth Controller.
+    ///
+    /// # Panic
+    /// This will panic if something goes wrong with the system calls to Linux.
     pub async fn run(mut self) {
-        use device::send_to_controller;
-
         loop {
             tokio::select! {
                 received = self.receiver.recv() => {
                     match &received {
                         Some(packet) => if let Err(e) = self.interface.up_send(packet).await {
-                            if let Err(e) = e.try_log() {
-                                log::error!("up send error: {:?}", e);
-                                break
-                            };
+                            e.try_log().expect("up send error");
                         },
-                        None => break,
+                        None => {
+                            // The receiver closed so the interface thread is dead.
+                            // Panic if there is an error in the thread handle.
+                            self.join_handle.take().unwrap().join().unwrap();
+
+                            unreachable!("unexpected closed receiver")
+                        },
                     }
                 }
-                opt_packet = self.interface.down_send() => { {}
+                opt_packet = self.interface.down_send() => {
                     match opt_packet {
-                        Some(mut packet) => if let Err(e) = send_to_controller(&self.adapter_fd.0, &mut packet) {
-                            log::error!("unix error: {}", e);
-                            break
+                        Some(mut packet) => if let Err(e) = self.send_to_controller(&mut packet) {
+                            panic!("unix error: {}", e);
                         }
                         None => {
                             log::debug!("interface exiting due to host closure");
@@ -324,153 +302,67 @@ impl<T: ChannelReserve> LinuxInterface<T> {
             }
         }
     }
-}
 
-/// Create a `LinuxInterface` from an ID for the adapter
-fn from_adapter_id(
-    adapter_id: usize,
-) -> (
-    LinuxInterface<bo_tie_hci_util::channel::tokio::UnboundedChannelReserve>,
-    bo_tie_hci_util::channel::tokio::UnboundedHostChannelEnds,
-) {
-    use nix::libc;
-    use nix::sys::epoll::{epoll_create1, epoll_ctl, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp};
-    use nix::sys::eventfd::{eventfd, EfdFlags};
-    use nix::sys::signal::{SigSet, Signal};
-    use nix::sys::signalfd::{signalfd, SfdFlags};
+    /// Send a HCI packet to the controller
+    fn send_to_controller(&self, packet: &mut HciPacket<impl Buffer>) -> nix::Result<usize> {
+        let raw_fd = std::os::fd::AsRawFd::as_raw_fd(&self.controller_socket);
 
-    let device_fd = unsafe {
-        libc::socket(
-            libc::AF_BLUETOOTH,
-            libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-            device::bindings::BTPROTO_HCI as i32,
-        )
-    };
+        // UART packet indication is the same system used by the Linux kernel for labeling HCI packets.
+        // This should never fail unless there is an issue within `PacketIndicator`.
+        let message =
+            bo_tie_hci_interface::uart::PacketIndicator::prepend(packet).expect("failed to prepend packet indicator");
 
-    if device_fd < 0 {
-        panic!("Bluetooth not supported on this system");
+        nix::sys::socket::send(raw_fd, &message, nix::sys::socket::MsgFlags::MSG_DONTWAIT)
     }
-
-    let sa_p = &device::bindings::sockaddr_hci {
-        hci_family: libc::AF_BLUETOOTH as u16,
-        hci_dev: adapter_id as u16,
-        hci_channel: device::bindings::HCI_CHANNEL_USER as u16,
-    } as *const device::bindings::sockaddr_hci as *const libc::sockaddr;
-
-    let sa_len = std::mem::size_of::<device::bindings::sockaddr_hci>() as libc::socklen_t;
-
-    if let Err(e) = unsafe { device::hci_dev_down(device_fd, adapter_id.try_into().unwrap()) } {
-        panic!("Failed to close hci device '{}', {}", adapter_id, e);
-    }
-
-    if let Err(e) = unsafe { device::hci_dev_up(device_fd, adapter_id.try_into().unwrap()) } {
-        panic!("Failed to open hci device '{}', {}", adapter_id, e);
-    }
-
-    if let Err(e) = unsafe { device::hci_dev_down(device_fd, adapter_id.try_into().unwrap()) } {
-        panic!("Failed to close hci device '{}', {}", adapter_id, e);
-    }
-
-    if unsafe { libc::bind(device_fd, sa_p, sa_len) } < 0 {
-        panic!("Failed to bind to HCI: {}", nix::errno::Errno::last());
-    }
-
-    let exit_evt_fd = eventfd(0, EfdFlags::EFD_CLOEXEC).expect("eventfd failed");
-
-    let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).expect("epoll_create1 failed");
-
-    // A set of signals used to abort the epoll
-    let mut signals_set = SigSet::empty();
-
-    signals_set.add(Signal::SIGABRT);
-    signals_set.add(Signal::SIGTERM);
-
-    let signals_fd = signalfd(-1, &signals_set, SfdFlags::SFD_CLOEXEC).expect("singalfd failed");
-
-    epoll_ctl(
-        epoll_fd,
-        EpollOp::EpollCtlAdd,
-        device_fd,
-        &mut EpollEvent::new(EpollFlags::EPOLLIN, EPollResult::BluetoothController.into()),
-    )
-    .expect("epoll_ctl failed");
-
-    epoll_ctl(
-        epoll_fd,
-        EpollOp::EpollCtlAdd,
-        exit_evt_fd,
-        &mut EpollEvent::new(EpollFlags::EPOLLIN, EPollResult::TaskExit.into()),
-    )
-    .expect("epoll_ctl failed");
-
-    epoll_ctl(
-        epoll_fd,
-        EpollOp::EpollCtlAdd,
-        signals_fd,
-        &mut EpollEvent::new(EpollFlags::EPOLLIN, EPollResult::TaskTerm.into()),
-    )
-    .expect("epoll_ctl failed");
-
-    let arc_adapter_fd = ArcFileDesc::from(device_fd);
-    let arc_exit_fd = ArcFileDesc::from(exit_evt_fd);
-    let arc_epoll_fd = ArcFileDesc::from(epoll_fd);
-
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-
-    let (reserve, host_ends) = bo_tie_hci_util::channel::tokio_unbounded(1, 0);
-
-    let interface = bo_tie_hci_interface::Interface::new(reserve);
-
-    AdapterThread {
-        sender,
-        adapter_fd: arc_adapter_fd.clone(),
-        exit_fd: arc_exit_fd.clone(),
-        epoll_fd: arc_epoll_fd,
-    }
-    .spawn();
-
-    let this = LinuxInterface {
-        adapter_fd: arc_adapter_fd,
-        exit_fd: arc_exit_fd,
-        receiver,
-        interface,
-    };
-
-    (this, host_ends)
 }
 
 impl<C> Drop for LinuxInterface<C> {
     fn drop(&mut self) {
+        let Some(join_handle) = self.join_handle.take() else {
+            return;
+        };
+
+        let raw_fd = std::os::fd::AsRawFd::as_raw_fd(&self.exit_event);
+
         // Send the exit signal.
-        // The value sent doesn't really matter (just that it is 8 bytes, not 0, and not !0 )
-        nix::unistd::write(self.exit_fd.raw_fd(), &[1u8; 8]).unwrap();
+        nix::unistd::write(raw_fd, &[1u8; 8]).unwrap();
+
+        join_handle.join().expect("failed to close task")
     }
 }
 
 /// Create a `LinuxInterface`
 ///
-/// The input `adapter_id` is the identifier of the adapter for the Bluetooth Controller. If
-/// there is only one Bluetooth Controller or any adapter will work `None` can be used to
-/// automatically select an adapter.
+/// The input `controller_id` is an identifier of a Bluetooth Controller on this Linux machine. Its a unique number
+/// assigned to a Bluetooth controller soon after the Linux OS detects the device. If you're familiar with the Bluetooth
+/// management interface, the `controller_id` is equivalent to a controller index.
+///
+/// Using `None` for `controller_id` will use the controller with the ID equivalent to `0`. If you're unsure what
+/// controller to choose, either use the `ControllersInterface` or the tools of `bluez` to discover the identifiers of
+/// the controllers on the system.
 ///
 /// # Panic
-/// This will panic if there is no Bluetooth adapter or if the `adapter_id` does not exist for
-/// this machine.
+/// This will panic if Bluetooth is not supported or there is no Bluetooth controller for `controller_id` on this
+/// machine.
+///
+/// [`ControllersInterface`]: device::ControllersInterface
 pub fn new<T>(
-    adapter_id: T,
+    controller_id: T,
 ) -> (
     LinuxInterface<bo_tie_hci_util::channel::tokio::UnboundedChannelReserve>,
     bo_tie_hci_util::channel::tokio::UnboundedHostChannelEnds,
 )
 where
-    T: Into<Option<usize>>,
+    T: Into<Option<u16>>,
 {
-    match adapter_id.into() {
-        Some(id) => from_adapter_id(id),
-        None => {
-            let adapter_id = device::get_dev_id(None).expect("No Bluetooth adapter found on this system");
+    let mut controllers_interface = device::ControllersInterface::new().expect("Bluetooth not supported");
 
-            from_adapter_id(adapter_id)
-        }
+    match controller_id.into() {
+        Some(id) => controllers_interface
+            .create_interface(id)
+            .expect("no controller with input id"),
+        None => controllers_interface
+            .create_interface(0)
+            .expect("no default controller on this system"),
     }
 }
