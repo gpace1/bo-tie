@@ -325,8 +325,8 @@ impl ManagementSocket {
     ///
     /// [`23500189d7`]: https://github.com/torvalds/linux/commit/23500189d7e03a071f0746f43f2cce875a62c91c
     pub(crate) fn make_socket(&mut self, index: u16) -> Result<std::os::fd::OwnedFd, Box<dyn std::error::Error>> {
-        // Need to 'power down' the controller before it a
-        // user channel socket is established
+        // Need to 'power down' the controller before a
+        // user channel can be bound to the socket
         self.set_powered(index, false)?;
 
         let raw_socket_fd = unsafe {
@@ -339,8 +339,8 @@ impl ManagementSocket {
 
         let sock_addr_ptr = &bindings::sockaddr_hci {
             hci_family: libc::AF_BLUETOOTH as u16,
-            hci_dev: index as u16,
-            hci_channel: bindings::HCI_CHANNEL_RAW as u16,
+            hci_dev: index,
+            hci_channel: bindings::HCI_CHANNEL_USER as u16,
         } as *const bindings::sockaddr_hci as *const libc::sockaddr;
 
         let sock_addr_len = std::mem::size_of::<bindings::sockaddr_hci>() as libc::socklen_t;
@@ -726,8 +726,8 @@ impl ControllerInfo {
     fn from_raw_extended(index: u16, raw: &[u8]) -> Self {
         let raw_address = &raw[0..6];
         let company_id = <u16>::from_le_bytes([raw[7], raw[8]]);
-        let eir_data_len: usize = <u16>::from_le_bytes([raw[18], raw[19]]).into();
-        let eir = raw[20..(20 + eir_data_len)].to_vec();
+        let eir_data_len: usize = <u16>::from_le_bytes([raw[17], raw[18]]).into();
+        let eir = raw[19..(19 + eir_data_len)].to_vec();
 
         let address = bo_tie_core::BluetoothDeviceAddress::try_from(raw_address).unwrap();
 

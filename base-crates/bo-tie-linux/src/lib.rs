@@ -103,51 +103,6 @@ impl From<PollEvent> for nix::sys::epoll::EpollEvent {
     }
 }
 
-// #[derive(Clone, PartialEq, Debug)]
-// pub enum Error {
-//     EventNotSentFromController(String),
-//     IoError(nix::Error),
-//     MPSCError(String),
-//     Timeout,
-//     Other(String),
-// }
-//
-// impl fmt::Display for Error {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         write!(f, "(from base-crate: bo-tie-linux) ")?;
-//
-//         match *self {
-//             Error::EventNotSentFromController(ref reason) => write!(f, "Event not sent from controller {}", reason),
-//
-//             Error::IoError(ref errno) => write!(f, "IO error: {}", errno),
-//
-//             Error::MPSCError(ref msg) => write!(f, "{}", msg),
-//
-//             Error::Timeout => write!(f, "Timeout Occurred"),
-//
-//             Error::Other(ref msg) => write!(f, "{}", msg),
-//         }
-//     }
-// }
-//
-// impl std::error::Error for Error {
-//     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-//         match *self {
-//             Error::EventNotSentFromController(_) => None,
-//             Error::IoError(ref errno) => errno.source().clone(),
-//             Error::MPSCError(_) => None,
-//             Error::Timeout => None,
-//             Error::Other(_) => None,
-//         }
-//     }
-// }
-//
-// impl From<nix::Error> for Error {
-//     fn from(e: nix::Error) -> Self {
-//         Error::IoError(e)
-//     }
-// }
-
 /// A struct for creating a thread to directly interface with the Bluetooth controller
 ///
 /// This is used to create a thread to be a middle man between the Linux operating system and the the async executor
@@ -290,8 +245,8 @@ impl<T: ChannelReserve> LinuxInterface<T> {
                 }
                 opt_packet = self.interface.down_send() => {
                     match opt_packet {
-                        Some(mut packet) => if let Err(e) = self.send_to_controller(&mut packet) {
-                            panic!("unix error: {}", e);
+                        Some(mut packet) => {
+                            self.send_to_controller(&mut packet).expect("linux error");
                         }
                         None => {
                             log::debug!("interface exiting due to host closure");
