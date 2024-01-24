@@ -329,13 +329,8 @@ impl ManagementSocket {
         // user channel can be bound to the socket
         self.set_powered(index, false)?;
 
-        let raw_socket_fd = unsafe {
-            libc::socket(
-                libc::AF_BLUETOOTH,
-                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-                device::bindings::BTPROTO_HCI as i32,
-            )
-        };
+        let raw_socket_fd =
+            unsafe { libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW, device::bindings::BTPROTO_HCI as i32) };
 
         let sock_addr_ptr = &bindings::sockaddr_hci {
             hci_family: libc::AF_BLUETOOTH as u16,
