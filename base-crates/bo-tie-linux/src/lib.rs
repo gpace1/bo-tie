@@ -315,9 +315,9 @@ where
     match controller_id.into() {
         Some(id) => controllers_interface
             .create_interface(id)
-            .expect("no controller with input id"),
+            .expect("failed to use controller"),
         None => controllers_interface
             .create_interface(0)
-            .expect("no default controller on this system"),
+            .expect("failed to use default controller"),
     }
 }
