@@ -81,14 +81,12 @@ impl LegacySocket {
 
         unsafe { hci_dev_down(this_raw_fd, index as std::ffi::c_ulong) }?;
 
-        unsafe { hci_dev_set_raw(this_raw_fd, index as std::ffi::c_ulong) }?;
-
         let raw_socked_fd = unsafe { libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW, bindings::BTPROTO_HCI as i32) };
 
         let sock_addr_ptr = &bindings::sockaddr_hci {
             hci_family: libc::AF_BLUETOOTH as u16,
             hci_dev: index,
-            hci_channel: bindings::HCI_CHANNEL_RAW as u16, // For some early Linux versions this doesn't even exist.
+            hci_channel: bindings::HCI_CHANNEL_RAW as u16, // for some early Linux versions this doesn't even exist.
         } as *const bindings::sockaddr_hci as *const libc::sockaddr;
 
         let sock_addr_len = std::mem::size_of::<bindings::sockaddr_hci>() as libc::socklen_t;
@@ -96,6 +94,8 @@ impl LegacySocket {
         if unsafe { libc::bind(raw_socked_fd, sock_addr_ptr, sock_addr_len) } < 0 {
             return Err(nix::Error::last());
         }
+
+        unsafe { hci_dev_set_raw(raw_socked_fd, 1 as std::ffi::c_ulong) }?;
 
         let fd = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw_socked_fd) };
 
