@@ -30,7 +30,7 @@
 /// assert!(!uuid_128.can_be_16_bit());
 /// ```
 ///
-/// ## String UUID
+/// ## Converting from a string UUID
 ///
 /// A [`Uuid`] can be created from a string that is formatted as a UUID. The string must exactly
 /// match the field format \[8\]-\[4\]-\[4\]-\[4\]-\[12\] where each number represents the number of
@@ -41,13 +41,17 @@
 /// 67836afd-ae0b-4eb4-946d-e5b716f333e7
 /// ```
 ///
-/// A string of a 16 or 32 bit shortened UUID cannot be converted *directly* into a `Uuid`. Instead
-/// use the [`str::parse`] to convert the string to a `u16` or `u32` bit number and then convert
-/// that into a UUID.
+/// ### Shortened UUID
+/// A string of a 16 or 32 bit shortened UUID cannot be converted *directly* into a `Uuid`. Use the [`str::parse`] to
+/// convert the string to a `u16` or `u32` number and then convert that into a UUID.
 ///
-/// Either the of the implementations of `TryFrom` or `FromStr` (see method `str::parse`) can be
-/// used to perform the conversion, but the `TryFrom` error type does contains some information on
-/// what went wrong.
+/// ## `Uuid` display formats
+/// The implementation of `Display` will format the UUID to the standard \[8\]-\[4\]-\[4\]-\[4\]-\[12\] hexidecimal
+/// grouping format. There is no difference between the display for full or shortened Uuids.
+///
+/// The implementations of `LowerHex` and `UpperHex` will shorten the displayed `Uuid`, if it can be, but they will just
+/// display the UUID as a number without the grouping. It can be confusing whether a shortened or a full `Uuid` is
+/// formatted using a hexidecimal format, so an indication of the size should be displayed with `Uuid`.
 ///
 /// ## Using crate [`uuid`]
 ///
@@ -102,9 +106,8 @@ impl Uuid {
 
     /// Display format for UUID
     ///
-    /// The display format for a UUID changes based on whether or not it is a 16 bit or 32 bit
-    /// shortened UUID.
-    fn display_type<F1, F2, F3>(
+    /// The display format for a UUID changes based on whether it is a 16 or 32 bit shortened UUID.
+    fn hex_display_type<F1, F2, F3>(
         &self,
         f: &mut core::fmt::Formatter,
         fn_16: F1,
@@ -117,17 +120,11 @@ impl Uuid {
         F3: FnOnce(&u128, &mut core::fmt::Formatter) -> core::fmt::Result,
     {
         if let Ok(val) = <u16>::try_from(*self) {
-            fn_16(&val, f)?;
-
-            write!(f, " (16b)")
+            fn_16(&val, f)
         } else if let Ok(val) = <u32>::try_from(*self) {
-            fn_32(&val, f)?;
-
-            write!(f, " (32b)")
+            fn_32(&val, f)
         } else {
-            fn_128(&self.base_uuid, f)?;
-
-            write!(f, " (128b)")
+            fn_128(&self.base_uuid, f)
         }
     }
 }
@@ -138,9 +135,23 @@ impl core::fmt::Debug for Uuid {
     }
 }
 
+impl core::fmt::Display for Uuid {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(
+            f,
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            self.base_uuid >> 96,
+            (self.base_uuid >> 80) & 0xffff,
+            (self.base_uuid >> 64) & 0xffff,
+            (self.base_uuid >> 48) & 0xffff,
+            self.base_uuid & 0xffffffffffff
+        )
+    }
+}
+
 impl core::fmt::LowerHex for Uuid {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        self.display_type(
+        self.hex_display_type(
             f,
             |v, f| core::fmt::LowerHex::fmt(v, f),
             |v, f| core::fmt::LowerHex::fmt(v, f),
@@ -151,7 +162,7 @@ impl core::fmt::LowerHex for Uuid {
 
 impl core::fmt::UpperHex for Uuid {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        self.display_type(
+        self.hex_display_type(
             f,
             |v, f| core::fmt::UpperHex::fmt(v, f),
             |v, f| core::fmt::UpperHex::fmt(v, f),
