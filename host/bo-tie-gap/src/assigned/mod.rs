@@ -670,7 +670,7 @@ impl SequenceVec {
             Err(len) => len,
         };
 
-        self.0.resize(data_len + HEADER_SIZE, 0);
+        self.0.resize(self.0.len() + data_len + HEADER_SIZE, 0);
 
         // this cannot fail unless the return of convert_to is incorrect
         t.convert_into(&mut self.0[start..]).unwrap();
