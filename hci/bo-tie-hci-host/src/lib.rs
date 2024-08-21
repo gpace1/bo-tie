@@ -375,13 +375,13 @@ impl<T> HciAclData<T> {
             buffer.get(3).copied().ok_or(HciAclPacketError::PacketTooSmall)?,
         ]) as usize;
 
+        // remove the HCI ACL data packet header
+        buffer.try_front_remove(4).expect("unexpected invalid ACL packet size");
+        
         let data_total_len = buffer
             .len()
             .checked_sub(data_length)
             .ok_or(HciAclPacketError::PacketTooSmall)?;
-
-        // remove the HCI ACL data packet header
-        buffer.try_front_remove(4).expect("unexpected invalid ACL packet size");
 
         // truncate to `data_total_len`
         buffer
