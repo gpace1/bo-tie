@@ -767,10 +767,10 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         Ok(k_frame)
     }
 
-    /// Receive a Credit Based Frame but dont touch the buffer
+    /// Receive a Credit Based Frame but don't touch the buffer
     ///
-    /// Unlike `receive_frame` this returns a `CreditBasedFrame` where the payload is a the same
-    /// reference as `sdu_buffer`.
+    /// Unlike `receive_frame` this returns a `CreditBasedFrame` where the payload is placed within
+    /// `sdu_buffer`.
     async fn receive_frame_into<'z, T>(
         &mut self,
         sdu_buffer: &'z mut T,
