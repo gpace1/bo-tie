@@ -31,7 +31,7 @@ use bo_tie::host::gap::assigned;
 use bo_tie::BluetoothDeviceAddress;
 
 pub async fn discoverable_advertising_setup<H: HostChannelEnds>(host: &mut Host<H>) -> Kind {
-    let discoverable_address = BluetoothDeviceAddress::new_random_non_resolvable();
+    let discoverable_address = BluetoothDeviceAddress::new_non_resolvable();
 
     let adv_name = assigned::local_name::LocalName::new(crate::EXAMPLE_NAME, ["HRP example", "HRP"]);
 
