@@ -1477,6 +1477,7 @@ pub fn read_blob_response(parameters: ReadBlobResponse) -> Pdu<ReadBlobResponse>
 /// Localized Read Blob Response
 ///
 /// Contains a reference to a blob of data sent from the server
+#[derive(Debug)]
 pub(crate) struct LocalReadBlobResponse<'a> {
     blob: &'a [u8],
 }

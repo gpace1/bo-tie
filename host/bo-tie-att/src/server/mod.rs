@@ -421,7 +421,7 @@ macro_rules! client_can_write_attribute {
 /// $pdu: `pdu::Pdu<_>`,
 macro_rules! send_pdu {
     ( $channel:expr, $pdu:expr $(,)?) => {{
-        log::info!("(ATT) sending {}", $pdu.get_opcode());
+        log::info!("(ATT) sending {:?}", $pdu);
 
         send_pdu!(SKIP_LOG, $channel, $pdu)
     }};
