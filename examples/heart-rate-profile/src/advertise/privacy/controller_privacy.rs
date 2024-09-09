@@ -3,15 +3,15 @@
 use bo_tie::hci::{Connection, Host, HostChannelEnds};
 use bo_tie::host::sm::{IdentityAddress, Keys};
 
-pub struct Controller;
+pub struct Controller(Vec<IdentityAddress>);
 
 impl Controller {
     pub fn new() -> Self {
-        Controller
+        Controller(Vec::new())
     }
 
     /// Add a device to the resolving list when using the Bluetooth Controller for privacy
-    pub async fn add_device_resolving_list<H: HostChannelEnds>(&self, host: &mut Host<H>, keys: &Keys) {
+    pub async fn add_device_resolving_list<H: HostChannelEnds>(&mut self, host: &mut Host<H>, keys: &Keys) {
         use bo_tie::hci::commands::le::{
             add_device_to_resolving_list, set_address_resolution_enable, set_privacy_mode,
             set_resolvable_private_address_timeout, PeerIdentityAddressType,
@@ -56,10 +56,16 @@ impl Controller {
             .unwrap();
 
         set_address_resolution_enable::send(host, true).await.unwrap();
+
+        self.0.push(keys.get_peer_identity().unwrap())
+    }
+
+    pub fn get_bonded(&self) -> Vec<IdentityAddress> {
+        self.0.clone()
     }
 
     pub async fn remove_device_from_resolving_list<H: HostChannelEnds>(
-        &self,
+        &mut self,
         host: &mut Host<H>,
         identity: &IdentityAddress,
     ) {
@@ -76,13 +82,19 @@ impl Controller {
         };
 
         remove_device_from_resolving_list::send(host, parameter).await.unwrap();
+
+        if let Some(index) = self.0.iter().position(|i| i == identity) {
+            self.0.swap_remove(index);
+        }
     }
 
     /// Clear the resolving list on the Controller
-    pub async fn clear_resolving_list<H: HostChannelEnds>(&self, host: &mut Host<H>) {
+    pub async fn clear_resolving_list<H: HostChannelEnds>(&mut self, host: &mut Host<H>) {
         bo_tie::hci::commands::le::clear_resolving_list::send(host)
             .await
-            .unwrap()
+            .unwrap();
+
+        self.0.clear();
     }
 
     pub async fn set_timeout<H: HostChannelEnds>(&self, host: &mut Host<H>, timeout: std::time::Duration) {

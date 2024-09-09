@@ -27,6 +27,10 @@ impl HostPrivacy {
         HostPrivacy { resolving_list }
     }
 
+    pub fn get_bonded(&self) -> Vec<IdentityAddress> {
+        self.resolving_list.iter().map(|r| r.peer_identity).collect()
+    }
+
     fn set_connected(&mut self, peer_identity: &IdentityAddress, is_connected: bool) {
         let index = self
             .resolving_list

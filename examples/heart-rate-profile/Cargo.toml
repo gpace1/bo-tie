@@ -5,19 +5,21 @@ edition = "2021"
 
 [dependencies]
 bo-tie = { path = "../../bo-tie", features = ["serde", "tokio"] }
-simplelog = "0.12.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "io-util", "io-std"] }
 rand = "0.8"
 serde = "1"
 
 [target.'cfg(any(unix, windows))'.dependencies]
-crossterm = "0.26.0"
+crossterm = "0.28"
+clap = { version = "4.5", features = ["derive"] }
+dirs = "5.0"
 futures-core = "0.3"
-dirs = "4"
 serde_yaml = "0.9"
+shlex = "1.3"
+simplelog = "0.12"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-bo-tie-linux = { path = "../../base-crates/bo-tie-linux"}
+bo-tie-linux = { path = "../../base-crates/bo-tie-linux" }
 
 [features]
 log = []

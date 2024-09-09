@@ -540,10 +540,17 @@ impl HeartRateProfile {
 
                 to_ui.send(MainToUserInput::Mode(io::Mode::Silent)).unwrap();
             }
+            io::FromUserInput::ListBonded => self.list_all_bonded(to_ui),
             io::FromUserInput::DeleteAllBonded => self.delete_all_bonded(host).await,
             io::FromUserInput::DeleteBonded(address) => self.delete_bonded(host, address).await,
             io::FromUserInput::Exit => self.exit(host).await,
         }
+    }
+
+    fn list_all_bonded(&self, to_ui: std::sync::mpsc::Sender<MainToUserInput>) {
+        let list = self.privacy.get_bonded();
+
+        to_ui.send(MainToUserInput::BondedDevices(list)).unwrap()
     }
 
     async fn delete_all_bonded<H: HostChannelEnds>(&mut self, host: &mut Host<H>) {
@@ -717,12 +724,12 @@ impl HeartRateProfile {
         }
     }
 
-    async fn get_bonded_devices(&self) -> Vec<BluetoothDeviceAddress> {
+    async fn get_bonded_devices(&self) -> Vec<IdentityAddress> {
         self.keys_store
             .get_all_keys()
             .await
             .iter()
-            .map(|keys| keys.get_peer_identity().unwrap().get_address())
+            .map(|keys| keys.get_peer_identity().unwrap())
             .collect()
     }
 }
@@ -753,19 +760,6 @@ async fn gen_hart_rate_data(hrd: &HeartRateMeasurementArc) -> tokio::time::Sleep
 
 #[tokio::main]
 async fn main() {
-    #[cfg(feature = "log")]
-    {
-        use simplelog::{ColorChoice, Config, LevelFilter, TermLogger, TerminalMode};
-
-        TermLogger::init(
-            LevelFilter::Trace,
-            Config::default(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        )
-        .unwrap();
-    }
-
     let (mut user_io, mut from_ui) = io::UserInput::new();
 
     let to_ui = user_io.get_sender_to_ui();
@@ -784,7 +778,13 @@ async fn main() {
 
     let mut connection_receiver = hrp.take_connection_receiver().unwrap();
 
-    user_io.set_bonded_devices(hrp.get_bonded_devices().await);
+    user_io.set_bonded_devices(
+        hrp.get_bonded_devices()
+            .await
+            .iter()
+            .map(|identity| identity.get_address())
+            .collect(),
+    );
 
     let ui_join_handle = user_io.spawn();
 
@@ -815,6 +815,8 @@ async fn main() {
     advertise::disable_advertising(host).await;
 
     hrp.exit(host).await;
+
+    to_ui.send(MainToUserInput::Exit).unwrap();
 
     ui_join_handle.exit();
 }

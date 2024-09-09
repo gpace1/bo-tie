@@ -60,6 +60,14 @@ impl Privacy {
         Self { mode }
     }
 
+    /// Get a list of the bonded devices
+    pub fn get_bonded(&self) -> Vec<IdentityAddress> {
+        match &self.mode {
+            PrivacyMode::Controller(c) => c.get_bonded(),
+            PrivacyMode::Host(h) => h.get_bonded(),
+        }
+    }
+
     /// Add a device to the resolving list
     pub async fn add_device_to_resolving_list<H: HostChannelEnds>(&mut self, host: &mut Host<H>, keys: &Keys) {
         match &mut self.mode {
