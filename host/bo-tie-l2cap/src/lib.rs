@@ -61,12 +61,16 @@ pub mod link_flavor;
 pub mod pdu;
 pub mod signals;
 
-use crate::channel::id::{ChannelIdentifier, LeCid};
-use crate::channel::SharedPhysicalLink;
+use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
+use crate::channel::{ChannelBuffer, ChannelType, PduRecombine, PduRecombineAddError, PduRecombineAddOutput, SduLenState, SharedPhysicalLink};
 pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
+use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
+use std::cmp::max;
+use std::num::NonZeroUsize;
 use link_flavor::{AclULink, LeULink};
 use pdu::L2capFragment;
+use crate::pdu::{BasicFrame, FragmentIterator, FragmentL2capPdu};
 
 /// The Different Types of Logical Links
 ///
@@ -190,20 +194,83 @@ pub trait PhysicalLink {
     fn recv(&mut self) -> Self::RecvFut<'_>;
 }
 
-/// Trait for a Logical Links
-///
-/// This trait is used to mark a type as a L2CAP logical. It is not intended to be implemented by
-/// types outside the bounds of `bo-tie-l2cap`.
-///
-/// Its only method is `get_shared_link` which is used to return a `SharedPhysicalLink`. This
-/// return is used to ensure that multiple channels can be 'selected' within one async context. See
-/// the library level doc for details on this.
+trait PhysicalLinkExt: PhysicalLink {
+    /// Send a PDU
+    ///
+    /// This is an extension method for sending a PDU.
+    ///
+    /// # No SDU support
+    /// This is for only sending a PDU. Any higher layer data type must be fragmented down to the
+    /// PDU size of the channel.
+    ///
+    /// # Panic
+    /// This will panic if `fragmentation_size` is invalid (the channel is expected to verify any
+    /// user set fragmentation size). The conditions for it to be invalid depend on the 
+    /// implementation of [`FragmentL2capPdu`].
+    async fn send_pdu<T>(&mut self, pdu: T, fragmentation_size: usize) -> Result<(), Self::SendErr>
+    where T: FragmentL2capPdu
+    {
+        let mut fragments = pdu.into_fragments(fragmentation_size).unwrap();
+
+        let mut is_first = true;
+
+        while let Some(fragment_data) = fragments.next() {
+            let fragment = L2capFragment::new(is_first, fragment_data);
+
+            is_first = false;
+
+            self.send(fragment).await?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<T> PhysicalLinkExt for T where T: PhysicalLink {}
+
+/// A Logical Link
 pub trait LogicalLink {
     type PhysicalLink: PhysicalLink;
-    type UnusedChannelResponse: channel::UnusedChannelResponse;
+    type Buffer;
     type Flavor: link_flavor::LinkFlavor;
-
-    fn get_shared_link(&self) -> &SharedPhysicalLink<Self::PhysicalLink, Self::UnusedChannelResponse>;
+    
+    /// Add a new dynamic channel
+    /// 
+    /// This attempts to create a new dynamic channel on this `LogicalLink`. So long as the link can
+    /// create another dyn channel, this method will return true. Once this is called, the dynamic 
+    /// channel can be acquired using methods specific to the implementor.
+    /// 
+    /// # Channel Must Be Pre-Established
+    /// Any procedure required for creating the channel must be done before this method is called.
+    /// Once this method is called the logical link will immediately start processing data fragments
+    /// sent and received over the channel.
+    /// 
+    /// # Panic
+    /// This will panic if `id` is not a dynamically allocated channel identifier
+    fn new_dyn_channel(&mut self, maximum_pdu_size: u16, buffer: Self::Buffer) -> Option<ChannelIdentifier>;
+    
+    /// Remove a dynamic channel
+    /// 
+    /// This attempts to remove the dynamic channel from this `LogicalLink`. If the channel exists
+    /// within this `LogicalLink` it will be deleted and this method will return true. If the 
+    /// channel does not exist then nothing happens and this method returns false.
+    ///
+    /// # Channel Must Be Closed
+    /// Any closure procedure required for removing the channel must be done before this method is 
+    /// called. Once this method is called the logical link will no longer process data fragments
+    /// sent and received over the channel. 
+    ///
+    /// # Panic
+    /// This will panic if `id` is not a dynamically allocated channel identifier
+    fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool;
+    
+    /// Get a reference to the physical link
+    fn get_physical_link(&self) -> &Self::PhysicalLink;
+    
+    /// Get a mutable reference to the physical link
+    fn get_mut_physical_link(&mut self) -> &mut Self::PhysicalLink;
+    
+    
 }
 
 /// A LE-U Logical Link
@@ -214,6 +281,20 @@ pub trait LogicalLink {
 /// A `LeULogicalLink` requires a `PhysicalLink` to be created. This `PhysicalLink` is a trait that
 /// is either directly implemented by the physical layer or some interface to the physical layer
 /// (typically a host controller interface (HCI) implementation).
+///
+/// ```
+/// # use tokio::select;
+/// # use bo_tie_l2cap::{PhysicalLink, LeULogicalLink};
+/// async fn le_u_doc<P: PhysicalLink>(physical_link: P) {
+/// let le_link = LeULogicalLink::new(physical_link, &mut Vec::new());
+///
+/// loop {
+///     select! {
+///         
+///     }
+/// }
+/// # }
+/// ```
 ///
 /// ## Channels
 /// Channels are used to sending and receiving data between two linked devices. Fixed channels are
@@ -288,16 +369,101 @@ pub trait LogicalLink {
 /// };
 /// # }
 /// ```
-pub struct LeULogicalLink<P: PhysicalLink> {
-    shared_link: SharedPhysicalLink<P, Self>,
+pub struct LeULogicalLink<P: PhysicalLink, B, const DYN_CHANNELS: usize = 0> {
+    physical_link: P,
+    basic_header_processor: channel::shared::BasicHeaderProcessor,
+    channels: [ChannelBuffer<B>; { LE_STATIC_CHANNEL_COUNT + DYN_CHANNELS }],
 }
 
-impl<P: PhysicalLink> LeULogicalLink<P> {
+/// The number of channels that have a defined channel for a LE-U link within the Bluetooth Spec.
+const LE_STATIC_CHANNEL_COUNT: usize = 3;
+
+impl<P, B, const DYN_CHANNELS: usize> LeULogicalLink<P, B, DYN_CHANNELS> 
+where
+    P: PhysicalLink,
+    B: TryExtend<u8> + Default
+{
+
     /// Create a new `LogicalLink`
     pub fn new(physical_link: P) -> Self {
-        let shared_link = SharedPhysicalLink::new(physical_link);
+        let basic_header_processor = channel::shared::BasicHeaderProcessor::init();
+        let channels = [ChannelBuffer::Unused; { LE_STATIC_CHANNEL_COUNT + DYN_CHANNELS } ];
 
-        Self { shared_link }
+        Self {
+            physical_link,
+            basic_header_processor,
+            channels
+        }
+    }
+
+    /// Await for the next received complete PDU
+    pub async fn receive(&mut self) -> Result<ChannelType<&mut Self>, NextError<P, B>> {
+        'outer: loop {
+            let mut fragment = self
+                .physical_link
+                .recv()
+                .await
+                .ok_or(NextError::Disconnected)?
+                .map_err(|e| NextError::ReceiveError(e))?;
+
+            self.basic_header_processor.process(&mut fragment).map_err(|_| NextError::InvalidChannel)?;
+
+            let Some(basic_header) = self.basic_header_processor.get_basic_header() else { continue 'outer };
+            
+            let mut dump_data = false;
+            
+            let channel = match basic_header.channel_id {
+                ChannelIdentifier::Le(LeCid::AttributeProtocol) => &mut self.channels[0],
+                ChannelIdentifier::Le(LeCid::LeSignalingChannel) => &mut self.channels[1],
+                ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => &mut self.channels[2],
+                ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn)) => {
+                    let index = 3 + (dyn.get_val() - *DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize;
+
+                    &mut self.channels[index]
+                }
+                _ => {
+                    dump_data = true;
+                    
+                    &mut ChannelBuffer::Unused
+                },
+            };
+
+            let mut recombiner = if !dump_data {
+                channel.new_recombiner(&basic_header)
+            } else {
+                PduRecombine::new_dump_recombiner(&basic_header)
+            };
+
+            'recombine: loop {
+                match recombiner.add(&mut fragment.data)
+                {
+                    Err(e) => break 'outer match e {
+                        PduRecombineAddError::AlreadyFinished => Err(NextError::Internal("already finished")),
+                        PduRecombineAddError::BasicChannel(e) => Err(NextError::RecombineBasicFrame(e)),
+                        PduRecombineAddError::SignallingChannel(e) => Err(NextError::RecombineControlFrame(e)),
+                        PduRecombineAddError::CreditBasedChannel(e) => Err(NextError::RecombineCreditBasedFrame(e)),
+                    },
+                    Ok(PduRecombineAddOutput::Ongoing) => continue 'recombine,
+                    Ok(PduRecombineAddOutput::DumpComplete) => break 'recombine,
+                    Ok(PduRecombineAddOutput::BasicFrame(pdu)) => {
+                        let channel = BasicFrameChannel::new(
+                            basic_header.channel_id,
+                            self.physical_link.max_transmission_size(),
+                            &mut self.physical_link,
+                            Some(&mut self)
+                        );
+                        
+                        break 'outer Ok(ChannelType::BasicFrameChannel(channel))
+                    },
+                    Ok(PduRecombineAddOutput::ControlFrame(pdu)) => break 'outer Ok(ChannelType::SignallingChannel(todo!())),
+                    Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
+                        todo!();
+                        
+                        break 'outer Ok(ChannelType::CreditBasedChannel(todo!()))
+                    },
+                }
+            }
+        }
     }
 
     /// Get what kind of Logical Link this is
@@ -348,15 +514,65 @@ impl<P: PhysicalLink> LeULogicalLink<P> {
     }
 }
 
-impl<P: PhysicalLink> LogicalLink for LeULogicalLink<P> {
+impl<P: PhysicalLink, B> LogicalLink for &mut LeULogicalLink<P, B> {
     type PhysicalLink = P;
-    type UnusedChannelResponse = Self;
+    type Buffer = B;
 
     type Flavor = LeULink;
 
-    fn get_shared_link(&self) -> &SharedPhysicalLink<Self::PhysicalLink, Self::UnusedChannelResponse> {
-        &self.shared_link
+    fn new_dyn_channel(&mut self, maximum_pdu_size: u16, buffer: Self::Buffer) -> Option<ChannelIdentifier> {
+        self.channels[LE_STATIC_CHANNEL_COUNT..].iter().enumerate().find_map(|(i, channel)| {
+            if let ChannelBuffer::Unused = channel { Some(i) } else { None }
+        })
+            .map(|index| {
+                let recombine_meta = pdu::credit_frame::RecombineMeta {
+                    first: true,
+                    mps: maximum_pdu_size,
+                }; 
+                
+                let channel_buffer = ChannelBuffer::CreditBasedChannel { recombine_meta,buffer};
+                
+                self.channels[index] = channel_buffer;
+                
+                ChannelIdentifier::Le(DynChannelId::new_le((index - LE_STATIC_CHANNEL_COUNT) as u16 + *DynChannelId::<LeULink>::LE_BOUNDS.start()).unwrap())
+            })
     }
+
+    fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool {
+        if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = id {
+            let index = (channel_id.get_val() - *DynChannelId::LE_BOUNDS.start()) as usize + LE_STATIC_CHANNEL_COUNT;
+            
+            if let ChannelBuffer::Unused = self.channels[index] {
+                false
+            } else {
+                self.channels[index] = ChannelBuffer::Unused;
+                
+                true
+            }
+        } else {
+            false
+        }
+    }
+
+    fn get_physical_link(&self) -> &Self::PhysicalLink {
+        &self.physical_link
+    }
+
+    fn get_mut_physical_link(&mut self) -> &mut Self::PhysicalLink {
+        &mut self.physical_link
+    }
+}
+
+#[derive(Debug)]
+enum NextError<P: PhysicalLink, B: TryExtend<u8>> {
+    ReceiveError(P::RecvErr),
+    Disconnected,
+    BufferOverflow(B::Error),
+    InvalidChannel,
+    Internal(&'static str),
+    RecombineBasicFrame(pdu::basic_frame::RecombineError),
+    RecombineControlFrame(pdu::control_frame::RecombineError),
+    RecombineCreditBasedFrame(pdu::credit_frame::RecombineError)
 }
 
 /// Protocol and Service Multiplexers

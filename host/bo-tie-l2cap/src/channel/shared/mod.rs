@@ -21,44 +21,9 @@ mod unused;
 
 /// The basic header of every L2CAP PDU
 #[derive(Copy, Clone)]
-struct BasicHeader {
+pub(crate) struct BasicHeader {
     pub length: u16,
     pub channel_id: ChannelIdentifier,
-}
-
-/// A [`L2capFragment`] with its attached basic header
-///
-/// This is used to pass a L2CAP fragment with its associated basic header. If this is the start
-/// fragment, the actual fragment data will also contain all or part of the basic header in the raw
-/// L2CAP PDU form.
-pub struct BasicHeadedFragment<T> {
-    header: BasicHeader,
-    is_beginning: bool,
-    data: T,
-}
-
-impl<T> BasicHeadedFragment<T> {
-    pub fn get_pdu_length(&self) -> u16 {
-        self.header.length
-    }
-
-    pub fn get_channel_id(&self) -> ChannelIdentifier {
-        self.header.channel_id
-    }
-
-    /// Returns true if the data is the starting data of the L2CAP PDU
-    ///
-    /// # Note
-    /// This may not necessarily mean that the starting fragment led to the creation of this
-    /// `BasicHeadedFragment`. The size of initial fragments could have been smaller than the basic
-    /// header.
-    pub fn is_start_of_data(&self) -> bool {
-        self.is_beginning
-    }
-
-    pub fn into_data(self) -> T {
-        self.data
-    }
 }
 
 /// The 'shared l2cap raw data processor'
@@ -70,13 +35,13 @@ impl<T> BasicHeadedFragment<T> {
 /// Format* of the L2CAP part of the Bluetooth Spec.). If the basic header *happens* to contain the
 /// same channel identifier as the current executing future then the same future will poll to
 /// completion, but most likely the executing is not the correct future and
-struct BasicHeaderProcessor {
+pub(crate) struct BasicHeaderProcessor {
     length: Cell<ProcessorLengthState>,
     channel_id: Cell<ProcessorChannelIdentifier>,
 }
 
 impl BasicHeaderProcessor {
-    fn init() -> Self {
+    pub(crate) fn init() -> Self {
         BasicHeaderProcessor {
             length: Cell::new(ProcessorLengthState::None),
             channel_id: Cell::new(ProcessorChannelIdentifier::None),
@@ -108,11 +73,9 @@ impl BasicHeaderProcessor {
     ///    `active_channels`.
     /// * `Ready(Err(InvalidChannel))` => The peer send a channel that was invalid for this L2CAP
     ///    logical link (the physical link should be closed by the user in this case).
-    fn process<L, T>(
+    pub(crate) fn process<L, T>(
         &self,
         fragment: &mut L2capFragment<T>,
-        this_channel: Option<ChannelIdentifier>,
-        active_channels: &[ChannelIdentifier],
     ) -> Result<BasicHeadProcessOutput, InvalidChannel>
     where
         L: LogicalLink,
@@ -165,7 +128,7 @@ impl BasicHeaderProcessor {
     /// Get the Basic Header
     ///
     /// This gets the basic header, if the basic header was established.
-    pub fn get_basic_header(&self) -> Option<BasicHeader> {
+    pub(crate) fn get_basic_header(&self) -> Option<BasicHeader> {
         match (self.length.get(), self.channel_id.get()) {
             (ProcessorLengthState::Complete(length), ProcessorChannelIdentifier::Complete(channel_id)) => {
                 Some(BasicHeader { length, channel_id })
@@ -174,7 +137,7 @@ impl BasicHeaderProcessor {
         }
     }
 
-    pub fn clear_basic_header(&self) {
+    pub(crate) fn clear_basic_header(&self) {
         self.length.set(ProcessorLengthState::None);
         self.channel_id.set(ProcessorChannelIdentifier::None);
     }
@@ -513,120 +476,88 @@ where
         owner: ChannelIdentifier,
     ) -> Result<Result<BasicHeadedFragment<P::RecvData>, U::Response>, MaybeRecvError<P, U>> {
         loop {
-            let count = core::future::poll_fn(|context| match self.owner.get() {
-                PhysicalLinkOwner::Receiver(current, count) if current == owner => {
-                    return Poll::Ready(count);
+            let mut fragment = unsafe { self.recv_fragment().await? };
+
+            match (
+                fragment.is_start_fragment(),
+                self.basic_header_processor.get_basic_header(),
+                self.drop_data.get(),
+            ) {
+                (false, Some(basic_header), Some(drop_data)) => {
+                    let basic_headed_fragment = BasicHeadedFragment {
+                        header: basic_header,
+                        is_beginning: false,
+                        data: fragment.into_inner(),
+                    };
+
+                    if let Some(rsp) = self.process_dumped_fragment(drop_data, basic_headed_fragment)? {
+                        self.owner.set(PhysicalLinkOwner::None);
+
+                        self.wakeup.take().map(|waker| waker.wake());
+
+                        break Ok(Err(rsp));
+                    }
                 }
-                PhysicalLinkOwner::None => {
-                    self.owner.set(PhysicalLinkOwner::Receiver(owner, 0));
+                (true, _, _) | (false, None, _) => {
+                    match self.maybe_recv_header_process::<L>(owner, &mut fragment)? {
+                        MaybeReceiveHeaderOutput::FragmentIsForOwner(basic_header) => {
+                            let new_count = count + fragment.get_data().len();
 
-                    Poll::Ready(0)
-                }
-                PhysicalLinkOwner::AnyReceiver => {
-                    self.owner.set(PhysicalLinkOwner::Receiver(owner, 0));
+                            self.owner.set(PhysicalLinkOwner::Receiver(owner, new_count));
 
-                    Poll::Ready(0)
-                }
-                _ => {
-                    self.wakeup.set(context.waker().clone().into());
+                            let basic_headed_fragment = BasicHeadedFragment {
+                                header: basic_header,
+                                is_beginning: true,
+                                data: fragment.into_inner(),
+                            };
 
-                    Poll::Pending
-                }
-            })
-            .await;
-
-            let maybe_stasis_fragment = self.stasis_fragment.take();
-
-            if let Some(statis) = maybe_stasis_fragment {
-                if let Some(v) = self.process_stasis_fragment(statis)? {
-                    return Ok(v);
-                }
-            } else {
-                let mut fragment = unsafe { self.recv_fragment().await? };
-
-                match (
-                    fragment.is_start_fragment(),
-                    self.basic_header_processor.get_basic_header(),
-                    self.drop_data.get(),
-                ) {
-                    (false, Some(basic_header), Some(drop_data)) => {
-                        let basic_headed_fragment = BasicHeadedFragment {
-                            header: basic_header,
-                            is_beginning: false,
-                            data: fragment.into_inner(),
-                        };
-
-                        if let Some(rsp) = self.process_dumped_fragment(drop_data, basic_headed_fragment)? {
-                            self.owner.set(PhysicalLinkOwner::None);
+                            break Ok(Ok(basic_headed_fragment));
+                        }
+                        MaybeReceiveHeaderOutput::PduIsForDifferentChannel(basic_header) => {
+                            self.owner.set(PhysicalLinkOwner::Receiver(basic_header.channel_id, 0));
 
                             self.wakeup.take().map(|waker| waker.wake());
 
-                            break Ok(Err(rsp));
+                            let basic_headed_fragment = BasicHeadedFragment {
+                                header: basic_header,
+                                is_beginning: true,
+                                data: fragment.into_inner(),
+                            };
+
+                            self.stasis_fragment.set(Some(basic_headed_fragment));
                         }
-                    }
-                    (true, _, _) | (false, None, _) => {
-                        match self.maybe_recv_header_process::<L>(owner, &mut fragment)? {
-                            MaybeReceiveHeaderOutput::FragmentIsForOwner(basic_header) => {
-                                let new_count = count + fragment.get_data().len();
+                        MaybeReceiveHeaderOutput::UnusedChannelPdu(header) => {
+                            let drop_data = U::new_response_data(header.length.into(), header.channel_id);
 
-                                self.owner.set(PhysicalLinkOwner::Receiver(owner, new_count));
+                            let basic_headed_fragment = BasicHeadedFragment {
+                                header,
+                                is_beginning: true,
+                                data: fragment.into_inner(),
+                            };
 
-                                let basic_headed_fragment = BasicHeadedFragment {
-                                    header: basic_header,
-                                    is_beginning: true,
-                                    data: fragment.into_inner(),
-                                };
-
-                                break Ok(Ok(basic_headed_fragment));
+                            // note: process_dumped_fragment will set
+                            // `self.drop_data` to `drop_data` before
+                            // it will return `None`.
+                            if let Some(response) = self.process_dumped_fragment(drop_data, basic_headed_fragment)? {
+                                break Ok(Err(response));
                             }
-                            MaybeReceiveHeaderOutput::PduIsForDifferentChannel(basic_header) => {
-                                self.owner.set(PhysicalLinkOwner::Receiver(basic_header.channel_id, 0));
-
-                                self.wakeup.take().map(|waker| waker.wake());
-
-                                let basic_headed_fragment = BasicHeadedFragment {
-                                    header: basic_header,
-                                    is_beginning: true,
-                                    data: fragment.into_inner(),
-                                };
-
-                                self.stasis_fragment.set(Some(basic_headed_fragment));
-                            }
-                            MaybeReceiveHeaderOutput::UnusedChannelPdu(header) => {
-                                let drop_data = U::new_response_data(header.length.into(), header.channel_id);
-
-                                let basic_headed_fragment = BasicHeadedFragment {
-                                    header,
-                                    is_beginning: true,
-                                    data: fragment.into_inner(),
-                                };
-
-                                // note: process_dumped_fragment will set
-                                // `self.drop_data` to `drop_data` before
-                                // it will return `None`.
-                                if let Some(response) =
-                                    self.process_dumped_fragment(drop_data, basic_headed_fragment)?
-                                {
-                                    break Ok(Err(response));
-                                }
-                            }
-                            MaybeReceiveHeaderOutput::Undetermined => (),
                         }
+                        MaybeReceiveHeaderOutput::Undetermined => (),
                     }
-                    (false, Some(basic_header), _) => {
-                        // this if should only succeed when the owner
-                        // is the same as in the PDU's header. The owner
-                        // should have locked the processing by this point.
-                        debug_assert_eq!(owner, basic_header.channel_id);
+                }
+                (false, Some(basic_header), _) => {
+                    // this if should only succeed when the owner
+                    // is the same as in the PDU's header. The owner
+                    // should have locked the processing by this point.
+                    debug_assert_eq!(owner, basic_header.channel_id);
 
-                        let basic_headed_fragment = BasicHeadedFragment {
-                            header: basic_header,
-                            is_beginning: false,
-                            data: fragment.into_inner(),
-                        };
+                    let basic_headed_fragment = BasicHeadedFragment {
+                        header: basic_header,
+                        is_beginning: false,
+                        data: fragment.into_inner(),
+                    };
 
-                        break Ok(Ok(basic_headed_fragment));
-                    }
+                    break Ok(Ok(basic_headed_fragment));
                 }
             }
         }

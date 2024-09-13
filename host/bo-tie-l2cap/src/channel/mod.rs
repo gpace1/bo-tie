@@ -19,23 +19,182 @@
 
 mod credit_based;
 pub mod id;
-mod shared;
+pub(crate) mod shared;
 pub mod signalling;
 
 use crate::channel::id::ChannelIdentifier;
-use crate::channel::shared::{BasicHeadedFragment, MaybeRecvError, ReceiveDataProcessor};
+use crate::channel::shared::{BasicHeader, BasicHeaderProcessor, MaybeRecvError, ReceiveDataProcessor};
+use crate::pdu::control_frame::ControlFrame;
 use crate::pdu::credit_frame::CreditBasedFrame;
 use crate::pdu::{
     BasicFrame, CreditBasedSdu, FragmentIterator, FragmentL2capPdu, FragmentL2capSdu, PacketsError,
     RecombinePayloadIncrementally,
 };
 use crate::pdu::{RecombineL2capPdu, SduPacketsIterator};
-use crate::{pdu, pdu::L2capFragment, LogicalLink, PhysicalLink};
+use crate::{pdu, pdu::L2capFragment, LogicalLink, NextError, PhysicalLink, PhysicalLinkExt};
 use bo_tie_core::buffer::TryExtend;
+use core::num::NonZeroUsize;
 pub(crate) use credit_based::ChannelCredits;
 pub use credit_based::CreditServiceData;
 pub(crate) use shared::{SharedPhysicalLink, UnusedChannelResponse};
 pub use signalling::SignallingChannel;
+
+pub(crate) enum ChannelBuffer<B> {
+    Unused,
+    AttributeChannel {
+        buffer: B,
+    },
+    SignallingChannel {
+        buffer: B,
+    },
+    CreditBasedChannel {
+        peer_channel_id: ChannelDirection,
+        maximum_packet_size: u16,
+        maximum_transmission_size: u16,
+        peer_credits: u16,
+        this_credits: u16,
+        buffer: B,
+    },
+}
+
+impl<B> ChannelBuffer<B> {
+    /// Create the recombiner associated with the channel's L2CAP PDU
+    ///
+    /// # Panic
+    /// This cannot be called on an [`Unused`] channel.
+    ///
+    /// [`Unused`]: ChannelBuffer::Unused
+    pub(crate) fn new_recombiner(&mut self, basic_header: &BasicHeader) -> PduRecombine<'a, B> {
+        match self {
+            ChannelBuffer::Unused => unreachable!(),
+            ChannelBuffer::AttributeChannel { buffer } => {
+                let meta = &mut ();
+
+                let recombiner = BasicFrame::recombine(basic_header.length, basic_header.channel_id, buffer, meta);
+
+                PduRecombine::BasicChannel(recombiner)
+            }
+            ChannelBuffer::SignallingChannel { buffer } => {
+                let meta = &mut ();
+
+                let recombiner = ControlFrame::recombine(basic_header.length, basic_header.channel_id, buffer, meta);
+
+                PduRecombine::SignallingChannel(recombiner)
+            }
+            ChannelBuffer::CreditBasedChannel { recombine_meta, buffer } => {
+                let recombiner =
+                    CreditBasedFrame::recombine(basic_header.length, basic_header.channel_id, buffer, recombine_meta);
+
+                PduRecombine::CreditBasedChannel(recombiner)
+            }
+        }
+    }
+}
+
+pub(crate) enum PduRecombine<'a, B> {
+    Dump { pdu_len: usize, received_so_far: usize },
+    BasicChannel(<BasicFrame<&'a mut B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
+    SignallingChannel(<ControlFrame<&'a mut B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
+    CreditBasedChannel(<CreditBasedFrame<&'a mut B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
+    Finished,
+}
+
+impl<'a, B> PduRecombine<'a, B> {
+    /// Create a recombiner for dumpind data
+    pub(crate) fn new_dump_recombiner(basic_header: &BasicHeader) -> Self {
+        let pdu_len = basic_header.length.into();
+        let received_so_far = 0;
+
+        PduRecombine::Dump {
+            pdu_len,
+            received_so_far,
+        }
+    }
+
+    /// Add more payload bytes to the PDU
+    ///
+    /// This is just a shadow of the [`add`] method within the inner recombiner type.
+    pub(crate) fn add<T>(
+        &mut self,
+        payload_fragment: T,
+    ) -> Result<PduRecombineAddOutput<'a, B>, PduRecombineAddError<'a, B>>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        match self {
+            PduRecombine::Dump {
+                pdu_len,
+                received_so_far,
+            } => {
+                *received_so_far += payload_fragment.into_iter().len();
+
+                if pdu_len > received_so_far {
+                    Ok(PduRecombineAddOutput::Ongoing)
+                } else {
+                    Ok(PduRecombineAddOutput::DumpComplete)
+                }
+            }
+            PduRecombine::BasicChannel(recombiner) => recombiner
+                .add(payload_fragment)
+                .map(|opt| {
+                    opt.map(|pdu| {
+                        *self = Self::Finished;
+
+                        PduRecombineAddOutput::BasicFrame(pdu)
+                    })
+                    .unwrap_or_default()
+                })
+                .map_err(|e| PduRecombineAddError::BasicChannel(e)),
+            PduRecombine::SignallingChannel(recombiner) => recombiner
+                .add(payload_fragment)
+                .map(|opt| {
+                    opt.map(|pdu| {
+                        *self = Self::Finished;
+
+                        PduRecombineAddOutput::ControlFrame(pdu)
+                    })
+                    .unwrap_or_default()
+                })
+                .map_err(|e| PduRecombineAddError::SignallingChannel(e)),
+            PduRecombine::CreditBasedChannel(recombiner) => recombiner
+                .add(payload_fragment)
+                .map(|opt| {
+                    opt.map(|pdu| {
+                        *self = Self::Finished;
+
+                        PduRecombineAddOutput::CreditBasedFrame(pdu)
+                    })
+                    .unwrap_or_default()
+                })
+                .map_err(|e| PduRecombineAddError::CreditBasedChannel(e)),
+            PduRecombine::Finished => Err(PduRecombineAddError::AlreadyFinished),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) enum PduRecombineAddOutput<'a, B> {
+    #[default]
+    Ongoing,
+    DumpComplete,
+    BasicFrame(BasicFrame<&'a mut B>),
+    ControlFrame(ControlFrame<&'a mut B>),
+    CreditBasedFrame(CreditBasedFrame<&'a mut B>),
+}
+
+pub(crate) enum PduRecombineAddError<'a, B> {
+    AlreadyFinished,
+    BasicChannel(<BasicFrame<B> as RecombineL2capPdu>::RecombineError),
+    SignallingChannel(<ControlFrame<B> as RecombineL2capPdu>::RecombineError),
+    CreditBasedChannel(<CreditBasedFrame<B> as RecombineL2capPdu>::RecombineError),
+}
+
+pub enum ChannelType<L: LogicalLink> {
+    BasicFrameChannel(BasicFrameChannel<L::PhysicalLink, L::Buffer>),
+    SignallingChannel(SignallingChannel<L>),
+    CreditBasedChannel(CreditBasedChannel<P, B>),
+}
 
 /// Enumeration for dynamic channel source and destination CIDs
 pub(crate) enum ChannelDirection {
@@ -117,30 +276,23 @@ impl std::error::Error for InvalidChannel {}
 ///
 /// Many L2CAP channels defined by the Bluetooth Specification only use Basic Frames for
 /// communication to a connected device.
-pub struct BasicFrameChannel<'a, L: LogicalLink> {
+pub struct BasicFrameChannel<P, D> {
     channel_id: ChannelIdentifier,
-    logical_link: &'a L,
-    receiving_pdu_length: core::cell::Cell<usize>,
+    fragmentation_size: usize,
+    physical_link: P,
+    data: D,
 }
 
-impl<'a, L: LogicalLink> BasicFrameChannel<'a, L> {
-    pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: &'a L) -> Self {
-        assert!(
-            logical_link.get_shared_link().add_channel(channel_id),
-            "channel already exists"
-        );
-
-        let receiving_pdu_length = core::cell::Cell::new(0);
-
+impl<P: PhysicalLink, D> BasicFrameChannel<P, D> {
+    pub(crate) fn new(channel_id: ChannelIdentifier, fragmentation_size: usize, physical_link: P, data: D) -> Self {
         BasicFrameChannel {
             channel_id,
-            logical_link,
-            receiving_pdu_length,
+            fragmentation_size,
+            physical_link,
+            data,
         }
     }
-}
 
-impl<L: LogicalLink> BasicFrameChannel<'_, L> {
     /// Get the Channel Identifier (CID)
     pub fn get_cid(&self) -> ChannelIdentifier {
         self.channel_id
@@ -151,178 +303,36 @@ impl<L: LogicalLink> BasicFrameChannel<'_, L> {
     /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
     /// channel. Every L2CAP PDU is fragmented to this in both sending a receiving of L2CAP data.
     pub fn fragmentation_size(&self) -> usize {
-        self.logical_link.get_shared_link().get_fragmentation_size()
-    }
-
-    async fn send_fragment<T>(
-        &mut self,
-        fragment: L2capFragment<T>,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
-    where
-        T: IntoIterator<Item = u8>,
-    {
-        let mut fragment = Some(L2capFragment {
-            start_fragment: fragment.start_fragment,
-            data: fragment.data.into_iter(),
-        });
-
-        self.logical_link
-            .get_shared_link()
-            .maybe_send(self.channel_id, fragment.take().unwrap())
-            .await
-    }
-
-    async fn receive_fragment(
-        &mut self,
-    ) -> Result<
-        BasicHeadedFragment<<L::PhysicalLink as PhysicalLink>::RecvData>,
-        MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>,
-    > {
-        loop {
-            match self
-                .logical_link
-                .get_shared_link()
-                .maybe_recv::<L>(self.channel_id)
-                .await
-            {
-                Ok(Ok(f)) => break Ok(f),
-                Ok(Err(reject_response)) => {
-                    let output = self.send_inner(reject_response).await;
-
-                    output.map_err(|_| MaybeRecvError::Disconnected)?;
-                }
-                Err(e) => {
-                    self.logical_link.get_shared_link().clear_owner();
-
-                    break Err(e);
-                }
-            }
-        }
-    }
-
-    async fn send_inner<T>(&mut self, pdu: T) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
-    where
-        T: FragmentL2capPdu,
-    {
-        let mut is_first = true;
-
-        let mut fragments_iter = pdu.into_fragments(self.fragmentation_size()).unwrap();
-
-        while let Some(data) = fragments_iter.next() {
-            let fragment = L2capFragment::new(is_first, data);
-
-            is_first = false;
-
-            self.send_fragment(fragment).await?;
-        }
-
-        // clear owner as the full PDU was sent
-        self.logical_link.get_shared_link().clear_owner();
-
-        Ok(())
+        self.fragmentation_size
     }
 
     /// Send a Basic Frame to the lower layers
     ///
     /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
     /// may be called by protocol at a higher layer than L2CAP.
-    pub async fn send<T>(&mut self, b_frame: BasicFrame<T>) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
+    pub async fn send<T>(&mut self, b_frame: BasicFrame<T>) -> Result<(), P::SendErr>
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
-        let output = self.send_inner(b_frame).await;
-
-        self.logical_link.get_shared_link().clear_owner();
-
-        output
-    }
-
-    async fn receive_inner<T>(
-        &mut self,
-        buffer: &mut T,
-    ) -> Result<BasicFrame<T>, ReceiveError<L, pdu::basic_frame::RecombineError>>
-    where
-        T: TryExtend<u8> + Default,
-    {
-        let basic_headed_fragment = self.receive_fragment().await?;
-
-        if self.receiving_pdu_length.get() == 0 && !basic_headed_fragment.is_start_of_data() {
-            return Err(ReceiveError::new_expect_first_err());
-        }
-
-        let meta = &mut ();
-
-        let mut recombiner = BasicFrame::recombine(
-            basic_headed_fragment.get_pdu_length(),
-            basic_headed_fragment.get_channel_id(),
-            buffer,
-            meta,
-        );
-
-        let recombine_output = recombiner
-            .add(
-                basic_headed_fragment
-                    .into_data()
-                    .into_iter()
-                    .inspect(|_| self.receiving_pdu_length.set(self.receiving_pdu_length.get() + 1)),
-            )
-            .map_err(|e| ReceiveError::new_recombine(e))?;
-
-        if let Some(b_frame) = recombine_output {
-            Ok(b_frame)
-        } else {
-            loop {
-                let basic_headed_fragment = self.receive_fragment().await?;
-
-                if basic_headed_fragment.is_start_of_data() {
-                    return Err(ReceiveError::new_unexpect_first_err());
-                }
-
-                if let Some(b_frame) = recombiner
-                    .add(
-                        basic_headed_fragment
-                            .into_data()
-                            .into_iter()
-                            .inspect(|_| self.receiving_pdu_length.set(self.receiving_pdu_length.get() + 1)),
-                    )
-                    .map_err(|e| ReceiveError::new_recombine(e))?
-                {
-                    return Ok(b_frame);
-                }
-            }
-        }
-    }
-
-    /// Receive a Basic Frame
-    ///
-    /// The `receive` future is used to output the next `BasicFrame` sent to this channel. The input
-    /// `buffer` is used to temporarily contain received data until all fragments of a L2CAP PDU are
-    /// received.
-    ///
-    /// The returned `receive` future will poll until a complete L2CAP PDU is received. Internally,
-    /// the future polls the physical layer, which only returns fragments of L2CAP PDUs. The PDU
-    /// payload within these fragments is stored within `buffer`, stopping once all the fragments
-    /// of the L2CAP PDU are received. The data within `buffer` is taken (and is replaced with
-    /// `T::default()`) and set as the payload within the output `BasicFrame`.
-    pub async fn receive<T>(
-        &mut self,
-        buffer: &mut T,
-    ) -> Result<BasicFrame<T>, ReceiveError<L, pdu::basic_frame::RecombineError>>
-    where
-        T: TryExtend<u8> + Default,
-    {
-        let output = self.receive_inner(buffer).await;
-
-        self.logical_link.get_shared_link().clear_owner();
-
-        output
+        self.physical_link.send_pdu(b_frame, self.fragmentation_size).await
     }
 }
 
-impl<L: LogicalLink> Drop for BasicFrameChannel<'_, L> {
-    fn drop(&mut self) {
-        self.logical_link.get_shared_link().remove_channel(self.channel_id)
+impl<P, B> BasicFrameChannel<P, Option<&'_ mut B>>
+where
+    P: PhysicalLink,
+    B: Default,
+{
+    /// Get the last received PDU
+    ///
+    /// This is intended to be used proceeding the method `receive` of the logical link. The buffer
+    /// for this channel will be consumed and replaced with its default.
+    ///
+    /// # Note
+    /// After this is called once, it will return `None`.
+    pub fn take_received(self) -> Option<BasicFrame<B>> {
+        self.data.map(|b| BasicFrame::new(std::mem::take(b), self.channel_id))
     }
 }
 
@@ -332,10 +342,11 @@ impl<L: LogicalLink> Drop for BasicFrameChannel<'_, L> {
 /// Credit Based Connections and Enhanced Credit Based Connections.
 ///
 /// A `CreditBasedChannel` is created via signalling packets
-pub struct CreditBasedChannel<'a, L: LogicalLink> {
+pub struct CreditBasedChannel<P, D> {
     this_channel_id: ChannelDirection,
     peer_channel_id: ChannelDirection,
-    logical_link: &'a L,
+    physical_link: P,
+    data: D,
     maximum_pdu_payload_size: usize,
     maximum_transmission_size: usize,
     peer_credits: usize,
@@ -345,11 +356,12 @@ pub struct CreditBasedChannel<'a, L: LogicalLink> {
     receive_count_so_far: core::cell::Cell<usize>,
 }
 
-impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
+impl<P, D> CreditBasedChannel<P, D> {
     pub(crate) fn new(
         this_channel_id: ChannelDirection,
         peer_channel_id: ChannelDirection,
-        logical_link: &'a L,
+        physical_link: P,
+        data: D,
         maximum_packet_size: usize,
         maximum_transmission_size: usize,
         initial_peer_credits: usize,
@@ -364,7 +376,8 @@ impl<'a, L: LogicalLink> CreditBasedChannel<'a, L> {
         CreditBasedChannel {
             this_channel_id,
             peer_channel_id,
-            logical_link,
+            physical_link,
+            data,
             maximum_pdu_payload_size: maximum_packet_size,
             maximum_transmission_size,
             peer_credits: initial_peer_credits,
@@ -957,146 +970,6 @@ impl<L: LogicalLink> Drop for CreditBasedChannel<'_, L> {
             .get_shared_link()
             .remove_channel(self.this_channel_id.get_channel())
     }
-}
-
-/// Errors output by the `receive*` methods of channels
-///
-/// A receive error is a non-recoverable error. If this error does occur then the logical link (not
-/// just the channel) must be closed between the two devices. Afterwards the link can be
-/// reestablished.
-///
-/// These errors are not something that should ever occur. They only occur whenever the this device
-/// receives badly formatted L2CAP PDU data or the `receive` future was used incorrectly.
-pub struct ReceiveError<L: LogicalLink, C> {
-    inner: ReceiveErrorInner<L, C>,
-}
-
-impl<L: LogicalLink, C> ReceiveError<L, C> {
-    fn new_expect_first_err() -> Self {
-        let inner = ReceiveErrorInner::ExpectedPduBeginning;
-
-        Self { inner }
-    }
-
-    fn new_unexpect_first_err() -> Self {
-        let inner = ReceiveErrorInner::UnexpectedFirstFragment;
-
-        Self { inner }
-    }
-
-    fn new_recombine(e: C) -> Self {
-        let inner = ReceiveErrorInner::Recombine(e);
-
-        Self { inner }
-    }
-
-    fn new_invalid_sdu_length() -> Self {
-        let inner = ReceiveErrorInner::InvalidSduLength;
-
-        Self { inner }
-    }
-
-    fn new_unexpected_length(buffer_len: usize, expected_len: usize) -> Self {
-        let inner = ReceiveErrorInner::UnexpectedBufferLength(buffer_len, expected_len);
-
-        Self { inner }
-    }
-
-    fn peer_out_of_credits() -> Self {
-        let inner = ReceiveErrorInner::PeerSentWithNoCredits;
-
-        Self { inner }
-    }
-}
-
-impl<L, C> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveError<L, C>
-where
-    L: LogicalLink,
-{
-    fn from(maybe: MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>) -> Self {
-        let inner = ReceiveErrorInner::Maybe(maybe);
-
-        ReceiveError { inner }
-    }
-}
-
-impl<L, C> core::fmt::Debug for ReceiveError<L, C>
-where
-    L: LogicalLink,
-    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
-        core::fmt::Debug,
-    C: core::fmt::Debug,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match &self.inner {
-            ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("Disconnected"),
-            ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "RecvError({r:?})"),
-            ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "DumpRecvError({d:?})"),
-            ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:?}"),
-            ReceiveErrorInner::Recombine(e) => write!(f, "Recombine({e:?})"),
-            ReceiveErrorInner::ExpectedPduBeginning => f.write_str("ExpectedPduBeginning"),
-            ReceiveErrorInner::UnexpectedFirstFragment => f.write_str("UnexpectedFirstFragment"),
-            ReceiveErrorInner::InvalidSduLength => f.write_str("InvalidSduLength"),
-            ReceiveErrorInner::UnexpectedBufferLength(buffer_len, expected_len) => f
-                .debug_struct("UnexpectedBufferLength")
-                .field("buffer_len", buffer_len)
-                .field("expected_len", expected_len)
-                .finish(),
-            ReceiveErrorInner::PeerSentWithNoCredits => f.write_str("PeerSentWithNoCredits"),
-        }
-    }
-}
-
-impl<L, C> core::fmt::Display for ReceiveError<L, C>
-where
-    L: LogicalLink,
-    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
-        core::fmt::Display,
-    C: core::fmt::Display,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match &self.inner {
-            ReceiveErrorInner::Maybe(MaybeRecvError::Disconnected) => f.write_str("peer device disconnected"),
-            ReceiveErrorInner::Maybe(MaybeRecvError::RecvError(r)) => write!(f, "receive error: {r:}"),
-            ReceiveErrorInner::Maybe(MaybeRecvError::DumpRecvError(d)) => write!(f, "receive error (dump): {d:?}"),
-            ReceiveErrorInner::Maybe(MaybeRecvError::InvalidChannel(c)) => write!(f, "{c:}"),
-            ReceiveErrorInner::Recombine(e) => write!(f, "recombine error: {e:}"),
-            ReceiveErrorInner::ExpectedPduBeginning => f.write_str("expected first fragment of PDU"),
-            ReceiveErrorInner::UnexpectedFirstFragment => f.write_str("unexpected first fragment of PDU"),
-            ReceiveErrorInner::InvalidSduLength => f.write_str("SDU length field does not match SDU size"),
-            ReceiveErrorInner::UnexpectedBufferLength(buffer_len, expected_len) => write!(
-                f,
-                "the buffer length is {}, not the expected length of {}",
-                buffer_len, expected_len,
-            ),
-            ReceiveErrorInner::PeerSentWithNoCredits => {
-                f.write_str("linked device sent credit based frame without having credits to send")
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl<L, C> std::error::Error for ReceiveError<L, C>
-where
-    L: LogicalLink,
-    <L::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
-        std::error::Error,
-    C: std::error::Error,
-{
-}
-
-enum ReceiveErrorInner<L: LogicalLink, C> {
-    Maybe(MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>),
-    Recombine(C),
-    ExpectedPduBeginning,
-    UnexpectedFirstFragment,
-    InvalidSduLength,
-    UnexpectedBufferLength(usize, usize),
-    PeerSentWithNoCredits,
 }
 
 /// Error when sending a SDU
