@@ -1,11 +1,11 @@
 //! Signalling Channel implementation
 
 use crate::channel::id::{AclCid, ChannelIdentifier, DynChannelId, LeCid};
-use crate::channel::shared::{ReceiveDataProcessor, UnusedChannelResponse};
-use crate::channel::{ChannelBuffer, ConnectionChannel, CreditBasedChannel, MaybeRecvError};
+use crate::channel::{ChannelBuffer, ChannelDirection, CreditBasedChannel, DynChannelState};
 use crate::link_flavor::LeULink;
-use crate::pdu::control_frame::{ControlFrame, RecombineError};
-use crate::pdu::{FragmentIterator, FragmentL2capPdu, L2capFragment, RecombineL2capPdu, RecombinePayloadIncrementally};
+use crate::logical_link_private::NewDynChannelError;
+use crate::pdu::control_frame::RecombineError;
+use crate::pdu::{FragmentL2capPdu, RecombineL2capPdu, RecombinePayloadIncrementally};
 use crate::signals::packets::{
     CommandRejectResponse, DisconnectRequest, DisconnectResponse, FlowControlCreditInd, LeCreditBasedConnectionRequest,
     LeCreditBasedConnectionResponse, LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, Signal,
@@ -15,34 +15,6 @@ use crate::{LeULogicalLink, LogicalLink, PhysicalLink, PhysicalLinkExt, LE_STATI
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_core::buffer::TryExtend;
 use core::num::NonZeroU8;
-
-/// List of response signals and any data required with them
-enum AwaitedSignalResponse {
-    None,
-    LeCreditConnection(InterimCreditConnectionData),
-}
-
-impl AwaitedSignalResponse {
-    fn on_fail<L: LogicalLink>(&mut self, link: &L) {
-        let last = core::mem::replace(self, AwaitedSignalResponse::None);
-
-        match last {
-            AwaitedSignalResponse::None => (),
-            AwaitedSignalResponse::LeCreditConnection(i) => i.on_fail(link),
-        }
-    }
-}
-
-/// Interim data held awaiting for a response to a LE or enhanced credit connection response
-struct InterimCreditConnectionData {
-    source_dyn_cid: ChannelIdentifier,
-}
-
-impl InterimCreditConnectionData {
-    fn on_fail<L: LogicalLink>(self, link: &L) {
-        link.get_shared_link().remove_channel(self.source_dyn_cid)
-    }
-}
 
 /// A Signalling Channel
 ///
@@ -56,20 +28,16 @@ impl InterimCreditConnectionData {
 pub struct SignallingChannel<L> {
     channel_id: ChannelIdentifier,
     logical_link: L,
-    awaited_response: AwaitedSignalResponse,
     receiving_signal: ReceiveSignalRecombineBuilder,
 }
 
 impl<L> SignallingChannel<L> {
     pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: L) -> Self {
-        let awaited_response = AwaitedSignalResponse::None;
-
         let receiving_signal = ReceiveSignalRecombineBuilder::default();
 
         Self {
             channel_id,
             logical_link,
-            awaited_response,
             receiving_signal,
         }
     }
@@ -81,25 +49,19 @@ impl<L> SignallingChannel<L> {
 }
 
 impl<L: LogicalLink> SignallingChannel<L> {
-    /// Get fragmentation size of L2CAP control PDUs
-    ///
-    /// This returns the maximum payload of the underlying [`PhysicalLink`] of this connection
-    /// channel. Every L2CAP PDU is fragmented to this in both sending a receiving of L2CAP data.
-    pub fn fragmentation_size(&self) -> usize {
-        self.logical_link.get_physical_link().max_transmission_size()
-    }
-
     /// Send a Signal
     ///
     /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
     /// may be called by protocol at a higher layer than L2CAP.
-    async fn send<T: FragmentL2capPdu>(
-        &mut self,
-        c_frame: T,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+    async fn send<T: FragmentL2capPdu>(&mut self, c_frame: T) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
+    where
+        T: FragmentL2capPdu,
+    {
+        let max_transmission_size = self.logical_link.get_physical_link().max_transmission_size().into();
+
         self.logical_link
             .get_mut_physical_link()
-            .send_pdu(c_frame, self.fragmentation_size())
+            .send_pdu(c_frame, max_transmission_size)
             .await
     }
 
@@ -111,18 +73,38 @@ impl<L: LogicalLink> SignallingChannel<L> {
     /// # Note
     /// The disconnection of the L2CAP connection does not occur until after a disconnection
     /// response is received by this device (with the correct fields).
-    pub async fn request_disconnection<C: ConnectionChannel>(
+    pub async fn request_disconnection(
         &mut self,
-        channel: &mut C,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let destination_id = channel.get_peer_channel_id();
-        let source_id = channel.get_this_channel_id();
+        this_channel_id: ChannelIdentifier,
+    ) -> Result<(), RequestDisconnectError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
+        match this_channel_id {
+            ChannelIdentifier::Le(LeCid::DynamicallyAllocated(_))
+            | ChannelIdentifier::Acl(AclCid::DynamicallyAllocated(_)) => (),
+            _ => return Err(RequestDisconnectError::NotAConnectionChannel(this_channel_id)),
+        }
 
-        let disconnect_request = DisconnectRequest::new(NonZeroU8::new(1).unwrap(), destination_id, source_id);
+        let channel_buffer = self
+            .logical_link
+            .get_dyn_channel(this_channel_id)
+            .ok_or_else(|| RequestDisconnectError::NoChannelFoundForId(this_channel_id))?;
 
-        let c_frame = disconnect_request.into_control_frame(self.channel_id);
+        match channel_buffer {
+            ChannelBuffer::CreditBasedChannel { data } => {
+                let (source_id, destination_id) = match &data.peer_channel_id {
+                    ChannelDirection::Source(s) => (*s, this_channel_id),
+                    ChannelDirection::Destination(d) => (this_channel_id, *d),
+                };
 
-        self.send(c_frame).await
+                let disconnect_request = DisconnectRequest::new(NonZeroU8::new(1).unwrap(), destination_id, source_id);
+
+                let c_frame = disconnect_request.into_control_frame(self.channel_id);
+
+                self.send(c_frame)
+                    .await
+                    .map_err(|e| RequestDisconnectError::SendError(e))
+            }
+            _ => unreachable!("unexpected invalid dynamic channel buffer data"),
+        }
     }
 
     /// Give credits to the peer device
@@ -134,7 +116,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
     pub(crate) async fn give_credits_to_peer(
         &mut self,
         channel_credits: crate::channel::ChannelCredits,
-    ) -> Result<(), PhysicalLink::SendErr> {
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> where {
         let credit_ind = FlowControlCreditInd::new(
             NonZeroU8::new(1).unwrap(),
             channel_credits.get_channel_id(),
@@ -146,7 +128,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
         self.send(c_frame).await
     }
 
-    /// Request a LE Credit Based Connection
+    /// Request an LE Credit Based Connection
     ///
     /// This will send the request to create a LE credit based connection with the linked device. A
     /// connection is not completed until a response is received via the method [`receive`].
@@ -165,15 +147,18 @@ impl<L: LogicalLink> SignallingChannel<L> {
         mtu: LeCreditMtu,
         mps: LeCreditMps,
         initial_credits: u16,
-        buffer: L::Buffer,
-    ) -> Result<LeCreditBasedConnectionRequest, CreditConnectionRequestError<<L::PhysicalLink as PhysicalLink>::SendErr>>
-    {
+    ) -> Result<
+        LeCreditBasedConnectionRequest,
+        RequestLeCreditConnectionError<<L::PhysicalLink as PhysicalLink>::SendErr>,
+    > {
+        let dyn_channel_buffer_builder = DynChannelState::ReserveCreditBasedChannel;
+
         let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = self
             .logical_link
-            .new_dyn_channel(mps.get(), buffer)
-            .ok_or_else(|| CreditConnectionRequestError::NoMoreDynChannels)?
+            .new_dyn_channel(dyn_channel_buffer_builder)
+            .map_err(|e| RequestLeCreditConnectionError::CreateDynChannelError(e))?
         else {
-            return Err(CreditConnectionRequestError::InvalidChannelIdentifier);
+            return Err(RequestLeCreditConnectionError::InvalidChannelIdentifier);
         };
 
         let request = LeCreditBasedConnectionRequest {
@@ -185,34 +170,55 @@ impl<L: LogicalLink> SignallingChannel<L> {
             initial_credits,
         };
 
-        let interim_data = InterimCreditConnectionData {
-            source_dyn_cid: ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)),
-        };
-
-        self.awaited_response = AwaitedSignalResponse::LeCreditConnection(interim_data);
-
         let control_frame = request.into_control_frame(self.channel_id);
 
-        self.logical_link
-            .get_mut_physical_link()
-            .send_pdu(control_frame, self.fragmentation_size())
+        self.send(control_frame)
             .await
-            .map_err(|e| CreditConnectionRequestError::SendError(e))?;
+            .map_err(|e| RequestLeCreditConnectionError::SendError(e))?;
 
         Ok(request)
     }
 }
 
-/// Error returned by a credit based connection request
+/// Error returned by method [`request_disconnection`]
+///
+/// [`request_disconnection`]: SignallingChannel::request_disconnection
 #[derive(Debug)]
-pub enum CreditConnectionRequestError<S> {
+pub enum RequestDisconnectError<S> {
+    SendError(S),
+    NotAConnectionChannel(ChannelIdentifier),
+    NoChannelFoundForId(ChannelIdentifier),
+}
+
+impl<S> core::fmt::Display for RequestDisconnectError<S>
+where
+    S: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Self::SendError(s) => core::fmt::Display::fmt(s, f),
+            Self::NotAConnectionChannel(id) => {
+                write!(f, "{id} is not a connection channel")
+            }
+            Self::NoChannelFoundForId(id) => {
+                write!(f, "there exists L2CAP connection with the channel ID {id} (on this ")
+            }
+        }
+    }
+}
+
+/// Error returned by method [`request_le_credit_connection`]
+///
+/// [`request_le_credit_connection`]: SignallingChannel::request_le_credit_connection
+#[derive(Debug)]
+pub enum RequestLeCreditConnectionError<S> {
     SendError(S),
     NotLeULogicalLink,
-    NoMoreDynChannels,
+    CreateDynChannelError(NewDynChannelError),
     InvalidChannelIdentifier,
 }
 
-impl<S> core::fmt::Display for CreditConnectionRequestError<S>
+impl<S> core::fmt::Display for RequestLeCreditConnectionError<S>
 where
     S: core::fmt::Display,
 {
@@ -222,14 +228,16 @@ where
             Self::NotLeULogicalLink => {
                 f.write_str("an LE credit based connection can only be created on a LE-U logical link")
             }
-            Self::NoMoreDynChannels => f.write_str("no more dynamic channels can be allocated for this link"),
+            Self::CreateDynChannelError(NewDynChannelError) => {
+                write!(f, "{NewDynChannelError}")
+            }
             Self::InvalidChannelIdentifier => f.write_str("invalid channel identifier"),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl<S> std::error::Error for CreditConnectionRequestError<S> where S: std::error::Error {}
+impl<S> std::error::Error for RequestLeCreditConnectionError<S> where S: std::error::Error {}
 
 /// Signal received from the linked device
 #[non_exhaustive]
@@ -345,8 +353,6 @@ impl<L> core::fmt::Debug for ReceiveSignalError<L>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
-        core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -365,8 +371,6 @@ impl<L> core::fmt::Display for ReceiveSignalError<L>
 where
     L: LogicalLink,
     <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
-    <<L::UnusedChannelResponse as UnusedChannelResponse>::ReceiveProcessor as ReceiveDataProcessor>::Error:
-        core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -377,16 +381,6 @@ where
             ReceiveSignalError::Recombine(r) => core::fmt::Display::fmt(r, f),
             ReceiveSignalError::ExpectedFirstFragment => f.write_str("expected first fragment of PDU"),
             ReceiveSignalError::UnexpectedFirstFragment => f.write_str("unexpected first fragment of PDU"),
-        }
-    }
-}
-
-impl<L: LogicalLink> From<MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>> for ReceiveSignalError<L> {
-    fn from(value: MaybeRecvError<L::PhysicalLink, L::UnusedChannelResponse>) -> Self {
-        match value {
-            MaybeRecvError::Disconnected => ReceiveSignalError::Disconnected,
-            MaybeRecvError::RecvError(e) => ReceiveSignalError::RecvErr(e),
-            MaybeRecvError::InvalidChannel(c) => ReceiveSignalError::InvalidChannel(c),
         }
     }
 }
@@ -421,7 +415,7 @@ enum ReceiveSignalRecombineBuilder {
     // state used before the signalling code is received
     #[default]
     Init,
-    // Used for a error condition where the L2CAP signalling packet is 'unknown'
+    // Used for an error condition where the L2CAP signalling packet is 'unknown'
     Unknown(UnknownSignal),
     CommandRejectRsp(LinearBuffer<8, u8>),
     DisconnectRequest(LinearBuffer<8, u8>),
@@ -635,24 +629,23 @@ impl Request<DisconnectRequest> {
     /// rejection response contains the *invalid CID in request* reason.
     pub fn check_disconnect_request<L: LogicalLink>(
         &self,
-        logical_link: &L,
+        signalling_channel: &mut SignallingChannel<L>,
     ) -> Result<(), Response<CommandRejectResponse>> {
-        if logical_link
-            .get_shared_link()
-            .is_channel_used(self.request.destination_cid)
-        {
-            Ok(())
-        } else {
-            let rejection = CommandRejectResponse::new_invalid_cid_in_request(
-                self.request.identifier,
-                self.request.destination_cid.to_val(),
-                self.request.source_cid.to_val(),
-            );
+        signalling_channel
+            .logical_link
+            .remove_dyn_channel(self.request.destination_cid)
+            .then_some(())
+            .ok_or_else(|| {
+                let rejection = CommandRejectResponse::new_invalid_cid_in_request(
+                    self.request.identifier,
+                    self.request.destination_cid.to_val(),
+                    self.request.source_cid.to_val(),
+                );
 
-            let response = Response::new(rejection);
+                let response = Response::new(rejection);
 
-            Err(response)
-        }
+                response
+            })
     }
 
     pub async fn send_disconnect_response<L: LogicalLink>(
@@ -680,14 +673,25 @@ impl Request<LeCreditBasedConnectionRequest> {
     /// # Panic
     /// This method will panic if there are no more dynamic channels that can be allocated for a
     /// LE-U logical link.
-    pub fn create_le_credit_based_connection<P: PhysicalLink, B>(
+    pub fn create_le_credit_based_connection<L: LogicalLink>(
         &self,
-        link: &mut LeULogicalLink<P, B>,
+        signal_channel: &mut SignallingChannel<L>,
         initial_credits: u16,
-        buffer: B,
     ) -> LeCreditBasedConnectionResponseBuilder<'_> {
-        let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(destination_dyn_cid)) = link
-            .new_dyn_channel(self.request.mps.get(), buffer)
+        let peer_channel_id = ChannelDirection::Source(ChannelIdentifier::Le(LeCid::DynamicallyAllocated(
+            self.request.source_dyn_cid,
+        )));
+
+        let dyn_channel_state = DynChannelState::EstablishedCreditBasedChannel {
+            peer_channel_id,
+            maximum_transmission_size: self.mtu.get(),
+            maximum_payload_size: self.mps.get(),
+            peer_credits: self.initial_credits,
+        };
+
+        let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(destination_dyn_cid)) = signal_channel
+            .logical_link
+            .new_dyn_channel(dyn_channel_state)
             .expect("failed to create a dynamic channel")
         else {
             panic!("link returned invalid channel")
@@ -724,7 +728,7 @@ impl Request<LeCreditBasedConnectionRequest> {
 /// Builder used for creating a *LE Credit Based Connection Response*
 pub struct LeCreditBasedConnectionResponseBuilder<'a> {
     request: &'a LeCreditBasedConnectionRequest,
-    destination_dyn_cid: crate::channel::id::DynChannelId<LeULink>,
+    destination_dyn_cid: DynChannelId<LeULink>,
     mtu: u16,
     mps: u16,
     initial_credits: u16,
@@ -733,9 +737,9 @@ pub struct LeCreditBasedConnectionResponseBuilder<'a> {
 impl LeCreditBasedConnectionResponseBuilder<'_> {
     /// Get the destination channel identifier
     ///
-    /// This will be the identifier of the channel created by the output of [`send_response`]
+    /// This will be the identifier of the channel created by the output of [`send_success_response`]
     ///
-    /// [`send_response`]: LeCreditBasedConnectionResponseBuilder::send_response
+    /// [`send_success_response`]: LeCreditBasedConnectionResponseBuilder::send_success_response
     pub fn get_destination_channel(&self) -> ChannelIdentifier {
         ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.destination_dyn_cid))
     }
@@ -766,19 +770,26 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
 
     /// Send the response and create the connection
     ///
-    /// This sends the response to the peer device and returns a [`CreditBasedChannel`] for the new
-    /// connection.
+    /// This sends the response to establish the LE credit based connection. After this is
+    /// successfully polled to completion there will be a new LE credit based connection established
+    /// between this device and the peer.
     ///
     /// # Note
     /// The result field within the response will be [`ConnectionSuccessful`]
     ///
+    /// # Error
+    /// If this was not called on an LE-U logical link or there was an error sending the response.
+    ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub async fn send_response<P: PhysicalLink, B>(
+    pub async fn send_success_response<L: LogicalLink>(
         self,
-        signals_channel: &mut SignallingChannel<LeULogicalLink<P, B>>,
-        buffer: B,
-    ) -> Result<(), P::SendErr> {
+        signals_channel: &mut SignallingChannel<L>,
+    ) -> Result<(), LeCreditResponseError<L>> {
+        use crate::LinkFlavor;
         use core::cmp::min;
+
+        L::LinkFlavor::try_channel_from_raw(self.destination_dyn_cid.get_val())
+            .ok_or_else(|| LeCreditResponseError::LinkIsNotLeU)?;
 
         let response = LeCreditBasedConnectionResponse::new(
             self.request.identifier,
@@ -790,35 +801,59 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
 
         signals_channel
             .send(response.into_control_frame(signals_channel.channel_id))
-            .await?;
+            .await
+            .map_err(|e| LeCreditResponseError::SendErr(e))?;
 
         let index = (self.destination_dyn_cid.get_val() - DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize
             + LE_STATIC_CHANNEL_COUNT;
 
-        let peer_channel_id = crate::channel::ChannelDirection::Source(self.request.get_source_cid());
+        let peer_channel_id = ChannelDirection::Source(self.request.get_source_cid());
 
-        let maximum_packet_size = min(self.mps, self.request.mps.get()).into();
+        let maximum_payload_size = min(self.mps, self.request.mps.get()).into();
 
         let maximum_transmission_size = min(self.mtu, self.request.mtu.get()).into();
 
         let initial_peer_credits = self.request.initial_credits.into();
 
-        let initial_this_credits = self.initial_credits.into();
-
-        let channel_buffer = ChannelBuffer::CreditBasedChannel {
+        let state = DynChannelState::EstablishedCreditBasedChannel {
             peer_channel_id,
-            maximum_packet_size,
             maximum_transmission_size,
+            maximum_payload_size,
             peer_credits: initial_peer_credits,
-            this_credits: initial_this_credits,
-            buffer,
         };
 
-        signals_channel.logical_link.channels[index] = channel_buffer;
+        signals_channel.logical_link.new_dyn_channel(state);
 
         Ok(())
     }
 }
+
+#[derive(Debug)]
+enum LeCreditResponseError<L: LogicalLink> {
+    LinkIsNotLeU,
+    SendErr(<L::PhysicalLink as PhysicalLink>::SendErr),
+}
+
+impl<L: LogicalLink> core::fmt::Display for LeCreditResponseError<L>
+where
+    <L::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        use crate::LinkFlavor;
+
+        match self {
+            Self::LinkIsNotLeU => write!(
+                f,
+                "cannot establish an LE credit based channel on an {} logical link",
+                <L::LinkFlavor as LinkFlavor>::name()
+            ),
+            Self::SendErr(s) => core::fmt::Display::fmt(&s, f),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<L: LogicalLink> std::error::Error for LeCreditResponseError<L> where Self: core::fmt::Debug {}
 
 /// A response signal from the linked device
 #[derive(Debug, Copy, Clone)]
@@ -860,44 +895,62 @@ impl Response<LeCreditBasedConnectionResponse> {
     ///
     /// # Error
     /// An error is returned if the result field in the response is anything other than
-    /// [`ConnectionSuccessful`]
+    /// [`ConnectionSuccessful`], or the link failed to allocate a dynamic channel.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub fn create_le_credit_connection<P: PhysicalLink, B>(
+    pub fn create_le_credit_connection<L: LogicalLink>(
         &self,
         request: &LeCreditBasedConnectionRequest,
-        link: &mut LeULogicalLink<P, B>,
-    ) -> Result<(), LeCreditBasedConnectionResponseResult> {
+        signals_channel: &mut SignallingChannel<L>,
+    ) -> Result<(), CreateLeCreditConnectionError> {
         if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = self.get_result() {
-            let index = (request.get_source_cid().get_val() - DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize
-                + LE_STATIC_CHANNEL_COUNT;
+            let peer_channel_id = ChannelDirection::Destination(self.response.get_destination_cid().unwrap());
 
-            let peer_channel_id =
-                crate::channel::ChannelDirection::Destination(self.response.get_destination_cid().unwrap());
-
-            let maximum_packet_size = core::cmp::min(self.response.get_mps().unwrap().get(), request.mps.get()).into();
+            let maximum_payload_size = core::cmp::min(self.response.get_mps().unwrap().get(), request.mps.get()).into();
 
             let maximum_transmission_size =
                 core::cmp::min(self.response.get_mtu().unwrap().get(), request.mtu.get()).into();
 
             let initial_peer_credits = self.response.get_initial_credits().unwrap().into();
 
-            let initial_this_credits = request.initial_credits.into();
-
-            let channel_buffer = ChannelBuffer::CreditBasedChannel {
+            let state = DynChannelState::EstablishedCreditBasedChannel {
                 peer_channel_id,
-                maximum_packet_size,
                 maximum_transmission_size,
+                maximum_payload_size,
                 peer_credits: initial_peer_credits,
-                this_credits: initial_this_credits,
-                buffer,
             };
 
-            link.channels[index] = channel_buffer;
+            signals_channel
+                .logical_link
+                .new_dyn_channel(state)
+                .map_err(|e| CreateLeCreditConnectionError::DynChannelFail(e))?;
 
             Ok(())
         } else {
-            Err(self.get_result())
+            Err(CreateLeCreditConnectionError::ResponseError(self.get_result()))
+        }
+    }
+}
+
+/// The error returned by [`create_le_credit_connection`]
+///
+///
+/// [`create_le_credit_connection`]: Response::<LeCreditBasedConnectionResponse>::create_le_credit_connection
+#[derive(Debug)]
+enum CreateLeCreditConnectionError {
+    ResponseError(LeCreditBasedConnectionResponseResult),
+    DynChannelFail(NewDynChannelError),
+}
+
+impl core::fmt::Display for CreateLeCreditConnectionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            CreateLeCreditConnectionError::ResponseError(r) => {
+                write!(f, "response contained error {r}")
+            }
+            CreateLeCreditConnectionError::DynChannelFail(n) => {
+                write!(f, "failed to create create channel, {n}")
+            }
         }
     }
 }

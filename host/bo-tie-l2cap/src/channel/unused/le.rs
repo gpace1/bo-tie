@@ -1,13 +1,13 @@
 //! Processing of Unused LE channels
 
 use crate::channel::id::{ChannelIdentifier, LeCid};
-use crate::channel::shared::unused::{ReceiveDataProcessor, UnusedChannelResponse};
-use crate::channel::shared::BasicHeadedFragment;
-use crate::pdu::BasicFrame;
+use crate::channel::unused::{ReceiveDataProcessor, UnusedChannelResponse};
+use crate::channel::BasicHeader;
+use crate::pdu::{BasicFrame, L2capFragment};
 use crate::{LeULogicalLink, PhysicalLink};
 use core::num::NonZeroU8;
 
-impl<P: PhysicalLink> UnusedChannelResponse for LeULogicalLink<P> {
+impl<P: PhysicalLink, B> UnusedChannelResponse for LeULogicalLink<P, B> {
     type ReceiveProcessor = UnusedFixedChannelPduData;
     type Response = BasicFrame<UnusedPduResp>;
 
@@ -104,7 +104,7 @@ impl UnusedFixedChannelPduData {
 impl ReceiveDataProcessor for UnusedFixedChannelPduData {
     type Error = UnusedError;
 
-    fn process<T>(&mut self, mut fragment: BasicHeadedFragment<T>) -> Result<bool, Self::Error>
+    fn process<T>(&mut self, basic_header: &BasicHeader, fragment: &mut L2capFragment<T>) -> Result<bool, Self::Error>
     where
         T: Iterator<Item = u8> + ExactSizeIterator,
     {

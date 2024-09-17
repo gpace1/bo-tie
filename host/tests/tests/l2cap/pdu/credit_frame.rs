@@ -90,7 +90,7 @@ macro_rules! connect_response {
         let credit_based_channel = match signal_channel.receive().await.expect("failed to get request") {
             ReceivedSignal::LeCreditBasedConnectionRequest(request) => request
                 .create_le_credit_based_connection(&$r_link, $init_credits)
-                .send_response(&mut signal_channel)
+                .send_success_response(&mut signal_channel)
                 .await
                 .expect("failed to send response"),
             _ => panic!("received unexpected signal"),

@@ -4,7 +4,7 @@ use crate::channel::id::ChannelIdentifier;
 use crate::channel::{CreditBasedChannel, SendSduError};
 use crate::pdu::credit_frame::PacketsIterator;
 use crate::pdu::SduPacketsIterator;
-use crate::{LogicalLink, PhysicalLink};
+use crate::{LogicalLink, PhysicalLink, PhysicalLinkExt};
 
 /// Unsent Credit Frames of a SDU
 ///
@@ -29,15 +29,15 @@ where
 
     async fn send<L: LogicalLink>(
         &mut self,
-        credit_based_channel: &mut CreditBasedChannel<'_, L>,
+        credit_based_channel: &mut CreditBasedChannel<L>,
     ) -> Result<bool, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        while credit_based_channel.peer_credits != 0 && !self.packets_iterator.is_complete() {
+        while credit_based_channel.get_channel_data().peer_credits != 0 && !self.packets_iterator.is_complete() {
             // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
-            let next_pdu = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter()).unwrap();
+            let pdu = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter()).unwrap();
 
-            credit_based_channel.send_pdu(next_pdu).await?;
+            credit_based_channel.send_k_frame(pdu).await?;
 
-            credit_based_channel.peer_credits -= 1;
+            credit_based_channel.get_mut_channel_data().peer_credits -= 1;
         }
 
         Ok(self.packets_iterator.is_complete())
@@ -45,8 +45,8 @@ where
 
     /// Increase the peer credit count and send more credit based PDUs
     ///
-    /// This first increases the credit count for the linked device and then starts sending k-frames
-    /// until either the full SDU is sent or the credits have reached zero (again).
+    /// This first forcibly increases the credit count for the linked device and then starts sending
+    /// credit based frames until either the full SDU is sent or the credits have reached zero.
     ///
     /// If all k-frames for the SDU are sent by the returned future will output `None`, otherwise
     /// this is returned if the increased `amount` of credits was not enough to send the SDU.
@@ -54,18 +54,21 @@ where
     /// Input `amount` should be the number of credits as indicated from a received *L2CAP flow
     /// control credit ind* signal.
     ///
+    /// # Unsafe
+    /// This does not validate that the peer device sent the credits to increase the credit amount.
+    ///
     /// # Error
     /// The `credit_based_channel` must be the same channel that created this `UnsentCreditFrames`.
-    pub async fn inc_and_send<L: LogicalLink>(
+    pub async unsafe fn force_inc_and_send<L: LogicalLink>(
         mut self,
-        credit_based_channel: &mut CreditBasedChannel<'_, L>,
+        credit_based_channel: &mut CreditBasedChannel<L>,
         amount: u16,
     ) -> Result<Option<CreditServiceData<T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        if credit_based_channel.peer_channel_id.get_channel() != self.destination_channel {
+        if credit_based_channel.get_channel_data().peer_channel_id.get_channel() != self.destination_channel {
             return Err(SendSduError::IncorrectChannel);
         }
 
-        credit_based_channel.add_peer_credits(amount);
+        credit_based_channel.force_add_peer_credits(amount);
 
         self.send(credit_based_channel)
             .await
@@ -83,7 +86,7 @@ where
     /// # use bo_tie_l2cap::channel::{CreditServiceData, SendSduError};
     /// # use bo_tie_l2cap::{CreditBasedChannel, LogicalLink, PhysicalLink};
     /// # use bo_tie_l2cap::signals::packets::FlowControlCreditInd;
-    /// # async fn example<L: LogicalLink>(credit_service_data: CreditServiceData<IntoIter<u8>>, mut credit_based_channel: CreditBasedChannel<'_, L>, flow_control_credit_ind: FlowControlCreditInd)
+    /// # async fn example<L: LogicalLink>(credit_service_data: CreditServiceData<IntoIter<u8>>, mut credit_based_channel: CreditBasedChannel<L>, flow_control_credit_ind: FlowControlCreditInd)
     /// # -> Result<(), SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
     /// credit_based_channel.add_peer_credits(flow_control_credit_ind.get_credits());
     ///
@@ -95,9 +98,9 @@ where
     /// [`add_peer_credits`]: CreditBasedChannel::add_peer_credits
     pub async fn continue_sending<L: LogicalLink>(
         mut self,
-        credit_based_channel: &mut CreditBasedChannel<'_, L>,
+        credit_based_channel: &mut CreditBasedChannel<L>,
     ) -> Result<Option<CreditServiceData<T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        if credit_based_channel.peer_channel_id.get_channel() != self.destination_channel {
+        if credit_based_channel.get_channel_data().peer_channel_id.get_channel() != self.destination_channel {
             return Err(SendSduError::IncorrectChannel);
         }
 

@@ -273,7 +273,7 @@ async fn multiple_sending_signal_channel<'a>(
             ReceivedSignal::LeCreditBasedConnectionRequest(request) => {
                 break request
                     .create_le_credit_based_connection(s.get_link(), 0xFFFF)
-                    .send_response(s)
+                    .send_success_response(s)
                     .await
                     .expect("failed to send LE credit based response")
             }
@@ -453,7 +453,7 @@ async fn le_channel_dropped_while_receiving() {
                 request = signalling_channel.receive() => match request.expect("receive failed") {
                     ReceivedSignal::LeCreditBasedConnectionRequest(request) => {
                         request.create_le_credit_based_connection(&l_link, 0)
-                            .send_response(&mut signalling_channel)
+                            .send_success_response(&mut signalling_channel)
                             .await
                             .expect("failed to send response");
                     }

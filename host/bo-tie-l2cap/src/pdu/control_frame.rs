@@ -55,7 +55,7 @@ impl<T> RecombineL2capPdu for ControlFrame<T>
 where
     T: TryExtend<u8> + Default,
 {
-    type RecombineMeta = ();
+    type RecombineMeta<'a> = ();
     type RecombineError = RecombineError;
     type RecombineBuffer = T;
     type PayloadRecombiner<'a> = ControlFrameRecombiner<'a, Self::RecombineBuffer> where Self::RecombineBuffer: 'a;
@@ -64,7 +64,7 @@ where
         payload_length: u16,
         channel_id: ChannelIdentifier,
         buffer: &'a mut Self::RecombineBuffer,
-        _: &mut Self::RecombineMeta,
+        _: Self::RecombineMeta<'a>,
     ) -> Self::PayloadRecombiner<'a> {
         ControlFrameRecombiner::new(buffer, payload_length.into(), channel_id)
     }

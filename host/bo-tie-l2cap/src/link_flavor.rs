@@ -47,9 +47,12 @@ pub trait LinkFlavor {
     ///
     /// # Note
     /// In general this is used as the default MTU for the link until a negotiation is made to use a
-    /// different MTU. This negotiation may occur by L2CAP within the `WAIT_CONNECT` and 
+    /// different MTU. This negotiation may occur by L2CAP within the `WAIT_CONNECT` and
     /// `WAIT_CONNECT_RSP` (L2CAP) states or in the `OPEN` state by a higher layer protocol.
     const SUPPORTED_MTU: u16;
+
+    /// Name of the link
+    fn name() -> &'static str;
 
     /// Try to get the channel identifier from its value
     ///
@@ -78,6 +81,10 @@ pub struct AclULink;
 impl LinkFlavor for AclULink {
     const SUPPORTED_MTU: u16 = 48;
 
+    fn name() -> &'static str {
+        "ACL-U"
+    }
+
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
     }
@@ -100,6 +107,10 @@ pub struct AclUExtLink;
 impl LinkFlavor for AclUExtLink {
     const SUPPORTED_MTU: u16 = 672;
 
+    fn name() -> &'static str {
+        "ACL-U (ext.)"
+    }
+
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         AclCid::try_from_raw(val).map(|id| ChannelIdentifier::Acl(id)).ok()
     }
@@ -120,6 +131,10 @@ pub struct ApbLink;
 
 impl LinkFlavor for ApbLink {
     const SUPPORTED_MTU: u16 = 48;
+
+    fn name() -> &'static str {
+        "APB-U"
+    }
 
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         crate::channel::id::ApbCid::try_from_raw(val)
@@ -143,6 +158,10 @@ pub struct LeULink;
 
 impl LinkFlavor for LeULink {
     const SUPPORTED_MTU: u16 = 23;
+
+    fn name() -> &'static str {
+        "LE-U"
+    }
 
     fn try_channel_from_raw(val: u16) -> Option<ChannelIdentifier> {
         LeCid::try_from_raw(val).map(|id| ChannelIdentifier::Le(id)).ok()

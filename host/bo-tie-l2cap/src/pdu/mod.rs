@@ -131,7 +131,7 @@ pub trait FragmentIterator {
 /// protocols **below** L2CAP.
 pub trait RecombineL2capPdu {
     /// Information required in order to recombine fragments into a PDU
-    type RecombineMeta;
+    type RecombineMeta<'a>;
 
     /// Error when trying to recombine fragments.
     type RecombineError;
@@ -174,7 +174,7 @@ pub trait RecombineL2capPdu {
         payload_length: u16,
         channel_id: ChannelIdentifier,
         buffer: &'a mut Self::RecombineBuffer,
-        meta: &'a mut Self::RecombineMeta,
+        meta: Self::RecombineMeta<'a>,
     ) -> Self::PayloadRecombiner<'a>;
 }
 

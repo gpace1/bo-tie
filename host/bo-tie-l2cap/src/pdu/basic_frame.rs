@@ -35,6 +35,11 @@ impl<T> BasicFrame<T> {
     pub fn get_payload(&self) -> &T {
         &self.payload
     }
+
+    /// Convert this `BasicFrame` into its payload
+    pub fn into_payload(self) -> T {
+        self.payload
+    }
 }
 
 impl<T> FragmentL2capPdu for BasicFrame<T>
@@ -62,7 +67,7 @@ where
     T: TryExtend<u8> + Default,
 {
     type RecombineError = RecombineError;
-    type RecombineMeta = ();
+    type RecombineMeta<'a> = ();
     type RecombineBuffer = T;
     type PayloadRecombiner<'a> = BasicFrameRecombiner<'a, Self::RecombineBuffer>
         where Self::RecombineBuffer: 'a;
@@ -71,7 +76,7 @@ where
         payload_length: u16,
         channel_id: ChannelIdentifier,
         buffer: &'a mut Self::RecombineBuffer,
-        _: &'a mut Self::RecombineMeta,
+        _: Self::RecombineMeta<'_>,
     ) -> Self::PayloadRecombiner<'a> {
         BasicFrameRecombiner::new(buffer, payload_length.into(), channel_id)
     }

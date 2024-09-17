@@ -9,8 +9,8 @@
 pub mod le;
 
 use crate::channel::id::ChannelIdentifier;
-use crate::channel::shared::BasicHeadedFragment;
-use crate::pdu::FragmentL2capPdu;
+use crate::channel::BasicHeader;
+use crate::pdu::{FragmentL2capPdu, L2capFragment};
 
 /// Response for a PDU for an unused channel
 ///
@@ -57,7 +57,7 @@ pub trait ReceiveDataProcessor: Copy + Clone + core::fmt::Debug + PartialEq {
     ///
     /// # Note
     /// `fragment` will only contain bytes after the basic header of the PDU.
-    fn process<T>(&mut self, fragment: BasicHeadedFragment<T>) -> Result<bool, Self::Error>
+    fn process<T>(&mut self, basic_header: &BasicHeader, fragment: &mut L2capFragment<T>) -> Result<bool, Self::Error>
     where
         T: Iterator<Item = u8> + ExactSizeIterator;
 }

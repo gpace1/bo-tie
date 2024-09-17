@@ -495,7 +495,7 @@ where
     P: Default + TryExtend<u8>,
 {
     type RecombineError = RecombineError;
-    type RecombineMeta = RecombineMeta;
+    type RecombineMeta<'a> = &'a mut RecombineMeta;
     type RecombineBuffer = P;
     type PayloadRecombiner<'a> = CreditBasedFrameRecombiner<'a, P> where P: 'a;
 
@@ -503,7 +503,7 @@ where
         payload_length: u16,
         channel_id: ChannelIdentifier,
         buffer: &'a mut Self::RecombineBuffer,
-        meta: &'a mut Self::RecombineMeta,
+        meta: Self::RecombineMeta<'a>,
     ) -> Self::PayloadRecombiner<'a> {
         CreditBasedFrameRecombiner::new(buffer, payload_length.into(), channel_id, meta)
     }
@@ -644,7 +644,7 @@ impl std::error::Error for RecombineError {}
 /// Meta information required for recombining Credit Based Frames.
 pub struct RecombineMeta {
     pub first: bool,
-    pub mps: u16,
+    pub maximum_payload_size: u16,
 }
 
 /// A recombiner of fragments into a Credit Based PDU.
@@ -713,7 +713,7 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
         P: TryExtend<u8>,
         T: Iterator<Item = u8> + ExactSizeIterator,
     {
-        if self.byte_count + payload.len() > self.meta.mps.into() {
+        if self.byte_count + payload.len() > self.meta.maximum_payload_size.into() {
             Err(RecombineError::PayloadLargerThanMps)
         } else {
             self.byte_count += payload.len();

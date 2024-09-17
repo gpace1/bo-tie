@@ -1088,7 +1088,7 @@ impl std::error::Error for LeCreditBasedConnectionResponseResult {}
 /// The LE credit based connection response signal
 #[derive(Clone, Copy, Debug)]
 pub struct LeCreditBasedConnectionResponse {
-    pub identifier: NonZeroU8,
+    identifier: NonZeroU8,
     destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
     mtu: LeCreditMtu,
     mps: LeCreditMps,
