@@ -104,7 +104,7 @@ impl UnusedFixedChannelPduData {
 impl ReceiveDataProcessor for UnusedFixedChannelPduData {
     type Error = UnusedError;
 
-    fn process<T>(&mut self, basic_header: &BasicHeader, fragment: &mut L2capFragment<T>) -> Result<bool, Self::Error>
+    fn process<T>(&mut self, _: &BasicHeader, fragment: &mut L2capFragment<T>) -> Result<bool, Self::Error>
     where
         T: Iterator<Item = u8> + ExactSizeIterator,
     {

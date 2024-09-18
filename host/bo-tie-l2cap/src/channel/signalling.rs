@@ -1,19 +1,17 @@
 //! Signalling Channel implementation
 
 use crate::channel::id::{AclCid, ChannelIdentifier, DynChannelId, LeCid};
-use crate::channel::{ChannelDirection, CreditBasedChannel, DynChannelState, LeUChannelBuffer};
+use crate::channel::{ChannelDirection, DynChannelState, DynChannelStateInner, LeUChannelBuffer};
 use crate::link_flavor::LeULink;
 use crate::logical_link_private::NewDynChannelError;
-use crate::pdu::control_frame::RecombineError;
 use crate::pdu::{FragmentL2capPdu, RecombineL2capPdu, RecombinePayloadIncrementally};
 use crate::signals::packets::{
     CommandRejectResponse, DisconnectRequest, DisconnectResponse, FlowControlCreditInd, LeCreditBasedConnectionRequest,
     LeCreditBasedConnectionResponse, LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, Signal,
     SignalCode, SimplifiedProtocolServiceMultiplexer,
 };
-use crate::{LogicalLink, PhysicalLink, PhysicalLinkExt, LE_STATIC_CHANNEL_COUNT};
+use crate::{LogicalLink, PhysicalLink, PhysicalLinkExt};
 use bo_tie_core::buffer::stack::LinearBuffer;
-use bo_tie_core::buffer::TryExtend;
 use core::num::NonZeroU8;
 
 /// A Signalling Channel
@@ -28,17 +26,13 @@ use core::num::NonZeroU8;
 pub struct SignallingChannel<L> {
     channel_id: ChannelIdentifier,
     logical_link: L,
-    receiving_signal: ReceiveLeUSignalRecombineBuilder,
 }
 
 impl<L> SignallingChannel<L> {
     pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: L) -> Self {
-        let receiving_signal = ReceiveLeUSignalRecombineBuilder::default();
-
         Self {
             channel_id,
             logical_link,
-            receiving_signal,
         }
     }
 
@@ -151,7 +145,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
         LeCreditBasedConnectionRequest,
         RequestLeCreditConnectionError<<L::PhysicalLink as PhysicalLink>::SendErr>,
     > {
-        let dyn_channel_buffer_builder = DynChannelState::ReserveCreditBasedChannel;
+        let dyn_channel_buffer_builder = DynChannelState(DynChannelStateInner::ReserveCreditBasedChannel);
 
         let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = self
             .logical_link
@@ -228,8 +222,8 @@ where
             Self::NotLeULogicalLink => {
                 f.write_str("an LE credit based connection can only be created on a LE-U logical link")
             }
-            Self::CreateDynChannelError(NewDynChannelError) => {
-                write!(f, "{NewDynChannelError}")
+            Self::CreateDynChannelError(d) => {
+                write!(f, "{d}")
             }
             Self::InvalidChannelIdentifier => f.write_str("invalid channel identifier"),
         }
@@ -348,75 +342,6 @@ impl RecombineL2capPdu for ReceivedLeUSignal {
     ) -> Self::PayloadRecombiner<'a> {
         ReceiveLeUSignalRecombineBuilder::default()
     }
-}
-
-/// Receive Error
-///
-/// This error is returned by the method [`receive`] of `SignallingChannel`.
-///
-/// [`receive`]: SignallingChannel::receive
-pub enum ReceiveSignalError<L: LogicalLink> {
-    Disconnected,
-    RecvErr(<L::PhysicalLink as PhysicalLink>::RecvErr),
-    InvalidChannel(crate::channel::InvalidChannel),
-    Convert(ConvertSignalError),
-    Recombine(RecombineError),
-    ExpectedFirstFragment,
-    UnexpectedFirstFragment,
-}
-
-impl<L> core::fmt::Debug for ReceiveSignalError<L>
-where
-    L: LogicalLink,
-    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Debug,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ReceiveSignalError::Disconnected => f.write_str("Disconnected"),
-            ReceiveSignalError::RecvErr(e) => write!(f, "RecvErr({e:?})"),
-            ReceiveSignalError::InvalidChannel(c) => core::fmt::Debug::fmt(c, f),
-            ReceiveSignalError::Convert(c) => core::fmt::Debug::fmt(c, f),
-            ReceiveSignalError::Recombine(r) => core::fmt::Debug::fmt(r, f),
-            ReceiveSignalError::ExpectedFirstFragment => f.write_str("ExpectedFirstFragment"),
-            ReceiveSignalError::UnexpectedFirstFragment => f.write_str("UnexpectedFirstFragment"),
-        }
-    }
-}
-
-impl<L> core::fmt::Display for ReceiveSignalError<L>
-where
-    L: LogicalLink,
-    <L::PhysicalLink as PhysicalLink>::RecvErr: core::fmt::Display,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ReceiveSignalError::Disconnected => f.write_str("peer device disconnected"),
-            ReceiveSignalError::RecvErr(e) => write!(f, "failed to receive signal, {e}"),
-            ReceiveSignalError::InvalidChannel(c) => core::fmt::Display::fmt(c, f),
-            ReceiveSignalError::Convert(c) => core::fmt::Display::fmt(c, f),
-            ReceiveSignalError::Recombine(r) => core::fmt::Display::fmt(r, f),
-            ReceiveSignalError::ExpectedFirstFragment => f.write_str("expected first fragment of PDU"),
-            ReceiveSignalError::UnexpectedFirstFragment => f.write_str("unexpected first fragment of PDU"),
-        }
-    }
-}
-
-impl<L: LogicalLink> From<ConvertSignalError> for ReceiveSignalError<L> {
-    fn from(value: ConvertSignalError) -> Self {
-        ReceiveSignalError::Convert(value)
-    }
-}
-
-impl<L: LogicalLink> From<RecombineError> for ReceiveSignalError<L> {
-    fn from(value: RecombineError) -> Self {
-        ReceiveSignalError::Recombine(value)
-    }
-}
-
-#[cfg(feature = "std")]
-impl<L: LogicalLink> std::error::Error for ReceiveSignalError<L> where
-    ReceiveSignalError<L>: core::fmt::Debug + core::fmt::Display
-{
 }
 
 /// A recombine builder for a `ReceivedSignal`
@@ -556,7 +481,7 @@ impl core::fmt::Display for ConvertSignalError {
     }
 }
 
-struct UnknownSignal {
+pub struct UnknownSignal {
     header: LinearBuffer<4, u8>,
     expected_len: usize,
     bytes_received: usize,
@@ -743,12 +668,12 @@ impl Request<LeCreditBasedConnectionRequest> {
             self.request.source_dyn_cid,
         )));
 
-        let dyn_channel_state = DynChannelState::EstablishedCreditBasedChannel {
+        let dyn_channel_state = DynChannelState(DynChannelStateInner::EstablishedCreditBasedChannel {
             peer_channel_id,
             maximum_transmission_size: self.mtu.get(),
             maximum_payload_size: self.mps.get(),
             peer_credits: self.initial_credits,
-        };
+        });
 
         let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(destination_dyn_cid)) = signal_channel
             .logical_link
@@ -865,9 +790,6 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
             .await
             .map_err(|e| LeCreditResponseError::SendErr(e))?;
 
-        let index = (self.destination_dyn_cid.get_val() - DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize
-            + LE_STATIC_CHANNEL_COUNT;
-
         let peer_channel_id = ChannelDirection::Source(self.request.get_source_cid());
 
         let maximum_payload_size = min(self.mps, self.request.mps.get()).into();
@@ -876,22 +798,26 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
 
         let initial_peer_credits = self.request.initial_credits.into();
 
-        let state = DynChannelState::EstablishedCreditBasedChannel {
+        let state = DynChannelState(DynChannelStateInner::EstablishedCreditBasedChannel {
             peer_channel_id,
             maximum_transmission_size,
             maximum_payload_size,
             peer_credits: initial_peer_credits,
-        };
+        });
 
-        signals_channel.logical_link.new_dyn_channel(state);
+        signals_channel
+            .logical_link
+            .new_dyn_channel(state)
+            .map_err(|e| LeCreditResponseError::FailedToCreateChannel(e))?;
 
         Ok(())
     }
 }
 
-enum LeCreditResponseError<L: LogicalLink> {
+pub enum LeCreditResponseError<L: LogicalLink> {
     LinkIsNotLeU,
     SendErr(<L::PhysicalLink as PhysicalLink>::SendErr),
+    FailedToCreateChannel(NewDynChannelError),
 }
 
 impl<L> core::fmt::Debug for LeCreditResponseError<L>
@@ -903,6 +829,7 @@ where
         match self {
             Self::LinkIsNotLeU => f.debug_tuple(stringify!(LinkIsNotLeU)).finish(),
             Self::SendErr(e) => f.debug_tuple(stringify!(SendErr)).field(e).finish(),
+            Self::FailedToCreateChannel(e) => f.debug_tuple(stringify!(FailedToCreateChannel)).field(e).finish(),
         }
     }
 }
@@ -921,6 +848,7 @@ where
                 <L::LinkFlavor as LinkFlavor>::name()
             ),
             Self::SendErr(s) => core::fmt::Display::fmt(&s, f),
+            Self::FailedToCreateChannel(e) => write!(f, "failed to create new dyn channel, {e}"),
         }
     }
 }
@@ -989,12 +917,12 @@ impl Response<LeCreditBasedConnectionResponse> {
 
             let initial_peer_credits = self.response.get_initial_credits().unwrap().into();
 
-            let state = DynChannelState::EstablishedCreditBasedChannel {
+            let state = DynChannelState(DynChannelStateInner::EstablishedCreditBasedChannel {
                 peer_channel_id,
                 maximum_transmission_size,
                 maximum_payload_size,
                 peer_credits: initial_peer_credits,
-            };
+            });
 
             signals_channel
                 .logical_link
@@ -1013,7 +941,7 @@ impl Response<LeCreditBasedConnectionResponse> {
 ///
 /// [`create_le_credit_connection`]: Response::<LeCreditBasedConnectionResponse>::create_le_credit_connection
 #[derive(Debug)]
-enum CreateLeCreditConnectionError {
+pub enum CreateLeCreditConnectionError {
     ResponseError(LeCreditBasedConnectionResponseResult),
     DynChannelFail(NewDynChannelError),
 }
@@ -1030,3 +958,6 @@ impl core::fmt::Display for CreateLeCreditConnectionError {
         }
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for CreateLeCreditConnectionError {}

@@ -585,11 +585,6 @@ impl TryIntoSignal for CommandRejectResponse {
             data,
         })
     }
-
-    fn correct_channel(raw_channel_id: u16) -> bool {
-        raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
-            || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
-    }
 }
 
 /// Disconnection Request Signal
@@ -698,11 +693,6 @@ impl TryIntoSignal for DisconnectRequest {
             source_cid,
         })
     }
-
-    fn correct_channel(raw_channel_id: u16) -> bool {
-        raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
-            || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
-    }
 }
 
 /// Disconnection Response Signal
@@ -794,11 +784,6 @@ impl TryIntoSignal for DisconnectResponse {
             destination_cid,
             source_cid,
         })
-    }
-
-    fn correct_channel(raw_channel_id: u16) -> bool {
-        raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
-            || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
 }
 
@@ -993,10 +978,6 @@ impl TryIntoSignal for LeCreditBasedConnectionRequest {
             initial_credits,
             source_dyn_cid: dyn_cid,
         })
-    }
-
-    fn correct_channel(raw_channel_id: u16) -> bool {
-        raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
 }
 
@@ -1309,10 +1290,6 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
             Ok(LeCreditBasedConnectionResponse::new_rejected(identifier, result))
         }
     }
-
-    fn correct_channel(raw_channel_id: u16) -> bool {
-        raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
-    }
 }
 
 /// Flow control credit indication PDU
@@ -1455,10 +1432,5 @@ impl TryIntoSignal for FlowControlCreditInd {
             cid,
             credits,
         })
-    }
-
-    fn correct_channel(raw_channel_id: u16) -> bool {
-        raw_channel_id == ChannelIdentifier::Acl(AclCid::SignalingChannel).to_val()
-            || raw_channel_id == ChannelIdentifier::Le(LeCid::LeSignalingChannel).to_val()
     }
 }

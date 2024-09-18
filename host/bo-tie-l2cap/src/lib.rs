@@ -56,7 +56,7 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 extern crate alloc;
-pub mod channel;
+mod channel;
 pub mod link_flavor;
 mod logical_link_private;
 pub mod pdu;
@@ -68,7 +68,6 @@ pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChanne
 use crate::channel::{InvalidChannel, LeUChannelBuffer, PduRecombineAddError, PduRecombineAddOutput};
 use crate::link_flavor::LinkFlavor;
 use crate::logical_link_private::LeULogicalLinkHandle;
-use crate::pdu::credit_frame::CreditBasedFrame;
 use crate::pdu::{BasicFrame, FragmentIterator, FragmentL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
@@ -220,6 +219,7 @@ impl<T> PhysicalLinkExt for T where T: PhysicalLink {}
 ///
 /// This is a marker trait for a Logical Link. This is used by channel types to interact with the
 /// logical link that created them.
+#[allow(private_interfaces)]
 pub trait LogicalLink: LogicalLinkPrivate {}
 
 impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
@@ -504,7 +504,7 @@ pub enum Next<L: LogicalLink> {
 }
 
 /// The error type returned by the method [`LeULogicalLink::next`]
-enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
+pub enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
     ReceiveError(P::RecvErr),
     ExpectedStartingFragment,
     UnexpectedStartingFragment,

@@ -20,8 +20,6 @@ pub(crate) trait TryIntoSignal {
     where
         L: crate::link_flavor::LinkFlavor,
         Self: Sized;
-
-    fn correct_channel(raw_channel_id: u16) -> bool;
 }
 
 /// Error for converting into a Signal from a `ControlFrame`

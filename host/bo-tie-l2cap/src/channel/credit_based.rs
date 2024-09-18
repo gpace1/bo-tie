@@ -4,7 +4,7 @@ use crate::channel::id::ChannelIdentifier;
 use crate::channel::{CreditBasedChannel, SendSduError};
 use crate::pdu::credit_frame::PacketsIterator;
 use crate::pdu::SduPacketsIterator;
-use crate::{LogicalLink, PhysicalLink, PhysicalLinkExt};
+use crate::{LogicalLink, PhysicalLink};
 
 /// Unsent Credit Frames of a SDU
 ///
@@ -59,6 +59,7 @@ where
     ///
     /// # Error
     /// The `credit_based_channel` must be the same channel that created this `UnsentCreditFrames`.
+    ///
     pub async unsafe fn force_inc_and_send<L: LogicalLink>(
         mut self,
         credit_based_channel: &mut CreditBasedChannel<L>,

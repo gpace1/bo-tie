@@ -25,12 +25,8 @@ mod unused;
 use crate::channel::id::ChannelIdentifier;
 use crate::channel::signalling::ReceivedLeUSignal;
 use crate::link_flavor::LinkFlavor;
-use crate::pdu::control_frame::ControlFrame;
 use crate::pdu::credit_frame::{self, CreditBasedFrame};
-use crate::pdu::{
-    BasicFrame, CreditBasedSdu, FragmentIterator, FragmentL2capPdu, FragmentL2capSdu, PacketsError,
-    RecombinePayloadIncrementally,
-};
+use crate::pdu::{BasicFrame, CreditBasedSdu, PacketsError, RecombinePayloadIncrementally};
 use crate::pdu::{RecombineL2capPdu, SduPacketsIterator};
 use crate::{pdu::L2capFragment, LogicalLink, PhysicalLink, PhysicalLinkExt};
 use bo_tie_core::buffer::TryExtend;
@@ -130,15 +126,15 @@ impl BasicHeaderProcessor {
     }
 }
 
-pub(crate) enum LeUChannelBuffer<B> {
+pub enum LeUChannelBuffer<B> {
     Unused,
     Reserved,
     AttributeChannel { buffer: B },
-    SignallingChannel { buffer: B },
+    SignallingChannel,
     CreditBasedChannel { data: CreditBasedChannelData<B> },
 }
 
-pub(crate) struct CreditBasedChannelData<B> {
+pub struct CreditBasedChannelData<B> {
     recombine_meta: credit_frame::RecombineMeta,
     peer_channel_id: ChannelDirection,
     maximum_transmission_size: u16,
@@ -201,7 +197,7 @@ impl<B> LeUChannelBuffer<B> {
 
                 PduRecombine::BasicChannel(recombine)
             }
-            LeUChannelBuffer::SignallingChannel { buffer } => {
+            LeUChannelBuffer::SignallingChannel => {
                 let recombine = ReceivedLeUSignal::recombine(basic_header.length, basic_header.channel_id, (), ());
 
                 PduRecombine::SignallingChannel(recombine)
@@ -316,7 +312,7 @@ pub(crate) enum PduRecombineAddError<B: TryExtend<u8> + Default> {
     CreditBasedChannel(<CreditBasedFrame<B> as RecombineL2capPdu>::RecombineError),
 }
 
-pub(crate) enum DynChannelState {
+pub(crate) enum DynChannelStateInner {
     /// Reserve the channel
     ///
     /// This is used whenever this device is initializing a credit based channel to the peer device.
@@ -332,14 +328,16 @@ pub(crate) enum DynChannelState {
     },
 }
 
+pub struct DynChannelState(DynChannelStateInner);
+
 impl<B> From<DynChannelState> for LeUChannelBuffer<B>
 where
     B: Default,
 {
     fn from(builder: DynChannelState) -> Self {
-        match builder {
-            DynChannelState::ReserveCreditBasedChannel => LeUChannelBuffer::Reserved,
-            DynChannelState::EstablishedCreditBasedChannel {
+        match builder.0 {
+            DynChannelStateInner::ReserveCreditBasedChannel => LeUChannelBuffer::Reserved,
+            DynChannelStateInner::EstablishedCreditBasedChannel {
                 peer_channel_id,
                 maximum_transmission_size,
                 maximum_payload_size,
@@ -495,7 +493,6 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         match &self.get_channel_data().peer_channel_id {
             ChannelDirection::Source(c) => *c,
             ChannelDirection::Destination(_) => self.channel_id,
-            _ => unreachable!(),
         }
     }
 
@@ -506,8 +503,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
     pub fn get_destination_channel_id(&self) -> ChannelIdentifier {
         match &self.get_channel_data().peer_channel_id {
             ChannelDirection::Destination(d) => *d,
-            ChannelDirection::Destination(_) => self.channel_id,
-            _ => unreachable!(),
+            ChannelDirection::Source(_) => self.channel_id,
         }
     }
 
@@ -626,6 +622,8 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         T: IntoIterator<Item = u8>,
         <T as IntoIterator>::IntoIter: ExactSizeIterator,
     {
+        use crate::pdu::FragmentL2capSdu;
+
         let maximum_transmission_size = self.logical_link.get_physical_link().max_transmission_size();
 
         let sdu = CreditBasedSdu::new(sdu, self.get_peer_channel_id(), maximum_transmission_size);

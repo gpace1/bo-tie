@@ -1,8 +1,8 @@
 use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
-use crate::channel::{CreditBasedChannelData, DynChannelState, LeUChannelBuffer};
+use crate::channel::{DynChannelState, LeUChannelBuffer};
 use crate::link_flavor::{LeULink, LinkFlavor};
 use crate::{
-    LeULogicalLink, LogicalLink, PhysicalLink, PhysicalLinkExt, SignallingChannel, LE_LINK_SIGNALLING_CHANNEL_INDEX,
+    LeULogicalLink, PhysicalLink, SignallingChannel, LE_LINK_SIGNALLING_CHANNEL_INDEX,
     LE_STATIC_CHANNEL_COUNT,
 };
 use bo_tie_core::buffer::TryExtend;
@@ -104,7 +104,6 @@ impl std::error::Error for NewDynChannelError {}
 pub(crate) struct LeULogicalLinkHandle<'a, P, B> {
     logical_link: &'a mut LeULogicalLink<P, B>,
     index: usize,
-    receive_data_taken: bool,
 }
 
 impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
@@ -114,7 +113,6 @@ impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
         Self {
             logical_link,
             index,
-            receive_data_taken,
         }
     }
 }

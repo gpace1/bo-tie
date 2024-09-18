@@ -29,10 +29,6 @@ impl<T> ControlFrame<T> {
 
         ControlFrame { channel_id, payload }
     }
-
-    pub(crate) fn into_payload(self) -> T {
-        self.payload
-    }
 }
 
 impl<T> FragmentL2capPdu for ControlFrame<T>
