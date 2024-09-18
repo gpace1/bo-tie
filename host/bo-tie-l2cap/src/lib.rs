@@ -504,7 +504,6 @@ pub enum Next<L: LogicalLink> {
 }
 
 /// The error type returned by the method [`LeULogicalLink::next`]
-#[derive(Debug)]
 enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
     ReceiveError(P::RecvErr),
     ExpectedStartingFragment,
@@ -516,6 +515,30 @@ enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
     RecombineBasicFrame(pdu::basic_frame::RecombineError),
     RecombineControlFrame(channel::signalling::ConvertSignalError),
     RecombineCreditBasedFrame(pdu::credit_frame::RecombineError),
+}
+
+impl<P, B> core::fmt::Debug for LeULogicalLinkNextError<P, B>
+where
+    P: PhysicalLink,
+    B: TryExtend<u8>,
+    P::RecvErr: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Self::ReceiveError(e) => f.debug_tuple(stringify!(ReceiveError)).field(e).finish(),
+            Self::ExpectedStartingFragment => f.debug_tuple(stringify!(ExpectedStartingFragment)).finish(),
+            Self::UnexpectedStartingFragment => f.debug_tuple(stringify!(UnexpectedStartingFragment)).finish(),
+            Self::Disconnected => f.debug_tuple(stringify!(Disconnected)).finish(),
+            Self::BufferOverflow(e) => f.debug_tuple(stringify!(BufferOverflow)).field(e).finish(),
+            Self::InvalidChannel(c) => f.debug_tuple(stringify!(InvalidChannel)).field(c).finish(),
+            Self::Internal(e) => f.debug_tuple(stringify!(Internal)).field(e).finish(),
+            Self::RecombineBasicFrame(e) => f.debug_tuple(stringify!(RecombineBasicFrame)).field(e).finish(),
+            Self::RecombineControlFrame(e) => f.debug_tuple(stringify!(RecombineControlFrame)).field(e).finish(),
+            Self::RecombineCreditBasedFrame(e) => {
+                f.debug_tuple(stringify!(RecombineCreditBasedFrame)).field(e).finish()
+            }
+        }
+    }
 }
 
 impl<P: PhysicalLink, B: TryExtend<u8>> core::fmt::Display for LeULogicalLinkNextError<P, B>
@@ -545,7 +568,10 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<P: PhysicalLink, B: TryExtend<u8>> std::error::Error for LeULogicalLinkNextError<P, B> where Self: core::fmt::Debug {}
+impl<P: PhysicalLink, B: TryExtend<u8>> std::error::Error for LeULogicalLinkNextError<P, B> where
+    <P as PhysicalLink>::RecvErr: core::fmt::Display
+{
+}
 
 impl<P: PhysicalLink, B: TryExtend<u8>> From<InvalidChannel> for LeULogicalLinkNextError<P, B> {
     fn from(error: InvalidChannel) -> Self {

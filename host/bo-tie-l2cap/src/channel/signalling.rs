@@ -889,10 +889,22 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
     }
 }
 
-#[derive(Debug)]
 enum LeCreditResponseError<L: LogicalLink> {
     LinkIsNotLeU,
     SendErr(<L::PhysicalLink as PhysicalLink>::SendErr),
+}
+
+impl<L> core::fmt::Debug for LeCreditResponseError<L>
+where
+    L: LogicalLink,
+    <L::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Self::LinkIsNotLeU => f.debug_tuple(stringify!(LinkIsNotLeU)).finish(),
+            Self::SendErr(e) => f.debug_tuple(stringify!(SendErr)).field(e).finish(),
+        }
+    }
 }
 
 impl<L: LogicalLink> core::fmt::Display for LeCreditResponseError<L>
@@ -914,7 +926,10 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<L: LogicalLink> std::error::Error for LeCreditResponseError<L> where Self: core::fmt::Debug {}
+impl<L: LogicalLink> std::error::Error for LeCreditResponseError<L> where
+    <L::PhysicalLink as PhysicalLink>::SendErr: core::fmt::Display
+{
+}
 
 /// A response signal from the linked device
 #[derive(Debug, Copy, Clone)]
