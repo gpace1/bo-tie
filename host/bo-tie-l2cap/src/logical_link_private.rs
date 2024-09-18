@@ -1,8 +1,9 @@
 use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
-use crate::channel::{ChannelBuffer, CreditBasedChannelData, DynChannelState};
+use crate::channel::{CreditBasedChannelData, DynChannelState, LeUChannelBuffer};
 use crate::link_flavor::{LeULink, LinkFlavor};
 use crate::{
-    LeULogicalLink, PhysicalLink, SignallingChannel, LE_LINK_SIGNALLING_CHANNEL_INDEX, LE_STATIC_CHANNEL_COUNT,
+    LeULogicalLink, LogicalLink, PhysicalLink, PhysicalLinkExt, SignallingChannel, LE_LINK_SIGNALLING_CHANNEL_INDEX,
+    LE_STATIC_CHANNEL_COUNT,
 };
 use bo_tie_core::buffer::TryExtend;
 
@@ -10,9 +11,13 @@ use bo_tie_core::buffer::TryExtend;
 pub trait LogicalLinkPrivate: Sized {
     type PhysicalLink: PhysicalLink;
 
-    type Buffer: TryExtend<u8> + Default;
+    type Buffer;
 
     type LinkFlavor: LinkFlavor;
+
+    type Deferred<'a>: LogicalLinkPrivate<PhysicalLink = Self::PhysicalLink, Buffer = Self::Buffer, LinkFlavor = Self::LinkFlavor>
+    where
+        Self: 'a;
 
     /// Add a new dynamic channel
     ///
@@ -38,13 +43,13 @@ pub trait LogicalLinkPrivate: Sized {
     fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool;
 
     /// Get a dynamic channel by its identifier
-    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&ChannelBuffer<Self::Buffer>>;
+    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelBuffer<Self::Buffer>>;
 
     /// Get the signalling channel
     ///
     /// This returns the channel used for siding `L2CAP` control frames to the linked device. This
     /// returns `None` if this logical link does not have a signalling channel.
-    fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self>>;
+    fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self::Deferred<'_>>>;
 
     /// Get a reference to the physical link
     fn get_physical_link(&self) -> &Self::PhysicalLink;
@@ -52,20 +57,11 @@ pub trait LogicalLinkPrivate: Sized {
     /// Get a mutable reference to the physical link
     fn get_mut_physical_link(&mut self) -> &mut Self::PhysicalLink;
 
-    /// Take the last received PDU
-    ///
-    /// This returns the last received PDU unless no PDU received or the PDU has already been taken
-    /// by a call to this method. After this is called, subsequent calls will always return `None`.
-    /// This method is intended to be used after a call to `receive` by the logical link.
-    fn take_last_received(&mut self) -> Option<Self::Buffer>
-    where
-        Self::Buffer: Default;
-
     /// Get the channel buffer
-    fn get_channel_buffer(&self) -> &ChannelBuffer<Self::Buffer>;
+    fn get_channel_buffer(&self) -> &LeUChannelBuffer<Self::Buffer>;
 
     /// Get a mutable reference to the buffer
-    fn get_mut_channel_buffer(&mut self) -> &mut ChannelBuffer<Self::Buffer>;
+    fn get_mut_channel_buffer(&mut self) -> &mut LeUChannelBuffer<Self::Buffer>;
 }
 
 #[derive(Debug)]
@@ -105,51 +101,6 @@ impl core::fmt::Display for NewDynChannelError {
 #[cfg(feature = "std")]
 impl std::error::Error for NewDynChannelError {}
 
-// impl<T: LogicalLinkPrivate> LogicalLinkPrivate for &mut T {
-//     type PhysicalLink = T::PhysicalLink;
-//     type Buffer = T::Buffer;
-//     type LinkFlavor = T::LinkFlavor;
-//
-//     fn new_dyn_channel(&mut self, state: DynChannelState) -> Option<ChannelIdentifier> {
-//         (&**self).new_dyn_channel(state)
-//     }
-//
-//     fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool {
-//         (&**self).remove_dyn_channel(id)
-//     }
-//
-//     fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&ChannelBuffer<Self::Buffer>> {
-//         (&**self).get_dyn_channel(id)
-//     }
-//
-//     fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self>> {
-//         (&**self).get_signalling_channel()
-//     }
-//
-//     fn get_physical_link(&self) -> &Self::PhysicalLink {
-//         (&**self).get_physical_link()
-//     }
-//
-//     fn get_mut_physical_link(&mut self) -> &mut Self::PhysicalLink {
-//         (&**self).get_mut_physical_link()
-//     }
-//
-//     fn take_last_received(&mut self) -> Option<Self::Buffer>
-//     where
-//         Self::Buffer: Default,
-//     {
-//         (&**self).take_last_received()
-//     }
-//
-//     fn get_channel_buffer(&self) -> &ChannelBuffer<Self::Buffer> {
-//         (&**self).get_channel_buffer()
-//     }
-//
-//     fn get_mut_channel_buffer(&mut self) -> &mut ChannelBuffer<Self::Buffer> {
-//         todo!()
-//     }
-// }
-
 pub(crate) struct LeULogicalLinkHandle<'a, P, B> {
     logical_link: &'a mut LeULogicalLink<P, B>,
     index: usize,
@@ -178,6 +129,10 @@ where
 
     type LinkFlavor = LeULink;
 
+    type Deferred<'a> = LeULogicalLinkHandle<'a, P, B,> 
+        where 
+            Self: 'a;
+
     fn new_dyn_channel(
         &mut self,
         dyn_channel_builder: DynChannelState,
@@ -186,7 +141,7 @@ where
             .iter()
             .enumerate()
             .find_map(|(i, channel)| {
-                if let ChannelBuffer::Unused = channel {
+                if let LeUChannelBuffer::Unused = channel {
                     Some(i)
                 } else {
                     None
@@ -216,10 +171,10 @@ where
         if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = id {
             let index = (channel_id.get_val() - *DynChannelId::LE_BOUNDS.start()) as usize + LE_STATIC_CHANNEL_COUNT;
 
-            if let ChannelBuffer::Unused = self.logical_link.channels[index] {
+            if let LeUChannelBuffer::Unused = self.logical_link.channels[index] {
                 false
             } else {
-                self.logical_link.channels[index] = ChannelBuffer::Unused;
+                self.logical_link.channels[index] = LeUChannelBuffer::Unused;
 
                 true
             }
@@ -228,7 +183,7 @@ where
         }
     }
 
-    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&ChannelBuffer<Self::Buffer>> {
+    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelBuffer<Self::Buffer>> {
         if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) = id {
             let index = self.logical_link.get_dyn_index(dyn_channel_id);
 
@@ -238,7 +193,7 @@ where
         }
     }
 
-    fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self>> {
+    fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self::Deferred<'_>>> {
         let handle = LeULogicalLinkHandle::new(&mut self.logical_link, LE_LINK_SIGNALLING_CHANNEL_INDEX);
 
         Some(SignallingChannel::new(
@@ -255,33 +210,11 @@ where
         &mut self.logical_link.physical_link
     }
 
-    fn take_last_received(&mut self) -> Option<B>
-    where
-        Self::Buffer: Default,
-    {
-        if !self.receive_data_taken {
-            self.receive_data_taken = true;
-
-            let buffer = match &mut self.logical_link.channels[self.index] {
-                ChannelBuffer::Unused | ChannelBuffer::Reserved => unreachable!(),
-                ChannelBuffer::AttributeChannel { buffer } => buffer,
-                ChannelBuffer::SignallingChannel { buffer } => buffer,
-                ChannelBuffer::CreditBasedChannel {
-                    data: CreditBasedChannelData { buffer, .. },
-                } => buffer,
-            };
-
-            Some(core::mem::take(buffer))
-        } else {
-            None
-        }
-    }
-
-    fn get_channel_buffer(&self) -> &ChannelBuffer<B> {
+    fn get_channel_buffer(&self) -> &LeUChannelBuffer<B> {
         &self.logical_link.channels[self.index]
     }
 
-    fn get_mut_channel_buffer(&mut self) -> &mut ChannelBuffer<Self::Buffer> {
+    fn get_mut_channel_buffer(&mut self) -> &mut LeUChannelBuffer<Self::Buffer> {
         &mut self.logical_link.channels[self.index]
     }
 }

@@ -66,17 +66,16 @@ impl<T> RecombineL2capPdu for BasicFrame<T>
 where
     T: TryExtend<u8> + Default,
 {
+    type RecombineMeta<'a> = () where Self: 'a;
     type RecombineError = RecombineError;
-    type RecombineMeta<'a> = ();
-    type RecombineBuffer = T;
-    type PayloadRecombiner<'a> = BasicFrameRecombiner<'a, Self::RecombineBuffer>
-        where Self::RecombineBuffer: 'a;
+    type RecombineBuffer<'a> = &'a mut T where Self: 'a;
+    type PayloadRecombiner<'a> = BasicFrameRecombiner<'a, T> where Self: 'a;
 
     fn recombine<'a>(
         payload_length: u16,
         channel_id: ChannelIdentifier,
-        buffer: &'a mut Self::RecombineBuffer,
-        _: Self::RecombineMeta<'_>,
+        buffer: Self::RecombineBuffer<'a>,
+        _: Self::RecombineMeta<'a>,
     ) -> Self::PayloadRecombiner<'a> {
         BasicFrameRecombiner::new(buffer, payload_length.into(), channel_id)
     }
@@ -276,10 +275,7 @@ pub struct BasicFrameRecombiner<'a, T> {
 
 impl<'a, T> BasicFrameRecombiner<'a, T> {
     /// Create a new `BasicFrameRecombiner` with a default payload
-    fn new(payload: &'a mut T, payload_len: usize, channel_id: ChannelIdentifier) -> Self
-    where
-        T: Default,
-    {
+    fn new(payload: &'a mut T, payload_len: usize, channel_id: ChannelIdentifier) -> Self {
         let byte_count = 0;
 
         BasicFrameRecombiner {
@@ -291,13 +287,13 @@ impl<'a, T> BasicFrameRecombiner<'a, T> {
     }
 }
 
-impl<P> crate::pdu::RecombinePayloadIncrementally for BasicFrameRecombiner<'_, P>
+impl<'a, P> crate::pdu::RecombinePayloadIncrementally for BasicFrameRecombiner<'a, P>
 where
     P: TryExtend<u8> + Default,
 {
     type Pdu = BasicFrame<P>;
+    type RecombineBuffer = &'a mut P;
     type RecombineError = RecombineError;
-    type RecombineBuffer = P;
 
     fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
     where

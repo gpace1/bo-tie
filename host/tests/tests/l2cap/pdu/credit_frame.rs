@@ -1,6 +1,6 @@
 //! Tests for credit based frames
 
-use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+use bo_tie_l2cap::channel::signalling::ReceivedLeUSignal;
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::signals::packets::{LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer};
 use futures::{SinkExt, StreamExt};
@@ -73,7 +73,7 @@ macro_rules! request_connect {
             .expect("failed to send init credit connection");
 
         let credit_based_channel = match signal_channel.receive().await.expect("failed to get response") {
-            ReceivedSignal::LeCreditBasedConnectionResponse(response) => response
+            ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => response
                 .create_le_credit_connection(&request, &$l_link)
                 .expect("unexpected connection rejection"),
             _ => panic!("received unexpected signal"),
@@ -88,7 +88,7 @@ macro_rules! connect_response {
         let mut signal_channel = $r_link.get_signalling_channel();
 
         let credit_based_channel = match signal_channel.receive().await.expect("failed to get request") {
-            ReceivedSignal::LeCreditBasedConnectionRequest(request) => request
+            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => request
                 .create_le_credit_based_connection(&$r_link, $init_credits)
                 .send_success_response(&mut signal_channel)
                 .await
@@ -193,7 +193,7 @@ async fn send_multiple_pdu_for_sdu() {
             .await
             .expect("failed to receive flow control inc")
         {
-            ReceivedSignal::FlowControlCreditIndication(inc) => inc,
+            ReceivedLeUSignal::FlowControlCreditIndication(inc) => inc,
             _ => panic!("received unexpected signal"),
         };
 
@@ -208,7 +208,7 @@ async fn send_multiple_pdu_for_sdu() {
             .await
             .expect("failed to receive flow control inc")
         {
-            ReceivedSignal::FlowControlCreditIndication(inc) => inc,
+            ReceivedLeUSignal::FlowControlCreditIndication(inc) => inc,
             _ => panic!("received unexpected signal"),
         };
 
@@ -551,7 +551,7 @@ async fn connection_disconnection() {
             let signal = signalling_channel.receive().await.expect("failed to receive signal");
 
             match signal {
-                ReceivedSignal::FlowControlCreditIndication(ind) => {
+                ReceivedLeUSignal::FlowControlCreditIndication(ind) => {
                     maybe_send_task = send_task
                         .inc_and_send(&mut credit_based_channel, ind.get_credits())
                         .await
@@ -566,7 +566,7 @@ async fn connection_disconnection() {
         loop {
             let signal = signalling_channel.receive().await.expect("failed to receive");
 
-            if let ReceivedSignal::DisconnectRequest(request) = signal {
+            if let ReceivedLeUSignal::DisconnectRequest(request) = signal {
                 assert_eq!(request.source_cid, credit_based_channel.get_peer_channel_id());
                 assert_eq!(request.destination_cid, credit_based_channel.get_this_channel_id());
 
@@ -614,7 +614,7 @@ async fn connection_disconnection() {
             .await
             .expect("failed to receive disconnect");
 
-        if let ReceivedSignal::DisconnectResponse(_) = response {
+        if let ReceivedLeUSignal::DisconnectResponse(_) = response {
             // nothing to do if response received
         } else {
             panic!("unexpected response signal: {response:?}")
@@ -648,7 +648,7 @@ async fn credit_crunch() {
         loop {
             let signal = signalling_channel.receive().await.expect("receive failed");
 
-            if let ReceivedSignal::FlowControlCreditIndication(ind) = signal {
+            if let ReceivedLeUSignal::FlowControlCreditIndication(ind) = signal {
                 sdu_sender = match sdu_sender
                     .inc_and_send(&mut credit_based_channel, ind.get_credits())
                     .await

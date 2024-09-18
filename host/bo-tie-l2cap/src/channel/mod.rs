@@ -23,6 +23,7 @@ pub mod signalling;
 mod unused;
 
 use crate::channel::id::ChannelIdentifier;
+use crate::channel::signalling::ReceivedLeUSignal;
 use crate::link_flavor::LinkFlavor;
 use crate::pdu::control_frame::ControlFrame;
 use crate::pdu::credit_frame::{self, CreditBasedFrame};
@@ -129,7 +130,7 @@ impl BasicHeaderProcessor {
     }
 }
 
-pub(crate) enum ChannelBuffer<B> {
+pub(crate) enum LeUChannelBuffer<B> {
     Unused,
     Reserved,
     AttributeChannel { buffer: B },
@@ -143,33 +144,69 @@ pub(crate) struct CreditBasedChannelData<B> {
     maximum_transmission_size: u16,
     maximum_payload_size: u16,
     peer_credits: u16,
+    remaining_sdu_bytes: u16,
     buffer: B,
 }
 
-impl<B> ChannelBuffer<B> {
+impl<B: TryExtend<u8> + Default> CreditBasedChannelData<B> {
+    /// Process a PDU, returning a SDU if it has been completely received
+    ///
+    /// # Error
+    /// Returns an error if the buffer cannot be extended by the payload of the credit based frame.
+    pub(crate) fn process_pdu<T>(&mut self, pdu: CreditBasedFrame<T>) -> Result<Option<B>, B::Error>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        if let Some(len) = pdu.get_sdu_length() {
+            self.recombine_meta.first_pdu_of_sdu = false;
+
+            self.remaining_sdu_bytes = len
+        };
+
+        let iter = pdu.into_payload().into_iter();
+
+        self.remaining_sdu_bytes = self
+            .remaining_sdu_bytes
+            .saturating_sub(iter.len().try_into().unwrap_or(<u16>::MAX));
+
+        self.buffer.try_extend(iter.take(self.remaining_sdu_bytes.into()))?;
+
+        if self.remaining_sdu_bytes == 0 {
+            // now that the SDU is built, reset the first flag
+            self.recombine_meta.first_pdu_of_sdu = true;
+
+            Ok(Some(core::mem::take(&mut self.buffer)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<B> LeUChannelBuffer<B> {
     /// Create the recombiner associated with the channel's L2CAP PDU
     ///
     /// # Panic
     /// This cannot be called on an [`Unused`] channel.
     ///
-    /// [`Unused`]: ChannelBuffer::Unused
+    /// [`Unused`]: LeUChannelBuffer::Unused
     pub(crate) fn new_recombiner(&mut self, basic_header: &BasicHeader) -> PduRecombine<'_, B>
     where
         B: TryExtend<u8> + Default,
     {
         match self {
-            ChannelBuffer::Unused | ChannelBuffer::Reserved => PduRecombine::new_dump_recombiner(&basic_header),
-            ChannelBuffer::AttributeChannel { buffer } => {
+            LeUChannelBuffer::Unused | LeUChannelBuffer::Reserved => PduRecombine::new_dump_recombiner(&basic_header),
+            LeUChannelBuffer::AttributeChannel { buffer } => {
                 let recombine = BasicFrame::recombine(basic_header.length, basic_header.channel_id, buffer, ());
 
                 PduRecombine::BasicChannel(recombine)
             }
-            ChannelBuffer::SignallingChannel { buffer } => {
-                let recombine = ControlFrame::recombine(basic_header.length, basic_header.channel_id, buffer, ());
+            LeUChannelBuffer::SignallingChannel { buffer } => {
+                let recombine = ReceivedLeUSignal::recombine(basic_header.length, basic_header.channel_id, (), ());
 
                 PduRecombine::SignallingChannel(recombine)
             }
-            ChannelBuffer::CreditBasedChannel { data } => {
+            LeUChannelBuffer::CreditBasedChannel { data } => {
                 let recombine = CreditBasedFrame::recombine(
                     basic_header.length,
                     basic_header.channel_id,
@@ -186,7 +223,7 @@ impl<B> ChannelBuffer<B> {
 pub(crate) enum PduRecombine<'a, B: 'a + TryExtend<u8> + Default> {
     Dump { pdu_len: usize, received_so_far: usize },
     BasicChannel(<BasicFrame<B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
-    SignallingChannel(<ControlFrame<B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
+    SignallingChannel(<ReceivedLeUSignal as RecombineL2capPdu>::PayloadRecombiner<'a>),
     CreditBasedChannel(<CreditBasedFrame<B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
     Finished,
 }
@@ -268,21 +305,15 @@ pub(crate) enum PduRecombineAddOutput<B> {
     Ongoing,
     DumpComplete,
     BasicFrame(BasicFrame<B>),
-    ControlFrame(ControlFrame<B>),
+    ControlFrame(ReceivedLeUSignal),
     CreditBasedFrame(CreditBasedFrame<B>),
 }
 
 pub(crate) enum PduRecombineAddError<B: TryExtend<u8> + Default> {
     AlreadyFinished,
     BasicChannel(<BasicFrame<B> as RecombineL2capPdu>::RecombineError),
-    SignallingChannel(<ControlFrame<B> as RecombineL2capPdu>::RecombineError),
+    SignallingChannel(<ReceivedLeUSignal as RecombineL2capPdu>::RecombineError),
     CreditBasedChannel(<CreditBasedFrame<B> as RecombineL2capPdu>::RecombineError),
-}
-
-pub enum ChannelType<L: LogicalLink> {
-    BasicFrameChannel(BasicFrameChannel<L>),
-    SignallingChannel(SignallingChannel<L>),
-    CreditBasedChannel(CreditBasedChannel<L>),
 }
 
 pub(crate) enum DynChannelState {
@@ -301,23 +332,22 @@ pub(crate) enum DynChannelState {
     },
 }
 
-impl<B> From<DynChannelState> for ChannelBuffer<B>
+impl<B> From<DynChannelState> for LeUChannelBuffer<B>
 where
     B: Default,
 {
     fn from(builder: DynChannelState) -> Self {
         match builder {
-            DynChannelState::ReserveCreditBasedChannel => ChannelBuffer::Reserved,
+            DynChannelState::ReserveCreditBasedChannel => LeUChannelBuffer::Reserved,
             DynChannelState::EstablishedCreditBasedChannel {
                 peer_channel_id,
                 maximum_transmission_size,
                 maximum_payload_size,
                 peer_credits,
             } => {
-                let recombine_meta = credit_frame::RecombineMeta {
-                    first: true,
-                    maximum_payload_size,
-                };
+                let recombine_meta = credit_frame::RecombineMeta { first_pdu_of_sdu: true };
+
+                let remaining_sdu_bytes = 0;
 
                 let credit_data = CreditBasedChannelData {
                     recombine_meta,
@@ -325,10 +355,11 @@ where
                     maximum_transmission_size,
                     maximum_payload_size,
                     peer_credits,
+                    remaining_sdu_bytes,
                     buffer: B::default(),
                 };
 
-                ChannelBuffer::CreditBasedChannel { data: credit_data }
+                LeUChannelBuffer::CreditBasedChannel { data: credit_data }
             }
         }
     }
@@ -403,19 +434,6 @@ where
         self.logical_link.get_physical_link().max_transmission_size().into()
     }
 
-    /// Get the last received PDU
-    ///
-    /// This is intended to be used proceeding the method `receive` of the logical link. The buffer
-    /// for this channel will be consumed and replaced with its default.
-    ///
-    /// # Note
-    /// After this is called once, it will return `None`.
-    pub fn take_last_received(&mut self) -> Option<BasicFrame<L::Buffer>> {
-        self.logical_link
-            .take_last_received()
-            .map(|b| BasicFrame::new(b, self.channel_id))
-    }
-
     /// Send a Basic Frame to the lower layers
     ///
     /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
@@ -454,7 +472,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
     }
 
     fn get_channel_data(&self) -> &CreditBasedChannelData<L::Buffer> {
-        let ChannelBuffer::CreditBasedChannel { data } = self.logical_link.get_channel_buffer() else {
+        let LeUChannelBuffer::CreditBasedChannel { data } = self.logical_link.get_channel_buffer() else {
             unreachable!()
         };
 
@@ -462,7 +480,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
     }
 
     fn get_mut_channel_data(&mut self) -> &mut CreditBasedChannelData<L::Buffer> {
-        let ChannelBuffer::CreditBasedChannel { data } = self.logical_link.get_mut_channel_buffer() else {
+        let LeUChannelBuffer::CreditBasedChannel { data } = self.logical_link.get_mut_channel_buffer() else {
             unreachable!()
         };
 

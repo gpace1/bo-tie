@@ -131,22 +131,26 @@ pub trait FragmentIterator {
 /// protocols **below** L2CAP.
 pub trait RecombineL2capPdu {
     /// Information required in order to recombine fragments into a PDU
-    type RecombineMeta<'a>;
+    type RecombineMeta<'a>
+    where
+        Self: 'a;
 
     /// Error when trying to recombine fragments.
     type RecombineError;
 
     /// Buffer type used for recombination
-    type RecombineBuffer;
+    type RecombineBuffer<'a>
+    where
+        Self: 'a;
 
     /// The type for recombining fragments into a PDU
     type PayloadRecombiner<'a>: RecombinePayloadIncrementally<
         Pdu = Self,
-        RecombineBuffer = Self::RecombineBuffer,
+        RecombineBuffer = Self::RecombineBuffer<'a>,
         RecombineError = Self::RecombineError,
     >
     where
-        Self::RecombineBuffer: 'a;
+        Self: 'a;
 
     /// Recombine fragments into this PDU
     ///
@@ -173,7 +177,7 @@ pub trait RecombineL2capPdu {
     fn recombine<'a>(
         payload_length: u16,
         channel_id: ChannelIdentifier,
-        buffer: &'a mut Self::RecombineBuffer,
+        buffer: Self::RecombineBuffer<'a>,
         meta: Self::RecombineMeta<'a>,
     ) -> Self::PayloadRecombiner<'a>;
 }

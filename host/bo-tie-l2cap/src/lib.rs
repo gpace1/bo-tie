@@ -63,14 +63,13 @@ pub mod pdu;
 pub mod signals;
 
 use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
+use crate::channel::signalling::ReceivedLeUSignal;
 pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
-use crate::channel::{
-    ChannelBuffer, ChannelDirection, ChannelType, InvalidChannel, PduRecombine, PduRecombineAddError,
-    PduRecombineAddOutput,
-};
+use crate::channel::{InvalidChannel, LeUChannelBuffer, PduRecombineAddError, PduRecombineAddOutput};
 use crate::link_flavor::LinkFlavor;
 use crate::logical_link_private::LeULogicalLinkHandle;
-use crate::pdu::{credit_frame, FragmentIterator, FragmentL2capPdu};
+use crate::pdu::credit_frame::CreditBasedFrame;
+use crate::pdu::{BasicFrame, FragmentIterator, FragmentL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
 use link_flavor::{AclULink, LeULink};
@@ -278,7 +277,7 @@ impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
 ///
 /// ```
 /// # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
-/// # use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+/// # use bo_tie_l2cap::channel::signalling::ReceivedLeUSignal;
 /// # use bo_tie_l2cap::signals::packets::{LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer};
 /// # async fn example<P: PhysicalLink>(le_u_logical_link: LeULogicalLink<P>)
 /// # where  
@@ -310,11 +309,11 @@ impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
 ///     .await
 ///     .expect("failed to get response")
 /// {
-///     ReceivedSignal::LeCreditBasedConnectionResponse(response) => response
+///     ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => response
 ///         .create_le_credit_connection(&request, &le_u_logical_link)
 ///         .expect("linked device rejected LE credit based connection request"),
 ///
-///     ReceivedSignal::CommandRejectRsp(response) => {
+///     ReceivedLeUSignal::CommandRejectRsp(response) => {
 ///          panic!("LE credit based channels not supported by the linked device")
 ///     }
 ///     _ => panic!("received unexpected signal"),
@@ -324,7 +323,7 @@ impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
 pub struct LeULogicalLink<P, B, const DYN_CHANNELS: usize = 0> {
     physical_link: P,
     basic_header_processor: channel::BasicHeaderProcessor,
-    channels: alloc::vec::Vec<ChannelBuffer<B>>,
+    channels: alloc::vec::Vec<LeUChannelBuffer<B>>,
 }
 
 /// The number of channels that have a defined channel for a LE-U link within the Bluetooth Spec.
@@ -339,15 +338,11 @@ const LE_LINK_SIGNALLING_CHANNEL_INDEX: usize = 1;
 /// Index for the Signalling channel within a `LeULogicalLink::channels`
 const LE_LINK_SM_CHANNEL_INDEX: usize = 2;
 
-impl<P, B> LeULogicalLink<P, B>
-where
-    P: PhysicalLink,
-    B: TryExtend<u8> + Default,
-{
+impl<P, B> LeULogicalLink<P, B> {
     /// Create a new `LogicalLink`
     pub fn new(physical_link: P) -> Self {
         let basic_header_processor = channel::BasicHeaderProcessor::init();
-        let channels = core::iter::repeat_with(|| ChannelBuffer::Unused)
+        let channels = core::iter::repeat_with(|| LeUChannelBuffer::Unused)
             .take(LE_STATIC_CHANNEL_COUNT)
             .collect();
 
@@ -363,20 +358,35 @@ where
     }
 
     /// Await for the next link event
-    pub async fn next(&mut self) -> Result<ChannelType<impl LogicalLink + '_>, NextError<P, B>> {
+    pub async fn next(&mut self) -> Result<Next<impl LogicalLink + '_>, LeULogicalLinkNextError<P, B>>
+    where
+        P: PhysicalLink,
+        B: TryExtend<u8> + Default + IntoIterator<Item = u8>,
+        B::IntoIter: ExactSizeIterator,
+    {
+        let mut expect_first_fragment = true;
+
         'outer: loop {
             let mut fragment = self
                 .physical_link
                 .recv()
                 .await
-                .ok_or(NextError::Disconnected)?
-                .map_err(|e| NextError::ReceiveError(e))?;
+                .ok_or(LeULogicalLinkNextError::Disconnected)?
+                .map_err(|e| LeULogicalLinkNextError::ReceiveError(e))?;
+
+            if expect_first_fragment && !fragment.start_fragment {
+                return Err(LeULogicalLinkNextError::ExpectedStartingFragment);
+            }
 
             let Some(basic_header) = self.basic_header_processor.process::<LeULink, _>(&mut fragment)? else {
+                expect_first_fragment = false;
+
                 continue 'outer;
             };
 
-            let mut unused = ChannelBuffer::Unused;
+            expect_first_fragment = true;
+
+            let mut unused = LeUChannelBuffer::Unused;
 
             let (index, mut recombiner) = match basic_header.channel_id {
                 ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
@@ -412,34 +422,64 @@ where
                 match recombiner.add(&mut fragment.data) {
                     Err(e) => {
                         break 'outer match e {
-                            PduRecombineAddError::AlreadyFinished => Err(NextError::Internal("already finished")),
-                            PduRecombineAddError::BasicChannel(e) => Err(NextError::RecombineBasicFrame(e)),
-                            PduRecombineAddError::SignallingChannel(e) => Err(NextError::RecombineControlFrame(e)),
-                            PduRecombineAddError::CreditBasedChannel(e) => Err(NextError::RecombineCreditBasedFrame(e)),
+                            PduRecombineAddError::AlreadyFinished => {
+                                Err(LeULogicalLinkNextError::Internal("already finished"))
+                            }
+                            PduRecombineAddError::BasicChannel(e) => {
+                                Err(LeULogicalLinkNextError::RecombineBasicFrame(e))
+                            }
+                            PduRecombineAddError::SignallingChannel(e) => {
+                                Err(LeULogicalLinkNextError::RecombineControlFrame(e))
+                            }
+                            PduRecombineAddError::CreditBasedChannel(e) => {
+                                Err(LeULogicalLinkNextError::RecombineCreditBasedFrame(e))
+                            }
                         }
                     }
-                    Ok(PduRecombineAddOutput::Ongoing) => continue 'recombine,
+                    Ok(PduRecombineAddOutput::Ongoing) => {
+                        fragment = self
+                            .physical_link
+                            .recv()
+                            .await
+                            .ok_or(LeULogicalLinkNextError::Disconnected)?
+                            .map_err(|e| LeULogicalLinkNextError::ReceiveError(e))?;
+
+                        if fragment.is_start_fragment() {
+                            return Err(LeULogicalLinkNextError::UnexpectedStartingFragment);
+                        }
+                    }
                     Ok(PduRecombineAddOutput::DumpComplete) => break 'recombine,
-                    Ok(PduRecombineAddOutput::BasicFrame(_)) => {
+                    Ok(PduRecombineAddOutput::BasicFrame(pdu)) => {
                         let handle = LeULogicalLinkHandle::new(self, index);
 
                         let channel = BasicFrameChannel::new(basic_header.channel_id, handle);
 
-                        break 'outer Ok(ChannelType::BasicFrameChannel(channel));
+                        break 'outer Ok(Next::BasicFrame { pdu, channel });
                     }
-                    Ok(PduRecombineAddOutput::ControlFrame(_)) => {
+                    Ok(PduRecombineAddOutput::ControlFrame(signal)) => {
                         let handle = LeULogicalLinkHandle::new(self, index);
 
                         let channel = SignallingChannel::new(basic_header.channel_id, handle);
 
-                        break 'outer Ok(ChannelType::SignallingChannel(channel));
+                        break 'outer Ok(Next::ControlFrame { signal, channel });
                     }
                     Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
+                        let LeUChannelBuffer::CreditBasedChannel { data } = &mut self.channels[index] else {
+                            unreachable!()
+                        };
+
+                        let Some(sdu) = data
+                            .process_pdu(pdu)
+                            .map_err(|e| LeULogicalLinkNextError::BufferOverflow(e))?
+                        else {
+                            continue 'outer;
+                        };
+
                         let handle = LeULogicalLinkHandle::new(self, index);
 
                         let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                        let channel = break 'outer Ok(ChannelType::CreditBasedChannel(todo!()));
+                        break 'outer Ok(Next::ServiceData { sdu, channel });
                     }
                 }
             }
@@ -447,42 +487,69 @@ where
     }
 }
 
+/// The output of the future returned by [`LeULogicalLink::next`]
+pub enum Next<L: LogicalLink> {
+    BasicFrame {
+        pdu: BasicFrame<L::Buffer>,
+        channel: BasicFrameChannel<L>,
+    },
+    ControlFrame {
+        signal: ReceivedLeUSignal,
+        channel: SignallingChannel<L>,
+    },
+    ServiceData {
+        sdu: L::Buffer,
+        channel: CreditBasedChannel<L>,
+    },
+}
+
+/// The error type returned by the method [`LeULogicalLink::next`]
 #[derive(Debug)]
-enum NextError<P: PhysicalLink, B: TryExtend<u8>> {
+enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
     ReceiveError(P::RecvErr),
+    ExpectedStartingFragment,
+    UnexpectedStartingFragment,
     Disconnected,
     BufferOverflow(B::Error),
     InvalidChannel(InvalidChannel),
     Internal(&'static str),
     RecombineBasicFrame(pdu::basic_frame::RecombineError),
-    RecombineControlFrame(pdu::control_frame::RecombineError),
+    RecombineControlFrame(channel::signalling::ConvertSignalError),
     RecombineCreditBasedFrame(pdu::credit_frame::RecombineError),
 }
 
-impl<P: PhysicalLink, B: TryExtend<u8>> core::fmt::Display for NextError<P, B>
+impl<P: PhysicalLink, B: TryExtend<u8>> core::fmt::Display for LeULogicalLinkNextError<P, B>
 where
     <P as PhysicalLink>::RecvErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            NextError::ReceiveError(r) => write!(f, "receive error: {r}"),
-            NextError::Disconnected => f.write_str("disconnected"),
-            NextError::BufferOverflow(o) => write!(f, "buffer overflow: {o}"),
-            NextError::InvalidChannel(c) => write!(f, "invalid channel: {c}"),
-            NextError::Internal(i) => f.write_str(i),
-            NextError::RecombineBasicFrame(r) => write!(f, "recombine basic frame error: {r}"),
-            NextError::RecombineControlFrame(r) => write!(f, "recombine control frame error: {r}"),
-            NextError::RecombineCreditBasedFrame(r) => write!(f, "recombine credit based frame error: {r}"),
+            LeULogicalLinkNextError::ReceiveError(r) => write!(f, "receive error: {r}"),
+            LeULogicalLinkNextError::ExpectedStartingFragment => {
+                f.write_str("expected a starting fragment to start the PDU")
+            }
+            LeULogicalLinkNextError::UnexpectedStartingFragment => {
+                f.write_str("unexpected starting L2CAP fragment when expecting continuing fragments for a PDU")
+            }
+            LeULogicalLinkNextError::Disconnected => f.write_str("disconnected"),
+            LeULogicalLinkNextError::BufferOverflow(o) => write!(f, "buffer overflow: {o}"),
+            LeULogicalLinkNextError::InvalidChannel(c) => write!(f, "invalid channel: {c}"),
+            LeULogicalLinkNextError::Internal(i) => f.write_str(i),
+            LeULogicalLinkNextError::RecombineBasicFrame(r) => write!(f, "recombine basic frame error: {r}"),
+            LeULogicalLinkNextError::RecombineControlFrame(r) => write!(f, "recombine control frame error: {r}"),
+            LeULogicalLinkNextError::RecombineCreditBasedFrame(r) => {
+                write!(f, "recombine credit based frame error: {r}")
+            }
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl<P: PhysicalLink, B: TryExtend<u8>> std::error::Error for NextError<P, B> where Self: core::fmt::Debug {}
+impl<P: PhysicalLink, B: TryExtend<u8>> std::error::Error for LeULogicalLinkNextError<P, B> where Self: core::fmt::Debug {}
 
-impl<P: PhysicalLink, B: TryExtend<u8>> From<InvalidChannel> for NextError<P, B> {
+impl<P: PhysicalLink, B: TryExtend<u8>> From<InvalidChannel> for LeULogicalLinkNextError<P, B> {
     fn from(error: InvalidChannel) -> Self {
-        NextError::InvalidChannel(error)
+        LeULogicalLinkNextError::InvalidChannel(error)
     }
 }
 

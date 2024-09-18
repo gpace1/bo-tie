@@ -1,7 +1,7 @@
 //! Tests for multiple channels sending/receiving at the same time
 
 use bo_tie_host_tests::PhysicalLink;
-use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+use bo_tie_l2cap::channel::signalling::ReceivedLeUSignal;
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::{BasicFrameChannel, CreditBasedChannel, LeULogicalLink, SignallingChannel};
 use futures::{SinkExt, StreamExt};
@@ -270,7 +270,7 @@ async fn multiple_sending_signal_channel<'a>(
 ) -> CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>> {
     loop {
         match s.receive().await.expect("failed to receive ") {
-            ReceivedSignal::LeCreditBasedConnectionRequest(request) => {
+            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                 break request
                     .create_le_credit_based_connection(s.get_link(), 0xFFFF)
                     .send_success_response(s)
@@ -451,7 +451,7 @@ async fn le_channel_dropped_while_receiving() {
             tokio::select! {
                 _ = &mut exit_receiver => break,
                 request = signalling_channel.receive() => match request.expect("receive failed") {
-                    ReceivedSignal::LeCreditBasedConnectionRequest(request) => {
+                    ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                         request.create_le_credit_based_connection(&l_link, 0)
                             .send_success_response(&mut signalling_channel)
                             .await

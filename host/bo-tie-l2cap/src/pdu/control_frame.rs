@@ -55,15 +55,18 @@ impl<T> RecombineL2capPdu for ControlFrame<T>
 where
     T: TryExtend<u8> + Default,
 {
-    type RecombineMeta<'a> = ();
+    type RecombineMeta<'a> = () where Self: 'a;
+
     type RecombineError = RecombineError;
-    type RecombineBuffer = T;
-    type PayloadRecombiner<'a> = ControlFrameRecombiner<'a, Self::RecombineBuffer> where Self::RecombineBuffer: 'a;
+
+    type RecombineBuffer<'a> = &'a mut T where Self: 'a;
+
+    type PayloadRecombiner<'a> = ControlFrameRecombiner<'a, T> where Self: 'a;
 
     fn recombine<'a>(
         payload_length: u16,
         channel_id: ChannelIdentifier,
-        buffer: &'a mut Self::RecombineBuffer,
+        buffer: Self::RecombineBuffer<'a>,
         _: Self::RecombineMeta<'a>,
     ) -> Self::PayloadRecombiner<'a> {
         ControlFrameRecombiner::new(buffer, payload_length.into(), channel_id)
@@ -241,13 +244,13 @@ impl<'a, T> ControlFrameRecombiner<'a, T> {
     }
 }
 
-impl<P> crate::pdu::RecombinePayloadIncrementally for ControlFrameRecombiner<'_, P>
+impl<'a, P> crate::pdu::RecombinePayloadIncrementally for ControlFrameRecombiner<'a, P>
 where
     P: TryExtend<u8> + Default,
 {
     type Pdu = ControlFrame<P>;
+    type RecombineBuffer = &'a mut P;
     type RecombineError = RecombineError;
-    type RecombineBuffer = P;
 
     fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
     where

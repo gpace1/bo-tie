@@ -1,7 +1,7 @@
 //! Tests for L2CAP signals
 
 use bo_tie_l2cap::channel::id::{ChannelIdentifier, DynChannelId};
-use bo_tie_l2cap::channel::signalling::ReceivedSignal;
+use bo_tie_l2cap::channel::signalling::ReceivedLeUSignal;
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::signals::packets::{
     LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer,
@@ -30,7 +30,7 @@ pub async fn request_le_credit_connection() {
             .expect("failed to send init credit connection");
 
         let credit_based_channel = match signal_channel.receive().await.expect("failed to get response") {
-            ReceivedSignal::LeCreditBasedConnectionResponse(response) => response
+            ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => response
                 .create_le_credit_connection(&request, &sending_link)
                 .expect("received rejection response"),
             _ => panic!("received unexpected signal"),
@@ -265,7 +265,7 @@ pub async fn response_with_rejected_request() {
             .expect("failed to send init credit connection");
 
         match signal_channel.receive().await.expect("failed to receive response") {
-            ReceivedSignal::LeCreditBasedConnectionResponse(response) => {
+            ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => {
                 assert_eq!(
                     response.get_result(),
                     LeCreditBasedConnectionResponseResult::NoResourcesAvailable
@@ -279,7 +279,7 @@ pub async fn response_with_rejected_request() {
         let mut signal_channel = response_link.get_signalling_channel();
 
         match signal_channel.receive().await.expect("failed to receive request") {
-            ReceivedSignal::LeCreditBasedConnectionRequest(request) => request
+            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => request
                 .reject_le_credit_based_connection(
                     &mut signal_channel,
                     LeCreditBasedConnectionResponseResult::NoResourcesAvailable,
