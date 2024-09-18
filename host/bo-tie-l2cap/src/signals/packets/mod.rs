@@ -1420,7 +1420,7 @@ impl TryIntoSignal for FlowControlCreditInd {
             raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
         ]))
-        .map_err(|_| SignalError::InvalidSpsm)?;
+        .map_err(|_| SignalError::InvalidChannel)?;
 
         let credits = <u16>::from_le_bytes([
             raw.get(6).copied().ok_or(SignalError::InvalidSize)?,

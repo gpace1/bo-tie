@@ -108,8 +108,6 @@ pub(crate) struct LeULogicalLinkHandle<'a, P, B> {
 
 impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
     pub(crate) fn new(logical_link: &'a mut LeULogicalLink<P, B>, index: usize) -> Self {
-        let receive_data_taken = false;
-
         Self {
             logical_link,
             index,
@@ -183,7 +181,7 @@ where
 
     fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelBuffer<Self::Buffer>> {
         if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) = id {
-            let index = self.logical_link.get_dyn_index(dyn_channel_id);
+            let index = self.logical_link.convert_dyn_index(dyn_channel_id);
 
             self.logical_link.channels.get(index)
         } else {

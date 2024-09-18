@@ -177,6 +177,10 @@ impl<B: TryExtend<u8> + Default> CreditBasedChannelData<B> {
             Ok(None)
         }
     }
+
+    pub(crate) fn add_peer_credits(&mut self, amount: u16) {
+        self.peer_credits = self.peer_credits.saturating_add(amount)
+    }
 }
 
 impl<B> LeUChannelBuffer<B> {
@@ -385,7 +389,7 @@ impl ChannelDirection {
 pub struct InvalidChannel(u16, &'static str);
 
 impl InvalidChannel {
-    fn new<L: crate::link_flavor::LinkFlavor>(raw_channel: u16) -> Self {
+    pub(crate) fn new<L: LinkFlavor>(raw_channel: u16) -> Self {
         InvalidChannel(raw_channel, core::any::type_name::<L>())
     }
 }

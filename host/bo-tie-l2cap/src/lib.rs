@@ -353,11 +353,17 @@ impl<P, B> LeULogicalLink<P, B> {
         }
     }
 
-    fn get_dyn_index(&self, dyn_channel_id: DynChannelId<LeULink>) -> usize {
+    fn convert_dyn_index(&self, dyn_channel_id: DynChannelId<LeULink>) -> usize {
         3 + (dyn_channel_id.get_val() - *DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize
     }
 
     /// Await for the next link event
+    ///
+    /// ## *Flow Control Credit Indication* Signal Processing
+    ///
+    /// `next` has the processing of the *flow control credit indication* L2CAP signal built into
+    /// its returned future. Normally `next` will output a [`CreditIndication`] containing the
+    /// number of credits given and the affected channel. However, before the channel is returned
     pub async fn next(&mut self) -> Result<Next<impl LogicalLink + '_>, LeULogicalLinkNextError<P, B>>
     where
         P: PhysicalLink,
@@ -405,7 +411,7 @@ impl<P, B> LeULogicalLink<P, B> {
                     (LE_LINK_SM_CHANNEL_INDEX, recombiner)
                 }
                 ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) => {
-                    let index = self.get_dyn_index(dyn_channel_id);
+                    let index = self.convert_dyn_index(dyn_channel_id);
 
                     let recombiner = self
                         .channels
@@ -457,11 +463,42 @@ impl<P, B> LeULogicalLink<P, B> {
                         break 'outer Ok(Next::BasicFrame { pdu, channel });
                     }
                     Ok(PduRecombineAddOutput::ControlFrame(signal)) => {
-                        let handle = LeULogicalLinkHandle::new(self, index);
+                        // If this is a credit indication for an active credit based channel,
+                        // return a Next::CreditIndication instead of a Next::ControlFrame.
+                        if let ReceivedLeUSignal::FlowControlCreditIndication(credit_ind) = signal {
+                            let channel_id = credit_ind.get_cid();
 
-                        let channel = SignallingChannel::new(basic_header.channel_id, handle);
+                            let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(id)) = channel_id else {
+                                unreachable!("the channel ID should already be validated")
+                            };
 
-                        break 'outer Ok(Next::ControlFrame { signal, channel });
+                            let index = self.convert_dyn_index(id);
+
+                            let Some(LeUChannelBuffer::CreditBasedChannel { data: channel_data }) =
+                                self.channels.get_mut(index)
+                            else {
+                                // ignore the credit indication
+                                continue 'outer;
+                            };
+
+                            let credits = credit_ind.get_credits();
+
+                            channel_data.add_peer_credits(credits);
+
+                            let handle = LeULogicalLinkHandle::new(self, index);
+
+                            let credits_given = credits.into();
+
+                            let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
+
+                            break 'outer Ok(Next::CreditIndication { credits_given, channel });
+                        } else {
+                            let handle = LeULogicalLinkHandle::new(self, index);
+
+                            let channel = SignallingChannel::new(basic_header.channel_id, handle);
+
+                            break 'outer Ok(Next::ControlFrame { signal, channel });
+                        }
                     }
                     Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
                         let LeUChannelBuffer::CreditBasedChannel { data } = &mut self.channels[index] else {
@@ -499,6 +536,10 @@ pub enum Next<L: LogicalLink> {
     },
     ServiceData {
         sdu: L::Buffer,
+        channel: CreditBasedChannel<L>,
+    },
+    CreditIndication {
+        credits_given: usize,
         channel: CreditBasedChannel<L>,
     },
 }
