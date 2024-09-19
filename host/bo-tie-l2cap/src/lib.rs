@@ -342,6 +342,7 @@ impl<P, B> LeULogicalLink<P, B> {
     /// Create a new `LogicalLink`
     pub fn new(physical_link: P) -> Self {
         let basic_header_processor = channel::BasicHeaderProcessor::init();
+
         let channels = core::iter::repeat_with(|| LeUChannelBuffer::Unused)
             .take(LE_STATIC_CHANNEL_COUNT)
             .collect();
@@ -353,11 +354,55 @@ impl<P, B> LeULogicalLink<P, B> {
         }
     }
 
+    /// Enable the Attribute protocol channel
+    pub fn enable_att_channel(&mut self, buffer: B) {
+        self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelBuffer::BasicChannel { buffer };
+    }
+
+    /// Disable the Attribute protocol channel
+    pub fn disable_att_channel(&mut self) {
+        self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+    }
+
+    /// Enable the signalling channel
+    pub fn enable_signalling_channel(&mut self) {
+        self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelBuffer::SignallingChannel;
+    }
+
+    /// Disable the signalling channel
+    pub fn disable_signalling_channel(&mut self) {
+        self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+    }
+
+    /// Enable the Security Manager channel
+    pub fn enable_security_manager_channel(&mut self, buffer: B) {
+        self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelBuffer::BasicChannel { buffer }
+    }
+
+    /// Disable the Security Manager channel
+    pub fn disable_security_manager_channel(&mut self) {
+        self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+    }
+
     fn convert_dyn_index(&self, dyn_channel_id: DynChannelId<LeULink>) -> usize {
         3 + (dyn_channel_id.get_val() - *DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize
     }
 
-    /// Await for the next link event
+    /// Receive the next event from the LE-U logical link
+    ///
+    /// This returns a future for waiting until the logical link is ready to transfer an event to
+    /// the higher layers.  
+    ///
+    /// # Events
+    ///
+    /// Events are defined by this `method`. An event occurs whenever the logical link is ready to
+    /// give data it has to a higher layer. The following are events output by the `next` future.
+    ///
+    /// ## Complete PDU or SDU data
+    ///
+    /// Upon the reception of data from the Bluetooth protocol layers below the L2CAP layer, `next`
+    /// will take the data and recombine it into a complete PDU or SDU depending on the data type
+    /// used by channel. It will then output it with the channel and data type.
     ///
     /// ## *Flow Control Credit Indication* Signal Processing
     ///
@@ -460,7 +505,15 @@ impl<P, B> LeULogicalLink<P, B> {
 
                         let channel = BasicFrameChannel::new(basic_header.channel_id, handle);
 
-                        break 'outer Ok(Next::BasicFrame { pdu, channel });
+                        match basic_header.channel_id {
+                            ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
+                                break 'outer Ok(Next::AttributeChannel { pdu, channel })
+                            }
+                            ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
+                                break 'outer Ok(Next::SecurityManagerChannel { pdu, channel })
+                            }
+                            _ => unreachable!(),
+                        }
                     }
                     Ok(PduRecombineAddOutput::ControlFrame(signal)) => {
                         // If this is a credit indication for an active credit based channel,
@@ -497,7 +550,7 @@ impl<P, B> LeULogicalLink<P, B> {
 
                             let channel = SignallingChannel::new(basic_header.channel_id, handle);
 
-                            break 'outer Ok(Next::ControlFrame { signal, channel });
+                            break 'outer Ok(Next::SignallingChannel { signal, channel });
                         }
                     }
                     Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
@@ -516,7 +569,7 @@ impl<P, B> LeULogicalLink<P, B> {
 
                         let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                        break 'outer Ok(Next::ServiceData { sdu, channel });
+                        break 'outer Ok(Next::CreditBasedChannel { sdu, channel });
                     }
                 }
             }
@@ -526,15 +579,19 @@ impl<P, B> LeULogicalLink<P, B> {
 
 /// The output of the future returned by [`LeULogicalLink::next`]
 pub enum Next<L: LogicalLink> {
-    BasicFrame {
+    AttributeChannel {
         pdu: BasicFrame<L::Buffer>,
         channel: BasicFrameChannel<L>,
     },
-    ControlFrame {
+    SignallingChannel {
         signal: ReceivedLeUSignal,
         channel: SignallingChannel<L>,
     },
-    ServiceData {
+    SecurityManagerChannel {
+        pdu: BasicFrame<L::Buffer>,
+        channel: BasicFrameChannel<L>,
+    },
+    CreditBasedChannel {
         sdu: L::Buffer,
         channel: CreditBasedChannel<L>,
     },

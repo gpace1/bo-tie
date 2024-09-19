@@ -129,7 +129,7 @@ impl BasicHeaderProcessor {
 pub enum LeUChannelBuffer<B> {
     Unused,
     Reserved,
-    AttributeChannel { buffer: B },
+    BasicChannel { buffer: B },
     SignallingChannel,
     CreditBasedChannel { data: CreditBasedChannelData<B> },
 }
@@ -196,7 +196,7 @@ impl<B> LeUChannelBuffer<B> {
     {
         match self {
             LeUChannelBuffer::Unused | LeUChannelBuffer::Reserved => PduRecombine::new_dump_recombiner(&basic_header),
-            LeUChannelBuffer::AttributeChannel { buffer } => {
+            LeUChannelBuffer::BasicChannel { buffer } => {
                 let recombine = BasicFrame::recombine(basic_header.length, basic_header.channel_id, buffer, ());
 
                 PduRecombine::BasicChannel(recombine)
