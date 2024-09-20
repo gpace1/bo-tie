@@ -320,7 +320,7 @@ impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
 /// };
 /// # }
 /// ```
-pub struct LeULogicalLink<P, B, const DYN_CHANNELS: usize = 0> {
+pub struct LeULogicalLink<P, B> {
     physical_link: P,
     basic_header_processor: channel::BasicHeaderProcessor,
     channels: alloc::vec::Vec<LeUChannelBuffer<B>>,
