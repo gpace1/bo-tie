@@ -834,15 +834,15 @@ pub enum PsmAssignedNum {
 ///
 /// ### NotDynamicRange
 /// Returned when the PSM is within the assigned number range of values. Dynamic values need to be
-/// larger then 0x1000.
+/// larger than 0x1000.
 ///
 /// ### NotOdd
 /// All PSM values must be odd, the value provided was even
 ///
 /// ### Extended
-/// The least signaficant bit of the most significant byte (aka bit 8) must be 0 unless you want
-/// an extended PSM (but I don't know what that is as I don't want to pay 200 sweedish dubloons
-/// for ISO 3309 to find out what that is). For now extended PSM is not supported.
+/// The least significant bit of the most significant byte (aka bit 8) must be 0 unless you want
+/// an extended PSM (but I don't know what that is as I don't want to pay for ISO 3309 to find out
+/// what that is). For now extended PSM is not supported.
 pub enum PsmIssue {
     NotDynamicRange,
     NotOdd,
