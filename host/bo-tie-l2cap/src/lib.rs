@@ -324,6 +324,7 @@ pub struct LeULogicalLink<P, B, const DYN_CHANNELS: usize = 0> {
     physical_link: P,
     basic_header_processor: channel::BasicHeaderProcessor,
     channels: alloc::vec::Vec<LeUChannelBuffer<B>>,
+    unused_responses: bool,
 }
 
 /// The number of channels that have a defined channel for a LE-U link within the Bluetooth Spec.
@@ -347,10 +348,13 @@ impl<P, B> LeULogicalLink<P, B> {
             .take(LE_STATIC_CHANNEL_COUNT)
             .collect();
 
+        let unused_responses = false;
+
         Self {
             physical_link,
             basic_header_processor,
             channels,
+            unused_responses,
         }
     }
 
@@ -382,6 +386,33 @@ impl<P, B> LeULogicalLink<P, B> {
     /// Disable the Security Manager channel
     pub fn disable_security_manager_channel(&mut self) {
         self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+    }
+
+    /// Enable/Disable unused responses
+    ///
+    /// Fixed channels *should* have a default response event if they are not used. This can be done
+    /// either by enabling all the fixed channels and handling a default response yourself or by
+    /// calling this method with input `enable` as true.
+    ///
+    /// If this is called with `true` the following responses are sent back when a disabled fixed
+    /// channel receives data.
+    ///
+    /// | Channel                  | Response |
+    /// | --- | --- |
+    /// | Attribute Channel        | ATT_ERROR_RSP with error code 'Request Not Supported` |
+    /// | Signalling Channel       | L2CAP_COMMAND_REJECT_RSP with reason 'Command not Understood' |
+    /// | Security Manager Channel | 'Pairing Failed' with reason 'Pairing Not Supported' |
+    ///
+    /// These responses are only send for **disabled channels**, as soon as one of
+    /// [`enable_att_channel`], [`enable_signalling_channel`], [`enable_security_manager_channel`],
+    /// is called the associated channel will no longer be responded with a default response.
+    ///
+    /// [`next`]: LeULogicalLink::next
+    /// [`enable_att_channel`]: LeULogicalLink::enable_att_channel
+    /// [`enable_signalling_channel`]: LeULogicalLink::enable_signalling_channel
+    /// [`enable_security_manager_channel`]: LeULogicalLink::enable_security_manager_channel
+    pub fn disable_response(&mut self, enable: bool) {
+        self.unused_responses = enable
     }
 
     fn convert_dyn_index(&self, dyn_channel_id: DynChannelId<LeULink>) -> usize {
@@ -492,7 +523,7 @@ impl<P, B> LeULogicalLink<P, B> {
                             .physical_link
                             .recv()
                             .await
-                            .ok_or(LeULogicalLinkNextError::Disconnected)?
+                            .ok_or_else(|| LeULogicalLinkNextError::Disconnected)?
                             .map_err(|e| LeULogicalLinkNextError::ReceiveError(e))?;
 
                         if fragment.is_start_fragment() {
@@ -500,6 +531,16 @@ impl<P, B> LeULogicalLink<P, B> {
                         }
                     }
                     Ok(PduRecombineAddOutput::DumpComplete) => break 'recombine,
+                    Ok(PduRecombineAddOutput::UnusedComplete(unused)) => {
+                        if self.unused_responses {
+                            self.physical_link
+                                .send_pdu(unused, self.physical_link.max_transmission_size().into())
+                                .await
+                                .map_err(|e| LeULogicalLinkNextError::SendUnusedError(e))?;
+                        }
+
+                        break 'recombine;
+                    }
                     Ok(PduRecombineAddOutput::BasicFrame(pdu)) => {
                         let handle = LeULogicalLinkHandle::new(self, index);
 
@@ -604,6 +645,7 @@ pub enum Next<L: LogicalLink> {
 /// The error type returned by the method [`LeULogicalLink::next`]
 pub enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
     ReceiveError(P::RecvErr),
+    SendUnusedError(P::SendErr),
     ExpectedStartingFragment,
     UnexpectedStartingFragment,
     Disconnected,
@@ -620,10 +662,12 @@ where
     P: PhysicalLink,
     B: TryExtend<u8>,
     P::RecvErr: core::fmt::Debug,
+    P::SendErr: core::fmt::Debug,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             Self::ReceiveError(e) => f.debug_tuple(stringify!(ReceiveError)).field(e).finish(),
+            Self::SendUnusedError(e) => f.debug_tuple(stringify!(SendUnusedError)).field(e).finish(),
             Self::ExpectedStartingFragment => f.debug_tuple(stringify!(ExpectedStartingFragment)).finish(),
             Self::UnexpectedStartingFragment => f.debug_tuple(stringify!(UnexpectedStartingFragment)).finish(),
             Self::Disconnected => f.debug_tuple(stringify!(Disconnected)).finish(),
@@ -641,11 +685,15 @@ where
 
 impl<P: PhysicalLink, B: TryExtend<u8>> core::fmt::Display for LeULogicalLinkNextError<P, B>
 where
-    <P as PhysicalLink>::RecvErr: core::fmt::Display,
+    P::RecvErr: core::fmt::Display,
+    P::SendErr: core::fmt::Display,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             LeULogicalLinkNextError::ReceiveError(r) => write!(f, "receive error: {r}"),
+            LeULogicalLinkNextError::SendUnusedError(s) => {
+                write!(f, "failed to send rejection response for unused channel: {s}")
+            }
             LeULogicalLinkNextError::ExpectedStartingFragment => {
                 f.write_str("expected a starting fragment to start the PDU")
             }
@@ -666,8 +714,10 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<P: PhysicalLink, B: TryExtend<u8>> std::error::Error for LeULogicalLinkNextError<P, B> where
-    <P as PhysicalLink>::RecvErr: core::fmt::Display
+impl<P: PhysicalLink, B: TryExtend<u8>> std::error::Error for LeULogicalLinkNextError<P, B>
+where
+    P::RecvErr: core::fmt::Display + core::fmt::Debug,
+    P::SendErr: core::fmt::Display + core::fmt::Debug,
 {
 }
 

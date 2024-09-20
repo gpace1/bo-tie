@@ -22,8 +22,9 @@ pub mod id;
 pub mod signalling;
 mod unused;
 
-use crate::channel::id::ChannelIdentifier;
+use crate::channel::id::{ChannelIdentifier, LeCid};
 use crate::channel::signalling::ReceivedLeUSignal;
+use crate::channel::unused::LeUUnusedChannelResponse;
 use crate::link_flavor::LinkFlavor;
 use crate::pdu::credit_frame::{self, CreditBasedFrame};
 use crate::pdu::{BasicFrame, CreditBasedSdu, PacketsError, RecombinePayloadIncrementally};
@@ -190,21 +191,36 @@ impl<B> LeUChannelBuffer<B> {
     /// This cannot be called on an [`Unused`] channel.
     ///
     /// [`Unused`]: LeUChannelBuffer::Unused
-    pub(crate) fn new_recombiner(&mut self, basic_header: &BasicHeader) -> PduRecombine<'_, B>
+    pub(crate) fn new_recombiner(&mut self, basic_header: &BasicHeader) -> LeUPduRecombine<'_, B>
     where
         B: TryExtend<u8> + Default,
     {
         match self {
-            LeUChannelBuffer::Unused | LeUChannelBuffer::Reserved => PduRecombine::new_dump_recombiner(&basic_header),
+            LeUChannelBuffer::Unused => match basic_header.channel_id {
+                ChannelIdentifier::Le(LeCid::AttributeProtocol)
+                | ChannelIdentifier::Le(LeCid::LeSignalingChannel)
+                | ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
+                    let recombine = unused::LeUUnusedChannelResponse::recombine(
+                        basic_header.length,
+                        basic_header.channel_id,
+                        (),
+                        (),
+                    );
+
+                    LeUPduRecombine::Unused(recombine)
+                }
+                _ => LeUPduRecombine::new_dump_recombiner(&basic_header),
+            },
+            LeUChannelBuffer::Reserved => LeUPduRecombine::new_dump_recombiner(&basic_header),
             LeUChannelBuffer::BasicChannel { buffer } => {
                 let recombine = BasicFrame::recombine(basic_header.length, basic_header.channel_id, buffer, ());
 
-                PduRecombine::BasicChannel(recombine)
+                LeUPduRecombine::BasicChannel(recombine)
             }
             LeUChannelBuffer::SignallingChannel => {
                 let recombine = ReceivedLeUSignal::recombine(basic_header.length, basic_header.channel_id, (), ());
 
-                PduRecombine::SignallingChannel(recombine)
+                LeUPduRecombine::SignallingChannel(recombine)
             }
             LeUChannelBuffer::CreditBasedChannel { data } => {
                 let recombine = CreditBasedFrame::recombine(
@@ -214,27 +230,28 @@ impl<B> LeUChannelBuffer<B> {
                     &mut data.recombine_meta,
                 );
 
-                PduRecombine::CreditBasedChannel(recombine)
+                LeUPduRecombine::CreditBasedChannel(recombine)
             }
         }
     }
 }
 
-pub(crate) enum PduRecombine<'a, B: 'a + TryExtend<u8> + Default> {
+pub(crate) enum LeUPduRecombine<'a, B: 'a + TryExtend<u8> + Default> {
     Dump { pdu_len: usize, received_so_far: usize },
+    Unused(unused::LeUUnusedChannelResponseRecombiner),
     BasicChannel(<BasicFrame<B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
     SignallingChannel(<ReceivedLeUSignal as RecombineL2capPdu>::PayloadRecombiner<'a>),
     CreditBasedChannel(<CreditBasedFrame<B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
     Finished,
 }
 
-impl<'a, B: 'a + TryExtend<u8> + Default> PduRecombine<'a, B> {
+impl<'a, B: 'a + TryExtend<u8> + Default> LeUPduRecombine<'a, B> {
     /// Create a recombiner for dumpind data
     pub(crate) fn new_dump_recombiner(basic_header: &BasicHeader) -> Self {
         let pdu_len = basic_header.length.into();
         let received_so_far = 0;
 
-        PduRecombine::Dump {
+        LeUPduRecombine::Dump {
             pdu_len,
             received_so_far,
         }
@@ -249,7 +266,7 @@ impl<'a, B: 'a + TryExtend<u8> + Default> PduRecombine<'a, B> {
         T::IntoIter: ExactSizeIterator,
     {
         match self {
-            PduRecombine::Dump {
+            LeUPduRecombine::Dump {
                 pdu_len,
                 received_so_far,
             } => {
@@ -261,7 +278,18 @@ impl<'a, B: 'a + TryExtend<u8> + Default> PduRecombine<'a, B> {
                     Ok(PduRecombineAddOutput::DumpComplete)
                 }
             }
-            PduRecombine::BasicChannel(recombiner) => recombiner
+            LeUPduRecombine::Unused(recombiner) => Ok(recombiner
+                .add(payload_fragment)
+                .map(|opt| {
+                    opt.map(|pdu| {
+                        *self = Self::Finished;
+
+                        PduRecombineAddOutput::UnusedComplete(pdu)
+                    })
+                    .unwrap_or_default()
+                })
+                .unwrap_or_else(|_| PduRecombineAddOutput::DumpComplete)),
+            LeUPduRecombine::BasicChannel(recombiner) => recombiner
                 .add(payload_fragment)
                 .map(|opt| {
                     opt.map(|pdu| {
@@ -272,7 +300,7 @@ impl<'a, B: 'a + TryExtend<u8> + Default> PduRecombine<'a, B> {
                     .unwrap_or_default()
                 })
                 .map_err(|e| PduRecombineAddError::BasicChannel(e)),
-            PduRecombine::SignallingChannel(recombiner) => recombiner
+            LeUPduRecombine::SignallingChannel(recombiner) => recombiner
                 .add(payload_fragment)
                 .map(|opt| {
                     opt.map(|pdu| {
@@ -283,7 +311,7 @@ impl<'a, B: 'a + TryExtend<u8> + Default> PduRecombine<'a, B> {
                     .unwrap_or_default()
                 })
                 .map_err(|e| PduRecombineAddError::SignallingChannel(e)),
-            PduRecombine::CreditBasedChannel(recombiner) => recombiner
+            LeUPduRecombine::CreditBasedChannel(recombiner) => recombiner
                 .add(payload_fragment)
                 .map(|opt| {
                     opt.map(|pdu| {
@@ -294,7 +322,7 @@ impl<'a, B: 'a + TryExtend<u8> + Default> PduRecombine<'a, B> {
                     .unwrap_or_default()
                 })
                 .map_err(|e| PduRecombineAddError::CreditBasedChannel(e)),
-            PduRecombine::Finished => Err(PduRecombineAddError::AlreadyFinished),
+            LeUPduRecombine::Finished => Err(PduRecombineAddError::AlreadyFinished),
         }
     }
 }
@@ -304,6 +332,7 @@ pub(crate) enum PduRecombineAddOutput<B> {
     #[default]
     Ongoing,
     DumpComplete,
+    UnusedComplete(LeUUnusedChannelResponse),
     BasicFrame(BasicFrame<B>),
     ControlFrame(ReceivedLeUSignal),
     CreditBasedFrame(CreditBasedFrame<B>),

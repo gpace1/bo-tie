@@ -281,6 +281,12 @@ impl<const SIZE: usize, T> Iterator for LinearBufferIter<SIZE, T> {
     }
 }
 
+impl<const SIZE: usize, T> ExactSizeIterator for LinearBufferIter<SIZE, T> {
+    fn len(&self) -> usize {
+        self.linear_buffer.count - self.index
+    }
+}
+
 impl<const SIZE: usize, T> Drop for LinearBufferIter<SIZE, T> {
     fn drop(&mut self) {
         for is_init in self.linear_buffer.buffer[self.index..self.linear_buffer.count].iter_mut() {
