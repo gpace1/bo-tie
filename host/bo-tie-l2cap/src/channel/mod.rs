@@ -441,10 +441,7 @@ pub struct BasicFrameChannel<L> {
     logical_link: L,
 }
 
-impl<L: LogicalLink> BasicFrameChannel<L>
-where
-    L::Buffer: Default,
-{
+impl<L: LogicalLink> BasicFrameChannel<L> {
     pub(crate) fn new(channel_id: ChannelIdentifier, logical_link: L) -> Self {
         BasicFrameChannel {
             channel_id,
@@ -473,6 +470,7 @@ where
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
+        L::Buffer: Default,
     {
         let max_transmission_size = self.logical_link.get_physical_link().max_transmission_size().into();
 

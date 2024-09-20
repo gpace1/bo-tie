@@ -368,6 +368,26 @@ impl<P, B> LeULogicalLink<P, B> {
         self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelBuffer::Unused
     }
 
+    /// Get the Attribute Channel
+    ///
+    /// The Attribute channel is returned if it was enabled.
+    pub fn get_att_channel(&mut self) -> Option<BasicFrameChannel<impl LogicalLink + '_>>
+    where
+        P: PhysicalLink,
+        B: TryExtend<u8> + Default,
+    {
+        if let LeUChannelBuffer::BasicChannel { .. } = &self.channels[LE_LINK_ATT_CHANNEL_INDEX] {
+            let handle = LeULogicalLinkHandle::new(self, LE_LINK_ATT_CHANNEL_INDEX);
+
+            Some(BasicFrameChannel::new(
+                ChannelIdentifier::Le(LeCid::AttributeProtocol),
+                handle,
+            ))
+        } else {
+            None
+        }
+    }
+
     /// Enable the signalling channel
     pub fn enable_signalling_channel(&mut self) {
         self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelBuffer::SignallingChannel;
@@ -378,6 +398,26 @@ impl<P, B> LeULogicalLink<P, B> {
         self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelBuffer::Unused
     }
 
+    /// Get the Signalling Channel
+    ///
+    /// The Signalling channel is returned if it was enabled.
+    pub fn get_signalling_channel(&mut self) -> Option<SignallingChannel<impl LogicalLink + '_>>
+    where
+        P: PhysicalLink,
+        B: TryExtend<u8> + Default,
+    {
+        if let LeUChannelBuffer::SignallingChannel = &self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] {
+            let handle = LeULogicalLinkHandle::new(self, LE_LINK_SIGNALLING_CHANNEL_INDEX);
+
+            Some(SignallingChannel::new(
+                ChannelIdentifier::Le(LeCid::LeSignalingChannel),
+                handle,
+            ))
+        } else {
+            None
+        }
+    }
+
     /// Enable the Security Manager channel
     pub fn enable_security_manager_channel(&mut self, buffer: B) {
         self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelBuffer::BasicChannel { buffer }
@@ -386,6 +426,56 @@ impl<P, B> LeULogicalLink<P, B> {
     /// Disable the Security Manager channel
     pub fn disable_security_manager_channel(&mut self) {
         self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+    }
+
+    /// Get the Security Manager Channel
+    ///
+    /// This Security Manager channel is returned if it was enabled.
+    pub fn get_security_manager_channel(&mut self) -> Option<BasicFrameChannel<impl LogicalLink + '_>>
+    where
+        P: PhysicalLink,
+        B: TryExtend<u8> + Default,
+    {
+        if let LeUChannelBuffer::BasicChannel { .. } = &self.channels[LE_LINK_SM_CHANNEL_INDEX] {
+            let handle = LeULogicalLinkHandle::new(self, LE_LINK_SM_CHANNEL_INDEX);
+
+            Some(BasicFrameChannel::new(
+                ChannelIdentifier::Le(LeCid::SecurityManagerProtocol),
+                handle,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Get a Credit Based Channel
+    ///
+    /// This returns a Credit Based channel if a connection for the channel has been established.
+    ///
+    /// # Note
+    /// `None` is also returned if `channel_identifier` is not a valid channel ID for a credit based
+    /// channel.
+    pub fn get_credit_based_channel(
+        &mut self,
+        channel_identifier: ChannelIdentifier,
+    ) -> Option<CreditBasedChannel<impl LogicalLink + '_>>
+    where
+        P: PhysicalLink,
+        B: TryExtend<u8> + Default,
+    {
+        let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) = channel_identifier else {
+            return None;
+        };
+
+        let index = self.convert_dyn_index(dyn_channel_id);
+
+        if let Some(LeUChannelBuffer::CreditBasedChannel { .. }) = self.channels.get(index) {
+            let handle = LeULogicalLinkHandle::new(self, index);
+
+            Some(CreditBasedChannel::new(channel_identifier, handle))
+        } else {
+            None
+        }
     }
 
     /// Enable/Disable unused responses
