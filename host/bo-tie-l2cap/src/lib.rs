@@ -118,9 +118,14 @@ pub trait PhysicalLink {
     where
         Self: 'a;
 
+    /// Sent L2CAP Data
+    type SendData<'a>: IntoIterator<Item = u8>
+    where
+        Self: 'a;
+
     /// Received L2CAP Data
     ///
-    /// `RecvData` shall be an iterator over data of a *single* physical link packet. The bytes of
+    /// `RecvData` is an iterator over data of a *single* physical link packet. The bytes of
     /// the data are also be in the order in which they are received by the linked device.
     ///
     /// # Note
@@ -170,13 +175,6 @@ pub trait PhysicalLink {
     /// The output of `recv` is a future that returns a result within an option. The future's output
     /// is either `None` to indicate the peer disconnected, a `L2capFragment`, or an error that
     /// occurred when receiving.
-    ///
-    /// # Queued PDUs
-    /// It is up to the implementation on how many physical link PDUs can be queued. Most
-    /// implementations do not provide any queuing. Queuing is only relevant for supporting
-    /// applications that may occasionally take inordinate amounts of time between calling `recv`.
-    /// In a truly bad scenario, the host should be using flow control implemented in the L2CAP or
-    /// higher layers to manage the reception of L2CAP PDUs.
     fn recv(&mut self) -> Self::RecvFut<'_>;
 }
 
@@ -196,6 +194,7 @@ trait PhysicalLinkExt: PhysicalLink {
     async fn send_pdu<T>(&mut self, pdu: T, fragmentation_size: usize) -> Result<(), Self::SendErr>
     where
         T: FragmentL2capPdu,
+        for<'a> T::FragmentIterator: FragmentIterator<Item<'a> = Self::SendData<'a>> + 'a,
     {
         let mut fragments = pdu.into_fragments(fragmentation_size).unwrap();
 
@@ -945,6 +944,175 @@ impl core::fmt::Display for PsmIssue {
             PsmIssue::NotDynamicRange => write!(f, "Dynamic PSM not within allocated range"),
             PsmIssue::NotOdd => write!(f, "Dynamic PSM value is not odd"),
             PsmIssue::Extended => write!(f, "Dynamic PSM has extended bit set"),
+        }
+    }
+}
+
+/// tests require
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::channel::id::{ChannelIdentifier, LeCid};
+    use crate::channel::signalling::ReceivedLeUSignal;
+    use crate::pdu::L2capFragment;
+    use crate::signals::packets::{LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer};
+    use crate::{LeULogicalLink, Next, PhysicalLink};
+    use alloc::boxed::Box;
+    use bo_tie_core::buffer::stack::{LinearBuffer, LinearBufferError, LinearBufferIter};
+    use bo_tie_core::buffer::TryExtend;
+    use core::cell::{Cell, RefCell};
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Poll, Waker};
+
+    pub(crate) struct PhysicalLinkLoop {
+        data: RefCell<LinearBuffer<32, u8>>,
+        starting_data: Cell<bool>,
+        a_waker: Cell<Option<Waker>>,
+        b_waker: Cell<Option<Waker>>,
+    }
+
+    impl PhysicalLinkLoop {
+        pub(crate) fn new() -> Self {
+            let data = RefCell::new(LinearBuffer::new());
+            let starting_data = Cell::new(false);
+            let a_waker = Cell::new(None);
+            let b_waker = Cell::new(None);
+
+            PhysicalLinkLoop {
+                data,
+                starting_data,
+                a_waker,
+                b_waker,
+            }
+        }
+
+        /// Create a two-way channel of physical links
+        ///
+        /// Sending from one physical link will cause the other physical link to receive the data.
+        pub(crate) fn channel(&mut self) -> (impl PhysicalLink + '_, impl PhysicalLink + '_) {
+            struct End<'a> {
+                data: &'a RefCell<LinearBuffer<32, u8>>,
+                starting_data: &'a Cell<bool>,
+                waker: &'a Cell<Option<Waker>>,
+                peer_waker: &'a Cell<Option<Waker>>,
+            }
+
+            impl PhysicalLink for End<'_> {
+                type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + Send + 'a>> where Self: 'a ;
+                type SendErr = LinearBufferError;
+                type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>> + Send + 'a>> where Self: 'a;
+                type RecvData = LinearBufferIter<32, u8>;
+                type RecvErr = core::convert::Infallible;
+
+                fn max_transmission_size(&self) -> u16 {
+                    32
+                }
+
+                fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+                where
+                    T: IntoIterator<Item = u8>,
+                {
+                    Box::pin(core::future::poll_fn(|context| {
+                        if !self.data.borrow().is_empty() {
+                            self.waker.replace(Some(context.waker().clone()));
+
+                            Poll::Pending
+                        } else {
+                            self.starting_data.set(fragment.start_fragment);
+
+                            self.data
+                                .borrow_mut()
+                                .try_extend(fragment.data)
+                                .map_err(|e| Box::new(e))?;
+
+                            self.peer_waker.take().map(|waker| waker.wake());
+
+                            Poll::Ready(Ok(()))
+                        }
+                    }))
+                }
+
+                fn recv(&mut self) -> Self::RecvFut<'_> {
+                    core::future::poll_fn(|context| {
+                        if self.data.borrow().is_empty() {
+                            self.waker.replace(Some(context.waker().clone()));
+
+                            Poll::Pending
+                        } else {
+                            let data = self.data.take();
+
+                            let starting_fragment = self.starting_data.take();
+
+                            let fragment = L2capFragment::new(starting_fragment, data.into_iter());
+
+                            Poll::Ready(Ok(fragment))
+                        }
+                    })
+                    .into()
+                }
+            }
+
+            let a = End {
+                data: &self.data,
+                starting_data: &self.starting_data,
+                waker: &self.a_waker,
+                peer_waker: &self.b_waker,
+            };
+
+            let b = End {
+                data: &self.data,
+                starting_data: &self.starting_data,
+                waker: &self.b_waker,
+                peer_waker: &self.a_waker,
+            };
+
+            (a, b)
+        }
+    }
+
+    #[tokio::test]
+    async fn le_u_logical_link_next() {
+        let mut phy_link_loop = PhysicalLinkLoop::new();
+
+        let (phy_test, phy_verify) = phy_link_loop.channel();
+
+        let mut test_link = LeULogicalLink::new(phy_test);
+
+        test_link.enable_signalling_channel();
+
+        let mut verify_link = LeULogicalLink::new(phy_verify);
+
+        verify_link.enable_signalling_channel();
+
+        let mut test_channel = test_link.get_signalling_channel().unwrap();
+
+        loop {
+            tokio::select! {
+                rslt = test_channel.request_le_credit_connection(
+                    SimplifiedProtocolServiceMultiplexer::new_dyn(10),
+                    LeCreditMtu::new(256),
+                    LeCreditMps::new(16),
+                    5
+                ) => {
+                    rslt.unwrap();
+                }
+
+                recv = verify_link.next() => {
+                    let Next::SignallingChannel { signal, channel } = recv.unwrap() else {
+                        panic!("expected signalling channel")
+                    };
+
+                    let ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) = signal else {
+                        panic!("expected 'LeCreditBasedConnectionRequest`, received {signal:?}");
+                    };
+
+                    assert_eq!(test_channel.get_channel_id(), ChannelIdentifier::Le(LeCid::DynamicallyAllocated(request.source_dyn_cid)));
+
+                    assert_eq!(1, request.identifier);
+
+                    assert_eq!(SimplifiedProtocolServiceMultiplexer::new_dyn(10), SimplifiedProtocolServiceMultiplexer::new_dyn(10));
+                }
+            }
         }
     }
 }

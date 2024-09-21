@@ -234,18 +234,29 @@ impl<T: Clone, const SIZE: usize> TryFrom<&[T]> for LinearBuffer<SIZE, T> {
     }
 }
 
-impl<T, const SIZE: usize> Drop for LinearBuffer<SIZE, T> {
-    fn drop(&mut self) {
-        self.clear()
-    }
-}
-
 impl<T, const SIZE: usize> IntoIterator for LinearBuffer<SIZE, T> {
     type Item = T;
     type IntoIter = LinearBufferIter<SIZE, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         LinearBufferIter::new(self)
+    }
+}
+
+impl<T, const SIZE: usize> crate::buffer::TryExtend<T> for LinearBuffer<SIZE, T> {
+    type Error = LinearBufferError;
+
+    fn try_extend<I>(&mut self, iter: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        iter.into_iter().try_for_each(|byte| self.try_push(byte))
+    }
+}
+
+impl<T, const SIZE: usize> Drop for LinearBuffer<SIZE, T> {
+    fn drop(&mut self) {
+        self.clear()
     }
 }
 

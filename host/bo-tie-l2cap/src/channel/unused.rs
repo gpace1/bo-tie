@@ -214,7 +214,7 @@ impl AttributeChannelUnusedResponseBuilder {
 }
 
 struct SignallingChannelUnusedResponseBuilder {
-    command_identifier: Option<u8>,
+    command_identifier: Option<NonZeroU8>,
 }
 
 impl SignallingChannelUnusedResponseBuilder {
@@ -233,7 +233,7 @@ impl SignallingChannelUnusedResponseBuilder {
                 1 => {
                     let Some(byte) = byte_iter.next() else { return Ok(None) };
 
-                    self.command_identifier = Some(byte);
+                    self.command_identifier = Some(NonZeroU8::new(byte).ok_or(UnusedRecombineError)?);
 
                     *bytes_received += 1;
                 }
@@ -243,7 +243,7 @@ impl SignallingChannelUnusedResponseBuilder {
 
         (*bytes_received >= pdu_length)
             .then(|| {
-                let identifier = self.command_identifier.ok_or(UnusedRecombineError)?;
+                let identifier = self.command_identifier.ok_or(UnusedRecombineError)?.get();
 
                 // 0x1 -> signalling L2CAP_COMMAND_REJECT_RSP
                 // 0x2, 0x0 -> data length
