@@ -97,18 +97,35 @@ impl BasicHeaderProcessor {
             self.channel_id.set(ProcessorChannelIdentifier::None);
         }
 
-        for byte in &mut fragment.data {
+        loop {
             match (self.length.get(), self.channel_id.get()) {
                 (ProcessorLengthState::None, ProcessorChannelIdentifier::None) => {
+                    let Some(byte) = fragment.data.next() else {
+                        return Ok(None);
+                    };
+
                     self.length.set(ProcessorLengthState::FirstByte(byte))
                 }
-                (ProcessorLengthState::FirstByte(v), ProcessorChannelIdentifier::None) => self
-                    .length
-                    .set(ProcessorLengthState::Complete(<u16>::from_le_bytes([v, byte]))),
+                (ProcessorLengthState::FirstByte(v), ProcessorChannelIdentifier::None) => {
+                    let Some(byte) = fragment.data.next() else {
+                        return Ok(None);
+                    };
+
+                    self.length
+                        .set(ProcessorLengthState::Complete(<u16>::from_le_bytes([v, byte])))
+                }
                 (ProcessorLengthState::Complete(_), ProcessorChannelIdentifier::None) => {
+                    let Some(byte) = fragment.data.next() else {
+                        return Ok(None);
+                    };
+
                     self.channel_id.set(ProcessorChannelIdentifier::FirstByte(byte))
                 }
                 (ProcessorLengthState::Complete(_), ProcessorChannelIdentifier::FirstByte(v)) => {
+                    let Some(byte) = fragment.data.next() else {
+                        return Ok(None);
+                    };
+
                     let raw_channel = <u16>::from_le_bytes([v, byte]);
 
                     let channel_id =
