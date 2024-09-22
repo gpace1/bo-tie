@@ -949,11 +949,13 @@ impl core::fmt::Display for PsmIssue {
 /// tests require
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::channel::id::{ChannelIdentifier, LeCid};
+    use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
     use crate::channel::signalling::ReceivedLeUSignal;
     use crate::pdu::L2capFragment;
-    use crate::signals::packets::{LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer};
-    use crate::{LeULogicalLink, Next, PhysicalLink};
+    use crate::signals::packets::{
+        LeCreditMps, LeCreditMtu, SignalWithDynChannel, SimplifiedProtocolServiceMultiplexer,
+    };
+    use crate::{LeULogicalLink, Next, PhysicalLink, LE_DYNAMIC_CHANNEL_COUNT, LE_STATIC_CHANNEL_COUNT};
     use alloc::boxed::Box;
     use bo_tie_core::buffer::stack::{LinearBuffer, LinearBufferError, LinearBufferIter};
     use bo_tie_core::buffer::TryExtend;
@@ -996,9 +998,9 @@ pub(crate) mod tests {
             }
 
             impl PhysicalLink for End<'_> {
-                type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + Send + 'a>> where Self: 'a ;
+                type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + 'a>> where Self: 'a ;
                 type SendErr = LinearBufferError;
-                type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>> + Send + 'a>> where Self: 'a;
+                type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>> + 'a>> where Self: 'a;
                 type RecvData = LinearBufferIter<32, u8>;
                 type RecvErr = core::convert::Infallible;
 
@@ -1010,7 +1012,11 @@ pub(crate) mod tests {
                 where
                     T: IntoIterator<Item = u8>,
                 {
-                    Box::pin(core::future::poll_fn(|context| {
+                    let mut buffer = LinearBuffer::default();
+
+                    buffer.try_extend(fragment.data).expect("invalid fragment length");
+
+                    Box::pin(core::future::poll_fn(move |context| {
                         if !self.data.borrow().is_empty() {
                             self.waker.replace(Some(context.waker().clone()));
 
@@ -1018,10 +1024,7 @@ pub(crate) mod tests {
                         } else {
                             self.starting_data.set(fragment.start_fragment);
 
-                            self.data
-                                .borrow_mut()
-                                .try_extend(fragment.data)
-                                .map_err(|e| Box::new(e))?;
+                            self.data.replace(core::mem::take(&mut buffer));
 
                             self.peer_waker.take().map(|waker| waker.wake());
 
@@ -1031,7 +1034,7 @@ pub(crate) mod tests {
                 }
 
                 fn recv(&mut self) -> Self::RecvFut<'_> {
-                    core::future::poll_fn(|context| {
+                    Box::pin(core::future::poll_fn(|context| {
                         if self.data.borrow().is_empty() {
                             self.waker.replace(Some(context.waker().clone()));
 
@@ -1043,10 +1046,9 @@ pub(crate) mod tests {
 
                             let fragment = L2capFragment::new(starting_fragment, data.into_iter());
 
-                            Poll::Ready(Ok(fragment))
+                            Poll::Ready(Some(Ok(fragment)))
                         }
-                    })
-                    .into()
+                    }))
                 }
             }
 
@@ -1068,31 +1070,42 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn check_channel_ranges() {
+        assert_eq!(3, LE_STATIC_CHANNEL_COUNT);
+
+        assert_eq!(0x40, LE_DYNAMIC_CHANNEL_COUNT);
+    }
+
     #[tokio::test]
     async fn le_u_logical_link_next() {
         let mut phy_link_loop = PhysicalLinkLoop::new();
 
         let (phy_test, phy_verify) = phy_link_loop.channel();
 
-        let mut test_link = LeULogicalLink::new(phy_test);
+        let mut test_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_test);
 
         test_link.enable_signalling_channel();
 
-        let mut verify_link = LeULogicalLink::new(phy_verify);
+        let mut verify_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_verify);
 
         verify_link.enable_signalling_channel();
 
         let mut test_channel = test_link.get_signalling_channel().unwrap();
 
-        loop {
+        let mut request_channel = None;
+
+        'test: loop {
             tokio::select! {
                 rslt = test_channel.request_le_credit_connection(
-                    SimplifiedProtocolServiceMultiplexer::new_dyn(10),
+                    SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
                     LeCreditMtu::new(256),
-                    LeCreditMps::new(16),
+                    LeCreditMps::new(34),
                     5
                 ) => {
-                    rslt.unwrap();
+                    let connection_request = rslt.unwrap();
+
+                    request_channel = connection_request.get_local_cid().into();
                 }
 
                 recv = verify_link.next() => {
@@ -1100,15 +1113,17 @@ pub(crate) mod tests {
                         panic!("expected signalling channel")
                     };
 
+                    assert_eq!(ChannelIdentifier::Le(LeCid::LeSignalingChannel), channel.get_channel_id());
+
                     let ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) = signal else {
                         panic!("expected 'LeCreditBasedConnectionRequest`, received {signal:?}");
                     };
 
-                    assert_eq!(test_channel.get_channel_id(), ChannelIdentifier::Le(LeCid::DynamicallyAllocated(request.source_dyn_cid)));
+                    assert_eq!(Some(request.get_source_cid()), request_channel);
 
-                    assert_eq!(1, request.identifier);
+                    assert_eq!(1, request.identifier.get());
 
-                    assert_eq!(SimplifiedProtocolServiceMultiplexer::new_dyn(10), SimplifiedProtocolServiceMultiplexer::new_dyn(10));
+                    break 'test
                 }
             }
         }
