@@ -801,7 +801,7 @@ impl SimplifiedProtocolServiceMultiplexer {
     /// # Panic
     /// `val` must be in the range (inclusive) of 0x1 to 0x7F
     pub fn new_fixed(val: u16) -> Self {
-        assert!(val > 0 && val < 0x80);
+        assert!(val >= 1 && val <= 0x7F);
 
         Self(val)
     }
@@ -811,7 +811,7 @@ impl SimplifiedProtocolServiceMultiplexer {
     /// # Panic
     /// `val` must be in the range (inclusive) of 0x80 to 0xFF
     pub fn new_dyn(val: u16) -> Self {
-        assert!(val > 0x7F && val < 0x100);
+        assert!(val >= 0x80 && val <= 0xFF);
 
         Self(val)
     }
