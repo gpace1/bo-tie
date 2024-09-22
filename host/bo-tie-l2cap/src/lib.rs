@@ -118,11 +118,6 @@ pub trait PhysicalLink {
     where
         Self: 'a;
 
-    /// Sent L2CAP Data
-    type SendData<'a>: IntoIterator<Item = u8>
-    where
-        Self: 'a;
-
     /// Received L2CAP Data
     ///
     /// `RecvData` is an iterator over data of a *single* physical link packet. The bytes of
@@ -194,7 +189,6 @@ trait PhysicalLinkExt: PhysicalLink {
     async fn send_pdu<T>(&mut self, pdu: T, fragmentation_size: usize) -> Result<(), Self::SendErr>
     where
         T: FragmentL2capPdu,
-        for<'a> T::FragmentIterator: FragmentIterator<Item<'a> = Self::SendData<'a>> + 'a,
     {
         let mut fragments = pdu.into_fragments(fragmentation_size).unwrap();
 
