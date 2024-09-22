@@ -11,6 +11,7 @@ use core::num::{NonZeroU16, NonZeroU8};
 /// logical link.
 // A `ControlFrame` can be created from one of the signaling data types within the [`signals`]
 // module.
+#[derive(Debug)]
 pub struct ControlFrame<T> {
     channel_id: ChannelIdentifier,
     payload: T,
