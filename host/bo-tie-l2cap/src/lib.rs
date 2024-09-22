@@ -323,6 +323,10 @@ pub struct LeULogicalLink<P, B> {
 /// The number of channels that have a defined channel for a LE-U link within the Bluetooth Spec.
 const LE_STATIC_CHANNEL_COUNT: usize = 3;
 
+/// The number of dynamic channels available for a LE-U link
+const LE_DYNAMIC_CHANNEL_COUNT: usize =
+    1 + (*DynChannelId::<LeULink>::LE_BOUNDS.end() - *DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize;
+
 /// Index for the ATT channel within a `LeULogicalLink::channels`
 const LE_LINK_ATT_CHANNEL_INDEX: usize = 0;
 

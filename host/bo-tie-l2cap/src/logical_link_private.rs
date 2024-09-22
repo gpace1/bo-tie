@@ -2,7 +2,7 @@ use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
 use crate::channel::{DynChannelState, LeUChannelBuffer};
 use crate::link_flavor::{LeULink, LinkFlavor};
 use crate::{
-    LeULogicalLink, PhysicalLink, SignallingChannel, LE_LINK_SIGNALLING_CHANNEL_INDEX,
+    LeULogicalLink, PhysicalLink, SignallingChannel, LE_DYNAMIC_CHANNEL_COUNT, LE_LINK_SIGNALLING_CHANNEL_INDEX,
     LE_STATIC_CHANNEL_COUNT,
 };
 use bo_tie_core::buffer::TryExtend;
@@ -15,7 +15,11 @@ pub trait LogicalLinkPrivate: Sized {
 
     type LinkFlavor: LinkFlavor;
 
-    type Deferred<'a>: LogicalLinkPrivate<PhysicalLink = Self::PhysicalLink, Buffer = Self::Buffer, LinkFlavor = Self::LinkFlavor>
+    type Deferred<'a>: LogicalLinkPrivate<
+        PhysicalLink = Self::PhysicalLink,
+        Buffer = Self::Buffer,
+        LinkFlavor = Self::LinkFlavor,
+    >
     where
         Self: 'a;
 
@@ -66,17 +70,20 @@ pub trait LogicalLinkPrivate: Sized {
 
 #[derive(Debug)]
 enum NewDynChannelErrorReason {
-    AllCreditBasedDynChannelsAreUsed { dyn_channel_count: usize },
+    AllCreditBasedDynChannelsAreUsed { total_dyn_channel_count: usize },
 }
 
 impl core::fmt::Display for NewDynChannelErrorReason {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            NewDynChannelErrorReason::AllCreditBasedDynChannelsAreUsed { dyn_channel_count } => {
+            NewDynChannelErrorReason::AllCreditBasedDynChannelsAreUsed {
+                total_dyn_channel_count,
+            } => {
                 write!(
                     f,
                     "the link cannot allocate another credit based channel as it has reached its \
-                    maximum number of them ({dyn_channel_count})"
+                    maximum number of them (the total number of dynamic channels for this link is \
+                    {total_dyn_channel_count})"
                 )
             }
         }
@@ -108,10 +115,7 @@ pub(crate) struct LeULogicalLinkHandle<'a, P, B> {
 
 impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
     pub(crate) fn new(logical_link: &'a mut LeULogicalLink<P, B>, index: usize) -> Self {
-        Self {
-            logical_link,
-            index,
-        }
+        Self { logical_link, index }
     }
 }
 
@@ -125,42 +129,55 @@ where
 
     type LinkFlavor = LeULink;
 
-    type Deferred<'a> = LeULogicalLinkHandle<'a, P, B,> 
-        where 
+    type Deferred<'a> = LeULogicalLinkHandle<'a, P, B,>
+        where
             Self: 'a;
 
     fn new_dyn_channel(
         &mut self,
         dyn_channel_builder: DynChannelState,
     ) -> Result<ChannelIdentifier, NewDynChannelError> {
-        self.logical_link.channels[LE_STATIC_CHANNEL_COUNT..]
-            .iter()
-            .enumerate()
-            .find_map(|(i, channel)| {
-                if let LeUChannelBuffer::Unused = channel {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .map(|index| {
-                self.logical_link.channels[index] = dyn_channel_builder.into();
+        if self.logical_link.channels.len() < LE_STATIC_CHANNEL_COUNT + LE_DYNAMIC_CHANNEL_COUNT {
+            let index = self.logical_link.channels.len();
 
-                ChannelIdentifier::Le(
-                    DynChannelId::new_le(
-                        (index - LE_STATIC_CHANNEL_COUNT) as u16 + *DynChannelId::<LeULink>::LE_BOUNDS.start(),
-                    )
-                    .unwrap(),
+            self.logical_link.channels.push(dyn_channel_builder.into());
+
+            Ok(ChannelIdentifier::Le(
+                DynChannelId::new_le(
+                    (index - LE_STATIC_CHANNEL_COUNT) as u16 + *DynChannelId::<LeULink>::LE_BOUNDS.start(),
                 )
-            })
-            .ok_or_else(|| {
-                let dyn_channel_count =
-                    (*DynChannelId::<LeULink>::LE_BOUNDS.end() - *DynChannelId::<LeULink>::LE_BOUNDS.start()).into();
+                .unwrap(),
+            ))
+        } else {
+            self.logical_link.channels[LE_STATIC_CHANNEL_COUNT..]
+                .iter()
+                .enumerate()
+                .find_map(|(i, channel)| match channel {
+                    LeUChannelBuffer::Unused => Some(i),
+                    _ => None,
+                })
+                .map(|index| {
+                    self.logical_link.channels[index] = dyn_channel_builder.into();
 
-                let e = NewDynChannelErrorReason::AllCreditBasedDynChannelsAreUsed { dyn_channel_count };
+                    ChannelIdentifier::Le(
+                        DynChannelId::new_le(
+                            (index - LE_STATIC_CHANNEL_COUNT) as u16 + *DynChannelId::<LeULink>::LE_BOUNDS.start(),
+                        )
+                        .unwrap(),
+                    )
+                })
+                .ok_or_else(|| {
+                    let total_dyn_channel_count = (*DynChannelId::<LeULink>::LE_BOUNDS.end()
+                        - *DynChannelId::<LeULink>::LE_BOUNDS.start())
+                    .into();
 
-                NewDynChannelError(e)
-            })
+                    let e = NewDynChannelErrorReason::AllCreditBasedDynChannelsAreUsed {
+                        total_dyn_channel_count,
+                    };
+
+                    NewDynChannelError(e)
+                })
+        }
     }
 
     fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool {
