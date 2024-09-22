@@ -397,6 +397,10 @@ impl ReceiveLeUSignalRecombineBuilder {
     }
 
     fn is_complete(&self) -> bool {
+        // the signal code (1), identifier (1), and
+        // data length (2) are 4 total bytes
+        const SIGNAL_HEADER_SIZE: usize = 4;
+
         let buffer: &[u8] = match &self.state {
             ReceiveLeUSignalRecombineBuilderState::Init => return false,
             ReceiveLeUSignalRecombineBuilderState::Unknown(u) => return u.is_complete(),
@@ -412,9 +416,9 @@ impl ReceiveLeUSignalRecombineBuilder {
 
         let Some(len_1) = buffer.get(3) else { return false };
 
-        let len = <u16>::from_le_bytes([*len_0, *len_1]).into();
+        let data_size: usize = <u16>::from_le_bytes([*len_0, *len_1]).into();
 
-        buffer.len() == len
+        buffer.len() >= data_size + SIGNAL_HEADER_SIZE
     }
 }
 
