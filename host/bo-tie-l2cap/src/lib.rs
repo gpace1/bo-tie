@@ -369,7 +369,7 @@ impl<P, B> LeULogicalLink<P, B> {
     /// Get the Attribute Channel
     ///
     /// The Attribute channel is returned if it was enabled.
-    pub fn get_att_channel(&mut self) -> Option<BasicFrameChannel<impl LogicalLink + '_>>
+    pub fn get_att_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
@@ -399,7 +399,7 @@ impl<P, B> LeULogicalLink<P, B> {
     /// Get the Signalling Channel
     ///
     /// The Signalling channel is returned if it was enabled.
-    pub fn get_signalling_channel(&mut self) -> Option<SignallingChannel<impl LogicalLink + '_>>
+    pub fn get_signalling_channel(&mut self) -> Option<SignallingChannel<LeULogicalLinkHandle<'_, P, B>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
@@ -429,7 +429,7 @@ impl<P, B> LeULogicalLink<P, B> {
     /// Get the Security Manager Channel
     ///
     /// This Security Manager channel is returned if it was enabled.
-    pub fn get_security_manager_channel(&mut self) -> Option<BasicFrameChannel<impl LogicalLink + '_>>
+    pub fn get_security_manager_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
@@ -456,7 +456,7 @@ impl<P, B> LeULogicalLink<P, B> {
     pub fn get_credit_based_channel(
         &mut self,
         channel_identifier: ChannelIdentifier,
-    ) -> Option<CreditBasedChannel<impl LogicalLink + '_>>
+    ) -> Option<CreditBasedChannel<LeULogicalLinkHandle<'_, P, B>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
@@ -528,7 +528,7 @@ impl<P, B> LeULogicalLink<P, B> {
     /// `next` has the processing of the *flow control credit indication* L2CAP signal built into
     /// its returned future. Normally `next` will output a [`CreditIndication`] containing the
     /// number of credits given and the affected channel. However, before the channel is returned
-    pub async fn next(&mut self) -> Result<Next<impl LogicalLink + '_>, LeULogicalLinkNextError<P, B>>
+    pub async fn next(&mut self) -> Result<LeUNext<'_, P, B>, LeULogicalLinkNextError<P, B>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default + IntoIterator<Item = u8>,
@@ -636,10 +636,10 @@ impl<P, B> LeULogicalLink<P, B> {
 
                         match basic_header.channel_id {
                             ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
-                                break 'outer Ok(Next::AttributeChannel { pdu, channel })
+                                break 'outer Ok(LeUNext::AttributeChannel { pdu: pdu, channel })
                             }
                             ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                                break 'outer Ok(Next::SecurityManagerChannel { pdu, channel })
+                                break 'outer Ok(LeUNext::SecurityManagerChannel { pdu, channel })
                             }
                             _ => unreachable!(),
                         }
@@ -673,13 +673,13 @@ impl<P, B> LeULogicalLink<P, B> {
 
                             let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                            break 'outer Ok(Next::CreditIndication { credits_given, channel });
+                            break 'outer Ok(LeUNext::CreditIndication { credits_given, channel });
                         } else {
                             let handle = LeULogicalLinkHandle::new(self, index);
 
                             let channel = SignallingChannel::new(basic_header.channel_id, handle);
 
-                            break 'outer Ok(Next::SignallingChannel { signal, channel });
+                            break 'outer Ok(LeUNext::SignallingChannel { signal, channel });
                         }
                     }
                     Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
@@ -698,7 +698,7 @@ impl<P, B> LeULogicalLink<P, B> {
 
                         let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                        break 'outer Ok(Next::CreditBasedChannel { sdu, channel });
+                        break 'outer Ok(LeUNext::CreditBasedChannel { sdu, channel });
                     }
                 }
             }
@@ -707,26 +707,27 @@ impl<P, B> LeULogicalLink<P, B> {
 }
 
 /// The output of the future returned by [`LeULogicalLink::next`]
-pub enum Next<L: LogicalLink> {
+#[derive(Debug)]
+pub enum LeUNext<'a, P, B> {
     AttributeChannel {
-        pdu: BasicFrame<L::Buffer>,
-        channel: BasicFrameChannel<L>,
+        pdu: BasicFrame<B>,
+        channel: BasicFrameChannel<LeULogicalLinkHandle<'a, P, B>>,
     },
     SignallingChannel {
         signal: ReceivedLeUSignal,
-        channel: SignallingChannel<L>,
+        channel: SignallingChannel<LeULogicalLinkHandle<'a, P, B>>,
     },
     SecurityManagerChannel {
-        pdu: BasicFrame<L::Buffer>,
-        channel: BasicFrameChannel<L>,
+        pdu: BasicFrame<B>,
+        channel: BasicFrameChannel<LeULogicalLinkHandle<'a, P, B>>,
     },
     CreditBasedChannel {
-        sdu: L::Buffer,
-        channel: CreditBasedChannel<L>,
+        sdu: B,
+        channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B>>,
     },
     CreditIndication {
         credits_given: usize,
-        channel: CreditBasedChannel<L>,
+        channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B>>,
     },
 }
 
