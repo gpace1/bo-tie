@@ -478,6 +478,9 @@ impl<P, B> LeULogicalLink<P, B> {
 
     /// Enable/Disable unused responses
     ///
+    /// This is used to enable or disable the unused response for the fixed channels of a LE-U link.
+    /// The unused responses are disabled by default, so this method must be called in enable them.  
+    ///
     /// Fixed channels *should* have a default response event if they are not used. This can be done
     /// either by enabling all the fixed channels and handling a default response yourself or by
     /// calling this method with input `enable` as true.
@@ -499,7 +502,7 @@ impl<P, B> LeULogicalLink<P, B> {
     /// [`enable_att_channel`]: LeULogicalLink::enable_att_channel
     /// [`enable_signalling_channel`]: LeULogicalLink::enable_signalling_channel
     /// [`enable_security_manager_channel`]: LeULogicalLink::enable_security_manager_channel
-    pub fn disable_response(&mut self, enable: bool) {
+    pub fn unused_responses(&mut self, enable: bool) {
         self.unused_responses = enable
     }
 
@@ -950,14 +953,14 @@ impl core::fmt::Display for PsmIssue {
 
 /// tests require
 #[cfg(test)]
-pub(crate) mod tests {
-    use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
+pub mod tests {
+    use crate::channel::id::{ChannelIdentifier, LeCid};
     use crate::channel::signalling::ReceivedLeUSignal;
     use crate::pdu::L2capFragment;
     use crate::signals::packets::{
-        LeCreditMps, LeCreditMtu, SignalWithDynChannel, SimplifiedProtocolServiceMultiplexer,
+        CommandRejectResponse, LeCreditMps, LeCreditMtu, SignalWithDynChannel, SimplifiedProtocolServiceMultiplexer,
     };
-    use crate::{LeULogicalLink, Next, PhysicalLink, LE_DYNAMIC_CHANNEL_COUNT, LE_STATIC_CHANNEL_COUNT};
+    use crate::{LeULogicalLink, LeUNext, PhysicalLink, LE_DYNAMIC_CHANNEL_COUNT, LE_STATIC_CHANNEL_COUNT};
     use alloc::boxed::Box;
     use bo_tie_core::buffer::stack::{LinearBuffer, LinearBufferError, LinearBufferIter};
     use bo_tie_core::buffer::TryExtend;
@@ -966,23 +969,113 @@ pub(crate) mod tests {
     use core::pin::Pin;
     use core::task::{Poll, Waker};
 
+    /// A loop between to connected physical links
     pub(crate) struct PhysicalLinkLoop {
-        data: RefCell<LinearBuffer<32, u8>>,
-        starting_data: Cell<bool>,
+        a_data: RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
+        b_data: RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
         a_waker: Cell<Option<Waker>>,
         b_waker: Cell<Option<Waker>>,
     }
 
+    impl core::fmt::Debug for PhysicalLinkLoop {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            f.debug_struct("PhysicalLinkLoop")
+                .field("a_data", &self.a_data)
+                .field("b_data", &self.b_data)
+                .field("a_waker", &"..")
+                .field("b_waker", &"..")
+                .finish()
+        }
+    }
+
+    /// One end of a physical link loop
+    ///
+    /// This is returned by [`PhysicalLinkLoop::channel`]
+    pub struct PhysicalLinkLoopEnd<'a> {
+        data: &'a RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
+        peer_data: &'a RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
+        waker: &'a Cell<Option<Waker>>,
+        peer_waker: &'a Cell<Option<Waker>>,
+    }
+
+    impl core::fmt::Debug for PhysicalLinkLoopEnd<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+            f.debug_struct("PhysicalLinkLoop")
+                .field("data", &self.data)
+                .field("peer_data", &self.peer_data)
+                .field("waker", &"..")
+                .field("peer_waker", &"..")
+                .finish()
+        }
+    }
+
+    impl PhysicalLink for PhysicalLinkLoopEnd<'_> {
+        type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + 'a>> where Self: 'a ;
+        type SendErr = LinearBufferError;
+        type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>> + 'a>> where Self: 'a;
+        type RecvData = LinearBufferIter<32, u8>;
+        type RecvErr = core::convert::Infallible;
+
+        fn max_transmission_size(&self) -> u16 {
+            32
+        }
+
+        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+        where
+            T: IntoIterator<Item = u8>,
+        {
+            let mut buffer = LinearBuffer::default();
+
+            buffer.try_extend(fragment.data).expect("invalid fragment length");
+
+            Box::pin(core::future::poll_fn(move |context| {
+                if self.data.borrow().is_some() {
+                    self.waker.replace(Some(context.waker().clone()));
+
+                    Poll::Pending
+                } else {
+                    let fragment = L2capFragment::new(fragment.start_fragment, core::mem::take(&mut buffer));
+
+                    self.data.replace(Some(fragment));
+
+                    self.peer_waker.take().map(|waker| waker.wake());
+
+                    Poll::Ready(Ok(()))
+                }
+            }))
+        }
+
+        fn recv(&mut self) -> Self::RecvFut<'_> {
+            Box::pin(core::future::poll_fn(|context| {
+                if self.peer_data.borrow().is_none() {
+                    self.waker.replace(Some(context.waker().clone()));
+
+                    Poll::Pending
+                } else {
+                    self.peer_waker.take().map(|w| w.wake());
+
+                    let fragment = Ok(self
+                        .peer_data
+                        .take()
+                        .map(|f| L2capFragment::new(f.is_start_fragment(), f.data.into_iter())))
+                    .transpose();
+
+                    Poll::Ready(fragment)
+                }
+            }))
+        }
+    }
+
     impl PhysicalLinkLoop {
         pub(crate) fn new() -> Self {
-            let data = RefCell::new(LinearBuffer::new());
-            let starting_data = Cell::new(false);
+            let a_data = RefCell::new(None);
+            let b_data = RefCell::new(None);
             let a_waker = Cell::new(None);
             let b_waker = Cell::new(None);
 
             PhysicalLinkLoop {
-                data,
-                starting_data,
+                a_data,
+                b_data,
                 a_waker,
                 b_waker,
             }
@@ -991,79 +1084,17 @@ pub(crate) mod tests {
         /// Create a two-way channel of physical links
         ///
         /// Sending from one physical link will cause the other physical link to receive the data.
-        pub(crate) fn channel(&mut self) -> (impl PhysicalLink + '_, impl PhysicalLink + '_) {
-            struct End<'a> {
-                data: &'a RefCell<LinearBuffer<32, u8>>,
-                starting_data: &'a Cell<bool>,
-                waker: &'a Cell<Option<Waker>>,
-                peer_waker: &'a Cell<Option<Waker>>,
-            }
-
-            impl PhysicalLink for End<'_> {
-                type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), Self::SendErr>> + 'a>> where Self: 'a ;
-                type SendErr = LinearBufferError;
-                type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>> + 'a>> where Self: 'a;
-                type RecvData = LinearBufferIter<32, u8>;
-                type RecvErr = core::convert::Infallible;
-
-                fn max_transmission_size(&self) -> u16 {
-                    32
-                }
-
-                fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
-                where
-                    T: IntoIterator<Item = u8>,
-                {
-                    let mut buffer = LinearBuffer::default();
-
-                    buffer.try_extend(fragment.data).expect("invalid fragment length");
-
-                    Box::pin(core::future::poll_fn(move |context| {
-                        if !self.data.borrow().is_empty() {
-                            self.waker.replace(Some(context.waker().clone()));
-
-                            Poll::Pending
-                        } else {
-                            self.starting_data.set(fragment.start_fragment);
-
-                            self.data.replace(core::mem::take(&mut buffer));
-
-                            self.peer_waker.take().map(|waker| waker.wake());
-
-                            Poll::Ready(Ok(()))
-                        }
-                    }))
-                }
-
-                fn recv(&mut self) -> Self::RecvFut<'_> {
-                    Box::pin(core::future::poll_fn(|context| {
-                        if self.data.borrow().is_empty() {
-                            self.waker.replace(Some(context.waker().clone()));
-
-                            Poll::Pending
-                        } else {
-                            let data = self.data.take();
-
-                            let starting_fragment = self.starting_data.take();
-
-                            let fragment = L2capFragment::new(starting_fragment, data.into_iter());
-
-                            Poll::Ready(Some(Ok(fragment)))
-                        }
-                    }))
-                }
-            }
-
-            let a = End {
-                data: &self.data,
-                starting_data: &self.starting_data,
+        pub(crate) fn channel(&mut self) -> (PhysicalLinkLoopEnd<'_>, PhysicalLinkLoopEnd<'_>) {
+            let a = PhysicalLinkLoopEnd {
+                data: &self.a_data,
+                peer_data: &self.b_data,
                 waker: &self.a_waker,
                 peer_waker: &self.b_waker,
             };
 
-            let b = End {
-                data: &self.data,
-                starting_data: &self.starting_data,
+            let b = PhysicalLinkLoopEnd {
+                data: &self.b_data,
+                peer_data: &self.a_data,
                 waker: &self.b_waker,
                 peer_waker: &self.a_waker,
             };
@@ -1111,7 +1142,7 @@ pub(crate) mod tests {
                 }
 
                 recv = verify_link.next() => {
-                    let Next::SignallingChannel { signal, channel } = recv.unwrap() else {
+                    let LeUNext::SignallingChannel { signal, channel } = recv.unwrap() else {
                         panic!("expected signalling channel")
                     };
 
@@ -1127,6 +1158,101 @@ pub(crate) mod tests {
 
                     break 'test
                 }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn le_u_logical_link_unused_channels() {
+        use alloc::vec::Vec;
+
+        let mut phy_link_loop = PhysicalLinkLoop::new();
+
+        let (phy_test, phy_verify) = phy_link_loop.channel();
+
+        let mut test_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_test);
+
+        test_link.unused_responses(true);
+
+        let mut verify_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_verify);
+
+        verify_link.enable_att_channel(Vec::new());
+        verify_link.enable_signalling_channel();
+        verify_link.enable_security_manager_channel(Vec::new());
+
+        let test_procedure = async {
+            let find_info_request = alloc::vec![0x4, 0x0, 0x0, 0xFF, 0xFF];
+
+            verify_link
+                .get_att_channel()
+                .unwrap()
+                .send(find_info_request)
+                .await
+                .unwrap();
+
+            let next = verify_link.next().await.unwrap();
+
+            let LeUNext::AttributeChannel { pdu: att_pdu, .. } = next else {
+                panic!("expected attribute channel data")
+            };
+
+            // [error opcode, request opcode, handle_0, handle_1, error code]
+            assert_eq!(att_pdu.get_payload(), &alloc::vec![0x1, 0x4, 0x0, 0x0, 0x6]);
+
+            verify_link
+                .get_signalling_channel()
+                .unwrap()
+                .request_le_credit_connection(
+                    SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
+                    LeCreditMtu::new(256),
+                    LeCreditMps::new(34),
+                    5,
+                )
+                .await
+                .unwrap();
+
+            let next = verify_link.next().await.unwrap();
+
+            let LeUNext::SignallingChannel { signal, .. } = next else {
+                panic!("expected signalling channel data")
+            };
+
+            let ReceivedLeUSignal::CommandRejectRsp(response) = signal else {
+                panic!("expected CommandRejectRsp")
+            };
+
+            assert_eq!(
+                response.into_inner(),
+                CommandRejectResponse::new_command_not_understood(core::num::NonZeroU8::new(1).unwrap())
+            );
+
+            let pairing_request = alloc::vec![0x1, 0x0, 0x0, 0xD, 0x10, 0x02, 0x02];
+
+            verify_link
+                .get_security_manager_channel()
+                .unwrap()
+                .send(pairing_request)
+                .await
+                .unwrap();
+
+            let next = verify_link.next().await.unwrap();
+
+            let LeUNext::SecurityManagerChannel { pdu: sm_pdu, .. } = next else {
+                panic!("expected security manager channel data")
+            };
+
+            assert_eq!(sm_pdu.get_payload(), &alloc::vec![0x5, 0x5])
+        };
+
+        'test: loop {
+            tokio::select! {
+                rslt = test_link.next() => {
+                    let output = rslt.unwrap();
+
+                    panic!("test_link should never output `{output:?}`")
+                },
+
+                _ = test_procedure => break 'test,
             }
         }
     }
