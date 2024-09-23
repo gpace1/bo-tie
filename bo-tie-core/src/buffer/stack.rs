@@ -290,6 +290,12 @@ impl<const SIZE: usize, T> Iterator for LinearBufferIter<SIZE, T> {
             None
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = self.linear_buffer.count - self.index;
+
+        (size, Some(size))
+    }
 }
 
 impl<const SIZE: usize, T> ExactSizeIterator for LinearBufferIter<SIZE, T> {
