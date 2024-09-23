@@ -483,17 +483,18 @@ impl<L: LogicalLink> BasicFrameChannel<L> {
         self.logical_link.get_physical_link().max_transmission_size().into()
     }
 
-    /// Send a Basic Frame to the lower layers
+    /// Send data through the channel
     ///
-    /// This is used to send a L2CAP Basic Frame PDU from the Host to a linked device. This method
-    /// may be called by protocol at a higher layer than L2CAP.
-    pub async fn send<T>(&mut self, b_frame: BasicFrame<T>) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
+    /// The data will be converted into a `BasicFrame<T>` before being sent via the logical link.
+    pub async fn send<T>(&mut self, payload: T) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr>
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
         L::Buffer: Default,
     {
         let max_transmission_size = self.logical_link.get_physical_link().max_transmission_size().into();
+
+        let b_frame = BasicFrame::new(payload, self.channel_id);
 
         self.logical_link
             .get_mut_physical_link()
