@@ -15,13 +15,6 @@ pub const ACL_U_SIGNAL_CHANNEL_ID: crate::channel::id::ChannelIdentifier =
 pub const LE_U_SIGNAL_CHANNEL_ID: crate::channel::id::ChannelIdentifier =
     crate::ChannelIdentifier::Le(crate::channel::id::LeCid::LeSignalingChannel);
 
-pub(crate) trait TryIntoSignal {
-    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        Self: Sized;
-}
-
 /// Error for converting into a Signal from a `ControlFrame`
 #[derive(Debug, Copy, Clone)]
 pub enum SignalError {

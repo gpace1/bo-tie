@@ -958,7 +958,7 @@ pub mod tests {
     use crate::channel::signalling::ReceivedLeUSignal;
     use crate::pdu::L2capFragment;
     use crate::signals::packets::{
-        CommandRejectResponse, LeCreditMps, LeCreditMtu, SignalWithDynChannel, SimplifiedProtocolServiceMultiplexer,
+        CommandRejectResponse, LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer,
     };
     use crate::{LeULogicalLink, LeUNext, PhysicalLink, LE_DYNAMIC_CHANNEL_COUNT, LE_STATIC_CHANNEL_COUNT};
     use alloc::boxed::Box;
@@ -1138,7 +1138,7 @@ pub mod tests {
                 ) => {
                     let connection_request = rslt.unwrap();
 
-                    request_channel = connection_request.get_local_cid().into();
+                    request_channel = connection_request.get_source_cid().into();
                 }
 
                 recv = verify_link.next() => {

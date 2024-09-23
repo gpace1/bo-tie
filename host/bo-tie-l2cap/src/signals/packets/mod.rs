@@ -4,7 +4,7 @@ mod iter;
 
 use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 use crate::pdu::control_frame::ControlFrame;
-use crate::signals::{SignalError, TryIntoSignal};
+use crate::signals::SignalError;
 use core::num::NonZeroU8;
 
 macro_rules! max_u16 {
@@ -308,31 +308,9 @@ impl core::fmt::Display for InvalidSignalCode {
 ///
 /// Every signal implements this trait.
 pub trait Signal {
-    /// Get the code for the signal
-    fn get_code(&self) -> SignalCode;
-
     /// Get the identifier within the signal packet.
     fn get_identifier(&self) -> NonZeroU8;
-
-    /// Get the *Data Length* field of the signal packet
-    fn get_data_length(&self) -> u16;
 }
-
-/// Trait for signals that dynamically allocate channels
-///
-/// Signals that handle tye dynamic allocation of channels implement this trait.
-pub trait SignalWithDynChannel {
-    /// Get the local channel
-    ///
-    /// This will return the local channel identifier if it exists for this signal.
-    fn get_local_cid(&self) -> Option<ChannelIdentifier>;
-
-    /// Get the remote channel
-    ///
-    /// This will return the remote channel identifier if it exists for this signal.
-    fn get_remote_cid(&self) -> Option<ChannelIdentifier>;
-}
-
 /// Command Rejection Reason
 ///
 /// This is an enum of the *Reason* field within the command reject response signaling packet
@@ -519,64 +497,33 @@ impl CommandRejectResponse {
     }
 
     /// Try to create a `CommandRejectResponse` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-    {
-        <Self as TryIntoSignal>::try_from::<L>(payload)
-    }
-}
-
-impl Signal for CommandRejectResponse {
-    fn get_code(&self) -> SignalCode {
-        SignalCode::CommandRejectResponse
-    }
-
-    fn get_identifier(&self) -> NonZeroU8 {
-        self.identifier
-    }
-
-    fn get_data_length(&self) -> u16 {
-        match self.data {
-            CommandRejectReasonData::None => 2,
-            CommandRejectReasonData::Mtu(_) => 4,
-            CommandRejectReasonData::RequestedCid(_, _) => 6,
-        }
-    }
-}
-
-impl TryIntoSignal for CommandRejectResponse {
-    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        Self: Sized,
-    {
-        if CommandRejectResponse::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
+    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+        if CommandRejectResponse::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
             return Err(SignalError::IncorrectCode);
         }
 
-        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
+        let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
 
         let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
 
         let data_len = <u16>::from_le_bytes([
-            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
-        if data_len as usize != raw[4..].len() {
+        if data_len as usize != payload[4..].len() {
             return Err(SignalError::InvalidLengthField);
         }
 
         let reason_raw = <u16>::from_le_bytes([
-            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
         let reason =
             CommandRejectReason::try_from_value(reason_raw).map_err(|e| SignalError::InvalidCommandRejectReason(e))?;
 
-        let data = CommandRejectReasonData::try_from_slice(&raw[6..])
+        let data = CommandRejectReasonData::try_from_slice(&payload[6..])
             .map_err(|e| SignalError::InvalidCommandRejectReasonData(e))?;
 
         Ok(CommandRejectResponse {
@@ -584,6 +531,12 @@ impl TryIntoSignal for CommandRejectResponse {
             reason,
             data,
         })
+    }
+}
+
+impl Signal for CommandRejectResponse {
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
     }
 }
 
@@ -632,41 +585,17 @@ impl DisconnectRequest {
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        <Self as TryIntoSignal>::try_from::<L>(payload)
-    }
-}
-
-impl Signal for DisconnectRequest {
-    fn get_code(&self) -> SignalCode {
-        SignalCode::DisconnectionRequest
-    }
-
-    fn get_identifier(&self) -> NonZeroU8 {
-        self.identifier
-    }
-
-    fn get_data_length(&self) -> u16 {
-        4
-    }
-}
-
-impl TryIntoSignal for DisconnectRequest {
-    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        Self: Sized,
-    {
-        if DisconnectRequest::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
+        if DisconnectRequest::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
             return Err(SignalError::IncorrectCode);
         }
 
-        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
+        let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
 
         let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
 
         let data_len = <u16>::from_le_bytes([
-            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
         if data_len != 4 {
@@ -674,15 +603,15 @@ impl TryIntoSignal for DisconnectRequest {
         }
 
         let raw_destination_cid = <u16>::from_le_bytes([
-            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
         let destination_cid = L::try_channel_from_raw(raw_destination_cid).ok_or(SignalError::InvalidChannel)?;
 
         let raw_source_cid = <u16>::from_le_bytes([
-            raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(6).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(7).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
         let source_cid = L::try_channel_from_raw(raw_source_cid).ok_or(SignalError::InvalidChannel)?;
@@ -692,6 +621,12 @@ impl TryIntoSignal for DisconnectRequest {
             destination_cid,
             source_cid,
         })
+    }
+}
+
+impl Signal for DisconnectRequest {
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
     }
 }
 
@@ -724,41 +659,17 @@ impl DisconnectResponse {
     where
         L: crate::link_flavor::LinkFlavor,
     {
-        <Self as TryIntoSignal>::try_from::<L>(payload)
-    }
-}
-
-impl Signal for DisconnectResponse {
-    fn get_code(&self) -> SignalCode {
-        SignalCode::DisconnectionResponse
-    }
-
-    fn get_identifier(&self) -> NonZeroU8 {
-        self.identifier
-    }
-
-    fn get_data_length(&self) -> u16 {
-        4
-    }
-}
-
-impl TryIntoSignal for DisconnectResponse {
-    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        Self: Sized,
-    {
-        if DisconnectResponse::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
+        if DisconnectResponse::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
             return Err(SignalError::IncorrectCode);
         }
 
-        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
+        let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
 
         let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
 
         let data_len = <u16>::from_le_bytes([
-            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
         if data_len != 4 {
@@ -766,15 +677,15 @@ impl TryIntoSignal for DisconnectResponse {
         }
 
         let raw_destination_cid = <u16>::from_le_bytes([
-            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
         let destination_cid = L::try_channel_from_raw(raw_destination_cid).ok_or(SignalError::InvalidChannel)?;
 
         let raw_source_cid = <u16>::from_le_bytes([
-            raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(6).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(7).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
         let source_cid = L::try_channel_from_raw(raw_source_cid).ok_or(SignalError::InvalidChannel)?;
@@ -784,6 +695,12 @@ impl TryIntoSignal for DisconnectResponse {
             destination_cid,
             source_cid,
         })
+    }
+}
+
+impl Signal for DisconnectResponse {
+    fn get_identifier(&self) -> NonZeroU8 {
+        self.identifier
     }
 }
 
@@ -867,7 +784,7 @@ impl LeCreditBasedConnectionRequest {
     ///
     /// This will map the dynamic CID to the full channel identifier.
     pub fn get_source_cid(&self) -> ChannelIdentifier {
-        ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(self.source_dyn_cid))
+        ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.source_dyn_cid))
     }
 
     /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
@@ -879,105 +796,76 @@ impl LeCreditBasedConnectionRequest {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-    {
-        <Self as TryIntoSignal>::try_from::<L>(payload)
+    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+        {
+            if LeCreditBasedConnectionRequest::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
+                return Err(SignalError::IncorrectCode);
+            }
+
+            let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
+
+            let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
+
+            let data_len = <u16>::from_le_bytes([
+                payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
+            ]);
+
+            if data_len != 10 {
+                return Err(SignalError::InvalidLengthField);
+            }
+
+            let spsm = SimplifiedProtocolServiceMultiplexer::try_from_raw(<u16>::from_le_bytes([
+                payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidSpsm)?;
+
+            let source_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
+                payload.get(6).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(7).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidChannel)?;
+
+            let dyn_cid =
+                if let ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(dyn_cid)) = source_cid {
+                    dyn_cid
+                } else {
+                    return Err(SignalError::InvalidChannel);
+                };
+
+            let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
+                payload.get(8).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(9).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidField("MTU"))?;
+
+            let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
+                payload.get(10).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(11).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidField("MPS"))?;
+
+            let initial_credits = <u16>::from_le_bytes([
+                payload.get(12).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(13).copied().ok_or(SignalError::InvalidSize)?,
+            ]);
+
+            Ok(LeCreditBasedConnectionRequest {
+                identifier,
+                spsm,
+                mtu,
+                mps,
+                initial_credits,
+                source_dyn_cid: dyn_cid,
+            })
+        }
     }
 }
 
 impl Signal for LeCreditBasedConnectionRequest {
-    fn get_code(&self) -> SignalCode {
-        SignalCode::LeCreditBasedConnectionRequest
-    }
-
     fn get_identifier(&self) -> NonZeroU8 {
         self.identifier
-    }
-
-    fn get_data_length(&self) -> u16 {
-        10
-    }
-}
-
-impl SignalWithDynChannel for LeCreditBasedConnectionRequest {
-    fn get_local_cid(&self) -> Option<ChannelIdentifier> {
-        self.get_source_cid().into()
-    }
-
-    fn get_remote_cid(&self) -> Option<ChannelIdentifier> {
-        None
-    }
-}
-
-impl TryIntoSignal for LeCreditBasedConnectionRequest {
-    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        Self: Sized,
-    {
-        if LeCreditBasedConnectionRequest::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
-            return Err(SignalError::IncorrectCode);
-        }
-
-        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
-
-        let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
-
-        let data_len = <u16>::from_le_bytes([
-            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
-
-        if data_len != 10 {
-            return Err(SignalError::InvalidLengthField);
-        }
-
-        let spsm = SimplifiedProtocolServiceMultiplexer::try_from_raw(<u16>::from_le_bytes([
-            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidSpsm)?;
-
-        let source_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
-            raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidChannel)?;
-
-        let dyn_cid =
-            if let ChannelIdentifier::Le(crate::channel::id::LeCid::DynamicallyAllocated(dyn_cid)) = source_cid {
-                dyn_cid
-            } else {
-                return Err(SignalError::InvalidChannel);
-            };
-
-        let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
-            raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(9).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidField("MTU"))?;
-
-        let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
-            raw.get(10).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(11).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidField("MPS"))?;
-
-        let initial_credits = <u16>::from_le_bytes([
-            raw.get(12).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(13).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
-
-        Ok(LeCreditBasedConnectionRequest {
-            identifier,
-            spsm,
-            mtu,
-            mps,
-            initial_credits,
-            source_dyn_cid: dyn_cid,
-        })
     }
 }
 
@@ -1185,110 +1073,81 @@ impl LeCreditBasedConnectionResponse {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from the payload of a control frame.
-    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-    {
-        <Self as TryIntoSignal>::try_from::<L>(payload)
+    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+        {
+            if LeCreditBasedConnectionResponse::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
+                return Err(SignalError::IncorrectCode);
+            }
+
+            let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
+
+            let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
+
+            let data_len = <u16>::from_le_bytes([
+                payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
+            ]);
+
+            if data_len != 10 {
+                return Err(SignalError::InvalidLengthField);
+            }
+
+            let result_raw = <u16>::from_le_bytes([
+                payload.get(12).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(13).copied().ok_or(SignalError::InvalidSize)?,
+            ]);
+
+            let result = LeCreditBasedConnectionResponseResult::try_from_raw(result_raw)?;
+
+            if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = result {
+                let destination_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
+                    payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
+                    payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
+                ]))
+                .map_err(|_| SignalError::InvalidChannel)?;
+
+                let destination_dyn_cid =
+                    if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
+                        dyn_cid
+                    } else {
+                        return Err(SignalError::InvalidChannel);
+                    };
+
+                let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
+                    payload.get(6).copied().ok_or(SignalError::InvalidSize)?,
+                    payload.get(7).copied().ok_or(SignalError::InvalidSize)?,
+                ]))
+                .map_err(|_| SignalError::InvalidField("MTU"))?;
+
+                let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
+                    payload.get(8).copied().ok_or(SignalError::InvalidSize)?,
+                    payload.get(9).copied().ok_or(SignalError::InvalidSize)?,
+                ]))
+                .map_err(|_| SignalError::InvalidField("MPS"))?;
+
+                let initial_credits = <u16>::from_le_bytes([
+                    payload.get(10).copied().ok_or(SignalError::InvalidSize)?,
+                    payload.get(11).copied().ok_or(SignalError::InvalidSize)?,
+                ]);
+
+                Ok(LeCreditBasedConnectionResponse {
+                    identifier,
+                    destination_dyn_cid,
+                    mtu,
+                    mps,
+                    initial_credits,
+                    result,
+                })
+            } else {
+                Ok(LeCreditBasedConnectionResponse::new_rejected(identifier, result))
+            }
+        }
     }
 }
 
 impl Signal for LeCreditBasedConnectionResponse {
-    fn get_code(&self) -> SignalCode {
-        SignalCode::LeCreditBasedConnectionResponse
-    }
-
     fn get_identifier(&self) -> NonZeroU8 {
         self.identifier
-    }
-
-    fn get_data_length(&self) -> u16 {
-        10
-    }
-}
-
-impl SignalWithDynChannel for LeCreditBasedConnectionResponse {
-    fn get_local_cid(&self) -> Option<ChannelIdentifier> {
-        self.get_destination_cid().into()
-    }
-
-    fn get_remote_cid(&self) -> Option<ChannelIdentifier> {
-        None
-    }
-}
-
-impl TryIntoSignal for LeCreditBasedConnectionResponse {
-    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        Self: Sized,
-    {
-        if LeCreditBasedConnectionResponse::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
-            return Err(SignalError::IncorrectCode);
-        }
-
-        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
-
-        let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
-
-        let data_len = <u16>::from_le_bytes([
-            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
-
-        if data_len != 10 {
-            return Err(SignalError::InvalidLengthField);
-        }
-
-        let result_raw = <u16>::from_le_bytes([
-            raw.get(12).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(13).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
-
-        let result = LeCreditBasedConnectionResponseResult::try_from_raw(result_raw)?;
-
-        if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = result {
-            let destination_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
-                raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
-                raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
-            ]))
-            .map_err(|_| SignalError::InvalidChannel)?;
-
-            let destination_dyn_cid =
-                if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
-                    dyn_cid
-                } else {
-                    return Err(SignalError::InvalidChannel);
-                };
-
-            let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
-                raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
-                raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
-            ]))
-            .map_err(|_| SignalError::InvalidField("MTU"))?;
-
-            let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
-                raw.get(8).copied().ok_or(SignalError::InvalidSize)?,
-                raw.get(9).copied().ok_or(SignalError::InvalidSize)?,
-            ]))
-            .map_err(|_| SignalError::InvalidField("MPS"))?;
-
-            let initial_credits = <u16>::from_le_bytes([
-                raw.get(10).copied().ok_or(SignalError::InvalidSize)?,
-                raw.get(11).copied().ok_or(SignalError::InvalidSize)?,
-            ]);
-
-            Ok(LeCreditBasedConnectionResponse {
-                identifier,
-                destination_dyn_cid,
-                mtu,
-                mps,
-                initial_credits,
-                result,
-            })
-        } else {
-            Ok(LeCreditBasedConnectionResponse::new_rejected(identifier, result))
-        }
     }
 }
 
@@ -1385,52 +1244,49 @@ impl FlowControlCreditInd {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-    {
-        <Self as TryIntoSignal>::try_from::<L>(payload)
+    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+        {
+            if FlowControlCreditInd::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
+                return Err(SignalError::IncorrectCode);
+            }
+
+            let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
+
+            let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
+
+            let data_len = <u16>::from_le_bytes([
+                payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
+            ]);
+
+            if data_len != 4 {
+                return Err(SignalError::InvalidLengthField);
+            }
+
+            let cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
+                payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidChannel)?;
+
+            let credits = <u16>::from_le_bytes([
+                payload.get(6).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(7).copied().ok_or(SignalError::InvalidSize)?,
+            ]);
+
+            Ok(FlowControlCreditInd {
+                identifier,
+                cid,
+                credits,
+            })
+        }
     }
 }
 
-impl TryIntoSignal for FlowControlCreditInd {
-    fn try_from<L>(raw: &[u8]) -> Result<Self, SignalError>
-    where
-        L: crate::link_flavor::LinkFlavor,
-        Self: Sized,
-    {
-        if FlowControlCreditInd::CODE != *raw.get(0).ok_or(SignalError::InvalidSize)? {
-            return Err(SignalError::IncorrectCode);
-        }
-
-        let raw_identifier = raw.get(1).copied().ok_or(SignalError::InvalidSize)?;
-
-        let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
-
-        let data_len = <u16>::from_le_bytes([
-            raw.get(2).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
-
-        if data_len != 4 {
-            return Err(SignalError::InvalidLengthField);
-        }
-
-        let cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
-            raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
-        ]))
-        .map_err(|_| SignalError::InvalidChannel)?;
-
-        let credits = <u16>::from_le_bytes([
-            raw.get(6).copied().ok_or(SignalError::InvalidSize)?,
-            raw.get(7).copied().ok_or(SignalError::InvalidSize)?,
-        ]);
-
-        Ok(FlowControlCreditInd {
-            identifier,
-            cid,
-            credits,
-        })
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn command_reject() {
+        let test_data_1 = [0x1, 1, 2, 0, 0, 0];
     }
 }

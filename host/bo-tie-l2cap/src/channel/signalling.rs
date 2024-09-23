@@ -296,7 +296,7 @@ impl ReceivedLeUSignal {
                 })
             }
             ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp(raw) => {
-                CommandRejectResponse::try_from_raw_control_frame_payload::<LeULink>(raw)
+                CommandRejectResponse::try_from_raw_control_frame_payload(raw)
                     .map(|s| ReceivedLeUSignal::CommandRejectRsp(Response::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::CommandRejectResponse, e))
             }
@@ -311,17 +311,17 @@ impl ReceivedLeUSignal {
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::DisconnectionResponse, e))
             }
             ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionRequest(raw) => {
-                LeCreditBasedConnectionRequest::try_from_raw_control_frame_payload::<LeULink>(raw)
+                LeCreditBasedConnectionRequest::try_from_raw_control_frame_payload(raw)
                     .map(|s| ReceivedLeUSignal::LeCreditBasedConnectionRequest(Request::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::LeCreditBasedConnectionRequest, e))
             }
             ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionResponse(raw) => {
-                LeCreditBasedConnectionResponse::try_from_raw_control_frame_payload::<LeULink>(raw)
+                LeCreditBasedConnectionResponse::try_from_raw_control_frame_payload(raw)
                     .map(|s| ReceivedLeUSignal::LeCreditBasedConnectionResponse(Response::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::LeCreditBasedConnectionResponse, e))
             }
             ReceiveLeUSignalRecombineBuilderState::FlowControlCreditIndication(raw) => {
-                FlowControlCreditInd::try_from_raw_control_frame_payload::<LeULink>(raw)
+                FlowControlCreditInd::try_from_raw_control_frame_payload(raw)
                     .map(|s| ReceivedLeUSignal::FlowControlCreditIndication(s))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::FlowControlCreditIndication, e))
             }
