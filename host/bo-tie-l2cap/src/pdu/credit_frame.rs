@@ -641,6 +641,7 @@ impl core::fmt::Display for RecombineError {
 impl std::error::Error for RecombineError {}
 
 /// Meta information required for recombining Credit Based Frames.
+#[derive(Debug)]
 pub struct RecombineMeta {
     /// A flag to the `CreditBasedFrameRecombiner` to indicate that it is recombining fragments
     /// of the first credit based frame of a SDU.

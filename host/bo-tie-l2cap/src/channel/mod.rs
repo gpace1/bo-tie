@@ -36,7 +36,7 @@ pub use credit_based::CreditServiceData;
 pub use signalling::SignallingChannel;
 
 /// Enumeration of a [`BasicHeaderProcessor`] length
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum ProcessorLengthState {
     None,
     FirstByte(u8),
@@ -44,7 +44,7 @@ enum ProcessorLengthState {
 }
 
 /// Enumeration of a [`BasicHeaderProcessor`]  channel identifier
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum ProcessorChannelIdentifier {
     None,
     FirstByte(u8),
@@ -62,6 +62,7 @@ pub(crate) struct BasicHeader {
 ///
 /// This is used for processing the basic header of a L2CAP data to determine which channel the PDU
 /// is set to.
+#[derive(Debug)]
 pub(crate) struct BasicHeaderProcessor {
     length: core::cell::Cell<ProcessorLengthState>,
     channel_id: core::cell::Cell<ProcessorChannelIdentifier>,
@@ -142,6 +143,7 @@ impl BasicHeaderProcessor {
     }
 }
 
+#[derive(Debug)]
 pub enum LeUChannelBuffer<B> {
     Unused,
     Reserved,
@@ -150,6 +152,8 @@ pub enum LeUChannelBuffer<B> {
     CreditBasedChannel { data: CreditBasedChannelData<B> },
 }
 
+/// Data used by an established credit based channel
+#[derive(Debug)]
 pub struct CreditBasedChannelData<B> {
     recombine_meta: credit_frame::RecombineMeta,
     peer_channel_id: ChannelDirection,
@@ -412,6 +416,7 @@ where
 }
 
 /// Enumeration for dynamic channel source and destination CIDs
+#[derive(Debug)]
 pub(crate) enum ChannelDirection {
     Source(ChannelIdentifier),
     Destination(ChannelIdentifier),
@@ -450,7 +455,8 @@ impl std::error::Error for InvalidChannel {}
 /// A channel that only communicates with Basic Frames
 ///
 /// Many L2CAP channels defined by the Bluetooth Specification only use Basic Frames for
-/// communication to a connected device.
+/// communication to a connected device.\
+#[derive(Debug)]
 pub struct BasicFrameChannel<L> {
     channel_id: ChannelIdentifier,
     logical_link: L,
@@ -502,6 +508,7 @@ impl<L: LogicalLink> BasicFrameChannel<L> {
 /// Credit Based Connections and Enhanced Credit Based Connections.
 ///
 /// A `CreditBasedChannel` is created via signalling packets
+#[derive(Debug)]
 pub struct CreditBasedChannel<L> {
     channel_id: ChannelIdentifier,
     logical_link: L,

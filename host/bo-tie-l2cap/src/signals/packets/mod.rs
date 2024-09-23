@@ -46,7 +46,7 @@ macro_rules! max_u16 {
 
     ($( #[ $def_doc:meta ], )* ; $( #[ $new_doc:meta ], )* $name:ident, $max:literal, $min:literal) => {
         $( # [ $def_doc ] )*
-        #[derive(Clone, Copy, Debug)]
+        #[derive(Clone, Copy, Debug, PartialEq)]
         pub struct $name {
             val: u16,
         }
@@ -459,7 +459,7 @@ impl std::error::Error for CommandRejectReasonDataError {}
 /// Command Rejection Response
 ///
 /// This L2CAP signal packet is sent when a device rejects a received request signal.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct CommandRejectResponse {
     identifier: NonZeroU8,
     reason: CommandRejectReason,
@@ -590,7 +590,7 @@ impl TryIntoSignal for CommandRejectResponse {
 /// Disconnection Request Signal
 ///
 /// This signal is used for terminating a dynamically allocated L2CAP channel
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisconnectRequest {
     pub identifier: NonZeroU8,
     pub destination_cid: ChannelIdentifier,
@@ -698,7 +698,7 @@ impl TryIntoSignal for DisconnectRequest {
 /// Disconnection Response Signal
 ///
 /// This signal is used for terminating a dynamically allocated L2CAP channel
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisconnectResponse {
     pub identifier: NonZeroU8,
     pub destination_cid: ChannelIdentifier,
@@ -850,7 +850,7 @@ max_u16!(#[doc = "Credit based connection maximum PDU payload size"], LeCreditMp
 max_u16!(#[doc = "Credit based connection maximum transmission size"], LeCreditMtu, 23);
 
 /// LE credit based connection request
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LeCreditBasedConnectionRequest {
     pub identifier: NonZeroU8,
     pub spsm: SimplifiedProtocolServiceMultiplexer,
@@ -1067,7 +1067,7 @@ impl core::fmt::Display for LeCreditBasedConnectionResponseResult {
 impl std::error::Error for LeCreditBasedConnectionResponseResult {}
 
 /// The LE credit based connection response signal
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LeCreditBasedConnectionResponse {
     identifier: NonZeroU8,
     destination_dyn_cid: crate::channel::id::DynChannelId<crate::LeULink>,
@@ -1297,7 +1297,7 @@ impl TryIntoSignal for LeCreditBasedConnectionResponse {
 /// A flow control credit indication contains a number of credits for sending to the channel
 /// identified within the same indication. These credits are additional, they increase the amount
 /// of frames that can be sent to the specified channel.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FlowControlCreditInd {
     identifier: NonZeroU8,
     cid: ChannelIdentifier,

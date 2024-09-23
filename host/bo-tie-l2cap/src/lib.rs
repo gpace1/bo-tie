@@ -313,6 +313,7 @@ impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
 /// };
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct LeULogicalLink<P, B> {
     physical_link: P,
     basic_header_processor: channel::BasicHeaderProcessor,

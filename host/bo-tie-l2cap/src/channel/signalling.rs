@@ -23,6 +23,7 @@ use core::num::NonZeroU8;
 /// method of `LeULogicalLink`
 ///
 /// [`get_signalling_channel`]: crate::LeULogicalLink::get_signalling_channel
+#[derive(Debug)]
 pub struct SignallingChannel<L> {
     channel_id: ChannelIdentifier,
     logical_link: L,
@@ -864,7 +865,7 @@ impl<L: LogicalLink> std::error::Error for LeCreditResponseError<L> where
 }
 
 /// A response signal from the linked device
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Response<T> {
     response: T,
 }
