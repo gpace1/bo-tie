@@ -101,14 +101,14 @@ impl BasicHeaderProcessor {
             match (self.length.get(), self.channel_id.get()) {
                 (ProcessorLengthState::None, ProcessorChannelIdentifier::None) => {
                     let Some(byte) = fragment.data.next() else {
-                        return Ok(None);
+                        break Ok(None);
                     };
 
                     self.length.set(ProcessorLengthState::FirstByte(byte))
                 }
                 (ProcessorLengthState::FirstByte(v), ProcessorChannelIdentifier::None) => {
                     let Some(byte) = fragment.data.next() else {
-                        return Ok(None);
+                        break Ok(None);
                     };
 
                     self.length
@@ -116,14 +116,14 @@ impl BasicHeaderProcessor {
                 }
                 (ProcessorLengthState::Complete(_), ProcessorChannelIdentifier::None) => {
                     let Some(byte) = fragment.data.next() else {
-                        return Ok(None);
+                        break Ok(None);
                     };
 
                     self.channel_id.set(ProcessorChannelIdentifier::FirstByte(byte))
                 }
                 (ProcessorLengthState::Complete(_), ProcessorChannelIdentifier::FirstByte(v)) => {
                     let Some(byte) = fragment.data.next() else {
-                        return Ok(None);
+                        break Ok(None);
                     };
 
                     let raw_channel = <u16>::from_le_bytes([v, byte]);
@@ -139,8 +139,6 @@ impl BasicHeaderProcessor {
                 _ => unreachable!(),
             }
         }
-
-        Ok(None)
     }
 }
 
