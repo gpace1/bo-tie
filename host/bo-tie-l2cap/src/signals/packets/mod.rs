@@ -564,14 +564,14 @@ impl TryIntoSignal for CommandRejectResponse {
             raw.get(3).copied().ok_or(SignalError::InvalidSize)?,
         ]);
 
+        if data_len as usize != raw[4..].len() {
+            return Err(SignalError::InvalidLengthField);
+        }
+
         let reason_raw = <u16>::from_le_bytes([
             raw.get(4).copied().ok_or(SignalError::InvalidSize)?,
             raw.get(5).copied().ok_or(SignalError::InvalidSize)?,
         ]);
-
-        if data_len as usize != raw[6..].len() {
-            return Err(SignalError::InvalidLengthField);
-        }
 
         let reason =
             CommandRejectReason::try_from_value(reason_raw).map_err(|e| SignalError::InvalidCommandRejectReason(e))?;
