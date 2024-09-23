@@ -108,7 +108,9 @@ impl core::fmt::Display for NewDynChannelError {
 #[cfg(feature = "std")]
 impl std::error::Error for NewDynChannelError {}
 
-pub(crate) struct LeULogicalLinkHandle<'a, P, B> {
+/// A handle to a logical link for a channel
+#[derive(Debug)]
+pub struct LeULogicalLinkHandle<'a, P, B> {
     logical_link: &'a mut LeULogicalLink<P, B>,
     index: usize,
 }
