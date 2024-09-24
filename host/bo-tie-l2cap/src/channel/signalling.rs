@@ -915,10 +915,9 @@ impl Response<LeCreditBasedConnectionResponse> {
         if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = self.get_result() {
             let peer_channel_id = ChannelDirection::Destination(self.response.get_destination_cid().unwrap());
 
-            let maximum_payload_size = core::cmp::min(self.response.get_mps().unwrap().get(), request.mps.get()).into();
+            let maximum_payload_size = core::cmp::min(self.response.get_mps().unwrap(), request.mps.get()).into();
 
-            let maximum_transmission_size =
-                core::cmp::min(self.response.get_mtu().unwrap().get(), request.mtu.get()).into();
+            let maximum_transmission_size = core::cmp::min(self.response.get_mtu().unwrap(), request.mtu.get()).into();
 
             let initial_peer_credits = self.response.get_initial_credits().unwrap().into();
 

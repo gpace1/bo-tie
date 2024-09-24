@@ -357,7 +357,7 @@ impl TryFrom<u16> for CommandRejectReason {
 }
 
 /// Error for an invalid `CommandRejectReason` value
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct InvalidCommandRejectReason(u16);
 
 impl core::fmt::Display for InvalidCommandRejectReason {
@@ -371,7 +371,7 @@ impl std::error::Error for InvalidCommandRejectReason {}
 
 /// The *reason data* for a command rejection
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-enum CommandRejectReasonData {
+pub enum CommandRejectReasonData {
     None,
     Mtu(u16),
     RequestedCid(u16, u16),
@@ -418,7 +418,7 @@ impl CommandRejectReasonData {
 }
 
 /// Error for an invalid `CommandRejectReasonData`
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum CommandRejectReasonDataError {
     InvalidSize,
 }
@@ -480,12 +480,19 @@ impl CommandRejectResponse {
         }
     }
 
-    /// Get the length of the signal command reject response packet
+    /// Get the size of the signal command reject response packet
     ///
     /// # Note
     /// This is the length of the information payload within a control frame (c-frame).
     pub fn size(&self) -> usize {
         6 + self.data.len()
+    }
+
+    /// Get the reason for the rejection
+    ///
+    /// This returns the reason for the rejection as well as any associated data with the rejection.
+    pub fn reason(&self) -> (&CommandRejectReason, &CommandRejectReasonData) {
+        (&self.reason, &self.data)
     }
 
     /// Create a c-frame from this signal
@@ -780,11 +787,31 @@ pub struct LeCreditBasedConnectionRequest {
 impl LeCreditBasedConnectionRequest {
     pub const CODE: u8 = 0x14;
 
+    /// Get the Simplified Protocol/Service Multiplexer
+    pub fn get_spsm(&self) -> SimplifiedProtocolServiceMultiplexer {
+        self.spsm
+    }
+
     /// Get the source CID
     ///
     /// This will map the dynamic CID to the full channel identifier.
     pub fn get_source_cid(&self) -> ChannelIdentifier {
         ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.source_dyn_cid))
+    }
+
+    /// Get the maximum transmission size of the SDU
+    pub fn get_mtu(&self) -> u16 {
+        self.mtu.get()
+    }
+
+    /// Get the maximum size of the credit based frames
+    pub fn get_mps(&self) -> u16 {
+        self.mps.get()
+    }
+
+    /// Get the initial number of credits
+    pub fn get_initial_credits(&self) -> u16 {
+        self.initial_credits
     }
 
     /// Convert this `LeCreditBasedConnectionRequest` into a C-frame for an LE-U logic link
@@ -1033,11 +1060,11 @@ impl LeCreditBasedConnectionResponse {
 
     /// Get the maximum transmission unit (MTU)
     ///
-    /// The return is the the MTU if the result field in the response is [`ConnectionSuccessful`].
+    /// The return is the MTU if the result field in the response is [`ConnectionSuccessful`].
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub fn get_mtu(&self) -> Option<LeCreditMtu> {
-        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful).then(|| self.mtu)
+    pub fn get_mtu(&self) -> Option<u16> {
+        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful).then(|| self.mtu.get())
     }
 
     /// Get the maximum PDU payload size (MPS)
@@ -1045,8 +1072,8 @@ impl LeCreditBasedConnectionResponse {
     /// The return is the MPS if the result field in the response is [`ConnectionSuccessful`].
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub fn get_mps(&self) -> Option<LeCreditMps> {
-        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful).then(|| self.mps)
+    pub fn get_mps(&self) -> Option<u16> {
+        (self.result == LeCreditBasedConnectionResponseResult::ConnectionSuccessful).then(|| self.mps.get())
     }
 
     /// Get the initial credits
@@ -1285,8 +1312,361 @@ impl FlowControlCreditInd {
 
 #[cfg(test)]
 mod tests {
+    use crate::channel::id::{ChannelIdentifier, DynChannelId};
+    use crate::link_flavor::LeULink;
+    use crate::signals::packets::{
+        CommandRejectReason, CommandRejectReasonData, CommandRejectReasonDataError, CommandRejectResponse,
+        DisconnectRequest, InvalidCommandRejectReason, LeCreditBasedConnectionRequest, LeCreditBasedConnectionResponse,
+        LeCreditBasedConnectionResponseResult, SimplifiedProtocolServiceMultiplexer,
+    };
+    use crate::signals::SignalError;
+    use quickcheck_macros::quickcheck;
+
     #[test]
-    fn command_reject() {
+    fn valid_command_rejections() {
         let test_data_1 = [0x1, 1, 2, 0, 0, 0];
+
+        let response_1 = CommandRejectResponse::try_from_raw_control_frame(&test_data_1).unwrap();
+
+        assert_eq!(6, response_1.size());
+
+        assert_eq!(
+            (
+                &CommandRejectReason::CommandNotUnderstood,
+                &CommandRejectReasonData::None
+            ),
+            response_1.reason()
+        );
+
+        let test_data_2 = [0x1, 1, 4, 0, 1, 0, 64, 0];
+
+        let response_2 = CommandRejectResponse::try_from_raw_control_frame(&test_data_2).unwrap();
+
+        assert_eq!(8, response_2.size());
+
+        assert_eq!(
+            (
+                &CommandRejectReason::SignalingMtuExceeded,
+                &CommandRejectReasonData::Mtu(64)
+            ),
+            response_2.reason()
+        );
+
+        let test_data_3 = [0x1, 1, 6, 0, 2, 0, 80, 0, 81, 0];
+
+        let response_3 = CommandRejectResponse::try_from_raw_control_frame(&test_data_3).unwrap();
+
+        assert_eq!(10, response_3.size());
+
+        assert_eq!(
+            (
+                &CommandRejectReason::InvalidCidInRequest,
+                &CommandRejectReasonData::RequestedCid(80, 81)
+            ),
+            response_3.reason()
+        );
+    }
+
+    fn expected_command_reject_response(data: &[u8]) -> Result<(), SignalError> {
+        match data {
+            [0 | 2..=0xFF, ..] => Err(SignalError::IncorrectCode),
+            [0x1, 0, ..] => Err(SignalError::InvalidIdentifier),
+            [0x1, 1..=0xFF, len_0, len_1, rest @ ..] if rest.len() != <u16>::from_le_bytes([*len_0, *len_1]).into() => {
+                Err(SignalError::InvalidLengthField)
+            }
+            [0x1, 1..=0xFF, _, _, val_1 @ 4..=0xFF, val_2 @ _, ..] => Err(SignalError::InvalidCommandRejectReason(
+                InvalidCommandRejectReason(<u16>::from_le_bytes([*val_1, *val_2])),
+            )),
+            [0x1, 1..=0xFF, 2, 0, 0]
+            | [0x1, 1..=0xFF, 4, 0, 1, 0, _]
+            | [0x1, 1..=0xFF, 4, 0, 1, 0, _, _, _, ..]
+            | [0x1, 1..=0xFF, 6, 0, 2, 0, _]
+            | [0x1, 1..=0xFF, 6, 0, 2, 0, _, _]
+            | [0x1, 1..=0xFF, 6, 0, 2, 0, _, _, _]
+            | [0x1, 1..=0xFF, 6, 0, 2, 0, _, _, _, _, _, ..] => Err(SignalError::InvalidCommandRejectReasonData(
+                CommandRejectReasonDataError::InvalidSize,
+            )),
+            [0x1, 1..=0xFF, 2, 0, 0, 0] => Ok(()),
+            [0x1, 1..=0xFF, 4, 0, 1, 0, _, _] => Ok(()),
+            [0x1, 1..=0xFF, 6, 0, 2, 0, _, _, _, _] => Ok(()),
+            _ => Err(SignalError::InvalidSize),
+        }
+    }
+
+    #[quickcheck]
+    fn try_from_command_reject_response(packet: alloc::vec::Vec<u8>) -> bool {
+        CommandRejectResponse::try_from_raw_control_frame(&packet).map(|_| ())
+            == expected_command_reject_response(&packet)
+    }
+
+    #[test]
+    fn valid_disconnect_request() {
+        let test_data_le = [0x6, 1, 4, 0, 0x40, 0, 0x50, 0];
+
+        let disconnect_request_le = DisconnectRequest::try_from_raw_control_frame::<LeULink>(&test_data_le).unwrap();
+
+        let expected_destination_le_id = ChannelIdentifier::Le(DynChannelId::new_le(0x40).unwrap());
+
+        let expected_source_le_id = ChannelIdentifier::Le(DynChannelId::new_le(0x50).unwrap());
+
+        assert_eq!(expected_destination_le_id, disconnect_request_le.get_destination_cid());
+
+        assert_eq!(expected_source_le_id, disconnect_request_le.get_source_cid());
+    }
+
+    fn expected_disconnect_request_response_le_u(data: &[u8]) -> Result<(), SignalError> {
+        match data {
+            [0..=0x5 | 0x7..=0xFF, ..] => Err(SignalError::IncorrectCode),
+            [0x6, 0, ..] => Err(SignalError::InvalidIdentifier),
+            [0x6, 1..=0xFF, 4, 1..=0xFF, ..] | [0x6, 1..=0xFF, 0..=3 | 5..=0xFF, _, ..] => {
+                Err(SignalError::InvalidLengthField)
+            }
+            [0x6, 1..=0xFF, 4, 0, 0..=0x3F | 0x80..=0xFF, _, 0..=0x3F | 0x80..=0xFF, _] => {
+                Err(SignalError::InvalidChannel)
+            }
+            [0x6, 1..=0xFF, 4, 0, 0x40..=0x7F, 0, 0x40..=0x7F, 0] => Ok(()),
+            _ => Err(SignalError::InvalidSize),
+        }
+    }
+
+    #[quickcheck]
+    fn try_from_disconnect_request_le_u(data: alloc::vec::Vec<u8>) -> bool {
+        DisconnectRequest::try_from_raw_control_frame::<LeULink>(&data).map(|_| ())
+            == expected_disconnect_request_response_le_u(&data)
+    }
+
+    #[test]
+    fn valid_disconnect_response() {
+        let test_data_le = [0x6, 1, 4, 0, 0x40, 0, 0x50, 0];
+
+        let disconnect_request_le = DisconnectRequest::try_from_raw_control_frame::<LeULink>(&test_data_le).unwrap();
+
+        let expected_destination_le_id = ChannelIdentifier::Le(DynChannelId::new_le(0x40).unwrap());
+
+        let expected_source_le_id = ChannelIdentifier::Le(DynChannelId::new_le(0x50).unwrap());
+
+        assert_eq!(expected_destination_le_id, disconnect_request_le.get_destination_cid());
+
+        assert_eq!(expected_source_le_id, disconnect_request_le.get_source_cid());
+    }
+
+    #[quickcheck]
+    fn try_from_disconnect_response_le_u(data: alloc::vec::Vec<u8>) -> bool {
+        DisconnectRequest::try_from_raw_control_frame::<LeULink>(&data).map(|_| ())
+            == expected_disconnect_request_response_le_u(&data)
+    }
+
+    #[test]
+    #[should_panic]
+    fn simplified_protocol_service_multiplexer_val_0_fixed() {
+        SimplifiedProtocolServiceMultiplexer::new_fixed(0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn simplified_protocol_service_multiplexer_val_0_dyn() {
+        SimplifiedProtocolServiceMultiplexer::new_dyn(0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn simplified_protocol_service_multiplexer_val_0x80_fixed() {
+        SimplifiedProtocolServiceMultiplexer::new_fixed(0x80);
+    }
+
+    #[test]
+    fn simplified_protocol_service_multiplexer_val_0x80_dyn() {
+        SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
+    }
+
+    #[test]
+    fn simplified_protocol_service_multiplexer_val_0xff_dyn() {
+        SimplifiedProtocolServiceMultiplexer::new_dyn(0xFF);
+    }
+
+    #[test]
+    #[should_panic]
+    fn simplified_protocol_service_multiplexer_val_0x100_dyn() {
+        SimplifiedProtocolServiceMultiplexer::new_dyn(0x100);
+    }
+
+    #[test]
+    fn valid_le_credit_based_connection_request() {
+        let test_data_1 = [0x14, 1, 10, 0, 1, 0, 0x40, 0, 23, 0, 23, 0, 0, 0];
+
+        let request_1 = LeCreditBasedConnectionRequest::try_from_raw_control_frame(&test_data_1).unwrap();
+
+        assert_eq!(SimplifiedProtocolServiceMultiplexer::new_fixed(1), request_1.get_spsm());
+
+        assert_eq!(
+            ChannelIdentifier::Le(DynChannelId::new_le(0x40).unwrap()),
+            request_1.get_source_cid()
+        );
+
+        assert_eq!(23, request_1.get_mtu());
+
+        assert_eq!(23, request_1.get_mps());
+
+        assert_eq!(0, request_1.get_initial_credits());
+
+        let test_data_2 = [0x14, 1, 10, 0, 0xFF, 0, 0x7F, 0, 0xFF, 0xFF, 0xFD, 0xFF, 0xFF, 0xFF];
+
+        let request_2 = LeCreditBasedConnectionRequest::try_from_raw_control_frame(&test_data_2).unwrap();
+
+        assert_eq!(
+            SimplifiedProtocolServiceMultiplexer::new_dyn(0xFF),
+            request_2.get_spsm()
+        );
+
+        assert_eq!(
+            ChannelIdentifier::Le(DynChannelId::new_le(0x7F).unwrap()),
+            request_2.get_source_cid()
+        );
+
+        assert_eq!(0xFFFF, request_2.get_mtu());
+
+        assert_eq!(65533, request_2.get_mps());
+
+        assert_eq!(65535, request_2.get_initial_credits());
+    }
+
+    fn expected_le_credit_based_connection_request(data: &[u8]) -> Result<(), SignalError> {
+        match data {
+            [0..=0x13 | 0x15..=0xFF, ..] => Err(SignalError::IncorrectCode),
+            [0x14, 0, ..] => Err(SignalError::InvalidIdentifier),
+            [0x14, 1..=0xFF, 0..=9 | 11..=0xFF, 0, ..] | [0x14, 1..=0xFF, _, 1..=0xFF, ..] => {
+                Err(SignalError::InvalidLengthField)
+            }
+            [0x14, 1..=0xFF, 10, 0, 0, 0, ..] | [0x14, 1..=0xFF, 10, 0, _, 1..=0xFF, ..] => {
+                Err(SignalError::InvalidSpsm)
+            }
+            [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0..=0x3F | 0x80..=0xFF, 0, ..]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, _, 1..=0xFF, ..] => Err(SignalError::InvalidChannel),
+            [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, 0..=22, 0, ..] => {
+                Err(SignalError::InvalidField("MTU"))
+            }
+            [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 0..=22, 0, ..]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 0xFE..=0xFF, 0xFF, ..]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 0..=22, 0, ..]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 0xFE..=0xFF, 0xFF, ..] => {
+                Err(SignalError::InvalidField("MPS"))
+            }
+            [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 23..=0xFF, 0, _, _]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 23..=0xFF, 0, _, _]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, _, 1..=0xFE, _, _]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 0..=0xFD, 0xFF, _, _]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, _, 1..=0xFF, _, 1..=0xFE, _, _]
+            | [0x14, 1..=0xFF, 10, 0, 1..=0xFF, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 0..=0xFD, 0xFF, _, _] => Ok(()),
+            _ => Err(SignalError::InvalidSize),
+        }
+    }
+
+    #[quickcheck]
+    fn try_from_le_connection_request(data: alloc::vec::Vec<u8>) -> bool {
+        LeCreditBasedConnectionRequest::try_from_raw_control_frame(&data).map(|_| ())
+            == expected_le_credit_based_connection_request(&data)
+    }
+
+    #[test]
+    fn valid_le_credit_based_connection_response() {
+        let test_data_1 = [0x15, 1, 10, 0, 0x40, 0, 23, 0, 23, 0, 0, 0, 0, 0];
+
+        let response_1 = LeCreditBasedConnectionResponse::try_from_raw_control_frame(&test_data_1).unwrap();
+
+        assert_eq!(
+            ChannelIdentifier::Le(DynChannelId::new_le(0x40).unwrap()),
+            response_1.get_destination_cid().unwrap()
+        );
+
+        assert_eq!(23, response_1.get_mtu().unwrap());
+
+        assert_eq!(23, response_1.get_mps().unwrap());
+
+        assert_eq!(0, response_1.get_initial_credits().unwrap());
+
+        let test_data_2 = [0x15, 1, 10, 0, 0x7F, 0, 0xFF, 0xFF, 0xFD, 0xFF, 0xFF, 0xFF, 0, 0];
+
+        let response_2 = LeCreditBasedConnectionResponse::try_from_raw_control_frame(&test_data_2).unwrap();
+
+        assert_eq!(
+            ChannelIdentifier::Le(DynChannelId::new_le(0x7F).unwrap()),
+            response_2.get_destination_cid().unwrap()
+        );
+
+        assert_eq!(0xFFFF, response_2.get_mtu().unwrap());
+
+        assert_eq!(65533, response_2.get_mps().unwrap());
+
+        assert_eq!(65535, response_2.get_initial_credits().unwrap());
+    }
+
+    fn expected_le_credit_based_connection_response(
+        data: &[u8],
+    ) -> Result<LeCreditBasedConnectionResponseResult, SignalError> {
+        macro_rules! result_match {
+            ( $([$b0:expr, $b1:expr] => $result_enum:ident),* $(,)? ) => {
+                match data {
+                    $(
+                        [0x15, 1..=0xFF, 10, 0, _, _, _, _, _, _, _, _, $b0, $b1, ..] => {
+                            Ok(LeCreditBasedConnectionResponseResult::$result_enum)
+                        }
+                    )*
+                    [0..=0x14 | 0x16..=0xFF, ..] => Err(SignalError::IncorrectCode),
+                    [0x15, 0, ..] => Err(SignalError::InvalidIdentifier),
+                    [0x15, 1..=0xFF, 0..=9 | 11..=0xFF, 0, ..] | [0x15, 1..=0xFF, _, 1..=0xFF, ..] => {
+                        Err(SignalError::InvalidLengthField)
+                    }
+                    [0x15, 1..=0xFF, 10, 0, 0..=0x3F | 0x80..=0xFF, 0, _, _, _, _, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, _, 1..=0xFF, _, _, _, _, _, _, 0, 0] => Err(SignalError::InvalidChannel),
+                    [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, 0..=22, 0, _, _, _, _, 0, 0] => Err(SignalError::InvalidField("MTU")),
+                    [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 0..=22, 0, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 0xFE..=0xFF, 0xFF, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 0..=22, 0, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 0xFE..=0xFF, 0xFF, _, _, 0, 0] => {
+                        Err(SignalError::InvalidField("MPS"))
+                    }
+                    [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 23..=0xFF, 0, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 23..=0xFF, 0, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, _, 1..=0xFE, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, 23..=0xFF, 0, 0..=0xFD, 0xFF, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, _, 1..=0xFF, _, 1..=0xFE, _, _, 0, 0]
+                    | [0x15, 1..=0xFF, 10, 0, 0x40..=0x7F, 0, _, 1..=0xFF, 0..=0xFD, 0xFF, _, _, 0, 0] => {
+                        Ok(LeCreditBasedConnectionResponseResult::ConnectionSuccessful)
+                    }
+                    [0x15, 1..=0xFF, 10, 0, _, _, _, _, _, _, _, _, _, _, ..] => {
+                        Err(SignalError::InvalidField("Result"))
+                    }
+                    _ => Err(SignalError::InvalidSize),
+                }
+            }
+        }
+
+        result_match!(
+            [2, 0] => SpsmNotSupported,
+            [4, 0] => NoResourcesAvailable,
+            [5, 0] => InsufficientAuthentication,
+            [6, 0] => InsufficientAuthorization,
+            [7, 0] => EncryptionKeySizeTooShort,
+            [8, 0] => InsufficientEncryption,
+            [9, 0] => InvalidSourceCid,
+            [0xa, 0] => SourceCidAlreadyAllocated,
+            [0xb, 0] => UnacceptableParameters,
+        )
+    }
+
+    #[test]
+    fn quickie() {
+        let test_data = [21, 1, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+
+        assert_eq!(
+            LeCreditBasedConnectionResponse::try_from_raw_control_frame(&test_data).map(|c| c.get_result()),
+            expected_le_credit_based_connection_response(&test_data)
+        )
+    }
+
+    #[quickcheck]
+    fn try_from_le_connection_response(data: alloc::vec::Vec<u8>) -> bool {
+        LeCreditBasedConnectionResponse::try_from_raw_control_frame(&data).map(|c| c.get_result())
+            == expected_le_credit_based_connection_response(&data)
     }
 }
