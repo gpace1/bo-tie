@@ -497,7 +497,7 @@ impl CommandRejectResponse {
     }
 
     /// Try to create a `CommandRejectResponse` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+    pub fn try_from_raw_control_frame(payload: &[u8]) -> Result<Self, SignalError> {
         if CommandRejectResponse::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
             return Err(SignalError::IncorrectCode);
         }
@@ -581,7 +581,7 @@ impl DisconnectRequest {
     }
 
     /// Try to create a `CommandRejectResponse` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
+    pub fn try_from_raw_control_frame<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
@@ -655,7 +655,7 @@ impl DisconnectResponse {
     }
 
     /// Try to create a `CommandRejectResponse` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload<L>(payload: &[u8]) -> Result<Self, SignalError>
+    pub fn try_from_raw_control_frame<L>(payload: &[u8]) -> Result<Self, SignalError>
     where
         L: crate::link_flavor::LinkFlavor,
     {
@@ -796,7 +796,7 @@ impl LeCreditBasedConnectionRequest {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+    pub fn try_from_raw_control_frame(payload: &[u8]) -> Result<Self, SignalError> {
         {
             if LeCreditBasedConnectionRequest::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
                 return Err(SignalError::IncorrectCode);
@@ -1073,7 +1073,7 @@ impl LeCreditBasedConnectionResponse {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from the payload of a control frame.
-    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+    pub fn try_from_raw_control_frame(payload: &[u8]) -> Result<Self, SignalError> {
         {
             if LeCreditBasedConnectionResponse::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
                 return Err(SignalError::IncorrectCode);
@@ -1244,7 +1244,7 @@ impl FlowControlCreditInd {
     }
 
     /// Try to create a `LeCreditBasedConnectionRequest` from a c-frame's payload.
-    pub fn try_from_raw_control_frame_payload(payload: &[u8]) -> Result<Self, SignalError> {
+    pub fn try_from_raw_control_frame(payload: &[u8]) -> Result<Self, SignalError> {
         {
             if FlowControlCreditInd::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
                 return Err(SignalError::IncorrectCode);
