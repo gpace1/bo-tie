@@ -648,41 +648,44 @@ impl<P, B> LeULogicalLink<P, B> {
                         }
                     }
                     Ok(PduRecombineAddOutput::ControlFrame(signal)) => {
-                        // If this is a credit indication for an active credit based channel,
-                        // return a Next::CreditIndication instead of a Next::ControlFrame.
-                        if let ReceivedLeUSignal::FlowControlCreditIndication(credit_ind) = signal {
-                            let channel_id = credit_ind.get_cid();
+                        match &signal {
+                            ReceivedLeUSignal::FlowControlCreditIndication(credit_ind) => {
+                                // If this is a credit indication for an active credit based channel,
+                                // return a Next::CreditIndication instead of a Next::ControlFrame.
+                                let channel_id = credit_ind.get_cid();
 
-                            let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(id)) = channel_id else {
-                                unreachable!("the channel ID should already be validated")
-                            };
+                                let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(id)) = channel_id else {
+                                    unreachable!("the channel ID should already be validated")
+                                };
 
-                            let index = self.convert_dyn_index(id);
+                                let index = self.convert_dyn_index(id);
 
-                            let Some(LeUChannelBuffer::CreditBasedChannel { data: channel_data }) =
-                                self.channels.get_mut(index)
-                            else {
-                                // ignore the credit indication
-                                continue 'outer;
-                            };
+                                let Some(LeUChannelBuffer::CreditBasedChannel { data: channel_data }) =
+                                    self.channels.get_mut(index)
+                                else {
+                                    // ignore the credit indication
+                                    continue 'outer;
+                                };
 
-                            let credits = credit_ind.get_credits();
+                                let credits = credit_ind.get_credits();
 
-                            channel_data.add_peer_credits(credits);
+                                channel_data.add_peer_credits(credits);
 
-                            let handle = LeULogicalLinkHandle::new(self, index);
+                                let handle = LeULogicalLinkHandle::new(self, index);
 
-                            let credits_given = credits.into();
+                                let credits_given = credits.into();
 
-                            let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
+                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                            break 'outer Ok(LeUNext::CreditIndication { credits_given, channel });
-                        } else {
-                            let handle = LeULogicalLinkHandle::new(self, index);
+                                break 'outer Ok(LeUNext::CreditIndication { credits_given, channel });
+                            }
+                            _ => {
+                                let handle = LeULogicalLinkHandle::new(self, index);
 
-                            let channel = SignallingChannel::new(basic_header.channel_id, handle);
+                                let channel = SignallingChannel::new(basic_header.channel_id, handle);
 
-                            break 'outer Ok(LeUNext::SignallingChannel { signal, channel });
+                                break 'outer Ok(LeUNext::SignallingChannel { signal, channel });
+                            }
                         }
                     }
                     Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
