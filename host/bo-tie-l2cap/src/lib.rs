@@ -1260,4 +1260,127 @@ pub mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn le_credit_connection() {
+        let mut phy_link_loop = PhysicalLinkLoop::new();
+
+        let (phy_test, phy_verify) = phy_link_loop.channel();
+
+        let mut test_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_test);
+
+        test_link.enable_signalling_channel();
+
+        let mut verify_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_verify);
+
+        verify_link.enable_signalling_channel();
+
+        let test_message = b"hello and welcome to the test. Lorem ipsum dolor sit amet, \
+            consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna \
+            aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip \
+            ex ea commodo consequat.";
+
+        let mut test_procedure = Box::pin(async {
+            let le_connect_request = test_link
+                .get_signalling_channel()
+                .unwrap()
+                .request_le_credit_connection(
+                    SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
+                    LeCreditMtu::new(2048),
+                    LeCreditMps::new(23),
+                    0,
+                )
+                .await
+                .unwrap();
+
+            let response = if let LeUNext::SignallingChannel { signal, .. } = test_link.next().await.unwrap() {
+                match signal {
+                    ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => response,
+                    ReceivedLeUSignal::CommandRejectRsp(response) => {
+                        panic!("received command reject response: {response:?}")
+                    }
+                    signal => panic!("received unexpected signal {signal:?}"),
+                }
+            } else {
+                panic!("received unexpected next event");
+            };
+
+            if response.get_result() != LeCreditBasedConnectionResponseResult::ConnectionSuccessful {
+                panic!("received connection result {:?}", response.get_result())
+            }
+
+            response
+                .create_le_credit_connection(&le_connect_request, &mut test_link.get_signalling_channel().unwrap())
+                .unwrap();
+
+            let channel_id = le_connect_request.get_source_cid();
+
+            let mut channel = test_link.get_credit_based_channel(channel_id).unwrap();
+
+            channel.give_credits_to_peer(32).await.unwrap();
+
+            let sdu = match test_link.next().await.unwrap() {
+                LeUNext::CreditBasedChannel { sdu, .. } => sdu,
+                next => panic!("unexpected next: {next:?}"),
+            };
+
+            let received_message = core::str::from_utf8(&sdu).unwrap();
+
+            assert_eq!(core::str::from_utf8(test_message).unwrap(), received_message)
+        });
+
+        let mut test_message_iter = test_message.into_iter().copied();
+
+        let mut credit_channel_id = None;
+
+        let mut channel_sending = None;
+
+        'test: loop {
+            tokio::select! {
+                _ = &mut test_procedure => break 'test,
+
+                next = verify_link.next() => match next.unwrap() {
+                    LeUNext::SignallingChannel { signal, .. } => {
+                        match signal {
+                            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
+                                let mut signalling_channel = verify_link.get_signalling_channel().unwrap();
+
+                                if credit_channel_id.is_none() {
+                                    let channel_builder = request.accept_le_credit_based_connection(
+                                        &mut signalling_channel,
+                                        0
+                                    );
+
+                                    credit_channel_id = Some(channel_builder.get_destination_channel());
+
+                                    channel_builder
+                                        .send_success_response()
+                                        .await
+                                        .unwrap();
+                                } else {
+                                    request.reject_le_credit_based_connection(
+                                        &mut verify_link.get_signalling_channel().unwrap(),
+                                        LeCreditBasedConnectionResponseResult::NoResourcesAvailable
+                                    )
+                                    .await
+                                    .unwrap()
+                                }
+                            }
+                            _ => panic!("received unexpected signal {signal:?}")
+                        }
+                    }
+                    LeUNext::CreditIndication { credits_given: 1.., mut channel} => {
+                        channel_sending = match channel_sending.take() {
+                            None => channel.send(&mut test_message_iter).await.unwrap(),
+                            Some(sending) => sending.continue_sending(
+                                &mut verify_link.get_credit_based_channel(credit_channel_id.unwrap()).unwrap()
+                            ).await.unwrap()
+                        }
+
+                    }
+                    next => panic!("unexpected next {next:?}")
+                }
+            }
+        }
+    }
 }
