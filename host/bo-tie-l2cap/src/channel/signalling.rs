@@ -664,11 +664,11 @@ impl Request<LeCreditBasedConnectionRequest> {
     /// # Panic
     /// This method will panic if there are no more dynamic channels that can be allocated for a
     /// LE-U logical link.
-    pub fn create_le_credit_based_connection<L: LogicalLink>(
-        &self,
-        signal_channel: &mut SignallingChannel<L>,
+    pub fn accept_le_credit_based_connection<'a, L: LogicalLink>(
+        &'a self,
+        signal_channel: &'a mut SignallingChannel<L>,
         initial_credits: u16,
-    ) -> LeCreditBasedConnectionResponseBuilder<'_> {
+    ) -> LeCreditBasedConnectionResponseBuilder<'a, L> {
         let peer_channel_id = ChannelDirection::Source(ChannelIdentifier::Le(LeCid::DynamicallyAllocated(
             self.request.source_dyn_cid,
         )));
@@ -689,6 +689,7 @@ impl Request<LeCreditBasedConnectionRequest> {
         };
 
         LeCreditBasedConnectionResponseBuilder {
+            signal_channel,
             request: &self.request,
             destination_dyn_cid,
             mtu: self.request.mtu.get(),
@@ -717,7 +718,9 @@ impl Request<LeCreditBasedConnectionRequest> {
 }
 
 /// Builder used for creating a *LE Credit Based Connection Response*
-pub struct LeCreditBasedConnectionResponseBuilder<'a> {
+#[must_use]
+pub struct LeCreditBasedConnectionResponseBuilder<'a, L> {
+    signal_channel: &'a mut SignallingChannel<L>,
     request: &'a LeCreditBasedConnectionRequest,
     destination_dyn_cid: DynChannelId<LeULink>,
     mtu: u16,
@@ -725,7 +728,7 @@ pub struct LeCreditBasedConnectionResponseBuilder<'a> {
     initial_credits: u16,
 }
 
-impl LeCreditBasedConnectionResponseBuilder<'_> {
+impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
     /// Get the destination channel identifier
     ///
     /// This will be the identifier of the channel created by the output of [`send_success_response`]
@@ -772,10 +775,10 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
     /// If this was not called on an LE-U logical link or there was an error sending the response.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub async fn send_success_response<L: LogicalLink>(
-        self,
-        signals_channel: &mut SignallingChannel<L>,
-    ) -> Result<(), LeCreditResponseError<L>> {
+    pub async fn send_success_response(self) -> Result<(), LeCreditResponseError<L>>
+    where
+        L: LogicalLink,
+    {
         use crate::LinkFlavor;
         use core::cmp::min;
 
@@ -790,8 +793,8 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
             self.initial_credits,
         );
 
-        signals_channel
-            .send(response.into_control_frame(signals_channel.channel_id))
+        self.signal_channel
+            .send(response.into_control_frame(self.signal_channel.channel_id))
             .await
             .map_err(|e| LeCreditResponseError::SendErr(e))?;
 
@@ -810,7 +813,7 @@ impl LeCreditBasedConnectionResponseBuilder<'_> {
             peer_credits: initial_peer_credits,
         });
 
-        signals_channel
+        self.signal_channel
             .logical_link
             .new_dyn_channel(state)
             .map_err(|e| LeCreditResponseError::FailedToCreateChannel(e))?;
