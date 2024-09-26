@@ -150,7 +150,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
 
         let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = self
             .logical_link
-            .new_dyn_channel(dyn_channel_buffer_builder)
+            .dyn_channel(dyn_channel_buffer_builder)
             .map_err(|e| RequestLeCreditConnectionError::CreateDynChannelError(e))?
         else {
             return Err(RequestLeCreditConnectionError::InvalidChannelIdentifier);
@@ -682,7 +682,7 @@ impl Request<LeCreditBasedConnectionRequest> {
 
         let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(destination_dyn_cid)) = signal_channel
             .logical_link
-            .new_dyn_channel(dyn_channel_state)
+            .dyn_channel(dyn_channel_state)
             .expect("failed to create a dynamic channel")
         else {
             panic!("link returned invalid channel")
@@ -815,7 +815,7 @@ impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
 
         self.signal_channel
             .logical_link
-            .new_dyn_channel(state)
+            .dyn_channel(state)
             .map_err(|e| LeCreditResponseError::FailedToCreateChannel(e))?;
 
         Ok(())
@@ -933,7 +933,7 @@ impl Response<LeCreditBasedConnectionResponse> {
 
             signals_channel
                 .logical_link
-                .new_dyn_channel(state)
+                .dyn_channel(state)
                 .map_err(|e| CreateLeCreditConnectionError::DynChannelFail(e))?;
 
             Ok(())

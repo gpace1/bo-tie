@@ -1023,7 +1023,7 @@ impl LeCreditBasedConnectionResponse {
     /// Create a new `LeCreditBasedConnectionResponse` for rejecting the request.
     ///
     /// # Note
-    /// The `identifier` must the the same identifier used within the received LE credit based
+    /// The `identifier` must the same identifier used within the received LE credit based
     /// connection request.
     ///
     /// # Panic
@@ -1101,73 +1101,71 @@ impl LeCreditBasedConnectionResponse {
 
     /// Try to create a `LeCreditBasedConnectionRequest` from the payload of a control frame.
     pub fn try_from_raw_control_frame(payload: &[u8]) -> Result<Self, SignalError> {
-        {
-            if LeCreditBasedConnectionResponse::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
-                return Err(SignalError::IncorrectCode);
-            }
+        if LeCreditBasedConnectionResponse::CODE != *payload.get(0).ok_or(SignalError::InvalidSize)? {
+            return Err(SignalError::IncorrectCode);
+        }
 
-            let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
+        let raw_identifier = payload.get(1).copied().ok_or(SignalError::InvalidSize)?;
 
-            let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
+        let identifier = NonZeroU8::try_from(raw_identifier).map_err(|_| SignalError::InvalidIdentifier)?;
 
-            let data_len = <u16>::from_le_bytes([
-                payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
-                payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
+        let data_len = <u16>::from_le_bytes([
+            payload.get(2).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(3).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        if data_len != 10 {
+            return Err(SignalError::InvalidLengthField);
+        }
+
+        let result_raw = <u16>::from_le_bytes([
+            payload.get(12).copied().ok_or(SignalError::InvalidSize)?,
+            payload.get(13).copied().ok_or(SignalError::InvalidSize)?,
+        ]);
+
+        let result = LeCreditBasedConnectionResponseResult::try_from_raw(result_raw)?;
+
+        if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = result {
+            let destination_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
+                payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidChannel)?;
+
+            let destination_dyn_cid =
+                if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
+                    dyn_cid
+                } else {
+                    return Err(SignalError::InvalidChannel);
+                };
+
+            let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
+                payload.get(6).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(7).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidField("MTU"))?;
+
+            let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
+                payload.get(8).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(9).copied().ok_or(SignalError::InvalidSize)?,
+            ]))
+            .map_err(|_| SignalError::InvalidField("MPS"))?;
+
+            let initial_credits = <u16>::from_le_bytes([
+                payload.get(10).copied().ok_or(SignalError::InvalidSize)?,
+                payload.get(11).copied().ok_or(SignalError::InvalidSize)?,
             ]);
 
-            if data_len != 10 {
-                return Err(SignalError::InvalidLengthField);
-            }
-
-            let result_raw = <u16>::from_le_bytes([
-                payload.get(12).copied().ok_or(SignalError::InvalidSize)?,
-                payload.get(13).copied().ok_or(SignalError::InvalidSize)?,
-            ]);
-
-            let result = LeCreditBasedConnectionResponseResult::try_from_raw(result_raw)?;
-
-            if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = result {
-                let destination_cid = ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([
-                    payload.get(4).copied().ok_or(SignalError::InvalidSize)?,
-                    payload.get(5).copied().ok_or(SignalError::InvalidSize)?,
-                ]))
-                .map_err(|_| SignalError::InvalidChannel)?;
-
-                let destination_dyn_cid =
-                    if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_cid)) = destination_cid {
-                        dyn_cid
-                    } else {
-                        return Err(SignalError::InvalidChannel);
-                    };
-
-                let mtu = LeCreditMtu::try_new(<u16>::from_le_bytes([
-                    payload.get(6).copied().ok_or(SignalError::InvalidSize)?,
-                    payload.get(7).copied().ok_or(SignalError::InvalidSize)?,
-                ]))
-                .map_err(|_| SignalError::InvalidField("MTU"))?;
-
-                let mps = LeCreditMps::try_new(<u16>::from_le_bytes([
-                    payload.get(8).copied().ok_or(SignalError::InvalidSize)?,
-                    payload.get(9).copied().ok_or(SignalError::InvalidSize)?,
-                ]))
-                .map_err(|_| SignalError::InvalidField("MPS"))?;
-
-                let initial_credits = <u16>::from_le_bytes([
-                    payload.get(10).copied().ok_or(SignalError::InvalidSize)?,
-                    payload.get(11).copied().ok_or(SignalError::InvalidSize)?,
-                ]);
-
-                Ok(LeCreditBasedConnectionResponse {
-                    identifier,
-                    destination_dyn_cid,
-                    mtu,
-                    mps,
-                    initial_credits,
-                    result,
-                })
-            } else {
-                Ok(LeCreditBasedConnectionResponse::new_rejected(identifier, result))
-            }
+            Ok(LeCreditBasedConnectionResponse {
+                identifier,
+                destination_dyn_cid,
+                mtu,
+                mps,
+                initial_credits,
+                result,
+            })
+        } else {
+            Ok(LeCreditBasedConnectionResponse::new_rejected(identifier, result))
         }
     }
 }

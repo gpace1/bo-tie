@@ -1,5 +1,5 @@
 use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
-use crate::channel::{DynChannelState, LeUChannelBuffer};
+use crate::channel::{DynChannelState, DynChannelStateInner, LeUChannelBuffer};
 use crate::link_flavor::{LeULink, LinkFlavor};
 use crate::{
     LeULogicalLink, PhysicalLink, SignallingChannel, LE_DYNAMIC_CHANNEL_COUNT, LE_LINK_SIGNALLING_CHANNEL_INDEX,
@@ -23,13 +23,37 @@ pub trait LogicalLinkPrivate: Sized {
     where
         Self: 'a;
 
-    /// Add a new dynamic channel
+    /// Reserve a dynamic channel
     ///
-    /// This attempts to create a new dynamic channel on this `LogicalLink`.
+    /// This is used for reserve a dynamic channel ID upon initiating a dynamic channel.
     ///
-    /// # Panic
-    /// This will panic if `id` is not a dynamically allocated channel identifier
-    fn new_dyn_channel(&mut self, state: DynChannelState) -> Result<ChannelIdentifier, NewDynChannelError>;
+    /// Dynamic channels require a procedure to establish the channel between the endpoints of the
+    /// link. This is used after a request for the creation of the channel to ensure that no other
+    /// concurrent request also tries taking the channel. The channel doesn't actually exist yet,
+    /// and `establish_dyn_channel` needs to be called in order to use it.
+    ///
+    /// # Error
+    /// An error is returned if all dynamic channels for the logical link are currently used by
+    /// either established channels or reservations.
+    fn reserve_dyn_channel(&mut self) -> Result<ChannelIdentifier, NewDynChannelError>;
+
+    /// Establish a dynamic channel
+    ///
+    /// This is used to establish a dynamic channel.
+    ///
+    /// After this is called the dynamic channel now exists (as far as this device is concerned) and
+    /// data can be sent or received over the channel.
+    ///
+    /// # Input
+    /// This takes a state. The state is either two different things, either a reserved or newly
+    /// established dynamic channel. If the input is of the reserved variety, then the channel
+    /// reservation must exist within the logical link.
+    ///
+    /// # Errors
+    /// * An error is returned if all dynamic channels for the logical link are currently used by
+    ///   either established channels or reservations.
+    /// * There is no associated reservation provided for the reservation state.
+    fn establish_dyn_channel(&mut self, state: DynChannelState) -> Result<ChannelIdentifier, NewDynChannelError>;
 
     /// Remove a dynamic channel
     ///
@@ -71,6 +95,7 @@ pub trait LogicalLinkPrivate: Sized {
 #[derive(Debug)]
 enum NewDynChannelErrorReason {
     AllCreditBasedDynChannelsAreUsed { total_dyn_channel_count: usize },
+    InvalidReserveChannel(ChannelIdentifier),
 }
 
 impl core::fmt::Display for NewDynChannelErrorReason {
@@ -86,6 +111,7 @@ impl core::fmt::Display for NewDynChannelErrorReason {
                     {total_dyn_channel_count})"
                 )
             }
+            NewDynChannelErrorReason::InvalidReserveChannel(id) => write!(f, "reserve channel {id:?} is invalid"),
         }
     }
 }
@@ -119,6 +145,57 @@ impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
     pub(crate) fn new(logical_link: &'a mut LeULogicalLink<P, B>, index: usize) -> Self {
         Self { logical_link, index }
     }
+
+    fn occupy_next_dyn_channel(&mut self, buff: LeUChannelBuffer<B>) -> Result<ChannelIdentifier, NewDynChannelError> {
+        if self.logical_link.channels.len() < LE_STATIC_CHANNEL_COUNT + LE_DYNAMIC_CHANNEL_COUNT {
+            let index = self.logical_link.channels.len();
+
+            self.logical_link.channels.push(buff);
+
+            Ok(self.index_to_channel(index))
+        } else {
+            self.logical_link.channels[LE_STATIC_CHANNEL_COUNT..]
+                .iter()
+                .enumerate()
+                .find_map(|(i, channel)| match channel {
+                    LeUChannelBuffer::Unused => Some(i),
+                    _ => None,
+                })
+                .map(|index| {
+                    self.logical_link.channels[index] = buff;
+
+                    self.index_to_channel(index)
+                })
+                .ok_or_else(|| {
+                    let total_dyn_channel_count = (*DynChannelId::<LeULink>::LE_BOUNDS.end()
+                        - *DynChannelId::<LeULink>::LE_BOUNDS.start())
+                    .into();
+
+                    let e = NewDynChannelErrorReason::AllCreditBasedDynChannelsAreUsed {
+                        total_dyn_channel_count,
+                    };
+
+                    NewDynChannelError(e)
+                })
+        }
+    }
+
+    fn index_to_channel(&self, index: usize) -> ChannelIdentifier {
+        ChannelIdentifier::Le(
+            DynChannelId::new_le(
+                (index - LE_STATIC_CHANNEL_COUNT) as u16 + *DynChannelId::<LeULink>::LE_BOUNDS.start(),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn channel_to_index(&self, channel: ChannelIdentifier) -> Option<usize> {
+        let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dynamic_id)) = channel else {
+            return None;
+        };
+
+        self.logical_link.convert_dyn_index(dynamic_id).into()
+    }
 }
 
 impl<P, B> LogicalLinkPrivate for LeULogicalLinkHandle<'_, P, B>
@@ -135,50 +212,29 @@ where
         where
             Self: 'a;
 
-    fn new_dyn_channel(
+    fn reserve_dyn_channel(&mut self) -> Result<ChannelIdentifier, NewDynChannelError> {
+        self.occupy_next_dyn_channel(LeUChannelBuffer::Reserved)
+    }
+
+    fn establish_dyn_channel(
         &mut self,
         dyn_channel_builder: DynChannelState,
     ) -> Result<ChannelIdentifier, NewDynChannelError> {
-        if self.logical_link.channels.len() < LE_STATIC_CHANNEL_COUNT + LE_DYNAMIC_CHANNEL_COUNT {
-            let index = self.logical_link.channels.len();
+        match &dyn_channel_builder.0 {
+            DynChannelStateInner::ReserveCreditBasedChannel { reserved_id, .. } => {
+                let channel = *reserved_id;
 
-            self.logical_link.channels.push(dyn_channel_builder.into());
+                let index = self
+                    .channel_to_index(*reserved_id)
+                    .ok_or_else(|| NewDynChannelError(NewDynChannelErrorReason::InvalidReserveChannel(channel)))?;
 
-            Ok(ChannelIdentifier::Le(
-                DynChannelId::new_le(
-                    (index - LE_STATIC_CHANNEL_COUNT) as u16 + *DynChannelId::<LeULink>::LE_BOUNDS.start(),
-                )
-                .unwrap(),
-            ))
-        } else {
-            self.logical_link.channels[LE_STATIC_CHANNEL_COUNT..]
-                .iter()
-                .enumerate()
-                .find_map(|(i, channel)| match channel {
-                    LeUChannelBuffer::Unused => Some(i),
-                    _ => None,
-                })
-                .map(|index| {
-                    self.logical_link.channels[index] = dyn_channel_builder.into();
+                self.logical_link.channels.insert(index, dyn_channel_builder.into());
 
-                    ChannelIdentifier::Le(
-                        DynChannelId::new_le(
-                            (index - LE_STATIC_CHANNEL_COUNT) as u16 + *DynChannelId::<LeULink>::LE_BOUNDS.start(),
-                        )
-                        .unwrap(),
-                    )
-                })
-                .ok_or_else(|| {
-                    let total_dyn_channel_count = (*DynChannelId::<LeULink>::LE_BOUNDS.end()
-                        - *DynChannelId::<LeULink>::LE_BOUNDS.start())
-                    .into();
-
-                    let e = NewDynChannelErrorReason::AllCreditBasedDynChannelsAreUsed {
-                        total_dyn_channel_count,
-                    };
-
-                    NewDynChannelError(e)
-                })
+                Ok(channel)
+            }
+            DynChannelStateInner::EstablishedCreditBasedChannel { .. } => {
+                self.occupy_next_dyn_channel(dyn_channel_builder.into())
+            }
         }
     }
 

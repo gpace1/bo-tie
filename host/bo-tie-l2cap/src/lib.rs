@@ -961,7 +961,8 @@ pub mod tests {
     use crate::channel::signalling::ReceivedLeUSignal;
     use crate::pdu::L2capFragment;
     use crate::signals::packets::{
-        CommandRejectResponse, LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer,
+        CommandRejectResponse, LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu,
+        SimplifiedProtocolServiceMultiplexer,
     };
     use crate::{LeULogicalLink, LeUNext, PhysicalLink, LE_DYNAMIC_CHANNEL_COUNT, LE_STATIC_CHANNEL_COUNT};
     use alloc::boxed::Box;

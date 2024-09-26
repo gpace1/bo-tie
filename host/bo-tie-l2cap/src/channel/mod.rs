@@ -365,13 +365,13 @@ pub(crate) enum PduRecombineAddError<B: TryExtend<u8> + Default> {
 }
 
 pub(crate) enum DynChannelStateInner {
-    /// Reserve the channel
-    ///
-    /// This is used whenever this device is initializing a credit based channel to the peer device.
-    /// The channel needs to be reserved until the connection is either established or fails to be.
-    /// This must be converted to `EstablishedCreditBasedChannel` once the connection procedure is
-    /// complete.
-    ReserveCreditBasedChannel,
+    ReserveCreditBasedChannel {
+        reserved_id: ChannelIdentifier,
+        peer_channel_id: ChannelDirection,
+        maximum_transmission_size: u16,
+        maximum_payload_size: u16,
+        peer_credits: u16,
+    },
     EstablishedCreditBasedChannel {
         peer_channel_id: ChannelDirection,
         maximum_transmission_size: u16,
@@ -380,7 +380,7 @@ pub(crate) enum DynChannelStateInner {
     },
 }
 
-pub struct DynChannelState(DynChannelStateInner);
+pub struct DynChannelState(pub(crate) DynChannelStateInner);
 
 impl<B> From<DynChannelState> for LeUChannelBuffer<B>
 where
@@ -388,8 +388,14 @@ where
 {
     fn from(builder: DynChannelState) -> Self {
         match builder.0 {
-            DynChannelStateInner::ReserveCreditBasedChannel => LeUChannelBuffer::Reserved,
-            DynChannelStateInner::EstablishedCreditBasedChannel {
+            DynChannelStateInner::ReserveCreditBasedChannel {
+                peer_channel_id,
+                maximum_transmission_size,
+                maximum_payload_size,
+                peer_credits,
+                ..
+            }
+            | DynChannelStateInner::EstablishedCreditBasedChannel {
                 peer_channel_id,
                 maximum_transmission_size,
                 maximum_payload_size,
