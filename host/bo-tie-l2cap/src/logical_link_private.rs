@@ -220,7 +220,7 @@ where
         &mut self,
         dyn_channel_builder: DynChannelState,
     ) -> Result<ChannelIdentifier, NewDynChannelError> {
-        match &dyn_channel_builder.0 {
+        match &dyn_channel_builder.inner {
             DynChannelStateInner::ReserveCreditBasedChannel { reserved_id, .. } => {
                 let channel = *reserved_id;
 

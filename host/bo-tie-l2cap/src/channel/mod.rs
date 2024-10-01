@@ -380,14 +380,16 @@ pub(crate) enum DynChannelStateInner {
     },
 }
 
-pub struct DynChannelState(pub(crate) DynChannelStateInner);
+pub struct DynChannelState {
+    pub(crate) inner: DynChannelStateInner,
+}
 
 impl<B> From<DynChannelState> for LeUChannelBuffer<B>
 where
     B: Default,
 {
-    fn from(builder: DynChannelState) -> Self {
-        match builder.0 {
+    fn from(state: DynChannelState) -> Self {
+        match state.inner {
             DynChannelStateInner::ReserveCreditBasedChannel {
                 peer_channel_id,
                 maximum_transmission_size,

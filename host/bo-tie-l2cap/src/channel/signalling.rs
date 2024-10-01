@@ -1,6 +1,6 @@
 //! Signalling Channel implementation
 
-use crate::channel::id::{AclCid, ChannelIdentifier, DynChannelId, LeCid};
+use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
 use crate::channel::{ChannelDirection, DynChannelState, DynChannelStateInner, LeUChannelBuffer};
 use crate::link_flavor::LeULink;
 use crate::logical_link_private::NewDynChannelError;
@@ -146,11 +146,9 @@ impl<L: LogicalLink> SignallingChannel<L> {
         LeCreditBasedConnectionRequest,
         RequestLeCreditConnectionError<<L::PhysicalLink as PhysicalLink>::SendErr>,
     > {
-        let dyn_channel_buffer_builder = DynChannelState(DynChannelStateInner::ReserveCreditBasedChannel);
-
         let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = self
             .logical_link
-            .dyn_channel(dyn_channel_buffer_builder)
+            .reserve_dyn_channel()
             .map_err(|e| RequestLeCreditConnectionError::CreateDynChannelError(e))?
         else {
             return Err(RequestLeCreditConnectionError::InvalidChannelIdentifier);
@@ -667,31 +665,12 @@ impl Request<LeCreditBasedConnectionRequest> {
     pub fn accept_le_credit_based_connection<'a, L: LogicalLink>(
         &'a self,
         signal_channel: &'a mut SignallingChannel<L>,
-        initial_credits: u16,
     ) -> LeCreditBasedConnectionResponseBuilder<'a, L> {
-        let peer_channel_id = ChannelDirection::Source(ChannelIdentifier::Le(LeCid::DynamicallyAllocated(
-            self.request.source_dyn_cid,
-        )));
-
-        let dyn_channel_state = DynChannelState(DynChannelStateInner::EstablishedCreditBasedChannel {
-            peer_channel_id,
-            maximum_transmission_size: self.mtu.get(),
-            maximum_payload_size: self.mps.get(),
-            peer_credits: self.initial_credits,
-        });
-
-        let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(destination_dyn_cid)) = signal_channel
-            .logical_link
-            .dyn_channel(dyn_channel_state)
-            .expect("failed to create a dynamic channel")
-        else {
-            panic!("link returned invalid channel")
-        };
+        let initial_credits = 0;
 
         LeCreditBasedConnectionResponseBuilder {
             signal_channel,
             request: &self.request,
-            destination_dyn_cid,
             mtu: self.request.mtu.get(),
             mps: self.request.mps.get(),
             initial_credits,
@@ -722,28 +701,20 @@ impl Request<LeCreditBasedConnectionRequest> {
 pub struct LeCreditBasedConnectionResponseBuilder<'a, L> {
     signal_channel: &'a mut SignallingChannel<L>,
     request: &'a LeCreditBasedConnectionRequest,
-    destination_dyn_cid: DynChannelId<LeULink>,
     mtu: u16,
     mps: u16,
     initial_credits: u16,
 }
 
 impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
-    /// Get the destination channel identifier
+    /// Set the initial credits to give to the peer
     ///
-    /// This will be the identifier of the channel created by the output of [`send_success_response`]
+    /// This will be the number of credits the peer device has for sending credit based frames on
+    /// this channel after connection is made.
     ///
-    /// [`send_success_response`]: LeCreditBasedConnectionResponseBuilder::send_success_response
-    pub fn get_destination_channel(&self) -> ChannelIdentifier {
-        ChannelIdentifier::Le(LeCid::DynamicallyAllocated(self.destination_dyn_cid))
-    }
-
-    /// Get the initial credits
-    ///
-    /// This returns the initial credits that were used to create this
-    /// `LeCreditBasedConnectionResponseBuilder`
-    pub fn get_initial_credits(&self) -> u16 {
-        self.initial_credits
+    /// If this is not called the peer device is initially given zero credits.
+    pub fn initially_given_credits(&mut self, credits: u16) {
+        self.initial_credits = credits
     }
 
     /// Set the maximum payload size (MPS)
@@ -771,23 +742,48 @@ impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
     /// # Note
     /// The result field within the response will be [`ConnectionSuccessful`]
     ///
+    /// # Return
+    /// The return is the channel identifier of the credit based connection for this logical link.
+    ///
     /// # Error
     /// If this was not called on an LE-U logical link or there was an error sending the response.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub async fn send_success_response(self) -> Result<(), LeCreditResponseError<L>>
+    pub async fn send_success_response(self) -> Result<ChannelIdentifier, LeCreditResponseError<L>>
     where
         L: LogicalLink,
     {
-        use crate::LinkFlavor;
         use core::cmp::min;
 
-        L::LinkFlavor::try_channel_from_raw(self.destination_dyn_cid.get_val())
-            .ok_or_else(|| LeCreditResponseError::LinkIsNotLeU)?;
+        let peer_channel_id = ChannelDirection::Source(self.request.get_source_cid());
+
+        let maximum_payload_size = min(self.mps, self.request.mps.get()).into();
+
+        let maximum_transmission_size = min(self.mtu, self.request.mtu.get()).into();
+
+        let initial_peer_credits = self.request.initial_credits.into();
+
+        let state = DynChannelState {
+            inner: DynChannelStateInner::EstablishedCreditBasedChannel {
+                peer_channel_id,
+                maximum_transmission_size,
+                maximum_payload_size,
+                peer_credits: initial_peer_credits,
+            },
+        };
+
+        let cid @ ChannelIdentifier::Le(LeCid::DynamicallyAllocated(destination)) = self
+            .signal_channel
+            .logical_link
+            .establish_dyn_channel(state)
+            .map_err(|e| LeCreditResponseError::FailedToCreateChannel(e))?
+        else {
+            unreachable!()
+        };
 
         let response = LeCreditBasedConnectionResponse::new(
             self.request.identifier,
-            self.destination_dyn_cid,
+            destination,
             LeCreditMtu::new(self.mtu),
             LeCreditMps::new(self.mps),
             self.initial_credits,
@@ -798,27 +794,7 @@ impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
             .await
             .map_err(|e| LeCreditResponseError::SendErr(e))?;
 
-        let peer_channel_id = ChannelDirection::Source(self.request.get_source_cid());
-
-        let maximum_payload_size = min(self.mps, self.request.mps.get()).into();
-
-        let maximum_transmission_size = min(self.mtu, self.request.mtu.get()).into();
-
-        let initial_peer_credits = self.request.initial_credits.into();
-
-        let state = DynChannelState(DynChannelStateInner::EstablishedCreditBasedChannel {
-            peer_channel_id,
-            maximum_transmission_size,
-            maximum_payload_size,
-            peer_credits: initial_peer_credits,
-        });
-
-        self.signal_channel
-            .logical_link
-            .dyn_channel(state)
-            .map_err(|e| LeCreditResponseError::FailedToCreateChannel(e))?;
-
-        Ok(())
+        Ok(cid)
     }
 }
 
@@ -924,16 +900,19 @@ impl Response<LeCreditBasedConnectionResponse> {
 
             let initial_peer_credits = self.response.get_initial_credits().unwrap().into();
 
-            let state = DynChannelState(DynChannelStateInner::EstablishedCreditBasedChannel {
-                peer_channel_id,
-                maximum_transmission_size,
-                maximum_payload_size,
-                peer_credits: initial_peer_credits,
-            });
+            let state = DynChannelState {
+                inner: DynChannelStateInner::ReserveCreditBasedChannel {
+                    reserved_id: request.get_source_cid(),
+                    peer_channel_id,
+                    maximum_transmission_size,
+                    maximum_payload_size,
+                    peer_credits: initial_peer_credits,
+                },
+            };
 
             signals_channel
                 .logical_link
-                .dyn_channel(state)
+                .establish_dyn_channel(state)
                 .map_err(|e| CreateLeCreditConnectionError::DynChannelFail(e))?;
 
             Ok(())
