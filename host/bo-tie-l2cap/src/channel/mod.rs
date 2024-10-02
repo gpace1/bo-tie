@@ -682,17 +682,15 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
     ) -> Result<Option<CreditServiceData<T::IntoIter>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>>
     where
         T: IntoIterator<Item = u8>,
-        <T as IntoIterator>::IntoIter: ExactSizeIterator,
+        <T as IntoIterator>::IntoIter: ExactSizeIterator + core::fmt::Debug,
     {
         use crate::pdu::FragmentL2capSdu;
 
-        let maximum_transmission_size = self.logical_link.get_physical_link().max_transmission_size();
-
-        let sdu = CreditBasedSdu::new(sdu, self.get_peer_channel_id(), maximum_transmission_size);
+        let sdu = CreditBasedSdu::new(sdu, self.get_peer_channel_id(), self.get_mps());
 
         let mut packets = sdu.into_packets().map_err(|e| SendSduError::SduPacketError(e))?;
 
-        if packets.get_remaining_count() > maximum_transmission_size.into() {
+        if packets.get_remaining_count() > self.get_mtu().into() {
             return Err(SendSduError::SduLargerThanMtu);
         }
 

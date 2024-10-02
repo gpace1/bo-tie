@@ -968,7 +968,7 @@ pub mod tests {
     use alloc::boxed::Box;
     use bo_tie_core::buffer::stack::{LinearBuffer, LinearBufferError, LinearBufferIter};
     use bo_tie_core::buffer::TryExtend;
-    use core::cell::{Cell, RefCell};
+    use core::cell::RefCell;
     use core::future::Future;
     use core::pin::Pin;
     use core::task::{Poll, Waker};
@@ -977,8 +977,8 @@ pub mod tests {
     pub(crate) struct PhysicalLinkLoop {
         a_data: RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
         b_data: RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
-        a_waker: Cell<Option<Waker>>,
-        b_waker: Cell<Option<Waker>>,
+        a_waker: RefCell<Option<Waker>>,
+        b_waker: RefCell<Option<Waker>>,
     }
 
     impl core::fmt::Debug for PhysicalLinkLoop {
@@ -998,8 +998,8 @@ pub mod tests {
     pub struct PhysicalLinkLoopEnd<'a> {
         data: &'a RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
         peer_data: &'a RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
-        waker: &'a Cell<Option<Waker>>,
-        peer_waker: &'a Cell<Option<Waker>>,
+        waker: &'a RefCell<Option<Waker>>,
+        peer_waker: &'a RefCell<Option<Waker>>,
     }
 
     impl core::fmt::Debug for PhysicalLinkLoopEnd<'_> {
@@ -1074,8 +1074,8 @@ pub mod tests {
         pub(crate) fn new() -> Self {
             let a_data = RefCell::new(None);
             let b_data = RefCell::new(None);
-            let a_waker = Cell::new(None);
-            let b_waker = Cell::new(None);
+            let a_waker = RefCell::new(None);
+            let b_waker = RefCell::new(None);
 
             PhysicalLinkLoop {
                 a_data,
@@ -1280,7 +1280,7 @@ pub mod tests {
             aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip \
             ex ea commodo consequat.";
 
-        let mut test_procedure = Box::pin(async {
+        let mut test_procedure = core::pin::pin!(async {
             let le_connect_request = test_link
                 .get_signalling_channel()
                 .unwrap()
@@ -1329,58 +1329,63 @@ pub mod tests {
             assert_eq!(core::str::from_utf8(test_message).unwrap(), received_message)
         });
 
-        let mut test_message_iter = test_message.into_iter().copied();
+        let mut verify_procedure = core::pin::pin!(async {
+            let mut test_message_iter = test_message.into_iter().copied();
 
-        let mut credit_channel_id = None;
+            let mut credit_channel_id = None;
 
-        let mut channel_sending = None;
+            let mut channel_sending = None;
 
-        'test: loop {
-            tokio::select! {
-                _ = &mut test_procedure => break 'test,
+            loop {
+                match verify_link.next().await.unwrap() {
+                    LeUNext::SignallingChannel { signal, .. } => match signal {
+                        ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
+                            let mut signalling_channel = verify_link.get_signalling_channel().unwrap();
 
-                next = verify_link.next() => match next.unwrap() {
-                    LeUNext::SignallingChannel { signal, .. } => {
-                        match signal {
-                            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
-                                let mut signalling_channel = verify_link.get_signalling_channel().unwrap();
+                            if credit_channel_id.is_none() {
+                                let channel_builder =
+                                    request.accept_le_credit_based_connection(&mut signalling_channel);
 
-                                if credit_channel_id.is_none() {
-                                    let channel_builder = request.accept_le_credit_based_connection(
-                                        &mut signalling_channel,
-                                        0
-                                    );
+                                let channel_id = channel_builder.send_success_response().await.unwrap();
 
-                                    credit_channel_id = Some(channel_builder.get_destination_channel());
-
-                                    channel_builder
-                                        .send_success_response()
-                                        .await
-                                        .unwrap();
-                                } else {
-                                    request.reject_le_credit_based_connection(
+                                credit_channel_id = Some(channel_id);
+                            } else {
+                                request
+                                    .reject_le_credit_based_connection(
                                         &mut verify_link.get_signalling_channel().unwrap(),
-                                        LeCreditBasedConnectionResponseResult::NoResourcesAvailable
+                                        LeCreditBasedConnectionResponseResult::NoResourcesAvailable,
                                     )
                                     .await
                                     .unwrap()
-                                }
                             }
-                            _ => panic!("received unexpected signal {signal:?}")
                         }
-                    }
-                    LeUNext::CreditIndication { credits_given: 1.., mut channel} => {
+                        _ => panic!("received unexpected signal {signal:?}"),
+                    },
+                    LeUNext::CreditIndication {
+                        credits_given: 1..,
+                        mut channel,
+                    } => {
                         channel_sending = match channel_sending.take() {
                             None => channel.send(&mut test_message_iter).await.unwrap(),
-                            Some(sending) => sending.continue_sending(
-                                &mut verify_link.get_credit_based_channel(credit_channel_id.unwrap()).unwrap()
-                            ).await.unwrap()
+                            Some(sending) => sending
+                                .continue_sending(
+                                    &mut verify_link
+                                        .get_credit_based_channel(credit_channel_id.unwrap())
+                                        .unwrap(),
+                                )
+                                .await
+                                .unwrap(),
                         }
-
                     }
-                    next => panic!("unexpected next {next:?}")
+                    next => panic!("unexpected next {next:?}"),
                 }
             }
+        });
+
+        tokio::select! {
+            _ = &mut test_procedure => (),
+
+            _ = &mut verify_procedure => panic!("unexpected exit of verify procedure")
         }
     }
 }
