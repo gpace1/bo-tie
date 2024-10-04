@@ -65,9 +65,9 @@ pub mod signals;
 use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
 use crate::channel::signalling::ReceivedLeUSignal;
 pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
-use crate::channel::{InvalidChannel, LeUChannelBuffer, PduRecombineAddError, PduRecombineAddOutput};
+use crate::channel::{InvalidChannel, LeUChannelType, PduRecombineAddError, PduRecombineAddOutput};
 use crate::link_flavor::LinkFlavor;
-use crate::logical_link_private::LeULogicalLinkHandle;
+use crate::logical_link_private::{LeULogicalLinkHandle, PhantomBuffer};
 use crate::pdu::{BasicFrame, FragmentIterator, FragmentL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
@@ -217,6 +217,178 @@ pub trait LogicalLink: LogicalLinkPrivate {}
 
 impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
 
+/// Builder for a `LeULogicalLink`
+///
+/// The main purpose of this is for setting the physical link and configuring the channels to be
+/// used by built `LeULogicalLink`.
+///
+/// This can be created via the [`LeULogicalLink::builder`] method.
+pub struct LeULogicalLinkBuilder<P, B, S> {
+    physical_link: P,
+    pdu_buffer: Option<B>,
+    sdu_buffer: Option<S>,
+    att_channel_enabled: bool,
+    sig_channel_enabled: bool,
+    sm_channel_enabled: bool,
+    unused_responses: bool,
+}
+
+impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
+    fn new(physical_link: P) -> Self {
+        let pdu_buffer = None;
+        let sdu_buffer = None;
+        let att_channel_enabled = false;
+        let sig_channel_enabled = false;
+        let sm_channel_enabled = false;
+        let unused_responses = false;
+
+        LeULogicalLinkBuilder {
+            physical_link,
+            pdu_buffer,
+            sdu_buffer,
+            att_channel_enabled,
+            sig_channel_enabled,
+            sm_channel_enabled,
+            unused_responses,
+        }
+    }
+
+    /// Set the physical link
+    ///
+    /// The physical link is the interface to the radio layers for transmission and reception of
+    /// LE-U pdu fragments. This is required to be called in order to use this link for sending or
+    /// receiving to a connected device.
+    pub fn set_physical_link<T>(self, physical_link: T) -> LeULogicalLinkBuilder<T, B, S> {
+        LeULogicalLinkBuilder {
+            physical_link,
+            pdu_buffer: self.pdu_buffer,
+            sdu_buffer: self.sdu_buffer,
+            att_channel_enabled: self.att_channel_enabled,
+            sig_channel_enabled: self.sig_channel_enabled,
+            sm_channel_enabled: self.sm_channel_enabled,
+            unused_responses: self.unused_responses,
+        }
+    }
+
+    /// Set an owned buffer for storing a PDU
+    ///
+    /// This is used to set the type for buffering a PDU. The buffer is used to store fragments
+    /// until the complete PDU is received. In order to call this method, a ‘turbofish’: `::<>`
+    /// containing the buffering type is required.
+    pub fn use_owned_buffer<T>(self) -> LeULogicalLinkBuilder<P, T, S>
+    where
+        T: Default + TryExtend<u8>,
+    {
+        LeULogicalLinkBuilder {
+            physical_link: self.physical_link,
+            pdu_buffer: None,
+            sdu_buffer: self.sdu_buffer,
+            att_channel_enabled: self.att_channel_enabled,
+            sig_channel_enabled: self.sig_channel_enabled,
+            sm_channel_enabled: self.sm_channel_enabled,
+            unused_responses: self.unused_responses,
+        }
+    }
+
+    /// Use a `Vec` for buffering a PDU
+    ///
+    /// This is equivalent to calling `.use_owned_buffer::<Vec<u8>>()`
+    pub fn use_vec_buffer(self) -> LeULogicalLinkBuilder<P, alloc::vec::Vec<u8>, S> {
+        self.use_owned_buffer()
+    }
+
+    /// Set an owned buffer for storing a SDU
+    ///
+    /// L2CAP connection channels (such as credit based channels) transfer data via a service data
+    /// unit (SDU). The main point of a SDU is to be able to transfer data over multiple PDUs. Each
+    /// connection channel must have its own buffer as PDUs of a SDU may not all be sent together by
+    /// the linked peer device.
+    pub fn use_owned_sdu_buffer<T>(self) -> LeULogicalLinkBuilder<P, B, T> {
+        LeULogicalLinkBuilder {
+            physical_link: self.physical_link,
+            pdu_buffer: self.pdu_buffer,
+            sdu_buffer: None,
+            att_channel_enabled: self.att_channel_enabled,
+            sig_channel_enabled: self.sig_channel_enabled,
+            sm_channel_enabled: self.sm_channel_enabled,
+            unused_responses: self.unused_responses,
+        }
+    }
+
+    /// Use `Vec` for buffering SDUs
+    ///
+    /// This is equivalent to calling `.use_owned_sdu_buffer::<Vec<u8>>()`
+    pub fn use_vec_sdu_buffer(self) -> LeULogicalLinkBuilder<P, B, alloc::vec::Vec<u8>> {
+        self.use_owned_sdu_buffer()
+    }
+
+    /// Enable the Attribute Channel
+    pub fn enable_attribute_channel(mut self) -> LeULogicalLinkBuilder<P, B, S> {
+        self.att_channel_enabled = true;
+        self
+    }
+
+    /// Enable the Signalling Channel
+    pub fn enable_signalling_channel(mut self) -> Self {
+        self.sig_channel_enabled = true;
+        self
+    }
+
+    /// Enable the Security Manager Channel
+    pub fn enable_security_manager_channel(mut self) -> Self {
+        self.sm_channel_enabled = true;
+        self
+    }
+
+    /// Enable unused responses
+    ///
+    /// This enables a default response for unenabled fixed channels of this logical link.
+    ///
+    /// The actual response is relevant to the fixed channel.
+    pub fn enable_unused_fixed_channel_response(mut self) -> Self {
+        self.unused_responses = true;
+        self
+    }
+
+    /// Build the `LeULogicalLink`
+    pub fn build(self) -> LeULogicalLink<P, B, S>
+    where
+        B: Default,
+    {
+        let physical_link = self.physical_link;
+
+        let basic_header_processor = channel::BasicHeaderProcessor::init();
+
+        let mut channels: alloc::vec::Vec<LeUChannelType<S>> = core::iter::repeat_with(|| LeUChannelType::Unused)
+            .take(LE_STATIC_CHANNEL_COUNT)
+            .collect();
+
+        if self.att_channel_enabled {
+            channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelType::BasicChannel
+        }
+
+        if self.sig_channel_enabled {
+            channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelType::SignallingChannel
+        }
+
+        if self.sm_channel_enabled {
+            channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelType::BasicChannel
+        }
+
+        let unused_responses = self.unused_responses;
+
+        let pdu_buffer = B::default();
+
+        LeULogicalLink {
+            physical_link,
+            pdu_buffer,
+            basic_header_processor,
+            channels,
+            unused_responses,
+        }
+    }
+}
+
 /// A LE-U Logical Link
 ///
 /// This is the logical link for two devices connected via Bluetooth LE. Channels can be created for
@@ -225,99 +397,12 @@ impl<T> LogicalLink for T where T: LogicalLinkPrivate {}
 /// A `LeULogicalLink` requires a `PhysicalLink` to be created. This `PhysicalLink` is a trait that
 /// is either directly implemented by the physical layer or some interface to the physical layer
 /// (typically a host controller interface (HCI) implementation).
-///
-/// ```
-/// # use tokio::select;
-/// # use bo_tie_l2cap::{PhysicalLink, LeULogicalLink};
-/// async fn le_u_doc<P: PhysicalLink>(physical_link: P) {
-/// let le_link = LeULogicalLink::new(physical_link, &mut Vec::new());
-///
-/// loop {
-///     select! {
-///         
-///     }
-/// }
-/// # }
-/// ```
-///
-/// ## Channels
-/// Channels are used to sending and receiving data between two linked devices. Fixed channels are
-/// directly created via a method of a `LeULogicalLink`, but dynamically allocated channels must be
-/// created through a connection process initiated using the signalling channel.
-///
-/// ### Fixed Channels
-/// Fixed channels are assigned by the Bluetooth SIG and are either defined within the Bluetooth
-/// Specification or the assigned numbers document (but as of right now the list within the assigned
-/// numbers document is empty). There is no special process to establish a fixed channel at the
-/// L2CAP layer, so any fixed channel can be created using the appropriate method of
-/// `LeULogicalLink`.
-///
-/// ```
-/// # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
-/// # async fn example<P: PhysicalLink>(le_u_logical_link: LeULogicalLink<P>) {
-/// // create the signalling and ATT channels
-///
-/// let signalling_channel = le_u_logical_link.get_signalling_channel();
-///
-/// let att_channel = le_u_logical_link.get_att_channel();
-/// # }
-/// ```
-///
-/// ### Dynamic Channels
-/// Dynamic channels must be created using the signalling channel. There is a L2CAP connection
-/// process that goes through the establishing of the channel identities (and any other information
-/// used for the connection) of the dynamically allocated channels.
-///
-/// ```
-/// # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
-/// # use bo_tie_l2cap::channel::signalling::ReceivedLeUSignal;
-/// # use bo_tie_l2cap::signals::packets::{LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer};
-/// # async fn example<P: PhysicalLink>(le_u_logical_link: LeULogicalLink<P>)
-/// # where  
-/// #     <P as PhysicalLink>::SendErr: std::fmt::Debug,
-/// #     <P as PhysicalLink>::RecvErr: std::fmt::Debug,
-/// # {
-/// // This is the process for initializing a LE credit based
-/// // channel. This channel uses a dynamically allocated CID,
-/// // so it must go through a L2CAP connection process before
-/// // it can be created.
-///
-/// let mut signalling_channel = le_u_logical_link.get_signalling_channel();
-///
-/// // request the creation of a LE credit based channel
-/// let request = signalling_channel
-///     .request_le_credit_connection(
-///         SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
-///         LeCreditMtu::new_min(),
-///         LeCreditMps::new_min(),
-///         10,
-///     )
-///     .await
-///     .expect("failed to send request");
-///
-/// // Process the response from the linked peer device and
-/// // create a new credit_based_channel.
-/// let credit_based_channel = match signalling_channel
-///     .receive()
-///     .await
-///     .expect("failed to get response")
-/// {
-///     ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => response
-///         .create_le_credit_connection(&request, &le_u_logical_link)
-///         .expect("linked device rejected LE credit based connection request"),
-///
-///     ReceivedLeUSignal::CommandRejectRsp(response) => {
-///          panic!("LE credit based channels not supported by the linked device")
-///     }
-///     _ => panic!("received unexpected signal"),
-/// };
-/// # }
-/// ```
 #[derive(Debug)]
-pub struct LeULogicalLink<P, B> {
+pub struct LeULogicalLink<P, B, S> {
     physical_link: P,
+    pdu_buffer: B,
     basic_header_processor: channel::BasicHeaderProcessor,
-    channels: alloc::vec::Vec<LeUChannelBuffer<B>>,
+    channels: alloc::vec::Vec<LeUChannelType<S>>,
     unused_responses: bool,
 }
 
@@ -337,44 +422,33 @@ const LE_LINK_SIGNALLING_CHANNEL_INDEX: usize = 1;
 /// Index for the Signalling channel within a `LeULogicalLink::channels`
 const LE_LINK_SM_CHANNEL_INDEX: usize = 2;
 
-impl<P, B> LeULogicalLink<P, B> {
-    /// Create a new `LogicalLink`
-    pub fn new(physical_link: P) -> Self {
-        let basic_header_processor = channel::BasicHeaderProcessor::init();
-
-        let channels = core::iter::repeat_with(|| LeUChannelBuffer::Unused)
-            .take(LE_STATIC_CHANNEL_COUNT)
-            .collect();
-
-        let unused_responses = false;
-
-        Self {
-            physical_link,
-            basic_header_processor,
-            channels,
-            unused_responses,
-        }
+impl<P> LeULogicalLink<P, PhantomBuffer, PhantomBuffer> {
+    /// Get a builder for a `LogicalLink`
+    pub fn builder(physical_link: P) -> LeULogicalLinkBuilder<P, PhantomBuffer, PhantomBuffer> {
+        LeULogicalLinkBuilder::new(physical_link)
     }
+}
 
+impl<P, B, S> LeULogicalLink<P, B, S> {
     /// Enable the Attribute protocol channel
-    pub fn enable_att_channel(&mut self, buffer: B) {
-        self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelBuffer::BasicChannel { buffer };
+    pub fn enable_att_channel(&mut self) {
+        self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelType::BasicChannel;
     }
 
     /// Disable the Attribute protocol channel
     pub fn disable_att_channel(&mut self) {
-        self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+        self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelType::Unused
     }
 
     /// Get the Attribute Channel
     ///
     /// The Attribute channel is returned if it was enabled.
-    pub fn get_att_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B>>>
+    pub fn get_att_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
     {
-        if let LeUChannelBuffer::BasicChannel { .. } = &self.channels[LE_LINK_ATT_CHANNEL_INDEX] {
+        if let LeUChannelType::BasicChannel { .. } = &self.channels[LE_LINK_ATT_CHANNEL_INDEX] {
             let handle = LeULogicalLinkHandle::new(self, LE_LINK_ATT_CHANNEL_INDEX);
 
             Some(BasicFrameChannel::new(
@@ -388,23 +462,23 @@ impl<P, B> LeULogicalLink<P, B> {
 
     /// Enable the signalling channel
     pub fn enable_signalling_channel(&mut self) {
-        self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelBuffer::SignallingChannel;
+        self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelType::SignallingChannel;
     }
 
     /// Disable the signalling channel
     pub fn disable_signalling_channel(&mut self) {
-        self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+        self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelType::Unused
     }
 
     /// Get the Signalling Channel
     ///
     /// The Signalling channel is returned if it was enabled.
-    pub fn get_signalling_channel(&mut self) -> Option<SignallingChannel<LeULogicalLinkHandle<'_, P, B>>>
+    pub fn get_signalling_channel(&mut self) -> Option<SignallingChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
     {
-        if let LeUChannelBuffer::SignallingChannel = &self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] {
+        if let LeUChannelType::SignallingChannel = &self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] {
             let handle = LeULogicalLinkHandle::new(self, LE_LINK_SIGNALLING_CHANNEL_INDEX);
 
             Some(SignallingChannel::new(
@@ -417,24 +491,24 @@ impl<P, B> LeULogicalLink<P, B> {
     }
 
     /// Enable the Security Manager channel
-    pub fn enable_security_manager_channel(&mut self, buffer: B) {
-        self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelBuffer::BasicChannel { buffer }
+    pub fn enable_security_manager_channel(&mut self) {
+        self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelType::BasicChannel
     }
 
     /// Disable the Security Manager channel
     pub fn disable_security_manager_channel(&mut self) {
-        self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelBuffer::Unused
+        self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelType::Unused
     }
 
     /// Get the Security Manager Channel
     ///
     /// This Security Manager channel is returned if it was enabled.
-    pub fn get_security_manager_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B>>>
+    pub fn get_security_manager_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
     {
-        if let LeUChannelBuffer::BasicChannel { .. } = &self.channels[LE_LINK_SM_CHANNEL_INDEX] {
+        if let LeUChannelType::BasicChannel { .. } = &self.channels[LE_LINK_SM_CHANNEL_INDEX] {
             let handle = LeULogicalLinkHandle::new(self, LE_LINK_SM_CHANNEL_INDEX);
 
             Some(BasicFrameChannel::new(
@@ -456,7 +530,7 @@ impl<P, B> LeULogicalLink<P, B> {
     pub fn get_credit_based_channel(
         &mut self,
         channel_identifier: ChannelIdentifier,
-    ) -> Option<CreditBasedChannel<LeULogicalLinkHandle<'_, P, B>>>
+    ) -> Option<CreditBasedChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default,
@@ -467,7 +541,7 @@ impl<P, B> LeULogicalLink<P, B> {
 
         let index = self.convert_dyn_index(dyn_channel_id);
 
-        if let Some(LeUChannelBuffer::CreditBasedChannel { .. }) = self.channels.get(index) {
+        if let Some(LeUChannelType::CreditBasedChannel { .. }) = self.channels.get(index) {
             let handle = LeULogicalLinkHandle::new(self, index);
 
             Some(CreditBasedChannel::new(channel_identifier, handle))
@@ -531,11 +605,12 @@ impl<P, B> LeULogicalLink<P, B> {
     /// `next` has the processing of the *flow control credit indication* L2CAP signal built into
     /// its returned future. Normally `next` will output a [`CreditIndication`] containing the
     /// number of credits given and the affected channel. However, before the channel is returned
-    pub async fn next(&mut self) -> Result<LeUNext<'_, P, B>, LeULogicalLinkNextError<P, B>>
+    pub async fn next(&mut self) -> Result<LeUNext<'_, P, B, S>, LeULogicalLinkNextError<P, B, S>>
     where
         P: PhysicalLink,
         B: TryExtend<u8> + Default + IntoIterator<Item = u8>,
         B::IntoIter: ExactSizeIterator,
+        S: TryExtend<u8> + Default,
     {
         let mut expect_first_fragment = true;
 
@@ -559,21 +634,24 @@ impl<P, B> LeULogicalLink<P, B> {
 
             expect_first_fragment = true;
 
-            let mut unused = LeUChannelBuffer::Unused;
+            let mut unused = LeUChannelType::Unused;
 
             let (index, mut recombiner) = match basic_header.channel_id {
                 ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
-                    let recombiner = self.channels[LE_LINK_ATT_CHANNEL_INDEX].new_recombiner(&basic_header);
+                    let recombiner =
+                        self.channels[LE_LINK_ATT_CHANNEL_INDEX].new_recombiner(&mut self.pdu_buffer, &basic_header);
 
                     (LE_LINK_ATT_CHANNEL_INDEX, recombiner)
                 }
                 ChannelIdentifier::Le(LeCid::LeSignalingChannel) => {
-                    let recombiner = self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX].new_recombiner(&basic_header);
+                    let recombiner = self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX]
+                        .new_recombiner(&mut self.pdu_buffer, &basic_header);
 
                     (LE_LINK_SIGNALLING_CHANNEL_INDEX, recombiner)
                 }
                 ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                    let recombiner = self.channels[LE_LINK_SM_CHANNEL_INDEX].new_recombiner(&basic_header);
+                    let recombiner =
+                        self.channels[LE_LINK_SM_CHANNEL_INDEX].new_recombiner(&mut self.pdu_buffer, &basic_header);
 
                     (LE_LINK_SM_CHANNEL_INDEX, recombiner)
                 }
@@ -584,11 +662,11 @@ impl<P, B> LeULogicalLink<P, B> {
                         .channels
                         .get_mut(index)
                         .unwrap_or(&mut unused)
-                        .new_recombiner(&basic_header);
+                        .new_recombiner(&mut self.pdu_buffer, &basic_header);
 
                     (index, recombiner)
                 }
-                _ => (<usize>::MAX, unused.new_recombiner(&basic_header)),
+                _ => (<usize>::MAX, unused.new_recombiner(&mut self.pdu_buffer, &basic_header)),
             };
 
             'recombine: loop {
@@ -660,7 +738,7 @@ impl<P, B> LeULogicalLink<P, B> {
 
                                 let index = self.convert_dyn_index(id);
 
-                                let Some(LeUChannelBuffer::CreditBasedChannel { data: channel_data }) =
+                                let Some(LeUChannelType::CreditBasedChannel { data: channel_data }) =
                                     self.channels.get_mut(index)
                                 else {
                                     // ignore the credit indication
@@ -689,13 +767,13 @@ impl<P, B> LeULogicalLink<P, B> {
                         }
                     }
                     Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
-                        let LeUChannelBuffer::CreditBasedChannel { data } = &mut self.channels[index] else {
+                        let LeUChannelType::CreditBasedChannel { data } = &mut self.channels[index] else {
                             unreachable!()
                         };
 
                         let Some(sdu) = data
                             .process_pdu(pdu)
-                            .map_err(|e| LeULogicalLinkNextError::BufferOverflow(e))?
+                            .map_err(|e| LeULogicalLinkNextError::SduBufferOverflow(e))?
                         else {
                             continue 'outer;
                         };
@@ -714,37 +792,38 @@ impl<P, B> LeULogicalLink<P, B> {
 
 /// The output of the future returned by [`LeULogicalLink::next`]
 #[derive(Debug)]
-pub enum LeUNext<'a, P, B> {
+pub enum LeUNext<'a, P, B, S> {
     AttributeChannel {
         pdu: BasicFrame<B>,
-        channel: BasicFrameChannel<LeULogicalLinkHandle<'a, P, B>>,
+        channel: BasicFrameChannel<LeULogicalLinkHandle<'a, P, B, S>>,
     },
     SignallingChannel {
         signal: ReceivedLeUSignal,
-        channel: SignallingChannel<LeULogicalLinkHandle<'a, P, B>>,
+        channel: SignallingChannel<LeULogicalLinkHandle<'a, P, B, S>>,
     },
     SecurityManagerChannel {
         pdu: BasicFrame<B>,
-        channel: BasicFrameChannel<LeULogicalLinkHandle<'a, P, B>>,
+        channel: BasicFrameChannel<LeULogicalLinkHandle<'a, P, B, S>>,
     },
     CreditBasedChannel {
-        sdu: B,
-        channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B>>,
+        sdu: S,
+        channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B, S>>,
     },
     CreditIndication {
         credits_given: usize,
-        channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B>>,
+        channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B, S>>,
     },
 }
 
 /// The error type returned by the method [`LeULogicalLink::next`]
-pub enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
+pub enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>, S: TryExtend<u8>> {
     ReceiveError(P::RecvErr),
     SendUnusedError(P::SendErr),
     ExpectedStartingFragment,
     UnexpectedStartingFragment,
     Disconnected,
-    BufferOverflow(B::Error),
+    PduBufferOverflow(B::Error),
+    SduBufferOverflow(S::Error),
     InvalidChannel(InvalidChannel),
     Internal(&'static str),
     RecombineBasicFrame(pdu::basic_frame::RecombineError),
@@ -752,10 +831,11 @@ pub enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>> {
     RecombineCreditBasedFrame(pdu::credit_frame::RecombineError),
 }
 
-impl<P, B> core::fmt::Debug for LeULogicalLinkNextError<P, B>
+impl<P, B, S> core::fmt::Debug for LeULogicalLinkNextError<P, B, S>
 where
     P: PhysicalLink,
     B: TryExtend<u8>,
+    S: TryExtend<u8>,
     P::RecvErr: core::fmt::Debug,
     P::SendErr: core::fmt::Debug,
 {
@@ -766,7 +846,8 @@ where
             Self::ExpectedStartingFragment => f.debug_tuple(stringify!(ExpectedStartingFragment)).finish(),
             Self::UnexpectedStartingFragment => f.debug_tuple(stringify!(UnexpectedStartingFragment)).finish(),
             Self::Disconnected => f.debug_tuple(stringify!(Disconnected)).finish(),
-            Self::BufferOverflow(e) => f.debug_tuple(stringify!(BufferOverflow)).field(e).finish(),
+            Self::PduBufferOverflow(e) => f.debug_tuple(stringify!(PduBufferOverflow)).field(e).finish(),
+            Self::SduBufferOverflow(e) => f.debug_tuple(stringify!(SduBufferOverflow)).field(e).finish(),
             Self::InvalidChannel(c) => f.debug_tuple(stringify!(InvalidChannel)).field(c).finish(),
             Self::Internal(e) => f.debug_tuple(stringify!(Internal)).field(e).finish(),
             Self::RecombineBasicFrame(e) => f.debug_tuple(stringify!(RecombineBasicFrame)).field(e).finish(),
@@ -778,10 +859,13 @@ where
     }
 }
 
-impl<P: PhysicalLink, B: TryExtend<u8>> core::fmt::Display for LeULogicalLinkNextError<P, B>
+impl<P, B, S> core::fmt::Display for LeULogicalLinkNextError<P, B, S>
 where
+    P: PhysicalLink,
     P::RecvErr: core::fmt::Display,
     P::SendErr: core::fmt::Display,
+    B: TryExtend<u8>,
+    S: TryExtend<u8>,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
@@ -796,7 +880,8 @@ where
                 f.write_str("unexpected starting L2CAP fragment when expecting continuing fragments for a PDU")
             }
             LeULogicalLinkNextError::Disconnected => f.write_str("disconnected"),
-            LeULogicalLinkNextError::BufferOverflow(o) => write!(f, "buffer overflow: {o}"),
+            LeULogicalLinkNextError::PduBufferOverflow(o) => write!(f, "PDU buffer overflow: {o}"),
+            LeULogicalLinkNextError::SduBufferOverflow(o) => write!(f, "SDU buffer overflow: {o}"),
             LeULogicalLinkNextError::InvalidChannel(c) => write!(f, "invalid channel: {c}"),
             LeULogicalLinkNextError::Internal(i) => f.write_str(i),
             LeULogicalLinkNextError::RecombineBasicFrame(r) => write!(f, "recombine basic frame error: {r}"),
@@ -809,14 +894,22 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<P: PhysicalLink, B: TryExtend<u8>> std::error::Error for LeULogicalLinkNextError<P, B>
+impl<P, B, S> std::error::Error for LeULogicalLinkNextError<P, B, S>
 where
+    P: PhysicalLink,
     P::RecvErr: core::fmt::Display + core::fmt::Debug,
     P::SendErr: core::fmt::Display + core::fmt::Debug,
+    B: TryExtend<u8>,
+    S: TryExtend<u8>,
 {
 }
 
-impl<P: PhysicalLink, B: TryExtend<u8>> From<InvalidChannel> for LeULogicalLinkNextError<P, B> {
+impl<P, B, S> From<InvalidChannel> for LeULogicalLinkNextError<P, B, S>
+where
+    P: PhysicalLink,
+    B: TryExtend<u8>,
+    S: TryExtend<u8>,
+{
     fn from(error: InvalidChannel) -> Self {
         LeULogicalLinkNextError::InvalidChannel(error)
     }
@@ -1120,13 +1213,17 @@ pub mod tests {
 
         let (phy_test, phy_verify) = phy_link_loop.channel();
 
-        let mut test_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_test);
+        let mut test_link = LeULogicalLink::builder(phy_test)
+            .enable_signalling_channel()
+            .use_vec_buffer()
+            .use_vec_sdu_buffer()
+            .build();
 
-        test_link.enable_signalling_channel();
-
-        let mut verify_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_verify);
-
-        verify_link.enable_signalling_channel();
+        let mut verify_link = LeULogicalLink::builder(phy_verify)
+            .enable_signalling_channel()
+            .use_vec_buffer()
+            .use_vec_sdu_buffer()
+            .build();
 
         let mut test_channel = test_link.get_signalling_channel().unwrap();
 
@@ -1168,21 +1265,21 @@ pub mod tests {
 
     #[tokio::test]
     async fn le_u_logical_link_unused_channels() {
-        use alloc::vec::Vec;
-
         let mut phy_link_loop = PhysicalLinkLoop::new();
 
         let (phy_test, phy_verify) = phy_link_loop.channel();
 
-        let mut test_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_test);
+        let mut test_link = LeULogicalLink::builder(phy_test)
+            .enable_unused_fixed_channel_response()
+            .build();
 
-        test_link.unused_responses(true);
-
-        let mut verify_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_verify);
-
-        verify_link.enable_att_channel(Vec::new());
-        verify_link.enable_signalling_channel();
-        verify_link.enable_security_manager_channel(Vec::new());
+        let mut verify_link = LeULogicalLink::builder(phy_verify)
+            .enable_attribute_channel()
+            .enable_signalling_channel()
+            .enable_security_manager_channel()
+            .use_vec_buffer()
+            .use_vec_sdu_buffer()
+            .build();
 
         let test_procedure = async {
             let find_info_request = alloc::vec![0x4, 0x0, 0x0, 0xFF, 0xFF];
@@ -1267,13 +1364,17 @@ pub mod tests {
 
         let (phy_test, phy_verify) = phy_link_loop.channel();
 
-        let mut test_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_test);
+        let mut test_link = LeULogicalLink::builder(phy_test)
+            .enable_signalling_channel()
+            .use_vec_buffer()
+            .use_vec_sdu_buffer()
+            .build();
 
-        test_link.enable_signalling_channel();
-
-        let mut verify_link = LeULogicalLink::<_, alloc::vec::Vec<u8>>::new(phy_verify);
-
-        verify_link.enable_signalling_channel();
+        let mut verify_link = LeULogicalLink::builder(phy_verify)
+            .enable_signalling_channel()
+            .use_vec_buffer()
+            .use_vec_sdu_buffer()
+            .build();
 
         let test_message = b"hello and welcome to the test. Lorem ipsum dolor sit amet, \
             consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna \

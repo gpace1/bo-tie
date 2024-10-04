@@ -144,10 +144,10 @@ impl BasicHeaderProcessor {
 }
 
 #[derive(Debug)]
-pub enum LeUChannelBuffer<B> {
+pub enum LeUChannelType<B> {
     Unused,
     Reserved,
-    BasicChannel { buffer: B },
+    BasicChannel,
     SignallingChannel,
     CreditBasedChannel { data: CreditBasedChannelData<B> },
 }
@@ -161,15 +161,15 @@ pub struct CreditBasedChannelData<B> {
     maximum_payload_size: u16,
     peer_credits: u16,
     remaining_sdu_bytes: u16,
-    buffer: B,
+    sdu_buffer: B,
 }
 
-impl<B: TryExtend<u8> + Default> CreditBasedChannelData<B> {
+impl<S: TryExtend<u8> + Default> CreditBasedChannelData<S> {
     /// Process a PDU, returning a SDU if it has been completely received
     ///
     /// # Error
     /// Returns an error if the buffer cannot be extended by the payload of the credit based frame.
-    pub(crate) fn process_pdu<T>(&mut self, pdu: CreditBasedFrame<T>) -> Result<Option<B>, B::Error>
+    pub(crate) fn process_pdu<T>(&mut self, pdu: CreditBasedFrame<T>) -> Result<Option<S>, S::Error>
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
@@ -182,17 +182,21 @@ impl<B: TryExtend<u8> + Default> CreditBasedChannelData<B> {
 
         let iter = pdu.into_payload().into_iter();
 
+        let iter_len = iter.len();
+
+        let take_amount = core::cmp::min(iter_len, self.remaining_sdu_bytes.into());
+
+        self.sdu_buffer.try_extend(iter.take(take_amount))?;
+
         self.remaining_sdu_bytes = self
             .remaining_sdu_bytes
-            .saturating_sub(iter.len().try_into().unwrap_or(<u16>::MAX));
-
-        self.buffer.try_extend(iter.take(self.remaining_sdu_bytes.into()))?;
+            .saturating_sub(iter_len.try_into().unwrap_or(<u16>::MAX));
 
         if self.remaining_sdu_bytes == 0 {
             // now that the SDU is built, reset the first flag
             self.recombine_meta.first_pdu_of_sdu = true;
 
-            Ok(Some(core::mem::take(&mut self.buffer)))
+            Ok(Some(core::mem::take(&mut self.sdu_buffer)))
         } else {
             Ok(None)
         }
@@ -203,19 +207,23 @@ impl<B: TryExtend<u8> + Default> CreditBasedChannelData<B> {
     }
 }
 
-impl<B> LeUChannelBuffer<B> {
+impl<S> LeUChannelType<S> {
     /// Create the recombiner associated with the channel's L2CAP PDU
     ///
     /// # Panic
     /// This cannot be called on an [`Unused`] channel.
     ///
-    /// [`Unused`]: LeUChannelBuffer::Unused
-    pub(crate) fn new_recombiner(&mut self, basic_header: &BasicHeader) -> LeUPduRecombine<'_, B>
+    /// [`Unused`]: LeUChannelType::Unused
+    pub(crate) fn new_recombiner<'a, B>(
+        &'a mut self,
+        buffer: &'a mut B,
+        basic_header: &BasicHeader,
+    ) -> LeUPduRecombine<'a, B>
     where
         B: TryExtend<u8> + Default,
     {
         match self {
-            LeUChannelBuffer::Unused => match basic_header.channel_id {
+            LeUChannelType::Unused => match basic_header.channel_id {
                 ChannelIdentifier::Le(LeCid::AttributeProtocol)
                 | ChannelIdentifier::Le(LeCid::LeSignalingChannel)
                 | ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
@@ -230,22 +238,22 @@ impl<B> LeUChannelBuffer<B> {
                 }
                 _ => LeUPduRecombine::new_dump_recombiner(&basic_header),
             },
-            LeUChannelBuffer::Reserved => LeUPduRecombine::new_dump_recombiner(&basic_header),
-            LeUChannelBuffer::BasicChannel { buffer } => {
+            LeUChannelType::Reserved => LeUPduRecombine::new_dump_recombiner(&basic_header),
+            LeUChannelType::BasicChannel => {
                 let recombine = BasicFrame::recombine(basic_header.length, basic_header.channel_id, buffer, ());
 
                 LeUPduRecombine::BasicChannel(recombine)
             }
-            LeUChannelBuffer::SignallingChannel => {
+            LeUChannelType::SignallingChannel => {
                 let recombine = ReceivedLeUSignal::recombine(basic_header.length, basic_header.channel_id, (), ());
 
                 LeUPduRecombine::SignallingChannel(recombine)
             }
-            LeUChannelBuffer::CreditBasedChannel { data } => {
+            LeUChannelType::CreditBasedChannel { data } => {
                 let recombine = CreditBasedFrame::recombine(
                     basic_header.length,
                     basic_header.channel_id,
-                    &mut data.buffer,
+                    buffer,
                     &mut data.recombine_meta,
                 );
 
@@ -384,9 +392,9 @@ pub struct DynChannelState {
     pub(crate) inner: DynChannelStateInner,
 }
 
-impl<B> From<DynChannelState> for LeUChannelBuffer<B>
+impl<S> From<DynChannelState> for LeUChannelType<S>
 where
-    B: Default,
+    S: Default,
 {
     fn from(state: DynChannelState) -> Self {
         match state.inner {
@@ -414,10 +422,10 @@ where
                     maximum_payload_size,
                     peer_credits,
                     remaining_sdu_bytes,
-                    buffer: B::default(),
+                    sdu_buffer: S::default(),
                 };
 
-                LeUChannelBuffer::CreditBasedChannel { data: credit_data }
+                LeUChannelType::CreditBasedChannel { data: credit_data }
             }
         }
     }
@@ -498,7 +506,7 @@ impl<L: LogicalLink> BasicFrameChannel<L> {
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
-        L::Buffer: Default,
+        L::PduBuffer: Default,
     {
         let max_transmission_size = self.logical_link.get_physical_link().max_transmission_size().into();
 
@@ -531,16 +539,16 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         }
     }
 
-    fn get_channel_data(&self) -> &CreditBasedChannelData<L::Buffer> {
-        let LeUChannelBuffer::CreditBasedChannel { data } = self.logical_link.get_channel_buffer() else {
+    fn get_channel_data(&self) -> &CreditBasedChannelData<L::SduBuffer> {
+        let LeUChannelType::CreditBasedChannel { data } = self.logical_link.get_channel_data() else {
             unreachable!()
         };
 
         data
     }
 
-    fn get_mut_channel_data(&mut self) -> &mut CreditBasedChannelData<L::Buffer> {
-        let LeUChannelBuffer::CreditBasedChannel { data } = self.logical_link.get_mut_channel_buffer() else {
+    fn get_mut_channel_data(&mut self) -> &mut CreditBasedChannelData<L::SduBuffer> {
+        let LeUChannelType::CreditBasedChannel { data } = self.logical_link.get_mut_channel_data() else {
             unreachable!()
         };
 

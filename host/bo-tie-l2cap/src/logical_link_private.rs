@@ -1,5 +1,5 @@
 use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
-use crate::channel::{DynChannelState, DynChannelStateInner, LeUChannelBuffer};
+use crate::channel::{DynChannelState, DynChannelStateInner, LeUChannelType};
 use crate::link_flavor::{LeULink, LinkFlavor};
 use crate::{
     LeULogicalLink, PhysicalLink, SignallingChannel, LE_DYNAMIC_CHANNEL_COUNT, LE_LINK_SIGNALLING_CHANNEL_INDEX,
@@ -7,17 +7,54 @@ use crate::{
 };
 use bo_tie_core::buffer::TryExtend;
 
+/// Marker type for an unused buffer
+#[derive(Debug, Default)]
+pub struct PhantomBuffer;
+
+impl<I> TryExtend<I> for PhantomBuffer {
+    type Error = PhantomBufferError;
+
+    fn try_extend<T>(&mut self, _: T) -> Result<(), Self::Error>
+    where
+        T: IntoIterator<Item = I>,
+    {
+        Err(PhantomBufferError)
+    }
+}
+
+impl IntoIterator for PhantomBuffer {
+    type Item = u8;
+
+    type IntoIter = core::array::IntoIter<u8, 0>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        [].into_iter()
+    }
+}
+
+/// Error type for [`PhantomBuffer`]
+#[derive(Debug)]
+pub struct PhantomBufferError;
+
+impl core::fmt::Display for PhantomBufferError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str("tried to use marker type `UnusedBuffer` as a real buffer")
+    }
+}
+
 #[doc(hidden)]
 pub trait LogicalLinkPrivate: Sized {
     type PhysicalLink: PhysicalLink;
 
-    type Buffer;
+    type PduBuffer;
+
+    type SduBuffer;
 
     type LinkFlavor: LinkFlavor;
 
     type Deferred<'a>: LogicalLinkPrivate<
         PhysicalLink = Self::PhysicalLink,
-        Buffer = Self::Buffer,
+        PduBuffer = Self::PduBuffer,
         LinkFlavor = Self::LinkFlavor,
     >
     where
@@ -53,7 +90,9 @@ pub trait LogicalLinkPrivate: Sized {
     /// * An error is returned if all dynamic channels for the logical link are currently used by
     ///   either established channels or reservations.
     /// * There is no associated reservation provided for the reservation state.
-    fn establish_dyn_channel(&mut self, state: DynChannelState) -> Result<ChannelIdentifier, NewDynChannelError>;
+    fn establish_dyn_channel(&mut self, state: DynChannelState) -> Result<ChannelIdentifier, NewDynChannelError>
+    where
+        Self::SduBuffer: Default;
 
     /// Remove a dynamic channel
     ///
@@ -71,7 +110,7 @@ pub trait LogicalLinkPrivate: Sized {
     fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool;
 
     /// Get a dynamic channel by its identifier
-    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelBuffer<Self::Buffer>>;
+    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelType<Self::SduBuffer>>;
 
     /// Get the signalling channel
     ///
@@ -86,10 +125,10 @@ pub trait LogicalLinkPrivate: Sized {
     fn get_mut_physical_link(&mut self) -> &mut Self::PhysicalLink;
 
     /// Get the channel buffer
-    fn get_channel_buffer(&self) -> &LeUChannelBuffer<Self::Buffer>;
+    fn get_channel_data(&self) -> &LeUChannelType<Self::SduBuffer>;
 
     /// Get a mutable reference to the buffer
-    fn get_mut_channel_buffer(&mut self) -> &mut LeUChannelBuffer<Self::Buffer>;
+    fn get_mut_channel_data(&mut self) -> &mut LeUChannelType<Self::SduBuffer>;
 }
 
 #[derive(Debug)]
@@ -136,17 +175,17 @@ impl std::error::Error for NewDynChannelError {}
 
 /// A handle to a logical link for a channel
 #[derive(Debug)]
-pub struct LeULogicalLinkHandle<'a, P, B> {
-    logical_link: &'a mut LeULogicalLink<P, B>,
+pub struct LeULogicalLinkHandle<'a, P, B, S> {
+    logical_link: &'a mut LeULogicalLink<P, B, S>,
     index: usize,
 }
 
-impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
-    pub(crate) fn new(logical_link: &'a mut LeULogicalLink<P, B>, index: usize) -> Self {
+impl<'a, P, B, S> LeULogicalLinkHandle<'a, P, B, S> {
+    pub(crate) fn new(logical_link: &'a mut LeULogicalLink<P, B, S>, index: usize) -> Self {
         Self { logical_link, index }
     }
 
-    fn occupy_next_dyn_channel(&mut self, buff: LeUChannelBuffer<B>) -> Result<ChannelIdentifier, NewDynChannelError> {
+    fn occupy_next_dyn_channel(&mut self, buff: LeUChannelType<S>) -> Result<ChannelIdentifier, NewDynChannelError> {
         if self.logical_link.channels.len() < LE_STATIC_CHANNEL_COUNT + LE_DYNAMIC_CHANNEL_COUNT {
             let index = self.logical_link.channels.len();
 
@@ -158,7 +197,7 @@ impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
                 .iter()
                 .enumerate()
                 .find_map(|(i, channel)| match channel {
-                    LeUChannelBuffer::Unused => Some(i),
+                    LeUChannelType::Unused => Some(i),
                     _ => None,
                 })
                 .map(|index| {
@@ -198,28 +237,29 @@ impl<'a, P, B> LeULogicalLinkHandle<'a, P, B> {
     }
 }
 
-impl<P, B> LogicalLinkPrivate for LeULogicalLinkHandle<'_, P, B>
-where
-    P: PhysicalLink,
-    B: TryExtend<u8> + Default,
-{
+impl<P: PhysicalLink, B, S> LogicalLinkPrivate for LeULogicalLinkHandle<'_, P, B, S> {
     type PhysicalLink = P;
-    type Buffer = B;
+    type PduBuffer = B;
+
+    type SduBuffer = S;
 
     type LinkFlavor = LeULink;
 
-    type Deferred<'a> = LeULogicalLinkHandle<'a, P, B,>
+    type Deferred<'a> = LeULogicalLinkHandle<'a, P, B, S>
         where
             Self: 'a;
 
     fn reserve_dyn_channel(&mut self) -> Result<ChannelIdentifier, NewDynChannelError> {
-        self.occupy_next_dyn_channel(LeUChannelBuffer::Reserved)
+        self.occupy_next_dyn_channel(LeUChannelType::Reserved)
     }
 
     fn establish_dyn_channel(
         &mut self,
         dyn_channel_builder: DynChannelState,
-    ) -> Result<ChannelIdentifier, NewDynChannelError> {
+    ) -> Result<ChannelIdentifier, NewDynChannelError>
+    where
+        Self::SduBuffer: Default,
+    {
         match &dyn_channel_builder.inner {
             DynChannelStateInner::ReserveCreditBasedChannel { reserved_id, .. } => {
                 let channel = *reserved_id;
@@ -242,10 +282,10 @@ where
         if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = id {
             let index = (channel_id.get_val() - *DynChannelId::LE_BOUNDS.start()) as usize + LE_STATIC_CHANNEL_COUNT;
 
-            if let LeUChannelBuffer::Unused = self.logical_link.channels[index] {
+            if let LeUChannelType::Unused = self.logical_link.channels[index] {
                 false
             } else {
-                self.logical_link.channels[index] = LeUChannelBuffer::Unused;
+                self.logical_link.channels[index] = LeUChannelType::Unused;
 
                 true
             }
@@ -254,7 +294,7 @@ where
         }
     }
 
-    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelBuffer<Self::Buffer>> {
+    fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelType<Self::SduBuffer>> {
         if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) = id {
             let index = self.logical_link.convert_dyn_index(dyn_channel_id);
 
@@ -281,11 +321,11 @@ where
         &mut self.logical_link.physical_link
     }
 
-    fn get_channel_buffer(&self) -> &LeUChannelBuffer<B> {
+    fn get_channel_data(&self) -> &LeUChannelType<Self::SduBuffer> {
         &self.logical_link.channels[self.index]
     }
 
-    fn get_mut_channel_buffer(&mut self) -> &mut LeUChannelBuffer<Self::Buffer> {
+    fn get_mut_channel_data(&mut self) -> &mut LeUChannelType<Self::SduBuffer> {
         &mut self.logical_link.channels[self.index]
     }
 }

@@ -1,7 +1,7 @@
 //! Signalling Channel implementation
 
 use crate::channel::id::{AclCid, ChannelIdentifier, LeCid};
-use crate::channel::{ChannelDirection, DynChannelState, DynChannelStateInner, LeUChannelBuffer};
+use crate::channel::{ChannelDirection, DynChannelState, DynChannelStateInner, LeUChannelType};
 use crate::link_flavor::LeULink;
 use crate::logical_link_private::NewDynChannelError;
 use crate::pdu::{FragmentL2capPdu, RecombineL2capPdu, RecombinePayloadIncrementally};
@@ -84,7 +84,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
             .ok_or_else(|| RequestDisconnectError::NoChannelFoundForId(this_channel_id))?;
 
         match channel_buffer {
-            LeUChannelBuffer::CreditBasedChannel { data } => {
+            LeUChannelType::CreditBasedChannel { data } => {
                 let (source_id, destination_id) = match &data.peer_channel_id {
                     ChannelDirection::Source(s) => (*s, this_channel_id),
                     ChannelDirection::Destination(d) => (this_channel_id, *d),
@@ -752,6 +752,7 @@ impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
     pub async fn send_success_response(self) -> Result<ChannelIdentifier, LeCreditResponseError<L>>
     where
         L: LogicalLink,
+        L::SduBuffer: Default,
     {
         use core::cmp::min;
 
@@ -886,11 +887,15 @@ impl Response<LeCreditBasedConnectionResponse> {
     /// [`ConnectionSuccessful`], or the link failed to allocate a dynamic channel.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub fn create_le_credit_connection<L: LogicalLink>(
+    pub fn create_le_credit_connection<L>(
         &self,
         request: &LeCreditBasedConnectionRequest,
         signals_channel: &mut SignallingChannel<L>,
-    ) -> Result<(), CreateLeCreditConnectionError> {
+    ) -> Result<(), CreateLeCreditConnectionError>
+    where
+        L: LogicalLink,
+        L::SduBuffer: Default,
+    {
         if let LeCreditBasedConnectionResponseResult::ConnectionSuccessful = self.get_result() {
             let peer_channel_id = ChannelDirection::Destination(self.response.get_destination_cid().unwrap());
 
