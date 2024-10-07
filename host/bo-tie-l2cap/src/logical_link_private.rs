@@ -9,9 +9,9 @@ use bo_tie_core::buffer::TryExtend;
 
 /// Marker type for an unused buffer
 #[derive(Debug, Default)]
-pub struct PhantomBuffer;
+pub struct UnusedBuffer;
 
-impl<I> TryExtend<I> for PhantomBuffer {
+impl<I> TryExtend<I> for UnusedBuffer {
     type Error = PhantomBufferError;
 
     fn try_extend<T>(&mut self, _: T) -> Result<(), Self::Error>
@@ -22,7 +22,7 @@ impl<I> TryExtend<I> for PhantomBuffer {
     }
 }
 
-impl IntoIterator for PhantomBuffer {
+impl IntoIterator for UnusedBuffer {
     type Item = u8;
 
     type IntoIter = core::array::IntoIter<u8, 0>;
@@ -32,7 +32,7 @@ impl IntoIterator for PhantomBuffer {
     }
 }
 
-/// Error type for [`PhantomBuffer`]
+/// Error type for [`UnusedBuffer`]
 #[derive(Debug)]
 pub struct PhantomBufferError;
 
