@@ -46,7 +46,7 @@ impl core::fmt::Display for PhantomBufferError {
 pub trait LogicalLinkPrivate: Sized {
     type PhysicalLink: PhysicalLink;
 
-    type PduBuffer;
+    type PduBuffer: Default;
 
     type SduBuffer;
 
@@ -237,7 +237,7 @@ impl<'a, P, B, S> LeULogicalLinkHandle<'a, P, B, S> {
     }
 }
 
-impl<P: PhysicalLink, B, S> LogicalLinkPrivate for LeULogicalLinkHandle<'_, P, B, S> {
+impl<P: PhysicalLink, B: Default, S> LogicalLinkPrivate for LeULogicalLinkHandle<'_, P, B, S> {
     type PhysicalLink = P;
     type PduBuffer = B;
 

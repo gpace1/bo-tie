@@ -12,8 +12,8 @@ quickcheck_macros = "1"
 tokio = { version = "1", features = ["full"] }
 
 [features]
+default = ["std"]
 std = []
-unstable = []
 
 [package.metadata.docs.rs]
 all-features = true

@@ -12,7 +12,8 @@ use crate::{LogicalLink, PhysicalLink};
 /// (k-frames) until the peer device sends a *L2CAP flow control credit ind* containing one or more
 /// credits.
 pub struct CreditServiceData<T: Iterator> {
-    destination_channel: ChannelIdentifier,
+    this_channel: ChannelIdentifier,
+    peer_channel: ChannelIdentifier,
     packets_iterator: PacketsIterator<T>,
 }
 
@@ -20,11 +21,26 @@ impl<T> CreditServiceData<T>
 where
     T: Iterator<Item = u8> + ExactSizeIterator,
 {
-    pub(crate) fn new(destination_channel: ChannelIdentifier, packets_iterator: PacketsIterator<T>) -> Self {
+    pub(crate) fn new(
+        this_channel: ChannelIdentifier,
+        peer_channel: ChannelIdentifier,
+        packets_iterator: PacketsIterator<T>,
+    ) -> Self {
         Self {
-            destination_channel,
+            this_channel,
+            peer_channel,
             packets_iterator,
         }
+    }
+
+    /// Get the identifier of the channel that is sending this SDU
+    pub fn get_this_channel_id(&self) -> ChannelIdentifier {
+        self.this_channel
+    }
+
+    /// Get the identifier of the device that is receiving this SDU
+    pub fn get_peer_channel_id(&self) -> ChannelIdentifier {
+        self.peer_channel
     }
 
     async fn send<L: LogicalLink>(
@@ -65,7 +81,7 @@ where
         credit_based_channel: &mut CreditBasedChannel<L>,
         amount: u16,
     ) -> Result<Option<CreditServiceData<T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        if credit_based_channel.get_channel_data().peer_channel_id.get_channel() != self.destination_channel {
+        if credit_based_channel.get_channel_data().peer_channel_id.get_channel() != self.peer_channel {
             return Err(SendSduError::IncorrectChannel);
         }
 
@@ -80,18 +96,54 @@ where
     ///
     /// This can be used if credits were given directly to the `credit_based_channel`. This method will continue sending
     /// credit based frames until either the SDU was finished sending or the number of credits within the channel is
-    /// zero. This method is typically called after [`add_peer_credits`].
+    /// zero.
     ///
     /// ```
+    /// # use std::fmt::{Debug, Display};
     /// # use std::vec::IntoIter;
-    /// # use bo_tie_l2cap::channel::{CreditServiceData, SendSduError};
+    /// # use bo_tie_core::buffer::TryExtend;
+    /// # use bo_tie_l2cap::{CreditServiceData, LeULogicalLink, LeUNext, SendSduError};
     /// # use bo_tie_l2cap::{CreditBasedChannel, LogicalLink, PhysicalLink};
+    /// # use bo_tie_l2cap::cid::{ChannelIdentifier, DynChannelId};
     /// # use bo_tie_l2cap::signals::packets::FlowControlCreditInd;
-    /// # async fn example<L: LogicalLink>(credit_service_data: CreditServiceData<IntoIter<u8>>, mut credit_based_channel: CreditBasedChannel<L>, flow_control_credit_ind: FlowControlCreditInd)
-    /// # -> Result<(), SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-    /// credit_based_channel.add_peer_credits(flow_control_credit_ind.get_credits());
+    /// # async fn example<P: PhysicalLink, B: , S>(
+    /// #    mut le_link: LeULogicalLink<P, B, S>)
+    /// # -> Result<(), Box<dyn std::error::Error>>
+    /// # where
+    /// #         P: PhysicalLink + 'static,
+    /// #         B: TryExtend<u8> + Default + IntoIterator<Item = u8> + 'static,
+    /// #         B::IntoIter: ExactSizeIterator,
+    /// #         S: TryExtend<u8> + Default + 'static,
+    /// #         P::RecvErr: Debug + Display,
+    /// #         P::SendErr: Debug + Display, {
+    /// # let channel_id = ChannelIdentifier::Le(DynChannelId::new_le(0x40).unwrap());
+    /// # let sdu_data = b"this is the sdu data for this doc example".to_vec();
+    /// let mut credit_service_data = le_link.get_credit_based_channel(channel_id)
+    ///     .unwrap()
+    ///     .send(sdu_data)
+    ///     .await?;
     ///
-    /// credit_service_data.continue_sending(&mut credit_based_channel).await?;
+    /// loop {
+    ///     if credit_service_data.is_none() { break }
+    ///
+    ///     match le_link.next().await? {
+    ///         LeUNext::CreditIndication { mut channel, .. } => {
+    ///             let data_cid = credit_service_data
+    ///                 .as_ref()
+    ///                 .map(|c| c.get_this_channel_id());
+    ///     
+    ///             if data_cid == Some(channel.get_this_channel_id()) {
+    ///                 credit_service_data = credit_service_data
+    ///                     .unwrap()
+    ///                     .continue_sending(&mut channel)
+    ///                     .await?;
+    ///             }
+    ///         }
+    ///     
+    ///         // ...
+    /// #       _ => (),
+    ///     }
+    /// }
     /// # Ok(())
     /// # }
     /// ```
@@ -101,7 +153,7 @@ where
         mut self,
         credit_based_channel: &mut CreditBasedChannel<L>,
     ) -> Result<Option<CreditServiceData<T>>, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        if credit_based_channel.get_channel_data().peer_channel_id.get_channel() != self.destination_channel {
+        if credit_based_channel.get_channel_data().peer_channel_id.get_channel() != self.peer_channel {
             return Err(SendSduError::IncorrectChannel);
         }
 

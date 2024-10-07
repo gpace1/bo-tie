@@ -491,7 +491,6 @@ impl<L: LogicalLink> BasicFrameChannel<L> {
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
-        L::PduBuffer: Default,
     {
         let max_transmission_size = self.logical_link.get_physical_link().max_transmission_size().into();
 
@@ -701,6 +700,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         }
 
         Ok(Some(CreditServiceData::new(
+            self.get_this_channel_id(),
             self.get_channel_data().peer_channel_id.get_channel(),
             packets,
         )))
@@ -743,4 +743,4 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<E: std::error::Error> std::error::Error for SendSduError<E> {}
+impl<E: core::fmt::Debug + core::fmt::Display> std::error::Error for SendSduError<E> {}

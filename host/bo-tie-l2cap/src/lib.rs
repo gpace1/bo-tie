@@ -76,8 +76,9 @@
 //! via their channel identifier.
 //!
 //! ```
-//! # use bo_tie_l2cap::LeULogicalLink;
-//! # fn doc_test<P, B, S>(mut le_logical_link: LeULogicalLink<P, B, S>) {
+//! # use bo_tie_core::buffer::TryExtend;
+//! # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+//! # fn doc_test<P: PhysicalLink, B: TryExtend<u8> + Default, S>(mut le_logical_link: LeULogicalLink<P, B, S>) {
 //! le_logical_link.enable_att_channel();
 //!
 //! // get methods return `None` if the channel is disabled
@@ -131,7 +132,9 @@ pub mod signals;
 
 use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
 use crate::channel::signalling::ReceivedLeUSignal;
-pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
+pub use crate::channel::{
+    id as cid, BasicFrameChannel, CreditBasedChannel, CreditServiceData, SendSduError, SignallingChannel,
+};
 use crate::channel::{InvalidChannel, LeUChannelType, PduRecombineAddError, PduRecombineAddOutput};
 use crate::link_flavor::LinkFlavor;
 use crate::logical_link_private::{LeULogicalLinkHandle, UnusedBuffer};
