@@ -1,56 +1,123 @@
-//! Link Link Control and Adaption Protocol
+//! Logical Link Control and Adaptation Protocol (L2CAP) Implementation
 //!
-//! This is an implementation of the Link Link Control and Adaption Protocol (L2CAP). L2CAP is the
-//! base protocol for all other host protocols of Bluetooth. Its main purpose is for data managing
-//! and control between the host, the protocols below the host layer (usually this is the HCI
-//! layer), and connected devices.
-//!  
-//! # Logical Links Flavors
-//! There are two distinct types of logical links, ACL-U for a BR/ERD physical link and LE-U for a
-//! LE physical link. The Bluetooth Specification further defines different configuration for these
-//! logical links (well only for the ACL-U link) depending on the configuration or implementation of
-//! either the physical link or how the higher protocol use the link. To manage this, this crate
-//! has 'broken up' these two logical links into logical links *flavors*.
+//! This library specifically deals with the L2CAP layer of the Bluetooth Specification. L2CAP is
+//! a middling layer so it the implementation needs to interface with the lower layers while
+//! providing data integrity to the higher layers. The main job of all this is to manage data
+//! fragmentation. Whenever data is sent from a higher layer to the L2CAP layer, the job of the
+//! L2CAP implementation is to fragment the date into acceptable sizes by the lower layers.
+//! Similarly, data from the lower layers needs to be recombined into data fit for the higher
+//! layers.
 //!
-//! [`AclULink`], [`AclUExtLink`], [`ApbLink`], and [`LeULink`] are the four 'flavors' of logical
-//! links defined within this library. `AclULink`, `AclUExtLink`, `ApbLink` are flavors of ACL-U
-//! logical links and `LeULink` is the lone flavor for a LE-U logical link. Each type has their own
-//! supported Maximum Transmission Unit (MTU) and channel mapping (as assigned by the Bluetooth SIG)
-//! requirements.
+//! The rules and configuration for how data is processed by the L2CAP layer depend on the logical
+//! link implementation and the logical link 'flavor'. 'flavor' is not something defined by this
+//! library and not *directly* defined the Bluetooth Specification, but it's required for various
+//! implementation details and signalling channel restrictions.
 //!
-//! Every flavor implements the [`LinkFlavor`] trait. This trait is for ensuring channel mapping is
-//! correct for the flavor and for defining the required supported MTU.
+//! Logical links' control the data transport and channel allocations. In order to create a logical
+//! link it needs to be tied to the lower layers via the [`PhysicalLink`] trait. From the
+//! perspective of the logical layer, the `PhysicalLink` is the direct I/O to the radio. In reality
+//! the implementation is most likely a driver of the data transport toward the hardware of the
+//! controller. The `PhysicalLink` trait has no differentiation between BR/EDR and LE, so its up to
+//! you to ensure the right physical link implementation is used with the correct logical link.
+//!
+//! # LE-U Logical Link
+//!
+//! This interface between the LE physical layers and the LE host layers is done via the
+//! [`LeULogicalLink`] type.
+//!
+//! ### `LeULogicalLink` Builder
+//!
+//! A `LeULogicalLink` must be constructed through its [`builder`](LeULogicalLink::builder) due to
+//! buffering types that need to be set. If you look at the wrapping `impl` for `builder`, it has
+//! the strange type of `LeULogicalLink<P, UnusedBuffer, UnusedBuffer>`. The generics of
+//! `LeULogicalLink` are the `PhysicalLink`, the PDU buffer, and the SDU buffer in that order.
+//! Technically both the PDU buffer and SDU buffer are optional, although in practice the PDU buffer
+//! is usually defined. `UnusedBuffer` is essentially a marker type that returns an error whenever
+//! it is attempted to be used as a buffer. The PDU buffer type needs to be redefined if the
+//! Attribute, Security Manager, or dynamic channels are enabled or used. The SDU buffer type needs
+//! to be redefined if dynamic channels are going to be used. The easiest way to do this is with the
+//! `use_vec_*` methods of the builder.
 //!
 //! ```
-//! # use bo_tie_l2cap::link_flavor::{AclUExtLink, AclULink, LeULink, LinkFlavor};
-//! # use bo_tie_l2cap::channel::id::{AclCid, ChannelIdentifier};
-//!
-//! // The `LinkFlavor` trait is mainly used for validating
-//! // raw channel identifiers
-//!
-//! // att channel
-//! assert!(LeULink::try_channel_from_raw(0x4).is_some());
-//!
-//! // invalid channel
-//! assert!(LeULink::try_channel_from_raw(0xFFFF).is_none());
-//!
-//!
-//! // The `SUPPORTED_MTU` constant is the required supported MTU
-//! assert_eq!(672, AclUExtLink::SUPPORTED_MTU);
-//!
-//!
-//! // `LinkFlavor` also has a method to get the signalling channel
-//! assert_eq!(
-//!     Some(ChannelIdentifier::Acl(AclCid::SignalingChannel)),
-//!     AclULink::get_signaling_channel()
-//! );
+//! # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+//! # fn doc_test<P: PhysicalLink>(physical_link: P) {
+//! let le_logical_link = LeULogicalLink::builder(physical_link)
+//!     .enable_attribute_channel() // fixed channels can be enabled by the builder
+//!     .enable_signalling_channel()
+//!     .enable_security_manager_channel()
+//!     .use_vec_buffer() // sets the PDU buffer as `Vec`
+//!     .use_vec_sdu_buffer() // sets the SDU buffer as `Vec`
+//!     .build();
+//! # }
 //! ```
 //!
-//! [`AclULink`]: link_flavor::AclULink
-//! [`AclUExtLink`]: link_flavor::AclUExtLink
-//! [`ApbLink`]: link_flavor::ApbLink
-//! [`LeULink`]: link_flavor::LeULink
-//! [`LinkFlavor`]: link_flavor::LinkFlavor
+//! If you want to use a different type the `use_owned_*` methods used with a turbofish `::<_>` will
+//! change the buffer type to a custom type.
+//!
+//! ```
+//! # use bo_tie_l2cap::{LeULogicalLink, PhysicalLink};
+//! # type MyOwnedBufferType = bo_tie_core::buffer::stack::LinearBuffer<0, u8>;
+//! # fn doc_test<P: PhysicalLink>(physical_link: P) {
+//! let le_logical_link = LeULogicalLink::builder(physical_link)
+//!     .use_owned_buffer::<MyOwnedBufferType>()
+//!     .use_owned_sdu_buffer::<MyOwnedBufferType>()
+//!     .build();
+//! # }
+//! ```
+//!
+//! ### Channels
+//!
+//! Channels must be enabled before they can be used. They can either be enabled by the builder or
+//! enabled/disabled by the `LeULogicalLink`. Once enabled the channel can be sent to and received
+//! from.
+//!
+//! There is two ways to acquire a channel from a `LeULogicalLink`. The most obvious way is to use
+//! the get methods. Fixed channels have their own get method, and dynamic channels can be acquired
+//! via their channel identifier.
+//!
+//! ```
+//! # use bo_tie_l2cap::LeULogicalLink;
+//! # fn doc_test<P, B, S>(mut le_logical_link: LeULogicalLink<P, B, S>) {
+//! le_logical_link.enable_att_channel();
+//!
+//! // get methods return `None` if the channel is disabled
+//! let att_channel = le_logical_link.get_att_channel().unwrap();
+//! # }
+//! ```
+//!
+//! Unfortunately dynamic channels are more complicated than just calling an enable method and begin
+//! using them. There is a setup process to establishing a dynamic channel, see the dynamic channel
+//! subsection for details.
+//!
+//! The other way to get a channel is after data is received for the channel. The next section goes
+//! over that.
+//!
+//! ### Data Reception
+//!
+//! Data is received from another device using the future returned by the method
+//! [`next`](LeULogicalLink::next). This future is a bit of a heavy processor, but its main purpose
+//! is for recombining fragments into a complete L2CAP PDU or SDU and returning the data along with
+//! the channel the data is for, with some exceptions.
+//!
+//! ```
+//! # use bo_tie_core::buffer::stack::LinearBuffer;
+//! # use bo_tie_l2cap::{LeULogicalLink, LeULogicalLinkNextError, LeUNext, PhysicalLink};
+//! # async fn doc_test<P: PhysicalLink>(mut le_logical_link: LeULogicalLink<P, LinearBuffer<0, u8>, LinearBuffer<0, u8>>) -> Result<(), LeULogicalLinkNextError<P, LinearBuffer<0, u8>, LinearBuffer<0, u8>>> {
+//! le_logical_link.enable_att_channel();
+//! le_logical_link.enable_security_manager_channel();
+//!
+//! match le_logical_link.next().await? {
+//!     LeUNext::AttributeChannel { pdu, channel } => {
+//!         // process attribute protocol data
+//!     },
+//!     LeUNext::SecurityManagerChannel { pdu, channel } => {
+//!         // process security manager protocol data
+//!     },
+//!     _ => unreachable!()
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
@@ -67,7 +134,7 @@ use crate::channel::signalling::ReceivedLeUSignal;
 pub use crate::channel::{BasicFrameChannel, CreditBasedChannel, SignallingChannel};
 use crate::channel::{InvalidChannel, LeUChannelType, PduRecombineAddError, PduRecombineAddOutput};
 use crate::link_flavor::LinkFlavor;
-use crate::logical_link_private::{LeULogicalLinkHandle, PhantomBuffer};
+use crate::logical_link_private::{LeULogicalLinkHandle, UnusedBuffer};
 use crate::pdu::{BasicFrame, FragmentIterator, FragmentL2capPdu};
 use bo_tie_core::buffer::TryExtend;
 use core::future::Future;
@@ -84,44 +151,33 @@ pub trait PhysicalLink {
     /// Sending Future
     ///
     /// This future is used to await the transmission of data. It shall poll to completion when the
-    /// lower layer can accept another L2CAP fragment.
-    ///
-    /// If something goes wrong when sending, the future shall complete and output an
-    /// [`Err(Self::SendErr)`].
-    ///
-    /// [`Err(Self::SendErr)`]: PhysicalLink::SendErr
-    // todo: change this into `SendFut<'a, I>` where `I: 'a`. The method `send` will also be changed
-    //  to return `SendFut<'s, T::IntoIter>`. For now this is not done as there are erroneous errors
-    //  generated by the compiler in regards to the generic `I` and it implementing `Iterator`. Once
-    //  those are fixed then `SendFut` will change.
+    /// lower layer can accept another L2CAP fragment. However, if something goes wrong when
+    /// sending, the future shall complete and output an error.
     type SendFut<'a>: Future<Output = Result<(), Self::SendErr>>
     where
         Self: 'a;
 
     /// Send Error
     ///
-    /// This is an error generated by the lower layer whenever the future returned by `send` cannot
-    /// be successfully polled to completed.
+    /// This error is returned by the lower layer whenever the future returned by [`send`] fails.
+    ///
+    /// [`send`]: PhysicalLink::send
     type SendErr: core::fmt::Debug;
 
     /// Reception Future
     ///
     /// This futures must be implemented to await for the reception of L2CAP fragments over the
     /// physical link. The future shall only output when a new L2CAP fragment should be sent to the
-    /// L2CAP layer or an error occurs.
-    ///
-    /// If something goes wrong when awaiting or receiving, the future shall complete and output
-    /// an [`Err(Self::RecvErr)`].
-    ///
-    /// [`Err(Self::RecvErr)`]: PhysicalLink::RecvErr
+    /// L2CAP layer or an error occurs. However, if something goes wrong when awaiting or receiving,
+    /// then the future shall complete and output an error.
     type RecvFut<'a>: Future<Output = Option<Result<L2capFragment<Self::RecvData>, Self::RecvErr>>>
     where
         Self: 'a;
 
     /// Received L2CAP Data
     ///
-    /// `RecvData` is an iterator over data of a *single* physical link packet. The bytes of
-    /// the data are also be in the order in which they are received by the linked device.
+    /// `RecvData` is an exact-sized iterator over data of a *single* fragment of L2CAP data. The
+    /// bytes of the data must be in the order in which they are received by the physical layer.
     ///
     /// # Note
     /// The implementation does not need to verify or check that the payload contains valid L2CAP
@@ -277,7 +333,8 @@ impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
     /// containing the buffering type is required.
     pub fn use_owned_buffer<T>(self) -> LeULogicalLinkBuilder<P, T, S>
     where
-        T: Default + TryExtend<u8>,
+        T: TryExtend<u8> + Default + IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
     {
         LeULogicalLinkBuilder {
             physical_link: self.physical_link,
@@ -303,7 +360,10 @@ impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
     /// unit (SDU). The main point of a SDU is to be able to transfer data over multiple PDUs. Each
     /// connection channel must have its own buffer as PDUs of a SDU may not all be sent together by
     /// the linked peer device.
-    pub fn use_owned_sdu_buffer<T>(self) -> LeULogicalLinkBuilder<P, B, T> {
+    pub fn use_owned_sdu_buffer<T>(self) -> LeULogicalLinkBuilder<P, B, T>
+    where
+        T: TryExtend<u8> + Default,
+    {
         LeULogicalLinkBuilder {
             physical_link: self.physical_link,
             pdu_buffer: self.pdu_buffer,
@@ -422,9 +482,9 @@ const LE_LINK_SIGNALLING_CHANNEL_INDEX: usize = 1;
 /// Index for the Signalling channel within a `LeULogicalLink::channels`
 const LE_LINK_SM_CHANNEL_INDEX: usize = 2;
 
-impl<P> LeULogicalLink<P, PhantomBuffer, PhantomBuffer> {
+impl<P> LeULogicalLink<P, UnusedBuffer, UnusedBuffer> {
     /// Get a builder for a `LogicalLink`
-    pub fn builder(physical_link: P) -> LeULogicalLinkBuilder<P, PhantomBuffer, PhantomBuffer> {
+    pub fn builder(physical_link: P) -> LeULogicalLinkBuilder<P, UnusedBuffer, UnusedBuffer> {
         LeULogicalLinkBuilder::new(physical_link)
     }
 }

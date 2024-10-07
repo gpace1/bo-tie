@@ -1,21 +1,6 @@
 //! L2CAP Channels
 //!
-//! This modules defines different types of channels based on the PDU formats and connections
-//! defined within the L2CAP Bluetooth Specification.
-//!
-//! # [`BasicChannel`]
-//! This channel is used for a L2CAP channel that exchanges basic frames.
-//!
-//! # [`SignallingChannel`]
-//! This channel is the signalling channel of a logical link. Control frames are passed between the
-//! two ends of a signalling channel.
-//!
-//! # [`CreditBasedChannel`]
-//! A credit based channel is created after a L2CAP credit based connection is made between the two
-//! linked devices. Both a LE credit based connection and enhanced credit based connection use
-//! the `CreditBasedChannel` type to passed credit based data over the link.
-//!
-//! [flavor]: crate::link_flavor
+//! This module defines different types of channels used by logical links.
 
 mod credit_based;
 pub mod id;
