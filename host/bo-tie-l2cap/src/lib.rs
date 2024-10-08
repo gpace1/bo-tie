@@ -1130,7 +1130,7 @@ pub mod tests {
     use core::task::{Poll, Waker};
 
     /// A loop between to connected physical links
-    pub(crate) struct PhysicalLinkLoop {
+    pub struct PhysicalLinkLoop {
         a_data: RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
         b_data: RefCell<Option<L2capFragment<LinearBuffer<32, u8>>>>,
         a_waker: RefCell<Option<Waker>>,
@@ -1227,7 +1227,7 @@ pub mod tests {
     }
 
     impl PhysicalLinkLoop {
-        pub(crate) fn new() -> Self {
+        pub fn new() -> Self {
             let a_data = RefCell::new(None);
             let b_data = RefCell::new(None);
             let a_waker = RefCell::new(None);
@@ -1244,7 +1244,7 @@ pub mod tests {
         /// Create a two-way channel of physical links
         ///
         /// Sending from one physical link will cause the other physical link to receive the data.
-        pub(crate) fn channel(&mut self) -> (PhysicalLinkLoopEnd<'_>, PhysicalLinkLoopEnd<'_>) {
+        pub fn channel(&mut self) -> (PhysicalLinkLoopEnd<'_>, PhysicalLinkLoopEnd<'_>) {
             let a = PhysicalLinkLoopEnd {
                 data: &self.a_data,
                 peer_data: &self.b_data,
