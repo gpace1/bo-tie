@@ -11,7 +11,7 @@ use crate::client::response_processor::{
 use crate::{pdu, server::ServerPduName, TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use alloc::{format, vec::Vec};
 use bo_tie_l2cap as l2cap;
-use bo_tie_l2cap::channel::id::ChannelIdentifier;
+use bo_tie_l2cap::cid::ChannelIdentifier;
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink};
 pub use response_processor::ResponseProcessor;
 
@@ -144,104 +144,22 @@ pub struct ConnectFixedClient {
 }
 
 impl ConnectFixedClient {
-    /// Connect to the Attribute server of the peer device
-    ///
-    /// This method cannot be used if the peer device also has an Attribute client or the Attribute
-    /// server of the peer is configured to immediately send notifications or indications. Use
-    /// method [`initiate`] followed by to [`create_client`] if there is a possibility of the other
-    /// device sending *any* data over this channel other than an *exchange MTU response*.
-    ///
-    /// `default_mtu` is the default MTU. This value is the set as the MTU if there is no MTU
-    /// exchange. `request_mtu` is the MTU to be requested within the MTU exchange. See the section
-    /// on [MTU exchange] for more information on the MTU exchange. If both these inputs are `None`,
-    /// then the future returned by `connect` will immediately output an error.
-    ///
-    /// # Note for `select!` macros
-    /// Do not use the `connect` directly within a `select!` unless it is used by mutable reference.
-    /// It can lead to issues with missing L2CAP PDU fragments if another future polls to completion
-    /// before the connect future. This is because there is a buffer within the future that stores
-    /// the fragment data until the entire fragmented PDU is received. If the future drops, so does
-    /// the buffer, and an error will occur with the `att_bearer` channel the next time it tries to
-    /// receive any data.
-    ///
-    /// Do not do this...
-    ///```
-    /// # use bo_tie_att::ConnectFixedClient;
-    /// # use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink, LogicalLink};
-    /// # async fn example<L: LogicalLink>(att_bearer: &mut BasicFrameChannel<'_, L>) {
-    /// tokio::select! {
-    ///    _ = ConnectFixedClient::connect(att_bearer, None, None) => {
-    ///        // handle connection
-    ///    }
-    ///    
-    ///    // other futures
-    /// }
-    /// # }
-    ///```
-    ///
-    /// But this is OK...
-    ///```
-    /// # use bo_tie_att::ConnectFixedClient;
-    /// # use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink, LogicalLink};
-    /// # async fn example<L: LogicalLink>(att_bearer: &mut BasicFrameChannel<'_, L>) {
-    /// // binding the future outside of the `select!`
-    /// // so it will not be dropped because of it.
-    /// let mut connect_future = ConnectFixedClient::connect(
-    ///    att_bearer,
-    ///    None,
-    ///    None);
-    ///
-    /// tokio::select! {
-    ///    _ = &mut connect_future => { /* handle connection */ }
-    ///    
-    ///    // other futures
-    /// }
-    /// # }
-    /// ```
-    ///
-    /// # Panic
-    /// Input `default_mtu` cannot be greater than `request_mtu`.
-    ///
-    /// [`initiate`]: ConnectFixedClient::initiate
-    /// [`create_client`]: ConnectFixedClient::create_client
-    pub async fn connect<T, I, R>(
-        att_bearer: &mut BasicFrameChannel<'_, T>,
-        default_mtu: I,
-        request_mtu: R,
-    ) -> Result<Client, super::ConnectionError<T>>
-    where
-        T: LogicalLink,
-        I: Into<Option<u16>>,
-        R: Into<Option<u16>>,
-    {
-        let connect_client = Self::initiate(att_bearer, default_mtu, request_mtu).await?;
-
-        let mut buffer = alloc::vec::Vec::new();
-
-        let response = att_bearer
-            .receive(&mut buffer)
-            .await
-            .map_err(|e| super::ConnectionError::RecvError(e))?;
-
-        connect_client.create_client(&response).await.map_err(|e| e.into())
-    }
-
     /// Initiate a connection to an ATT server
     ///
     /// # MTU
     /// The `default_mtu` is the initial MTU set for this instance of the ATT protocol. This value
-    /// is defined by a higher layer protocol or profile and it is the assumed value of the MTU when
-    /// the client and server initially connect.
+    /// is defined by a higher layer protocol or profile, and it is the assumed value of the MTU
+    /// when the client and server initially connect.
     ///
     /// The `requested_mtu` is the value that will be sent as part of an *exchange MTU request* that
     /// is sent after the client and server connect. It may become the `requested_mtu` if it is an
-    /// accepted size by the server. If it isn't then the whatever is the smaller of the MTU's
+    /// accepted size by the server. If it isn't then the whatever is the smallest of the MTU values
     /// during the MTU exchange will be set as the new MTU.
     ///
     /// # Panic
     /// Input `default_mtu` cannot be greater than `request_mtu`.
     pub async fn initiate<T, I, R>(
-        att_bearer: &mut BasicFrameChannel<'_, T>,
+        att_bearer: &mut BasicFrameChannel<T>,
         default_mtu: I,
         request_mtu: R,
     ) -> Result<ConnectFixedClient, super::ConnectionError<T>>
@@ -270,7 +188,7 @@ impl ConnectFixedClient {
 
         let request = pdu::exchange_mtu_request(request_mtu);
 
-        let acl_data = l2cap::pdu::BasicFrame::new(TransferFormatInto::into(&request), att_bearer.get_cid());
+        let acl_data = TransferFormatInto::into(&request);
 
         att_bearer
             .send(acl_data)
@@ -386,7 +304,7 @@ impl Client {
     /// specified by a higher protocol layer) or the MTU set as part of the MTU exchange.
     ///
     /// ## ATT bearers using a dynamic L2CAP channel ID
-    /// This method will returns `None` for ATT bearers that use a dynamic channel ID. For those
+    /// This method will return `None` for ATT bearers that use a dynamic channel ID. For those
     /// channels the ATT protocol uses the L2CAP MTU that was determined as part of establishing the
     /// L2CAP channel. The MTU for these connections can be acquired from the instance of the L2CAP
     /// channel.
@@ -396,7 +314,7 @@ impl Client {
 
     async fn send<T, P>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         pdu: &pdu::Pdu<P>,
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -408,7 +326,7 @@ impl Client {
         if payload.len() > self.mtu {
             Err(super::Error::MtuExceeded.into())
         } else {
-            let data = l2cap::pdu::BasicFrame::new(payload.to_vec(), super::L2CAP_FIXED_CHANNEL_ID);
+            let data = payload;
 
             connection_channel
                 .send(data)
@@ -428,7 +346,7 @@ impl Client {
     /// The new MTU is output by the returned `ResponseProcessor`, but it can also .
     pub async fn exchange_mtu_request<'a, T>(
         &'a mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         mtu: u16,
     ) -> Result<ExchangeMtuResponseProcessor<'a>, super::ConnectionError<T>>
     where
@@ -450,7 +368,7 @@ impl Client {
     /// equal to the starting handle
     pub async fn find_information_request<T, R>(
         &self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         handle_range: R,
     ) -> Result<FindInformationResponseProcessor, super::ConnectionError<T>>
     where
@@ -468,16 +386,16 @@ impl Client {
 
     /// Find by type and value request
     ///
-    /// The attribute type, labeled as the input `uuid`, is a 16 bit assigned number type. If the
+    /// The attribute type, labeled as the input `uuid`, is a 16-bit assigned number type. If the
     /// type cannot be converted into a 16 bit UUID, then this function will return an error
     /// containing the incorrect type.
     ///
     /// # Panic
-    /// A range cannot be the reserved handle 0x0000 and the start handle must be larger then the
+    /// A range cannot be the reserved handle 0x0000 and the start handle must be larger than the
     /// ending handle
     pub async fn find_by_type_value_request<T, R, D>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handle_range: R,
         uuid: crate::Uuid,
         value: D,
@@ -510,7 +428,7 @@ impl Client {
     /// then the ending handle
     pub async fn read_by_type_request<T, R, D>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handle_range: R,
         attr_type: crate::Uuid,
     ) -> Result<ReadByTypeResponseProcessor<D>, super::ConnectionError<T>>
@@ -537,7 +455,7 @@ impl Client {
     /// The input `handle` cannot be the reserved handle 0x0000
     pub async fn read_request<T, D>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handle: u16,
     ) -> Result<ReadResponseProcessor<D>, super::ConnectionError<T>>
     where
@@ -560,22 +478,27 @@ impl Client {
     /// PDUs.
     ///
     /// ```
+    /// # use std::error::Error;
     /// # use bo_tie_att::Client;
-    /// # use bo_tie_l2cap::BasicFrameChannel;
-    /// # async fn example<T>(channel: &mut BasicFrameChannel<'_, T>, client: Client) {
+    /// # use bo_tie_att::client::ResponseProcessor;
+    /// # use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink, LeUNext};
+    /// # async fn example<P, B, S>(mut le_link: LeULogicalLink<P,B,S>, client: Client) -> Result<(), Box<dyn Error>> {
     /// # let handle = 1;
     /// let mut offset = 0;
     /// let mut full_blob = None;
     ///
     /// loop {
+    ///     let channel = &mut le_link.get_att_channel().unwrap();
+    ///
     ///     let response_processor = client.read_blob_request(channel, handle, offset)
     ///         .await
     ///         .expect("failed to send request");
     ///
-    ///     let response = channel.receive().await.expect("failed to receive PDU");
+    ///     let LeUNext::AttributeChannel { pdu, .. } = le_link.next().await? else {
+    ///         return Err("unexpected LE data".into())
+    ///     };
     ///
-    ///     match response_processor.process_response(&response)
-    ///         .expect("invalid response")
+    ///     match response_processor.process_response(&pdu)?
     ///     {
     ///         // You can add a `Option<ReadBlob>` to a `ReadBlob`,
     ///         // but it must be on the right side of the `+` and
@@ -593,10 +516,11 @@ impl Client {
     ///     }
     /// }
     ///
-    /// let value: String = full_blob.unwrap()
-    ///     .try_into_value()
-    ///     .expect("invalid string");
+    /// // In this example this value is a String, but it can be
+    /// // whatever type that is associated with the Attribute value
+    /// let value: String = full_blob.unwrap().try_into_value()?;
     ///
+    /// # Ok(())
     /// # }
     /// ```
     ///
@@ -613,7 +537,7 @@ impl Client {
     /// The `handle` cannot be the reserved handle 0
     pub async fn read_blob_request<T>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handle: u16,
         offset: u16,
     ) -> Result<ReadBlobResponseProcessor, super::ConnectionError<T>>
@@ -639,7 +563,7 @@ impl Client {
     /// A handle within `handles` cannot be the reserved handle 0x0000.
     pub async fn read_multiple_request<T, I>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handles: I,
     ) -> Result<impl ResponseProcessor<Response = ReadMultiple>, super::ConnectionError<T>>
     where
@@ -671,7 +595,7 @@ impl Client {
     /// The handle cannot be the reserved handle 0x0000
     pub async fn read_by_group_type_request<T, R, D>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handle_range: R,
         group_type: crate::Uuid,
     ) -> Result<ReadByGroupTypeResponseProcessor<D>, super::ConnectionError<T>>
@@ -695,14 +619,14 @@ impl Client {
 
     /// Request to write data to a handle on the server
     ///
-    /// The clint will send a response to the write request if the write was made on the server,
-    /// otherwise the client will send an error PDU if the write couldn't be made.
+    /// The clint will send a response to the write request if the *write* was made on the server,
+    /// otherwise the client will send an error PDU if the *write* couldn't be made.
     ///
     /// # Panic
     /// The handle cannot be the reserved handle 0x0000
     pub async fn write_request<T, D>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handle: u16,
         data: D,
     ) -> Result<WriteResponseProcessor, super::ConnectionError<T>>
@@ -728,7 +652,7 @@ impl Client {
     /// The handle cannot be the reserved handle 0x0000
     pub async fn write_command<T, D>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         handle: u16,
         data: D,
     ) -> Result<(), super::ConnectionError<T>>
@@ -752,7 +676,7 @@ impl Client {
     /// The handle cannot be the reserved handle 0x0000
     pub async fn prepare_write_request<T>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         pwr: pdu::Pdu<pdu::PreparedWriteRequest<'_>>,
     ) -> Result<PrepareWriteResponseProcessor, super::ConnectionError<T>>
     where
@@ -765,7 +689,7 @@ impl Client {
 
     pub async fn execute_write_request<T>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         execute: pdu::ExecuteWriteFlag,
     ) -> Result<ExecuteWriteResponseProcessor, super::ConnectionError<T>>
     where
@@ -788,7 +712,7 @@ impl Client {
     /// applications deliberately out of spec (tooling, debugging, ect.).
     pub async fn custom_command<T, D>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         pdu: pdu::Pdu<D>,
     ) -> Result<(), super::ConnectionError<T>>
     where

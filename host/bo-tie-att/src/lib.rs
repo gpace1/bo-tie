@@ -252,8 +252,8 @@ pub mod pdu;
 /// This is the fixed channel identifier for the Attribute (ATT) protocol. There can be multiple ATT
 /// bearers using channels with dynamically assigned channel identifiers, but in L2CAP there is only
 /// one fixed channel identifier given to the ATT protocol
-pub const L2CAP_FIXED_CHANNEL_ID: bo_tie_l2cap::channel::id::ChannelIdentifier =
-    bo_tie_l2cap::channel::id::ChannelIdentifier::Le(bo_tie_l2cap::channel::id::LeCid::AttributeProtocol);
+pub const L2CAP_FIXED_CHANNEL_ID: bo_tie_l2cap::cid::ChannelIdentifier =
+    bo_tie_l2cap::cid::ChannelIdentifier::Le(bo_tie_l2cap::cid::LeCid::AttributeProtocol);
 
 /// Advanced Encryption Standard (AES) key sizes
 #[derive(Clone, Copy, Debug, PartialEq, Eq, bo_tie_macros::DepthCount)]
@@ -494,7 +494,7 @@ pub enum Error {
     /// Custom opcode is already used by the Att protocol
     AttUsedOpcode(u8),
     /// Incorrect Channel Identifier
-    IncorrectChannelId(bo_tie_l2cap::channel::id::ChannelIdentifier),
+    IncorrectChannelId(bo_tie_l2cap::cid::ChannelIdentifier),
     /// Pdu Error
     PduError(pdu::Error),
 }
@@ -541,7 +541,7 @@ impl From<TransferFormatError> for Error {
 /// channel for the Attribute Protocol.
 pub enum ConnectionError<T: bo_tie_l2cap::LogicalLink> {
     AttError(Error),
-    RecvError(bo_tie_l2cap::channel::ReceiveError<T, bo_tie_l2cap::pdu::basic_frame::RecombineError>),
+    RecvError(<T::PhysicalLink as PhysicalLink>::RecvErr),
     SendError(<T::PhysicalLink as PhysicalLink>::SendErr),
     InvalidMtuInputs,
 }

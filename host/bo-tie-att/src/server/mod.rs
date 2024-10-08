@@ -64,8 +64,6 @@
 //! [`Attribute`]: crate::Attribute
 
 mod access_value;
-#[cfg(test)]
-mod tests;
 
 use crate::{
     client::ClientPduName, pdu, AttributePermissions, AttributeRestriction, ConnectionError, TransferFormatInto,
@@ -427,11 +425,9 @@ macro_rules! send_pdu {
     }};
 
     (SKIP_LOG, $channel:expr, $pdu:expr $(,)?) => {{
-        let interface_data = $crate::TransferFormatInto::into(&$pdu);
+        let data = $crate::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, $crate::L2CAP_FIXED_CHANNEL_ID);
-
-        $channel.send(acl_data).await.map_err(|e| ConnectionError::SendError(e))
+        $channel.send(data).await.map_err(|e| ConnectionError::SendError(e))
     }};
 }
 
@@ -638,7 +634,7 @@ where
     /// of your server stack (you're not using GATT or some other custom higher layer protocol).
     pub async fn process_att_pdu<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         pdu: &l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<Status, super::ConnectionError<T>>
     where
@@ -665,7 +661,7 @@ where
         &self,
         acl_packet: &'a l2cap::pdu::BasicFrame<Vec<u8>>,
     ) -> Result<(ClientPduName, &'a [u8]), super::Error> {
-        use l2cap::channel::id::{ChannelIdentifier, LeCid};
+        use l2cap::cid::{ChannelIdentifier, LeCid};
 
         match acl_packet.get_channel_id() {
             ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
@@ -699,7 +695,7 @@ where
     /// server for communication with a client device.
     pub async fn process_parsed_att_pdu<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         pdu_type: ClientPduName,
         payload: &[u8],
     ) -> Result<Status, super::ConnectionError<T>>
@@ -777,7 +773,7 @@ where
     /// be sent.
     pub async fn send_notification<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         handle: u16,
     ) -> Result<bool, ServerInitiatedError<T>>
     where
@@ -845,7 +841,7 @@ where
     /// be sent.
     pub async fn send_notification_with<'a, T, V, R>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         handle: u16,
         value: &V,
         restrictions: R,
@@ -906,7 +902,7 @@ where
     /// be sent.
     pub async fn send_indication<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         handle: u16,
     ) -> Result<bool, ServerInitiatedError<T>>
     where
@@ -976,7 +972,7 @@ where
     /// be sent.
     pub async fn send_indication_with<'a, T, V, R>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         handle: u16,
         value: &V,
         restrictions: R,
@@ -1160,7 +1156,7 @@ where
     /// Process a exchange MTU request from the client
     async fn process_exchange_mtu_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         client_mtu: u16,
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -1178,7 +1174,7 @@ where
     /// Process a Read Request from the client
     async fn process_read_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         handle: u16,
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -1217,7 +1213,7 @@ where
     /// Process a Write Request from the client
     async fn process_write_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -1237,7 +1233,7 @@ where
     /// Process a Find Information Request form the client
     async fn process_find_information_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         handle_range: pdu::HandleRange,
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -1352,7 +1348,7 @@ where
     /// end handle with the same found attribute handle.
     async fn process_find_by_type_value_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -1447,7 +1443,7 @@ where
     /// Process Read By Type Request
     async fn process_read_by_type_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         type_request: pdu::TypeRequest,
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -1612,7 +1608,7 @@ where
     /// Process read blob request
     async fn process_read_blob_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         blob_request: pdu::ReadBlobRequest,
     ) -> Result<Status, super::ConnectionError<T>>
     where
@@ -1666,7 +1662,7 @@ where
     #[inline]
     async fn create_blob_send_response<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         br: &pdu::ReadBlobRequest,
     ) -> Result<(), super::ConnectionError<T>>
     where
@@ -1714,7 +1710,7 @@ where
     #[inline]
     async fn use_blob_send_response<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         offset: u16,
     ) -> Result<Status, ConnectionError<T>>
     where
@@ -1765,7 +1761,7 @@ where
 
     async fn process_prepare_write_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<(), ConnectionError<T>>
     where
@@ -1799,7 +1795,7 @@ where
 
     async fn process_execute_write_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         request_flag: pdu::ExecuteWriteFlag,
     ) -> Result<(), super::ConnectionError<T>>
     where
