@@ -213,7 +213,7 @@ pub trait PhysicalLink {
     /// What is means to send a fragment is subjective to the device. It's up to the `SendFut` to
     /// ensure that sending a `fragment` complies with the requirements of the physical layers and
     /// any surrounding systems. For an HCI implementation it could mean that the data has been sent
-    /// once it's delivered to the Controller. For a single system implementation it may mean that 
+    /// once it's delivered to the Controller. For a single system implementation it may mean that
     /// the data has fully transmitted to the peer device.
     ///
     /// [`max_transmission_size`]: PhysicalLink::max_transmission_size
