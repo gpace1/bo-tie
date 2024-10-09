@@ -1,6 +1,6 @@
 //! Tests for read blob request/response
 //!
-//! This tests the read blob request/response and any commands whose read can be continued with a
+//! This tests-scaffold the read blob request/response and any commands whose read can be continued with a
 //! read blob request.
 
 use bo_tie_att::client::{ClientPduName, ReadBlob, ResponseProcessor};

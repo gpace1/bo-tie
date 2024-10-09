@@ -1,401 +1,376 @@
 //! Tests for L2CAP signals
 
-use bo_tie_l2cap::channel::id::{ChannelIdentifier, DynChannelId};
-use bo_tie_l2cap::channel::signalling::ReceivedLeUSignal;
-use bo_tie_l2cap::pdu::L2capFragment;
+use bo_tie_host_tests::PhysicalLinkLoop;
+use bo_tie_l2cap::pdu::{ControlFrame, FragmentIterator, FragmentL2capPdu, L2capFragment};
+use bo_tie_l2cap::signalling::{ConvertSignalError, ReceivedLeUSignal};
 use bo_tie_l2cap::signals::packets::{
-    LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer,
+    LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, SignalCode, SimplifiedProtocolServiceMultiplexer,
 };
-use bo_tie_l2cap::signals::SignalError;
-use futures::{SinkExt, StreamExt};
+use bo_tie_l2cap::signals::{SignalError, LE_U_SIGNAL_CHANNEL_ID};
+use bo_tie_l2cap::{LeULogicalLink, LeULogicalLinkNextError, LeUNext, PhysicalLink};
 
 #[tokio::test]
-pub async fn request_le_credit_connection() {
-    let (sending_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(20);
+async fn le_credit_connection() {
+    let test_message = b"hello and welcome to the test. Lorem ipsum dolor sit amet, \
+            consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna \
+            aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip \
+            ex ea commodo consequat.";
 
-    let l_handle = tokio::spawn(async move {
-        let mut signal_channel = sending_link.get_signalling_channel();
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .use_vec_sdu_buffer()
+                .build();
 
-        let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
+            let mut test_message_iter = test_message.into_iter().copied();
 
-        let mtu = LeCreditMtu::new(0xFFFF);
+            let mut credit_channel_id = None;
 
-        let mps = LeCreditMps::new(30);
+            let mut channel_sending = None;
 
-        let initial_credits = 0xFFFF;
+            loop {
+                match link.next().await.unwrap() {
+                    LeUNext::SignallingChannel { signal, .. } => match signal {
+                        ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
+                            let mut signalling_channel = link.get_signalling_channel().unwrap();
 
-        let request = signal_channel
-            .request_le_credit_connection(spsm, mtu, mps, initial_credits)
-            .await
-            .expect("failed to send init credit connection");
+                            if credit_channel_id.is_none() {
+                                let channel_builder =
+                                    request.accept_le_credit_based_connection(&mut signalling_channel);
 
-        let credit_based_channel = match signal_channel.receive().await.expect("failed to get response") {
-            ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => response
-                .create_le_credit_connection(&request, &sending_link)
-                .expect("received rejection response"),
-            _ => panic!("received unexpected signal"),
-        };
+                                let channel_id = channel_builder.send_success_response().await.unwrap();
 
-        assert_eq!(
-            credit_based_channel.get_this_channel_id(),
-            ChannelIdentifier::Le(DynChannelId::new_le(0x40).unwrap())
-        );
+                                credit_channel_id = Some(channel_id);
+                            } else {
+                                request
+                                    .reject_le_credit_based_connection(
+                                        &mut link.get_signalling_channel().unwrap(),
+                                        LeCreditBasedConnectionResponseResult::NoResourcesAvailable,
+                                    )
+                                    .await
+                                    .unwrap()
+                            }
+                        }
+                        _ => panic!("received unexpected signal {signal:?}"),
+                    },
+                    LeUNext::CreditIndication {
+                        credits_given: 1..,
+                        mut channel,
+                    } => {
+                        channel_sending = match channel_sending.take() {
+                            None => channel.send(&mut test_message_iter).await.unwrap(),
+                            Some(sending) => sending
+                                .continue_sending(
+                                    &mut link.get_credit_based_channel(credit_channel_id.unwrap()).unwrap(),
+                                )
+                                .await
+                                .unwrap(),
+                        }
+                    }
+                    next => panic!("unexpected next {next:?}"),
+                }
+            }
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .use_vec_sdu_buffer()
+                .build();
 
-        assert_eq!(
-            credit_based_channel.get_peer_channel_id(),
-            ChannelIdentifier::Le(DynChannelId::new_le(0x56).unwrap())
-        );
+            let le_connect_request = link
+                .get_signalling_channel()
+                .unwrap()
+                .request_le_credit_connection(
+                    SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
+                    LeCreditMtu::new(2048),
+                    LeCreditMps::new(23),
+                    0,
+                )
+                .await
+                .unwrap();
 
-        assert_eq!(credit_based_channel.get_mtu(), 45);
+            let response = if let LeUNext::SignallingChannel { signal, .. } = link.next().await.unwrap() {
+                match signal {
+                    ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => response,
+                    ReceivedLeUSignal::CommandRejectRsp(response) => {
+                        panic!("received command reject response: {response:?}")
+                    }
+                    signal => panic!("received unexpected signal {signal:?}"),
+                }
+            } else {
+                panic!("received unexpected next event");
+            };
 
-        assert_eq!(credit_based_channel.get_mps(), 23);
+            if response.get_result() != LeCreditBasedConnectionResponseResult::ConnectionSuccessful {
+                panic!("received connection result {:?}", response.get_result())
+            }
 
-        assert_eq!(credit_based_channel.get_peer_credits(), 5);
-    });
+            response
+                .create_le_credit_connection(&le_connect_request, &mut link.get_signalling_channel().unwrap())
+                .unwrap();
 
-    let connection_request = rx.next().await.expect("never received LE credit connection request");
+            let channel_id = le_connect_request.get_source_cid();
 
-    assert!(connection_request.is_start_fragment());
+            let mut channel = link.get_credit_based_channel(channel_id).unwrap();
 
-    assert_eq!(
-        connection_request.get_data(),
-        &[
-            14, 0, // pdu len
-            5, 0,    // CID (signalling identifier for LE)
-            0x14, // code for LE credit based connection request
-            1,    // identifier (the expected identifier to be selected by the signalling channel is one)
-            10, 0, // data length
-            0x80, 0, // Simplified Protocol/Service Multiplexer (connect_left assigns this to 0x80)
-            0x40, 0, // source CID (a new signalling channel will use the first dyn channel, 0x40)
-            0xFF, 0xFF, // MTU (set to 0xFFFF in macro call of connect_left!)
-            30, 0, // MPS (set to 30 in macro call of connect_left!)
-            0xFF, 0xFF, // initial credits (set to 0xFFFF in macro call of connect_left!)
-        ]
-    );
+            channel.give_credits_to_peer(32).await.unwrap();
 
-    let response = L2capFragment::new(
-        true,
-        vec![14, 0, 5, 0, 0x15, 1, 10, 0, 0x56, 0, 45, 0, 23, 0, 5, 0, 0, 0],
-    );
+            let sdu = match link.next().await.unwrap() {
+                LeUNext::CreditBasedChannel { sdu, .. } => sdu,
+                next => panic!("unexpected next: {next:?}"),
+            };
 
-    tx.send(response).await.expect("failed to send response");
+            let received_message = core::str::from_utf8(&sdu).unwrap();
 
-    l_handle.await.expect("requesting task failed");
+            assert_eq!(core::str::from_utf8(test_message).unwrap(), received_message)
+        })
+        .run()
+        .await;
+}
+
+pub async fn invalid_response_test_factory<I>(response: I, expected_error: SignalError)
+where
+    I: IntoIterator<Item = u8>,
+    <I as IntoIterator>::IntoIter: ExactSizeIterator,
+{
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            // wait for the request
+
+            let mut counter = 0;
+
+            loop {
+                let fragment = end.recv().await.unwrap().unwrap();
+
+                counter += fragment.into_inner().count();
+
+                // request is always le connection request, so just count the bytes received
+                if counter >= 18 {
+                    break;
+                }
+            }
+
+            // send bad response
+            let control_frame = ControlFrame::new(response, LE_U_SIGNAL_CHANNEL_ID);
+
+            let mut fragments = control_frame
+                .into_fragments(end.max_transmission_size().into())
+                .unwrap();
+
+            let mut is_first = true;
+
+            while let Some(fragment) = fragments.next() {
+                let fragment = L2capFragment::new(is_first, fragment);
+
+                is_first = false;
+
+                end.send(fragment).await.expect("failed to send response fragment");
+            }
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end).enable_signalling_channel().build();
+
+            let mut signal_channel = link.get_signalling_channel().unwrap();
+
+            let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
+
+            let mtu = LeCreditMtu::new(0xFFFF);
+
+            let mps = LeCreditMps::new(30);
+
+            let initial_credits = 0xFFFF;
+
+            signal_channel
+                .request_le_credit_connection(spsm, mtu, mps, initial_credits)
+                .await
+                .expect("failed to send init credit connection");
+
+            match link.next().await.err().expect("expected an error") {
+                LeULogicalLinkNextError::RecombineControlFrame(ConvertSignalError::InvalidFormat(
+                    SignalCode::LeCreditBasedConnectionResponse,
+                    received_error,
+                )) => {
+                    assert_eq!(received_error, expected_error)
+                }
+                err => panic!("received wrong error: {err:?}"),
+            }
+        })
+        .run()
+        .await;
 }
 
 #[tokio::test]
 pub async fn invalid_channel_id_in_response() {
-    let (sending_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let response = [0x15, 1, 10, 0, 0, 0, 45, 0, 23, 0, 5, 0, 0, 0];
 
-    let l_handle = tokio::spawn(async move {
-        let mut signal_channel = sending_link.get_signalling_channel();
+    let error = SignalError::InvalidChannel;
 
-        let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
-
-        let mtu = LeCreditMtu::new(0xFFFF);
-
-        let mps = LeCreditMps::new(30);
-
-        let initial_credits = 0xFFFF;
-
-        signal_channel
-            .request_le_credit_connection(spsm, mtu, mps, initial_credits)
-            .await
-            .expect("failed to send init credit connection");
-
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response
-                .to_string()
-                .contains(&SignalError::InvalidChannel.to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let response = L2capFragment::new(true, vec![14, 0, 5, 0, 0x15, 1, 10, 0, 0, 0, 45, 0, 23, 0, 5, 0, 0, 0]);
-
-    tx.send(response).await.expect("failed to send response");
-
-    l_handle.await.expect("requesting task failed");
+    invalid_response_test_factory(response, error).await;
 }
 
 #[tokio::test]
 pub async fn invalid_mtu_in_response() {
-    let (sending_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let response = [0x15, 1, 10, 0, 0x40, 0, 10, 0, 23, 0, 5, 0, 0, 0];
 
-    let l_handle = tokio::spawn(async move {
-        let mut signal_channel = sending_link.get_signalling_channel();
+    let error = SignalError::InvalidField("MTU");
 
-        let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
-
-        let mtu = LeCreditMtu::new(0xFFFF);
-
-        let mps = LeCreditMps::new(30);
-
-        let initial_credits = 0xFFFF;
-
-        signal_channel
-            .request_le_credit_connection(spsm, mtu, mps, initial_credits)
-            .await
-            .expect("failed to send init credit connection");
-
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response
-                .to_string()
-                .contains(&SignalError::InvalidField("MTU").to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let response = L2capFragment::new(
-        true,
-        vec![14, 0, 5, 0, 0x15, 1, 10, 0, 0x40, 0, 10, 0, 23, 0, 5, 0, 0, 0],
-    );
-
-    tx.send(response).await.expect("failed to send response");
-
-    l_handle.await.expect("requesting task failed");
+    invalid_response_test_factory(response, error).await;
 }
 
 #[tokio::test]
 pub async fn invalid_mps_in_response() {
-    let (sending_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let response = [0x15, 1, 10, 0, 0x40, 0, 23, 0, 6, 0, 5, 0, 0, 0];
 
-    let l_handle = tokio::spawn(async move {
-        let mut signal_channel = sending_link.get_signalling_channel();
+    let error = SignalError::InvalidField("MPS");
 
-        let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
-
-        let mtu = LeCreditMtu::new(0xFFFF);
-
-        let mps = LeCreditMps::new(30);
-
-        let initial_credits = 0xFFFF;
-
-        signal_channel
-            .request_le_credit_connection(spsm, mtu, mps, initial_credits)
-            .await
-            .expect("failed to send init credit connection");
-
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response
-                .to_string()
-                .contains(&SignalError::InvalidField("MPS").to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let response = L2capFragment::new(
-        true,
-        vec![14, 0, 5, 0, 0x15, 1, 10, 0, 0x40, 0, 23, 0, 6, 0, 5, 0, 0, 0],
-    );
-
-    tx.send(response).await.expect("failed to send response");
-
-    l_handle.await.expect("requesting task failed");
+    invalid_response_test_factory(response, error).await;
 }
 
 #[tokio::test]
 pub async fn invalid_result_response() {
-    let (sending_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let response = [0x15, 1, 10, 0, 0x40, 0, 23, 0, 23, 0, 11, 0, 0xC, 0];
 
-    let l_handle = tokio::spawn(async move {
-        let mut signal_channel = sending_link.get_signalling_channel();
+    let error = SignalError::InvalidField("Result");
 
-        let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
-
-        let mtu = LeCreditMtu::new(0xFFFF);
-
-        let mps = LeCreditMps::new(30);
-
-        let initial_credits = 0xFFFF;
-
-        signal_channel
-            .request_le_credit_connection(spsm, mtu, mps, initial_credits)
-            .await
-            .expect("failed to send init credit connection");
-
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response
-                .to_string()
-                .contains(&SignalError::InvalidField("Result").to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let response = L2capFragment::new(
-        true,
-        vec![14, 0, 5, 0, 0x15, 1, 10, 0, 0x40, 0, 23, 0, 23, 0, 11, 0, 0xC, 0],
-    );
-
-    tx.send(response).await.expect("failed to send response");
-
-    l_handle.await.expect("requesting task failed");
+    invalid_response_test_factory(response, error).await;
 }
 
 #[tokio::test]
 pub async fn response_with_rejected_request() {
-    let (requesting_link, response_link) = bo_tie_host_tests::create_le_link(15);
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|end| async {
+            let mut link = LeULogicalLink::builder(end).enable_signalling_channel().build();
 
-    let req_handle = tokio::spawn(async move {
-        let mut signal_channel = requesting_link.get_signalling_channel();
-
-        let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
-
-        let mtu = LeCreditMtu::new(0xFFFF);
-
-        let mps = LeCreditMps::new(30);
-
-        let initial_credits = 0xFFFF;
-
-        signal_channel
-            .request_le_credit_connection(spsm, mtu, mps, initial_credits)
-            .await
-            .expect("failed to send init credit connection");
-
-        match signal_channel.receive().await.expect("failed to receive response") {
-            ReceivedLeUSignal::LeCreditBasedConnectionResponse(response) => {
-                assert_eq!(
-                    response.get_result(),
-                    LeCreditBasedConnectionResponseResult::NoResourcesAvailable
-                )
+            loop {
+                match &mut link.next().await.unwrap() {
+                    LeUNext::SignallingChannel {
+                        signal: ReceivedLeUSignal::LeCreditBasedConnectionRequest(request),
+                        channel,
+                    } => {
+                        request
+                            .reject_le_credit_based_connection(
+                                channel,
+                                LeCreditBasedConnectionResponseResult::NoResourcesAvailable,
+                            )
+                            .await
+                            .unwrap();
+                    }
+                    next => panic!("unexpected next: {next:?}"),
+                }
             }
-            _ => panic!("received unexpected signal"),
-        }
-    });
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end).enable_signalling_channel().build();
 
-    let res_handle = tokio::spawn(async move {
-        let mut signal_channel = response_link.get_signalling_channel();
+            let mut signalling_channel = link.get_signalling_channel().unwrap();
 
-        match signal_channel.receive().await.expect("failed to receive request") {
-            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => request
-                .reject_le_credit_based_connection(
-                    &mut signal_channel,
-                    LeCreditBasedConnectionResponseResult::NoResourcesAvailable,
-                )
+            let spsm = SimplifiedProtocolServiceMultiplexer::new_dyn(0x80);
+
+            let mtu = LeCreditMtu::new(0xFFFF);
+
+            let mps = LeCreditMps::new(30);
+
+            let initial_credits = 0xFFFF;
+
+            signalling_channel
+                .request_le_credit_connection(spsm, mtu, mps, initial_credits)
                 .await
-                .expect("failed to send rejection"),
-            _ => panic!("received unexpected signal"),
-        }
-    });
+                .expect("failed to send init credit connection");
 
-    req_handle.await.expect("requesting task failed");
-    res_handle.await.expect("responding task failed");
+            let response = match link.next().await.unwrap() {
+                LeUNext::SignallingChannel {
+                    signal: ReceivedLeUSignal::LeCreditBasedConnectionResponse(response),
+                    ..
+                } => response,
+                next => panic!("unexpected next: {next:?}"),
+            };
+
+            assert_eq!(
+                response.get_result(),
+                LeCreditBasedConnectionResponseResult::NoResourcesAvailable
+            )
+        })
+        .run()
+        .await;
+}
+
+async fn invalid_request_test_factory<I>(request: I, expected_error: SignalError)
+where
+    I: IntoIterator<Item = u8>,
+    <I as IntoIterator>::IntoIter: ExactSizeIterator,
+{
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            let control_frame = ControlFrame::new(request, LE_U_SIGNAL_CHANNEL_ID);
+
+            let mut fragments = control_frame
+                .into_fragments(end.max_transmission_size().into())
+                .unwrap();
+
+            let mut is_first = true;
+
+            while let Some(fragment) = fragments.next() {
+                let fragment = L2capFragment::new(is_first, fragment);
+
+                is_first = false;
+
+                end.send(fragment).await.expect("failed to send response fragment");
+            }
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end).enable_signalling_channel().build();
+
+            match link.next().await.err().expect("expected an error") {
+                LeULogicalLinkNextError::RecombineControlFrame(ConvertSignalError::InvalidFormat(
+                    SignalCode::LeCreditBasedConnectionRequest,
+                    received_error,
+                )) => assert_eq!(received_error, expected_error),
+                err => panic!("received unexpected error: {err:?}"),
+            }
+        })
+        .run()
+        .await;
 }
 
 #[tokio::test]
 async fn invalid_spsm_in_request() {
-    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let request = [0x14, 1, 10, 0, 0, 0, 0x40, 0, 23, 0, 23, 0, 100, 0];
 
-    let res_handle = tokio::spawn(async move {
-        let mut signal_channel = response_link.get_signalling_channel();
+    let error = SignalError::InvalidSpsm;
 
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response.to_string().contains(&SignalError::InvalidSpsm.to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0, 0, 0x40, 0, 23, 0, 23, 0, 100, 0];
-
-    let fragment = L2capFragment::new(true, request);
-
-    tx.send(fragment).await.expect("failed to send request");
-
-    res_handle.await.expect("responding task failed");
+    invalid_request_test_factory(request, error).await;
 }
 
 #[tokio::test]
 async fn invalid_source_cid_in_request() {
-    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let request = [0x14, 1, 10, 0, 0x80, 0, 0, 0, 23, 0, 23, 0, 100, 0];
 
-    let res_handle = tokio::spawn(async move {
-        let mut signal_channel = response_link.get_signalling_channel();
+    let error = SignalError::InvalidChannel;
 
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response
-                .to_string()
-                .contains(&SignalError::InvalidChannel.to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0, 0, 23, 0, 23, 0, 100, 0];
-
-    let fragment = L2capFragment::new(true, request);
-
-    tx.send(fragment).await.expect("failed to send request");
-
-    res_handle.await.expect("responding task failed");
+    invalid_request_test_factory(request, error).await;
 }
 
 #[tokio::test]
 async fn invalid_mtu_in_request() {
-    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let request = [0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 10, 0, 23, 0, 100, 0];
 
-    let res_handle = tokio::spawn(async move {
-        let mut signal_channel = response_link.get_signalling_channel();
+    let error = SignalError::InvalidField("MTU");
 
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response
-                .to_string()
-                .contains(&SignalError::InvalidField("MTU").to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 10, 0, 23, 0, 100, 0];
-
-    let fragment = L2capFragment::new(true, request);
-
-    tx.send(fragment).await.expect("failed to send request");
-
-    res_handle.await.expect("responding task failed");
+    invalid_request_test_factory(request, error).await;
 }
 
 #[tokio::test]
 async fn invalid_mps_in_request() {
-    let (response_link, mut tx, _rx) = bo_tie_host_tests::create_le_false_link(20);
+    let request = [0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 23, 0, 10, 0, 100, 0];
 
-    let res_handle = tokio::spawn(async move {
-        let mut signal_channel = response_link.get_signalling_channel();
+    let error = SignalError::InvalidField("MPS");
 
-        let err_response = signal_channel.receive().await.err().expect("expected an error");
-
-        assert!(
-            err_response
-                .to_string()
-                .contains(&SignalError::InvalidField("MPS").to_string()),
-            "actual error: {}",
-            err_response.to_string()
-        )
-    });
-
-    let request = vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 23, 0, 10, 0, 100, 0];
-
-    let fragment = L2capFragment::new(true, request);
-
-    tx.send(fragment).await.expect("failed to send request");
-
-    res_handle.await.expect("responding task failed");
+    invalid_request_test_factory(request, error).await;
 }

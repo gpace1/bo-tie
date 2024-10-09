@@ -110,7 +110,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 /* Note:
- * Until type_alias_impl_trait is stabilized, all tests must run on the nightly channel
+ * Until type_alias_impl_trait is stabilized, all tests-scaffold must run on the nightly channel
  */
 #![cfg_attr(all(test, feature = "std"), feature(type_alias_impl_trait))]
 

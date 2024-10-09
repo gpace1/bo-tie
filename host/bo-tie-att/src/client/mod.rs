@@ -203,12 +203,12 @@ impl ConnectFixedClient {
         })
     }
 
-    /// Finish connecting a client to a attribute server
+    /// Finish connecting a client to an Attribute server
     ///
     /// This takes the response from the MTU from the server and creates a `Client`. An error will
     /// occur if the response doesn't contain the correct channel identifier or an ATT PDU was received. The server is expected to respond with either a mtu response PDU or an
     /// error PDU with request not supported.
-    pub async fn create_client(self, response: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Client, super::Error> {
+    pub fn create_client(self, response: &l2cap::pdu::BasicFrame<Vec<u8>>) -> Result<Client, super::Error> {
         if self.skipped_mtu_request {
             Ok(Client::new(self.default_mtu))
         } else if response.get_channel_id() != self.channel_id {

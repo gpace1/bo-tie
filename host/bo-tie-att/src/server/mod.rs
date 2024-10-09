@@ -232,9 +232,9 @@ struct MultiReqData {
 ///
 /// ## Attribute Handles
 /// A handle is much like an index of an array and is used to address the attribute. Per the
-/// specification an handle is a `u16` value with zero being reserved (attributes will start at
+/// specification a handle is a `u16` value with zero being reserved (attributes will start at
 /// handle one). This server forcibly put all attributes in sequential order, as a vector is used
-/// for the attributes collection.
+/// for the attributes' collection.
 ///
 /// ## Unique Instances
 /// Each `Server` is unique for the connection to the client. Making the server this way allows for a
@@ -484,7 +484,7 @@ where
     /// type. A smaller default MTU can be used, but limitations of functionality will be put on the
     /// `Server`. There is no minimum size of the `default_mtu` but trying to process request or
     /// send responses may induce errors if the packet cannot be formed due to the minimum size of
-    /// the packet being larger then the `default_mtu` (this includes the exchange MTU
+    /// the packet being larger than the `default_mtu` (this includes the exchange MTU
     /// request/response).
     ///
     /// # Panic

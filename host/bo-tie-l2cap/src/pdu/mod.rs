@@ -11,7 +11,7 @@ pub mod credit_frame;
 
 use crate::channel::id::ChannelIdentifier;
 pub use basic_frame::BasicFrame;
-pub use control_frame::ControlFrameError;
+pub use control_frame::{ControlFrame, ControlFrameError};
 pub use credit_frame::CreditBasedSdu;
 
 /// A L2CAP PDU Fragment

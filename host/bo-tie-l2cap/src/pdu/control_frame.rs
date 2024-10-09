@@ -19,10 +19,7 @@ pub struct ControlFrame<T> {
 
 impl<T> ControlFrame<T> {
     /// Create a new `ControlFrame`
-    ///
-    /// # Panic
-    /// There must be a signalling channel associated with the logical link `L`.
-    pub(crate) fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
+    pub fn new(payload: T, channel_id: ChannelIdentifier) -> Self {
         match channel_id {
             ChannelIdentifier::Acl(AclCid::SignalingChannel) | ChannelIdentifier::Le(LeCid::LeSignalingChannel) => (),
             _ => panic!("invalid signalling channel {channel_id}"),

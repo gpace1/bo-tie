@@ -130,20 +130,20 @@ mod logical_link_private;
 pub mod pdu;
 pub mod signals;
 
-use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
-use crate::channel::signalling::ReceivedLeUSignal;
-pub use crate::channel::{
-    id as cid, BasicFrameChannel, CreditBasedChannel, CreditServiceData, SendSduError, SignallingChannel,
-};
-use crate::channel::{InvalidChannel, LeUChannelType, PduRecombineAddError, PduRecombineAddOutput};
-use crate::link_flavor::LinkFlavor;
-use crate::logical_link_private::{LeULogicalLinkHandle, UnusedBuffer};
-use crate::pdu::{BasicFrame, FragmentIterator, FragmentL2capPdu};
 use bo_tie_core::buffer::TryExtend;
+use channel::id::{ChannelIdentifier, DynChannelId, LeCid};
+use channel::signalling::ReceivedLeUSignal;
+pub use channel::{
+    id as cid, signalling, BasicFrameChannel, CreditBasedChannel, CreditServiceData, SendSduError, SignallingChannel,
+};
+use channel::{InvalidChannel, LeUChannelType, PduRecombineAddError, PduRecombineAddOutput};
 use core::future::Future;
+use link_flavor::LinkFlavor;
 use link_flavor::{AclULink, LeULink};
 use logical_link_private::LogicalLinkPrivate;
+use logical_link_private::{LeULogicalLinkHandle, UnusedBuffer};
 use pdu::L2capFragment;
+use pdu::{BasicFrame, FragmentIterator, FragmentL2capPdu};
 
 /// A Physical Link
 ///
@@ -487,7 +487,19 @@ const LE_LINK_SM_CHANNEL_INDEX: usize = 2;
 
 impl<P> LeULogicalLink<P, UnusedBuffer, UnusedBuffer> {
     /// Get a builder for a `LogicalLink`
-    pub fn builder(physical_link: P) -> LeULogicalLinkBuilder<P, UnusedBuffer, UnusedBuffer> {
+    ///
+    /// # Panic
+    /// This panics if the maximum transfer size of the physical link is zero
+    pub fn builder(physical_link: P) -> LeULogicalLinkBuilder<P, UnusedBuffer, UnusedBuffer>
+    where
+        P: PhysicalLink,
+    {
+        assert_ne!(
+            0,
+            physical_link.max_transmission_size(),
+            "the maximum transmission size of the physical link cannot be zero"
+        );
+
         LeULogicalLinkBuilder::new(physical_link)
     }
 }
@@ -1112,13 +1124,11 @@ impl core::fmt::Display for PsmIssue {
 
 /// tests require
 #[cfg(test)]
-pub mod tests {
-    use crate::channel::id::{ChannelIdentifier, LeCid};
+mod tests {
     use crate::channel::signalling::ReceivedLeUSignal;
     use crate::pdu::L2capFragment;
     use crate::signals::packets::{
-        CommandRejectResponse, LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu,
-        SimplifiedProtocolServiceMultiplexer,
+        LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer,
     };
     use crate::{LeULogicalLink, LeUNext, PhysicalLink, LE_DYNAMIC_CHANNEL_COUNT, LE_STATIC_CHANNEL_COUNT};
     use alloc::boxed::Box;

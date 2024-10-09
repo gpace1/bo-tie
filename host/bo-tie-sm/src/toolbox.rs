@@ -462,8 +462,8 @@ pub(crate) fn new_passkey() -> u32 {
 
 /// Tests
 ///
-/// The much of the tests data can be retrieved from the end of the Security Manager specification,
-/// but some of the tests data is unique. All the data (if the applicable function is implemented)
+/// The much of the tests-scaffold data can be retrieved from the end of the Security Manager specification,
+/// but some of the tests-scaffold data is unique. All the data (if the applicable function is implemented)
 /// should be used here for testing.
 #[cfg(test)]
 mod tests {
@@ -473,7 +473,7 @@ mod tests {
     use alloc::string::String;
     use alloc::vec::Vec;
 
-    /// This is handy for converting the byte data in the Bluetooth Specification into tests data
+    /// This is handy for converting the byte data in the Bluetooth Specification into tests-scaffold data
     ///
     /// spec_data is the concatenation of the data as shown. Whitespace doesn't matter.
     ///

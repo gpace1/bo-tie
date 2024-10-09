@@ -1,166 +1,286 @@
 //! Host integration test framework
-//!
-//! This library of `bo-tie-host-tests` contains the spoofing and stub frameworks to test the host
-//! defined implementation of bo-tie.
-//!
-//! Tests are implemented within the rust files outside of folder `std`. See the manifest for the
-//! actual integration tests.
-mod physical_link;
+#![no_std]
 
-use crate::physical_link::BoundedPhysicalLink;
+use bo_tie_core::buffer::stack::{LinearBuffer, LinearBufferError, LinearBufferIter};
+use bo_tie_core::buffer::TryExtend;
 use bo_tie_l2cap::pdu::L2capFragment;
-use bo_tie_l2cap::LeULogicalLink;
-pub use physical_link::PhysicalLink;
+use bo_tie_l2cap::PhysicalLink;
+use core::cell::RefCell;
+use core::future::{Future, IntoFuture};
+use core::pin::{pin, Pin};
+use core::task::{Context, Poll, Waker};
 
-/// Create a spoofed LE logical link
-///
-/// This returns two `LeULogicalLink`s that are "connected" to each other. When one sends L2CAP data
-/// the other will receive that data.
-///
-/// The input `max_tx_size` is the maximum transmission size *of both physical links*.
-pub fn create_le_link(max_tx_size: usize) -> (LeULogicalLink<PhysicalLink>, LeULogicalLink<PhysicalLink>) {
-    let (phy_link_a, phy_link_b) = PhysicalLink::new_connection(max_tx_size);
-
-    let le_link_a = LeULogicalLink::new(phy_link_a);
-    let le_link_b = LeULogicalLink::new(phy_link_b);
-
-    (le_link_a, le_link_b)
+/// A loop between to connected physical links
+pub struct PhysicalLinkLoop<const BUFFER_SIZE: usize> {
+    a_data: RefCell<Option<L2capFragment<LinearBuffer<BUFFER_SIZE, u8>>>>,
+    b_data: RefCell<Option<L2capFragment<LinearBuffer<BUFFER_SIZE, u8>>>>,
+    a_waker: RefCell<Option<Waker>>,
+    b_waker: RefCell<Option<Waker>>,
 }
 
-/// Create a spoofed *false* LE logical link
-///
-/// This creates a single `LeULogicalLink` and 'connects' it to the sender and receiver also
-/// returned.
-///
-/// The return of this method is a logical link, a sender, and a receiver in that order. The sender
-/// and receiver are closures for directly injecting fragments into the physical link. Calling the
-/// send closure will induce a reception of that fragment by the physical link and calling the recv
-/// closure will receive a fragment sent by the physical link.
-///
-/// The input `max_tx_size` is the maximum transmission size of the created physical link, however
-/// it is not the maximum size for the sender closure (there is no max size for this closure).
-///
-/// If the receiver is called and there is no data in channel to the logical link, then `None` is
-/// returned by the closure.
-///
-/// # Panics
-/// There is no panic calling this method, but the returned sender and receiver will panic if
-/// called and the logical link has been dropped.
-pub fn create_le_false_link(
-    max_tx_size: usize,
-) -> (
-    LeULogicalLink<PhysicalLink>,
-    impl futures::Sink<L2capFragment<Vec<u8>>, Error = futures::channel::mpsc::SendError> + Unpin,
-    impl futures::Stream<Item = L2capFragment<Vec<u8>>> + Unpin,
-) {
-    let (phy_link_a, sender, receiver) = PhysicalLink::new_false_connection(max_tx_size);
-
-    (LeULogicalLink::new(phy_link_a), sender, receiver)
+impl Default for PhysicalLinkLoop<32> {
+    fn default() -> Self {
+        PhysicalLinkLoop::<32>::new()
+    }
 }
 
-/// Create a spoofed bounded LE logical link
-///
-/// This returns two `LeULogicalLink`s that are "connected" to each other. When one sends L2CAP data
-/// the other will receive that data. The channels are bounded, meaning there is a limited number of
-/// messages that can be sent before the sender will await until the receiver receives a message.
-///
-/// # Inputs
-/// * `max_tx_size` is the maximum transmission size *of both physical links*.
-/// * `channel_size` is the maximum number of messages the underlying channel in the spoofed
-///   physical can send a once before awaiting for the receiver to remove messages from the channel
-///   by receiving a message.
-pub fn create_le_bounded_link(
-    max_tx_size: usize,
-    channel_size: usize,
-) -> (LeULogicalLink<BoundedPhysicalLink>, LeULogicalLink<BoundedPhysicalLink>) {
-    let (phy_link_a, phy_link_b) = BoundedPhysicalLink::new_connection(max_tx_size, channel_size);
+impl<const BUFFER_SIZE: usize> PhysicalLinkLoop<BUFFER_SIZE> {
+    pub fn new() -> Self {
+        let a_data = RefCell::new(None);
+        let b_data = RefCell::new(None);
+        let a_waker = RefCell::new(None);
+        let b_waker = RefCell::new(None);
 
-    let le_link_a = LeULogicalLink::new(phy_link_a);
-    let le_link_b = LeULogicalLink::new(phy_link_b);
+        PhysicalLinkLoop {
+            a_data,
+            b_data,
+            a_waker,
+            b_waker,
+        }
+    }
 
-    (le_link_a, le_link_b)
+    /// Get the test scaffold for this physical link loop
+    pub fn test_scaffold(&mut self) -> TestScaffold<'_, (), (), BUFFER_SIZE> {
+        TestScaffold::new(self)
+    }
 }
 
-/// Create a spoofed *false* bounded LE logical link
-///
-/// This creates a single `LeULogicalLink` and 'connects' it to the sender and receiver also
-/// returned.
-///
-/// The return of this method is a logical link, a sender, and a receiver in that order. The sender
-/// and receiver are closures for directly injecting fragments into the physical link. Calling the
-/// send closure will induce a reception of that fragment by the physical link and calling the recv
-/// closure will receive a fragment sent by the physical link.
-///
-/// The input `max_tx_size` is the maximum transmission size of the created physical link, however
-/// it is not the maximum size for the sender closure (there is no max size for this closure).
-///
-/// If the receiver is called and there is no data in channel to the logical link, then `None` is
-/// returned by the closure.
-///
-/// # Panics
-/// There is no panic calling this method, but the returned sender and receiver will panic if
-/// called and the logical link has been dropped.
-pub fn create_bounded_le_false_link(
-    max_tx_size: usize,
-    channel_size: usize,
-) -> (
-    LeULogicalLink<BoundedPhysicalLink>,
-    impl futures::Sink<L2capFragment<Vec<u8>>, Error = futures::channel::mpsc::SendError> + Unpin,
-    impl futures::Stream<Item = L2capFragment<Vec<u8>>> + Unpin,
-) {
-    let (phy_link_a, sender, receiver) = BoundedPhysicalLink::new_false_connection(max_tx_size, channel_size);
-
-    (LeULogicalLink::new(phy_link_a), sender, receiver)
+impl<const BUFFER_SIZE: usize> core::fmt::Debug for PhysicalLinkLoop<BUFFER_SIZE> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("PhysicalLinkLoop")
+            .field("a_data", &self.a_data)
+            .field("b_data", &self.b_data)
+            .field("a_waker", &"..")
+            .field("b_waker", &"..")
+            .finish()
+    }
 }
 
-/// A simple rendezvous implementation
+/// One end of a physical link loop
 ///
-/// Unlike a barrier, a `Rendezvous` only works between two tasks and only clears when every task
-/// is awaiting the `Rendezvous` at the same time (a barrier increases its clear count the moment
-/// it is polled, which can cause issues with something like the `select!` macro).
-pub struct Rendezvous {
-    sender: tokio::sync::oneshot::Sender<()>,
-    receiver: tokio::sync::oneshot::Receiver<()>,
-    flipped: bool,
+/// This is returned by [`PhysicalLinkLoop::channel`]
+pub struct PhysicalLinkLoopEnd<'a, const BUFFER_SIZE: usize> {
+    data: &'a RefCell<Option<L2capFragment<LinearBuffer<BUFFER_SIZE, u8>>>>,
+    peer_data: &'a RefCell<Option<L2capFragment<LinearBuffer<BUFFER_SIZE, u8>>>>,
+    waker: &'a RefCell<Option<Waker>>,
+    peer_waker: &'a RefCell<Option<Waker>>,
 }
 
-impl Rendezvous {
-    /// Rendezvous with the other task
-    ///
-    /// The return is the output value by the other `Rendezvous`'s task.
-    pub async fn rendez(self) {
-        if self.flipped {
-            self.sender.send(()).ok();
+impl<const BUFFER_SIZE: usize> core::fmt::Debug for PhysicalLinkLoopEnd<'_, BUFFER_SIZE> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.debug_struct("PhysicalLinkLoop")
+            .field("data", &self.data)
+            .field("peer_data", &self.peer_data)
+            .field("waker", &"..")
+            .field("peer_waker", &"..")
+            .finish()
+    }
+}
 
-            self.receiver.await.expect("other Rendezvous dropped")
+pub struct PhysicalLinkLoopEndSendFut<'i, 'a, const BUFFER_SIZE: usize> {
+    end: &'a mut PhysicalLinkLoopEnd<'i, BUFFER_SIZE>,
+    data: LinearBuffer<BUFFER_SIZE, u8>,
+    is_start_fragment: bool,
+}
+
+impl<const BUFFER_SIZE: usize> Future for PhysicalLinkLoopEndSendFut<'_, '_, BUFFER_SIZE> {
+    type Output = Result<(), LinearBufferError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if this.end.data.borrow().is_some() {
+            this.end.waker.replace(Some(cx.waker().clone()));
+
+            Poll::Pending
         } else {
-            self.receiver.await.expect("other Rendezvous dropped");
+            let fragment = L2capFragment::new(this.is_start_fragment, core::mem::take(&mut this.data));
 
-            self.sender.send(()).ok();
+            this.end.data.replace(Some(fragment));
+
+            this.end.peer_waker.take().map(|waker| waker.wake());
+
+            Poll::Ready(Ok(()))
         }
     }
 }
 
-/// Create a partial rendezvous
-///
-/// This is a partial rendezvous as the returned `Rendezvous` are not interchangeable. The first
-/// returned `Rendezvous` is used for triggering the second one. The first one is used at the end
-/// of test operations of the client task and the second one is `select!`ed along with processing
-/// ATT PDU's from the client of the server thread.
-pub fn directed_rendezvous() -> (Rendezvous, Rendezvous) {
-    let (sender_1, receiver_1) = tokio::sync::oneshot::channel();
-    let (sender_2, receiver_2) = tokio::sync::oneshot::channel();
+pub struct PhysicalLinkLoopEndRecvFut<'i, 'a, const BUFFER_SIZE: usize> {
+    end: &'a mut PhysicalLinkLoopEnd<'i, BUFFER_SIZE>,
+}
 
-    (
-        Rendezvous {
-            sender: sender_1,
-            receiver: receiver_2,
-            flipped: true,
-        },
-        Rendezvous {
-            sender: sender_2,
-            receiver: receiver_1,
-            flipped: false,
-        },
-    )
+impl<const BUFFER_SIZE: usize> Future for PhysicalLinkLoopEndRecvFut<'_, '_, BUFFER_SIZE> {
+    type Output = Option<Result<L2capFragment<LinearBufferIter<BUFFER_SIZE, u8>>, core::convert::Infallible>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if this.end.peer_data.borrow().is_none() {
+            this.end.waker.replace(Some(cx.waker().clone()));
+
+            Poll::Pending
+        } else {
+            this.end.peer_waker.take().map(|w| w.wake());
+
+            let fragment = Ok(this
+                .end
+                .peer_data
+                .take()
+                .map(|f| L2capFragment::new(f.is_start_fragment(), f.into_inner().into_iter())))
+            .transpose();
+
+            Poll::Ready(fragment)
+        }
+    }
+}
+
+impl<'i, const BUFFER_SIZE: usize> PhysicalLink for PhysicalLinkLoopEnd<'i, BUFFER_SIZE> {
+    type SendFut<'a> = PhysicalLinkLoopEndSendFut<'i, 'a, BUFFER_SIZE> where Self: 'a;
+    type SendErr = LinearBufferError;
+    type RecvFut<'a> = PhysicalLinkLoopEndRecvFut<'i, 'a, BUFFER_SIZE> where Self: 'a;
+    type RecvData = LinearBufferIter<BUFFER_SIZE, u8>;
+    type RecvErr = core::convert::Infallible;
+
+    fn max_transmission_size(&self) -> u16 {
+        BUFFER_SIZE as u16
+    }
+
+    fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
+    where
+        T: IntoIterator<Item = u8>,
+    {
+        let mut data = LinearBuffer::default();
+
+        let is_start_fragment = fragment.is_start_fragment();
+
+        data.try_extend(fragment.into_inner()).expect("invalid fragment length");
+
+        PhysicalLinkLoopEndSendFut {
+            end: self,
+            data,
+            is_start_fragment,
+        }
+    }
+
+    fn recv(&mut self) -> Self::RecvFut<'_> {
+        PhysicalLinkLoopEndRecvFut { end: self }
+    }
+}
+
+/// Scaffold for a peer-to-peer test
+///
+/// This is used for created a tested and a verifying peer-to-peer pseudo-link
+#[must_use]
+pub struct TestScaffold<'a, T, V, const BUFFER_SIZE: usize> {
+    link_loop: &'a PhysicalLinkLoop<BUFFER_SIZE>,
+    tested: T,
+    verify: V,
+}
+
+impl<'a, const BUFFER_SIZE: usize> TestScaffold<'a, (), (), BUFFER_SIZE> {
+    fn new(link_loop: &'a mut PhysicalLinkLoop<BUFFER_SIZE>) -> Self {
+        let tested = ();
+        let verify = ();
+
+        TestScaffold {
+            link_loop,
+            tested,
+            verify,
+        }
+    }
+}
+
+impl<'a, T, V, const BUFFER_SIZE: usize> TestScaffold<'a, T, V, BUFFER_SIZE> {
+    /// Set the future to be tested
+    ///
+    /// # Note
+    /// It is fine if the future returned by the input `f` never polls to completion. It is OK to do
+    /// something like this:
+    ///
+    /// ```
+    /// # use bo_tie_host_tests::PhysicalLinkLoop;
+    /// # use core::future;
+    /// # tokio_test::block_on(async {
+    /// PhysicalLinkLoop::default()
+    ///     .test_scaffold()
+    ///     // this never polls to completion and that is OK!
+    ///     .set_tested(|_| future::pending::<()>())
+    ///     .set_verify(|_| async { assert_ne!(1, 2) })
+    ///     .run()
+    ///     .await
+    /// # });
+    /// ```
+    pub fn set_tested<Fun, Fut>(self, f: Fun) -> TestScaffold<'a, Fut, V, BUFFER_SIZE>
+    where
+        Fun: FnOnce(PhysicalLinkLoopEnd<'a, BUFFER_SIZE>) -> Fut,
+        Fut: IntoFuture,
+    {
+        let end = PhysicalLinkLoopEnd {
+            data: &self.link_loop.a_data,
+            peer_data: &self.link_loop.b_data,
+            waker: &self.link_loop.a_waker,
+            peer_waker: &self.link_loop.b_waker,
+        };
+
+        let link_loop = self.link_loop;
+
+        let tested = f(end);
+
+        let verify = self.verify;
+
+        TestScaffold {
+            link_loop,
+            tested,
+            verify,
+        }
+    }
+
+    /// Set the future to verify the tested
+    ///
+    /// The future returned by input `f` must poll to completion.
+    pub fn set_verify<Fun, Fut>(self, f: Fun) -> TestScaffold<'a, T, Fut, BUFFER_SIZE>
+    where
+        Fun: FnOnce(PhysicalLinkLoopEnd<'a, BUFFER_SIZE>) -> Fut,
+        Fut: IntoFuture,
+    {
+        let end = PhysicalLinkLoopEnd {
+            data: &self.link_loop.b_data,
+            peer_data: &self.link_loop.a_data,
+            waker: &self.link_loop.b_waker,
+            peer_waker: &self.link_loop.a_waker,
+        };
+
+        let link_loop = self.link_loop;
+
+        let tested = self.tested;
+
+        let verify = f(end);
+
+        TestScaffold {
+            link_loop,
+            tested,
+            verify,
+        }
+    }
+
+    /// Run the tests
+    pub async fn run(self)
+    where
+        T: IntoFuture,
+        V: IntoFuture,
+    {
+        let mut tested = pin!(async {
+            self.tested.await;
+
+            core::future::pending::<()>().await
+        });
+
+        let mut verify = pin!(self.verify.into_future());
+
+        tokio::select! {
+            _ = &mut tested => panic!("unexpected output of tested"),
+
+            _ = &mut verify => ()
+        }
+    }
 }

@@ -238,8 +238,8 @@ pub fn nonce() -> u128 {
 
 /// Tests
 ///
-/// The much of the tests data can be retrieved from the end of the Security Manager specification,
-/// but some of the tests data is unique. All the data (if the applicable function is implemented)
+/// The much of the tests-scaffold data can be retrieved from the end of the Security Manager specification,
+/// but some of the tests-scaffold data is unique. All the data (if the applicable function is implemented)
 /// should be used here for testing.
 #[cfg(test)]
 mod tests {
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(0x1122_3380_0000_0000_0000_0000_0000_0000u128, aes_cmac_padding(&b));
     }
 
-    /// The tests data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
+    /// The tests-scaffold data was retrieved from [The AES-CMAC Algorithm](https://datatracker.ietf.org/doc/rfc4493)
     #[test]
     fn aes_cmac_subkey_gen_test() {
         let k = 0x2b7e1516_28aed2a6_abf71588_09cf4f3c;
@@ -313,7 +313,7 @@ mod tests {
         <u128>::from_str_radix(&output, 16).expect("failed to create generated")
     }
 
-    /// Random message tests (comparing with OpenSSL)
+    /// Random message tests-scaffold (comparing with OpenSSL)
     ///
     /// This test requires the openssl command be installed on the machine
     #[cfg(target_os = "linux")]

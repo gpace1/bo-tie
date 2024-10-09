@@ -1,4 +1,4 @@
-//! tests for read by group type request/response
+//! tests-scaffold for read by group type request/response
 
 use bo_tie_att::client::ResponseProcessor;
 use bo_tie_att::server::NoQueuedWrites;

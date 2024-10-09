@@ -1201,299 +1201,120 @@ impl TransferFormatTryFrom for bo_tie_core::BluetoothDeviceAddress {
 #[cfg(test)]
 mod test {
     #[tokio::test]
-    async fn test_att_connection() {
-        use super::client::ResponseProcessor;
+    async fn test_fixed_att_connection() {
         use bo_tie_host_util::Uuid;
-        use std::sync::{atomic, Arc};
 
         const UUID_1: Uuid = Uuid::from_u16(1);
+
         const UUID_2: Uuid = Uuid::from_u16(2);
+
         const UUID_3: Uuid = Uuid::from_u16(3);
 
+        const UUID_4: Uuid = Uuid::from_u16(4);
+
         let test_val_1 = 33usize;
+
         let test_val_2 = 64u64;
+
         let test_val_3 = -11i8;
 
-        let kill_opcode = 0xFFu8;
+        // the formatting does not matter, all that is needed is a large piece of data
+        let test_val_4 = b"\
+            Lorem ipsum dolor sit amet, consectetur adipiscing elit. Aliquam lobortis ipsum ac 
+            ornare fringilla. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices 
+            posuere cubilia curae; Maecenas est dolor, mollis vitae dictum ut, malesuada sit amet 
+            odio. Nam id molestie tellus, interdum molestie ante. Sed varius ante in velit cursus 
+            rutrum. Aliquam erat volutpat. Vestibulum vel tellus ut ante scelerisque placerat sed 
+            sed massa. Pellentesque non fringilla nisl. In vestibulum finibus accumsan. Vestibulum 
+            nec semper dolor. Nullam placerat, tortor eu vulputate tempus, leo elit porta arcu, ut 
+            aliquet elit odio at augue. Aenean cursus faucibus metus, et convallis eros commodo 
+            quis. In hac habitasse platea dictumst. Donec rhoncus vestibulum nulla, at viverra 
+            justo efficitur quis. Suspendisse semper eleifend aliquam. In vel est in nisi suscipit 
+            malesuada.
 
-        let (mut c1, mut c2) = TwoWayChannel::new();
+            Nulla ipsum leo, cursus vitae molestie id, pretium id tortor. Vestibulum ante ipsum 
+            primis in faucibus orci luctus et ultrices posuere cubilia curae; Nam placerat 
+            condimentum ante, eu condimentum odio ornare in. Nulla facilisi. Phasellus suscipit 
+            magna ac fringilla interdum. Donec lacinia eu nibh in varius. Nullam quis faucibus orci,
+            et efficitur eros. Aenean vitae odio sed diam viverra condimentum. Suspendisse in magna 
+            tortor. Etiam et sapien et ipsum lacinia varius quis nec libero. Sed rutrum magna velit. 
+            Nam faucibus at diam et egestas. Donec tincidunt non leo in fringilla. Class aptent 
+            taciti sociosqu ad litora torquent per conubia nostra, per inceptos himenaeos.
 
-        let thread_panicked = Arc::new(atomic::AtomicBool::new(false));
+            Suspendisse non vehicula mauris. Donec dignissim, magna sit amet sollicitudin commodo, 
+            enim augue laoreet tellus, ac aliquam odio magna vitae lorem. Praesent consectetur 
+            pellentesque ligula nec varius. Sed arcu sapien, tempus hendrerit dui ac, mattis luctus 
+            eros. Sed pulvinar condimentum dui, vitae accumsan orci. In vestibulum odio erat, eget 
+            consectetur ex tristique nec. Nullam a urna nec lorem placerat lacinia. Nam tristique 
+            libero augue, non eleifend risus varius vitae. Aenean maximus consequat ipsum. 
+            Suspendisse sit amet lectus sit amet est tristique vestibulum. Ut placerat leo vitae 
+            urna eleifend, a eleifend enim tempus. In ut arcu tincidunt, maximus odio eget, congue 
+            nibh. Quisque sagittis diam nec justo vestibulum dapibus. Donec interdum fringilla eros, 
+            in ornare justo mollis eget. Praesent magna enim, euismod at consectetur elementum, 
+            sollicitudin nec eros.
 
-        let thread_panicked_clone = thread_panicked.clone();
+            Etiam pulvinar risus eget pulvinar pulvinar. Donec sodales convallis lorem eu luctus. 
+            Maecenas porttitor, libero iaculis maximus dictum, risus purus ultrices mauris, non 
+            bibendum erat tellus vitae felis. Vivamus vulputate risus eu magna dapibus, a lobortis 
+            massa feugiat. Proin tincidunt augue odio. Duis a lacinia diam, et tincidunt sapien. 
+            Suspendisse potenti. Morbi commodo imperdiet venenatis.
 
-        // temporary util a better error is produced by the compiler. See
-        // rust issue https://github.com/rust-lang/rust/issues/102211 for
-        // what I think is the issue of this.
-        struct ForceSafeSend<T>(T);
+            In libero nunc, vehicula in felis molestie, feugiat suscipit erat. In vehicula erat 
+            quam, in cursus leo consectetur varius. Quisque tempus justo tincidunt purus venenatis 
+            luctus. Sed pellentesque arcu vitae nibh vestibulum, ac hendrerit arcu congue. Integer 
+            elementum massa quis nisi suscipit porta. Mauris eget sapien lectus. Sed tempor nulla 
+            rutrum, bibendum quam ut, ultricies purus. Maecenas a lorem mauris. 
+        ";
 
-        unsafe impl<T> Send for ForceSafeSend<T> {}
+        fixed_att_test_setup! (
+            server_setup => {
+                use AttributePermissions::*;
 
-        impl<T: std::future::Future> std::future::Future for ForceSafeSend<T> {
-            type Output = T::Output;
+                let mut server_attributes = ServerAttributes::new();
 
-            fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-                unsafe { self.map_unchecked_mut(|this| &mut this.0).poll(cx) }
-            }
-        }
+                let attribute_0 = Attribute::new(
+                    UUID_1,
+                    [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
+                    0usize,
+                );
 
-        let task = async move {
-            use AttributePermissions::*;
+                let attribute_1 = Attribute::new(
+                    UUID_2,
+                    [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
+                    0u64,
+                );
 
-            let mut server_attributes = ServerAttributes::new();
+                let attribute_3 = Attribute::new(
+                    UUID_3,
+                    [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
+                    0i8,
+                );
 
-            let attribute_0 = Attribute::new(
-                UUID_1,
-                [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
-                0usize,
-            );
+                server_attributes.push(attribute_0); // has handle value of 1
+                server_attributes.push(attribute_1); // has handle value of 2
+                server_attributes.push(attribute_3); // has handle value of 3
 
-            let attribute_1 = Attribute::new(
-                UUID_2,
-                [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
-                0u64,
-            );
+                let mut server = Server::new_fixed(23, 256, server_attributes, NoQueuedWrites);
 
-            let attribute_3 = Attribute::new(
-                UUID_3,
-                [Read(AttributeRestriction::None), Write(AttributeRestriction::None)].to_vec(),
-                0i8,
-            );
+                let client_permissions: &[AttributePermissions] =
+                    &[Read(AttributeRestriction::None), Write(AttributeRestriction::None)];
 
-            server_attributes.push(attribute_0); // has handle value of 1
-            server_attributes.push(attribute_1); // has handle value of 2
-            server_attributes.push(attribute_3); // has handle value of 3
+                server.give_permissions_to_client(client_permissions);
 
-            let mut server = Server::new(256, server_attributes, server::NoQueuedWrites);
-
-            let client_permissions: &[AttributePermissions] =
-                &[Read(AttributeRestriction::None), Write(AttributeRestriction::None)];
-
-            server.give_permissions_to_client(client_permissions);
-
-            if let Err(e) = 'server_loop: loop {
-                use std::convert::TryFrom;
-
-                match c2.receive_b_frame().await {
-                    Ok(l2cap_data_vec) => {
-                        for l2cap_pdu in l2cap_data_vec {
-                            match server.process_att_pdu(&mut c2, &l2cap_pdu).await {
-                                Err(ConnectionError::AttError(super::Error::UnknownOpcode(op)))
-                                    if op == kill_opcode =>
-                                {
-                                    break 'server_loop Ok(())
-                                }
-                                Err(e) => {
-                                    break 'server_loop Err(format!(
-                                        "Pdu error: {:?}, att pdu op: {:?}",
-                                        e,
-                                        client::ClientPduName::try_from(l2cap_pdu.get_payload()[0])
-                                    ))
-                                }
-                                _ => (),
-                            }
-                        }
-                    }
-                    Err(e) => break 'server_loop Err(format!("Future Receiver Error: {:?}", e)),
+                server
+            },
+            server_status => (status) {
+                match status {
+                    Status::None => (),
+                    _ => panic!("unexpected {status:?}")
                 }
-            } {
-                thread_panicked_clone.store(true, atomic::Ordering::Relaxed);
-                panic!("{}", e);
+            },
+            client_actions => (client, channel, pdu) {
+                {
+                    client
+                },
+                {}
             }
-        };
-
-        let mut join_handle = tokio::spawn(ForceSafeSend(task));
-
-        /// Creates a block-on implementation
-        ///
-        /// # Panics In Returned Closure
-        /// Input `t` of 'make_block_on' cannot refer to a `None` *for the lifetime of the returned
-        /// closure*.
-        async fn task_timeout<'t, F, T>(
-            tp: Arc<atomic::AtomicBool>,
-            t: &mut tokio::task::JoinHandle<T>,
-            f: F,
-            err: &str,
-        ) -> Result<F::Output, String>
-        where
-            F: std::future::Future,
-        {
-            let tf = tokio::time::timeout(std::time::Duration::from_secs(1), f);
-
-            match tf.await {
-                Err(timeout_err) => {
-                    if tp.load(atomic::Ordering::Relaxed) {
-                        Err(format!(
-                            "{}, server_error: {:?}",
-                            timeout_err,
-                            t.await
-                                .map(|_| "unexpected early exit")
-                                .map_err(|join_error| if join_error.is_panic() {
-                                    *join_error.into_panic().downcast::<String>().unwrap()
-                                } else {
-                                    "task canceled".to_string()
-                                })
-                                .unwrap_err()
-                        ))
-                    } else {
-                        Err(err.to_string())
-                    }
-                }
-                Ok(output) => Ok(output),
-            }
-        }
-
-        let le_client_setup = client::ConnectClient::initiate(&c1, 512).await.unwrap();
-
-        let mtu_rsp = task_timeout(
-            thread_panicked.clone(),
-            &mut join_handle,
-            c1.receive_b_frame(),
-            "Connect timed out",
-        )
-        .await
-        .unwrap()
-        .expect("connect receiver");
-
-        let client = le_client_setup.create_client(mtu_rsp.first().unwrap()).await.unwrap();
-
-        // writing to handle 1
-        client
-            .write_request(&mut c1, 1, test_val_1)
-            .await
-            .unwrap()
-            .process_response(
-                task_timeout(
-                    thread_panicked.clone(),
-                    &mut join_handle,
-                    c1.receive_b_frame(),
-                    "write handle 1 timed out",
-                )
-                .await
-                .unwrap()
-                .expect("w1 receiver")
-                .first()
-                .unwrap(),
-            )
-            .expect("w1 response");
-
-        // writing to handle 2
-        client
-            .write_request(&mut c1, 2, test_val_2)
-            .await
-            .unwrap()
-            .process_response(
-                task_timeout(
-                    thread_panicked.clone(),
-                    &mut join_handle,
-                    c1.receive_b_frame(),
-                    "write handle 2 timed out",
-                )
-                .await
-                .unwrap()
-                .expect("w2 receiver")
-                .first()
-                .unwrap(),
-            )
-            .expect("w2 response");
-
-        // writing to handle 3
-        client
-            .write_request(&mut c1, 3, test_val_3)
-            .await
-            .unwrap()
-            .process_response(
-                task_timeout(
-                    thread_panicked.clone(),
-                    &mut join_handle,
-                    c1.receive_b_frame(),
-                    "write handle 3 timed out",
-                )
-                .await
-                .unwrap()
-                .expect("w3 receiver")
-                .first()
-                .unwrap(),
-            )
-            .expect("w3 response");
-
-        // reading handle 1
-        let read_val_1 = client
-            .read_request(&mut c1, 1)
-            .await
-            .unwrap()
-            .process_response(
-                task_timeout(
-                    thread_panicked.clone(),
-                    &mut join_handle,
-                    c1.receive_b_frame(),
-                    "read handle 1 timed out",
-                )
-                .await
-                .unwrap()
-                .expect("r1 receiver")
-                .first()
-                .unwrap(),
-            )
-            .expect("r1 response");
-
-        let read_val_2 = client
-            .read_request(&mut c1, 2)
-            .await
-            .unwrap()
-            .process_response(
-                task_timeout(
-                    thread_panicked.clone(),
-                    &mut join_handle,
-                    c1.receive_b_frame(),
-                    "read handle 2 timed out",
-                )
-                .await
-                .unwrap()
-                .expect("r2 receiver")
-                .first()
-                .unwrap(),
-            )
-            .expect("r2 response");
-
-        let read_val_3 = client
-            .read_request(&mut c1, 3)
-            .await
-            .unwrap()
-            .process_response(
-                task_timeout(
-                    thread_panicked.clone(),
-                    &mut join_handle,
-                    c1.receive_b_frame(),
-                    "read handle 3 timed out",
-                )
-                .await
-                .unwrap()
-                .expect("r3 receiver")
-                .first()
-                .unwrap(),
-            )
-            .expect("r3 response");
-
-        client
-            .custom_command(&mut c1, pdu::Pdu::new(kill_opcode.into(), 0u8))
-            .await
-            .expect("Failed to send kill opcode");
-
-        // Check that the send values equal the read values
-        assert_eq!(test_val_1, read_val_1);
-        assert_eq!(test_val_2, read_val_2);
-        assert_eq!(test_val_3, read_val_3);
-
-        join_handle
-            .await
-            .map_err(|e| {
-                if e.is_panic() {
-                    format!("Thread panicked: {}", e.into_panic().downcast_ref::<String>().unwrap())
-                } else {
-                    "thread was cancelled".to_string()
-                }
-            })
-            .unwrap()
+        );
     }
 }

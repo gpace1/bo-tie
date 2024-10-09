@@ -1,78 +1,86 @@
-//! Tests for a LE-U Link
+//! Tests for the `next` methods
 
 use bo_tie_host_tests::PhysicalLinkLoop;
+use bo_tie_l2cap::cid::{ChannelIdentifier, LeCid};
 use bo_tie_l2cap::signalling::ReceivedLeUSignal;
 use bo_tie_l2cap::signals::packets::{
     CommandRejectResponse, LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer,
 };
-use bo_tie_l2cap::{LeULogicalLink, LeUNext, PhysicalLink};
-
-const TEST_DATA: &[u8] = b"Actualis at conscius supponam ac. Vocem si longo mo co veris \
-    entis. Similibus essentiae argumenti sum contingit eae praesenti. Spectatum de jactantur \
-    veritatis ut. Negans impetu optima nos postea rectum primas una. Actu iste ego lor haec \
-    ipsa quia tria meo. Eam unquam vim obstat eamque nia factam manebo. Anima terea ideas tur \
-    putem nec nolim aliae imo. Securum cum ultimum eam nul creatum suppono diversi. Vox pluribus \
-    jam chimerae acceptis eos utrimque impellit nihilque.";
+use bo_tie_l2cap::{LeULogicalLink, LeUNext};
 
 #[tokio::test]
-async fn minimal_fragments() {
-    PhysicalLinkLoop::<1>::new()
+async fn le_u_logical_link_next() {
+    let mut requested_channel = None;
+    let mut received_channel = None;
+
+    PhysicalLinkLoop::default()
         .test_scaffold()
         .set_tested(|end| async {
             let mut link = LeULogicalLink::builder(end)
-                .enable_attribute_channel()
+                .enable_signalling_channel()
                 .use_vec_buffer()
+                .use_vec_sdu_buffer()
                 .build();
 
-            let mut channel = link.get_att_channel().unwrap();
+            let mut channel = link.get_signalling_channel().unwrap();
 
-            channel
-                .send(TEST_DATA.iter().copied())
+            let connection_request = channel
+                .request_le_credit_connection(
+                    SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
+                    LeCreditMtu::new(256),
+                    LeCreditMps::new(34),
+                    5,
+                )
                 .await
-                .expect("failed to send gibberish")
+                .unwrap();
+
+            requested_channel = connection_request.get_source_cid().into();
         })
-        .set_verify(|mut end| async move {
-            let mut bytes = Vec::new();
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .use_vec_sdu_buffer()
+                .build();
 
-            while bytes.len() < TEST_DATA.len() {
-                let l2cap_fragment = end.recv().await.unwrap().unwrap();
+            let received = link.next().await.unwrap();
 
-                assert_eq!(l2cap_fragment.get_data().len(), 1);
+            let LeUNext::SignallingChannel { signal, channel } = received else {
+                panic!("expected signalling channel")
+            };
 
-                let byte: u8 = l2cap_fragment.into_inner().next().unwrap();
+            assert_eq!(
+                ChannelIdentifier::Le(LeCid::LeSignalingChannel),
+                channel.get_channel_id()
+            );
 
-                bytes.push(byte)
-            }
+            let ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) = signal else {
+                panic!("expected 'LeCreditBasedConnectionRequest`, received {signal:?}");
+            };
+
+            assert_eq!(1, request.identifier.get());
+
+            received_channel = request.get_source_cid().into();
         })
         .run()
         .await;
-}
 
-#[tokio::test]
-#[should_panic]
-async fn zero_sized_fragments() {
-    PhysicalLinkLoop::<0>::new()
-        .test_scaffold()
-        .set_tested(|_| async {})
-        .set_verify(|end| async {
-            LeULogicalLink::builder(end).build();
-        })
-        .run()
-        .await
+    assert_eq!(received_channel, requested_channel);
 }
 
 #[tokio::test]
 async fn le_u_logical_link_unused_channels() {
-    PhysicalLinkLoop::new()
+    PhysicalLinkLoop::default()
         .test_scaffold()
         .set_tested(|end| async {
-            let mut link = LeULogicalLink::builder(end)
+            LeULogicalLink::builder(end)
                 .enable_unused_fixed_channel_response()
-                .build();
+                .build()
+                .next()
+                .await
+                .unwrap();
 
-            let next = link.next().await.unwrap();
-
-            panic!("unexpectedly received {next:?}");
+            panic!("tested ")
         })
         .set_verify(|end| async {
             let mut link = LeULogicalLink::builder(end)
