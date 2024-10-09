@@ -521,7 +521,7 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     pub fn get_att_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
-        B: TryExtend<u8> + Default,
+        B: Default,
     {
         if let LeUChannelType::BasicChannel { .. } = &self.channels[LE_LINK_ATT_CHANNEL_INDEX] {
             let handle = LeULogicalLinkHandle::new(self, LE_LINK_ATT_CHANNEL_INDEX);
@@ -551,7 +551,7 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     pub fn get_signalling_channel(&mut self) -> Option<SignallingChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
-        B: TryExtend<u8> + Default,
+        B: Default,
     {
         if let LeUChannelType::SignallingChannel = &self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] {
             let handle = LeULogicalLinkHandle::new(self, LE_LINK_SIGNALLING_CHANNEL_INDEX);
@@ -581,7 +581,7 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     pub fn get_security_manager_channel(&mut self) -> Option<BasicFrameChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
-        B: TryExtend<u8> + Default,
+        B: Default,
     {
         if let LeUChannelType::BasicChannel { .. } = &self.channels[LE_LINK_SM_CHANNEL_INDEX] {
             let handle = LeULogicalLinkHandle::new(self, LE_LINK_SM_CHANNEL_INDEX);
@@ -608,7 +608,7 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     ) -> Option<CreditBasedChannel<LeULogicalLinkHandle<'_, P, B, S>>>
     where
         P: PhysicalLink,
-        B: TryExtend<u8> + Default,
+        B: Default,
     {
         let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) = channel_identifier else {
             return None;
