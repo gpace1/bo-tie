@@ -206,13 +206,15 @@ pub trait PhysicalLink {
     /// [`max_transmission_size`].
     ///
     /// # Flow Control
-    /// Flow control shall be implemented within the future returned by `send`. The future shall
-    /// await until it has successfully sent the L2CAP fragment.
     ///
-    /// # 'Sent'
-    /// What 'sent' means is subjective to the implementation. For an HCI implementation it could
-    /// mean that the data has been sent to the Controller. For a single system implementation it
-    /// may mean that the data has fully transmitted to the peer device.
+    /// Flow control shall be implemented within the future returned by `send`. The future shall
+    /// await until it has successfully 'sent' the L2CAP fragment.
+    ///
+    /// What is means to send a fragment is subjective to the device. It's up to the `SendFut` to
+    /// ensure that sending a `fragment` complies with the requirements of the physical layers and
+    /// any surrounding systems. For an HCI implementation it could mean that the data has been sent
+    /// once it's delivered to the Controller. For a single system implementation it may mean that 
+    /// the data has fully transmitted to the peer device.
     ///
     /// [`max_transmission_size`]: PhysicalLink::max_transmission_size
     fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>

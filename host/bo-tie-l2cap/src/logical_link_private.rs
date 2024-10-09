@@ -2,8 +2,8 @@ use crate::channel::id::{ChannelIdentifier, DynChannelId, LeCid};
 use crate::channel::{DynChannelState, DynChannelStateInner, LeUChannelType};
 use crate::link_flavor::{LeULink, LinkFlavor};
 use crate::{
-    LeULogicalLink, PhysicalLink, SignallingChannel, LE_DYNAMIC_CHANNEL_COUNT, LE_LINK_SIGNALLING_CHANNEL_INDEX,
-    LE_STATIC_CHANNEL_COUNT,
+    CreditBasedChannel, LeULogicalLink, PhysicalLink, SignallingChannel, LE_DYNAMIC_CHANNEL_COUNT,
+    LE_LINK_SIGNALLING_CHANNEL_INDEX, LE_STATIC_CHANNEL_COUNT,
 };
 use bo_tie_core::buffer::TryExtend;
 
@@ -117,6 +117,9 @@ pub trait LogicalLinkPrivate: Sized {
     /// This returns the channel used for siding `L2CAP` control frames to the linked device. This
     /// returns `None` if this logical link does not have a signalling channel.
     fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self::Deferred<'_>>>;
+
+    /// Get a credit based channel
+    fn get_credit_based_channel(&mut self, cid: ChannelIdentifier) -> Option<CreditBasedChannel<Self::Deferred<'_>>>;
 
     /// Get a reference to the physical link
     fn get_physical_link(&self) -> &Self::PhysicalLink;
@@ -311,6 +314,10 @@ impl<P: PhysicalLink, B: Default, S> LogicalLinkPrivate for LeULogicalLinkHandle
             ChannelIdentifier::Le(LeCid::LeSignalingChannel),
             handle,
         ))
+    }
+
+    fn get_credit_based_channel(&mut self, cid: ChannelIdentifier) -> Option<CreditBasedChannel<Self::Deferred<'_>>> {
+        self.logical_link.get_credit_based_channel(cid)
     }
 
     fn get_physical_link(&self) -> &P {
