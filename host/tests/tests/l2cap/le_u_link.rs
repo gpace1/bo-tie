@@ -63,7 +63,7 @@ async fn zero_sized_fragments() {
 
 #[tokio::test]
 async fn le_u_logical_link_unused_channels() {
-    PhysicalLinkLoop::new()
+    PhysicalLinkLoop::default()
         .test_scaffold()
         .set_tested(|end| async {
             let mut link = LeULogicalLink::builder(end)
