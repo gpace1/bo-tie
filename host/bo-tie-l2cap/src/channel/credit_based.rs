@@ -47,13 +47,14 @@ where
         &mut self,
         credit_based_channel: &mut CreditBasedChannel<L>,
     ) -> Result<bool, SendSduError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        while credit_based_channel.get_channel_data().peer_credits != 0 && !self.packets_iterator.is_complete() {
+        while credit_based_channel.get_channel_data().peer_provided_credits != 0 && !self.packets_iterator.is_complete()
+        {
             // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better)
             let pdu = self.packets_iterator.next().map(|cfb| cfb.map_to_vec_iter()).unwrap();
 
             credit_based_channel.send_k_frame(pdu).await?;
 
-            credit_based_channel.get_mut_channel_data().peer_credits -= 1;
+            credit_based_channel.get_mut_channel_data().peer_provided_credits -= 1;
         }
 
         Ok(self.packets_iterator.is_complete())

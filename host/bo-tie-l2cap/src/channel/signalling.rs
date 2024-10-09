@@ -762,14 +762,17 @@ impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
 
         let maximum_transmission_size = min(self.mtu, self.request.mtu.get()).into();
 
-        let initial_peer_credits = self.request.initial_credits.into();
+        let initial_peer_given_credits = self.request.initial_credits;
+
+        let initial_credits_given_to_peer = self.initial_credits;
 
         let state = DynChannelState {
             inner: DynChannelStateInner::EstablishedCreditBasedChannel {
                 peer_channel_id,
                 maximum_transmission_size,
                 maximum_payload_size,
-                peer_credits: initial_peer_credits,
+                credits_given_to_peer: initial_credits_given_to_peer,
+                peer_provided_credits: initial_peer_given_credits,
             },
         };
 
@@ -903,7 +906,9 @@ impl Response<LeCreditBasedConnectionResponse> {
 
             let maximum_transmission_size = core::cmp::min(self.response.get_mtu().unwrap(), request.mtu.get()).into();
 
-            let initial_peer_credits = self.response.get_initial_credits().unwrap().into();
+            let initial_credits_given_to_peer = request.get_initial_credits();
+
+            let initial_credits_from_peer = self.response.get_initial_credits().unwrap();
 
             let state = DynChannelState {
                 inner: DynChannelStateInner::ReserveCreditBasedChannel {
@@ -911,7 +916,8 @@ impl Response<LeCreditBasedConnectionResponse> {
                     peer_channel_id,
                     maximum_transmission_size,
                     maximum_payload_size,
-                    peer_credits: initial_peer_credits,
+                    credits_given_to_peer: initial_credits_given_to_peer,
+                    peer_provided_credits: initial_credits_from_peer,
                 },
             };
 

@@ -144,7 +144,8 @@ pub struct CreditBasedChannelData<B> {
     peer_channel_id: ChannelDirection,
     maximum_transmission_size: u16,
     maximum_payload_size: u16,
-    peer_credits: u16,
+    peer_provided_credits: u16,
+    credits_given_to_peer: u16,
     remaining_sdu_bytes: u16,
     sdu_buffer: B,
 }
@@ -154,11 +155,17 @@ impl<S: TryExtend<u8> + Default> CreditBasedChannelData<S> {
     ///
     /// # Error
     /// Returns an error if the buffer cannot be extended by the payload of the credit based frame.
-    pub(crate) fn process_pdu<T>(&mut self, pdu: CreditBasedFrame<T>) -> Result<Option<S>, S::Error>
+    pub(crate) fn process_pdu<T>(&mut self, pdu: CreditBasedFrame<T>) -> ProcessSduOutput<S, S::Error>
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
+        if self.credits_given_to_peer == 0 {
+            return ProcessSduOutput::PeerSentTooManyPdu;
+        }
+
+        self.credits_given_to_peer -= 1;
+
         if let Some(len) = pdu.get_sdu_length() {
             self.recombine_meta.first_pdu_of_sdu = false;
 
@@ -171,7 +178,9 @@ impl<S: TryExtend<u8> + Default> CreditBasedChannelData<S> {
 
         let take_amount = core::cmp::min(iter_len, self.remaining_sdu_bytes.into());
 
-        self.sdu_buffer.try_extend(iter.take(take_amount))?;
+        if let Err(e) = self.sdu_buffer.try_extend(iter.take(take_amount)) {
+            return ProcessSduOutput::BufferError(e);
+        }
 
         self.remaining_sdu_bytes = self
             .remaining_sdu_bytes
@@ -181,15 +190,33 @@ impl<S: TryExtend<u8> + Default> CreditBasedChannelData<S> {
             // now that the SDU is built, reset the first flag
             self.recombine_meta.first_pdu_of_sdu = true;
 
-            Ok(Some(core::mem::take(&mut self.sdu_buffer)))
+            if self.credits_given_to_peer == 0 {
+                ProcessSduOutput::SduPeerHasNoMoreCredits(core::mem::take(&mut self.sdu_buffer))
+            } else {
+                ProcessSduOutput::Sdu(core::mem::take(&mut self.sdu_buffer))
+            }
         } else {
-            Ok(None)
+            if self.credits_given_to_peer == 0 {
+                ProcessSduOutput::NonePeerHasNoMoreCredits
+            } else {
+                ProcessSduOutput::None
+            }
         }
     }
 
     pub(crate) fn add_peer_credits(&mut self, amount: u16) {
-        self.peer_credits = self.peer_credits.saturating_add(amount)
+        self.peer_provided_credits = self.peer_provided_credits.saturating_add(amount)
     }
+}
+
+pub(crate) enum ProcessSduOutput<S, E> {
+    None,
+    NonePeerHasNoMoreCredits,
+    Sdu(S),
+    SduPeerHasNoMoreCredits(S),
+    // errors
+    PeerSentTooManyPdu,
+    BufferError(E),
 }
 
 impl<S> LeUChannelType<S> {
@@ -363,13 +390,15 @@ pub(crate) enum DynChannelStateInner {
         peer_channel_id: ChannelDirection,
         maximum_transmission_size: u16,
         maximum_payload_size: u16,
-        peer_credits: u16,
+        credits_given_to_peer: u16,
+        peer_provided_credits: u16,
     },
     EstablishedCreditBasedChannel {
         peer_channel_id: ChannelDirection,
         maximum_transmission_size: u16,
         maximum_payload_size: u16,
-        peer_credits: u16,
+        credits_given_to_peer: u16,
+        peer_provided_credits: u16,
     },
 }
 
@@ -387,14 +416,16 @@ where
                 peer_channel_id,
                 maximum_transmission_size,
                 maximum_payload_size,
-                peer_credits,
+                credits_given_to_peer,
+                peer_provided_credits,
                 ..
             }
             | DynChannelStateInner::EstablishedCreditBasedChannel {
                 peer_channel_id,
                 maximum_transmission_size,
                 maximum_payload_size,
-                peer_credits,
+                credits_given_to_peer,
+                peer_provided_credits,
             } => {
                 let recombine_meta = credit_frame::RecombineMeta { first_pdu_of_sdu: true };
 
@@ -405,7 +436,8 @@ where
                     peer_channel_id,
                     maximum_transmission_size,
                     maximum_payload_size,
-                    peer_credits,
+                    credits_given_to_peer,
+                    peer_provided_credits,
                     remaining_sdu_bytes,
                     sdu_buffer: S::default(),
                 };
@@ -596,27 +628,29 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         self.get_channel_data().maximum_transmission_size
     }
 
-    /// Get the current number of credits given to this channel by the connected device
-    pub fn get_peer_credits(&self) -> u16 {
-        self.get_channel_data().peer_credits
+    /// Get the current number of credits available for sending to
+    ///
+    /// This is not the cumulative
+    pub fn get_credits(&self) -> u16 {
+        self.get_channel_data().peer_provided_credits
     }
 
     /// Get the current number of credits that were given to the peer device by this channel
     ///
-    /// This is the estimated count for the number of credits the peer device has for this channel.
-    /// This number may be different from the number of credits for this channel on the connected
-    /// device. There may be credit based frames sent by the connected device that have not yet been
-    /// received by this channel. This can be because they're either in the lower (than L2CAP)
-    /// protocol layers of the connected device or the lower protocol layers of this device.
-    pub fn get_credits_given(&self) -> u16 {
-        self.get_channel_data().peer_credits
+    /// This is an estimated count for the number of credits the peer device has for sending credit
+    /// based frames to this channel.
+    ///
+    /// It is impossible to get the exact number of credits the peer currently has as this count is
+    /// reflective to the number of
+    pub fn get_credit_of_peer(&self) -> u16 {
+        self.get_channel_data().credits_given_to_peer
     }
 
     /// Add credits given by the peer
     ///
     /// This forcibly adds peer credits to this channel. After this is called
     pub unsafe fn force_add_peer_credits(&mut self, amount: u16) {
-        let peer_credits = &mut self.get_mut_channel_data().peer_credits;
+        let peer_credits = &mut self.get_mut_channel_data().peer_provided_credits;
 
         *peer_credits = if let Some(amount) = peer_credits.checked_add(amount.into()) {
             core::cmp::min(amount, <u16>::MAX.into())
@@ -686,14 +720,14 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
             return Err(SendSduError::SduLargerThanMtu);
         }
 
-        while self.get_channel_data().peer_credits != 0 {
+        while self.get_channel_data().peer_provided_credits != 0 {
             // todo remove map_to_vec_iter (this is a workaround until rust's borrow check gets better with async)
             let next = packets.next().map(|cfb| cfb.map_to_vec_iter());
 
             if let Some(pdu) = next {
                 self.send_k_frame(pdu).await?;
 
-                self.get_mut_channel_data().peer_credits -= 1;
+                self.get_mut_channel_data().peer_provided_credits -= 1;
             } else {
                 return Ok(None);
             }

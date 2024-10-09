@@ -130,6 +130,7 @@ mod logical_link_private;
 pub mod pdu;
 pub mod signals;
 
+use crate::channel::ProcessSduOutput;
 use bo_tie_core::buffer::TryExtend;
 use channel::id::{ChannelIdentifier, DynChannelId, LeCid};
 use channel::signalling::ReceivedLeUSignal;
@@ -848,18 +849,48 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                             unreachable!()
                         };
 
-                        let Some(sdu) = data
-                            .process_pdu(pdu)
-                            .map_err(|e| LeULogicalLinkNextError::SduBufferOverflow(e))?
-                        else {
-                            continue 'outer;
-                        };
+                        match data.process_pdu(pdu) {
+                            ProcessSduOutput::None => continue 'outer,
+                            ProcessSduOutput::NonePeerHasNoMoreCredits => {
+                                let handle = LeULogicalLinkHandle::new(self, index);
 
-                        let handle = LeULogicalLinkHandle::new(self, index);
+                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                        let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
+                                break 'outer Ok(LeUNext::PeerOutOfCredits { channel });
+                            }
+                            ProcessSduOutput::Sdu(sdu) => {
+                                let handle = LeULogicalLinkHandle::new(self, index);
 
-                        break 'outer Ok(LeUNext::CreditBasedChannel { sdu, channel });
+                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
+
+                                let peer_out_of_credits = false;
+
+                                break 'outer Ok(LeUNext::CreditBasedChannel {
+                                    sdu,
+                                    channel,
+                                    peer_out_of_credits,
+                                });
+                            }
+                            ProcessSduOutput::SduPeerHasNoMoreCredits(sdu) => {
+                                let handle = LeULogicalLinkHandle::new(self, index);
+
+                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
+
+                                let peer_out_of_credits = true;
+
+                                break 'outer Ok(LeUNext::CreditBasedChannel {
+                                    sdu,
+                                    channel,
+                                    peer_out_of_credits,
+                                });
+                            }
+                            ProcessSduOutput::PeerSentTooManyPdu => {
+                                break 'outer Err(LeULogicalLinkNextError::PeerSentMoreThanCreditsGiven)
+                            }
+                            ProcessSduOutput::BufferError(e) => {
+                                break 'outer Err(LeULogicalLinkNextError::SduBufferOverflow(e))
+                            }
+                        }
                     }
                 }
             }
@@ -885,6 +916,10 @@ pub enum LeUNext<'a, P, B, S> {
     CreditBasedChannel {
         sdu: S,
         channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B, S>>,
+        peer_out_of_credits: bool,
+    },
+    PeerOutOfCredits {
+        channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B, S>>,
     },
     CreditIndication {
         credits_given: usize,
@@ -903,6 +938,7 @@ pub enum LeULogicalLinkNextError<P: PhysicalLink, B: TryExtend<u8>, S: TryExtend
     SduBufferOverflow(S::Error),
     InvalidChannel(InvalidChannel),
     Internal(&'static str),
+    PeerSentMoreThanCreditsGiven,
     RecombineBasicFrame(pdu::basic_frame::RecombineError),
     RecombineControlFrame(channel::signalling::ConvertSignalError),
     RecombineCreditBasedFrame(pdu::credit_frame::RecombineError),
@@ -927,6 +963,7 @@ where
             Self::SduBufferOverflow(e) => f.debug_tuple(stringify!(SduBufferOverflow)).field(e).finish(),
             Self::InvalidChannel(c) => f.debug_tuple(stringify!(InvalidChannel)).field(c).finish(),
             Self::Internal(e) => f.debug_tuple(stringify!(Internal)).field(e).finish(),
+            Self::PeerSentMoreThanCreditsGiven => f.debug_tuple(stringify!(PeerSentMoreThanCreditsGiven)).finish(),
             Self::RecombineBasicFrame(e) => f.debug_tuple(stringify!(RecombineBasicFrame)).field(e).finish(),
             Self::RecombineControlFrame(e) => f.debug_tuple(stringify!(RecombineControlFrame)).field(e).finish(),
             Self::RecombineCreditBasedFrame(e) => {
@@ -961,6 +998,9 @@ where
             LeULogicalLinkNextError::SduBufferOverflow(o) => write!(f, "SDU buffer overflow: {o}"),
             LeULogicalLinkNextError::InvalidChannel(c) => write!(f, "invalid channel: {c}"),
             LeULogicalLinkNextError::Internal(i) => f.write_str(i),
+            LeULogicalLinkNextError::PeerSentMoreThanCreditsGiven => f.write_str(
+                "the peer device has sent more PDUs than the number of credits it was given for a credit based channel",
+            ),
             LeULogicalLinkNextError::RecombineBasicFrame(r) => write!(f, "recombine basic frame error: {r}"),
             LeULogicalLinkNextError::RecombineControlFrame(r) => write!(f, "recombine control frame error: {r}"),
             LeULogicalLinkNextError::RecombineCreditBasedFrame(r) => {
