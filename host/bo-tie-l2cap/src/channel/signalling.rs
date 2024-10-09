@@ -10,7 +10,7 @@ use crate::signals::packets::{
     LeCreditBasedConnectionResponse, LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, Signal,
     SignalCode, SimplifiedProtocolServiceMultiplexer,
 };
-use crate::{LogicalLink, PhysicalLink, PhysicalLinkExt};
+use crate::{CreditBasedChannel, LogicalLink, PhysicalLink, PhysicalLinkExt};
 use bo_tie_core::buffer::stack::LinearBuffer;
 use core::num::NonZeroU8;
 
@@ -887,11 +887,11 @@ impl Response<LeCreditBasedConnectionResponse> {
     /// [`ConnectionSuccessful`], or the link failed to allocate a dynamic channel.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub fn create_le_credit_connection<L>(
+    pub fn create_le_credit_connection<'d, L>(
         &self,
         request: &LeCreditBasedConnectionRequest,
-        signals_channel: &mut SignallingChannel<L>,
-    ) -> Result<(), CreateLeCreditConnectionError>
+        signals_channel: &'d mut SignallingChannel<L>,
+    ) -> Result<CreditBasedChannel<L::Deferred<'d>>, CreateLeCreditConnectionError>
     where
         L: LogicalLink,
         L::SduBuffer: Default,
@@ -915,12 +915,14 @@ impl Response<LeCreditBasedConnectionResponse> {
                 },
             };
 
-            signals_channel
+            let cid = signals_channel
                 .logical_link
                 .establish_dyn_channel(state)
                 .map_err(|e| CreateLeCreditConnectionError::DynChannelFail(e))?;
 
-            Ok(())
+            let new_channel = signals_channel.logical_link.get_credit_based_channel(cid).unwrap();
+
+            Ok(new_channel)
         } else {
             Err(CreateLeCreditConnectionError::ResponseError(self.get_result()))
         }
