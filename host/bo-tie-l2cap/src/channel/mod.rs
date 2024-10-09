@@ -561,13 +561,13 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         }
     }
 
-    /// Get this channel identifier
+    /// Get this channel's identifier
     ///
     /// This is the identifier used by this link to receive credit based frames for this
     /// `CreditBasedChannel`. If this connection was initiated by this device then this was the
     /// *source* id within the connection request. If this connection was accepted by this device
     /// then this was the *destination* id within the connection response.
-    pub fn get_this_channel_id(&self) -> ChannelIdentifier {
+    pub fn get_channel_id(&self) -> ChannelIdentifier {
         self.channel_id
     }
 
@@ -637,7 +637,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         &mut self,
         amount: u16,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let new_credits = ChannelCredits::new(self.get_this_channel_id(), amount);
+        let new_credits = ChannelCredits::new(self.get_channel_id(), amount);
 
         self.logical_link
             .get_signalling_channel()
@@ -700,7 +700,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         }
 
         Ok(Some(CreditServiceData::new(
-            self.get_this_channel_id(),
+            self.get_channel_id(),
             self.get_channel_data().peer_channel_id.get_channel(),
             packets,
         )))

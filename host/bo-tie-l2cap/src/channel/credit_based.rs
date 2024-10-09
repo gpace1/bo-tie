@@ -132,7 +132,7 @@ where
     ///                 .as_ref()
     ///                 .map(|c| c.get_this_channel_id());
     ///     
-    ///             if data_cid == Some(channel.get_this_channel_id()) {
+    ///             if data_cid == Some(channel.get_channel_id()) {
     ///                 credit_service_data = credit_service_data
     ///                     .unwrap()
     ///                     .continue_sending(&mut channel)
