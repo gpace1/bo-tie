@@ -71,14 +71,7 @@ features = ["rt", "macros", "sync", "time"]
 [[test]]
 name = "l2cap_next_methods"
 path = "tests/l2cap/next.rs"
-#[[test]]
-#name = "l2cap_basic_frame"
-#path = "tests/l2cap/pdu/basic_frame.rs"
-#
-#[[test]]
-#name = "l2cap_credit_frame"
-#path = "tests/l2cap/pdu/credit_frame.rs"
-#
+
 [[test]]
 name = "l2cap_signals_le_credit_connection"
 path = "tests/l2cap/signals/le_credit_connection.rs"
