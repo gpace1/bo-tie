@@ -12,8 +12,8 @@ tokio = { version = "1", default-features = false }
 bo-tie-host-util = { path = "../bo-tie-host-util" }
 bo-tie-core = { path = "../../bo-tie-core" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
-#bo-tie-gap = { path = "../bo-tie-gap" }
-#bo-tie-att = { path = "../bo-tie-att", features = ["tokio"] }
+bo-tie-gap = { path = "../bo-tie-gap" }
+bo-tie-att = { path = "../bo-tie-att", features = ["tokio"] }
 #bo-tie-gatt = { path = "../bo-tie-gatt" }
 #bo-tie-sm = { path = "../bo-tie-sm" }
 tokio-test = { version = "0.4", default-features = false }
@@ -24,10 +24,10 @@ features = ["rt", "macros", "sync", "time"]
 
 # tests are organized below by their directory listing within folder `tests`
 
-#[[test]]
-#name = "att_connection"
-#path = "tests/att/connection_test.rs"
-#
+[[test]]
+name = "att_connection"
+path = "tests/att/connection_test.rs"
+
 #[[test]]
 #name = "att_mtu_exchange"
 #path = "tests/att/mtu_exchange.rs"
