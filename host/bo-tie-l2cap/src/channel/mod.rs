@@ -191,7 +191,7 @@ impl<S: TryExtend<u8> + Default> CreditBasedChannelData<S> {
             self.recombine_meta.first_pdu_of_sdu = true;
 
             if self.credits_given_to_peer == 0 {
-                ProcessSduOutput::SduPeerHasNoMoreCredits(core::mem::take(&mut self.sdu_buffer))
+                ProcessSduOutput::SduButPeerHasNoMoreCredits(core::mem::take(&mut self.sdu_buffer))
             } else {
                 ProcessSduOutput::Sdu(core::mem::take(&mut self.sdu_buffer))
             }
@@ -213,7 +213,7 @@ pub(crate) enum ProcessSduOutput<S, E> {
     None,
     NonePeerHasNoMoreCredits,
     Sdu(S),
-    SduPeerHasNoMoreCredits(S),
+    SduButPeerHasNoMoreCredits(S),
     // errors
     PeerSentTooManyPdu,
     BufferError(E),
@@ -524,14 +524,9 @@ impl<L: LogicalLink> BasicFrameChannel<L> {
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
     {
-        let max_transmission_size = self.logical_link.get_physical_link().max_transmission_size().into();
-
         let b_frame = BasicFrame::new(payload, self.channel_id);
 
-        self.logical_link
-            .get_mut_physical_link()
-            .send_pdu(b_frame, max_transmission_size)
-            .await
+        self.logical_link.get_mut_physical_link().send_pdu(b_frame).await
     }
 }
 
@@ -615,10 +610,10 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
 
     /// Get the maximum payload size (MPS)
     ///
-    /// This is the maximum PDU payload size of a credit based frame. When a SDU is transmitted it
-    /// is fragmented into credit based frames using this size.
+    /// This is the maximum PDU payload size of a credit based frame for this channel. When a SDU is
+    /// transmitted it is fragmented into credit based frames using this size.
     pub fn get_mps(&self) -> u16 {
-        self.logical_link.get_physical_link().max_transmission_size() as u16
+        self.get_channel_data().maximum_payload_size
     }
 
     /// Get the maximum transmission unit (MTU)
@@ -671,6 +666,10 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         &mut self,
         amount: u16,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+        let credits_given = &mut self.get_mut_channel_data().credits_given_to_peer;
+
+        *credits_given = (*credits_given).saturating_add(amount);
+
         let new_credits = ChannelCredits::new(self.get_channel_id(), amount);
 
         self.logical_link
@@ -687,12 +686,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
     where
         T: Iterator<Item = u8> + ExactSizeIterator,
     {
-        let maximum_payload_size = self.get_channel_data().maximum_payload_size.into();
-
-        self.logical_link
-            .get_mut_physical_link()
-            .send_pdu(pdu, maximum_payload_size)
-            .await
+        self.logical_link.get_mut_physical_link().send_pdu(pdu).await
     }
 
     /// Send a complete SDU to the linked device

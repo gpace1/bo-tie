@@ -52,12 +52,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
     where
         T: FragmentL2capPdu,
     {
-        let max_transmission_size = self.logical_link.get_physical_link().max_transmission_size().into();
-
-        self.logical_link
-            .get_mut_physical_link()
-            .send_pdu(c_frame, max_transmission_size)
-            .await
+        self.logical_link.get_mut_physical_link().send_pdu(c_frame).await
     }
 
     /// Request a disconnection of a L2CAP connection
@@ -706,7 +701,7 @@ pub struct LeCreditBasedConnectionResponseBuilder<'a, L> {
     initial_credits: u16,
 }
 
-impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
+impl<'a, L> LeCreditBasedConnectionResponseBuilder<'a, L> {
     /// Set the initial credits to give to the peer
     ///
     /// This will be the number of credits the peer device has for sending credit based frames on
@@ -749,7 +744,7 @@ impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
     /// If this was not called on an LE-U logical link or there was an error sending the response.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub async fn send_success_response(self) -> Result<ChannelIdentifier, LeCreditResponseError<L>>
+    pub async fn send_success_response(self) -> Result<CreditBasedChannel<L::Deferred<'a>>, LeCreditResponseError<L>>
     where
         L: LogicalLink,
         L::SduBuffer: Default,
@@ -798,7 +793,9 @@ impl<L> LeCreditBasedConnectionResponseBuilder<'_, L> {
             .await
             .map_err(|e| LeCreditResponseError::SendErr(e))?;
 
-        Ok(cid)
+        let channel = self.signal_channel.logical_link.get_credit_based_channel(cid).unwrap();
+
+        Ok(channel)
     }
 }
 

@@ -248,10 +248,12 @@ trait PhysicalLinkExt: PhysicalLink {
     /// This will panic if `fragmentation_size` is invalid (the channel is expected to verify any
     /// user set fragmentation size). The conditions for it to be invalid depend on the
     /// implementation of [`FragmentL2capPdu`].
-    async fn send_pdu<T>(&mut self, pdu: T, fragmentation_size: usize) -> Result<(), Self::SendErr>
+    async fn send_pdu<T>(&mut self, pdu: T) -> Result<(), Self::SendErr>
     where
         T: FragmentL2capPdu,
     {
+        let fragmentation_size = self.max_transmission_size().into();
+
         let mut fragments = pdu.into_fragments(fragmentation_size).unwrap();
 
         let mut is_first = true;
@@ -781,7 +783,7 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                     Ok(PduRecombineAddOutput::UnusedComplete(unused)) => {
                         if self.unused_responses {
                             self.physical_link
-                                .send_pdu(unused, self.physical_link.max_transmission_size().into())
+                                .send_pdu(unused)
                                 .await
                                 .map_err(|e| LeULogicalLinkNextError::SendUnusedError(e))?;
                         }
@@ -833,7 +835,9 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
 
                                 let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                                break 'outer Ok(LeUNext::CreditIndication { credits_given, channel });
+                                break 'outer Ok(LeUNext::CreditBasedChannel(
+                                    CreditBasedChannelNext::CreditIndication { credits_given, channel },
+                                ));
                             }
                             _ => {
                                 let handle = LeULogicalLinkHandle::new(self, index);
@@ -856,7 +860,9 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
 
                                 let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                                break 'outer Ok(LeUNext::PeerOutOfCredits { channel });
+                                break 'outer Ok(LeUNext::CreditBasedChannel(
+                                    CreditBasedChannelNext::PeerOutOfCredits { channel },
+                                ));
                             }
                             ProcessSduOutput::Sdu(sdu) => {
                                 let handle = LeULogicalLinkHandle::new(self, index);
@@ -865,24 +871,24 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
 
                                 let peer_out_of_credits = false;
 
-                                break 'outer Ok(LeUNext::CreditBasedChannel {
+                                break 'outer Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu {
                                     sdu,
                                     channel,
                                     peer_out_of_credits,
-                                });
+                                }));
                             }
-                            ProcessSduOutput::SduPeerHasNoMoreCredits(sdu) => {
+                            ProcessSduOutput::SduButPeerHasNoMoreCredits(sdu) => {
                                 let handle = LeULogicalLinkHandle::new(self, index);
 
                                 let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
                                 let peer_out_of_credits = true;
 
-                                break 'outer Ok(LeUNext::CreditBasedChannel {
+                                break 'outer Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu {
                                     sdu,
                                     channel,
                                     peer_out_of_credits,
-                                });
+                                }));
                             }
                             ProcessSduOutput::PeerSentTooManyPdu => {
                                 break 'outer Err(LeULogicalLinkNextError::PeerSentMoreThanCreditsGiven)
@@ -913,7 +919,15 @@ pub enum LeUNext<'a, P, B, S> {
         pdu: BasicFrame<B>,
         channel: BasicFrameChannel<LeULogicalLinkHandle<'a, P, B, S>>,
     },
-    CreditBasedChannel {
+    CreditBasedChannel(CreditBasedChannelNext<'a, P, B, S>),
+}
+
+/// Credit based channel specific outputs to the `next` method.
+///
+/// A `CreditBasedChannelNext` is wrapped within a [`LeUNext::CreditBasedChannel`].
+#[derive(Debug)]
+pub enum CreditBasedChannelNext<'a, P, B, S> {
+    Sdu {
         sdu: S,
         channel: CreditBasedChannel<LeULogicalLinkHandle<'a, P, B, S>>,
         peer_out_of_credits: bool,
