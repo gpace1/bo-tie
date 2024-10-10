@@ -7,7 +7,7 @@ use bo_tie_l2cap::signals::packets::{
     LeCreditBasedConnectionResponseResult, LeCreditMps, LeCreditMtu, SignalCode, SimplifiedProtocolServiceMultiplexer,
 };
 use bo_tie_l2cap::signals::{SignalError, LE_U_SIGNAL_CHANNEL_ID};
-use bo_tie_l2cap::{LeULogicalLink, LeULogicalLinkNextError, LeUNext, PhysicalLink};
+use bo_tie_l2cap::{CreditBasedChannelNext, LeULogicalLink, LeULogicalLinkNextError, LeUNext, PhysicalLink};
 
 #[tokio::test]
 async fn le_credit_connection() {
@@ -41,7 +41,8 @@ async fn le_credit_connection() {
                                 let channel_builder =
                                     request.accept_le_credit_based_connection(&mut signalling_channel);
 
-                                let channel_id = channel_builder.send_success_response().await.unwrap();
+                                let channel_id =
+                                    channel_builder.send_success_response().await.unwrap().get_channel_id();
 
                                 credit_channel_id = Some(channel_id);
                             } else {
@@ -56,10 +57,10 @@ async fn le_credit_connection() {
                         }
                         _ => panic!("received unexpected signal {signal:?}"),
                     },
-                    LeUNext::CreditIndication {
+                    LeUNext::CreditBasedChannel(CreditBasedChannelNext::CreditIndication {
                         credits_given: 1..,
                         mut channel,
-                    } => {
+                    }) => {
                         channel_sending = match channel_sending.take() {
                             None => channel.send(&mut test_message_iter).await.unwrap(),
                             Some(sending) => sending
@@ -120,7 +121,7 @@ async fn le_credit_connection() {
             channel.give_credits_to_peer(32).await.unwrap();
 
             let sdu = match link.next().await.unwrap() {
-                LeUNext::CreditBasedChannel { sdu, .. } => sdu,
+                LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu { sdu, .. }) => sdu,
                 next => panic!("unexpected next: {next:?}"),
             };
 
@@ -373,4 +374,121 @@ async fn invalid_mps_in_request() {
     let error = SignalError::InvalidField("MPS");
 
     invalid_request_test_factory(request, error).await;
+}
+
+#[tokio::test]
+async fn le_credit_management() {
+    let mut credits_received = 0;
+
+    let test_message = b"\
+        Lorem ipsum odor amet, consectetuer adipiscing elit. Placerat euismod nostra leo ornare \
+        elementum molestie. Conubia accumsan tempor lacinia felis nullam maecenas tristique \
+        accumsan. Vulputate lobortis nullam aptent felis taciti facilisi. Ut non pellentesque \
+        sapien rutrum nisi in. Bibendum habitasse nullam id eleifend ad sollicitudin id lacus. \
+        Eros phasellus primis vestibulum taciti volutpat, egestas tincidunt quisque placerat. \
+        Volutpat sem hendrerit felis senectus duis vel natoque pulvinar turpis. Vestibulum risus \
+        suscipit aenean dolor tristique.";
+
+    // the `+ 2` comes from the 'SDU length field'
+    let expected_credits_required = (test_message.len() + 2) / LeCreditMps::new_min().get() as usize
+        + if (test_message.len() + 2) % LeCreditMps::new_min().get() as usize != 0 {
+            1
+        } else {
+            0
+        };
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .use_vec_sdu_buffer()
+                .build();
+
+            let request = link
+                .get_signalling_channel()
+                .unwrap()
+                .request_le_credit_connection(
+                    SimplifiedProtocolServiceMultiplexer::new_dyn(0x80),
+                    LeCreditMtu::new(2048),
+                    LeCreditMps::new_min(),
+                    0,
+                )
+                .await
+                .unwrap();
+
+            let (response, mut signalling_channel) = match link.next().await.unwrap() {
+                LeUNext::SignallingChannel {
+                    signal: ReceivedLeUSignal::LeCreditBasedConnectionResponse(response),
+                    channel,
+                } => (response, channel),
+                next => panic!("received unexpected next: {next:?}"),
+            };
+
+            let mut credit_channel = response
+                .create_le_credit_connection(&request, &mut signalling_channel)
+                .unwrap();
+
+            let mut sdu_data = credit_channel.send(test_message.into_iter().copied()).await.unwrap();
+
+            assert!(sdu_data.is_some(), "expected sdu_data as Some(_)");
+
+            loop {
+                match link.next().await.unwrap() {
+                    LeUNext::CreditBasedChannel(CreditBasedChannelNext::CreditIndication {
+                        mut channel,
+                        credits_given,
+                    }) => {
+                        credits_received += credits_given;
+
+                        sdu_data = sdu_data.unwrap().continue_sending(&mut channel).await.unwrap();
+
+                        if sdu_data.is_none() {
+                            break;
+                        }
+                    }
+                    next => panic!("received unexpected {next:?}"),
+                }
+            }
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .use_vec_sdu_buffer()
+                .build();
+
+            let (request, mut channel) = match link.next().await.unwrap() {
+                LeUNext::SignallingChannel {
+                    signal: ReceivedLeUSignal::LeCreditBasedConnectionRequest(request),
+                    channel,
+                } => (request, channel),
+                next => panic!("received unexpected next: {next:?}"),
+            };
+
+            let mut channel = request
+                .accept_le_credit_based_connection(&mut channel)
+                .send_success_response()
+                .await
+                .unwrap();
+
+            channel.give_credits_to_peer(1).await.unwrap();
+
+            let sdu = loop {
+                match link.next().await.unwrap() {
+                    LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu { sdu, .. }) => break sdu,
+                    LeUNext::CreditBasedChannel(CreditBasedChannelNext::PeerOutOfCredits { mut channel }) => {
+                        channel.give_credits_to_peer(1).await.unwrap()
+                    }
+                    next => panic!("received unexpected {next:?}"),
+                }
+            };
+
+            assert_eq!(sdu, test_message)
+        })
+        .run()
+        .await;
+
+    assert_eq!(expected_credits_required, credits_received)
 }
