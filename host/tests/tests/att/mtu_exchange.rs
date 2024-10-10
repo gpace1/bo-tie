@@ -2,51 +2,54 @@
 
 use bo_tie_att::server::NoQueuedWrites;
 use bo_tie_att::{ConnectFixedClient, Server};
-use bo_tie_host_tests::{create_le_link, directed_rendezvous};
+use bo_tie_host_tests::PhysicalLinkLoop;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
+use bo_tie_l2cap::{LeULogicalLink, LeUNext};
 
 async fn mtu_setup(client_mtu: u16, server_mtu: u16, expected_mtu: u16) {
-    let (client, server) = create_le_link(LeULink::SUPPORTED_MTU.into());
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .use_vec_buffer()
+                .build();
 
-    let (rendezvous_client, rendezvous_server) = directed_rendezvous();
+            let mut server = Server::new_fixed(LeULink::SUPPORTED_MTU, server_mtu, None, NoQueuedWrites);
 
-    let client_handle = tokio::spawn(async move {
-        let mut att_bearer = client.get_att_channel();
-
-        let client = ConnectFixedClient::connect(&mut att_bearer, LeULink::SUPPORTED_MTU, client_mtu)
-            .await
-            .expect("exchange MTU failed");
-
-        assert_eq!(client.get_mtu(), Some(expected_mtu));
-
-        rendezvous_client.rendez().await;
-    });
-
-    let server_handle = tokio::spawn(async move {
-        let mut att_bearer = server.get_att_channel();
-
-        let mut server = Server::new_fixed(LeULink::SUPPORTED_MTU, server_mtu, None, NoQueuedWrites);
-
-        let mut rendez = Box::pin(rendezvous_server.rendez());
-
-        let buffer = &mut Vec::new();
-
-        loop {
-            tokio::select! {
-                _ = &mut rendez => break,
-
-                received = att_bearer.receive(buffer) => {
-                    let received = received.expect("receiver closed");
-
-                    server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process L2CAP data");
+            loop {
+                match &mut link.next().await.unwrap() {
+                    LeUNext::AttributeChannel { pdu, channel } => {
+                        server
+                            .process_att_pdu(channel, pdu)
+                            .await
+                            .expect("failed to process L2CAP data");
+                    }
+                    next => panic!("received unexpected {next:?}"),
                 }
             }
-        }
-    });
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .use_vec_buffer()
+                .build();
 
-    client_handle.await.unwrap();
+            let channel = &mut link.get_att_channel().unwrap();
 
-    server_handle.await.unwrap();
+            let connect = ConnectFixedClient::initiate(channel, LeULink::SUPPORTED_MTU, client_mtu)
+                .await
+                .unwrap();
+
+            let client = match &link.next().await.unwrap() {
+                LeUNext::AttributeChannel { pdu, .. } => connect.create_client(pdu).unwrap(),
+                next => panic!("received unexpectd {next:?}"),
+            };
+
+            assert_eq!(client.get_mtu(), Some(expected_mtu));
+        })
+        .run()
+        .await;
 }
 
 #[tokio::test]
