@@ -565,7 +565,7 @@ impl Client {
         &self,
         connection_channel: &mut BasicFrameChannel<T>,
         handles: I,
-    ) -> Result<impl ResponseProcessor<Response = ReadMultiple>, super::ConnectionError<T>>
+    ) -> Result<ReadMultipleResponseProcessor, super::ConnectionError<T>>
     where
         T: LogicalLink,
         I: IntoIterator<Item = u16> + Clone,
