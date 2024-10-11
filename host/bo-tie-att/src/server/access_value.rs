@@ -396,7 +396,7 @@ impl<T: AsyncAccessValue> AccessValue for T {
     }
 }
 
-/// Wrapper type for an type that implements [`AccessValue`]
+/// Wrapper type for a type that implements [`AccessValue`]
 pub(super) struct AccessibleValue<A: AccessValue>(pub(super) A);
 
 impl<A> ServerAttribute for AccessibleValue<A>
