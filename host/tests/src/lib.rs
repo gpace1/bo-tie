@@ -5,7 +5,8 @@ use bo_tie_core::buffer::stack::{LinearBuffer, LinearBufferError, LinearBufferIt
 use bo_tie_core::buffer::TryExtend;
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::PhysicalLink;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
+use core::fmt::{Display, Formatter};
 use core::future::{Future, IntoFuture};
 use core::pin::{pin, Pin};
 use core::task::{Context, Poll, Waker};
@@ -16,6 +17,7 @@ pub struct PhysicalLinkLoop<const BUFFER_SIZE: usize> {
     b_data: RefCell<Option<L2capFragment<LinearBuffer<BUFFER_SIZE, u8>>>>,
     a_waker: RefCell<Option<Waker>>,
     b_waker: RefCell<Option<Waker>>,
+    closed: Cell<bool>,
 }
 
 impl Default for PhysicalLinkLoop<32> {
@@ -30,12 +32,14 @@ impl<const BUFFER_SIZE: usize> PhysicalLinkLoop<BUFFER_SIZE> {
         let b_data = RefCell::new(None);
         let a_waker = RefCell::new(None);
         let b_waker = RefCell::new(None);
+        let closed = Cell::new(false);
 
         PhysicalLinkLoop {
             a_data,
             b_data,
             a_waker,
             b_waker,
+            closed,
         }
     }
 
@@ -64,6 +68,7 @@ pub struct PhysicalLinkLoopEnd<'a, const BUFFER_SIZE: usize> {
     peer_data: &'a RefCell<Option<L2capFragment<LinearBuffer<BUFFER_SIZE, u8>>>>,
     waker: &'a RefCell<Option<Waker>>,
     peer_waker: &'a RefCell<Option<Waker>>,
+    closed: &'a Cell<bool>,
 }
 
 impl<const BUFFER_SIZE: usize> core::fmt::Debug for PhysicalLinkLoopEnd<'_, BUFFER_SIZE> {
@@ -74,6 +79,12 @@ impl<const BUFFER_SIZE: usize> core::fmt::Debug for PhysicalLinkLoopEnd<'_, BUFF
             .field("waker", &"..")
             .field("peer_waker", &"..")
             .finish()
+    }
+}
+
+impl<const BUFFER_SIZE: usize> Drop for PhysicalLinkLoopEnd<'_, BUFFER_SIZE> {
+    fn drop(&mut self) {
+        self.closed.set(true)
     }
 }
 
@@ -105,6 +116,21 @@ impl<const BUFFER_SIZE: usize> Future for PhysicalLinkLoopEndSendFut<'_, '_, BUF
     }
 }
 
+#[derive(Debug)]
+pub enum PhysicalLinkLoopEndSendFutError {
+    Buffer(LinearBufferError),
+    ReceiverClosed,
+}
+
+impl Display for PhysicalLinkLoopEndSendFutError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        match self {
+            PhysicalLinkLoopEndSendFutError::Buffer(buffer) => Display::fmt(buffer, f),
+            PhysicalLinkLoopEndSendFutError::ReceiverClosed => f.write_str("physical link receiver closed"),
+        }
+    }
+}
+
 pub struct PhysicalLinkLoopEndRecvFut<'i, 'a, const BUFFER_SIZE: usize> {
     end: &'a mut PhysicalLinkLoopEnd<'i, BUFFER_SIZE>,
 }
@@ -118,7 +144,11 @@ impl<const BUFFER_SIZE: usize> Future for PhysicalLinkLoopEndRecvFut<'_, '_, BUF
         if this.end.peer_data.borrow().is_none() {
             this.end.waker.replace(Some(cx.waker().clone()));
 
-            Poll::Pending
+            if this.end.closed.get() {
+                Poll::Ready(None)
+            } else {
+                Poll::Pending
+            }
         } else {
             this.end.peer_waker.take().map(|w| w.wake());
 
@@ -220,6 +250,7 @@ impl<'a, T, V, const BUFFER_SIZE: usize> TestScaffold<'a, T, V, BUFFER_SIZE> {
             peer_data: &self.link_loop.b_data,
             waker: &self.link_loop.a_waker,
             peer_waker: &self.link_loop.b_waker,
+            closed: &self.link_loop.closed,
         };
 
         let link_loop = self.link_loop;
@@ -248,6 +279,7 @@ impl<'a, T, V, const BUFFER_SIZE: usize> TestScaffold<'a, T, V, BUFFER_SIZE> {
             peer_data: &self.link_loop.a_data,
             waker: &self.link_loop.b_waker,
             peer_waker: &self.link_loop.a_waker,
+            closed: &self.link_loop.closed,
         };
 
         let link_loop = self.link_loop;
