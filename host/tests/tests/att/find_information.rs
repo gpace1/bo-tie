@@ -4,8 +4,8 @@ use bo_tie_att::client::{ClientPduName, ResponseProcessor};
 use bo_tie_att::pdu::{FormattedHandlesWithType, HandleWithType};
 use bo_tie_att::server::{NoQueuedWrites, ServerAttributes, ServerPduName};
 use bo_tie_att::{
-    pdu, Attribute, AttributePermissions, AttributeRestriction, ConnectFixedClient, ConnectionError, EncryptionKeySize,
-    Server, FULL_READ_PERMISSIONS, LE_U_FIXED_CHANNEL_ID,
+    pdu, Attribute, AttributePermissions, AttributeRestriction, ConnectFixedClient, EncryptionKeySize, Server,
+    FULL_READ_PERMISSIONS, LE_U_FIXED_CHANNEL_ID,
 };
 use bo_tie_host_tests::PhysicalLinkLoop;
 use bo_tie_host_util::Uuid;
@@ -187,19 +187,7 @@ async fn invalid_handles() {
                 .use_vec_buffer()
                 .build();
 
-            let mut server_attributes = ServerAttributes::new();
-
-            server_attributes.push(Attribute::new(UUID_SHORT_1, FULL_READ_PERMISSIONS, 0u8));
-
-            server_attributes.push(Attribute::new(UUID_SHORT_2, FULL_READ_PERMISSIONS, 0u8));
-
-            server_attributes.push(Attribute::new(UUID_FULL_1, FULL_READ_PERMISSIONS, 0u8));
-
-            server_attributes.push(Attribute::new(UUID_FULL_2, FULL_READ_PERMISSIONS, 0u8));
-
-            server_attributes.push(Attribute::new(UUID_SHORT_3, FULL_READ_PERMISSIONS, 0u8));
-
-            server_attributes.push(Attribute::new(UUID_FULL_3, FULL_READ_PERMISSIONS, 0u8));
+            let server_attributes = ServerAttributes::new();
 
             let mut server = Server::new_fixed(
                 LeULink::SUPPORTED_MTU,
@@ -230,6 +218,7 @@ async fn invalid_handles() {
                 let mut fragments = basic_frame.into_fragments(end.max_transmission_size().into()).unwrap();
 
                 let mut first = true;
+
                 while let Some(fragment) = fragments.next() {
                     let l2cap_fragment = L2capFragment::new(first, fragment);
 
@@ -531,7 +520,7 @@ macro_rules! connect_benchmark_setup {
                     .expect("exchange MTU failed");
 
                 let $client = match $link.next().await.unwrap() {
-                    LeUNext::AttributeChannel { pdu, channel } => connect.create_client(&pdu).unwrap(),
+                    LeUNext::AttributeChannel { pdu, .. } => connect.create_client(&pdu).unwrap(),
                     next => panic!("recieved unexpected {next:?}"),
                 };
 
