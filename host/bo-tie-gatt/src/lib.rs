@@ -1290,7 +1290,7 @@ macro_rules! send_pdu {
     (SKIP_LOG, $channel:expr, $pdu:expr $(,)?) => {{
         let interface_data = bo_tie_att::TransferFormatInto::into(&$pdu);
 
-        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, bo_tie_att::L2CAP_FIXED_CHANNEL_ID);
+        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, bo_tie_att::LE_U_FIXED_CHANNEL_ID);
 
         $channel
             .send(acl_data)
@@ -2204,7 +2204,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(1.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_FIXED_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::LE_U_FIXED_CHANNEL_ID);
 
         assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
 
@@ -2226,7 +2226,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(11.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_FIXED_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::LE_U_FIXED_CHANNEL_ID);
 
         assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
 
@@ -2243,7 +2243,7 @@ mod tests {
 
         let client_pdu = att::pdu::read_by_group_type_request(15.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
 
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::L2CAP_FIXED_CHANNEL_ID);
+        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::LE_U_FIXED_CHANNEL_ID);
 
         // Request was made for for a attribute that was out of range
         assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);

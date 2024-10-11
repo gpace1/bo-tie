@@ -55,7 +55,7 @@ fn response_check<F, R>(b_frame: &BasicFrame<Vec<u8>>, f: F) -> Result<R, Error>
 where
     F: FnOnce(&[u8]) -> Result<R, Error>,
 {
-    if b_frame.get_channel_id() == crate::L2CAP_FIXED_CHANNEL_ID {
+    if b_frame.get_channel_id() == crate::LE_U_FIXED_CHANNEL_ID {
         f(b_frame.get_payload())
     } else {
         Err(Error::IncorrectChannelId(b_frame.get_channel_id()))
