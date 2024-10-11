@@ -53,10 +53,10 @@ path = "tests/att/read.rs"
 name = "att_read_blob"
 path = "tests/att/read_blob.rs"
 
-#[[test]]
-#name = "att_read_multiple"
-#path = "tests/att/read_multiple.rs"
-#
+[[test]]
+name = "att_read_multiple"
+path = "tests/att/read_multiple.rs"
+
 #[[test]]
 #name = "att_write"
 #path = "tests/att/write.rs"
