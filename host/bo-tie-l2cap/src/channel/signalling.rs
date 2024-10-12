@@ -708,24 +708,27 @@ impl<'a, L> LeCreditBasedConnectionResponseBuilder<'a, L> {
     /// this channel after connection is made.
     ///
     /// If this is not called the peer device is initially given zero credits.
-    pub fn initially_given_credits(&mut self, credits: u16) {
-        self.initial_credits = credits
+    pub fn initially_given_credits(mut self, credits: u16) -> Self {
+        self.initial_credits = credits;
+        self
     }
 
     /// Set the maximum payload size (MPS)
     ///
     /// This sets the MPS within the *LE Credit Based Connection Response* only if it is smaller
     /// than the request's MPS.
-    pub fn set_responded_mps(&mut self, mps: u16) {
-        self.mps = core::cmp::min(mps, self.request.mps.get())
+    pub fn set_responded_mps(mut self, mps: u16) -> Self {
+        self.mps = core::cmp::min(mps, self.request.mps.get());
+        self
     }
 
     /// Set the maximum transmission unit (MTU)
     ///
     /// This sets the MTU within the *LE Credit Based Connection Response* only if it is smaller
     /// than the request's MTS.
-    pub fn set_responded_mtu(&mut self, mtu: u16) {
-        self.mtu = core::cmp::min(mtu, self.request.mtu.get())
+    pub fn set_responded_mtu(mut self, mtu: u16) -> Self {
+        self.mtu = core::cmp::min(mtu, self.request.mtu.get());
+        self
     }
 
     /// Send the response and create the connection
