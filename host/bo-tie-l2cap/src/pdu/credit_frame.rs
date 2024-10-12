@@ -300,7 +300,7 @@ impl<P> CreditBasedFrame<P> {
     }
 
     /// Create a new `CreditBasedFrame` for the first frame
-    pub(crate) fn new_first(sdu_size: u16, channel_id: ChannelIdentifier, payload: P) -> Self {
+    pub fn new_first(sdu_size: u16, channel_id: ChannelIdentifier, payload: P) -> Self {
         Self {
             channel_id,
             sdu_len: Some(sdu_size),
@@ -309,7 +309,7 @@ impl<P> CreditBasedFrame<P> {
     }
 
     /// Create a new `CreditBasedFrame` for a subsequent frame
-    pub(crate) fn new_subsequent(channel_id: ChannelIdentifier, payload: P) -> Self {
+    pub fn new_subsequent(channel_id: ChannelIdentifier, payload: P) -> Self {
         Self {
             channel_id,
             sdu_len: None,
