@@ -3,237 +3,225 @@
 use bo_tie_att::client::ResponseProcessor;
 use bo_tie_att::server::{NoQueuedWrites, ServerAttributes};
 use bo_tie_att::{
-    Attribute, AttributePermissions, AttributeRestriction, Client, ConnectFixedClient, EncryptionKeySize, Server,
+    Attribute, AttributePermissions, AttributeRestriction, ConnectFixedClient, EncryptionKeySize, Server,
     FULL_WRITE_PERMISSIONS,
 };
-use bo_tie_host_tests::{create_le_link, directed_rendezvous, PhysicalLink};
+use bo_tie_host_tests::PhysicalLinkLoop;
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
-use bo_tie_l2cap::{BasicFrameChannel, LeULogicalLink};
-use std::future::Future;
+use bo_tie_l2cap::{LeULogicalLink, LeUNext};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 const UUID: Uuid = Uuid::from_u16(0x1234);
 
-async fn connect_setup<Fun>(test: Fun)
-where
-    Fun: for<'a> FnOnce(
-            &'a mut BasicFrameChannel<LeULogicalLink<PhysicalLink>>,
-            &'a mut Client,
-            &'a Arc<Mutex<usize>>,
-        ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>>
-        + Send
-        + 'static,
-{
-    let (client_link, server_link) = create_le_link(LeULink::SUPPORTED_MTU.into());
+macro_rules! connect_setup {
+    (|$link:ident, $client:ident, $ref_cell_value:ident| $action:block ) => {{
+        let $ref_cell_value: Arc<Mutex<usize>> = Default::default();
 
-    let (rendezvous_client, rendezvous_server) = directed_rendezvous();
+        let server_value = $ref_cell_value.clone();
 
-    let att_value: Arc<Mutex<usize>> = Default::default();
+        PhysicalLinkLoop::default()
+            .test_scaffold()
+            .set_tested(|end| async {
+                let mut link = LeULogicalLink::builder(end)
+                    .enable_attribute_channel()
+                    .use_vec_buffer()
+                    .build();
 
-    let servers_att_value = att_value.clone();
+                let mut server_attributes = ServerAttributes::new();
 
-    let client_handle = tokio::spawn(async move {
-        let mut att_bearer = client_link.get_att_channel();
+                server_attributes.push_accessor(Attribute::new(UUID, FULL_WRITE_PERMISSIONS, server_value));
 
-        let mut client = ConnectFixedClient::connect(&mut att_bearer, LeULink::SUPPORTED_MTU, LeULink::SUPPORTED_MTU)
-            .await
-            .expect("exchange MTU failed");
+                let mut server = Server::new_fixed(
+                    LeULink::SUPPORTED_MTU,
+                    LeULink::SUPPORTED_MTU,
+                    server_attributes,
+                    NoQueuedWrites,
+                );
 
-        test(&mut att_bearer, &mut client, &att_value).await;
-
-        rendezvous_client.rendez().await;
-    });
-
-    let server_handle = tokio::spawn(async move {
-        let mut att_bearer = server_link.get_att_channel();
-
-        let mut server_attributes = ServerAttributes::new();
-
-        server_attributes.push_accessor(Attribute::new(UUID, FULL_WRITE_PERMISSIONS, servers_att_value));
-
-        let mut server = Server::new_fixed(
-            LeULink::SUPPORTED_MTU,
-            LeULink::SUPPORTED_MTU,
-            server_attributes,
-            NoQueuedWrites,
-        );
-
-        let mut rendez = Box::pin(rendezvous_server.rendez());
-
-        let buffer = &mut Vec::new();
-
-        loop {
-            tokio::select! {
-                _ = &mut rendez => break,
-
-                received = att_bearer.receive(buffer) => {
-                    let received = received.expect("receiver closed");
-
-                    server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process ATT PDU");
+                loop {
+                    match &mut link.next().await.unwrap() {
+                        LeUNext::AttributeChannel { pdu, channel } => {
+                            server.process_att_pdu(channel, pdu).await.unwrap();
+                        }
+                        next => panic!("received unexpected {next:?}"),
+                    }
                 }
-            }
-        }
-    });
+            })
+            .set_verify(|end| async {
+                let mut $link = LeULogicalLink::builder(end)
+                    .enable_attribute_channel()
+                    .use_vec_buffer()
+                    .build();
 
-    client_handle.await.unwrap();
+                let channel = &mut $link.get_att_channel().unwrap();
 
-    server_handle.await.unwrap();
+                let connect = ConnectFixedClient::initiate(channel, LeULink::SUPPORTED_MTU, LeULink::SUPPORTED_MTU)
+                    .await
+                    .unwrap();
+
+                let $client = match $link.next().await.unwrap() {
+                    LeUNext::AttributeChannel { pdu, .. } => connect.create_client(&pdu).unwrap(),
+                    next => panic!("received unexpected {next:?}"),
+                };
+
+                $action
+            })
+            .run()
+            .await;
+    }};
 }
 
 #[tokio::test]
 async fn write_success() {
-    connect_setup(|channel, client, accessor| {
-        Box::pin(async {
-            let test_val = 10usize;
+    connect_setup!(|link, client, value| {
+        let test_val = 10usize;
 
-            let response_processor = client
-                .write_request(channel, 1, test_val)
-                .await
-                .expect("write request failed");
+        let channel = &mut link.get_att_channel().unwrap();
 
-            let response = channel.receive(&mut Vec::new()).await.expect("response failed");
+        let response_processor = client
+            .write_request(channel, 1, test_val)
+            .await
+            .expect("write request failed");
 
-            response_processor.process_response(&response).expect("write failed");
+        let response = match link.next().await.unwrap() {
+            LeUNext::AttributeChannel { pdu, .. } => pdu,
+            next => panic!("received unexpected {next:?}"),
+        };
 
-            assert_eq!(*accessor.lock().await, test_val)
-        })
+        response_processor.process_response(&response).expect("write failed");
+
+        assert_eq!(*value.lock().await, test_val)
     })
-    .await
 }
 
 #[tokio::test]
 async fn invalid_value() {
-    connect_setup(|channel, client, _| {
-        Box::pin(async {
-            let test_val = "the wrong word".to_string();
+    connect_setup!(|link, client, val| {
+        let channel = &mut link.get_att_channel().unwrap();
 
-            let response_processor = client
-                .write_request(channel, 1, test_val)
-                .await
-                .expect("write request failed");
+        let test_val = "the wrong word".to_string();
 
-            let response = channel.receive(&mut Vec::new()).await.expect("response failed");
+        let response_processor = client
+            .write_request(channel, 1, test_val)
+            .await
+            .expect("write request failed");
 
-            match response_processor.process_response(&response) {
-                Err(bo_tie_att::Error::Pdu(pdu)) => {
-                    assert_eq!(
-                        pdu.get_parameters().error,
-                        bo_tie_att::pdu::Error::InvalidAttributeValueLength,
-                    )
-                }
-                _ => panic!("expected invalid attribute value length "),
+        let response = match link.next().await.unwrap() {
+            LeUNext::AttributeChannel { pdu, .. } => pdu,
+            next => panic!("received unexpected {next:?}"),
+        };
+
+        match response_processor.process_response(&response) {
+            Err(bo_tie_att::Error::Pdu(pdu)) => {
+                assert_eq!(
+                    pdu.get_parameters().error,
+                    bo_tie_att::pdu::Error::InvalidAttributeValueLength,
+                )
             }
-        })
+            _ => panic!("expected invalid attribute value length "),
+        }
     })
-    .await
 }
 
-async fn connect_permission_setup<Fun>(client_permission: &'static [AttributePermissions], test: Fun)
-where
-    Fun: for<'a> FnOnce(
-            &'a mut BasicFrameChannel<LeULogicalLink<PhysicalLink>>,
-            &'a mut Client,
-        ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>>
-        + Send
-        + 'static,
-{
-    let (client_link, server_link) = create_le_link(LeULink::SUPPORTED_MTU.into());
+macro_rules! connect_permission_setup {
+    ($client_permission:expr, |$link:ident, $client:ident| $test:expr) => {{
+        PhysicalLinkLoop::default()
+            .test_scaffold()
+            .set_tested(|end| async {
+                let mut link = LeULogicalLink::builder(end)
+                    .enable_attribute_channel()
+                    .use_vec_buffer()
+                    .build();
 
-    let (rendezvous_client, rendezvous_server) = directed_rendezvous();
+                let mut server_attributes = ServerAttributes::new();
 
-    let client_handle = tokio::spawn(async move {
-        let mut att_bearer = client_link.get_att_channel();
+                // These attributes are for permission checks
+                server_attributes.push(Attribute::new(
+                    UUID,
+                    [AttributePermissions::Write(AttributeRestriction::None)],
+                    0u8,
+                ));
 
-        let mut client = ConnectFixedClient::connect(&mut att_bearer, LeULink::SUPPORTED_MTU, LeULink::SUPPORTED_MTU)
-            .await
-            .expect("exchange MTU failed");
+                server_attributes.push(Attribute::new(
+                    UUID,
+                    [AttributePermissions::Write(AttributeRestriction::Authentication)],
+                    0u8,
+                ));
 
-        test(&mut att_bearer, &mut client).await;
+                server_attributes.push(Attribute::new(
+                    UUID,
+                    [AttributePermissions::Write(AttributeRestriction::Authorization)],
+                    0u8,
+                ));
 
-        rendezvous_client.rendez().await;
-    });
+                server_attributes.push(Attribute::new(
+                    UUID,
+                    [AttributePermissions::Write(AttributeRestriction::Encryption(
+                        EncryptionKeySize::Bits128,
+                    ))],
+                    0u8,
+                ));
 
-    let server_handle = tokio::spawn(async move {
-        let mut att_bearer = server_link.get_att_channel();
+                server_attributes.push(Attribute::new(
+                    UUID,
+                    [AttributePermissions::Write(AttributeRestriction::Encryption(
+                        EncryptionKeySize::Bits192,
+                    ))],
+                    0u8,
+                ));
 
-        let mut server_attributes = ServerAttributes::new();
+                server_attributes.push(Attribute::new(
+                    UUID,
+                    [AttributePermissions::Write(AttributeRestriction::Encryption(
+                        EncryptionKeySize::Bits256,
+                    ))],
+                    0u8,
+                ));
 
-        // These attributes are for permission checks
-        server_attributes.push(Attribute::new(
-            UUID,
-            [AttributePermissions::Write(AttributeRestriction::None)],
-            0u8,
-        ));
+                let mut server = Server::new_fixed(
+                    LeULink::SUPPORTED_MTU,
+                    LeULink::SUPPORTED_MTU,
+                    server_attributes,
+                    NoQueuedWrites,
+                );
 
-        server_attributes.push(Attribute::new(
-            UUID,
-            [AttributePermissions::Write(AttributeRestriction::Authentication)],
-            0u8,
-        ));
+                server.revoke_permissions_of_client([AttributePermissions::Write(AttributeRestriction::None)]);
 
-        server_attributes.push(Attribute::new(
-            UUID,
-            [AttributePermissions::Write(AttributeRestriction::Authorization)],
-            0u8,
-        ));
+                server.give_permissions_to_client($client_permission);
 
-        server_attributes.push(Attribute::new(
-            UUID,
-            [AttributePermissions::Write(AttributeRestriction::Encryption(
-                EncryptionKeySize::Bits128,
-            ))],
-            0u8,
-        ));
-
-        server_attributes.push(Attribute::new(
-            UUID,
-            [AttributePermissions::Write(AttributeRestriction::Encryption(
-                EncryptionKeySize::Bits192,
-            ))],
-            0u8,
-        ));
-
-        server_attributes.push(Attribute::new(
-            UUID,
-            [AttributePermissions::Write(AttributeRestriction::Encryption(
-                EncryptionKeySize::Bits256,
-            ))],
-            0u8,
-        ));
-
-        let mut server = Server::new_fixed(
-            LeULink::SUPPORTED_MTU,
-            LeULink::SUPPORTED_MTU,
-            server_attributes,
-            NoQueuedWrites,
-        );
-
-        server.revoke_permissions_of_client([AttributePermissions::Write(AttributeRestriction::None)]);
-
-        server.give_permissions_to_client(client_permission);
-
-        let mut rendez = Box::pin(rendezvous_server.rendez());
-
-        let buffer = &mut Vec::new();
-
-        loop {
-            tokio::select! {
-                _ = &mut rendez => break,
-
-                received = att_bearer.receive(buffer) => {
-                    let received = received.expect("receiver closed");
-
-                    server.process_att_pdu(&mut att_bearer, &received).await.expect("failed to process ATT PDU");
+                loop {
+                    match &mut link.next().await.unwrap() {
+                        LeUNext::AttributeChannel { pdu, channel } => {
+                            server.process_att_pdu(channel, pdu).await.unwrap();
+                        }
+                        next => panic!("received unexpected {next:?}"),
+                    }
                 }
-            }
-        }
-    });
+            })
+            .set_verify(|end| async {
+                let mut $link = LeULogicalLink::builder(end)
+                    .enable_attribute_channel()
+                    .use_vec_buffer()
+                    .build();
 
-    client_handle.await.unwrap();
+                let channel = &mut $link.get_att_channel().unwrap();
 
-    server_handle.await.unwrap();
+                let connector = ConnectFixedClient::initiate(channel, LeULink::SUPPORTED_MTU, LeULink::SUPPORTED_MTU)
+                    .await
+                    .unwrap();
+
+                let $client = match $link.next().await.unwrap() {
+                    LeUNext::AttributeChannel { pdu, .. } => connector.create_client(&pdu).unwrap(),
+                    next => panic!("received unexpected {next:?}"),
+                };
+
+                $test
+            })
+            .run()
+            .await;
+    }};
 }
 
 macro_rules! permission_tests {
@@ -247,33 +235,35 @@ macro_rules! permission_tests {
         ::paste::paste! {
             #[tokio::test]
             async fn [<insufficient_ $permission_name _permissions>] () {
-                connect_permission_setup(&[], |channel, client| {
-                    Box::pin(async {
-                        let response_processor = client
-                            .write_request(channel, $handle, 10u8)
-                            .await
-                            .expect("failed to send request");
+                connect_permission_setup!([], |link, client| {
+                    let channel = &mut link.get_att_channel().unwrap();
 
-                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
+                    let response_processor = client
+                        .write_request(channel, $handle, 10u8)
+                        .await
+                        .expect("failed to send request");
 
-                        match response_processor.process_response(&response) {
-                            Err(bo_tie_att::Error::Pdu(pdu)) => {
-                                assert_eq!(
-                                    pdu.get_parameters().error,
-                                    bo_tie_att::pdu::Error::$exp_err
-                                )
-                            }
-                            Err(e) => panic!("unexpected error {:?}", e),
-                            Ok(_) => panic!("unexpected response"),
+                    let response = match link.next().await.unwrap() {
+                        LeUNext::AttributeChannel { pdu, .. } => pdu,
+                        next => panic!("received unexpected {next:?}")
+                    };
+
+                    match response_processor.process_response(&response) {
+                        Err(bo_tie_att::Error::Pdu(pdu)) => {
+                            assert_eq!(
+                                pdu.get_parameters().error,
+                                bo_tie_att::pdu::Error::$exp_err
+                            )
                         }
-                    })
+                        Err(e) => panic!("unexpected error {:?}", e),
+                        Ok(_) => panic!("unexpected response"),
+                    }
                 })
-                .await
             }
 
             #[tokio::test]
             async fn [<sufficient_ $permission_name _permissions>] () {
-                let permissions = &[
+                let permissions = [
                     ::bo_tie_att::AttributePermissions::Write(
                         ::bo_tie_att::AttributeRestriction::$restriction $( (
                             ::bo_tie_att::EncryptionKeySize::$encryption
@@ -281,22 +271,24 @@ macro_rules! permission_tests {
                     )
                 ];
 
-                connect_permission_setup(permissions, |channel, client| {
-                    Box::pin(async {
-                        let response_processor = client
-                            .write_request(channel, $handle, 10u8)
-                            .await
-                            .expect("failed to send request");
+                connect_permission_setup!(permissions, |link, client| {
+                    let channel = &mut link.get_att_channel().unwrap();
 
-                        let response = channel.receive(&mut Vec::new()).await.expect("failed to receive");
+                    let response_processor = client
+                        .write_request(channel, $handle, 10u8)
+                        .await
+                        .expect("failed to send request");
 
-                        match response_processor.process_response(&response) {
-                            Err(e) => panic!("unexpected error {:?}", e),
-                            Ok(_) => (),
-                        }
-                    })
+                    let response = match link.next().await.unwrap() {
+                        LeUNext::AttributeChannel { pdu, .. } => pdu,
+                        next => panic!("received unexpected {next:?}")
+                    };
+
+                    match response_processor.process_response(&response) {
+                        Err(e) => panic!("unexpected error {:?}", e),
+                        Ok(_) => (),
+                    }
                 })
-                .await
             }
         }
     };
