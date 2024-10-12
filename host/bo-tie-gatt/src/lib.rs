@@ -1288,9 +1288,7 @@ macro_rules! send_pdu {
     }};
 
     (SKIP_LOG, $channel:expr, $pdu:expr $(,)?) => {{
-        let interface_data = bo_tie_att::TransferFormatInto::into(&$pdu);
-
-        let acl_data = bo_tie_l2cap::pdu::BasicFrame::new(interface_data, bo_tie_att::LE_U_FIXED_CHANNEL_ID);
+        let acl_data = bo_tie_att::TransferFormatInto::into(&$pdu);
 
         $channel
             .send(acl_data)
@@ -1347,7 +1345,7 @@ where
     /// the underlying ATT server.
     pub async fn process_att_pdu<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         b_frame: &l2cap::pdu::BasicFrame<alloc::vec::Vec<u8>>,
     ) -> Result<bo_tie_att::server::Status, att::ConnectionError<T>>
     where
@@ -1382,7 +1380,7 @@ where
     /// A GATT profile Client will send this to a server to query for the Primary Services.
     async fn process_read_by_group_type_request<T>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<(), att::ConnectionError<T>>
     where
@@ -1536,7 +1534,7 @@ where
 
     /// Check a MTU request to ensure it does not contain a MTU less than [`LE_MINIMUM_ATT_MTU`]
     async fn check_mtu_request<T>(
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<bool, att::ConnectionError<T>>
     where
@@ -1572,7 +1570,7 @@ where
     /// An indication is not sent to the ATT client if no services are added.
     pub async fn add_services<T, F>(
         &mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
         f: F,
     ) -> Result<(), AddServicesError<T>>
     where
@@ -1754,7 +1752,7 @@ impl Client {
     /// ```
     pub async fn partial_discovery<'a, T: LogicalLink>(
         &'a mut self,
-        channel: &mut BasicFrameChannel<'_, T>,
+        channel: &mut BasicFrameChannel<T>,
     ) -> Result<QueryResponseProcessor<'a>, bo_tie_att::ConnectionError<T>> {
         let start_handle = self
             .known_services
