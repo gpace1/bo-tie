@@ -406,15 +406,3 @@ impl bo_tie_att::TransferFormatInto for ClientConfiguration {
         into_ret.copy_from_slice(&val.to_le_bytes())
     }
 }
-
-/// A trait to mark that the client configuration characteristic is complete
-pub trait ClientConfigComplete {}
-
-impl ClientConfigComplete for ReadOnlyClientConfiguration {}
-
-impl<Fun, Fut> ClientConfigComplete for Fun
-where
-    Fun: for<'a> FnMut(SetClientConfig) -> Fut + Send + 'static,
-    Fut: Future + Send,
-{
-}
