@@ -145,8 +145,8 @@ pub mod toolbox;
 const ENCRYPTION_KEY_MAX_SIZE: usize = 16;
 
 /// The L2CAP channel identifier for the Security Manager
-pub const L2CAP_CHANNEL_ID: l2cap::channel::id::ChannelIdentifier =
-    l2cap::channel::id::ChannelIdentifier::Le(l2cap::channel::id::LeCid::SecurityManagerProtocol);
+pub const LE_U_CHANNEL_ID: l2cap::cid::ChannelIdentifier =
+    l2cap::cid::ChannelIdentifier::Le(l2cap::cid::LeCid::SecurityManagerProtocol);
 
 /// General error within the Security Manager Protocol
 #[derive(Debug, Clone)]
@@ -315,7 +315,7 @@ impl TryFrom<&'_ BasicFrame<Vec<u8>>> for CommandType {
     type Error = Error;
 
     fn try_from(acl_data: &'_ BasicFrame<Vec<u8>>) -> Result<Self, Self::Error> {
-        if acl_data.get_channel_id() != L2CAP_CHANNEL_ID {
+        if acl_data.get_channel_id() != LE_U_CHANNEL_ID {
             return Err(Error::IncorrectL2capChannelId);
         }
 

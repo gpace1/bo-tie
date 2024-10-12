@@ -110,9 +110,9 @@ use bo_tie_l2cap::pdu::BasicFrame;
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 
 macro_rules! error {
-    ($channel:ty) => {
+    ($logical_link:ty) => {
         crate::SecurityManagerError<
-            <<$channel as bo_tie_l2cap::LogicalLink>::PhysicalLink as PhysicalLink>::SendErr
+            <<$logical_link>::PhysicalLink as PhysicalLink>::SendErr
         >
     }
 }
@@ -655,10 +655,7 @@ impl SecurityManager {
     /// [`set_encrypted`]: SecurityManager::set_encrypted
     /// [`UnknownIfLinkIsEncrypted`]: Error::UnknownIfLinkIsEncrypted
     /// [`process_command`]: SecurityManager::process_command
-    pub async fn start_bonding<T>(
-        &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
-    ) -> Result<bool, error!(T)>
+    pub async fn start_bonding<T>(&mut self, connection_channel: &mut BasicFrameChannel<T>) -> Result<bool, error!(T)>
     where
         T: LogicalLink,
     {
@@ -716,7 +713,7 @@ impl SecurityManager {
     /// The IRK is returned if it was successfully sent to the other device
     async fn send_irk<T, Irk>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         irk: Irk,
     ) -> Result<u128, error!(T)>
     where
@@ -759,7 +756,7 @@ impl SecurityManager {
     /// sign counter within the CSRK will always be 0.
     async fn send_csrk<T, Csrk>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         csrk: Csrk,
     ) -> Result<u128, error!(T)>
     where
@@ -804,7 +801,7 @@ impl SecurityManager {
     /// [`set_encrypted`]: crate::sm::responder::SecurityManager::set_encrypted
     async fn send_identity<T, I>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         identity: I,
     ) -> Result<crate::IdentityAddress, error!(T)>
     where
@@ -864,7 +861,7 @@ impl SecurityManager {
 
     async fn send<T, Cmd, P>(
         &self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         command: Cmd,
     ) -> Result<(), error!(T)>
     where
@@ -872,7 +869,7 @@ impl SecurityManager {
         Cmd: Into<Command<P>>,
         P: CommandData,
     {
-        let acl_data = BasicFrame::new(command.into().into_command_format().to_vec(), super::L2CAP_CHANNEL_ID);
+        let acl_data = command.into().into_command_format();
 
         connection_channel
             .send(acl_data)
@@ -882,7 +879,7 @@ impl SecurityManager {
 
     async fn send_err<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         fail_reason: PairingFailedReason,
     ) -> Result<(), error!(T)>
     where
@@ -908,7 +905,7 @@ impl SecurityManager {
     async fn process_input<T>(
         &mut self,
         instance: usize,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         input: Input,
     ) -> Result<Status, InputError<error!(T)>>
     where
@@ -955,7 +952,7 @@ impl SecurityManager {
     /// Process a keypress notification
     async fn p_input_keypress_notification<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         notification: KeyPressNotification,
     ) -> Result<Status, error!(T)>
     where
@@ -969,7 +966,7 @@ impl SecurityManager {
     /// Process the user's passkey
     async fn p_input_passkey<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         passkey_val: u32,
     ) -> Result<Status, error!(T)>
     where
@@ -1021,7 +1018,7 @@ impl SecurityManager {
     /// Process input of number comparison
     async fn p_input_number_comparison<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         is_yes: bool,
     ) -> Result<Status, error!(T)>
     where
@@ -1064,7 +1061,7 @@ impl SecurityManager {
     /// calculated value by this Security Manager.
     async fn p_input_out_of_band<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         _address: BluetoothDeviceAddress,
         random: u128,
         confirm: u128,
@@ -1107,7 +1104,7 @@ impl SecurityManager {
     /// [`SecurityManager`].
     pub async fn process_command<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         acl_data: &BasicFrame<Vec<u8>>,
     ) -> Result<Status, error!(T)>
     where
@@ -1144,7 +1141,7 @@ impl SecurityManager {
     /// Process a command that is not supported by this Security Manager
     async fn p_command_not_supported<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         _cmd: CommandType,
     ) -> Result<Status, error!(T)>
     where
@@ -1159,7 +1156,7 @@ impl SecurityManager {
     /// Process the pairing request
     async fn p_pairing_request<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         data: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1302,7 +1299,7 @@ impl SecurityManager {
 
     async fn p_pairing_public_key<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         data: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1419,7 +1416,7 @@ impl SecurityManager {
 
     async fn p_pairing_confirm<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1509,7 +1506,7 @@ impl SecurityManager {
 
     async fn p_pairing_random<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1618,7 +1615,7 @@ impl SecurityManager {
 
     async fn p_pairing_failed<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1643,7 +1640,7 @@ impl SecurityManager {
 
     async fn p_pairing_dh_key_check<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1681,7 +1678,7 @@ impl SecurityManager {
 
     async fn check_and_send_dh_key_check<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         initiator_dh_key_check: u128,
     ) -> Result<Status, error!(T)>
     where
@@ -1775,7 +1772,7 @@ impl SecurityManager {
     /// Process a keypress PDU
     async fn p_keypress_notification<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1796,7 +1793,7 @@ impl SecurityManager {
 
     async fn p_identity_info<'z, T>(
         &'z mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1843,7 +1840,7 @@ impl SecurityManager {
 
     async fn p_identity_address_info<T>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -1890,7 +1887,7 @@ impl SecurityManager {
 
     async fn p_signing_info<'z, T>(
         &'z mut self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
     ) -> Result<Status, error!(T)>
     where
@@ -2079,7 +2076,7 @@ impl NumberComparison {
     pub async fn yes<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<Status, NumberComparisonError<error!(T)>>
     where
         T: LogicalLink,
@@ -2096,7 +2093,7 @@ impl NumberComparison {
     pub async fn no<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<Status, NumberComparisonError<error!(T)>>
     where
         T: LogicalLink,
@@ -2173,7 +2170,7 @@ impl PasskeyInput {
     /// returned.
     async fn new<T>(
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         both_enter: bool,
     ) -> Result<Self, error!(T)>
     where
@@ -2224,7 +2221,7 @@ impl PasskeyInput {
     pub async fn add<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         digit: char,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
@@ -2263,7 +2260,7 @@ impl PasskeyInput {
     pub async fn insert<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         digit: char,
         index: usize,
     ) -> Result<(), PasscodeInputError<error!(T)>>
@@ -2305,7 +2302,7 @@ impl PasskeyInput {
     pub async fn remove<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         index: usize,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
@@ -2337,7 +2334,7 @@ impl PasskeyInput {
     pub async fn clear<T>(
         &mut self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
         T: LogicalLink,
@@ -2360,7 +2357,7 @@ impl PasskeyInput {
     pub async fn complete<T>(
         self,
         security_manger: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<Status, PasscodeInputError<error!(T)>>
     where
         T: LogicalLink,
@@ -2407,7 +2404,7 @@ impl PasskeyInput {
     pub async fn send_key_entry<T>(
         &self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
         T: LogicalLink,
@@ -2425,7 +2422,7 @@ impl PasskeyInput {
     pub async fn send_key_erase<T>(
         &self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
         T: LogicalLink,
@@ -2443,7 +2440,7 @@ impl PasskeyInput {
     pub async fn send_key_clear<T>(
         &self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<(), PasscodeInputError<error!(T)>>
     where
         T: LogicalLink,
@@ -2461,7 +2458,7 @@ impl PasskeyInput {
     pub async fn fail<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<Status, PasscodeInputError<error!(T)>>
     where
         T: LogicalLink,
@@ -2676,7 +2673,7 @@ impl OutOfBandInput {
     pub async fn input_oob<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
         oob_data: &[u8],
     ) -> Result<Status, OutOfBandInputError<error!(T)>>
     where
@@ -2743,7 +2740,7 @@ impl OutOfBandInput {
     pub async fn unavailable<T>(
         self,
         security_manager: &mut SecurityManager,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<Status, OutOfBandInputError<error!(T)>>
     where
         T: LogicalLink,

@@ -3,7 +3,6 @@
 use super::encrypt_info::AuthRequirements;
 use super::*;
 use bo_tie_core::buffer::stack::LinearBuffer;
-use bo_tie_l2cap::pdu::BasicFrame;
 use bo_tie_l2cap::{BasicFrameChannel, PhysicalLink};
 
 pub(crate) fn convert_io_cap(
@@ -805,7 +804,7 @@ impl PairingFailed {
     /// ```
     /// # use bo_tie_l2cap::{BasicFrameError, BasicFrame, ChannelIdentifier, ConnectionChannelExt, L2capFragment, LeUserChannelIdentifier};
     /// # use bo_tie_l2cap::send_future::Error;
-    /// # use bo_tie_sm::L2CAP_CHANNEL_ID;
+    /// # use bo_tie_sm::LE_U_CHANNEL_ID;
     /// # use bo_tie_util::buffer::de_vec::DeVec;
     /// # use bo_tie_util::buffer::TryExtend;
     /// # use bo_tie_sm::pairing::{PairingFailed, PairingFailedReason};
@@ -825,7 +824,7 @@ impl PairingFailed {
     /// # }
     /// # let mut connection_channel = CC;
     /// # async {
-    /// let sm_channel_id = L2CAP_CHANNEL_ID;
+    /// let sm_channel_id = LE_U_CHANNEL_ID;
     ///
     /// for frame in connection_channel.receive_b_frame().await.unwrap() {
     ///
@@ -846,7 +845,7 @@ impl PairingFailed {
     /// ```
     pub async fn send<T>(
         self,
-        connection_channel: &mut BasicFrameChannel<'_, T>,
+        connection_channel: &mut BasicFrameChannel<T>,
     ) -> Result<(), <T::PhysicalLink as PhysicalLink>::SendErr>
     where
         T: bo_tie_l2cap::LogicalLink,
@@ -855,9 +854,7 @@ impl PairingFailed {
 
         let data = command.into_command_format();
 
-        let b_frame = BasicFrame::new(data.to_vec(), L2CAP_CHANNEL_ID);
-
-        connection_channel.send(b_frame).await
+        connection_channel.send(data).await
     }
 }
 
