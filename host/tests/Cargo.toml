@@ -15,7 +15,7 @@ bo-tie-core = { path = "../../bo-tie-core" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-gap = { path = "../bo-tie-gap" }
 bo-tie-att = { path = "../bo-tie-att", features = ["tokio"] }
-#bo-tie-gatt = { path = "../bo-tie-gatt" }
+bo-tie-gatt = { path = "../bo-tie-gatt" }
 #bo-tie-sm = { path = "../bo-tie-sm" }
 tokio-test = { version = "0.4", default-features = false }
 
@@ -65,10 +65,10 @@ path = "tests/att/write.rs"
 name = "att_queued_write"
 path = "tests/att/queued_write.rs"
 
-#[[test]]
-#name = "gatt_read_by_group_type"
-#path = "tests/gatt/read_by_group_type.rs"
-#
+[[test]]
+name = "gatt_read_by_group_type"
+path = "tests/gatt/read_by_group_type.rs"
+
 [[test]]
 name = "l2cap_next_methods"
 path = "tests/l2cap/next.rs"
