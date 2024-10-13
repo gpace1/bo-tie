@@ -687,9 +687,13 @@ impl<'a, P> CreditBasedFrameRecombiner<'a, P> {
             match self.sdu_state {
                 SduLenState::None => self.sdu_state = SduLenState::First(payload.next()?),
                 SduLenState::First(first) => {
+                    let next = payload.next()?;
+
                     self.byte_count += 2;
 
-                    self.sdu_state = SduLenState::Complete(<u16>::from_le_bytes([first, payload.next()?]))
+                    let len = <u16>::from_le_bytes([first, next]);
+
+                    self.sdu_state = SduLenState::Complete(len)
                 }
                 SduLenState::Complete(_) => break Some(()),
             }
