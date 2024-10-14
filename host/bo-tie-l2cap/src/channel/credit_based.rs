@@ -103,7 +103,7 @@ where
     /// # use std::fmt::{Debug, Display};
     /// # use std::vec::IntoIter;
     /// # use bo_tie_core::buffer::TryExtend;
-    /// # use bo_tie_l2cap::{CreditServiceData, LeULogicalLink, LeUNext, SendSduError};
+    /// # use bo_tie_l2cap::{CreditBasedChannelNext, CreditServiceData, LeULogicalLink, LeUNext, SendSduError};
     /// # use bo_tie_l2cap::{CreditBasedChannel, LogicalLink, PhysicalLink};
     /// # use bo_tie_l2cap::cid::{ChannelIdentifier, DynChannelId};
     /// # use bo_tie_l2cap::signals::packets::FlowControlCreditInd;
@@ -128,7 +128,9 @@ where
     ///     if credit_service_data.is_none() { break }
     ///
     ///     match le_link.next().await? {
-    ///         LeUNext::CreditIndication { mut channel, .. } => {
+    ///         LeUNext::CreditBasedChannel(
+    ///             CreditBasedChannelNext::CreditIndication { mut channel, .. }
+    ///         ) => {
     ///             let data_cid = credit_service_data
     ///                 .as_ref()
     ///                 .map(|c| c.get_this_channel_id());

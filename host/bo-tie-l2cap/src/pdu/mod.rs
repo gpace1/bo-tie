@@ -136,7 +136,7 @@ pub trait FragmentIterator {
 /// # use bo_tie_l2cap::cid::{ChannelIdentifier, LeCid};
 /// # use bo_tie_l2cap::pdu::{BasicFrame, L2capFragment, RecombineL2capPdu, RecombinePayloadIncrementally};
 /// # use bo_tie_l2cap::PhysicalLink;
-/// # async fn doc_test<F>(next_fragment: F)
+/// # async fn doc_test<F>(next_fragment: F) -> Result<(), Box<dyn std::error::Error>>
 /// # where
 /// #     F: Fn() -> core::future::Ready<L2capFragment<Vec<u8>>>,
 /// # {
@@ -160,13 +160,13 @@ pub trait FragmentIterator {
 /// );
 ///
 /// loop {
-///     if let Some(pdu) = recombiner.add(fragment.into_inner()) {
+///     if let Some(pdu) = recombiner.add(fragment.into_inner())? {
 ///         break pdu
 ///     }
 ///
 ///     fragment = next_fragment().await;
 /// }
-/// # ;
+/// # ; Ok(())
 /// # }
 /// ```
 ///
