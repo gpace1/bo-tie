@@ -9,11 +9,15 @@ mod unused;
 
 use crate::channel::id::{ChannelIdentifier, LeCid};
 use crate::channel::signalling::ReceivedLeUSignal;
-use crate::channel::unused::LeUUnusedChannelResponse;
 use crate::link_flavor::LinkFlavor;
-use crate::pdu::credit_frame::{self, CreditBasedFrame};
-use crate::pdu::{BasicFrame, CreditBasedSdu, PacketsError, RecombinePayloadIncrementally};
+use crate::pdu::basic_frame::BasicFrameRecombinerIntoRef;
+use crate::pdu::credit_frame::{self, CreditBasedFrame, CreditBasedFrameRecombinerIntoRef};
+use crate::pdu::{
+    BasicFrame, CreditBasedSdu, PacketsError, RecombineL2capPduIntoRef, RecombinePayloadIncrementally,
+    RecombinePayloadIncrementallyIntoRef,
+};
 use crate::pdu::{RecombineL2capPdu, SduPacketsIterator};
+use crate::signalling::ReceiveLeUSignalRecombineBuilder;
 use crate::{pdu::L2capFragment, LogicalLink, PhysicalLink, PhysicalLinkExt};
 use bo_tie_core::buffer::TryExtend;
 pub(crate) use credit_based::ChannelCredits;
@@ -54,7 +58,7 @@ pub(crate) struct BasicHeaderProcessor {
 }
 
 impl BasicHeaderProcessor {
-    pub(crate) fn init() -> Self {
+    pub(crate) fn new() -> Self {
         BasicHeaderProcessor {
             length: core::cell::Cell::new(ProcessorLengthState::None),
             channel_id: core::cell::Cell::new(ProcessorChannelIdentifier::None),
@@ -128,15 +132,6 @@ impl BasicHeaderProcessor {
     }
 }
 
-#[derive(Debug)]
-pub enum LeUChannelType<B> {
-    Unused,
-    Reserved,
-    BasicChannel,
-    SignallingChannel,
-    CreditBasedChannel { data: CreditBasedChannelData<B> },
-}
-
 /// Data used by an established credit based channel
 #[derive(Debug)]
 pub struct CreditBasedChannelData<B> {
@@ -148,6 +143,12 @@ pub struct CreditBasedChannelData<B> {
     credits_given_to_peer: u16,
     remaining_sdu_bytes: u16,
     sdu_buffer: B,
+}
+
+impl<B> CreditBasedChannelData<B> {
+    pub(crate) fn get_meta(&mut self) -> &mut credit_frame::RecombineMeta {
+        &mut self.recombine_meta
+    }
 }
 
 impl<S: TryExtend<u8> + Default> CreditBasedChannelData<S> {
@@ -219,6 +220,15 @@ pub(crate) enum ProcessSduOutput<S, E> {
     BufferError(E),
 }
 
+#[derive(Debug)]
+pub enum LeUChannelType<B> {
+    Unused,
+    Reserved,
+    BasicChannel,
+    SignallingChannel,
+    CreditBasedChannel { data: CreditBasedChannelData<B> },
+}
+
 impl<S> LeUChannelType<S> {
     /// Create the recombiner associated with the channel's L2CAP PDU
     ///
@@ -226,33 +236,24 @@ impl<S> LeUChannelType<S> {
     /// This cannot be called on an [`Unused`] channel.
     ///
     /// [`Unused`]: LeUChannelType::Unused
-    pub(crate) fn new_recombiner<'a, B>(
-        &'a mut self,
-        buffer: &'a mut B,
-        basic_header: &BasicHeader,
-    ) -> LeUPduRecombine<'a, B>
+    pub(crate) fn new_recombiner<B>(&self, basic_header: &BasicHeader) -> LeUPduRecombine
     where
         B: TryExtend<u8> + Default,
     {
         match self {
-            LeUChannelType::Unused => match basic_header.channel_id {
-                ChannelIdentifier::Le(LeCid::AttributeProtocol)
-                | ChannelIdentifier::Le(LeCid::LeSignalingChannel)
-                | ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                    let recombine = unused::LeUUnusedChannelResponse::recombine(
-                        basic_header.length,
-                        basic_header.channel_id,
-                        (),
-                        (),
-                    );
-
-                    LeUPduRecombine::Unused(recombine)
-                }
-                _ => LeUPduRecombine::new_dump_recombiner(&basic_header),
-            },
-            LeUChannelType::Reserved => LeUPduRecombine::new_dump_recombiner(&basic_header),
+            LeUChannelType::Unused
+                if match basic_header.channel_id {
+                    ChannelIdentifier::Le(LeCid::AttributeProtocol)
+                    | ChannelIdentifier::Le(LeCid::LeSignalingChannel)
+                    | ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => true,
+                    _ => false,
+                } =>
+            {
+                LeUPduRecombine::new_unused(basic_header)
+            }
+            LeUChannelType::Unused | LeUChannelType::Reserved => LeUPduRecombine::new_dumped(&basic_header),
             LeUChannelType::BasicChannel => {
-                let recombine = BasicFrame::recombine(basic_header.length, basic_header.channel_id, buffer, ());
+                let recombine = BasicFrame::<B>::recombine_into_ref(basic_header.length, basic_header.channel_id);
 
                 LeUPduRecombine::BasicChannel(recombine)
             }
@@ -261,13 +262,8 @@ impl<S> LeUChannelType<S> {
 
                 LeUPduRecombine::SignallingChannel(recombine)
             }
-            LeUChannelType::CreditBasedChannel { data } => {
-                let recombine = CreditBasedFrame::recombine(
-                    basic_header.length,
-                    basic_header.channel_id,
-                    buffer,
-                    &mut data.recombine_meta,
-                );
+            LeUChannelType::CreditBasedChannel { .. } => {
+                let recombine = CreditBasedFrame::<B>::recombine_into_ref(basic_header.length, basic_header.channel_id);
 
                 LeUPduRecombine::CreditBasedChannel(recombine)
             }
@@ -275,18 +271,19 @@ impl<S> LeUChannelType<S> {
     }
 }
 
-pub(crate) enum LeUPduRecombine<'a, B: 'a + TryExtend<u8> + Default> {
+#[derive(Debug)]
+pub(crate) enum LeUPduRecombine {
     Dump { pdu_len: usize, received_so_far: usize },
     Unused(unused::LeUUnusedChannelResponseRecombiner),
-    BasicChannel(<BasicFrame<B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
-    SignallingChannel(<ReceivedLeUSignal as RecombineL2capPdu>::PayloadRecombiner<'a>),
-    CreditBasedChannel(<CreditBasedFrame<B> as RecombineL2capPdu>::PayloadRecombiner<'a>),
+    BasicChannel(BasicFrameRecombinerIntoRef),
+    SignallingChannel(ReceiveLeUSignalRecombineBuilder),
+    CreditBasedChannel(CreditBasedFrameRecombinerIntoRef),
     Finished,
 }
 
-impl<'a, B: 'a + TryExtend<u8> + Default> LeUPduRecombine<'a, B> {
-    /// Create a recombiner for dumpind data
-    pub(crate) fn new_dump_recombiner(basic_header: &BasicHeader) -> Self {
+impl LeUPduRecombine {
+    /// Create a `LeUPduRecombine` for dumping data
+    pub fn new_dumped(basic_header: &BasicHeader) -> Self {
         let pdu_len = basic_header.length.into();
         let received_so_far = 0;
 
@@ -296,13 +293,33 @@ impl<'a, B: 'a + TryExtend<u8> + Default> LeUPduRecombine<'a, B> {
         }
     }
 
+    /// create a `LeUPduRecombine` for an unused channel
+    pub fn new_unused(basic_header: &BasicHeader) -> Self {
+        let recombine =
+            unused::LeUUnusedChannelResponse::recombine(basic_header.length, basic_header.channel_id, (), ());
+
+        LeUPduRecombine::Unused(recombine)
+    }
+
     /// Add more payload bytes to the PDU
     ///
     /// This is just a shadow of the [`add`] method within the inner recombiner type.
-    pub(crate) fn add<T>(&mut self, payload_fragment: T) -> Result<PduRecombineAddOutput<B>, PduRecombineAddError<B>>
+    ///
+    /// # Panics
+    /// This panics if the meta information for the current PDU is required but the `meta` is not
+    /// the expected value. For example, if the current PDU is a credit based frame, and `meta` is
+    /// [`CurrentMeta::None`], this method will panic as it expects
+    /// [`CurrentMeta::CreditBasedFrame].  
+    pub(crate) fn add<T, B>(
+        &mut self,
+        payload_fragment: T,
+        buffer: &mut B,
+        meta: CurrentMeta,
+    ) -> Result<PduRecombineAddOutput<B>, PduRecombineAddError<B>>
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator,
+        B: TryExtend<u8> + Default,
     {
         match self {
             LeUPduRecombine::Dump {
@@ -329,7 +346,7 @@ impl<'a, B: 'a + TryExtend<u8> + Default> LeUPduRecombine<'a, B> {
                 })
                 .unwrap_or_else(|_| PduRecombineAddOutput::DumpComplete)),
             LeUPduRecombine::BasicChannel(recombiner) => recombiner
-                .add(payload_fragment)
+                .add_into_ref(payload_fragment, buffer, meta.get_none().as_mut().unwrap())
                 .map(|opt| {
                     opt.map(|pdu| {
                         *self = Self::Finished;
@@ -351,7 +368,7 @@ impl<'a, B: 'a + TryExtend<u8> + Default> LeUPduRecombine<'a, B> {
                 })
                 .map_err(|e| PduRecombineAddError::SignallingChannel(e)),
             LeUPduRecombine::CreditBasedChannel(recombiner) => recombiner
-                .add(payload_fragment)
+                .add_into_ref(payload_fragment, buffer, meta.get_credit_based().unwrap())
                 .map(|opt| {
                     opt.map(|pdu| {
                         *self = Self::Finished;
@@ -366,12 +383,35 @@ impl<'a, B: 'a + TryExtend<u8> + Default> LeUPduRecombine<'a, B> {
     }
 }
 
+pub(crate) enum CurrentMeta<'a> {
+    None,
+    CreditBasedFrame(&'a mut credit_frame::RecombineMeta),
+}
+
+impl<'a> CurrentMeta<'a> {
+    fn get_none(self) -> Option<()> {
+        if let CurrentMeta::None = self {
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    fn get_credit_based(self) -> Option<&'a mut credit_frame::RecombineMeta> {
+        if let CurrentMeta::CreditBasedFrame(meta) = self {
+            Some(meta)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) enum PduRecombineAddOutput<B> {
     #[default]
     Ongoing,
     DumpComplete,
-    UnusedComplete(LeUUnusedChannelResponse),
+    UnusedComplete(unused::LeUUnusedChannelResponse),
     BasicFrame(BasicFrame<B>),
     ControlFrame(ReceivedLeUSignal),
     CreditBasedFrame(CreditBasedFrame<B>),

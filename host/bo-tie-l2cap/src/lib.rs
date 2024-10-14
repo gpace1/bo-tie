@@ -130,7 +130,7 @@ mod logical_link_private;
 pub mod pdu;
 pub mod signals;
 
-use crate::channel::ProcessSduOutput;
+use crate::channel::{CurrentMeta, LeUPduRecombine, ProcessSduOutput};
 use bo_tie_core::buffer::TryExtend;
 use channel::id::{ChannelIdentifier, DynChannelId, LeCid};
 use channel::signalling::ReceivedLeUSignal;
@@ -425,8 +425,6 @@ impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
     {
         let physical_link = self.physical_link;
 
-        let basic_header_processor = channel::BasicHeaderProcessor::init();
-
         let mut channels: alloc::vec::Vec<LeUChannelType<S>> = core::iter::repeat_with(|| LeUChannelType::Unused)
             .take(LE_STATIC_CHANNEL_COUNT)
             .collect();
@@ -447,12 +445,14 @@ impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
 
         let pdu_buffer = B::default();
 
+        let defragmentation_data = LeDefragmentationData::new();
+
         LeULogicalLink {
             physical_link,
             pdu_buffer,
-            basic_header_processor,
             channels,
             unused_responses,
+            defragmentation_data,
         }
     }
 }
@@ -469,9 +469,9 @@ impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
 pub struct LeULogicalLink<P, B, S> {
     physical_link: P,
     pdu_buffer: B,
-    basic_header_processor: channel::BasicHeaderProcessor,
     channels: alloc::vec::Vec<LeUChannelType<S>>,
     unused_responses: bool,
+    defragmentation_data: LeDefragmentationData,
 }
 
 /// The number of channels that have a defined channel for a LE-U link within the Bluetooth Spec.
@@ -685,6 +685,12 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     /// `next` has the processing of the *flow control credit indication* L2CAP signal built into
     /// its returned future. Normally `next` will output a [`CreditIndication`] containing the
     /// number of credits given and the affected channel. However, before the channel is returned
+    ///
+    /// # Error
+    ///
+    /// Errors occur due to either a buffering issues or a received PDU is invalid. Regardless of
+    /// the reason, if `next` outputs an error then the entire *link* shall be closed down. Errors
+    /// mean the link has entered into an unrecoverable bad state.
     pub async fn next(&mut self) -> Result<LeUNext<'_, P, B, S>, LeULogicalLinkNextError<P, B, S>>
     where
         P: PhysicalLink,
@@ -692,9 +698,7 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
         B::IntoIter: ExactSizeIterator,
         S: TryExtend<u8> + Default,
     {
-        let mut expect_first_fragment = true;
-
-        'outer: loop {
+        loop {
             let mut fragment = self
                 .physical_link
                 .recv()
@@ -702,205 +706,234 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                 .ok_or(LeULogicalLinkNextError::Disconnected)?
                 .map_err(|e| LeULogicalLinkNextError::ReceiveError(e))?;
 
-            if expect_first_fragment && !fragment.start_fragment {
-                return Err(LeULogicalLinkNextError::ExpectedStartingFragment);
+            match (self.defragmentation_data.expect_first_fragment, fragment.start_fragment) {
+                (true, false) => return Err(LeULogicalLinkNextError::ExpectedStartingFragment),
+                (false, true) => return Err(LeULogicalLinkNextError::UnexpectedStartingFragment),
+                _ => (),
             }
 
-            let Some(basic_header) = self.basic_header_processor.process::<LeULink, _>(&mut fragment)? else {
-                expect_first_fragment = false;
+            self.defragmentation_data.expect_first_fragment = false;
 
-                continue 'outer;
+            let Some(basic_header) = self
+                .defragmentation_data
+                .basic_header_processor
+                .process::<LeULink, _>(&mut fragment)?
+            else {
+                continue;
             };
 
-            expect_first_fragment = true;
+            let index = match self.defragmentation_data.index {
+                Some(index) => index,
+                None => {
+                    let index = match basic_header.channel_id {
+                        ChannelIdentifier::Le(LeCid::AttributeProtocol) => LE_LINK_ATT_CHANNEL_INDEX,
+                        ChannelIdentifier::Le(LeCid::LeSignalingChannel) => LE_LINK_SIGNALLING_CHANNEL_INDEX,
+                        ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => LE_LINK_SM_CHANNEL_INDEX,
+                        ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) => {
+                            self.convert_dyn_index(dyn_channel_id)
+                        }
+                        _ => <usize>::MAX,
+                    };
 
-            let mut unused = LeUChannelType::Unused;
+                    self.defragmentation_data.index = index.into();
 
-            let (index, mut recombiner) = match basic_header.channel_id {
-                ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
-                    let recombiner =
-                        self.channels[LE_LINK_ATT_CHANNEL_INDEX].new_recombiner(&mut self.pdu_buffer, &basic_header);
-
-                    (LE_LINK_ATT_CHANNEL_INDEX, recombiner)
+                    index
                 }
-                ChannelIdentifier::Le(LeCid::LeSignalingChannel) => {
-                    let recombiner = self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX]
-                        .new_recombiner(&mut self.pdu_buffer, &basic_header);
+            };
 
-                    (LE_LINK_SIGNALLING_CHANNEL_INDEX, recombiner)
-                }
-                ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                    let recombiner =
-                        self.channels[LE_LINK_SM_CHANNEL_INDEX].new_recombiner(&mut self.pdu_buffer, &basic_header);
-
-                    (LE_LINK_SM_CHANNEL_INDEX, recombiner)
-                }
-                ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) => {
-                    let index = self.convert_dyn_index(dyn_channel_id);
-
+            let recombiner = match &mut self.defragmentation_data.recombiner {
+                Some(recombiner) => recombiner,
+                None => {
                     let recombiner = self
                         .channels
-                        .get_mut(index)
-                        .unwrap_or(&mut unused)
-                        .new_recombiner(&mut self.pdu_buffer, &basic_header);
+                        .get(index)
+                        .unwrap_or(&LeUChannelType::Unused)
+                        .new_recombiner::<B>(&basic_header);
 
-                    (index, recombiner)
+                    self.defragmentation_data.recombiner = Some(recombiner);
+
+                    self.defragmentation_data.recombiner.as_mut().unwrap()
                 }
-                _ => (<usize>::MAX, unused.new_recombiner(&mut self.pdu_buffer, &basic_header)),
             };
 
-            'recombine: loop {
-                match recombiner.add(&mut fragment.data) {
-                    Err(e) => {
-                        break 'outer match e {
-                            PduRecombineAddError::AlreadyFinished => {
-                                Err(LeULogicalLinkNextError::Internal("already finished"))
-                            }
-                            PduRecombineAddError::BasicChannel(e) => {
-                                Err(LeULogicalLinkNextError::RecombineBasicFrame(e))
-                            }
-                            PduRecombineAddError::SignallingChannel(e) => {
-                                Err(LeULogicalLinkNextError::RecombineControlFrame(e))
-                            }
-                            PduRecombineAddError::CreditBasedChannel(e) => {
-                                Err(LeULogicalLinkNextError::RecombineCreditBasedFrame(e))
-                            }
+            let meta = match &mut self.channels[index] {
+                LeUChannelType::Unused
+                | LeUChannelType::Reserved
+                | LeUChannelType::BasicChannel
+                | LeUChannelType::SignallingChannel => CurrentMeta::None,
+                LeUChannelType::CreditBasedChannel { data } => CurrentMeta::CreditBasedFrame(data.get_meta()),
+            };
+
+            match recombiner.add(&mut fragment.data, &mut self.pdu_buffer, meta) {
+                Err(e) => {
+                    break match e {
+                        PduRecombineAddError::AlreadyFinished => {
+                            Err(LeULogicalLinkNextError::Internal("already finished"))
+                        }
+                        PduRecombineAddError::BasicChannel(e) => Err(LeULogicalLinkNextError::RecombineBasicFrame(e)),
+                        PduRecombineAddError::SignallingChannel(e) => {
+                            Err(LeULogicalLinkNextError::RecombineControlFrame(e))
+                        }
+                        PduRecombineAddError::CreditBasedChannel(e) => {
+                            Err(LeULogicalLinkNextError::RecombineCreditBasedFrame(e))
                         }
                     }
-                    Ok(PduRecombineAddOutput::Ongoing) => {
-                        fragment = self
-                            .physical_link
-                            .recv()
+                }
+                Ok(PduRecombineAddOutput::Ongoing) => (),
+                Ok(PduRecombineAddOutput::DumpComplete) => self.defragmentation_data.reset(),
+                Ok(PduRecombineAddOutput::UnusedComplete(unused)) => {
+                    self.defragmentation_data.reset();
+
+                    if self.unused_responses {
+                        self.physical_link
+                            .send_pdu(unused)
                             .await
-                            .ok_or_else(|| LeULogicalLinkNextError::Disconnected)?
-                            .map_err(|e| LeULogicalLinkNextError::ReceiveError(e))?;
+                            .map_err(|e| LeULogicalLinkNextError::SendUnusedError(e))?;
+                    }
+                }
+                Ok(PduRecombineAddOutput::BasicFrame(pdu)) => {
+                    self.defragmentation_data.reset();
 
-                        if fragment.is_start_fragment() {
-                            return Err(LeULogicalLinkNextError::UnexpectedStartingFragment);
+                    let handle = LeULogicalLinkHandle::new(self, index);
+
+                    let channel = BasicFrameChannel::new(basic_header.channel_id, handle);
+
+                    match basic_header.channel_id {
+                        ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
+                            break Ok(LeUNext::AttributeChannel { pdu, channel })
+                        }
+                        ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
+                            break Ok(LeUNext::SecurityManagerChannel { pdu, channel })
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                Ok(PduRecombineAddOutput::ControlFrame(signal)) => {
+                    self.defragmentation_data.reset();
+
+                    match &signal {
+                        ReceivedLeUSignal::FlowControlCreditIndication(credit_ind) => {
+                            // If this is a credit indication for an active credit based channel,
+                            // return a Next::CreditIndication instead of a Next::ControlFrame.
+                            let channel_id = credit_ind.get_cid();
+
+                            let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(id)) = channel_id else {
+                                unreachable!("the channel ID should already be validated")
+                            };
+
+                            let index = self.convert_dyn_index(id);
+
+                            let Some(LeUChannelType::CreditBasedChannel { data: channel_data }) =
+                                self.channels.get_mut(index)
+                            else {
+                                // ignore the credit indication
+                                continue;
+                            };
+
+                            let credits = credit_ind.get_credits();
+
+                            channel_data.add_peer_credits(credits);
+
+                            let handle = LeULogicalLinkHandle::new(self, index);
+
+                            let credits_given = credits.into();
+
+                            let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
+
+                            break Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::CreditIndication {
+                                credits_given,
+                                channel,
+                            }));
+                        }
+                        _ => {
+                            let handle = LeULogicalLinkHandle::new(self, index);
+
+                            let channel = SignallingChannel::new(basic_header.channel_id, handle);
+
+                            break Ok(LeUNext::SignallingChannel { signal, channel });
                         }
                     }
-                    Ok(PduRecombineAddOutput::DumpComplete) => break 'recombine,
-                    Ok(PduRecombineAddOutput::UnusedComplete(unused)) => {
-                        if self.unused_responses {
-                            self.physical_link
-                                .send_pdu(unused)
-                                .await
-                                .map_err(|e| LeULogicalLinkNextError::SendUnusedError(e))?;
+                }
+                Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
+                    self.defragmentation_data.reset();
+
+                    let LeUChannelType::CreditBasedChannel { data } = &mut self.channels[index] else {
+                        unreachable!()
+                    };
+
+                    match data.process_pdu(pdu) {
+                        ProcessSduOutput::None => (),
+                        ProcessSduOutput::NonePeerHasNoMoreCredits => {
+                            let handle = LeULogicalLinkHandle::new(self, index);
+
+                            let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
+
+                            break Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::PeerOutOfCredits {
+                                channel,
+                            }));
                         }
+                        ProcessSduOutput::Sdu(sdu) => {
+                            let handle = LeULogicalLinkHandle::new(self, index);
 
-                        break 'recombine;
-                    }
-                    Ok(PduRecombineAddOutput::BasicFrame(pdu)) => {
-                        let handle = LeULogicalLinkHandle::new(self, index);
+                            let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                        let channel = BasicFrameChannel::new(basic_header.channel_id, handle);
+                            let peer_out_of_credits = false;
 
-                        match basic_header.channel_id {
-                            ChannelIdentifier::Le(LeCid::AttributeProtocol) => {
-                                break 'outer Ok(LeUNext::AttributeChannel { pdu: pdu, channel })
-                            }
-                            ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => {
-                                break 'outer Ok(LeUNext::SecurityManagerChannel { pdu, channel })
-                            }
-                            _ => unreachable!(),
+                            break Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu {
+                                sdu,
+                                channel,
+                                peer_out_of_credits,
+                            }));
                         }
-                    }
-                    Ok(PduRecombineAddOutput::ControlFrame(signal)) => {
-                        match &signal {
-                            ReceivedLeUSignal::FlowControlCreditIndication(credit_ind) => {
-                                // If this is a credit indication for an active credit based channel,
-                                // return a Next::CreditIndication instead of a Next::ControlFrame.
-                                let channel_id = credit_ind.get_cid();
+                        ProcessSduOutput::SduButPeerHasNoMoreCredits(sdu) => {
+                            let handle = LeULogicalLinkHandle::new(self, index);
 
-                                let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(id)) = channel_id else {
-                                    unreachable!("the channel ID should already be validated")
-                                };
+                            let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
 
-                                let index = self.convert_dyn_index(id);
+                            let peer_out_of_credits = true;
 
-                                let Some(LeUChannelType::CreditBasedChannel { data: channel_data }) =
-                                    self.channels.get_mut(index)
-                                else {
-                                    // ignore the credit indication
-                                    continue 'outer;
-                                };
-
-                                let credits = credit_ind.get_credits();
-
-                                channel_data.add_peer_credits(credits);
-
-                                let handle = LeULogicalLinkHandle::new(self, index);
-
-                                let credits_given = credits.into();
-
-                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
-
-                                break 'outer Ok(LeUNext::CreditBasedChannel(
-                                    CreditBasedChannelNext::CreditIndication { credits_given, channel },
-                                ));
-                            }
-                            _ => {
-                                let handle = LeULogicalLinkHandle::new(self, index);
-
-                                let channel = SignallingChannel::new(basic_header.channel_id, handle);
-
-                                break 'outer Ok(LeUNext::SignallingChannel { signal, channel });
-                            }
+                            break Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu {
+                                sdu,
+                                channel,
+                                peer_out_of_credits,
+                            }));
                         }
-                    }
-                    Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
-                        let LeUChannelType::CreditBasedChannel { data } = &mut self.channels[index] else {
-                            unreachable!()
-                        };
-
-                        match data.process_pdu(pdu) {
-                            ProcessSduOutput::None => continue 'outer,
-                            ProcessSduOutput::NonePeerHasNoMoreCredits => {
-                                let handle = LeULogicalLinkHandle::new(self, index);
-
-                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
-
-                                break 'outer Ok(LeUNext::CreditBasedChannel(
-                                    CreditBasedChannelNext::PeerOutOfCredits { channel },
-                                ));
-                            }
-                            ProcessSduOutput::Sdu(sdu) => {
-                                let handle = LeULogicalLinkHandle::new(self, index);
-
-                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
-
-                                let peer_out_of_credits = false;
-
-                                break 'outer Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu {
-                                    sdu,
-                                    channel,
-                                    peer_out_of_credits,
-                                }));
-                            }
-                            ProcessSduOutput::SduButPeerHasNoMoreCredits(sdu) => {
-                                let handle = LeULogicalLinkHandle::new(self, index);
-
-                                let channel = CreditBasedChannel::new(basic_header.channel_id, handle);
-
-                                let peer_out_of_credits = true;
-
-                                break 'outer Ok(LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu {
-                                    sdu,
-                                    channel,
-                                    peer_out_of_credits,
-                                }));
-                            }
-                            ProcessSduOutput::PeerSentTooManyPdu => {
-                                break 'outer Err(LeULogicalLinkNextError::PeerSentMoreThanCreditsGiven)
-                            }
-                            ProcessSduOutput::BufferError(e) => {
-                                break 'outer Err(LeULogicalLinkNextError::SduBufferOverflow(e))
-                            }
+                        ProcessSduOutput::PeerSentTooManyPdu => {
+                            break Err(LeULogicalLinkNextError::PeerSentMoreThanCreditsGiven)
                         }
+                        ProcessSduOutput::BufferError(e) => break Err(LeULogicalLinkNextError::SduBufferOverflow(e)),
                     }
                 }
             }
         }
+    }
+}
+
+#[derive(Debug)]
+struct LeDefragmentationData {
+    basic_header_processor: channel::BasicHeaderProcessor,
+    expect_first_fragment: bool,
+    index: Option<usize>,
+    recombiner: Option<LeUPduRecombine>,
+}
+
+impl LeDefragmentationData {
+    fn new() -> Self {
+        let basic_header_processor = channel::BasicHeaderProcessor::new();
+        let expect_first_fragment = true;
+        let index = None;
+        let recombiner = None;
+
+        LeDefragmentationData {
+            basic_header_processor,
+            expect_first_fragment,
+            index,
+            recombiner,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
     }
 }
 

@@ -345,7 +345,7 @@ impl RecombineL2capPdu for ReceivedLeUSignal {
 ///
 /// # Enumerations
 /// [received]: SignallingChannel::receive
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum ReceiveLeUSignalRecombineBuilderState {
     // state used before the signalling code is received
     #[default]
@@ -360,7 +360,7 @@ pub enum ReceiveLeUSignalRecombineBuilderState {
     FlowControlCreditIndication(LinearBuffer<8, u8>),
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ReceiveLeUSignalRecombineBuilder {
     state: ReceiveLeUSignalRecombineBuilderState,
 }
@@ -418,8 +418,6 @@ impl ReceiveLeUSignalRecombineBuilder {
 
 impl RecombinePayloadIncrementally for ReceiveLeUSignalRecombineBuilder {
     type Pdu = ReceivedLeUSignal;
-
-    type RecombineBuffer = ();
 
     type RecombineError = ConvertSignalError;
 
@@ -479,6 +477,7 @@ impl core::fmt::Display for ConvertSignalError {
     }
 }
 
+#[derive(Debug)]
 pub struct UnknownSignal {
     header: LinearBuffer<4, u8>,
     expected_len: usize,

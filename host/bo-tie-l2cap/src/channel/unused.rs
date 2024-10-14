@@ -89,6 +89,7 @@ impl RecombineL2capPdu for LeUUnusedChannelResponse {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct LeUUnusedChannelResponseRecombiner {
     length: usize,
     bytes_received: usize,
@@ -141,19 +142,21 @@ impl LeUUnusedChannelResponseRecombiner {
     }
 }
 
+#[derive(Debug)]
 enum LeUUnusedChannelResponseBuilderType {
     Attribute(AttributeChannelUnusedResponseBuilder),
     Signalling(SignallingChannelUnusedResponseBuilder),
     SecurityManager(SecurityManagerChannelUnusedResponseBuilder),
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 enum AttributeHandelState {
     None,
     First(u8),
     Complete(u16),
 }
 
+#[derive(Debug)]
 struct AttributeChannelUnusedResponseBuilder {
     request_code: Option<NonZeroU8>,
     handle_state: AttributeHandelState,
@@ -213,6 +216,7 @@ impl AttributeChannelUnusedResponseBuilder {
     }
 }
 
+#[derive(Debug)]
 struct SignallingChannelUnusedResponseBuilder {
     command_identifier: Option<NonZeroU8>,
 }
@@ -260,6 +264,7 @@ impl SignallingChannelUnusedResponseBuilder {
     }
 }
 
+#[derive(Debug)]
 struct SecurityManagerChannelUnusedResponseBuilder;
 
 impl SecurityManagerChannelUnusedResponseBuilder {
@@ -289,7 +294,6 @@ impl SecurityManagerChannelUnusedResponseBuilder {
 
 impl RecombinePayloadIncrementally for LeUUnusedChannelResponseRecombiner {
     type Pdu = LeUUnusedChannelResponse;
-    type RecombineBuffer = ();
     type RecombineError = UnusedRecombineError;
 
     fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>

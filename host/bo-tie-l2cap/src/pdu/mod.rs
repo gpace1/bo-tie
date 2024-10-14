@@ -11,6 +11,7 @@ pub mod credit_frame;
 
 use crate::channel::id::ChannelIdentifier;
 pub use basic_frame::BasicFrame;
+use bo_tie_core::buffer::TryExtend;
 pub use control_frame::{ControlFrame, ControlFrameError};
 pub use credit_frame::CreditBasedSdu;
 
@@ -127,8 +128,55 @@ pub trait FragmentIterator {
 
 /// L2CAP PDU Recombination
 ///
-/// The purpose of this trait is to facilitate the recombination of fragments received from
-/// protocols **below** L2CAP.
+/// This is used for creating a recombiner that will convert [`L2capFragment`] data into the
+/// implementor of this trait.
+///
+/// ```
+/// # use bo_tie_core::buffer::stack::LinearBuffer;
+/// # use bo_tie_l2cap::cid::{ChannelIdentifier, LeCid};
+/// # use bo_tie_l2cap::pdu::{BasicFrame, L2capFragment, RecombineL2capPdu, RecombinePayloadIncrementally};
+/// # use bo_tie_l2cap::PhysicalLink;
+/// # async fn doc_test<F>(next_fragment: F)
+/// # where
+/// #     F: Fn() -> core::future::Ready<L2capFragment<Vec<u8>>>,
+/// # {
+/// # let mut fragment = L2capFragment::new(true, Vec::new());
+/// # fn process_basic_header(fragment: &mut L2capFragment<Vec<u8>>) -> (u16, ChannelIdentifier) {
+/// #     (0, ChannelIdentifier::Le(LeCid::AttributeProtocol))
+/// # }
+/// let recombine_buffer = &mut Vec::new();
+///
+/// let recombine_meta = ();
+///
+/// // For simplicity, pretend that `process_basic_header` never fails; it
+/// // is just a stub method to show the prerequisite for calling recombine.  
+/// let (payload_length, channel_identifier) = process_basic_header(&mut fragment);
+///
+/// let mut recombiner = BasicFrame::recombine(
+///     payload_length,
+///     channel_identifier,
+///     recombine_buffer,
+///     recombine_meta
+/// );
+///
+/// loop {
+///     if let Some(pdu) = recombiner.add(fragment.into_inner()) {
+///         break pdu
+///     }
+///
+///     fragment = next_fragment().await;
+/// }
+/// # ;
+/// # }
+/// ```
+///
+/// ## Prerequisite
+///
+/// [`recombine`] requires the payload length and channel identifier in order to create the
+/// recombiner. These are the two fields of the L2CAP basic header which means that the basic header
+/// must be received (and processed) before a recombiner can be created.
+///
+/// [`recombine`](RecombineL2capPdu::recombine)
 pub trait RecombineL2capPdu {
     /// Information required in order to recombine fragments into a PDU
     type RecombineMeta<'a>
@@ -144,11 +192,7 @@ pub trait RecombineL2capPdu {
         Self: 'a;
 
     /// The type for recombining fragments into a PDU
-    type PayloadRecombiner<'a>: RecombinePayloadIncrementally<
-        Pdu = Self,
-        RecombineBuffer = Self::RecombineBuffer<'a>,
-        RecombineError = Self::RecombineError,
-    >
+    type PayloadRecombiner<'a>: RecombinePayloadIncrementally<Pdu = Self, RecombineError = Self::RecombineError>
     where
         Self: 'a;
 
@@ -182,23 +226,48 @@ pub trait RecombineL2capPdu {
     ) -> Self::PayloadRecombiner<'a>;
 }
 
-/// A trait for Incrementally Recombining L2CAP fragments into the Payload of a PDU
+/// L2CAP PDU Recombination into a referenced Buffer
 ///
-/// This is used to recombine fragments of the payload into the complete PDU. The initial combiner
-/// is created using the information within the Basic Header of a L2CAP PDU. This is generally done
-/// within the method [`recombine`] of the trait `RecombineL2capPdu`. Every other byte is added to
-/// the recombine via the method [`add`].
+/// The only difference from [`RecombineL2capPdu`] is that the `PayloadRecombiner` type does not
+/// store a reference to the buffer or meta information. This makes this more tricky to use but its
+/// main advantage is that it can be stored along with the buffer.
 ///
-/// Method `add` input is a type that can be converted into an iterator over bytes. These bytes are
-/// added to the *recombiner* until the number of bytes matches the *payload length* field that was
-/// part of the basic header.
+/// ## Prerequisite
 ///
-/// [`recombine`]: RecombineL2capPdu::recombine
-/// [`add`]: RecombinePayloadIncrementally::add
+/// The prerequisites for `RecombineL2capPdu` also apply for `RecombineL2capPduIntoRef`
+///
+/// # Note
+///
+/// This is not implemented for a ControlFrame because the implementation of `RecombineL2capPdu`
+/// does not require
+pub trait RecombineL2capPduIntoRef<B, M> {
+    /// Error when trying to recombine fragments.
+    type RecombineError;
+
+    /// The type for recombining fragments into a PDU
+    type PayloadRecombiner: RecombinePayloadIncrementallyIntoRef<
+        B,
+        M,
+        Pdu = Self,
+        RecombineError = Self::RecombineError,
+    >;
+
+    /// Recombine fragments into this PDU
+    ///
+    /// See the equivalent [`RecombineL2capPdu::recombine`].
+    fn recombine_into_ref(payload_length: u16, channel_id: ChannelIdentifier) -> Self::PayloadRecombiner;
+}
+
+/// A trait for recombining L2CAP fragments
+///
+/// This is used to incrementally add [`L2capFragment`] data to an internal buffer until a complete
+/// PDU is stored. The only requirement is that the fragments must be added in order. Everything
+/// else is handled by the implementation. Once the PDU is formed it is then taken from the buffer
+/// and returned
+///
+/// [`L2capFragments`]: L2capFragment
 pub trait RecombinePayloadIncrementally {
     type Pdu: Sized;
-
-    type RecombineBuffer;
 
     type RecombineError;
 
@@ -210,6 +279,30 @@ pub trait RecombinePayloadIncrementally {
     where
         T: IntoIterator<Item = u8>,
         T::IntoIter: ExactSizeIterator;
+}
+
+/// A trait for recombining L2CAP fragments into a referenced buffer
+///
+/// This is equivalent to [`RecombinePayloadIncrementally`] except the implementation does not own
+/// the buffer nor meta, and instead they are an input to the `add` method. This puts the onus on
+/// the user to ensure the buffer and meta have not changed between calls to `add`.
+///
+/// See `RecombineL2capPduIntoRef` for example details.
+pub trait RecombinePayloadIncrementallyIntoRef<B, M> {
+    type Pdu: Sized;
+
+    type RecombineError;
+
+    fn add_into_ref<T>(
+        &mut self,
+        payload_fragment: T,
+        buffer: &mut B,
+        recombine_meta: &mut M,
+    ) -> Result<Option<Self::Pdu>, Self::RecombineError>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+        B: TryExtend<u8> + Default;
 }
 
 /// L2CAP Service Data Unit (SDU) Fragmentation

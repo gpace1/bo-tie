@@ -238,12 +238,11 @@ impl<'a, T> ControlFrameRecombiner<'a, T> {
     }
 }
 
-impl<'a, P> crate::pdu::RecombinePayloadIncrementally for ControlFrameRecombiner<'a, P>
+impl<P> crate::pdu::RecombinePayloadIncrementally for ControlFrameRecombiner<'_, P>
 where
     P: TryExtend<u8> + Default,
 {
     type Pdu = ControlFrame<P>;
-    type RecombineBuffer = &'a mut P;
     type RecombineError = RecombineError;
 
     fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>

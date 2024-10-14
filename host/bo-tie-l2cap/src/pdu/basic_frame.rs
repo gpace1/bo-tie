@@ -1,7 +1,7 @@
 //! L2CAP Basic Frame Implementation
 
 use crate::channel::id::ChannelIdentifier;
-use crate::pdu::{FragmentL2capPdu, FragmentationError, RecombineL2capPdu};
+use crate::pdu::{FragmentL2capPdu, FragmentationError, RecombineL2capPdu, RecombineL2capPduIntoRef};
 use bo_tie_core::buffer::TryExtend;
 
 /// Basic information frame
@@ -88,6 +88,18 @@ impl core::fmt::Display for BasicFrame<alloc::vec::Vec<u8>> {
             "Basic Info Frame {{ channel id: {}, payload: {:x?} }}",
             self.channel_id, self.payload
         )
+    }
+}
+
+impl<T> RecombineL2capPduIntoRef<T, ()> for BasicFrame<T>
+where
+    T: TryExtend<u8> + Default,
+{
+    type RecombineError = RecombineError;
+    type PayloadRecombiner = BasicFrameRecombinerIntoRef;
+
+    fn recombine_into_ref(payload_length: u16, channel_id: ChannelIdentifier) -> Self::PayloadRecombiner {
+        BasicFrameRecombinerIntoRef::new(payload_length.into(), channel_id)
     }
 }
 
@@ -266,6 +278,7 @@ where
 }
 
 /// Recombiner of fragments into a Basic Frame PDU
+#[derive(Debug)]
 pub struct BasicFrameRecombiner<'a, T> {
     payload_len: usize,
     channel_id: ChannelIdentifier,
@@ -287,12 +300,12 @@ impl<'a, T> BasicFrameRecombiner<'a, T> {
     }
 }
 
-impl<'a, P> crate::pdu::RecombinePayloadIncrementally for BasicFrameRecombiner<'a, P>
+impl<P> crate::pdu::RecombinePayloadIncrementally for BasicFrameRecombiner<'_, P>
 where
     P: TryExtend<u8> + Default,
 {
     type Pdu = BasicFrame<P>;
-    type RecombineBuffer = &'a mut P;
+
     type RecombineError = RecombineError;
 
     fn add<T>(&mut self, payload_fragment: T) -> Result<Option<Self::Pdu>, Self::RecombineError>
@@ -311,6 +324,66 @@ where
 
             if self.payload_len == self.byte_count {
                 let b_frame = BasicFrame::new(core::mem::take(self.payload), self.channel_id);
+
+                Ok(Some(b_frame))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Err(RecombineError::PayloadLargerThanStatedLength)
+        }
+    }
+}
+
+/// Alternative Recombiner of fragments into a Basic Frame PDU
+///
+/// This implements [`RecombinePayloadIncrementallyIntoRef`] instead of
+/// [`RecombinePayloadIncrementally`]
+#[derive(Debug)]
+pub struct BasicFrameRecombinerIntoRef {
+    payload_len: usize,
+    channel_id: ChannelIdentifier,
+    byte_count: usize,
+}
+
+impl BasicFrameRecombinerIntoRef {
+    fn new(payload_len: usize, channel_id: ChannelIdentifier) -> Self {
+        let byte_count = 0;
+
+        BasicFrameRecombinerIntoRef {
+            payload_len,
+            channel_id,
+            byte_count,
+        }
+    }
+}
+
+impl<B> crate::pdu::RecombinePayloadIncrementallyIntoRef<B, ()> for BasicFrameRecombinerIntoRef {
+    type Pdu = BasicFrame<B>;
+    type RecombineError = RecombineError;
+
+    fn add_into_ref<T>(
+        &mut self,
+        payload_fragment: T,
+        buffer: &mut B,
+        _: &mut (),
+    ) -> Result<Option<Self::Pdu>, Self::RecombineError>
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+        B: TryExtend<u8> + Default,
+    {
+        let payload_iter = payload_fragment.into_iter();
+
+        if self.byte_count + payload_iter.len() <= self.payload_len {
+            self.byte_count += payload_iter.len();
+
+            buffer
+                .try_extend(payload_iter)
+                .map_err(|_| RecombineError::BufferTooSmall)?;
+
+            if self.payload_len == self.byte_count {
+                let b_frame = BasicFrame::new(core::mem::take(buffer), self.channel_id);
 
                 Ok(Some(b_frame))
             } else {
