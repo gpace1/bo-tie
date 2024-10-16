@@ -1025,6 +1025,8 @@ mod tests {
             for byte in &test[1..] {
                 unknown.process(*byte).unwrap();
             }
+
+            assert!(unknown.is_complete())
         }
     }
 

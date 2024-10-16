@@ -324,13 +324,14 @@ async fn le_channel_dropped_while_receiving() {
             end.send(fragment).await.unwrap();
 
             // sending a bad signal
-            let fragment = L2capFragment::new(true, [3, 0, 5, 0, 0, 2, 4]);
+            let fragment = L2capFragment::new(true, [4, 0, 5, 0, 0xFF, 1, 0, 0]);
 
             end.send(fragment).await.unwrap();
         })
         .set_verify(|end| async {
             let mut link = LeULogicalLink::builder(end)
                 .enable_attribute_channel()
+                .enable_signalling_channel()
                 .use_vec_buffer()
                 .build();
 
@@ -339,7 +340,7 @@ async fn le_channel_dropped_while_receiving() {
                     next = link.next() => match next.unwrap() {
                         LeUNext::AttributeChannel { .. } => panic!("received on ATT channel"),
                         LeUNext::SignallingChannel { signal, ..} => match signal {
-                            ReceivedLeUSignal::UnknownSignal { code, ..} => if code == 0xA { break }
+                            ReceivedLeUSignal::UnknownSignal { code, ..} => if code == 0xFF { break }
                             _ => panic!("receive unexpected signal {signal:?}")
                         },
                         next => panic!("received unexpected {next:?}")
