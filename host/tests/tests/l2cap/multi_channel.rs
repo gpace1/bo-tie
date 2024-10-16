@@ -252,7 +252,6 @@ async fn le_multiple_receiving() {
             let mut checklist = [false; 5];
 
             while checklist != [true; 5] {
-                println!("checklist: {:?}", checklist);
                 match &mut link.next().await.unwrap() {
                     LeUNext::SignallingChannel { signal, channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
