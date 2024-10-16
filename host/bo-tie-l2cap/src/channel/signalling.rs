@@ -380,7 +380,7 @@ impl ReceiveLeUSignalRecombineBuilder {
     pub(crate) fn get_byte_count(&self) -> usize {
         match &self.state {
             ReceiveLeUSignalRecombineBuilderState::Init => 0,
-            ReceiveLeUSignalRecombineBuilderState::Unknown(u) => u.extra_bytes_received,
+            ReceiveLeUSignalRecombineBuilderState::Unknown(u) => u.received_bytes_ignored,
             ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp(l) => l.len(),
             ReceiveLeUSignalRecombineBuilderState::DisconnectRequest(l) => l.len(),
             ReceiveLeUSignalRecombineBuilderState::DisconnectResponse(l) => l.len(),
@@ -410,9 +410,8 @@ impl ReceiveLeUSignalRecombineBuilder {
             Ok(SignalCode::FlowControlCreditIndication) => {
                 Ok(self.state = ReceiveLeUSignalRecombineBuilderState::FlowControlCreditIndication([first].into()))
             }
-            Err(_) | Ok(_) => {
-                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::Unknown(UnknownSignal::new(first)))
-            }
+            Err(_) | Ok(_) => Ok(self.state =
+                ReceiveLeUSignalRecombineBuilderState::Unknown(UnknownSignal::new(first, self.payload_length))),
         }
     }
 
@@ -449,7 +448,7 @@ impl ReceiveLeUSignalRecombineBuilder {
     pub(crate) fn get_bytes_received(&self) -> (&[u8], usize) {
         match &self.state {
             ReceiveLeUSignalRecombineBuilderState::Init => (&[], 0),
-            ReceiveLeUSignalRecombineBuilderState::Unknown(b) => (&*b.header, b.extra_bytes_received),
+            ReceiveLeUSignalRecombineBuilderState::Unknown(b) => (&*b.header, b.received_bytes_ignored),
             ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp(b) => (&*b, 0),
             ReceiveLeUSignalRecombineBuilderState::DisconnectRequest(b) => (&*b, 0),
             ReceiveLeUSignalRecombineBuilderState::DisconnectResponse(b) => (&*b, 0),
@@ -506,6 +505,7 @@ impl RecombinePayloadIncrementally for ReceiveLeUSignalRecombineBuilder {
 pub enum ConvertSignalError {
     ReceivedSignalTooLong,
     IncompleteSignal,
+    InvalidDataLengthField,
     InvalidFormat(SignalCode, crate::signals::SignalError),
 }
 
@@ -516,6 +516,7 @@ impl core::fmt::Display for ConvertSignalError {
         match self {
             ConvertSignalError::ReceivedSignalTooLong => f.write_str(", more bytes received than expected"),
             ConvertSignalError::IncompleteSignal => f.write_str(", signal is incomplete"),
+            ConvertSignalError::InvalidDataLengthField => f.write_str(", the 'data length' field is incorrect"),
             ConvertSignalError::InvalidFormat(code, err) => write!(f, ", invalid format for signal {code}: {err}"),
         }
     }
@@ -524,20 +525,22 @@ impl core::fmt::Display for ConvertSignalError {
 #[derive(Debug)]
 pub struct UnknownSignal {
     header: LinearBuffer<4, u8>,
-    expected_len: usize,
-    extra_bytes_received: usize,
+    payload_length: usize,
+    data_length_field: usize,
+    received_bytes_ignored: usize,
 }
 
 impl UnknownSignal {
-    fn new(code: u8) -> Self {
+    fn new(code: u8, payload_length: usize) -> Self {
         let header = [code].into();
-        let expected_len = 0;
-        let extra_bytes_received = 0;
+        let data_length_field = 0;
+        let received_bytes_ignored = 0;
 
         Self {
             header,
-            expected_len,
-            extra_bytes_received,
+            payload_length,
+            data_length_field,
+            received_bytes_ignored,
         }
     }
 
@@ -554,14 +557,18 @@ impl UnknownSignal {
                 let expected_len =
                     <u16>::from_le_bytes([*self.header.get(2).unwrap(), *self.header.get(3).unwrap()]).into();
 
-                self.expected_len = expected_len;
+                self.data_length_field = expected_len;
+
+                if self.data_length_field + 4 != self.payload_length {
+                    return Err(ConvertSignalError::InvalidDataLengthField);
+                }
 
                 Ok(())
             }
             _ => {
-                self.extra_bytes_received += 1;
+                self.received_bytes_ignored += 1;
 
-                if self.extra_bytes_received > self.expected_len {
+                if self.received_bytes_ignored > self.data_length_field {
                     Err(ConvertSignalError::ReceivedSignalTooLong)
                 } else {
                     Ok(())
@@ -575,7 +582,7 @@ impl UnknownSignal {
     }
 
     fn is_complete(&self) -> bool {
-        self.header.len() == 4 && self.expected_len == self.extra_bytes_received
+        self.header.len() == 4 && self.data_length_field == self.received_bytes_ignored
     }
 }
 
@@ -1003,3 +1010,37 @@ impl core::fmt::Display for CreateLeCreditConnectionError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for CreateLeCreditConnectionError {}
+
+#[cfg(test)]
+mod tests {
+    use crate::signalling::{ConvertSignalError, UnknownSignal};
+
+    #[test]
+    fn unknown_signal_processor() {
+        let test_data: &[&[u8]] = &[&[0xf3, 0, 3, 0, 3, 4, 5], &[0x56, 9, 1, 0, 7]];
+
+        for test in test_data {
+            let mut unknown = UnknownSignal::new(test[0], test.len());
+
+            for byte in &test[1..] {
+                unknown.process(*byte).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_signal_processor_invalid_length_field() {
+        let test_data = &[0x99, 0, 20, 0, 1, 2, 3, 4, 5];
+
+        let mut unknown = UnknownSignal::new(test_data[0], test_data.len());
+
+        let err = test_data[1..]
+            .iter()
+            .try_for_each(|b| unknown.process(*b))
+            .expect_err("expected convert signal error");
+
+        let ConvertSignalError::InvalidDataLengthField = err else {
+            panic!("expected `ConvertSignalError::InvalidDataLengthField`")
+        };
+    }
+}
