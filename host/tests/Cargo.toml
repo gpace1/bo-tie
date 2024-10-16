@@ -9,14 +9,15 @@ bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 tokio = { version = "1", default-features = false }
 
 [dev-dependencies]
-paste = "1"
 bo-tie-host-util = { path = "../bo-tie-host-util" }
 bo-tie-core = { path = "../../bo-tie-core" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-gap = { path = "../bo-tie-gap" }
 bo-tie-att = { path = "../bo-tie-att", features = ["tokio"] }
 bo-tie-gatt = { path = "../bo-tie-gatt" }
-#bo-tie-sm = { path = "../bo-tie-sm" }
+bo-tie-sm = { path = "../bo-tie-sm" }
+rand = "0.8"
+paste = "1"
 tokio-test = { version = "0.4", default-features = false }
 
 [dev-dependencies.tokio]
@@ -81,6 +82,6 @@ path = "tests/l2cap/signals/le_credit_connection.rs"
 name = "l2cap_le_u_link"
 path = "tests/l2cap/le_u_link.rs"
 
-#[[test]]
-#name = "l2cap_multi_channel"
-#path = "tests/l2cap/multi_channel.rs"
+[[test]]
+name = "l2cap_multi_channel"
+path = "tests/l2cap/multi_channel.rs"

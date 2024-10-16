@@ -1,15 +1,19 @@
 //! Tests for multiple channels sending/receiving at the same time
 
-use bo_tie_host_tests::PhysicalLink;
-use bo_tie_l2cap::channel::signalling::ReceivedLeUSignal;
-use bo_tie_l2cap::pdu::L2capFragment;
-use bo_tie_l2cap::{BasicFrameChannel, CreditBasedChannel, LeULogicalLink, SignallingChannel};
-use futures::{SinkExt, StreamExt};
+use bo_tie_host_tests::PhysicalLinkLoop;
+use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
+use bo_tie_l2cap::pdu::{
+    BasicFrame, ControlFrame, CreditBasedSdu, FragmentIterator, FragmentL2capPdu, FragmentL2capSdu, L2capFragment,
+    SduPacketsIterator,
+};
+use bo_tie_l2cap::signalling::ReceivedLeUSignal;
+use bo_tie_l2cap::{CreditBasedChannelNext, LeULogicalLink, LeUNext, PhysicalLink};
+use std::cmp::{max, min};
 
-const TEST_MESSAGE_ATT: &'static str = "🐸📣 this is a test message sent to the ATT channel";
+const TEST_MESSAGE_ATT: &[u8] = b"this is a test message sent to the ATT channel";
 
-const TEST_MESSAGE_CREDIT_CHANNEL_1: &'static str = "
-🐮📣 this is a test message sent to the first credit based channel. It is purposely long as to 
+const TEST_MESSAGE_CREDIT_CHANNEL_1: &[u8] = b"
+this is a test message sent to the first credit based channel. It is purposely long as to 
 force the credit based channel to send this SDU over multiple credit based frames. This allows for
 mixing and matching of frames between different channels to properly test this .... bla bla bla ...
 
@@ -24,8 +28,8 @@ fictitium. Lucem ii operi edita leone porro novum ab. Hae quavis hic tam essent 
 tum. 
 ";
 
-const TEST_MESSAGE_CREDIT_CHANNEL_2: &'static str = "
-🐱‍🐉📣 this is a test message sent to the second credit based channel. It is purposely long as to 
+const TEST_MESSAGE_CREDIT_CHANNEL_2: &[u8] = b"
+this is a test message sent to the second credit based channel. It is purposely long as to 
 force the credit based channel to send this SDU over multiple credit based frames. This allows for
 mixing and matching of frames between different channels to properly test this .... bla bla bla ...
 
@@ -62,464 +66,288 @@ quos. In haec sola foco fore at ac ecce. Corpora ab angelos odoratu ei cognitu c
 ingens dum sic usu hocque dem.
 ";
 
-/// Inputs
-/// * phy_mtu must be greater than or equal to 4
-fn gen_att_fragments(msg: &str, phy_mtu: usize) -> Vec<L2capFragment<Vec<u8>>> {
-    let mut msg_byte_iter = msg.bytes().peekable();
+macro_rules! send_att_data {
+    ($data:expr, $end:expr) => {
+        async {
+            let data = BasicFrame::new($data, ::bo_tie_att::LE_U_FIXED_CHANNEL_ID);
 
-    let mut ret = vec![L2capFragment::new(
-        true,
-        [
-            (msg.as_bytes().len() as u16).to_le_bytes()[0],
-            (msg.as_bytes().len() as u16).to_le_bytes()[1],
-            4,
-            0,
-        ]
-        .into_iter()
-        .chain(msg_byte_iter.by_ref().take(phy_mtu - 4))
-        .collect(),
-    )];
+            let mut fragments = data.into_fragments($end.max_transmission_size().into()).unwrap();
 
-    while msg_byte_iter.peek().is_some() {
-        ret.push(L2capFragment::new(
-            false,
-            msg_byte_iter.by_ref().take(phy_mtu).collect(),
-        ))
-    }
+            let mut first = true;
 
-    ret
+            while let Some(fragment) = fragments.next() {
+                let l2cap_fragment = L2capFragment::new(first, fragment);
+
+                first = false;
+
+                $end.send(l2cap_fragment).await.unwrap();
+            }
+        }
+    };
 }
 
-/// Inputs
-/// * phy_mtu must be greater than or equal to 6
-fn gen_k_frame_fragments(
-    msg: &str,
-    phy_mtu: usize,
-    channel_id: u16,
-    channel_mtu: usize,
-    channel_mps: usize,
-) -> Vec<Vec<L2capFragment<Vec<u8>>>> {
-    assert!(
-        msg.as_bytes().len() <= channel_mtu,
-        "channel cannot send test message in single SDU"
-    );
+macro_rules! send_raw_signal {
+    ($raw_signal:expr, $end:expr) => {
+        async {
+            let data = ControlFrame::new($raw_signal, ::bo_tie_l2cap::signals::LE_U_SIGNAL_CHANNEL_ID);
 
-    let mut msg_byte_iter = msg.bytes().peekable();
+            let mut fragments = data.into_fragments($end.max_transmission_size().into()).unwrap();
 
-    let mut ret = Vec::new();
+            let mut first = true;
 
-    let mut sdu_iter = (msg.as_bytes().len() as u16).to_le_bytes().into_iter().fuse();
+            while let Some(fragment) = fragments.next() {
+                let l2cap_fragment = L2capFragment::new(first, fragment);
 
-    while msg_byte_iter.peek().is_some() {
-        let mut count = 0;
+                first = false;
 
-        let sdu_size = sdu_iter.len();
-
-        let len = std::cmp::min(msg_byte_iter.len(), channel_mps) as u16;
-
-        let mut pdu = vec![L2capFragment::new(
-            true,
-            [
-                len.to_le_bytes()[0],
-                len.to_le_bytes()[1],
-                channel_id.to_le_bytes()[0],
-                channel_id.to_le_bytes()[1],
-            ]
-            .into_iter()
-            .chain(sdu_iter.by_ref())
-            .chain(msg_byte_iter.by_ref().take(phy_mtu - 4 - sdu_size))
-            .collect::<Vec<u8>>(),
-        )];
-
-        count += pdu.first().unwrap().get_data().len() - 4;
-
-        while count < channel_mps && msg_byte_iter.peek().is_some() {
-            let how_many = std::cmp::min(phy_mtu, channel_mps - count);
-
-            count += how_many;
-
-            pdu.push(L2capFragment::new(
-                false,
-                msg_byte_iter.by_ref().take(how_many).collect(),
-            ));
+                $end.send(l2cap_fragment).await.unwrap();
+            }
         }
+    };
+}
 
-        ret.push(pdu);
-    }
+macro_rules! send_credit_frame {
+    ($k_frame:expr, $end:expr) => {
+        async {
+            let mut fragments = $k_frame.into_fragments($end.max_transmission_size().into()).unwrap();
 
-    ret
+            let mut first = true;
+
+            while let Some(fragment) = fragments.next() {
+                let l2cap_fragment = L2capFragment::new(first, fragment);
+
+                first = false;
+
+                $end.send(l2cap_fragment).await.unwrap();
+            }
+        }
+    };
+}
+macro_rules! send_sdu_no_credit_check {
+    ($sdu:expr, $channel_id:expr, $mps: expr, $end:expr, $pdu_count:expr) => {
+        async {
+            let sdu = CreditBasedSdu::new($sdu, $channel_id, $mps);
+
+            let mut packets = sdu.into_packets().unwrap();
+
+            let mut count: usize = $pdu_count;
+
+            loop {
+                if count == 0 {
+                    break;
+                }
+
+                let Some(packet) = packets.next() else { break };
+
+                count -= 1;
+
+                send_credit_frame!(packet, $end).await;
+            }
+
+            packets
+        }
+    };
+}
+
+macro_rules! recv_le_connect_response {
+    ($end:expr, $expected_credits:expr) => {
+        async {
+            let mut connect_response = Vec::with_capacity(18);
+
+            while connect_response.len() < 18 {
+                let fragment = $end.recv().await.unwrap().unwrap();
+
+                connect_response.extend(fragment.into_inner())
+            }
+
+            // check the code
+            assert_eq!(connect_response[4], 0x15);
+
+            // check the credits
+            assert_eq!(
+                <u16>::from_le_bytes([connect_response[14], connect_response[15]]),
+                $expected_credits
+            );
+
+            // check the response
+            assert_eq!(<u16>::from_le_bytes([connect_response[16], connect_response[17]]), 0);
+
+            LeULink::try_channel_from_raw(<u16>::from_le_bytes([connect_response[8], connect_response[9]])).unwrap()
+        }
+    };
 }
 
 /// Test for multiple channels receiving at the "same time"
 #[tokio::test]
 async fn le_multiple_receiving() {
-    let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            send_att_data!(TEST_MESSAGE_ATT.iter().copied(), end).await;
 
-    let task_handle = tokio::spawn(async move {
-        let mut signalling_channel = l_link.get_signalling_channel();
+            // connect request for first channel
+            send_raw_signal!([0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 0xFF, 0xFF, 23, 0, 0xFF, 0xFF], end).await;
 
-        let mut att_channel = l_link.get_att_channel();
+            let peer_cid_1 = recv_le_connect_response!(end, <u16>::MAX).await;
 
-        let mut credit_channel_1 = None;
+            // sending 4 fragments to the first channel
+            let mut c1_packets = send_sdu_no_credit_check!(
+                TEST_MESSAGE_CREDIT_CHANNEL_1.iter().copied(),
+                peer_cid_1,
+                23,
+                end,
+                4 // number of k-frames sent in macro expansion
+            )
+            .await;
 
-        let mut credit_channel_2 = None;
+            // connect request for second channel
+            send_raw_signal!([0x14, 1, 10, 0, 0x80, 0, 0x41, 0, 0xFF, 0xFF, 23, 0, 10, 0], end).await;
 
-        let mut buffer_1 = Vec::new();
+            let peer_cid_2 = recv_le_connect_response!(end, <u16>::MAX).await;
 
-        let mut buffer_2 = Vec::new();
+            // not sending any fragments this time
+            let mut c2_packets =
+                send_sdu_no_credit_check!(TEST_MESSAGE_CREDIT_CHANNEL_2.iter().copied(), peer_cid_2, 23, end, 0).await;
 
-        let mut checklist = (false, false, false, false, false);
+            let c1_remaining = c1_packets.get_remaining_count();
+            let c2_remaining = c2_packets.get_remaining_count();
 
-        while checklist != (true, true, true, true, true) {
-            tokio::select! {
-                credit_channel = multiple_sending_signal_channel(&mut signalling_channel) => {
-                    if credit_channel_1.is_none() {
-                        checklist.0 = true;
-                        credit_channel_1 = Some(credit_channel);
-                    } else if credit_channel_2.is_none() {
-                        checklist.1 = true;
-                        credit_channel_2 = Some(credit_channel)
-                    } else {
-                        panic!("too many credit channels")
-                    }
-                },
+            let top = min(c1_remaining, c2_remaining);
 
-                _ = multiple_sending_att_channel(&mut att_channel) => checklist.2 = true,
+            let bottom = max(c1_remaining, c2_remaining);
 
-                _ = multiple_sending_credit_based_channel_1(&mut buffer_1, &mut credit_channel_1) => checklist.3 = true,
+            let split_odds = 100 * top / bottom;
 
-                _ = multiple_sending_credit_based_channel_2(&mut buffer_2, &mut credit_channel_2) => checklist.4 = true,
-            }
-        }
-    });
-
-    // send the attribute test message
-    for fragment in gen_att_fragments(TEST_MESSAGE_ATT, 12) {
-        tx.send(fragment).await.expect("failed to send");
-    }
-
-    // connect request for first channel
-
-    tx.send(L2capFragment::new(true, vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0]))
-        .await
-        .expect("failed to send");
-
-    tx.send(L2capFragment::new(false, vec![0x40, 0, 0xFF, 0xFF, 23, 0, 0xFF, 0xFF]))
-        .await
-        .expect("failed to send");
-
-    rx.next().await.expect("channel closed");
-
-    rx.next().await.expect("channel closed");
-
-    // send *some* of the PDUs for the first channel
-    let mut k_frames_1 = gen_k_frame_fragments(TEST_MESSAGE_CREDIT_CHANNEL_1, 12, 0x40, 0xFFFF, 23);
-
-    for k_frame in k_frames_1.drain(..k_frames_1.len() / 2) {
-        for fragment in k_frame {
-            tx.send(fragment).await.expect("failed to send fragment");
-        }
-    }
-
-    // connect request for second channel
-
-    tx.send(L2capFragment::new(true, vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0]))
-        .await
-        .expect("failed to send");
-
-    tx.send(L2capFragment::new(false, vec![0x41, 0, 0xFF, 0xFF, 23, 0, 10, 0]))
-        .await
-        .expect("failed to send");
-
-    let k_frames_2 = gen_k_frame_fragments(TEST_MESSAGE_CREDIT_CHANNEL_2, 12, 0x41, 0xFFFF, 23);
-
-    let split_odds =
-        100 * std::cmp::min(k_frames_1.len(), k_frames_2.len()) / std::cmp::max(k_frames_1.len(), k_frames_2.len());
-
-    let mut k_frames_1_iter = k_frames_1.into_iter().peekable();
-    let mut k_frames_2_iter = k_frames_2.into_iter().peekable();
-
-    // randomly interspersing the PDUs of k_frames_1 and k_frames_2.
-    loop {
-        let frame = match (k_frames_1_iter.peek(), k_frames_2_iter.peek()) {
-            (None, None) => break,
-            (Some(_), None) => k_frames_1_iter.next().unwrap(),
-            (None, Some(_)) => k_frames_2_iter.next().unwrap(),
-            (Some(_), Some(_)) => {
-                if rand::random::<usize>() % 100 <= split_odds {
-                    k_frames_1_iter.next().unwrap()
+            loop {
+                let (next, or_next) = if rand::random::<usize>() % 100 <= split_odds {
+                    (&mut c1_packets, &mut c2_packets)
                 } else {
-                    k_frames_2_iter.next().unwrap()
+                    (&mut c2_packets, &mut c1_packets)
+                };
+
+                if let Some(next) = next.next() {
+                    send_credit_frame!(next, end).await;
+                } else if let Some(next) = or_next.next() {
+                    send_credit_frame!(next, end).await;
+                } else {
+                    break;
                 }
             }
-        };
 
-        for fragment in frame {
-            tx.send(fragment).await.expect("failed to send fragment");
-        }
-    }
+            assert!(c1_packets.next().is_none());
+            assert!(c2_packets.next().is_none());
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .use_vec_buffer()
+                .use_vec_sdu_buffer()
+                .enable_signalling_channel()
+                .enable_attribute_channel()
+                .build();
 
-    tokio::time::timeout(std::time::Duration::from_secs(5), task_handle)
-        .await
-        .expect("task timeout")
-        .expect("task failed");
-}
+            let mut cid_1 = None;
 
-async fn multiple_sending_signal_channel<'a>(
-    s: &mut SignallingChannel<'a, LeULogicalLink<PhysicalLink>>,
-) -> CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>> {
-    loop {
-        match s.receive().await.expect("failed to receive ") {
-            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
-                break request
-                    .accept_le_credit_based_connection(s.get_link(), 0xFFFF)
-                    .send_success_response(s)
-                    .await
-                    .expect("failed to send LE credit based response")
+            let mut cid_2 = None;
+
+            let mut checklist = [false; 5];
+
+            while checklist != [true; 5] {
+                println!("checklist: {:?}", checklist);
+                match &mut link.next().await.unwrap() {
+                    LeUNext::SignallingChannel { signal, channel } => match signal {
+                        ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
+                            let channel = request
+                                .accept_le_credit_based_connection(channel)
+                                .initially_given_credits(<u16>::MAX)
+                                .send_success_response()
+                                .await
+                                .unwrap();
+
+                            if cid_1.is_none() {
+                                checklist[0] = true;
+
+                                cid_1 = channel.get_channel_id().into()
+                            } else if cid_2.is_none() {
+                                checklist[1] = true;
+
+                                cid_2 = channel.get_channel_id().into()
+                            }
+                        }
+                        _ => panic!("recieved unexpected signal {signal:?}"),
+                    },
+                    LeUNext::AttributeChannel { pdu, .. } => {
+                        checklist[2] = true;
+
+                        assert_eq!(pdu.get_payload(), TEST_MESSAGE_ATT);
+                    }
+                    LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu { sdu, channel, .. }) => {
+                        if Some(channel.get_channel_id()) == cid_1 {
+                            checklist[3] = true;
+
+                            assert_eq!(sdu, TEST_MESSAGE_CREDIT_CHANNEL_1);
+                        }
+
+                        if Some(channel.get_channel_id()) == cid_2 {
+                            checklist[4] = true;
+
+                            assert_eq!(sdu, TEST_MESSAGE_CREDIT_CHANNEL_2);
+                        }
+                    }
+                    next => panic!("received unexpected: {next:?}"),
+                }
             }
-            signal => panic!("unexpected signal: {signal:?}"),
-        }
-    }
-}
-
-async fn multiple_sending_att_channel<'a>(b: &mut BasicFrameChannel<'a, LeULogicalLink<PhysicalLink>>) {
-    let data = b.receive(&mut Vec::new()).await.expect("failed to receive");
-
-    let received_message = std::str::from_utf8(data.get_payload()).expect("invalid utf8 received");
-
-    assert_eq!(received_message, TEST_MESSAGE_ATT);
-}
-
-async fn multiple_sending_credit_based_channel_1<'a>(
-    b: &mut Vec<u8>,
-    k: &mut Option<CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>>>,
-) {
-    if let Some(channel) = k {
-        let data = channel
-            .receive(b, false)
-            .await
-            .expect("failed to receive")
-            .expect("SDU");
-
-        let received_message = std::str::from_utf8(&data).expect("invalid utf8 received");
-
-        assert_eq!(received_message, TEST_MESSAGE_CREDIT_CHANNEL_1)
-    } else {
-        std::future::pending().await
-    }
-}
-
-async fn multiple_sending_credit_based_channel_2<'a>(
-    b: &mut Vec<u8>,
-    k: &mut Option<CreditBasedChannel<'a, LeULogicalLink<PhysicalLink>>>,
-) {
-    if let Some(channel) = k {
-        let data = channel
-            .receive(b, false)
-            .await
-            .expect("failed to receive")
-            .expect("SDU");
-
-        let received_message = std::str::from_utf8(&data).expect("invalid utf8 received");
-
-        assert_eq!(received_message, TEST_MESSAGE_CREDIT_CHANNEL_2)
-    } else {
-        std::future::pending().await
-    }
-}
-
-/// Test for when L2CAP PDUs are receiving for channels that were not created at the time of
-/// receiving the PDU.
-#[tokio::test]
-async fn le_unused_channel_receive() {
-    let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
-
-    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
-
-    let task_barrier = barrier.clone();
-
-    let task_handle = tokio::spawn(async move {
-        let mut signalling_channel = l_link.get_signalling_channel();
-
-        for _ in 0..3 {
-            task_barrier.wait().await;
-
-            if let Some(r) = futures::future::poll_immediate(signalling_channel.receive()).await {
-                panic!("unexpectedly received output for signalling channel: {r:?}")
-            }
-        }
-
-        drop(signalling_channel);
-
-        task_barrier.wait().await;
-        task_barrier.wait().await;
-
-        let mut attribute_channel = l_link.get_att_channel();
-
-        if let Some(r) = futures::future::poll_immediate(attribute_channel.receive(&mut Vec::new())).await {
-            panic!("unexpectedly received output for ATT channel: {r:?}")
-        }
-    });
-
-    // send a PDU for a dynamic channel
-    tx.send(L2capFragment::new(true, vec![5, 0, 0x40, 0, 1, 2, 3, 4, 5]))
-        .await
-        .expect("failed to send");
-
-    barrier.wait().await;
-
-    // this should not output as no response
-    // is the expected operation
-    if let Some(r) = futures::future::poll_immediate(rx.next()).await {
-        panic!("unexpectedly received from link: {r:?}")
-    }
-
-    // send a PDU for the attribute protocol (ATT) fixed channel
-    tx.send(L2capFragment::new(true, vec![3, 0, 4, 0, 2, 3, 4]))
-        .await
-        .expect("failed to send");
-
-    barrier.wait().await;
-
-    let received = rx.next().await.expect("receiver closed");
-
-    // the expected returned data is the ATT PDU
-    // `ATT_ERROR_RSP` with the error code as
-    // `request not supported`
-    assert_eq!(received.get_data().as_slice(), &[5, 0, 4, 0, 0x1, 0x2, 0, 0, 0x6]);
-
-    // send a PDU for the security manager channel
-    // (FYI: the payload of the PDU is gibberish to the SM protocol)
-    tx.send(L2capFragment::new(true, vec![4, 0, 6, 0, 1, 2, 3, 4]))
-        .await
-        .expect("failed to send");
-
-    barrier.wait().await;
-
-    let received = rx.next().await.expect("receiver closed");
-
-    // the expected returned data is the SM PDU 'pairing
-    // failed' with the reason field set as pairing not
-    // supported.
-    assert_eq!(received.get_data().as_slice(), &[2, 0, 6, 0, 0x5, 0x5]);
-
-    // wait for the signalling channel to be dropped
-    barrier.wait().await;
-
-    // send a PDU for the signalling channel
-    tx.send(L2capFragment::new(
-        true,
-        vec![8, 0, 5, 0, 0x2, 1, 4, 0, 0x00, 0x10, 0x40, 0x00],
-    ))
-    .await
-    .expect("failed to send");
-
-    barrier.wait().await;
-
-    let received = rx.next().await.expect("receiver closed");
-
-    assert_eq!(received.get_data().as_slice(), &[6, 0, 5, 0, 0x1, 1, 2, 0, 0, 0]);
-
-    task_handle.await.expect("test task failed");
+        })
+        .run()
+        .await;
 }
 
 /// Test for a channel dropped in the middle of receiving a L2CAP PDU
 #[tokio::test]
 async fn le_channel_dropped_while_receiving() {
-    let (l_link, mut tx, mut rx) = bo_tie_host_tests::create_le_false_link(12);
+    let barrier = &tokio::sync::Barrier::new(2);
 
-    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
-    let task_barrier = barrier.clone();
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            let fragment = L2capFragment::new(true, [23, 0, 4, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-    let (exit_sender, mut exit_receiver) = tokio::sync::oneshot::channel();
+            end.send(fragment).await.unwrap();
 
-    let task_handle = tokio::spawn(async move {
-        let mut signalling_channel = l_link.get_signalling_channel();
-        let mut att_channel = l_link.get_att_channel();
+            barrier.wait().await;
 
-        task_barrier.wait().await;
+            let fragment = L2capFragment::new(false, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
 
-        if let Some(_) = futures::future::poll_immediate(att_channel.receive(&mut Vec::new())).await {
-            panic!("unexpected PDU received by ATT channel")
-        }
+            end.send(fragment).await.unwrap();
 
-        task_barrier.wait().await;
+            let fragment = L2capFragment::new(false, [23]);
 
-        drop(att_channel);
+            end.send(fragment).await.unwrap();
 
-        loop {
-            tokio::select! {
-                _ = &mut exit_receiver => break,
-                request = signalling_channel.receive() => match request.expect("receive failed") {
-                    ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
-                        request.accept_le_credit_based_connection(&l_link, 0)
-                            .send_success_response(&mut signalling_channel)
-                            .await
-                            .expect("failed to send response");
-                    }
-                    s => panic!("unexpected signal received ({s:?})")
-                },
+            // sending a bad signal
+            let fragment = L2capFragment::new(true, [3, 0, 5, 0, 0, 2, 4]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .use_vec_buffer()
+                .build();
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match next.unwrap() {
+                        LeUNext::AttributeChannel { .. } => panic!("received on ATT channel"),
+                        LeUNext::SignallingChannel { signal, ..} => match signal {
+                            ReceivedLeUSignal::UnknownSignal { code, ..} => if code == 0xA { break }
+                            _ => panic!("receive unexpected signal {signal:?}")
+                        },
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = barrier.wait() => link.disable_att_channel(),
+                }
             }
-        }
-    });
-
-    tx.send(L2capFragment::new(true, vec![0xFF, 0, 0x4, 0, 1, 2, 3, 4, 5, 6, 7, 8]))
-        .await
-        .expect("failed to send");
-
-    barrier.wait().await;
-
-    barrier.wait().await;
-
-    for _ in 0..((0xFF - 8) / 12) {
-        tx.send(L2capFragment::new(false, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]))
-            .await
-            .expect("failed to send");
-    }
-
-    tx.send(L2capFragment::new(
-        false,
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12][..(0xFF - 8) % 12].to_vec(),
-    ))
-    .await
-    .expect("failed to send");
-
-    // the receiver is expected to be empty, no response
-    // is made if the att channel is dropped in the middle
-    // of receiving a L2CAP PDU.
-    tokio::time::timeout(std::time::Duration::from_millis(10), rx.next())
-        .await
-        .expect_err("expected timeout");
-
-    // verify the link is still working by creating
-    // a LE credit based connection
-
-    tx.send(L2capFragment::new(
-        true,
-        vec![14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0],
-    ))
-    .await
-    .expect("failed to send");
-
-    tx.send(L2capFragment::new(false, vec![23, 0, 23, 0, 0, 0]))
-        .await
-        .expect("failed to send");
-
-    let fragment_1 = rx.next().await.expect("failed to receive");
-
-    assert_eq!(
-        fragment_1.get_data().as_slice(),
-        &[14, 0, 5, 0, 0x15, 1, 10, 0, 0x40, 0, 23, 0]
-    );
-
-    let fragment_2 = rx.next().await.expect("failed to receive");
-
-    assert_eq!(fragment_2.get_data().as_slice(), &[23, 0, 0, 0, 0, 0]);
-
-    exit_sender.send(()).expect("failed to send");
-
-    tokio::time::timeout(std::time::Duration::from_secs(3), task_handle)
-        .await
-        .expect("timeout")
-        .expect("test task failed");
+        })
+        .run()
+        .await;
 }

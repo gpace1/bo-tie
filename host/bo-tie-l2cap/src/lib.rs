@@ -445,11 +445,10 @@ impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
 
         let pdu_buffer = B::default();
 
-        let defragmentation_data = LeDefragmentationData::new();
+        let defragmentation_data = LeDefragmentationData::new(pdu_buffer);
 
         LeULogicalLink {
             physical_link,
-            pdu_buffer,
             channels,
             unused_responses,
             defragmentation_data,
@@ -468,10 +467,9 @@ impl<P, B, S> LeULogicalLinkBuilder<P, B, S> {
 #[derive(Debug)]
 pub struct LeULogicalLink<P, B, S> {
     physical_link: P,
-    pdu_buffer: B,
     channels: alloc::vec::Vec<LeUChannelType<S>>,
     unused_responses: bool,
-    defragmentation_data: LeDefragmentationData,
+    defragmentation_data: LeDefragmentationData<B>,
 }
 
 /// The number of channels that have a defined channel for a LE-U link within the Bluetooth Spec.
@@ -516,8 +514,12 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     }
 
     /// Disable the Attribute protocol channel
-    pub fn disable_att_channel(&mut self) {
-        self.channels[LE_LINK_ATT_CHANNEL_INDEX] = LeUChannelType::Unused
+    pub fn disable_att_channel(&mut self)
+    where
+        B: IntoIterator<Item = u8> + Default,
+        B::IntoIter: ExactSizeIterator,
+    {
+        self.disable_fixed_channel(LE_LINK_ATT_CHANNEL_INDEX)
     }
 
     /// Get the Attribute Channel
@@ -546,8 +548,12 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     }
 
     /// Disable the signalling channel
-    pub fn disable_signalling_channel(&mut self) {
-        self.channels[LE_LINK_SIGNALLING_CHANNEL_INDEX] = LeUChannelType::Unused
+    pub fn disable_signalling_channel(&mut self)
+    where
+        B: IntoIterator<Item = u8> + Default,
+        B::IntoIter: ExactSizeIterator,
+    {
+        self.disable_fixed_channel(LE_LINK_SIGNALLING_CHANNEL_INDEX)
     }
 
     /// Get the Signalling Channel
@@ -576,8 +582,12 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     }
 
     /// Disable the Security Manager channel
-    pub fn disable_security_manager_channel(&mut self) {
-        self.channels[LE_LINK_SM_CHANNEL_INDEX] = LeUChannelType::Unused
+    pub fn disable_security_manager_channel(&mut self)
+    where
+        B: IntoIterator<Item = u8> + Default,
+        B::IntoIter: ExactSizeIterator,
+    {
+        self.disable_fixed_channel(LE_LINK_SM_CHANNEL_INDEX)
     }
 
     /// Get the Security Manager Channel
@@ -662,6 +672,47 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
 
     fn convert_dyn_index(&self, dyn_channel_id: DynChannelId<LeULink>) -> usize {
         3 + (dyn_channel_id.get_val() - *DynChannelId::<LeULink>::LE_BOUNDS.start()) as usize
+    }
+
+    /// Disable a fixed channel
+    ///
+    /// # Panic
+    /// `index` must be valid
+    fn disable_fixed_channel(&mut self, index: usize)
+    where
+        B: IntoIterator<Item = u8> + Default,
+        B::IntoIter: ExactSizeIterator,
+    {
+        // if this channel is currently receiving a PDU, convert
+        // the recombiner to either unused or dumped.
+        if Some(index) == self.defragmentation_data.index {
+            self.defragmentation_data.recombiner = self.defragmentation_data.recombiner.take().map(|r| match index {
+                LE_LINK_ATT_CHANNEL_INDEX => r.into_unused_basic_channel(
+                    ChannelIdentifier::Le(LeCid::AttributeProtocol),
+                    core::mem::take(&mut self.defragmentation_data.pdu_buffer),
+                ),
+                LE_LINK_SIGNALLING_CHANNEL_INDEX => r.into_unused_signalling_channel(),
+                LE_LINK_SM_CHANNEL_INDEX => r.into_unused_basic_channel(
+                    ChannelIdentifier::Le(LeCid::SecurityManagerProtocol),
+                    core::mem::take(&mut self.defragmentation_data.pdu_buffer),
+                ),
+                _ => r.into_dumped(),
+            })
+        }
+
+        self.channels[index] = LeUChannelType::Unused
+    }
+
+    /// Disable a dynamic channel
+    ///
+    /// # Panic
+    /// `index` must be valid
+    fn disable_dyn_channel(&mut self, index: usize) {
+        if Some(index) == self.defragmentation_data.index {
+            self.defragmentation_data.recombiner = self.defragmentation_data.recombiner.take().map(|r| r.into_dumped());
+        }
+
+        self.channels[index] = LeUChannelType::Unused
     }
 
     /// Receive the next event from the LE-U logical link
@@ -764,7 +815,7 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                 LeUChannelType::CreditBasedChannel { data } => CurrentMeta::CreditBasedFrame(data.get_meta()),
             };
 
-            match recombiner.add(&mut fragment.data, &mut self.pdu_buffer, meta) {
+            match recombiner.add(&mut fragment.data, &mut self.defragmentation_data.pdu_buffer, meta) {
                 Err(e) => {
                     break match e {
                         PduRecombineAddError::AlreadyFinished => {
@@ -910,21 +961,23 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
 }
 
 #[derive(Debug)]
-struct LeDefragmentationData {
+struct LeDefragmentationData<B> {
+    pdu_buffer: B,
     basic_header_processor: channel::BasicHeaderProcessor,
     expect_first_fragment: bool,
     index: Option<usize>,
     recombiner: Option<LeUPduRecombine>,
 }
 
-impl LeDefragmentationData {
-    fn new() -> Self {
+impl<B> LeDefragmentationData<B> {
+    fn new(pdu_buffer: B) -> Self {
         let basic_header_processor = channel::BasicHeaderProcessor::new();
         let expect_first_fragment = true;
         let index = None;
         let recombiner = None;
 
         LeDefragmentationData {
+            pdu_buffer,
             basic_header_processor,
             expect_first_fragment,
             index,
@@ -932,8 +985,11 @@ impl LeDefragmentationData {
         }
     }
 
-    fn reset(&mut self) {
-        *self = Self::new();
+    fn reset(&mut self)
+    where
+        B: Default,
+    {
+        *self = Self::new(core::mem::take(&mut self.pdu_buffer));
     }
 }
 

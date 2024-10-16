@@ -329,12 +329,12 @@ impl RecombineL2capPdu for ReceivedLeUSignal {
     type PayloadRecombiner<'a> = ReceiveLeUSignalRecombineBuilder;
 
     fn recombine<'a>(
-        _: u16,
+        payload_length: u16,
         _: ChannelIdentifier,
         _: Self::RecombineBuffer<'a>,
         _: Self::RecombineMeta<'a>,
     ) -> Self::PayloadRecombiner<'a> {
-        ReceiveLeUSignalRecombineBuilder::default()
+        ReceiveLeUSignalRecombineBuilder::new(payload_length.into())
     }
 }
 
@@ -360,33 +360,59 @@ pub enum ReceiveLeUSignalRecombineBuilderState {
     FlowControlCreditIndication(LinearBuffer<8, u8>),
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct ReceiveLeUSignalRecombineBuilder {
+    payload_length: usize,
     state: ReceiveLeUSignalRecombineBuilderState,
 }
 
 impl ReceiveLeUSignalRecombineBuilder {
-    fn first_byte(&mut self, first: u8) {
+    fn new(payload_length: usize) -> Self {
+        let state = ReceiveLeUSignalRecombineBuilderState::default();
+
+        ReceiveLeUSignalRecombineBuilder { payload_length, state }
+    }
+
+    pub(crate) fn get_payload_length(&self) -> usize {
+        self.payload_length
+    }
+
+    pub(crate) fn get_byte_count(&self) -> usize {
+        match &self.state {
+            ReceiveLeUSignalRecombineBuilderState::Init => 0,
+            ReceiveLeUSignalRecombineBuilderState::Unknown(u) => u.extra_bytes_received,
+            ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp(l) => l.len(),
+            ReceiveLeUSignalRecombineBuilderState::DisconnectRequest(l) => l.len(),
+            ReceiveLeUSignalRecombineBuilderState::DisconnectResponse(l) => l.len(),
+            ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionRequest(l) => l.len(),
+            ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionResponse(l) => l.len(),
+            ReceiveLeUSignalRecombineBuilderState::FlowControlCreditIndication(l) => l.len(),
+        }
+    }
+
+    fn first_byte(&mut self, first: u8) -> Result<(), ConvertSignalError> {
         match SignalCode::try_from_code(first) {
             Ok(SignalCode::CommandRejectResponse) => {
-                self.state = ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp([first].into())
+                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp([first].into()))
             }
             Ok(SignalCode::DisconnectionRequest) => {
-                self.state = ReceiveLeUSignalRecombineBuilderState::DisconnectRequest([first].into())
+                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::DisconnectRequest([first].into()))
             }
             Ok(SignalCode::DisconnectionResponse) => {
-                self.state = ReceiveLeUSignalRecombineBuilderState::DisconnectResponse([first].into())
+                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::DisconnectResponse([first].into()))
             }
             Ok(SignalCode::LeCreditBasedConnectionRequest) => {
-                self.state = ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionRequest([first].into())
+                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionRequest([first].into()))
             }
             Ok(SignalCode::LeCreditBasedConnectionResponse) => {
-                self.state = ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionResponse([first].into())
+                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionResponse([first].into()))
             }
             Ok(SignalCode::FlowControlCreditIndication) => {
-                self.state = ReceiveLeUSignalRecombineBuilderState::FlowControlCreditIndication([first].into())
+                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::FlowControlCreditIndication([first].into()))
             }
-            Err(_) | Ok(_) => self.state = ReceiveLeUSignalRecombineBuilderState::Unknown(UnknownSignal::new(first)),
+            Err(_) | Ok(_) => {
+                Ok(self.state = ReceiveLeUSignalRecombineBuilderState::Unknown(UnknownSignal::new(first)))
+            }
         }
     }
 
@@ -414,6 +440,24 @@ impl ReceiveLeUSignalRecombineBuilder {
 
         buffer.len() >= data_size + SIGNAL_HEADER_SIZE
     }
+
+    /// Get the received bytes
+    ///
+    /// This returns the received bytes and an option extension of the number of extra bytes that
+    /// were relegated. e.g. if ten bytes were received, but only the first two were important, then
+    /// a slice of two bytes is returned along with `Some(8)`.
+    pub(crate) fn get_bytes_received(&self) -> (&[u8], usize) {
+        match &self.state {
+            ReceiveLeUSignalRecombineBuilderState::Init => (&[], 0),
+            ReceiveLeUSignalRecombineBuilderState::Unknown(b) => (&*b.header, b.extra_bytes_received),
+            ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp(b) => (&*b, 0),
+            ReceiveLeUSignalRecombineBuilderState::DisconnectRequest(b) => (&*b, 0),
+            ReceiveLeUSignalRecombineBuilderState::DisconnectResponse(b) => (&*b, 0),
+            ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionRequest(b) => (&*b, 0),
+            ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionResponse(b) => (&*b, 0),
+            ReceiveLeUSignalRecombineBuilderState::FlowControlCreditIndication(b) => (&*b, 0),
+        }
+    }
 }
 
 impl RecombinePayloadIncrementally for ReceiveLeUSignalRecombineBuilder {
@@ -428,7 +472,7 @@ impl RecombinePayloadIncrementally for ReceiveLeUSignalRecombineBuilder {
     {
         for byte in payload_fragment {
             match &mut self.state {
-                ReceiveLeUSignalRecombineBuilderState::Init => self.first_byte(byte),
+                ReceiveLeUSignalRecombineBuilderState::Init => self.first_byte(byte)?,
                 ReceiveLeUSignalRecombineBuilderState::Unknown(unknown) => unknown.process(byte)?,
                 ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp(buffer) => buffer
                     .try_push(byte)
@@ -481,19 +525,19 @@ impl core::fmt::Display for ConvertSignalError {
 pub struct UnknownSignal {
     header: LinearBuffer<4, u8>,
     expected_len: usize,
-    bytes_received: usize,
+    extra_bytes_received: usize,
 }
 
 impl UnknownSignal {
     fn new(code: u8) -> Self {
         let header = [code].into();
         let expected_len = 0;
-        let bytes_received = 0;
+        let extra_bytes_received = 0;
 
         Self {
             header,
             expected_len,
-            bytes_received,
+            extra_bytes_received,
         }
     }
 
@@ -515,9 +559,9 @@ impl UnknownSignal {
                 Ok(())
             }
             _ => {
-                self.bytes_received += 1;
+                self.extra_bytes_received += 1;
 
-                if self.bytes_received > self.expected_len {
+                if self.extra_bytes_received > self.expected_len {
                     Err(ConvertSignalError::ReceivedSignalTooLong)
                 } else {
                     Ok(())
@@ -531,7 +575,7 @@ impl UnknownSignal {
     }
 
     fn is_complete(&self) -> bool {
-        self.header.len() == 4 && self.expected_len == self.bytes_received
+        self.header.len() == 4 && self.expected_len == self.extra_bytes_received
     }
 }
 

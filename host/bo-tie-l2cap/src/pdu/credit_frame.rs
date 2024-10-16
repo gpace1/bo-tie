@@ -716,6 +716,14 @@ impl CreditBasedFrameRecombinerIntoRef {
 
         CreditBasedFrameRecombinerIntoRef { state }
     }
+
+    pub(crate) fn get_payload_length(&self) -> usize {
+        self.state.payload_len
+    }
+
+    pub(crate) fn get_byte_count(&self) -> usize {
+        self.state.byte_count
+    }
 }
 
 impl<P> RecombinePayloadIncrementallyIntoRef<P, RecombineMeta> for CreditBasedFrameRecombinerIntoRef

@@ -9,6 +9,7 @@ mod unused;
 
 use crate::channel::id::{ChannelIdentifier, LeCid};
 use crate::channel::signalling::ReceivedLeUSignal;
+use crate::channel::unused::LeUUnusedChannelResponseRecombiner;
 use crate::link_flavor::LinkFlavor;
 use crate::pdu::basic_frame::BasicFrameRecombinerIntoRef;
 use crate::pdu::credit_frame::{self, CreditBasedFrame, CreditBasedFrameRecombinerIntoRef};
@@ -283,7 +284,7 @@ pub(crate) enum LeUPduRecombine {
 
 impl LeUPduRecombine {
     /// Create a `LeUPduRecombine` for dumping data
-    pub fn new_dumped(basic_header: &BasicHeader) -> Self {
+    pub(crate) fn new_dumped(basic_header: &BasicHeader) -> Self {
         let pdu_len = basic_header.length.into();
         let received_so_far = 0;
 
@@ -293,8 +294,92 @@ impl LeUPduRecombine {
         }
     }
 
+    /// Convert the recombiner into a dumped recombiner
+    pub(crate) fn into_dumped(self) -> Self {
+        let (pdu_len, received_so_far) = match self {
+            Self::Dump {
+                pdu_len,
+                received_so_far,
+            } => (pdu_len, received_so_far),
+            Self::Unused(r) => (r.get_payload_length(), r.get_bytes_received()),
+            Self::BasicChannel(r) => (r.get_payload_length(), r.get_byte_count()),
+            Self::SignallingChannel(r) => (r.get_payload_length(), r.get_byte_count()),
+            Self::CreditBasedChannel(r) => (r.get_payload_length(), r.get_byte_count()),
+            Self::Finished => (0, 0),
+        };
+
+        Self::Dump {
+            pdu_len,
+            received_so_far,
+        }
+    }
+
+    /// Convert the recombiner into a dumped recombiner
+    ///
+    /// # Panic
+    /// The channel ID must be valid for an unused recombiner
+    pub(crate) fn into_unused_basic_channel<T>(self, channel_identifier: ChannelIdentifier, received_so_far: T) -> Self
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        match self {
+            Self::Unused(r) => Self::Unused(r),
+            Self::BasicChannel(r) => match channel_identifier {
+                ChannelIdentifier::Le(LeCid::AttributeProtocol) => Self::Unused(
+                    LeUUnusedChannelResponseRecombiner::converted_attribute(r.get_payload_length(), received_so_far),
+                ),
+                ChannelIdentifier::Le(LeCid::SecurityManagerProtocol) => Self::Unused(
+                    LeUUnusedChannelResponseRecombiner::converted_sm(r.get_payload_length(), received_so_far),
+                ),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn into_unused_signalling_channel(self) -> Self {
+        struct BytesReceivedIter<'a>(core::iter::Fuse<core::slice::Iter<'a, u8>>, usize);
+
+        impl Iterator for BytesReceivedIter<'_> {
+            type Item = u8;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if let Some(byte) = self.0.next() {
+                    Some(*byte)
+                } else if self.1 > 0 {
+                    self.1 -= 1;
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (self.0.len() + self.1, Some(self.0.len() + self.1))
+            }
+        }
+
+        impl ExactSizeIterator for BytesReceivedIter<'_> {
+            fn len(&self) -> usize {
+                self.0.len() + self.1
+            }
+        }
+
+        let Self::SignallingChannel(s) = self else {
+            unreachable!()
+        };
+
+        let (data, any_more) = s.get_bytes_received();
+
+        Self::Unused(LeUUnusedChannelResponseRecombiner::converted_signal(
+            s.get_payload_length(),
+            BytesReceivedIter(data.iter().fuse(), any_more),
+        ))
+    }
+
     /// create a `LeUPduRecombine` for an unused channel
-    pub fn new_unused(basic_header: &BasicHeader) -> Self {
+    pub(crate) fn new_unused(basic_header: &BasicHeader) -> Self {
         let recombine =
             unused::LeUUnusedChannelResponse::recombine(basic_header.length, basic_header.channel_id, (), ());
 

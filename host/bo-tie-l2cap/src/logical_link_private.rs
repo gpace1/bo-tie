@@ -288,7 +288,7 @@ impl<P: PhysicalLink, B: Default, S> LogicalLinkPrivate for LeULogicalLinkHandle
             if let LeUChannelType::Unused = self.logical_link.channels[index] {
                 false
             } else {
-                self.logical_link.channels[index] = LeUChannelType::Unused;
+                self.logical_link.disable_dyn_channel(index);
 
                 true
             }

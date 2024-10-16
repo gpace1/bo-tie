@@ -356,6 +356,14 @@ impl BasicFrameRecombinerIntoRef {
             byte_count,
         }
     }
+
+    pub(crate) fn get_payload_length(&self) -> usize {
+        self.payload_len
+    }
+
+    pub(crate) fn get_byte_count(&self) -> usize {
+        self.byte_count
+    }
 }
 
 impl<B> crate::pdu::RecombinePayloadIncrementallyIntoRef<B, ()> for BasicFrameRecombinerIntoRef {

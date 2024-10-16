@@ -60,6 +60,7 @@ impl Iterator for LeUUnusedChannelResponseDataIter<'_> {
 }
 
 /// A recombine error
+#[derive(Debug)]
 pub(crate) struct UnusedRecombineError;
 
 impl RecombineL2capPdu for LeUUnusedChannelResponse {
@@ -97,6 +98,14 @@ pub(crate) struct LeUUnusedChannelResponseRecombiner {
 }
 
 impl LeUUnusedChannelResponseRecombiner {
+    pub(crate) fn get_payload_length(&self) -> usize {
+        self.length
+    }
+
+    pub(crate) fn get_bytes_received(&self) -> usize {
+        self.bytes_received
+    }
+
     fn new_attribute(length: usize) -> Self {
         let bytes_received = 0;
         let request_code = None;
@@ -106,6 +115,36 @@ impl LeUUnusedChannelResponseRecombiner {
             request_code,
             handle_state,
         });
+
+        LeUUnusedChannelResponseRecombiner {
+            length,
+            bytes_received,
+            builder,
+        }
+    }
+
+    pub(crate) fn converted_attribute<T>(payload_length: usize, received_bytes: T) -> Self
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let length = payload_length;
+        let mut bytes_received = 0;
+        let request_code = None;
+        let handle_state = AttributeHandelState::None;
+
+        let mut att_builder = AttributeChannelUnusedResponseBuilder {
+            request_code,
+            handle_state,
+        };
+
+        // this should never error no return a response
+        assert!(att_builder
+            .process(received_bytes.into_iter(), length, &mut bytes_received)
+            .unwrap()
+            .is_none());
+
+        let builder = LeUUnusedChannelResponseBuilderType::Attribute(att_builder);
 
         LeUUnusedChannelResponseRecombiner {
             length,
@@ -129,10 +168,62 @@ impl LeUUnusedChannelResponseRecombiner {
         }
     }
 
+    pub(crate) fn converted_signal<T>(payload_length: usize, received_bytes: T) -> Self
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let length = payload_length;
+        let mut bytes_received = 0;
+
+        let mut sig_builder = SignallingChannelUnusedResponseBuilder {
+            command_identifier: None,
+        };
+
+        // this should never error no return a response
+        assert!(sig_builder
+            .process(received_bytes.into_iter(), length, &mut bytes_received)
+            .unwrap()
+            .is_none());
+
+        let builder = LeUUnusedChannelResponseBuilderType::Signalling(sig_builder);
+
+        LeUUnusedChannelResponseRecombiner {
+            length,
+            bytes_received,
+            builder,
+        }
+    }
+
     fn new_security_manager(length: usize) -> Self {
         let bytes_received = 0;
 
         let builder = LeUUnusedChannelResponseBuilderType::SecurityManager(SecurityManagerChannelUnusedResponseBuilder);
+
+        LeUUnusedChannelResponseRecombiner {
+            length,
+            bytes_received,
+            builder,
+        }
+    }
+
+    pub(crate) fn converted_sm<T>(payload_length: usize, received_bytes: T) -> Self
+    where
+        T: IntoIterator<Item = u8>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        let length = payload_length;
+        let mut bytes_received = 0;
+
+        let mut sm_builder = SecurityManagerChannelUnusedResponseBuilder;
+
+        // this should never error no return a response
+        assert!(sm_builder
+            .process(received_bytes.into_iter(), length, &mut bytes_received)
+            .unwrap()
+            .is_none());
+
+        let builder = LeUUnusedChannelResponseBuilderType::SecurityManager(sm_builder);
 
         LeUUnusedChannelResponseRecombiner {
             length,
