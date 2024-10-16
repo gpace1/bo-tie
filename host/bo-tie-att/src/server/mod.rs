@@ -1355,9 +1355,9 @@ where
         T: LogicalLink,
     {
         if payload.len() >= 6 {
-            let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4]).unwrap();
+            let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4])?;
 
-            let att_type: crate::Uuid = TransferFormatTryFrom::try_from(&payload[4..6]).unwrap();
+            let att_type: crate::Uuid = TransferFormatTryFrom::try_from(&payload[4..6])?;
 
             log::info!(
                 "(ATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
