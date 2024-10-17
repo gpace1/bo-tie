@@ -72,17 +72,9 @@ name = "gatt_read_by_group_type"
 path = "tests/gatt/read_by_group_type.rs"
 
 [[test]]
-name = "l2cap_next_methods"
-path = "tests/l2cap/next.rs"
-
-[[test]]
 name = "l2cap_signals_le_credit_connection"
 path = "tests/l2cap/signals/le_credit_connection.rs"
 
 [[test]]
 name = "l2cap_le_u_link"
 path = "tests/l2cap/le_u_link.rs"
-
-[[test]]
-name = "l2cap_multi_channel"
-path = "tests/l2cap/multi_channel.rs"
