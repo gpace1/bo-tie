@@ -1,10 +1,8 @@
 use bo_tie_host_tests::PhysicalLinkLoop;
-use bo_tie_l2cap::cid::{ChannelIdentifier, DynChannelId};
 use bo_tie_l2cap::pdu::L2capFragment;
 use bo_tie_l2cap::signalling::{DisconnectResponseError, ReceivedLeUSignal};
 use bo_tie_l2cap::signals::packets::{LeCreditMps, LeCreditMtu, SimplifiedProtocolServiceMultiplexer};
 use bo_tie_l2cap::{LeULogicalLink, LeUNext, PhysicalLink};
-use log::error;
 
 /// Tests for the Disconnect Request and Response L2CAP signals
 
@@ -137,15 +135,12 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_source_cid() {
                 .use_vec_sdu_buffer()
                 .build();
 
-            let mut source_cid = None;
             let mut destination_cid = None;
 
             loop {
                 match &mut link.next().await.unwrap() {
                     LeUNext::SignallingChannel { signal, channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
-                            source_cid = Some(request.get_source_cid());
-
                             let dyn_channel = request
                                 .accept_le_credit_based_connection(channel)
                                 .initially_given_credits(10)
@@ -187,15 +182,12 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_destination_cid
                 .use_vec_sdu_buffer()
                 .build();
 
-            let mut source_cid = None;
             let mut destination_cid = None;
 
             loop {
                 match &mut link.next().await.unwrap() {
                     LeUNext::SignallingChannel { signal, channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
-                            source_cid = Some(request.get_source_cid());
-
                             let dyn_channel = request
                                 .accept_le_credit_based_connection(channel)
                                 .initially_given_credits(10)
@@ -258,15 +250,12 @@ async fn le_credit_connection_disconnect_source_disconnected_race() {
                 .use_vec_sdu_buffer()
                 .build();
 
-            let mut source_cid = None;
             let mut destination_cid = None;
 
             loop {
                 match &mut link.next().await.unwrap() {
                     LeUNext::SignallingChannel { signal, channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
-                            source_cid = Some(request.get_source_cid());
-
                             let dyn_channel = request
                                 .accept_le_credit_based_connection(channel)
                                 .initially_given_credits(10)
