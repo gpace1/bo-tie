@@ -50,7 +50,7 @@ impl<const BUFFER_SIZE: usize> PhysicalLinkLoop<BUFFER_SIZE> {
 }
 
 impl<const BUFFER_SIZE: usize> core::fmt::Debug for PhysicalLinkLoop<BUFFER_SIZE> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
         f.debug_struct("PhysicalLinkLoop")
             .field("a_data", &self.a_data)
             .field("b_data", &self.b_data)
@@ -72,7 +72,7 @@ pub struct PhysicalLinkLoopEnd<'a, const BUFFER_SIZE: usize> {
 }
 
 impl<const BUFFER_SIZE: usize> core::fmt::Debug for PhysicalLinkLoopEnd<'_, BUFFER_SIZE> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
         f.debug_struct("PhysicalLinkLoop")
             .field("data", &self.data)
             .field("peer_data", &self.peer_data)
