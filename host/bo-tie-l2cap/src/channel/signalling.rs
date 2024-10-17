@@ -254,7 +254,7 @@ impl ReceivedLeUSignal {
     /// If this `ReceivedSignal` is a request, then a *Command Reject Response* is sent to the other
     /// device with the command not understood reason. If this is not a request then the received
     /// signal is ignored and no reject signal is sent.
-    pub async fn reject_or_ignore<L: LogicalLink>(
+    pub async fn quick_reject<L: LogicalLink>(
         self,
         signalling_channel: &mut SignallingChannel<L>,
     ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
