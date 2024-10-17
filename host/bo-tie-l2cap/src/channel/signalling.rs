@@ -65,24 +65,24 @@ impl<L: LogicalLink> SignallingChannel<L> {
     /// response is received by this device (with the correct fields).
     pub async fn request_disconnection(
         &mut self,
-        this_channel_id: ChannelIdentifier,
+        dyn_channel_id: ChannelIdentifier,
     ) -> Result<(), RequestDisconnectError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
-        match this_channel_id {
+        match dyn_channel_id {
             ChannelIdentifier::Le(LeCid::DynamicallyAllocated(_))
             | ChannelIdentifier::Acl(AclCid::DynamicallyAllocated(_)) => (),
-            _ => return Err(RequestDisconnectError::NotAConnectionChannel(this_channel_id)),
+            _ => return Err(RequestDisconnectError::NotAConnectionChannel(dyn_channel_id)),
         }
 
         let channel_buffer = self
             .logical_link
-            .remove_dyn_channel(this_channel_id)
-            .ok_or_else(|| RequestDisconnectError::NoChannelFoundForId(this_channel_id))?;
+            .remove_dyn_channel(dyn_channel_id)
+            .ok_or_else(|| RequestDisconnectError::NoChannelFoundForId(dyn_channel_id))?;
 
         match channel_buffer {
             LeUChannelType::CreditBasedChannel { data } => {
                 let (source_id, destination_id) = match &data.peer_channel_id {
-                    ChannelDirection::Source(s) => (*s, this_channel_id),
-                    ChannelDirection::Destination(d) => (this_channel_id, *d),
+                    ChannelDirection::Source(s) => (*s, dyn_channel_id),
+                    ChannelDirection::Destination(d) => (dyn_channel_id, *d),
                 };
 
                 let disconnect_request = DisconnectRequest::new(NonZeroU8::new(1).unwrap(), destination_id, source_id);
@@ -661,6 +661,11 @@ impl Request<DisconnectRequest> {
         {
             Some(LeUChannelType::CreditBasedChannel { data }) => {
                 if data.peer_channel_id.get_channel() == self.request.source_cid {
+                    signalling_channel
+                        .logical_link
+                        .remove_dyn_channel(self.request.destination_cid)
+                        .unwrap();
+
                     let response = DisconnectResponse {
                         identifier: self.request.identifier,
                         destination_cid: self.request.destination_cid,
