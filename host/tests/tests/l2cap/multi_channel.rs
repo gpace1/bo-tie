@@ -1,14 +1,17 @@
 //! Tests for multiple channels sending/receiving at the same time
 
 use bo_tie_host_tests::PhysicalLinkLoop;
+use bo_tie_l2cap::cid::{ChannelIdentifier, LeCid};
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::pdu::{
     BasicFrame, ControlFrame, CreditBasedSdu, FragmentIterator, FragmentL2capPdu, FragmentL2capSdu, L2capFragment,
     SduPacketsIterator,
 };
 use bo_tie_l2cap::signalling::ReceivedLeUSignal;
+use bo_tie_l2cap::signals::packets::CommandRejectReason;
 use bo_tie_l2cap::{CreditBasedChannelNext, LeULogicalLink, LeUNext, PhysicalLink};
 use std::cmp::{max, min};
+use std::pin::pin;
 
 const TEST_MESSAGE_ATT: &[u8] = b"this is a test message sent to the ATT channel";
 
@@ -300,9 +303,8 @@ async fn le_multiple_receiving() {
         .await;
 }
 
-/// Test for a channel dropped in the middle of receiving a L2CAP PDU
 #[tokio::test]
-async fn le_channel_dropped_while_receiving() {
+async fn le_attribute_channel_dropped_while_receiving() {
     let barrier = &tokio::sync::Barrier::new(2);
 
     PhysicalLinkLoop::default()
@@ -322,7 +324,7 @@ async fn le_channel_dropped_while_receiving() {
 
             end.send(fragment).await.unwrap();
 
-            // sending a bad signal
+            // sending a bad signal to exit test
             let fragment = L2capFragment::new(true, [4, 0, 5, 0, 0xFF, 1, 0, 0]);
 
             end.send(fragment).await.unwrap();
@@ -331,6 +333,319 @@ async fn le_channel_dropped_while_receiving() {
             let mut link = LeULogicalLink::builder(end)
                 .enable_attribute_channel()
                 .enable_signalling_channel()
+                .use_vec_buffer()
+                .build();
+
+            let mut pin_barrier = pin!(futures::FutureExt::fuse(barrier.wait()));
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match next.unwrap() {
+                        LeUNext::AttributeChannel { .. } => panic!("received on ATT channel"),
+                        LeUNext::SignallingChannel { signal, ..} => match signal {
+                            ReceivedLeUSignal::UnknownSignal { code, ..} => if code == 0xFF { break }
+                            _ => panic!("receive unexpected signal {signal:?}")
+                        },
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = &mut pin_barrier => link.disable_att_channel(),
+                }
+            }
+        })
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn le_signalling_channel_dropped_while_receiving() {
+    let barrier = &tokio::sync::Barrier::new(2);
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            let fragment = L2capFragment::new(true, [14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 23]);
+
+            end.send(fragment).await.unwrap();
+
+            barrier.wait().await;
+
+            let fragment = L2capFragment::new(false, [0, 23, 0, 10, 0]);
+
+            end.send(fragment).await.unwrap();
+
+            // sending data to the ATT channel to exit test
+            let fragment = L2capFragment::new(true, [1, 0, 4, 0, 0xFF]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .build();
+
+            let mut pin_barrier = pin!(futures::FutureExt::fuse(barrier.wait()));
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match next.unwrap() {
+                        LeUNext::SignallingChannel { .. } => panic!("received on ATT channel"),
+                        LeUNext::AttributeChannel { ..} => break,
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = &mut pin_barrier => link.disable_signalling_channel(),
+                }
+            }
+        })
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn le_security_manager_channel_dropped_while_receiving() {
+    let barrier = &tokio::sync::Barrier::new(2);
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            let fragment = L2capFragment::new(true, [23, 0, 6, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+            end.send(fragment).await.unwrap();
+
+            barrier.wait().await;
+
+            let fragment = L2capFragment::new(false, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+
+            end.send(fragment).await.unwrap();
+
+            let fragment = L2capFragment::new(false, [23]);
+
+            end.send(fragment).await.unwrap();
+
+            // sending a bad signal to exit test
+            let fragment = L2capFragment::new(true, [4, 0, 5, 0, 0xFF, 1, 0, 0]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_security_manager_channel()
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .build();
+
+            let mut pin_barrier = pin!(futures::FutureExt::fuse(barrier.wait()));
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match next.unwrap() {
+                        LeUNext::SecurityManagerChannel { .. } => panic!("received on SM channel"),
+                        LeUNext::SignallingChannel { signal, ..} => match signal {
+                            ReceivedLeUSignal::UnknownSignal { code, ..} => if code == 0xFF { break }
+                            _ => panic!("receive unexpected signal {signal:?}")
+                        },
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = &mut pin_barrier => link.disable_security_manager_channel(),
+                }
+            }
+        })
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn le_dyn_channel_dropped_while_receiving() {
+    let barrier = &tokio::sync::Barrier::new(2);
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            // request a dynamic channel
+            let fragment = L2capFragment::new(
+                true,
+                [14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 23, 0, 23, 0, 0, 0],
+            );
+
+            end.send(fragment).await.unwrap();
+
+            let received = end.recv().await.unwrap().unwrap().into_inner().collect::<Vec<_>>();
+
+            assert_eq!(
+                received,
+                [14, 0, 5, 0, 0x15, 1, 10, 0, 0x40, 0, 23, 0, 23, 0, 10, 0, 0, 0]
+            );
+
+            // the raw channel id of the peer is [received[8], received[9]]
+            let fragment = L2capFragment::new(true, [23, 0, received[8], received[9], 21, 0, 3, 4, 5, 6, 7, 8, 9]);
+
+            end.send(fragment).await.unwrap();
+
+            barrier.wait().await;
+
+            let fragment = L2capFragment::new(false, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+
+            end.send(fragment).await.unwrap();
+
+            let fragment = L2capFragment::new(false, [23]);
+
+            end.send(fragment).await.unwrap();
+
+            // sending a bad signal to exit test
+            let fragment = L2capFragment::new(true, [4, 0, 5, 0, 0xFF, 1, 0, 0]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_signalling_channel()
+                .use_vec_buffer()
+                .use_vec_sdu_buffer()
+                .build();
+
+            let mut pin_barrier = pin!(futures::FutureExt::fuse(barrier.wait()));
+
+            let mut peer_cid = None;
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match &mut next.unwrap() {
+                        LeUNext::SignallingChannel { signal, channel} => match signal {
+                            ReceivedLeUSignal::UnknownSignal { code, ..} if *code == 0xFF => break,
+                            ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
+                                peer_cid = request.get_source_cid().into();
+
+                                request.accept_le_credit_based_connection(channel)
+                                    .initially_given_credits(10)
+                                    .send_success_response()
+                                    .await
+                                    .unwrap();
+                            }
+                            _ => panic!("receive unexpected signal {signal:?}")
+                        },
+                        LeUNext::CreditBasedChannel(_) => panic!("unexpected credit channel data"),
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = &mut pin_barrier => {
+                        link.get_signalling_channel().unwrap().request_disconnection(peer_cid.unwrap()).await.unwrap();
+                    },
+                }
+            }
+        })
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn le_att_channel_dropped_while_receiving_with_unused() {
+    let barrier = &tokio::sync::Barrier::new(2);
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            let fragment = L2capFragment::new(true, [23, 0, 4, 0, 0x4, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+            end.send(fragment).await.unwrap();
+
+            barrier.wait().await;
+
+            let fragment = L2capFragment::new(false, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+
+            end.send(fragment).await.unwrap();
+
+            let fragment = L2capFragment::new(false, [23]);
+
+            end.send(fragment).await.unwrap();
+
+            let recv = end.recv().await.unwrap().unwrap();
+
+            let recv_payload = recv.into_inner().collect::<Vec<_>>();
+
+            assert_eq!(5, <u16>::from_le_bytes([recv_payload[0], recv_payload[1]]));
+
+            let channel =
+                ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([recv_payload[2], recv_payload[3]])).unwrap();
+
+            assert_eq!(channel, ChannelIdentifier::Le(LeCid::AttributeProtocol),);
+
+            assert_eq!(recv_payload[4], bo_tie_att::server::ServerPduName::ErrorResponse.into());
+
+            let err: bo_tie_att::pdu::ErrorResponse =
+                bo_tie_att::TransferFormatTryFrom::try_from(&recv_payload[5..]).unwrap();
+
+            assert_eq!(err.error, bo_tie_att::pdu::Error::RequestNotSupported);
+
+            // sending a bad signal to exit test
+            let fragment = L2capFragment::new(true, [4, 0, 5, 0, 0xFF, 1, 0, 0]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .enable_signalling_channel()
+                .enable_unused_fixed_channel_response()
+                .use_vec_buffer()
+                .build();
+
+            let mut pin_barrier = pin!(futures::FutureExt::fuse(barrier.wait()));
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match next.unwrap() {
+                        LeUNext::AttributeChannel { .. } => panic!("received on ATT channel"),
+                        LeUNext::SignallingChannel { signal, ..} => match signal {
+                            ReceivedLeUSignal::UnknownSignal { code, ..} => if code == 0xFF { break }
+                            _ => panic!("receive unexpected signal {signal:?}")
+                        },
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = &mut pin_barrier => link.disable_att_channel(),
+                }
+            }
+        })
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn le_att_channel_dropped_while_receiving_with_unused_no_response() {
+    let barrier = &tokio::sync::Barrier::new(2);
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            // this sends write command which the server should
+            // not send an error response regardless of 'unused'.
+            let fragment = L2capFragment::new(true, [23, 0, 4, 0, 0x52, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+            end.send(fragment).await.unwrap();
+
+            barrier.wait().await;
+
+            let fragment = L2capFragment::new(false, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+
+            end.send(fragment).await.unwrap();
+
+            let fragment = L2capFragment::new(false, [23]);
+
+            end.send(fragment).await.unwrap();
+
+            let Err(_) = tokio::time::timeout(std::time::Duration::from_millis(10), end.recv()).await else {
+                panic!("expected timeout")
+            };
+
+            // sending a bad signal to exit test
+            let fragment = L2capFragment::new(true, [4, 0, 5, 0, 0xFF, 1, 0, 0]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .enable_signalling_channel()
+                .enable_unused_fixed_channel_response()
                 .use_vec_buffer()
                 .build();
 
@@ -345,6 +660,148 @@ async fn le_channel_dropped_while_receiving() {
                         next => panic!("received unexpected {next:?}")
                     },
                     _ = barrier.wait() => link.disable_att_channel(),
+                }
+            }
+        })
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn le_sig_channel_dropped_while_receiving_with_unused() {
+    let barrier = &tokio::sync::Barrier::new(2);
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            let fragment = L2capFragment::new(true, [14, 0, 5, 0, 0x14, 1, 10, 0, 0x80, 0, 0x40, 0, 23]);
+
+            end.send(fragment).await.unwrap();
+
+            barrier.wait().await;
+
+            let fragment = L2capFragment::new(false, [0, 23, 0, 10, 0]);
+
+            end.send(fragment).await.unwrap();
+
+            let recv = end.recv().await.unwrap().unwrap();
+
+            let recv_payload = recv.into_inner().collect::<Vec<_>>();
+
+            assert_eq!(6, <u16>::from_le_bytes([recv_payload[0], recv_payload[1]]));
+
+            let channel =
+                ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([recv_payload[2], recv_payload[3]])).unwrap();
+
+            assert_eq!(channel, ChannelIdentifier::Le(LeCid::LeSignalingChannel),);
+
+            // 0x1 is code for L2CAP_COMMAND_REJECT_RESPONSE
+            assert_eq!(recv_payload[4], 0x1);
+
+            assert_eq!(<u16>::from_le_bytes([recv_payload[6], recv_payload[7]]), 2);
+
+            let reason = bo_tie_l2cap::signals::packets::CommandRejectReason::try_from(<u16>::from_le_bytes([
+                recv_payload[8],
+                recv_payload[9],
+            ]))
+            .unwrap();
+
+            assert_eq!(reason, CommandRejectReason::CommandNotUnderstood);
+
+            // sending data to the ATT channel to exit test
+            let fragment = L2capFragment::new(true, [1, 0, 4, 0, 0xFF]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .enable_signalling_channel()
+                .enable_unused_fixed_channel_response()
+                .use_vec_buffer()
+                .build();
+
+            let mut pin_barrier = pin!(futures::FutureExt::fuse(barrier.wait()));
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match next.unwrap() {
+                        LeUNext::SignallingChannel { .. } => panic!("received on ATT channel"),
+                        LeUNext::AttributeChannel { ..} => break,
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = &mut pin_barrier => link.disable_signalling_channel(),
+                }
+            }
+        })
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn le_security_manager_channel_dropped_while_receiving_with_unused() {
+    let barrier = &tokio::sync::Barrier::new(2);
+
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|mut end| async move {
+            let fragment = L2capFragment::new(true, [23, 0, 6, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+            end.send(fragment).await.unwrap();
+
+            barrier.wait().await;
+
+            let fragment = L2capFragment::new(false, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+
+            end.send(fragment).await.unwrap();
+
+            let fragment = L2capFragment::new(false, [23]);
+
+            end.send(fragment).await.unwrap();
+
+            let recv = end.recv().await.unwrap().unwrap();
+
+            let recv_payload = recv.into_inner().collect::<Vec<_>>();
+
+            assert_eq!(2, <u16>::from_le_bytes([recv_payload[0], recv_payload[1]]));
+
+            let channel =
+                ChannelIdentifier::le_try_from_raw(<u16>::from_le_bytes([recv_payload[2], recv_payload[3]])).unwrap();
+
+            assert_eq!(channel, ChannelIdentifier::Le(LeCid::SecurityManagerProtocol),);
+
+            // 0x5 -> Pairing failed code
+            assert_eq!(recv_payload[4], 0x5);
+
+            // 0x5 -> Pairing Not Supported
+            assert_eq!(recv_payload[5], 0x5);
+
+            // sending a bad signal to exit test
+            let fragment = L2capFragment::new(true, [4, 0, 5, 0, 0xFF, 1, 0, 0]);
+
+            end.send(fragment).await.unwrap();
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_security_manager_channel()
+                .enable_signalling_channel()
+                .enable_unused_fixed_channel_response()
+                .use_vec_buffer()
+                .build();
+
+            let mut pin_barrier = pin!(futures::FutureExt::fuse(barrier.wait()));
+
+            loop {
+                tokio::select! {
+                    next = link.next() => match next.unwrap() {
+                        LeUNext::AttributeChannel { .. } => panic!("received on ATT channel"),
+                        LeUNext::SignallingChannel { signal, ..} => match signal {
+                            ReceivedLeUSignal::UnknownSignal { code, ..} => if code == 0xFF { break }
+                            _ => panic!("receive unexpected signal {signal:?}")
+                        },
+                        next => panic!("received unexpected {next:?}")
+                    },
+                    _ = &mut pin_barrier => link.disable_security_manager_channel(),
                 }
             }
         })

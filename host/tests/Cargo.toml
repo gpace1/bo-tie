@@ -16,8 +16,9 @@ bo-tie-gap = { path = "../bo-tie-gap" }
 bo-tie-att = { path = "../bo-tie-att", features = ["tokio"] }
 bo-tie-gatt = { path = "../bo-tie-gatt" }
 bo-tie-sm = { path = "../bo-tie-sm" }
-rand = "0.8"
+futures = "0.3"
 paste = "1"
+rand = "0.8"
 tokio-test = { version = "0.4", default-features = false }
 
 [dev-dependencies.tokio]
