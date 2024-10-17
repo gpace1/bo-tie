@@ -151,6 +151,10 @@ impl<B> CreditBasedChannelData<B> {
     pub(crate) fn get_meta(&mut self) -> &mut credit_frame::RecombineMeta {
         &mut self.recombine_meta
     }
+
+    pub(crate) fn get_peer_channel_id(&self) -> ChannelIdentifier {
+        self.peer_channel_id.get_channel()
+    }
 }
 
 impl<S: TryExtend<u8> + Default> CreditBasedChannelData<S> {
@@ -228,6 +232,7 @@ pub enum LeUChannelType<B> {
     Reserved,
     BasicChannel,
     SignallingChannel,
+    PendingDisconnect { peer_channel_id: ChannelIdentifier },
     CreditBasedChannel { data: CreditBasedChannelData<B> },
 }
 
@@ -253,7 +258,9 @@ impl<S> LeUChannelType<S> {
             {
                 LeUPduRecombine::new_unused(basic_header)
             }
-            LeUChannelType::Unused | LeUChannelType::Reserved => LeUPduRecombine::new_dumped(&basic_header),
+            LeUChannelType::Unused | LeUChannelType::Reserved | LeUChannelType::PendingDisconnect { .. } => {
+                LeUPduRecombine::new_dumped(&basic_header)
+            }
             LeUChannelType::BasicChannel => {
                 let recombine = BasicFrame::<B>::recombine_into_ref(basic_header.length, basic_header.channel_id);
 

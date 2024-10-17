@@ -707,12 +707,40 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     ///
     /// # Panic
     /// `index` must be valid
-    fn disable_dyn_channel(&mut self, index: usize) -> LeUChannelType<S> {
+    fn remove_dyn_channel(&mut self, index: usize) -> LeUChannelType<S> {
+        assert!(index >= LE_STATIC_CHANNEL_COUNT);
+
         if Some(index) == self.defragmentation_data.index {
             self.defragmentation_data.recombiner = self.defragmentation_data.recombiner.take().map(|r| r.into_dumped());
         }
 
         core::mem::replace(&mut self.channels[index], LeUChannelType::Unused)
+    }
+
+    /// Initiated disconnect of a dynamic channel
+    ///
+    /// This method is equivalent to `remove_dyn_channel` except that it changes the state to
+    /// [`LeUChannelType::PendingDisconnect`]. This state is used to protect against a possible race
+    /// condition where both this device and the linked device send a disconnect request for the
+    /// same channel.
+    ///
+    /// # Panic
+    /// `index` must be valid
+    fn initiated_disconnect_of_dyn_channel(
+        &mut self,
+        index: usize,
+        peer_channel_id: ChannelIdentifier,
+    ) -> LeUChannelType<S> {
+        assert!(index >= LE_STATIC_CHANNEL_COUNT);
+
+        if Some(index) == self.defragmentation_data.index {
+            self.defragmentation_data.recombiner = self.defragmentation_data.recombiner.take().map(|r| r.into_dumped());
+        }
+
+        core::mem::replace(
+            &mut self.channels[index],
+            LeUChannelType::PendingDisconnect { peer_channel_id },
+        )
     }
 
     /// Receive the next event from the LE-U logical link
@@ -811,7 +839,8 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                 LeUChannelType::Unused
                 | LeUChannelType::Reserved
                 | LeUChannelType::BasicChannel
-                | LeUChannelType::SignallingChannel => CurrentMeta::None,
+                | LeUChannelType::SignallingChannel
+                | LeUChannelType::PendingDisconnect { .. } => CurrentMeta::None,
                 LeUChannelType::CreditBasedChannel { data } => CurrentMeta::CreditBasedFrame(data.get_meta()),
             };
 
@@ -868,6 +897,17 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                     self.defragmentation_data.reset();
 
                     match &signal {
+                        ReceivedLeUSignal::DisconnectResponse(response) => {
+                            if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_id)) = response.source_cid {
+                                let index = self.convert_dyn_index(dyn_id);
+
+                                if let LeUChannelType::PendingDisconnect { peer_channel_id } = &self.channels[index] {
+                                    if peer_channel_id == &response.destination_cid {
+                                        self.channels[index] = LeUChannelType::Unused;
+                                    }
+                                }
+                            }
+                        }
                         ReceivedLeUSignal::FlowControlCreditIndication(credit_ind) => {
                             // If this is a credit indication for an active credit based channel,
                             // return a Next::CreditIndication instead of a Next::ControlFrame.
@@ -901,14 +941,14 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                                 channel,
                             }));
                         }
-                        _ => {
-                            let handle = LeULogicalLinkHandle::new(self, index);
-
-                            let channel = SignallingChannel::new(basic_header.channel_id, handle);
-
-                            break Ok(LeUNext::SignallingChannel { signal, channel });
-                        }
+                        _ => (),
                     }
+
+                    let handle = LeULogicalLinkHandle::new(self, index);
+
+                    let channel = SignallingChannel::new(basic_header.channel_id, handle);
+
+                    break Ok(LeUNext::SignallingChannel { signal, channel });
                 }
                 Ok(PduRecombineAddOutput::CreditBasedFrame(pdu)) => {
                     self.defragmentation_data.reset();

@@ -109,6 +109,21 @@ pub trait LogicalLinkPrivate: Sized {
     /// This will panic if `id` is not a dynamically allocated channel identifier
     fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<LeUChannelType<Self::SduBuffer>>;
 
+    /// Used when this device initiates a disconnect of a dynamic channel
+    ///
+    /// This must be called (instead of `remove_dyn_channel`) to protect against a race condition
+    /// where this device and the linked device both send a disconnect request at the same time.
+    /// Internally this changes the state of the connection channel to
+    /// [`LeUChannelType::PendingDisconnect`].
+    ///
+    /// # Clearing the State
+    ///
+    /// Clearing the `PendingDisconnect` state can only be done once the disconnect response is
+    /// received. So it falls on the logical link implementation to clear this state upon receiving
+    /// the response.
+    fn initiated_disconnect_of_dyn_channel(&mut self, id: ChannelIdentifier)
+        -> Option<LeUChannelType<Self::SduBuffer>>;
+
     /// Get a dynamic channel by its identifier
     fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelType<Self::SduBuffer>>;
 
@@ -285,7 +300,27 @@ impl<P: PhysicalLink, B: Default, S> LogicalLinkPrivate for LeULogicalLinkHandle
         if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = id {
             let index = (channel_id.get_val() - *DynChannelId::LE_BOUNDS.start()) as usize + LE_STATIC_CHANNEL_COUNT;
 
-            self.logical_link.disable_dyn_channel(index).into()
+            self.logical_link.remove_dyn_channel(index).into()
+        } else {
+            None
+        }
+    }
+
+    fn initiated_disconnect_of_dyn_channel(
+        &mut self,
+        id: ChannelIdentifier,
+    ) -> Option<LeUChannelType<Self::SduBuffer>> {
+        if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = id {
+            let index = (channel_id.get_val() - *DynChannelId::LE_BOUNDS.start()) as usize + LE_STATIC_CHANNEL_COUNT;
+
+            let peer_channel_id = match self.get_dyn_channel(id) {
+                Some(LeUChannelType::CreditBasedChannel { data }) => data.get_peer_channel_id(),
+                _ => unreachable!(),
+            };
+
+            self.logical_link
+                .initiated_disconnect_of_dyn_channel(index, peer_channel_id)
+                .into()
         } else {
             None
         }

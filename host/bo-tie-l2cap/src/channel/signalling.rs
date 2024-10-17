@@ -75,7 +75,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
 
         let channel_buffer = self
             .logical_link
-            .remove_dyn_channel(dyn_channel_id)
+            .initiated_disconnect_of_dyn_channel(dyn_channel_id)
             .ok_or_else(|| RequestDisconnectError::NoChannelFoundForId(dyn_channel_id))?;
 
         match channel_buffer {
@@ -238,13 +238,13 @@ pub enum ReceivedLeUSignal {
         /// The unknown signal code
         code: u8,
         /// A prefabricated rejection response to this command.  
-        reject_response: Request<CommandRejectResponse>,
+        reject_response: ReceivedRequest<CommandRejectResponse>,
     },
-    CommandRejectRsp(Response<CommandRejectResponse>),
-    DisconnectRequest(Request<DisconnectRequest>),
-    DisconnectResponse(Response<DisconnectResponse>),
-    LeCreditBasedConnectionRequest(Request<LeCreditBasedConnectionRequest>),
-    LeCreditBasedConnectionResponse(Response<LeCreditBasedConnectionResponse>),
+    CommandRejectRsp(ReceivedResponse<CommandRejectResponse>),
+    DisconnectRequest(ReceivedRequest<DisconnectRequest>),
+    DisconnectResponse(ReceivedResponse<DisconnectResponse>),
+    LeCreditBasedConnectionRequest(ReceivedRequest<LeCreditBasedConnectionRequest>),
+    LeCreditBasedConnectionResponse(ReceivedResponse<LeCreditBasedConnectionResponse>),
     FlowControlCreditIndication(FlowControlCreditInd),
 }
 
@@ -281,7 +281,7 @@ impl ReceivedLeUSignal {
                     unknown.get_identifier().ok_or(ConvertSignalError::IncompleteSignal)?,
                 );
 
-                let request = Request::new(command_reject);
+                let request = ReceivedRequest::new(command_reject);
 
                 Ok(ReceivedLeUSignal::UnknownSignal {
                     code: signal_code,
@@ -290,27 +290,27 @@ impl ReceivedLeUSignal {
             }
             ReceiveLeUSignalRecombineBuilderState::CommandRejectRsp(raw) => {
                 CommandRejectResponse::try_from_raw_control_frame(raw)
-                    .map(|s| ReceivedLeUSignal::CommandRejectRsp(Response::new(s)))
+                    .map(|s| ReceivedLeUSignal::CommandRejectRsp(ReceivedResponse::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::CommandRejectResponse, e))
             }
             ReceiveLeUSignalRecombineBuilderState::DisconnectRequest(raw) => {
                 DisconnectRequest::try_from_raw_control_frame::<LeULink>(raw)
-                    .map(|s| ReceivedLeUSignal::DisconnectRequest(Request::new(s)))
+                    .map(|s| ReceivedLeUSignal::DisconnectRequest(ReceivedRequest::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::DisconnectionRequest, e))
             }
             ReceiveLeUSignalRecombineBuilderState::DisconnectResponse(raw) => {
                 DisconnectResponse::try_from_raw_control_frame::<LeULink>(raw)
-                    .map(|s| ReceivedLeUSignal::DisconnectResponse(Response::new(s)))
+                    .map(|s| ReceivedLeUSignal::DisconnectResponse(ReceivedResponse::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::DisconnectionResponse, e))
             }
             ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionRequest(raw) => {
                 LeCreditBasedConnectionRequest::try_from_raw_control_frame(raw)
-                    .map(|s| ReceivedLeUSignal::LeCreditBasedConnectionRequest(Request::new(s)))
+                    .map(|s| ReceivedLeUSignal::LeCreditBasedConnectionRequest(ReceivedRequest::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::LeCreditBasedConnectionRequest, e))
             }
             ReceiveLeUSignalRecombineBuilderState::LeCreditBasedConnectionResponse(raw) => {
                 LeCreditBasedConnectionResponse::try_from_raw_control_frame(raw)
-                    .map(|s| ReceivedLeUSignal::LeCreditBasedConnectionResponse(Response::new(s)))
+                    .map(|s| ReceivedLeUSignal::LeCreditBasedConnectionResponse(ReceivedResponse::new(s)))
                     .map_err(|e| ConvertSignalError::InvalidFormat(SignalCode::LeCreditBasedConnectionResponse, e))
             }
             ReceiveLeUSignalRecombineBuilderState::FlowControlCreditIndication(raw) => {
@@ -591,13 +591,13 @@ impl UnknownSignal {
 /// This is returned whenever a request is received by a Signalling Channel. Depending on the type
 /// of request (`T`) there are different operations done.
 #[derive(Debug, Copy, Clone)]
-pub struct Request<T> {
+pub struct ReceivedRequest<T> {
     request: T,
 }
 
-impl<T> Request<T> {
+impl<T> ReceivedRequest<T> {
     /// Create a new `Request`
-    pub fn new(request: T) -> Self {
+    pub(crate) fn new(request: T) -> Self {
         Self { request }
     }
 
@@ -625,7 +625,7 @@ impl<T> Request<T> {
     }
 }
 
-impl<T> core::ops::Deref for Request<T> {
+impl<T> core::ops::Deref for ReceivedRequest<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -633,13 +633,13 @@ impl<T> core::ops::Deref for Request<T> {
     }
 }
 
-impl<T> core::ops::DerefMut for Request<T> {
+impl<T> core::ops::DerefMut for ReceivedRequest<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.request
     }
 }
 
-impl Request<DisconnectRequest> {
+impl ReceivedRequest<DisconnectRequest> {
     /// Send the disconnect response
     ///
     /// # Invalid Disconnect Request
@@ -647,10 +647,19 @@ impl Request<DisconnectRequest> {
     /// If a disconnect request is invalid, the following actions are taken.
     ///
     /// * If the destination CID does not match a dynamic channel identifier of the logical link,
-    ///   then the requester is sent an error response with the 'invalid CID' message and an error
-    ///   is output by the future returned by `send_disconnect_response`.
+    ///   then the requester is sent an error response with the 'invalid CID' message. If no race
+    ///   condition occurred, then an error is output by the future returned by
+    ///   `send_disconnect_response`.
     /// * If the destination CID matches but the source CID does not match then an error is output
     ///   by the future returned by `send_disconnect_response`.
+    ///
+    /// ### Disconnect Race
+    ///
+    /// It's possible that both the peer and this device initiate a connection at the same time. The
+    /// logical link is able to detect this race as it puts the channel in a 'requesting disconnect'
+    /// state when it sends a disconnect request. This state is cleared once the future returned by
+    /// this method is called. This is how `send_disconnect_response` can detect whether a peer's
+    /// disconnect request is actually bad or a disconnect race occurred.
     pub async fn send_disconnect_response<L: LogicalLink>(
         &self,
         signalling_channel: &mut SignallingChannel<L>,
@@ -684,6 +693,24 @@ impl Request<DisconnectRequest> {
                     ))
                 }
             }
+            Some(LeUChannelType::PendingDisconnect { peer_channel_id })
+                if peer_channel_id == &self.request.source_cid =>
+            {
+                // disconnect request race occurred
+
+                let rejection = CommandRejectResponse::new_invalid_cid_in_request(
+                    self.request.identifier,
+                    self.request.destination_cid.to_val(),
+                    self.request.source_cid.to_val(),
+                );
+
+                ReceivedResponse::new(rejection)
+                    .send_rejection(signalling_channel)
+                    .await
+                    .map_err(|e| DisconnectResponseError::SendErr(e))?;
+
+                Ok(())
+            }
             _ => {
                 let rejection = CommandRejectResponse::new_invalid_cid_in_request(
                     self.request.identifier,
@@ -691,7 +718,7 @@ impl Request<DisconnectRequest> {
                     self.request.source_cid.to_val(),
                 );
 
-                Response::new(rejection)
+                ReceivedResponse::new(rejection)
                     .send_rejection(signalling_channel)
                     .await
                     .map_err(|e| DisconnectResponseError::SendErr(e))?;
@@ -724,7 +751,7 @@ impl<E: core::fmt::Display> core::fmt::Display for DisconnectResponseError<E> {
 #[cfg(feature = "std")]
 impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for DisconnectResponseError<E> {}
 
-impl Request<LeCreditBasedConnectionRequest> {
+impl ReceivedRequest<LeCreditBasedConnectionRequest> {
     /// Create a LE Credit Based Connection
     ///
     /// This returns a `LeCreditBasedConnectionResponseBuilder` to configure the LE credit based
@@ -925,14 +952,14 @@ impl<L: LogicalLink> std::error::Error for LeCreditResponseError<L> where
 
 /// A response signal from the linked device
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub struct Response<T> {
+pub struct ReceivedResponse<T> {
     response: T,
 }
 
-impl<T> Response<T> {
+impl<T> ReceivedResponse<T> {
     /// Create a new `Response`
-    pub fn new(response: T) -> Self {
-        Response { response }
+    pub(crate) fn new(response: T) -> Self {
+        ReceivedResponse { response }
     }
 
     /// Get the response
@@ -941,7 +968,7 @@ impl<T> Response<T> {
     }
 }
 
-impl<T> core::ops::Deref for Response<T> {
+impl<T> core::ops::Deref for ReceivedResponse<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -949,13 +976,13 @@ impl<T> core::ops::Deref for Response<T> {
     }
 }
 
-impl<T> core::ops::DerefMut for Response<T> {
+impl<T> core::ops::DerefMut for ReceivedResponse<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.response
     }
 }
 
-impl Response<CommandRejectResponse> {
+impl ReceivedResponse<CommandRejectResponse> {
     /// Send the command rejection response
     pub async fn send_rejection<L: LogicalLink>(
         self,
@@ -967,7 +994,7 @@ impl Response<CommandRejectResponse> {
     }
 }
 
-impl Response<LeCreditBasedConnectionResponse> {
+impl ReceivedResponse<LeCreditBasedConnectionResponse> {
     /// Create a connection from the LE Credit Based Connection Response
     ///
     /// In order to configure the credit based channel, the request originally sent to the peer
@@ -1026,7 +1053,7 @@ impl Response<LeCreditBasedConnectionResponse> {
 /// The error returned by [`create_le_credit_connection`]
 ///
 ///
-/// [`create_le_credit_connection`]: Response::<LeCreditBasedConnectionResponse>::create_le_credit_connection
+/// [`create_le_credit_connection`]: ReceivedResponse::<LeCreditBasedConnectionResponse>::create_le_credit_connection
 #[derive(Debug)]
 pub enum CreateLeCreditConnectionError {
     ResponseError(LeCreditBasedConnectionResponseResult),
