@@ -79,8 +79,10 @@ impl Iterator for CmdRejectRspIter {
 
             // using `to_le_bytes` here is kinda dirty without
             // converting to u16, but the logic is the same.
-            2 => self.reject.data.len().to_le_bytes().get(0).copied(),
-            3 => self.reject.data.len().to_le_bytes().get(1).copied(),
+            //
+            // `+ 2` for the size of the reject reason
+            2 => (self.reject.data.len() + 2).to_le_bytes().get(0).copied(),
+            3 => (self.reject.data.len() + 2).to_le_bytes().get(1).copied(),
             4 => self.reject.reason.into_val().to_le_bytes().get(0).copied(),
             5 => self.reject.reason.into_val().to_le_bytes().get(1).copied(),
             _ => self.reject.data.iter_pos(self.pos - 6),
