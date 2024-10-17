@@ -7,6 +7,7 @@ edition = "2021"
 bo-tie-core = { path = "../../bo-tie-core" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 tokio = { version = "1", default-features = false }
+log = "0.4.22"
 
 [dev-dependencies]
 bo-tie-host-util = { path = "../bo-tie-host-util" }
@@ -74,6 +75,10 @@ path = "tests/gatt/read_by_group_type.rs"
 [[test]]
 name = "l2cap_signals_le_credit_connection"
 path = "tests/l2cap/signals/le_credit_connection.rs"
+
+[[test]]
+name = "l2cap_signals_disconnec"
+path = "tests/l2cap/signals/disconnect.rs"
 
 [[test]]
 name = "l2cap_le_u_link"
