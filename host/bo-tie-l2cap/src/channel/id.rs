@@ -75,6 +75,18 @@ impl From<LeCid> for ChannelIdentifier {
     }
 }
 
+impl From<DynChannelId<LeULink>> for ChannelIdentifier {
+    fn from(id: DynChannelId<LeULink>) -> Self {
+        ChannelIdentifier::Le(LeCid::DynamicallyAllocated(id))
+    }
+}
+
+impl From<DynChannelId<AclULink>> for ChannelIdentifier {
+    fn from(id: DynChannelId<AclULink>) -> Self {
+        ChannelIdentifier::Acl(AclCid::DynamicallyAllocated(id))
+    }
+}
+
 /// Dynamically created L2CAP channel
 #[derive(Debug)]
 pub struct DynChannelId<T> {
