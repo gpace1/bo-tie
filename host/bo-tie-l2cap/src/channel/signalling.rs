@@ -75,7 +75,7 @@ impl<L: LogicalLink> SignallingChannel<L> {
 
         let channel_buffer = self
             .logical_link
-            .get_dyn_channel(this_channel_id)
+            .remove_dyn_channel(this_channel_id)
             .ok_or_else(|| RequestDisconnectError::NoChannelFoundForId(this_channel_id))?;
 
         match channel_buffer {
@@ -639,64 +639,85 @@ impl<T> core::ops::DerefMut for Request<T> {
     }
 }
 
-impl Request<CommandRejectResponse> {
-    /// Send the command rejection response
-    pub async fn send_rejection<L: LogicalLink>(
-        self,
-        signalling_channel: &mut SignallingChannel<L>,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let c_frame = self.request.into_control_frame(signalling_channel.channel_id);
-
-        signalling_channel.send(c_frame).await
-    }
-}
-
 impl Request<DisconnectRequest> {
-    /// Check that a requested disconnect is valid
+    /// Send the disconnect response
     ///
-    /// A disconnect request contains the source and destination channel identifiers of a L2CAP
-    /// connection. This is used to check if is a connection channel with the *destination* channel
-    /// identifier exists for the `logical_link`.
+    /// # Invalid Disconnect Request
     ///
-    /// If there is no channel associated with the destination channel identifier then an error is
-    /// returned containing a command reject response that should be sent to the peer device. This
-    /// rejection response contains the *invalid CID in request* reason.
-    pub fn check_disconnect_request<L: LogicalLink>(
+    /// If a disconnect request is invalid, the following actions are taken.
+    ///
+    /// * If the destination CID does not match a dynamic channel identifier of the logical link,
+    ///   then the requester is sent an error response with the 'invalid CID' message and an error
+    ///   is output by the future returned by `send_disconnect_response`.
+    /// * If the destination CID matches but the source CID does not match then an error is output
+    ///   by the future returned by `send_disconnect_response`.
+    pub async fn send_disconnect_response<L: LogicalLink>(
         &self,
         signalling_channel: &mut SignallingChannel<L>,
-    ) -> Result<(), Response<CommandRejectResponse>> {
-        signalling_channel
+    ) -> Result<(), DisconnectResponseError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
+        match signalling_channel
             .logical_link
-            .remove_dyn_channel(self.request.destination_cid)
-            .then_some(())
-            .ok_or_else(|| {
+            .get_dyn_channel(self.request.destination_cid)
+        {
+            Some(LeUChannelType::CreditBasedChannel { data }) => {
+                if data.peer_channel_id.get_channel() == self.request.source_cid {
+                    let response = DisconnectResponse {
+                        identifier: self.request.identifier,
+                        destination_cid: self.request.destination_cid,
+                        source_cid: self.request.source_cid,
+                    };
+
+                    let c_frame = response.into_control_frame(signalling_channel.channel_id);
+
+                    signalling_channel
+                        .send(c_frame)
+                        .await
+                        .map_err(|e| DisconnectResponseError::SendErr(e))
+                } else {
+                    Err(DisconnectResponseError::InvalidSourceChannelIdentifier(
+                        self.request.source_cid,
+                    ))
+                }
+            }
+            _ => {
                 let rejection = CommandRejectResponse::new_invalid_cid_in_request(
                     self.request.identifier,
                     self.request.destination_cid.to_val(),
                     self.request.source_cid.to_val(),
                 );
 
-                let response = Response::new(rejection);
+                Response::new(rejection)
+                    .send_rejection(signalling_channel)
+                    .await
+                    .map_err(|e| DisconnectResponseError::SendErr(e))?;
 
-                response
-            })
-    }
-
-    pub async fn send_disconnect_response<L: LogicalLink>(
-        &self,
-        signalling_channel: &mut SignallingChannel<L>,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
-        let response = DisconnectResponse {
-            identifier: self.request.identifier,
-            destination_cid: self.request.destination_cid,
-            source_cid: self.request.source_cid,
-        };
-
-        let c_frame = response.into_control_frame(signalling_channel.channel_id);
-
-        signalling_channel.send(c_frame).await
+                Err(DisconnectResponseError::InvalidDestinationChannelIdentifier(
+                    self.request.destination_cid,
+                ))
+            }
+        }
     }
 }
+
+#[derive(Debug)]
+pub enum DisconnectResponseError<E> {
+    SendErr(E),
+    InvalidDestinationChannelIdentifier(ChannelIdentifier),
+    InvalidSourceChannelIdentifier(ChannelIdentifier),
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for DisconnectResponseError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Self::SendErr(e) => core::fmt::Display::fmt(e, f),
+            Self::InvalidDestinationChannelIdentifier(id) => write!(f, "invalid destination channel identifier: {id}"),
+            Self::InvalidSourceChannelIdentifier(id) => write!(f, "invalid source channel identifier {id}"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for DisconnectResponseError<E> {}
 
 impl Request<LeCreditBasedConnectionRequest> {
     /// Create a LE Credit Based Connection
@@ -926,6 +947,18 @@ impl<T> core::ops::Deref for Response<T> {
 impl<T> core::ops::DerefMut for Response<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.response
+    }
+}
+
+impl Response<CommandRejectResponse> {
+    /// Send the command rejection response
+    pub async fn send_rejection<L: LogicalLink>(
+        self,
+        signalling_channel: &mut SignallingChannel<L>,
+    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+        let c_frame = self.response.into_control_frame(signalling_channel.channel_id);
+
+        signalling_channel.send(c_frame).await
     }
 }
 

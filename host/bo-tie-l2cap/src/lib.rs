@@ -707,12 +707,12 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
     ///
     /// # Panic
     /// `index` must be valid
-    fn disable_dyn_channel(&mut self, index: usize) {
+    fn disable_dyn_channel(&mut self, index: usize) -> LeUChannelType<S> {
         if Some(index) == self.defragmentation_data.index {
             self.defragmentation_data.recombiner = self.defragmentation_data.recombiner.take().map(|r| r.into_dumped());
         }
 
-        self.channels[index] = LeUChannelType::Unused
+        core::mem::replace(&mut self.channels[index], LeUChannelType::Unused)
     }
 
     /// Receive the next event from the LE-U logical link

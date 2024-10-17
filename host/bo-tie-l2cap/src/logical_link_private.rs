@@ -107,7 +107,7 @@ pub trait LogicalLinkPrivate: Sized {
     ///
     /// # Panic
     /// This will panic if `id` is not a dynamically allocated channel identifier
-    fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool;
+    fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<LeUChannelType<Self::SduBuffer>>;
 
     /// Get a dynamic channel by its identifier
     fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelType<Self::SduBuffer>>;
@@ -281,19 +281,13 @@ impl<P: PhysicalLink, B: Default, S> LogicalLinkPrivate for LeULogicalLinkHandle
         }
     }
 
-    fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> bool {
+    fn remove_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<LeUChannelType<Self::SduBuffer>> {
         if let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(channel_id)) = id {
             let index = (channel_id.get_val() - *DynChannelId::LE_BOUNDS.start()) as usize + LE_STATIC_CHANNEL_COUNT;
 
-            if let LeUChannelType::Unused = self.logical_link.channels[index] {
-                false
-            } else {
-                self.logical_link.disable_dyn_channel(index);
-
-                true
-            }
+            self.logical_link.disable_dyn_channel(index).into()
         } else {
-            false
+            None
         }
     }
 
