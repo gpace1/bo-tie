@@ -24,6 +24,7 @@ use bo_tie_core::buffer::TryExtend;
 pub(crate) use credit_based::ChannelCredits;
 pub use credit_based::CreditServiceData;
 pub use signalling::SignallingChannel;
+pub(crate) use unused::LeUUnusedChannelResponse;
 
 /// Enumeration of a [`BasicHeaderProcessor`] length
 #[derive(Copy, Clone, Debug)]

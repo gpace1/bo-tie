@@ -15,6 +15,7 @@ use bo_tie_core::buffer::stack::LinearBuffer;
 use core::num::NonZeroU8;
 
 pub(crate) enum LeUUnusedChannelResponse {
+    Dumped,
     BasicFrame(BasicFrame<LinearBuffer<7, u8>>),
 }
 
@@ -23,6 +24,7 @@ impl FragmentL2capPdu for LeUUnusedChannelResponse {
 
     fn into_fragments(self, fragmentation_size: usize) -> Result<Self::FragmentIterator, FragmentationError> {
         Ok(match self {
+            Self::Dumped => unreachable!(),
             Self::BasicFrame(frame) => LeUUnusedChannelResponseFragmentIter::BasicFrame(
                 FragmentL2capPdu::into_fragments(frame, fragmentation_size)?,
             ),
@@ -108,13 +110,8 @@ impl LeUUnusedChannelResponseRecombiner {
 
     fn new_attribute(length: usize) -> Self {
         let bytes_received = 0;
-        let request_code = None;
-        let handle_state = AttributeHandelState::None;
 
-        let builder = LeUUnusedChannelResponseBuilderType::Attribute(AttributeChannelUnusedResponseBuilder {
-            request_code,
-            handle_state,
-        });
+        let builder = LeUUnusedChannelResponseBuilderType::Attribute(AttributeChannelUnusedResponseBuilder::Unknown);
 
         LeUUnusedChannelResponseRecombiner {
             length,
@@ -130,13 +127,8 @@ impl LeUUnusedChannelResponseRecombiner {
     {
         let length = payload_length;
         let mut bytes_received = 0;
-        let request_code = None;
-        let handle_state = AttributeHandelState::None;
 
-        let mut att_builder = AttributeChannelUnusedResponseBuilder {
-            request_code,
-            handle_state,
-        };
+        let mut att_builder = AttributeChannelUnusedResponseBuilder::Unknown;
 
         // this should never error no return a response
         assert!(att_builder
@@ -158,7 +150,7 @@ impl LeUUnusedChannelResponseRecombiner {
         let command_identifier = None;
 
         let builder = LeUUnusedChannelResponseBuilderType::Signalling(SignallingChannelUnusedResponseBuilder {
-            command_identifier,
+            identifier: command_identifier,
         });
 
         LeUUnusedChannelResponseRecombiner {
@@ -176,9 +168,7 @@ impl LeUUnusedChannelResponseRecombiner {
         let length = payload_length;
         let mut bytes_received = 0;
 
-        let mut sig_builder = SignallingChannelUnusedResponseBuilder {
-            command_identifier: None,
-        };
+        let mut sig_builder = SignallingChannelUnusedResponseBuilder { identifier: None };
 
         // this should never error no return a response
         assert!(sig_builder
@@ -248,9 +238,13 @@ enum AttributeHandelState {
 }
 
 #[derive(Debug)]
-struct AttributeChannelUnusedResponseBuilder {
-    request_code: Option<NonZeroU8>,
-    handle_state: AttributeHandelState,
+enum AttributeChannelUnusedResponseBuilder {
+    Unknown,
+    Response {
+        request_code: NonZeroU8,
+        handle_state: AttributeHandelState,
+    },
+    Dumped,
 }
 
 impl AttributeChannelUnusedResponseBuilder {
@@ -261,23 +255,46 @@ impl AttributeChannelUnusedResponseBuilder {
         bytes_received: &mut usize,
     ) -> Result<Option<LeUUnusedChannelResponse>, UnusedRecombineError> {
         for byte in byte_iter {
-            match self.request_code.map(|code| code.get()) {
-                None => self.request_code = NonZeroU8::new(byte),
-                // the following ATT requests/commands contain a handle
-                Some(0x4 | 0x6 | 0x8 | 0xa | 0xc | 0xe | 0x10 | 0x20) => match *bytes_received {
-                    1 => self.handle_state = AttributeHandelState::First(byte),
-                    2 => {
-                        let AttributeHandelState::First(first) = self.handle_state else {
-                            unreachable!()
-                        };
+            match self {
+                Self::Unknown => {
+                    match byte {
+                        // the following ATT requests can have an error response
+                        0x2 | 0x4 | 0x6 | 0x8 | 0xa | 0xc | 0xe | 0x10 | 0x12 | 0x16 | 0x18 | 0x20 => {
+                            let request_code = NonZeroU8::new(byte).unwrap();
 
-                        let handle = <u16>::from_le_bytes([first, byte]);
+                            let handle_state = AttributeHandelState::None;
 
-                        self.handle_state = AttributeHandelState::Complete(handle);
+                            *self = Self::Response {
+                                request_code,
+                                handle_state,
+                            }
+                        }
+                        _ => *self = Self::Dumped,
                     }
-                    _ => (),
-                },
-                _ => (),
+                }
+                Self::Response {
+                    request_code,
+                    handle_state,
+                } => {
+                    match request_code.get() {
+                        // these requests have a handle field
+                        0x4 | 0x6 | 0x8 | 0xa | 0xc | 0xe | 0x10 | 0x12 | 0x16 | 0x20 => match *bytes_received {
+                            1 => *handle_state = AttributeHandelState::First(byte),
+                            2 => {
+                                let AttributeHandelState::First(first) = *handle_state else {
+                                    unreachable!()
+                                };
+
+                                let handle = <u16>::from_le_bytes([first, byte]);
+
+                                *handle_state = AttributeHandelState::Complete(handle);
+                            }
+                            _ => (),
+                        },
+                        _ => (),
+                    }
+                }
+                Self::Dumped => (),
             }
 
             *bytes_received += 1;
@@ -285,23 +302,31 @@ impl AttributeChannelUnusedResponseBuilder {
 
         (*bytes_received >= pdu_length)
             .then(|| {
-                let code = self.request_code.ok_or(UnusedRecombineError)?.get();
+                match self {
+                    Self::Unknown | Self::Dumped => Ok(LeUUnusedChannelResponse::Dumped),
+                    Self::Response {
+                        request_code,
+                        handle_state,
+                    } => {
+                        let code = request_code.get();
 
-                let AttributeHandelState::Complete(handle) = self.handle_state else {
-                    return Err(UnusedRecombineError);
-                };
+                        let AttributeHandelState::Complete(handle) = handle_state else {
+                            return Err(UnusedRecombineError);
+                        };
 
-                let [handle_byte_0, handle_byte_1] = handle.to_le_bytes();
+                        let [handle_byte_0, handle_byte_1] = handle.to_le_bytes();
 
-                // 0x1 -> attribute error response code
-                // 0x6 -> error code for 'request not supported'
-                let data = [0x1, code, handle_byte_0, handle_byte_1, 0x6];
+                        // 0x1 -> attribute error response code
+                        // 0x6 -> error code for 'request not supported'
+                        let data = [0x1, code, handle_byte_0, handle_byte_1, 0x6];
 
-                let lb = LinearBuffer::try_from(data).expect("unused response buffer is too small");
+                        let lb = LinearBuffer::try_from(data).expect("unused response buffer is too small");
 
-                let b_frame = BasicFrame::new(lb, ChannelIdentifier::Le(LeCid::AttributeProtocol));
+                        let b_frame = BasicFrame::new(lb, ChannelIdentifier::Le(LeCid::AttributeProtocol));
 
-                Ok(LeUUnusedChannelResponse::BasicFrame(b_frame))
+                        Ok(LeUUnusedChannelResponse::BasicFrame(b_frame))
+                    }
+                }
             })
             .transpose()
     }
@@ -309,7 +334,7 @@ impl AttributeChannelUnusedResponseBuilder {
 
 #[derive(Debug)]
 struct SignallingChannelUnusedResponseBuilder {
-    command_identifier: Option<NonZeroU8>,
+    identifier: Option<NonZeroU8>,
 }
 
 impl SignallingChannelUnusedResponseBuilder {
@@ -328,7 +353,7 @@ impl SignallingChannelUnusedResponseBuilder {
                 1 => {
                     let Some(byte) = byte_iter.next() else { return Ok(None) };
 
-                    self.command_identifier = Some(NonZeroU8::new(byte).ok_or(UnusedRecombineError)?);
+                    self.identifier = Some(NonZeroU8::new(byte).ok_or(UnusedRecombineError)?);
 
                     *bytes_received += 1;
                 }
@@ -338,7 +363,7 @@ impl SignallingChannelUnusedResponseBuilder {
 
         (*bytes_received >= pdu_length)
             .then(|| {
-                let identifier = self.command_identifier.ok_or(UnusedRecombineError)?.get();
+                let identifier = self.identifier.ok_or(UnusedRecombineError)?.get();
 
                 // 0x1 -> signalling L2CAP_COMMAND_REJECT_RSP
                 // 0x2, 0x0 -> data length

@@ -130,7 +130,7 @@ mod logical_link_private;
 pub mod pdu;
 pub mod signals;
 
-use crate::channel::{CurrentMeta, LeUPduRecombine, ProcessSduOutput};
+use crate::channel::{CurrentMeta, LeUPduRecombine, LeUUnusedChannelResponse, ProcessSduOutput};
 use bo_tie_core::buffer::TryExtend;
 use channel::id::{ChannelIdentifier, DynChannelId, LeCid};
 use channel::signalling::ReceivedLeUSignal;
@@ -836,10 +836,15 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
                     self.defragmentation_data.reset();
 
                     if self.unused_responses {
-                        self.physical_link
-                            .send_pdu(unused)
-                            .await
-                            .map_err(|e| LeULogicalLinkNextError::SendUnusedError(e))?;
+                        match unused {
+                            LeUUnusedChannelResponse::Dumped => (),
+                            LeUUnusedChannelResponse::BasicFrame(pdu) => {
+                                self.physical_link
+                                    .send_pdu(pdu)
+                                    .await
+                                    .map_err(|e| LeULogicalLinkNextError::SendUnusedError(e))?;
+                            }
+                        }
                     }
                 }
                 Ok(PduRecombineAddOutput::BasicFrame(pdu)) => {
