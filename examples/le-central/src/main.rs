@@ -5,7 +5,7 @@ mod io;
 use bo_tie::hci::events::parameters::LeAdvertisingReportData;
 use bo_tie::hci::{ConnectionChannelEnds, ConnectionHandle, Host, HostChannelEnds, LeLink, Next};
 use bo_tie::host::att::client::ResponseProcessor;
-use bo_tie::host::l2cap::LeULogicalLink;
+use bo_tie::host::l2cap::{LeULogicalLink, LeUNext};
 
 /// Scan for a device with the specific local name
 ///
@@ -75,7 +75,7 @@ where
 
     hi.mask_events(core::iter::empty::<Events>()).await.unwrap();
 
-    return stop_status.then_some(devices).ok_or("exited by user");
+    stop_status.then_some(devices).ok_or("exited by user")
 }
 
 /// Connect to the advertising device
@@ -184,44 +184,33 @@ where
     C: ConnectionChannelEnds,
 {
     use bo_tie::host::att::client::ConnectFixedClient;
-    use bo_tie::host::gatt::Client;
-    use std::time::Duration;
-    use tokio::time::timeout;
+    use bo_tie::host::gatt;
 
-    let logical_link = LeULogicalLink::new(connection);
+    let mut logical_link = LeULogicalLink::builder(connection)
+        .enable_attribute_channel()
+        .use_vec_buffer()
+        .build();
 
-    let mut att_channel = logical_link.get_att_channel();
+    let channel = &mut logical_link.get_att_channel().unwrap();
 
-    // Normally you can assume that there exists a
-    // GATT server on the peer device (I think it is
-    // part of the Bluetooth certification process for
-    // every LE device to have some basic GATT server
-    // or client), but here it is not assumed.
-    let mut gatt_client: Client = match timeout(
-        Duration::from_secs(5),
-        ConnectFixedClient::connect(&mut att_channel, None, 64),
-    )
-    .await
-    {
-        Err(_timeout) => {
-            println!("failed to connect to GATT (timeout)");
-            return;
-        }
-        Ok(Err(e)) => {
-            println!("failed to connect to GATT ({:?})", e);
-            return;
-        }
-        Ok(Ok(att_client)) => att_client.into(),
+    let connector = ConnectFixedClient::initiate(channel, None, 64).await.unwrap();
+
+    let LeUNext::AttributeChannel { pdu, .. } = logical_link.next().await.unwrap() else {
+        unreachable!()
     };
 
+    let mut gatt_client: gatt::Client = connector.create_client(&pdu).unwrap().into();
+
     loop {
-        // It may take multiple queries before
-        // all the services are discovered.
-        let querier = gatt_client.partial_discovery(&mut att_channel).await.unwrap();
+        let channel = &mut logical_link.get_att_channel().unwrap();
 
-        let response = att_channel.receive(&mut Vec::new()).await.unwrap();
+        let querier = gatt_client.partial_discovery(channel).await.unwrap();
 
-        if querier.process_response(&response).unwrap() {
+        let LeUNext::AttributeChannel { pdu, .. } = logical_link.next().await.unwrap() else {
+            unreachable!()
+        };
+
+        if querier.process_response(&pdu).unwrap() {
             break;
         }
     }
