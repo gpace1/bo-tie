@@ -173,8 +173,8 @@ where
     type RecvData = <C::FromBuffer as IntoExactSizeIterator>::IntoExactIter;
     type RecvErr = HciAclPacketError;
 
-    fn max_transmission_size(&self) -> usize {
-        self.fragment_size()
+    fn max_transmission_size(&self) -> u16 {
+        self.fragment_size().try_into().unwrap_or(<u16>::MAX)
     }
 
     fn send<T>(&mut self, fragment: bo_tie_l2cap::pdu::L2capFragment<T>) -> Self::SendFut<'_>
@@ -199,8 +199,8 @@ where
     type RecvData = <C::FromBuffer as IntoExactSizeIterator>::IntoExactIter;
     type RecvErr = HciAclPacketError;
 
-    fn max_transmission_size(&self) -> usize {
-        (**self).max_transmission_size()
+    fn max_transmission_size(&self) -> u16 {
+        (**self).max_transmission_size().try_into().unwrap_or(<u16>::MAX)
     }
 
     fn send<T>(&mut self, fragment: bo_tie_l2cap::pdu::L2capFragment<T>) -> Self::SendFut<'_>
@@ -212,24 +212,6 @@ where
 
     fn recv(&mut self) -> Self::RecvFut<'_> {
         (**self).recv()
-    }
-}
-
-impl<C> From<LeLink<C>> for LeULogicalLink<LeLink<C>>
-where
-    C: ConnectionChannelEnds,
-{
-    fn from(physical_link: LeLink<C>) -> Self {
-        LeULogicalLink::new(physical_link)
-    }
-}
-
-impl<'a, C> From<&'a mut LeLink<C>> for LeULogicalLink<&'a mut LeLink<C>>
-where
-    C: ConnectionChannelEnds + 'a,
-{
-    fn from(physical_link: &'a mut LeLink<C>) -> Self {
-        LeULogicalLink::new(physical_link)
     }
 }
 
