@@ -309,10 +309,15 @@ impl<'a, T, V, const BUFFER_SIZE: usize> TestScaffold<'a, T, V, BUFFER_SIZE> {
 
         let mut verify = pin!(self.verify.into_future());
 
-        tokio::select! {
-            _ = &mut tested => panic!("unexpected output of tested"),
-
-            _ = &mut verify => ()
-        }
+        core::future::poll_fn(|context| {
+            if tested.as_mut().poll(context).is_ready() {
+                unreachable!("unexpected output of tested")
+            } else if verify.as_mut().poll(context).is_ready() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
     }
 }

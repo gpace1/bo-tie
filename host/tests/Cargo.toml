@@ -6,8 +6,6 @@ edition = "2021"
 [dependencies]
 bo-tie-core = { path = "../../bo-tie-core" }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
-tokio = { version = "1", default-features = false }
-log = "0.4.22"
 
 [dev-dependencies]
 bo-tie-host-util = { path = "../bo-tie-host-util" }
