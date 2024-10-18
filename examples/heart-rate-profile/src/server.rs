@@ -194,7 +194,7 @@ impl Server {
     ///
     /// This will send a notification to the Client containing the heart rate data **if** the client
     /// has enabled notifications for the heart rate data characteristic.
-    pub async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>)
+    pub async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<L>)
     where
         L: LogicalLink,
     {
@@ -207,11 +207,8 @@ impl Server {
     }
 
     /// Process a L2CAP packet containing ATT protocol data
-    pub async fn process<L: LogicalLink>(
-        &mut self,
-        channel: &mut BasicFrameChannel<'_, L>,
-        packet: &BasicFrame<Vec<u8>>,
-    ) where
+    pub async fn process<L: LogicalLink>(&mut self, channel: &mut BasicFrameChannel<L>, packet: &BasicFrame<Vec<u8>>)
+    where
         L: LogicalLink,
     {
         let parse_result = self.server.parse_att_pdu(packet);

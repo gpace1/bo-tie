@@ -7,7 +7,7 @@ use crate::server::Server;
 use crate::{ConnectionToMain, ConnectionToMainMessage, MainToConnection};
 use bo_tie::hci::{ConnectionChannelEnds, ConnectionHandle, LeLink};
 use bo_tie::host::l2cap::pdu::BasicFrame;
-use bo_tie::host::l2cap::{BasicFrameChannel, LeULogicalLink, LogicalLink, PhysicalLink};
+use bo_tie::host::l2cap::{BasicFrameChannel, LeULogicalLink, LeUNext, LogicalLink, PhysicalLink};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone)]
@@ -26,7 +26,7 @@ impl ConnectedStatus {
 }
 
 pub(crate) struct Connection<P: PhysicalLink> {
-    le_l2cap: LeULogicalLink<P>,
+    le_l2cap: LeULogicalLink<P, Vec<u8>, Vec<u8>>,
     inner: ConnectionInner,
 }
 
@@ -43,7 +43,12 @@ impl<C: ConnectionChannelEnds> Connection<LeLink<C>> {
 
         let connection_handle = le_l2cap.get_handle();
 
-        let le_l2cap = LeULogicalLink::new(le_l2cap);
+        let le_l2cap = LeULogicalLink::builder(le_l2cap)
+            .enable_security_manager_channel()
+            .enable_attribute_channel()
+            .use_vec_sdu_buffer()
+            .use_vec_buffer()
+            .build();
 
         let inner = ConnectionInner {
             connection_handle,
@@ -57,33 +62,35 @@ impl<C: ConnectionChannelEnds> Connection<LeLink<C>> {
     }
 
     pub(crate) async fn run_le(mut self, mut from: UnboundedReceiver<MainToConnection>) {
-        let mut att_channel = self.le_l2cap.get_att_channel();
-        let mut sm_channel = self.le_l2cap.get_sm_channel();
-
-        let att_buffer = &mut Vec::new();
-        let sm_buffer = &mut Vec::new();
-
         loop {
             tokio::select! {
-                att_frame = att_channel.receive(att_buffer) => {
-                    self.inner
-                        .process_att(&mut att_channel, &att_frame.expect("received bad frame"))
-                        .await
-                }
-
-                sm_frame = sm_channel.receive(sm_buffer) => {
-                    self.inner
-                        .process_sm(&mut sm_channel, &mut sm_frame.expect("received bad frame"))
-                        .await
-                }
+                next = self.le_l2cap.next() => match &mut next.unwrap() {
+                    LeUNext::AttributeChannel {pdu, channel} => {
+                        self.inner
+                            .process_att(channel, pdu)
+                            .await
+                    }
+                    LeUNext::SecurityManagerChannel {pdu, channel} => {
+                        self.inner
+                            .process_sm(channel, pdu)
+                            .await
+                    }
+                    _ => unreachable!()
+                },
 
                 opt_msg = from.recv() => match opt_msg {
-                    Some(message) => self.inner.process_msg(&mut sm_channel, message).await,
+                    Some(message) => {
+                        let channel = &mut self.le_l2cap.get_security_manager_channel().unwrap();
+
+                        self.inner.process_msg(channel, message).await
+                    },
                     None => break, // another way to know the connection closed
                 },
 
                 _ = self.inner.notification_interval.tick() => {
-                    self.inner.send_hrd_notification(&mut att_channel).await
+                    let channel = &mut self.le_l2cap.get_att_channel().unwrap();
+
+                    self.inner.send_hrd_notification(channel).await
                 }
             }
         }
@@ -103,14 +110,14 @@ struct ConnectionInner {
 }
 
 impl ConnectionInner {
-    async fn process_att<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>, packet: &BasicFrame<Vec<u8>>)
+    async fn process_att<L>(&mut self, att_channel: &mut BasicFrameChannel<L>, packet: &BasicFrame<Vec<u8>>)
     where
         L: LogicalLink,
     {
         self.server.process(att_channel, packet).await
     }
 
-    async fn process_sm<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, packet: &mut BasicFrame<Vec<u8>>)
+    async fn process_sm<L>(&mut self, sm_channel: &mut BasicFrameChannel<L>, packet: &mut BasicFrame<Vec<u8>>)
     where
         L: LogicalLink,
     {
@@ -130,7 +137,7 @@ impl ConnectionInner {
         self.to.send(message).unwrap();
     }
 
-    async fn process_msg<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, msg: MainToConnection)
+    async fn process_msg<L>(&mut self, sm_channel: &mut BasicFrameChannel<L>, msg: MainToConnection)
     where
         L: LogicalLink,
     {
@@ -147,7 +154,7 @@ impl ConnectionInner {
         }
     }
 
-    async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>, is_encrypted: bool)
+    async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<L>, is_encrypted: bool)
     where
         L: LogicalLink,
     {
@@ -174,7 +181,7 @@ impl ConnectionInner {
         self.to.send(message).unwrap();
     }
 
-    async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<'_, L>)
+    async fn send_hrd_notification<L>(&mut self, att_channel: &mut BasicFrameChannel<L>)
     where
         L: LogicalLink,
     {

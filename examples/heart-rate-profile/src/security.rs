@@ -300,7 +300,7 @@ impl Security {
     /// `ConnectionToMain` message to alert the user that a device is
     pub async fn process<L>(
         &mut self,
-        sm_channel: &mut BasicFrameChannel<'_, L>,
+        sm_channel: &mut BasicFrameChannel<L>,
         pdu: &mut BasicFrame<Vec<u8>>,
     ) -> Option<SecurityStage>
     where
@@ -371,7 +371,7 @@ impl Security {
     }
 
     /// Called when encryption is established between the two devices
-    pub async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<'_, L>)
+    pub async fn on_encryption<L>(&mut self, sm_channel: &mut BasicFrameChannel<L>)
     where
         L: LogicalLink,
     {
@@ -400,7 +400,7 @@ impl Security {
         self.security_manager.get_keys().and_then(|keys| keys.get_ltk())
     }
 
-    pub async fn allow_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<'_, L>)
+    pub async fn allow_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<L>)
     where
         L: LogicalLink,
     {
@@ -415,7 +415,7 @@ impl Security {
             .unwrap();
     }
 
-    pub async fn reject_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<'_, L>)
+    pub async fn reject_pairing<L>(&mut self, connection_channel: &mut BasicFrameChannel<L>)
     where
         L: LogicalLink,
     {
@@ -435,7 +435,7 @@ impl Security {
 
     pub async fn process_authentication<L>(
         &mut self,
-        connection_channel: &mut BasicFrameChannel<'_, L>,
+        connection_channel: &mut BasicFrameChannel<L>,
         authentication: AuthenticationInput,
     ) -> Option<SecurityStage>
     where
