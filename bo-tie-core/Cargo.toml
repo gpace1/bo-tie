@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 aes = { version = "0.8", optional = true }
-elliptic-curve = { version = "0.12", default-features = false, features = ["ecdh"], optional = true }
-p256 = { version = "0.11", default-features = false, features = ["ecdh"], optional = true }
+elliptic-curve = { version = "0.13", default-features = false, features = ["ecdh"], optional = true }
+p256 = { version = "0.13", default-features = false, features = ["ecdh"], optional = true }
 rand_core = { version = "0.6", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
 
