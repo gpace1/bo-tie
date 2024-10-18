@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
-use bo_tie::host::l2cap::{LeULogicalLink, PhysicalLink};
+use bo_tie::host::l2cap::{LeULogicalLink, LeUNext, PhysicalLink};
 use bo_tie::BluetoothDeviceAddress;
 
 /// This sets up the advertising for the connection
@@ -130,8 +130,8 @@ async fn disconnect<H: HostChannelEnds>(hi: &mut Host<H>, connection_handle: Opt
 /// from the central device  
 ///
 /// A generic attribute server is not *technically* required for connecting, but many peer devices
-/// require some basic implementation of GATT in order to 'c vice.
-async fn server_loop<P>(logical_link: LeULogicalLink<P>, local_name: &str) -> !
+/// require some basic implementation of GATT server.
+async fn server_loop<P>(mut logical_link: LeULogicalLink<P, Vec<u8>, Vec<u8>>, local_name: &str) -> !
 where
     P: PhysicalLink,
 {
@@ -145,14 +145,12 @@ where
 
     server.give_permissions_to_client(att::AttributePermissions::Read(att::AttributeRestriction::None));
 
-    let mut att_channel = logical_link.get_att_channel();
-
-    let att_buffer = &mut Vec::new();
-
     loop {
-        let basic_frame = att_channel.receive(att_buffer).await.unwrap();
+        let LeUNext::AttributeChannel { pdu, mut channel } = logical_link.next().await.unwrap() else {
+            unreachable!()
+        };
 
-        match server.process_att_pdu(&mut att_channel, &basic_frame).await {
+        match server.process_att_pdu(&mut channel, &pdu).await {
             Ok(_) => (),
             Err(e) => println!("Cannot process acl data, '{:?}'", e),
         }
@@ -223,9 +221,15 @@ async fn main() {
     let task = async {
         advertise_setup(&mut host, local_name).await;
 
-        let le_link = wait_for_connection(&mut host).await;
+        let connection = wait_for_connection(&mut host).await;
 
-        server_loop(le_link.into(), local_name).await
+        let logical_link = LeULogicalLink::builder(connection)
+            .enable_attribute_channel()
+            .use_vec_buffer()
+            .use_vec_sdu_buffer()
+            .build();
+
+        server_loop(logical_link, local_name).await
     };
 
     tokio::select! {
