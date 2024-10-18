@@ -19,7 +19,7 @@ members = [
     "hci/*",
     "host/*",
     "bo-tie-macros",
-    "bo-tie-serde",
+    # "bo-tie-serde",
     "bo-tie-core",
     "base-crates/*",
     "base-crates/bo-tie-linux/ci/gen-bindings",
