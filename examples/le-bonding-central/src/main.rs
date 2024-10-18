@@ -4,7 +4,7 @@ mod io;
 mod privacy;
 
 use bo_tie::hci::{Host, HostChannelEnds, Next};
-use bo_tie::host::l2cap::LeULogicalLink;
+use bo_tie::host::l2cap::{LeULogicalLink, LeUNext};
 
 /// Scan for a device with the specific local name
 ///
@@ -181,69 +181,73 @@ where
 }
 
 /// Pair with a connected device
-async fn pair<P>(
-    connection_channel: &mut LeULogicalLink<P>,
+async fn pair<P, S>(
+    link: &mut LeULogicalLink<P, Vec<u8>, S>,
     sm: &mut bo_tie::host::sm::initiator::SecurityManager,
 ) -> Option<u128>
 where
     P: bo_tie::host::l2cap::PhysicalLink,
+    S: bo_tie::TryExtend<u8> + Default,
 {
     use bo_tie::host::sm::initiator::Status;
 
-    let mut sm_channel = connection_channel.get_sm_channel();
+    let mut channel = link.get_security_manager_channel().unwrap();
 
     let mut number_comparison = None;
     let mut passkey_input = None;
 
-    let buffer = &mut Vec::new();
-
-    sm.start_pairing(&mut sm_channel).await.unwrap();
+    sm.start_pairing(&mut channel).await.unwrap();
 
     'outer: loop {
         tokio::select! {
-            basic_frame = sm_channel.receive(buffer) => {
-                match sm.continue_pairing(&mut sm_channel, &basic_frame.expect("received bad data")).await.unwrap() {
-                    Status::PairingComplete => {
-                        break 'outer sm.get_keys().unwrap().get_ltk().unwrap().into()
-                    },
-                    Status::NumberComparison(n) => {
-                        println!(
-                            "To proceed with pairing, compare this number ({n}) with the \
-                            number displayed on the other device"
-                        );
-                        println!("Does {n} match the number on the other device? [y/n]");
+            next = link.next() => match next.unwrap() {
+                LeUNext::SecurityManagerChannel { pdu, mut channel } => {
+                    match sm.continue_pairing(&mut channel, &pdu).await.unwrap() {
+                        Status::PairingComplete => {
+                            break 'outer sm.get_keys().unwrap().get_ltk().unwrap().into()
+                        },
+                        Status::NumberComparison(n) => {
+                            println!(
+                                "To proceed with pairing, compare this number ({n}) with the \
+                                number displayed on the other device"
+                            );
+                            println!("Does {n} match the number on the other device? [y/n]");
 
-                        number_comparison = Some(n);
-                    },
-                    Status::PasskeyOutput(o) => {
-                        println!("enter this passkey on the other device: {o}")
-                    },
-                    Status::PasskeyInput(i) => {
-                        io::passkey_input_message(&i);
+                            number_comparison = Some(n);
+                        },
+                        Status::PasskeyOutput(o) => {
+                            println!("enter this passkey on the other device: {o}")
+                        },
+                        Status::PasskeyInput(i) => {
+                            io::passkey_input_message(&i);
 
-                        passkey_input = Some(i);
-                    },
-                    Status::PairingFailed(reason) => {
-                        eprintln!("pairing failed: {reason}");
-                        return None;
-                    },
-                    _ => (),
+                            passkey_input = Some(i);
+                        },
+                        Status::PairingFailed(reason) => {
+                            eprintln!("pairing failed: {reason}");
+                            return None;
+                        },
+                        _ => (),
+                    }
                 }
+                _ => unreachable!()
             },
 
             user_auth = io::user_authentication_input(&number_comparison, &passkey_input) => {
+                let mut channel = link.get_security_manager_channel().unwrap();
+
                 match user_auth {
                     io::UserAuthentication::NumberComparison(is_accepted) => if is_accepted {
-                        number_comparison.take().unwrap().yes(sm, &mut sm_channel).await.unwrap();
+                        number_comparison.take().unwrap().yes(sm, &mut channel).await.unwrap();
                     } else {
-                        number_comparison.take().unwrap().no(sm, &mut sm_channel).await.unwrap();
+                        number_comparison.take().unwrap().no(sm, &mut channel).await.unwrap();
                     },
                     io::UserAuthentication::PasskeyInput(passkey) =>if let Some(input) = io::process_passkey(passkey) {
                 passkey_input.as_mut().unwrap().write(input).unwrap();
 
-                passkey_input.take().unwrap().complete(sm, &mut sm_channel).await.unwrap();
+                passkey_input.take().unwrap().complete(sm, &mut channel).await.unwrap();
             } else {
-                passkey_input.take().unwrap().fail(sm, &mut sm_channel).await.unwrap();
+                passkey_input.take().unwrap().fail(sm, &mut channel).await.unwrap();
             },
                     io::UserAuthentication::Exit => break None,
                 }
@@ -292,71 +296,68 @@ async fn encrypt<H: HostChannelEnds>(
 ///
 /// # Note
 /// This must be called after method `encrypt`
-async fn bond<P>(channel: &mut LeULogicalLink<P>, sm: &mut bo_tie::host::sm::initiator::SecurityManager) -> Option<()>
+async fn bond<P, S>(
+    link: &mut LeULogicalLink<P, Vec<u8>, S>,
+    sm: &mut bo_tie::host::sm::initiator::SecurityManager,
+) -> Option<()>
 where
     P: bo_tie::host::l2cap::PhysicalLink,
+    S: bo_tie::TryExtend<u8> + Default,
 {
-    let mut sm_channel = channel.get_sm_channel();
-
     sm.set_encrypted(true);
 
-    'outer: loop {
-        let basic_frame = sm_channel.receive(&mut Vec::new()).await.expect("receiver closed");
+    loop {
+        let LeUNext::SecurityManagerChannel { pdu, mut channel } = link.next().await.unwrap() else {
+            unreachable!()
+        };
 
-        if sm.process_bonding(&mut sm_channel, &basic_frame).await.unwrap() {
+        if sm.process_bonding(&mut channel, &pdu).await.unwrap() {
             // once the peripheral has sent its bonding
             // information then this bonding information
             // is sent to the device.
-            break 'outer Some(());
+            break;
         }
     }
+
+    Some(())
 }
 
 /// Query the services for the GATT server
 ///
 /// # Note
-/// If there is not GATT server, then this will print out a messages stating as such
-async fn query_gatt_services<P>(link: &mut LeULogicalLink<P>)
+/// If there is not a GATT server, then this will print out a messages stating as such
+async fn query_gatt_services<P, S>(link: &mut LeULogicalLink<P, Vec<u8>, S>)
 where
     P: bo_tie::host::l2cap::PhysicalLink,
+    S: bo_tie::TryExtend<u8> + Default,
 {
     use bo_tie::host::att::client::{ConnectFixedClient, ResponseProcessor};
-    use bo_tie::host::gatt::Client;
-    use std::time::Duration;
-    use tokio::time::timeout;
+    use bo_tie::host::gatt;
 
-    let mut att_bearer = link.get_att_channel();
+    let mut channel = link.get_att_channel().unwrap();
 
-    // Normally you can assume that there exists a
-    // GATT server on the peer device (I think it is
-    // part of the Bluetooth certification process for
-    // every LE device to have some basic GATT server
-    // or client), but here it is not assumed.
-    let mut gatt_client: Client = match timeout(
-        Duration::from_secs(5),
-        ConnectFixedClient::connect(&mut att_bearer, None, 64),
-    )
-    .await
-    {
-        Err(_timeout) => {
-            println!("failed to connect to GATT (timeout)");
-            return;
-        }
-        Ok(Err(e)) => {
-            println!("failed to connect to GATT ({:?})", e);
-            return;
-        }
-        Ok(Ok(att_client)) => att_client.into(),
+    let connector = ConnectFixedClient::initiate(&mut channel, None, 64).await.unwrap();
+
+    let LeUNext::AttributeChannel { pdu, .. } = link.next().await.unwrap() else {
+        unreachable!()
     };
 
+    let att_client = connector.create_client(&pdu).unwrap();
+
+    let mut gatt_client: gatt::Client = att_client.into();
+
     loop {
+        let mut channel = link.get_security_manager_channel().unwrap();
+
         // It may take multiple queries before
         // all the services are discovered.
-        let querier = gatt_client.partial_discovery(&mut att_bearer).await.unwrap();
+        let querier = gatt_client.partial_discovery(&mut channel).await.unwrap();
 
-        let response = att_bearer.receive(&mut Vec::new()).await.unwrap();
+        let LeUNext::AttributeChannel { pdu, .. } = link.next().await.unwrap() else {
+            unreachable!()
+        };
 
-        if querier.process_response(&response).unwrap() {
+        if querier.process_response(&pdu).unwrap() {
             break;
         }
     }
@@ -515,7 +516,11 @@ async fn main() -> Result<(), &'static str> {
 
     let mut handle = connection.get_handle();
 
-    let mut link = LeULogicalLink::new(connection);
+    let mut link = LeULogicalLink::builder(connection)
+        .enable_security_manager_channel()
+        .enable_attribute_channel()
+        .use_vec_buffer()
+        .build();
 
     println!("pairing and bonding with {}", report.1);
 
@@ -581,7 +586,11 @@ async fn main() -> Result<(), &'static str> {
             new_conneciton = reconnect(&mut host, &mut privacy) => {
                 handle = new_conneciton.get_handle();
 
-                link = LeULogicalLink::new(new_conneciton);
+                link = LeULogicalLink::builder(new_conneciton)
+                    .enable_security_manager_channel()
+                    .enable_attribute_channel()
+                    .use_vec_buffer()
+                    .build();
             }
             _ = io::exit_signal() => {
                 cancel_connect(&mut host).await;
