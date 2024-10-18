@@ -8,6 +8,7 @@ bo-tie = { path = "../../bo-tie" }
 futures = "0.3"
 simplelog = "0.12.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+log = "0.4.22"
 
 [target.'cfg(any(unix, windows))'.dependencies]
 crossterm = "0.25.0"

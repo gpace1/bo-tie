@@ -5,8 +5,10 @@ mod privacy;
 
 use crate::privacy::host_privacy::RpaInterval;
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
+use bo_tie::host::l2cap::{LeULogicalLink, LeUNext};
 use bo_tie::host::sm::responder::Status;
 use bo_tie::host::sm::Keys;
+use log::log;
 
 #[derive(Clone, Copy)]
 struct AddressInfo {
@@ -130,7 +132,7 @@ async fn wait_for_connection<H: HostChannelEnds>(
 
 async fn on_encryption_change<L, Q>(
     ed: &bo_tie::hci::events::parameters::EncryptionChangeV1Data,
-    security_manager_channel: &mut bo_tie::host::l2cap::BasicFrameChannel<'_, L>,
+    security_manager_channel: &mut bo_tie::host::l2cap::BasicFrameChannel<L>,
     security_manager: &mut bo_tie::host::sm::responder::SecurityManager,
     gatt_server: &mut bo_tie::host::gatt::Server<Q>,
 ) where
@@ -179,11 +181,14 @@ where
 
     let mut event_receiver = connection.take_event_receiver().unwrap();
 
-    let logical_link: bo_tie::host::l2cap::LeULogicalLink<_> = connection.try_into_le().unwrap().into();
+    let physical_link = connection.try_into_le().unwrap();
 
-    let mut att_channel = logical_link.get_att_channel();
-
-    let mut sm_channel = logical_link.get_sm_channel();
+    let mut logical_link = LeULogicalLink::builder(physical_link)
+        .enable_attribute_channel()
+        .enable_security_manager_channel()
+        .use_vec_buffer()
+        .use_vec_sdu_buffer()
+        .build();
 
     let gsb = gatt::GapServiceBuilder::new(local_name, None);
 
@@ -215,31 +220,28 @@ where
     let mut number_comparison = None;
     let mut passkey_input = None;
 
-    let att_buffer = &mut Vec::new();
-    let sm_buffer = &mut Vec::new();
-
     loop {
         tokio::select! {
-            att_packet = att_channel.receive(att_buffer) => {
-                gatt_server
-                    .process_att_pdu(&mut att_channel, &att_packet.unwrap())
-                    .await
-                    .unwrap();
-            }
-
-            sm_packet = sm_channel.receive(sm_buffer) => {
+            next = logical_link.next() => match &mut next.unwrap() {
+                LeUNext::AttributeChannel {pdu, channel} => {
+                    gatt_server
+                        .process_att_pdu(channel, pdu)
+                        .await
+                        .unwrap();
+                }
+                LeUNext::SecurityManagerChannel { pdu, channel } => {
                     match security_manager
-                        .process_command(&mut sm_channel, &sm_packet.unwrap())
+                        .process_command(channel, pdu)
                         .await
                         .unwrap()
                     {
                         Status::NumberComparison(n) => {
                             println!(
                                 "To proceed with pairing, compare this number ({n}) with \
-                                the number displayed on the other device"
+                                        the number displayed on the other device"
                             );
                             println!("Does {n} match the number on the other device? \
-                                [y/n]"
+                                        [y/n]"
                             );
 
                             number_comparison = Some(n);
@@ -250,7 +252,7 @@ where
                             passkey_input = Some(i)
                         }
                         Status::PasskeyOutput(o) => {
-                           println!("enter this passkey on the other device: {o}")
+                            println!("enter this passkey on the other device: {o}")
                         },
                         Status::PairingFailed(reason) => {
                             eprintln!("pairing failed: {reason}");
@@ -260,11 +262,15 @@ where
                         Status::BondingComplete => println!("bonding complete"),
                         _ => (),
                     }
-            }
+                }
+                _ => unreachable!()
+            },
 
             event_data = event_receiver.recv() => match event_data {
                 Some(EventsData::EncryptionChangeV1(ed) )=> {
-                    on_encryption_change(&ed, &mut sm_channel, &mut security_manager, &mut gatt_server).await;
+                    let channel = &mut logical_link.get_security_manager_channel().unwrap();
+
+                    on_encryption_change(&ed, channel, &mut security_manager, &mut gatt_server).await;
                 }
                 Some(EventsData::LeMeta(LeMetaData::LongTermKeyRequest(_))) => {
                     let opt_ltk = security_manager.get_keys().and_then(|keys| keys.get_ltk());
@@ -275,29 +281,37 @@ where
                 _ => unreachable!(),
             },
 
-            is_accepted = io::number_comparison(&mut number_comparison) => if is_accepted {
-                number_comparison
-                    .take()
-                    .unwrap()
-                    .yes(&mut security_manager, &mut sm_channel)
-                    .await
-                    .unwrap();
-            } else {
-                number_comparison
-                    .take()
-                    .unwrap()
-                    .no(&mut security_manager, &mut sm_channel)
-                    .await
-                    .unwrap();
-            },
+            is_accepted = io::number_comparison(&mut number_comparison) => {
+                let channel = &mut logical_link.get_security_manager_channel().unwrap();
 
-            passkey = io::get_passkey(passkey_input.is_none()) => if let Some(input) = io::process_passkey(passkey) {
-                passkey_input.as_mut().unwrap().write(input).unwrap();
+                if is_accepted {
+                    number_comparison
+                        .take()
+                        .unwrap()
+                        .yes(&mut security_manager, channel)
+                        .await
+                        .unwrap();
+                } else {
+                    number_comparison
+                        .take()
+                        .unwrap()
+                        .no(&mut security_manager, channel)
+                        .await
+                        .unwrap();
+                }
+            }
 
-                passkey_input.take().unwrap().complete(&mut security_manager, &mut sm_channel).await.unwrap();
-            } else {
-                passkey_input.take().unwrap().fail(&mut security_manager, &mut sm_channel).await.unwrap();
-            },
+            passkey = io::get_passkey(passkey_input.is_none()) => {
+                let channel = &mut logical_link.get_security_manager_channel().unwrap();
+
+                if let Some(input) = io::process_passkey(passkey) {
+                    passkey_input.as_mut().unwrap().write(input).unwrap();
+
+                    passkey_input.take().unwrap().complete(&mut security_manager, channel).await.unwrap();
+                } else {
+                    passkey_input.take().unwrap().fail(&mut security_manager, channel).await.unwrap();
+                }
+            }
         }
     }
 
