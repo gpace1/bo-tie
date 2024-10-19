@@ -1,7 +1,6 @@
 //! Commands for the user to input
 
 use crate::io::{MainToUserInput, Mode, Output};
-use bo_tie::hci::events::parameters::CurrentMode;
 use bo_tie::BluetoothDeviceAddress;
 use clap::error::ErrorKind;
 use clap::{ArgMatches, Args, CommandFactory, Error, FromArgMatches, Parser, Subcommand};

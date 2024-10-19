@@ -8,7 +8,6 @@ use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
 use bo_tie::host::l2cap::{LeULogicalLink, LeUNext};
 use bo_tie::host::sm::responder::Status;
 use bo_tie::host::sm::Keys;
-use log::log;
 
 #[derive(Clone, Copy)]
 struct AddressInfo {
