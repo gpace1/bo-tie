@@ -40,6 +40,7 @@ use bo_tie_l2cap::LeULogicalLink;
 /// ```
 ///
 /// [`PhysicalLink`]: bo_tie_l2cap::PhysicalLink
+#[derive(Debug)]
 pub struct LeLink<C> {
     front_cap: usize,
     back_cap: usize,

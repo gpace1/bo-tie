@@ -245,6 +245,7 @@ impl<S, R> BufferReserve for Channel<S, R> {
 ///
 /// These are the ends of the channels used by a host async task for sending messages to and from an
 /// interface async task.
+#[derive(Debug)]
 pub struct HostChannelEnds<S1, R1, R2, P1, P2, P3> {
     front_capacity: usize,
     back_capacity: usize,
