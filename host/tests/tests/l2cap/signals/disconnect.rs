@@ -40,7 +40,7 @@ async fn le_credit_connection_disconnect_source_disconnected() {
 
                             assert_eq!(request.source_cid, source_cid.unwrap());
 
-                            request.send_disconnect_response(channel).await.unwrap();
+                            assert!(request.maybe_send_disconnect_response(channel).await.unwrap());
 
                             assert!(link.get_credit_based_channel(destination_cid.unwrap()).is_none());
                         }
@@ -152,7 +152,7 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_source_cid() {
                         }
                         ReceivedLeUSignal::DisconnectRequest(request) => {
                             let Err(DisconnectResponseError::InvalidSourceChannelIdentifier(_)) =
-                                request.send_disconnect_response(channel).await
+                                request.maybe_send_disconnect_response(channel).await
                             else {
                                 panic!("unexpected error")
                             };
@@ -199,7 +199,7 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_destination_cid
                         }
                         ReceivedLeUSignal::DisconnectRequest(request) => {
                             let Err(DisconnectResponseError::InvalidDestinationChannelIdentifier(_)) =
-                                request.send_disconnect_response(channel).await
+                                request.maybe_send_disconnect_response(channel).await
                             else {
                                 panic!("unexpected error")
                             };
@@ -273,7 +273,7 @@ async fn le_credit_connection_disconnect_source_disconnected_race() {
                         }
                         ReceivedLeUSignal::DisconnectRequest(request) => {
                             // it's a race!
-                            request.send_disconnect_response(channel).await.unwrap();
+                            assert!(!request.maybe_send_disconnect_response(channel).await.unwrap());
 
                             assert!(link.get_credit_based_channel(destination_cid.unwrap()).is_none());
                         }
@@ -363,7 +363,7 @@ async fn le_credit_connection_disconnect_destination_disconnected() {
 
             assert_eq!(this_channel_id, request.destination_cid);
 
-            request.send_disconnect_response(&mut channel).await.unwrap();
+            assert!(request.maybe_send_disconnect_response(&mut channel).await.unwrap());
 
             core::future::pending::<()>().await;
         })
@@ -484,7 +484,7 @@ async fn le_credit_connection_disconnect_destination_bad_source_cid() {
             assert_eq!(this_channel_id, request.destination_cid);
 
             let Err(DisconnectResponseError::InvalidSourceChannelIdentifier(_)) =
-                request.send_disconnect_response(&mut channel).await
+                request.maybe_send_disconnect_response(&mut channel).await
             else {
                 panic!("unexpected error")
             };
@@ -543,7 +543,7 @@ async fn le_credit_connection_disconnect_destination_bad_destination_cid() {
             assert_ne!(this_channel_id, request.destination_cid);
 
             let Err(DisconnectResponseError::InvalidDestinationChannelIdentifier(_)) =
-                request.send_disconnect_response(&mut channel).await
+                request.maybe_send_disconnect_response(&mut channel).await
             else {
                 panic!("unexpected error")
             };
@@ -631,7 +631,7 @@ async fn le_credit_connection_disconnect_destination_bad_destination_race() {
 
             assert_eq!(this_channel_id, request.destination_cid);
 
-            request.send_disconnect_response(&mut channel).await.unwrap();
+            assert!(!request.maybe_send_disconnect_response(&mut channel).await.unwrap());
 
             std::future::pending::<()>().await;
         })

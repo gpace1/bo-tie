@@ -640,7 +640,7 @@ impl<T> core::ops::DerefMut for ReceivedRequest<T> {
 }
 
 impl ReceivedRequest<DisconnectRequest> {
-    /// Send the disconnect response
+    /// (Maybe) Send the disconnect response
     ///
     /// # Invalid Disconnect Request
     ///
@@ -655,15 +655,23 @@ impl ReceivedRequest<DisconnectRequest> {
     ///
     /// ### Disconnect Race
     ///
-    /// It's possible that both the peer and this device initiate a connection at the same time. The
-    /// logical link is able to detect this race as it puts the channel in a 'requesting disconnect'
-    /// state when it sends a disconnect request. This state is cleared once the future returned by
-    /// this method is called. This is how `send_disconnect_response` can detect whether a peer's
-    /// disconnect request is actually bad or a disconnect race occurred.
-    pub async fn send_disconnect_response<L: LogicalLink>(
+    /// It's possible that both the peer and this device initiate a disconnection at the same time.
+    /// This occurs when both devices send a `DisconnectRequest` before either of them can process
+    /// their associate's signal. The logical links (of bo-tie) are able to detect this race as they
+    /// put the channel in a 'requesting disconnect' state whenever they send a `DisconnectRequest`.
+    /// Then the state is cleared when the future returned by this method is polled to completion.
+    /// This is how `send_disconnect_response` can detect whether a peer's disconnect request is
+    /// either a bad signal or a disconnect race occurred.
+    ///
+    /// # Future Output
+    ///
+    /// `true` is output if the disconnection was successfully initiated and a disconnect response
+    /// was sent. `false` is only returned if a disconnect race happened and a command reject
+    /// response is sent with the invalid channel ID reason.
+    pub async fn maybe_send_disconnect_response<L: LogicalLink>(
         &self,
         signalling_channel: &mut SignallingChannel<L>,
-    ) -> Result<(), DisconnectResponseError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
+    ) -> Result<bool, DisconnectResponseError<<L::PhysicalLink as PhysicalLink>::SendErr>> {
         match signalling_channel
             .logical_link
             .get_dyn_channel(self.request.destination_cid)
@@ -686,7 +694,9 @@ impl ReceivedRequest<DisconnectRequest> {
                     signalling_channel
                         .send(c_frame)
                         .await
-                        .map_err(|e| DisconnectResponseError::SendErr(e))
+                        .map_err(|e| DisconnectResponseError::SendErr(e))?;
+
+                    Ok(true)
                 } else {
                     Err(DisconnectResponseError::InvalidSourceChannelIdentifier(
                         self.request.source_cid,
@@ -709,7 +719,7 @@ impl ReceivedRequest<DisconnectRequest> {
                     .await
                     .map_err(|e| DisconnectResponseError::SendErr(e))?;
 
-                Ok(())
+                Ok(false)
             }
             _ => {
                 let rejection = CommandRejectResponse::new_invalid_cid_in_request(
