@@ -11,7 +11,6 @@ use bo_tie_host_tests::PhysicalLinkLoop;
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::{LeULogicalLink, LeUNext};
-use std::cell::RefCell;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -379,7 +378,7 @@ macro_rules! connect_permission_setup {
 
                 server.revoke_permissions_of_client(FULL_WRITE_PERMISSIONS);
 
-                server.give_permissions_to_client($ref_cell_client_permission.borrow().clone());
+                server.give_permissions_to_client($ref_cell_client_permission.lock().unwrap().clone());
 
                 loop {
                     match &mut link.next().await.unwrap() {
@@ -388,7 +387,7 @@ macro_rules! connect_permission_setup {
 
                             server.revoke_permissions_of_client(FULL_WRITE_PERMISSIONS);
 
-                            server.give_permissions_to_client($ref_cell_client_permission.borrow().clone());
+                            server.give_permissions_to_client($ref_cell_client_permission.lock().unwrap().clone());
                         }
                         next => panic!("received unexpected {next:?}"),
                     }
@@ -429,41 +428,44 @@ macro_rules! prepare_permission_tests {
         ::paste::paste! {
             #[tokio::test]
             async fn [<insufficient_prepare_ $permission_name _permissions>] () {
-                connect_permission_setup!( RefCell::new(Vec::<::bo_tie_att::AttributePermissions>::new()), |link, client| {
-                    let mtu = client.get_mtu().unwrap().into();
+                connect_permission_setup!(
+                    ::std::sync::Mutex::new(Vec::<::bo_tie_att::AttributePermissions>::new()),
+                    |link, client| {
+                        let mtu = client.get_mtu().unwrap().into();
 
-                    let prepared_requests = PreparedWriteRequests::new($handle, &10u8, mtu);
+                        let prepared_requests = PreparedWriteRequests::new($handle, &10u8, mtu);
 
-                    let first_request = prepared_requests.iter().next().unwrap();
+                        let first_request = prepared_requests.iter().next().unwrap();
 
-                    let channel = &mut link.get_att_channel().unwrap();
+                        let channel = &mut link.get_att_channel().unwrap();
 
-                    let response_processor = client
-                        .prepare_write_request(channel, first_request)
-                        .await
-                        .expect("failed to send request");
+                        let response_processor = client
+                            .prepare_write_request(channel, first_request)
+                            .await
+                            .expect("failed to send request");
 
-                    let response = match link.next().await.unwrap() {
-                        LeUNext::AttributeChannel { pdu, .. } => pdu,
-                        next => panic!("received unexpected {next:?}")
-                    };
+                        let response = match link.next().await.unwrap() {
+                            LeUNext::AttributeChannel { pdu, .. } => pdu,
+                            next => panic!("received unexpected {next:?}")
+                        };
 
-                    match response_processor.process_response(&response) {
-                        Err(bo_tie_att::Error::Pdu(pdu)) => {
-                            assert_eq!(
-                                pdu.get_parameters().error,
-                                bo_tie_att::pdu::Error::$exp_err
-                            )
+                        match response_processor.process_response(&response) {
+                            Err(bo_tie_att::Error::Pdu(pdu)) => {
+                                assert_eq!(
+                                    pdu.get_parameters().error,
+                                    bo_tie_att::pdu::Error::$exp_err
+                                )
+                            }
+                            Err(e) => panic!("unexpected error {:?}", e),
+                            Ok(_) => panic!("unexpected response"),
                         }
-                        Err(e) => panic!("unexpected error {:?}", e),
-                        Ok(_) => panic!("unexpected response"),
                     }
-                })
+                )
             }
 
             #[tokio::test]
             async fn [<sufficient_prepare_ $permission_name _permissions>] () {
-                let permissions = RefCell::new(vec![
+                let permissions = ::std::sync::Mutex::new(vec![
                     ::bo_tie_att::AttributePermissions::Write(
                         ::bo_tie_att::AttributeRestriction::$restriction $( (
                             ::bo_tie_att::EncryptionKeySize::$encryption
@@ -499,7 +501,7 @@ macro_rules! prepare_permission_tests {
 
             #[tokio::test]
             async fn [<sufficient_to_insufficient_prepare_ $permission_name _permissions>] () {
-                let permissions = RefCell::new(vec![
+                let permissions = ::std::sync::Mutex::new(vec![
                     ::bo_tie_att::AttributePermissions::Write(
                         ::bo_tie_att::AttributeRestriction::$restriction $( (
                             ::bo_tie_att::EncryptionKeySize::$encryption
@@ -518,7 +520,7 @@ macro_rules! prepare_permission_tests {
 
                     // this will change the permissions *after* the next
                     // ATT request PDU
-                    *permissions.borrow_mut() = vec![];
+                    *permissions.lock().unwrap() = vec![];
 
                     let response_processor = client
                         .prepare_write_request(channel, first_request)
@@ -590,7 +592,7 @@ macro_rules! execute_permission_tests {
         ::paste::paste! {
             #[tokio::test]
             async fn [<insufficient_execute_ $permission_name _permissions>] () {
-                let permissions = RefCell::new(vec![
+                let permissions = ::std::sync::Mutex::new(vec![
                     ::bo_tie_att::AttributePermissions::Read(
                         ::bo_tie_att::AttributeRestriction::None
                     ),
@@ -625,7 +627,7 @@ macro_rules! execute_permission_tests {
                         Ok(_) => (),
                     }
 
-                    *permissions.borrow_mut() = vec![];
+                    *permissions.lock().unwrap() = vec![];
 
                     let channel = &mut link.get_att_channel().unwrap();
 
@@ -665,7 +667,7 @@ macro_rules! execute_permission_tests {
 
             #[tokio::test]
             async fn [<sufficient_execute_ $permission_name _permissions>] () {
-                let permissions = RefCell::new(vec![
+                let permissions = ::std::sync::Mutex::new(vec![
                     ::bo_tie_att::AttributePermissions::Write(
                         ::bo_tie_att::AttributeRestriction::$restriction $( (
                             ::bo_tie_att::EncryptionKeySize::$encryption

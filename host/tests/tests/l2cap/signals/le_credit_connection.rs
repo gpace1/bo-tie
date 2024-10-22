@@ -135,8 +135,8 @@ async fn le_credit_connection() {
 
 pub async fn invalid_response_test_factory<I>(response: I, expected_error: SignalError)
 where
-    I: IntoIterator<Item = u8>,
-    <I as IntoIterator>::IntoIter: ExactSizeIterator,
+    I: IntoIterator<Item = u8> + Send,
+    <I as IntoIterator>::IntoIter: ExactSizeIterator + Send,
 {
     PhysicalLinkLoop::default()
         .test_scaffold()
@@ -303,8 +303,8 @@ pub async fn response_with_rejected_request() {
 
 async fn invalid_request_test_factory<I>(request: I, expected_error: SignalError)
 where
-    I: IntoIterator<Item = u8>,
-    <I as IntoIterator>::IntoIter: ExactSizeIterator,
+    I: IntoIterator<Item = u8> + Send,
+    <I as IntoIterator>::IntoIter: ExactSizeIterator + Send,
 {
     PhysicalLinkLoop::default()
         .test_scaffold()
