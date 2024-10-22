@@ -795,10 +795,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
     /// The future returned by this method increases the internal counter of peer credits by input
     /// '`amount`' and sends a *flow control credit indication* over the link's signalling channel
     /// with the number of credits given.
-    pub async fn give_credits_to_peer(
-        &mut self,
-        amount: u16,
-    ) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
+    pub async fn give_credits_to_peer(mut self, amount: u16) -> Result<(), <L::PhysicalLink as PhysicalLink>::SendErr> {
         let credits_given = &mut self.get_mut_channel_data().credits_given_to_peer;
 
         *credits_given = (*credits_given).saturating_add(amount);
@@ -806,9 +803,7 @@ impl<L: LogicalLink> CreditBasedChannel<L> {
         let new_credits = ChannelCredits::new(self.get_channel_id(), amount);
 
         self.logical_link
-            .get_signalling_channel()
-            .unwrap()
-            .give_credits_to_peer(new_credits)
+            .with_signalling_channel(|mut channel| async move { channel.give_credits_to_peer(new_credits).await })
             .await
     }
 

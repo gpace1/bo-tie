@@ -52,14 +52,6 @@ pub trait LogicalLinkPrivate: Sized {
 
     type LinkFlavor: LinkFlavor;
 
-    type Deferred<'a>: LogicalLinkPrivate<
-        PhysicalLink = Self::PhysicalLink,
-        PduBuffer = Self::PduBuffer,
-        LinkFlavor = Self::LinkFlavor,
-    >
-    where
-        Self: 'a;
-
     /// Reserve a dynamic channel
     ///
     /// This is used for reserve a dynamic channel ID upon initiating a dynamic channel.
@@ -127,14 +119,16 @@ pub trait LogicalLinkPrivate: Sized {
     /// Get a dynamic channel by its identifier
     fn get_dyn_channel(&mut self, id: ChannelIdentifier) -> Option<&LeUChannelType<Self::SduBuffer>>;
 
-    /// Get the signalling channel
+    /// Do something with the signalling channel
     ///
-    /// This returns the channel used for siding `L2CAP` control frames to the linked device. This
-    /// returns `None` if this logical link does not have a signalling channel.
-    fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self::Deferred<'_>>>;
+    /// # Panic
+    /// This panics if the signalling channel is not enabled.
+    fn with_signalling_channel<F, T>(self, f: F) -> T
+    where
+        F: FnOnce(SignallingChannel<Self>) -> T;
 
     /// Get a credit based channel
-    fn get_credit_based_channel(&mut self, cid: ChannelIdentifier) -> Option<CreditBasedChannel<Self::Deferred<'_>>>;
+    fn get_credit_based_channel(self, cid: ChannelIdentifier) -> Option<CreditBasedChannel<Self>>;
 
     /// Get a reference to the physical link
     fn get_physical_link(&self) -> &Self::PhysicalLink;
@@ -263,10 +257,6 @@ impl<P: PhysicalLink, B: Default, S> LogicalLinkPrivate for LeULogicalLinkHandle
 
     type LinkFlavor = LeULink;
 
-    type Deferred<'a> = LeULogicalLinkHandle<'a, P, B, S>
-        where
-            Self: 'a;
-
     fn reserve_dyn_channel(&mut self) -> Result<ChannelIdentifier, NewDynChannelError> {
         self.occupy_next_dyn_channel(LeUChannelType::Reserved)
     }
@@ -336,17 +326,31 @@ impl<P: PhysicalLink, B: Default, S> LogicalLinkPrivate for LeULogicalLinkHandle
         }
     }
 
-    fn get_signalling_channel(&mut self) -> Option<SignallingChannel<Self::Deferred<'_>>> {
-        let handle = LeULogicalLinkHandle::new(&mut self.logical_link, LE_LINK_SIGNALLING_CHANNEL_INDEX);
+    fn with_signalling_channel<F, T>(mut self, f: F) -> T
+    where
+        F: FnOnce(SignallingChannel<Self>) -> T,
+    {
+        self.index = LE_LINK_SIGNALLING_CHANNEL_INDEX;
 
-        Some(SignallingChannel::new(
-            ChannelIdentifier::Le(LeCid::LeSignalingChannel),
-            handle,
-        ))
+        let channel = SignallingChannel::new(ChannelIdentifier::Le(LeCid::LeSignalingChannel), self);
+
+        f(channel)
     }
 
-    fn get_credit_based_channel(&mut self, cid: ChannelIdentifier) -> Option<CreditBasedChannel<Self::Deferred<'_>>> {
-        self.logical_link.get_credit_based_channel(cid)
+    fn get_credit_based_channel(mut self, cid: ChannelIdentifier) -> Option<CreditBasedChannel<Self>> {
+        let ChannelIdentifier::Le(LeCid::DynamicallyAllocated(dyn_channel_id)) = cid else {
+            return None;
+        };
+
+        let index = self.logical_link.convert_dyn_index(dyn_channel_id);
+
+        if let Some(LeUChannelType::CreditBasedChannel { .. }) = self.logical_link.channels.get(index) {
+            self.index = index;
+
+            Some(CreditBasedChannel::new(cid, self))
+        } else {
+            None
+        }
     }
 
     fn get_physical_link(&self) -> &P {

@@ -770,10 +770,10 @@ impl ReceivedRequest<LeCreditBasedConnectionRequest> {
     /// # Panic
     /// This method will panic if there are no more dynamic channels that can be allocated for a
     /// LE-U logical link.
-    pub fn accept_le_credit_based_connection<'a, L: LogicalLink>(
-        &'a self,
-        signal_channel: &'a mut SignallingChannel<L>,
-    ) -> LeCreditBasedConnectionResponseBuilder<'a, L> {
+    pub fn accept_le_credit_based_connection<L: LogicalLink>(
+        &self,
+        signal_channel: SignallingChannel<L>,
+    ) -> LeCreditBasedConnectionResponseBuilder<L> {
         let initial_credits = 0;
 
         LeCreditBasedConnectionResponseBuilder {
@@ -807,7 +807,7 @@ impl ReceivedRequest<LeCreditBasedConnectionRequest> {
 /// Builder used for creating a *LE Credit Based Connection Response*
 #[must_use]
 pub struct LeCreditBasedConnectionResponseBuilder<'a, L> {
-    signal_channel: &'a mut SignallingChannel<L>,
+    signal_channel: SignallingChannel<L>,
     request: &'a LeCreditBasedConnectionRequest,
     mtu: u16,
     mps: u16,
@@ -860,7 +860,7 @@ impl<'a, L> LeCreditBasedConnectionResponseBuilder<'a, L> {
     /// If this was not called on an LE-U logical link or there was an error sending the response.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub async fn send_success_response(self) -> Result<CreditBasedChannel<L::Deferred<'a>>, LeCreditResponseError<L>>
+    pub async fn send_success_response(mut self) -> Result<CreditBasedChannel<L>, LeCreditResponseError<L>>
     where
         L: LogicalLink,
         L::SduBuffer: Default,
@@ -1015,11 +1015,11 @@ impl ReceivedResponse<LeCreditBasedConnectionResponse> {
     /// [`ConnectionSuccessful`], or the link failed to allocate a dynamic channel.
     ///
     /// [`ConnectionSuccessful`]: LeCreditBasedConnectionResponseResult::ConnectionSuccessful
-    pub fn create_le_credit_connection<'d, L>(
+    pub fn create_le_credit_connection<L>(
         &self,
         request: &LeCreditBasedConnectionRequest,
-        signals_channel: &'d mut SignallingChannel<L>,
-    ) -> Result<CreditBasedChannel<L::Deferred<'d>>, CreateLeCreditConnectionError>
+        mut signals_channel: SignallingChannel<L>,
+    ) -> Result<CreditBasedChannel<L>, CreateLeCreditConnectionError>
     where
         L: LogicalLink,
         L::SduBuffer: Default,
