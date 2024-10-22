@@ -9,7 +9,6 @@
 //!
 //! [`commands`]: crate::commands
 
-#![cfg_attr(feature = "unstable-type-alias-impl-trait", feature(type_alias_impl_trait))]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
@@ -377,7 +376,7 @@ impl<T> HciAclData<T> {
 
         // remove the HCI ACL data packet header
         buffer.try_front_remove(4).expect("unexpected invalid ACL packet size");
-        
+
         let data_total_len = buffer
             .len()
             .checked_sub(data_length)

@@ -8,7 +8,7 @@ license = "MIT"
 edition = "2021"
 
 [dependencies]
-bo-tie-core = {path = "../bo-tie-core", default-features = false }
+bo-tie-core = { path = "../bo-tie-core", default-features = false }
 bo-tie-hci-host = { path = "../hci/bo-tie-hci-host", default-features = false, optional = true }
 bo-tie-hci-interface = { path = "../hci/bo-tie-hci-interface", default-features = false, optional = true }
 bo-tie-hci-util = { path = "../hci/bo-tie-hci-util", default-features = false, optional = true }
@@ -20,7 +20,7 @@ bo-tie-gatt = { path = "../host/bo-tie-gatt", default-features = false, optional
 bo-tie-sm = { path = "../host/bo-tie-sm", default-features = false, optional = true }
 
 [features]
-default = ["std", "hci", "l2cap", "gap", "att", "gatt", "sm", "cryptography", "sys-rand" ]
+default = ["std", "hci", "l2cap", "gap", "att", "gatt", "sm", "cryptography", "sys-rand"]
 std = ["bo-tie-core/std", "bo-tie-hci-host/std", "bo-tie-hci-interface/std", "bo-tie-hci-util/std", "bo-tie-sm/std", "bo-tie-l2cap/std"]
 hci = ["bo-tie-hci-util", "bo-tie-hci-host", "bo-tie-hci-interface"]
 l2cap = ["bo-tie-host-util", "bo-tie-l2cap", "bo-tie-hci-host/l2cap"]
@@ -41,7 +41,7 @@ async-trait = ["bo-tie-att/async-trait"]
 #
 # These are subject to change and code enabled by these features may not be "additive" (see: https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
 unstable = [
-    "bo-tie-hci-util/unstable", "bo-tie-hci-host/unstable", "bo-tie-hci-interface/unstable", "bo-tie-gatt/unstable"
+    "bo-tie-hci-util/unstable", "bo-tie-hci-interface/unstable", "bo-tie-gatt/unstable"
 ]
 
 
