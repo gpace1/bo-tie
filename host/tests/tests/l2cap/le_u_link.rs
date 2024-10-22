@@ -32,7 +32,7 @@ async fn minimal_fragments() {
             let mut channel = link.get_att_channel().unwrap();
 
             channel
-                .send(TEST_DATA.iter().copied())
+                .send(TEST_DATA.to_vec().into_iter())
                 .await
                 .expect("failed to send gibberish")
         })
@@ -470,7 +470,7 @@ async fn le_multiple_receiving() {
             let mut checklist = [false; 5];
 
             while checklist != [true; 5] {
-                match &mut link.next().await.unwrap() {
+                match link.next().await.unwrap() {
                     LeUNext::SignallingChannel { signal, channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                             let channel = request
@@ -725,9 +725,9 @@ async fn le_dyn_channel_dropped_while_receiving() {
 
             loop {
                 tokio::select! {
-                    next = link.next() => match &mut next.unwrap() {
+                    next = link.next() => match next.unwrap() {
                         LeUNext::SignallingChannel { signal, channel} => match signal {
-                            ReceivedLeUSignal::UnknownSignal { code, ..} if *code == 0xFF => break,
+                            ReceivedLeUSignal::UnknownSignal { code, ..} if code == 0xFF => break,
                             ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                                 peer_cid = request.get_source_cid().into();
 

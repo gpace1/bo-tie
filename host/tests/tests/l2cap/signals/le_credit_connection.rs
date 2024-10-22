@@ -33,13 +33,10 @@ async fn le_credit_connection() {
 
             loop {
                 match link.next().await.unwrap() {
-                    LeUNext::SignallingChannel { signal, .. } => match signal {
+                    LeUNext::SignallingChannel { signal, channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
-                            let mut signalling_channel = link.get_signalling_channel().unwrap();
-
                             if credit_channel_id.is_none() {
-                                let channel_builder =
-                                    request.accept_le_credit_based_connection(&mut signalling_channel);
+                                let channel_builder = request.accept_le_credit_based_connection(channel);
 
                                 let channel_id =
                                     channel_builder.send_success_response().await.unwrap().get_channel_id();
@@ -111,12 +108,12 @@ async fn le_credit_connection() {
             }
 
             response
-                .create_le_credit_connection(&le_connect_request, &mut link.get_signalling_channel().unwrap())
+                .create_le_credit_connection(&le_connect_request, link.get_signalling_channel().unwrap())
                 .unwrap();
 
             let channel_id = le_connect_request.get_source_cid();
 
-            let mut channel = link.get_credit_based_channel(channel_id).unwrap();
+            let channel = link.get_credit_based_channel(channel_id).unwrap();
 
             channel.give_credits_to_peer(32).await.unwrap();
 
@@ -418,7 +415,7 @@ async fn le_credit_management() {
                 .await
                 .unwrap();
 
-            let (response, mut signalling_channel) = match link.next().await.unwrap() {
+            let (response, signalling_channel) = match link.next().await.unwrap() {
                 LeUNext::SignallingChannel {
                     signal: ReceivedLeUSignal::LeCreditBasedConnectionResponse(response),
                     channel,
@@ -427,7 +424,7 @@ async fn le_credit_management() {
             };
 
             let mut credit_channel = response
-                .create_le_credit_connection(&request, &mut signalling_channel)
+                .create_le_credit_connection(&request, signalling_channel)
                 .unwrap();
 
             let mut sdu_data = credit_channel.send(test_message.into_iter().copied()).await.unwrap();
@@ -459,7 +456,7 @@ async fn le_credit_management() {
                 .use_vec_sdu_buffer()
                 .build();
 
-            let (request, mut channel) = match link.next().await.unwrap() {
+            let (request, channel) = match link.next().await.unwrap() {
                 LeUNext::SignallingChannel {
                     signal: ReceivedLeUSignal::LeCreditBasedConnectionRequest(request),
                     channel,
@@ -467,8 +464,8 @@ async fn le_credit_management() {
                 next => panic!("received unexpected next: {next:?}"),
             };
 
-            let mut channel = request
-                .accept_le_credit_based_connection(&mut channel)
+            let channel = request
+                .accept_le_credit_based_connection(channel)
                 .send_success_response()
                 .await
                 .unwrap();
@@ -478,7 +475,7 @@ async fn le_credit_management() {
             let sdu = loop {
                 match link.next().await.unwrap() {
                     LeUNext::CreditBasedChannel(CreditBasedChannelNext::Sdu { sdu, .. }) => break sdu,
-                    LeUNext::CreditBasedChannel(CreditBasedChannelNext::PeerOutOfCredits { mut channel }) => {
+                    LeUNext::CreditBasedChannel(CreditBasedChannelNext::PeerOutOfCredits { channel }) => {
                         channel.give_credits_to_peer(1).await.unwrap()
                     }
                     next => panic!("received unexpected {next:?}"),

@@ -21,8 +21,8 @@ async fn le_credit_connection_disconnect_source_disconnected() {
             let mut destination_cid = None;
 
             loop {
-                match &mut link.next().await.unwrap() {
-                    LeUNext::SignallingChannel { signal, channel } => match signal {
+                match link.next().await.unwrap() {
+                    LeUNext::SignallingChannel { signal, mut channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                             source_cid = Some(request.get_source_cid());
 
@@ -40,7 +40,7 @@ async fn le_credit_connection_disconnect_source_disconnected() {
 
                             assert_eq!(request.source_cid, source_cid.unwrap());
 
-                            assert!(request.maybe_send_disconnect_response(channel).await.unwrap());
+                            assert!(request.maybe_send_disconnect_response(&mut channel).await.unwrap());
 
                             assert!(link.get_credit_based_channel(destination_cid.unwrap()).is_none());
                         }
@@ -69,7 +69,7 @@ async fn le_credit_connection_disconnect_source_disconnected() {
                 .await
                 .unwrap();
 
-            let LeUNext::SignallingChannel { signal, mut channel } = link.next().await.unwrap() else {
+            let LeUNext::SignallingChannel { signal, channel } = link.next().await.unwrap() else {
                 panic!("unexpected next");
             };
 
@@ -77,13 +77,17 @@ async fn le_credit_connection_disconnect_source_disconnected() {
                 panic!("unexpected signal");
             };
 
-            let dyn_channel = response.create_le_credit_connection(&request, &mut channel).unwrap();
+            let dyn_channel = response.create_le_credit_connection(&request, channel).unwrap();
 
             let this_channel_id = dyn_channel.get_channel_id();
 
             let peer_channel_id = dyn_channel.get_peer_channel_id();
 
-            channel.request_disconnection(this_channel_id).await.unwrap();
+            link.get_signalling_channel()
+                .unwrap()
+                .request_disconnection(this_channel_id)
+                .await
+                .unwrap();
 
             let LeUNext::SignallingChannel { signal, .. } = link.next().await.unwrap() else {
                 panic!("unexpected next");
@@ -138,8 +142,8 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_source_cid() {
             let mut destination_cid = None;
 
             loop {
-                match &mut link.next().await.unwrap() {
-                    LeUNext::SignallingChannel { signal, channel } => match signal {
+                match link.next().await.unwrap() {
+                    LeUNext::SignallingChannel { signal, mut channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                             let dyn_channel = request
                                 .accept_le_credit_based_connection(channel)
@@ -152,7 +156,7 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_source_cid() {
                         }
                         ReceivedLeUSignal::DisconnectRequest(request) => {
                             let Err(DisconnectResponseError::InvalidSourceChannelIdentifier(_)) =
-                                request.maybe_send_disconnect_response(channel).await
+                                request.maybe_send_disconnect_response(&mut channel).await
                             else {
                                 panic!("unexpected error")
                             };
@@ -185,8 +189,8 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_destination_cid
             let mut destination_cid = None;
 
             loop {
-                match &mut link.next().await.unwrap() {
-                    LeUNext::SignallingChannel { signal, channel } => match signal {
+                match link.next().await.unwrap() {
+                    LeUNext::SignallingChannel { signal, mut channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                             let dyn_channel = request
                                 .accept_le_credit_based_connection(channel)
@@ -199,7 +203,7 @@ async fn le_credit_connection_disconnect_source_disconnected_bad_destination_cid
                         }
                         ReceivedLeUSignal::DisconnectRequest(request) => {
                             let Err(DisconnectResponseError::InvalidDestinationChannelIdentifier(_)) =
-                                request.maybe_send_disconnect_response(channel).await
+                                request.maybe_send_disconnect_response(&mut channel).await
                             else {
                                 panic!("unexpected error")
                             };
@@ -253,8 +257,8 @@ async fn le_credit_connection_disconnect_source_disconnected_race() {
             let mut destination_cid = None;
 
             loop {
-                match &mut link.next().await.unwrap() {
-                    LeUNext::SignallingChannel { signal, channel } => match signal {
+                match link.next().await.unwrap() {
+                    LeUNext::SignallingChannel { signal, mut channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                             let dyn_channel = request
                                 .accept_le_credit_based_connection(channel)
@@ -267,13 +271,17 @@ async fn le_credit_connection_disconnect_source_disconnected_race() {
 
                             destination_cid = Some(this_channel_id);
 
-                            channel.request_disconnection(this_channel_id).await.unwrap();
+                            link.get_signalling_channel()
+                                .unwrap()
+                                .request_disconnection(this_channel_id)
+                                .await
+                                .unwrap();
 
                             assert!(link.get_credit_based_channel(this_channel_id).is_none());
                         }
                         ReceivedLeUSignal::DisconnectRequest(request) => {
                             // it's a race!
-                            assert!(!request.maybe_send_disconnect_response(channel).await.unwrap());
+                            assert!(!request.maybe_send_disconnect_response(&mut channel).await.unwrap());
 
                             assert!(link.get_credit_based_channel(destination_cid.unwrap()).is_none());
                         }
@@ -337,7 +345,7 @@ async fn le_credit_connection_disconnect_destination_disconnected() {
                 .await
                 .unwrap();
 
-            let LeUNext::SignallingChannel { signal, mut channel } = link.next().await.unwrap() else {
+            let LeUNext::SignallingChannel { signal, channel } = link.next().await.unwrap() else {
                 panic!("unexpected next");
             };
 
@@ -345,7 +353,7 @@ async fn le_credit_connection_disconnect_destination_disconnected() {
                 panic!("unexpected signal");
             };
 
-            let dyn_channel = response.create_le_credit_connection(&request, &mut channel).unwrap();
+            let dyn_channel = response.create_le_credit_connection(&request, channel).unwrap();
 
             let this_channel_id = dyn_channel.get_channel_id();
 
@@ -378,7 +386,7 @@ async fn le_credit_connection_disconnect_destination_disconnected() {
             let mut destination_cid = None;
 
             loop {
-                match &mut link.next().await.unwrap() {
+                match link.next().await.unwrap() {
                     LeUNext::SignallingChannel { signal, channel } => match signal {
                         ReceivedLeUSignal::LeCreditBasedConnectionRequest(request) => {
                             source_cid = Some(request.get_source_cid());
@@ -393,6 +401,8 @@ async fn le_credit_connection_disconnect_destination_disconnected() {
                             let this_channel_id = dyn_channel.get_channel_id();
 
                             destination_cid = Some(this_channel_id);
+
+                            let mut channel = link.get_signalling_channel().unwrap();
 
                             channel.request_disconnection(this_channel_id).await.unwrap();
 
@@ -457,7 +467,7 @@ async fn le_credit_connection_disconnect_destination_bad_source_cid() {
                 .await
                 .unwrap();
 
-            let LeUNext::SignallingChannel { signal, mut channel } = link.next().await.unwrap() else {
+            let LeUNext::SignallingChannel { signal, channel } = link.next().await.unwrap() else {
                 panic!("unexpected next");
             };
 
@@ -465,7 +475,7 @@ async fn le_credit_connection_disconnect_destination_bad_source_cid() {
                 panic!("unexpected signal");
             };
 
-            let dyn_channel = response.create_le_credit_connection(&request, &mut channel).unwrap();
+            let dyn_channel = response.create_le_credit_connection(&request, channel).unwrap();
 
             let this_channel_id = dyn_channel.get_channel_id();
 
@@ -516,7 +526,7 @@ async fn le_credit_connection_disconnect_destination_bad_destination_cid() {
                 .await
                 .unwrap();
 
-            let LeUNext::SignallingChannel { signal, mut channel } = link.next().await.unwrap() else {
+            let LeUNext::SignallingChannel { signal, channel } = link.next().await.unwrap() else {
                 panic!("unexpected next");
             };
 
@@ -524,7 +534,7 @@ async fn le_credit_connection_disconnect_destination_bad_destination_cid() {
                 panic!("unexpected signal");
             };
 
-            let dyn_channel = response.create_le_credit_connection(&request, &mut channel).unwrap();
+            let dyn_channel = response.create_le_credit_connection(&request, channel).unwrap();
 
             let this_channel_id = dyn_channel.get_channel_id();
 
@@ -598,7 +608,7 @@ async fn le_credit_connection_disconnect_destination_bad_destination_race() {
                 .await
                 .unwrap();
 
-            let LeUNext::SignallingChannel { signal, mut channel } = link.next().await.unwrap() else {
+            let LeUNext::SignallingChannel { signal, channel } = link.next().await.unwrap() else {
                 panic!("unexpected next");
             };
 
@@ -606,7 +616,7 @@ async fn le_credit_connection_disconnect_destination_bad_destination_race() {
                 panic!("unexpected signal");
             };
 
-            let dyn_channel = response.create_le_credit_connection(&request, &mut channel).unwrap();
+            let dyn_channel = response.create_le_credit_connection(&request, channel).unwrap();
 
             let this_channel_id = dyn_channel.get_channel_id();
 
