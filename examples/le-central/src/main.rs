@@ -204,7 +204,7 @@ where
     loop {
         let channel = &mut logical_link.get_att_channel().unwrap();
 
-        let querier = gatt_client.partial_discovery(channel).await.unwrap();
+        let querier = gatt_client.partial_service_discovery(channel).await.unwrap();
 
         let LeUNext::AttributeChannel { pdu, .. } = logical_link.next().await.unwrap() else {
             unreachable!()

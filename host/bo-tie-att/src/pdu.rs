@@ -893,25 +893,25 @@ pub fn find_information_response(parameters: FormattedHandlesWithType) -> Pdu<Fo
 
 /// Parameter for a Find By Type Value Request
 #[derive(Clone)]
-pub struct TypeValueRequest<D> {
+pub struct FindByTypeValueRequest<D> {
     handle_range: HandleRange,
     attr_type: u16,
     value: D,
 }
 
-impl<D> ExpectedOpcode for TypeValueRequest<D> {
+impl<D> ExpectedOpcode for FindByTypeValueRequest<D> {
     fn expected_opcode() -> PduOpcode {
         ClientPduName::FindByTypeValueRequest.into()
     }
 }
 
-impl<D> TransferFormatTryFrom for TypeValueRequest<D>
+impl<D> TransferFormatTryFrom for FindByTypeValueRequest<D>
 where
     D: TransferFormatTryFrom,
 {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError> {
         if raw.len() >= 6 {
-            Ok(TypeValueRequest {
+            Ok(FindByTypeValueRequest {
                 handle_range: TransferFormatTryFrom::try_from(&raw[..4])?,
                 attr_type: <u16>::from_le_bytes([raw[4], raw[5]]),
                 value: TransferFormatTryFrom::try_from(&raw[6..])?,
@@ -926,7 +926,7 @@ where
     }
 }
 
-impl<D> TransferFormatInto for TypeValueRequest<D>
+impl<D> TransferFormatInto for FindByTypeValueRequest<D>
 where
     D: TransferFormatInto,
 {
@@ -955,14 +955,14 @@ pub fn find_by_type_value_request<R, D>(
     handle_range: R,
     uuid: crate::Uuid,
     value: D,
-) -> Result<Pdu<TypeValueRequest<D>>, ()>
+) -> Result<Pdu<FindByTypeValueRequest<D>>, ()>
 where
     R: Into<HandleRange>,
 {
     if let Ok(uuid) = core::convert::TryFrom::try_from(uuid) {
         Ok(Pdu {
             opcode: From::from(ClientPduName::FindByTypeValueRequest),
-            parameters: TypeValueRequest {
+            parameters: FindByTypeValueRequest {
                 handle_range: handle_range.into(),
                 attr_type: uuid,
                 value,

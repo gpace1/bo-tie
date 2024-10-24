@@ -351,7 +351,7 @@ where
 
         // It may take multiple queries before
         // all the services are discovered.
-        let querier = gatt_client.partial_discovery(&mut channel).await.unwrap();
+        let querier = gatt_client.partial_service_discovery(&mut channel).await.unwrap();
 
         let LeUNext::AttributeChannel { pdu, .. } = link.next().await.unwrap() else {
             unreachable!()
