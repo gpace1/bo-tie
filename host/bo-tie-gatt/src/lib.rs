@@ -1354,20 +1354,14 @@ where
 
         match pdu_type {
             att::client::ClientPduName::FindByTypeValueRequest => {
-                log::info!(
-                    "(GATT) processing '{}'",
-                    att::client::ClientPduName::FindByTypeValueRequest
-                );
+                log::info!("(GATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ",);
 
                 self.process_find_by_type_value_request(channel, payload).await?;
 
                 Ok(bo_tie_att::server::Status::None)
             }
             att::client::ClientPduName::ReadByGroupTypeRequest => {
-                log::info!(
-                    "(GATT) processing '{}'",
-                    att::client::ClientPduName::ReadByGroupTypeRequest
-                );
+                log::info!("(GATT) processing PDU ATT_READ_BY_GROUP_TYPE_REQ");
 
                 self.process_read_by_group_type_request(channel, payload).await?;
 
