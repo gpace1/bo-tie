@@ -1354,15 +1354,11 @@ where
 
         match pdu_type {
             att::client::ClientPduName::FindByTypeValueRequest => {
-                log::info!("(GATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ",);
-
                 self.process_find_by_type_value_request(channel, payload).await?;
 
                 Ok(bo_tie_att::server::Status::None)
             }
             att::client::ClientPduName::ReadByGroupTypeRequest => {
-                log::info!("(GATT) processing PDU ATT_READ_BY_GROUP_TYPE_REQ");
-
                 self.process_read_by_group_type_request(channel, payload).await?;
 
                 Ok(bo_tie_att::server::Status::None)
@@ -1488,6 +1484,12 @@ where
             }
         };
 
+        log::info!(
+            "(GATT) processing PDU ATT_READ_BY_GROUP_TYPE_REQ {{ starting handle: {}, ending handle: {} }}",
+            request.handle_range.starting_handle,
+            request.handle_range.ending_handle,
+        );
+
         if ServiceDefinition::PRIMARY_SERVICE_TYPE != request.attr_type {
             return send_error!(
                 channel,
@@ -1597,6 +1599,13 @@ where
                 )
             }
         };
+
+        log::info!(
+            "(GATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {}, end handle: {}, Service: {:x}}}",
+            handle_range.starting_handle,
+            handle_range.ending_handle,
+            searched_for_uuid
+        );
 
         // the response starts with a 1 byte opcode
         let mut size = 1;
