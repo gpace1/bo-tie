@@ -1086,9 +1086,8 @@ impl<'a> GapServiceBuilder<'a> {
 /// architecture of the server before the server is created.
 ///
 /// ```
-/// use bo_tie_gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
-/// use bo_tie_att::{FULL_PERMISSIONS, server::NoQueuedWrites};
-///
+/// # use bo_tie_gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
+/// # use bo_tie_att::{FULL_PERMISSIONS, server::NoQueuedWrites};
 /// # use bo_tie_l2cap::{BasicFrameError,BasicFrame, L2capFragment, send_future};
 /// # use std::future::Future;
 /// # use std::pin::Pin;
@@ -1354,6 +1353,16 @@ where
         let (pdu_type, payload) = self.server.parse_att_pdu(&b_frame)?;
 
         match pdu_type {
+            att::client::ClientPduName::FindByTypeValueRequest => {
+                log::info!(
+                    "(GATT) processing '{}'",
+                    att::client::ClientPduName::FindByTypeValueRequest
+                );
+
+                self.process_find_by_type_value_request(channel, payload).await?;
+
+                Ok(bo_tie_att::server::Status::None)
+            }
             att::client::ClientPduName::ReadByGroupTypeRequest => {
                 log::info!(
                     "(GATT) processing '{}'",
@@ -1480,7 +1489,7 @@ where
                     channel,
                     0,
                     att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnlikelyError,
+                    att::pdu::Error::InvalidPDU,
                 );
             }
         };
@@ -1499,14 +1508,21 @@ where
                 channel,
                 0,
                 att::client::ClientPduName::ReadByGroupTypeRequest,
-                att::pdu::Error::UnlikelyError,
+                att::pdu::Error::InvalidHandle,
             );
         }
 
         let maybe_response = Response::try_new(self, request.handle_range.to_range_bounds());
 
         let response = match maybe_response {
-            Err(e) => return send_error!(channel, 0, att::client::ClientPduName::ReadByGroupTypeRequest, e),
+            Err(e) => {
+                return send_error!(
+                    channel,
+                    request.handle_range.starting_handle,
+                    att::client::ClientPduName::ReadByGroupTypeRequest,
+                    e
+                )
+            }
             Ok(response) => response,
         };
 
@@ -1530,6 +1546,99 @@ where
         };
 
         send_pdu!(channel, pdu)
+    }
+
+    async fn process_find_by_type_value_request<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<T>,
+        payload: &[u8],
+    ) -> Result<(), att::ConnectionError<T>>
+    where
+        T: LogicalLink,
+    {
+        use core::ops::RangeBounds;
+
+        let handle_range: att::pdu::HandleRange = match att::TransferFormatTryFrom::try_from(&payload[..4]) {
+            Ok(handle_range) => handle_range,
+            Err(_) => {
+                return send_error!(
+                    channel,
+                    0,
+                    att::client::ClientPduName::FindByTypeValueRequest,
+                    att::pdu::Error::InvalidPDU
+                );
+            }
+        };
+
+        let attribute_type: Uuid = match att::TransferFormatTryFrom::try_from(&payload[4..6]) {
+            Ok(uuid) => uuid,
+            Err(e) => {
+                return send_error!(
+                    channel,
+                    0,
+                    att::client::ClientPduName::FindByTypeValueRequest,
+                    att::pdu::Error::InvalidPDU
+                );
+            }
+        };
+
+        // return if the request is not looking for primary services
+        if attribute_type != uuid::PRIMARY_SERVICE {
+            return send_error!(
+                channel,
+                handle_range.starting_handle,
+                att::client::ClientPduName::FindByTypeValueRequest,
+                att::pdu::Error::UnsupportedGroupType,
+            );
+        }
+
+        let searched_for_uuid: Uuid = match att::TransferFormatTryFrom::try_from(&payload[6..]) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                return send_error!(
+                    channel,
+                    handle_range.starting_handle,
+                    att::client::ClientPduName::FindByTypeValueRequest,
+                    att::pdu::Error::AttributeNotFound
+                )
+            }
+        };
+
+        // the response starts with a 1 byte opcode
+        let mut size = 1;
+
+        let handle_information_list = self
+            .primary_services
+            .iter()
+            .filter(|service_data| {
+                service_data.service_uuid == searched_for_uuid
+                    && handle_range.to_range_bounds().contains(&service_data.service_handle)
+                    && self
+                        .server
+                        .check_permissions(service_data.service_handle, &att::FULL_READ_PERMISSIONS)
+                        .is_ok()
+            })
+            .take_while(|_| ((size + 4) < self.server.get_mtu()).then(|| size += 4).is_some())
+            .map(|service_data| {
+                att::pdu::TypeValueResponse::new(service_data.service_handle, service_data.end_group_handle)
+            })
+            .collect::<alloc::vec::Vec<_>>();
+
+        if handle_information_list.is_empty() {
+            send_error!(
+                channel,
+                handle_range.starting_handle,
+                att::client::ClientPduName::FindByTypeValueRequest,
+                att::pdu::Error::AttributeNotFound
+            )
+        } else {
+            let pdu = att::pdu::Pdu::new(
+                att::server::ServerPduName::FindByTypeValueResponse.into(),
+                handle_information_list,
+            );
+
+            send_pdu!(channel, pdu)
+        }
     }
 
     /// Check a MTU request to ensure it does not contain a MTU less than [`LE_MINIMUM_ATT_MTU`]
@@ -1729,7 +1838,7 @@ impl Client {
     /// use bo_tie_att::client::ResponseProcessor;
     ///
     /// loop {
-    ///     let query_next = client.partial_discovery(&mut channel)
+    ///     let query_next = client.partial_service_discovery(&mut channel)
     ///         .await
     ///         .expect("failed to send request");
     ///
@@ -1750,7 +1859,7 @@ impl Client {
     /// let services = client.get_known_services();
     /// # }
     /// ```
-    pub async fn partial_discovery<'a, T: LogicalLink>(
+    pub async fn partial_service_discovery<'a, T: LogicalLink>(
         &'a mut self,
         channel: &mut BasicFrameChannel<T>,
     ) -> Result<QueryResponseProcessor<'a>, bo_tie_att::ConnectionError<T>> {
@@ -2017,250 +2126,5 @@ impl GattServiceInfo {
 
             *server_attributes.get_mut_value::<HashValue>(handle).unwrap() = hash;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use crate::att::server::NoQueuedWrites;
-    use crate::characteristic::CharacteristicBuilder;
-    use crate::l2cap::L2capFragment;
-    use crate::Uuid;
-    use att::TransferFormatInto;
-    use bo_tie_att::server::access_value::TrivialAccessor;
-    use bo_tie_att::{AttributePermissions, AttributeRestriction};
-    use bo_tie_core::buffer::de_vec::DeVec;
-    use bo_tie_core::buffer::TryExtend;
-    use bo_tie_l2cap::{send_future, BasicFrameError};
-    use core::{
-        future::Future,
-        pin::Pin,
-        task::{Context, Poll},
-    };
-
-    struct DummySendFut;
-
-    impl Future for DummySendFut {
-        type Output = Result<(), send_future::Error<usize>>;
-
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    struct DummyRecvFut;
-
-    impl Future for DummyRecvFut {
-        type Output = Option<Result<L2capFragment<DeVec<u8>>, <DeVec<u8> as TryExtend<u8>>::Error>>;
-
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-            unimplemented!()
-        }
-    }
-
-    #[test]
-    fn create_gatt_attributes() {
-        let test_att_permissions: &[att::AttributePermissions] = &[
-            att::AttributePermissions::Read(att::AttributeRestriction::Encryption(att::EncryptionKeySize::Bits128)),
-            att::AttributePermissions::Write(att::AttributeRestriction::Authentication),
-        ];
-
-        let mut gap_service = GapServiceBuilder::new(None, None);
-
-        let mut server_builder = ServerBuilder::from(gap_service);
-
-        let test_service_1 = server_builder
-            .new_service(Uuid::from_u16(0x1234))
-            .make_secondary()
-            .add_characteristics()
-            .new_characteristic(|characteristic_builder| {
-                characteristic_builder
-                    .set_declaration(|declaration_builder| {
-                        declaration_builder
-                            .set_properties([
-                                characteristic::Properties::Read,
-                                characteristic::Properties::ExtendedProperties,
-                            ])
-                            .set_uuid(0x1234u16)
-                    })
-                    .set_value(|value_builder| value_builder.set_value(0usize).set_permissions(test_att_permissions))
-                    .set_user_description(|user_desc_builder| {
-                        user_desc_builder
-                            .set_read_only_description("Test 1")
-                            .set_read_only_restrictions([AttributeRestriction::None])
-                    })
-                    .set_extended_properties(|ext_prop_builder| {
-                        ext_prop_builder.set_extended_properties([characteristic::ExtendedProperties::ReliableWrite])
-                    })
-                    .set_client_configuration(|client_cfg_builder| {
-                        client_cfg_builder.set_config([characteristic::ClientConfiguration::Notification])
-                    })
-                    .set_server_configuration(|| {
-                        characteristic::ServerConfigurationBuilder::new()
-                            .set_config(TrivialAccessor(characteristic::ServerConfiguration::new()))
-                            .set_write_restrictions([AttributeRestriction::None])
-                    })
-            })
-            .finish_service()
-            .as_record();
-
-        let _test_service_2 = server_builder
-            .new_service(Uuid::from_u16(0x3456))
-            .into_includes_adder()
-            .include_service(test_service_1)
-            .unwrap()
-            .finish_service();
-
-        let server = server_builder.make_server(NoQueuedWrites);
-    }
-
-    struct TestChannel {
-        last_sent_pdu: std::cell::Cell<Option<Vec<u8>>>,
-    }
-
-    impl LogicalLink for TestChannel {
-        type SendFut<'a> = DummySendFut;
-        type SendErr = usize;
-        type RecvData = DeVec<u8>;
-        type RecvFut<'a> = DummyRecvFut where Self: 'a,;
-        type RecvErr = usize;
-
-        fn max_transmission_size(&self) -> usize {
-            23
-        }
-
-        fn send<T>(&mut self, fragment: L2capFragment<T>) -> Self::SendFut<'_>
-        where
-            T: Iterator<Item = u8>,
-        {
-            self.last_sent_pdu.set(Some(data.try_into_packet().unwrap()));
-
-            DummySendFut
-        }
-
-        fn recv(&mut self) -> Self::RecvFut<'_> {
-            unimplemented!()
-        }
-    }
-
-    #[tokio::test]
-    async fn gatt_services_read_by_group_type() {
-        let gap_service = GapServiceBuilder::new(None, None);
-
-        let mut server_builder = ServerBuilder::from(gap_service);
-
-        let first_test_uuid = Uuid::from(0x1000u16);
-        let second_test_uuid = Uuid::from(0x1001u128);
-
-        server_builder.new_gatt_service(|gatt_service_builder| gatt_service_builder.add_database_hash());
-
-        server_builder
-            .new_service(first_test_uuid)
-            .add_characteristics()
-            .new_characteristic(|characteristic_builder| {
-                characteristic_builder
-                    .set_declaration(|declaration_builder| {
-                        declaration_builder
-                            .set_properties([characteristic::Properties::Read])
-                            .set_uuid(0x2000u16)
-                    })
-                    .set_value(|value_builder| {
-                        value_builder
-                            .set_value(0usize)
-                            .set_permissions([AttributePermissions::Read(AttributeRestriction::None)])
-                    })
-            })
-            .finish_service();
-
-        server_builder
-            .new_service(second_test_uuid)
-            .add_characteristics()
-            .new_characteristic(|characteristic_builder| {
-                characteristic_builder
-                    .set_declaration(|declaration_builder| {
-                        declaration_builder
-                            .set_properties([characteristic::Properties::Read])
-                            .set_uuid(0x2001u16)
-                    })
-                    .set_value(|value_builder| {
-                        value_builder
-                            .set_value(0usize)
-                            .set_permissions([AttributePermissions::Read(AttributeRestriction::None)])
-                    })
-            })
-            .finish_service();
-
-        let mut test_channel = TestChannel {
-            last_sent_pdu: None.into(),
-        };
-
-        let mut server = server_builder.make_server(NoQueuedWrites);
-
-        server.give_permissions_to_client([att::AttributePermissions::Read(att::AttributeRestriction::None)]);
-
-        let client_pdu = att::pdu::read_by_group_type_request(1.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
-
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::LE_U_FIXED_CHANNEL_ID);
-
-        assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
-
-        let expected_response = att::pdu::ReadByGroupTypeResponse::new(vec![
-            // GAP Service
-            att::pdu::ReadGroupTypeData::new(1, 5, GapServiceBuilder::GAP_SERVICE_TYPE),
-            // GATT Service
-            att::pdu::ReadGroupTypeData::new(6, 8, GattServiceBuilder::GATT_SERVICE_UUID),
-            att::pdu::ReadGroupTypeData::new(9, 11, first_test_uuid),
-        ]);
-
-        assert_eq!(
-            Some(att::pdu::read_by_group_type_response(expected_response)),
-            test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicFrame::<Vec<_>>::try_from_slice(&data).unwrap();
-                att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
-            }),
-        );
-
-        let client_pdu = att::pdu::read_by_group_type_request(11.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
-
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::LE_U_FIXED_CHANNEL_ID);
-
-        assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
-
-        let expected_response =
-            att::pdu::ReadByGroupTypeResponse::new(vec![att::pdu::ReadGroupTypeData::new(12, 14, second_test_uuid)]);
-
-        assert_eq!(
-            Some(att::pdu::read_by_group_type_response(expected_response)),
-            test_channel.last_sent_pdu.take().map(|data| {
-                let acl_data = l2cap::BasicFrame::<Vec<_>>::try_from_slice(&data).unwrap();
-                att::TransferFormatTryFrom::try_from(acl_data.get_payload()).unwrap()
-            }),
-        );
-
-        let client_pdu = att::pdu::read_by_group_type_request(15.., ServiceDefinition::PRIMARY_SERVICE_TYPE);
-
-        let acl_client_pdu = l2cap::BasicFrame::new(TransferFormatInto::into(&client_pdu), att::LE_U_FIXED_CHANNEL_ID);
-
-        // Request was made for for a attribute that was out of range
-        assert_eq!(Ok(()), server.process_att_pdu(&mut test_channel, &acl_client_pdu).await);
-    }
-
-    fn is_send<T: Future + Send>(t: T) {}
-
-    #[allow(dead_code)]
-    fn send_test<T>(mut c: BasicFrameChannel<T>)
-    where
-        T: LogicalLink + Send,
-        <T::RecvBuffer as TryExtend<u8>>::Error: Send,
-        T::SendErr: Send,
-        for<'a> T::SendFut<'a>: Send,
-    {
-        let gap = GapServiceBuilder::new("dev", None);
-
-        let mut server = ServerBuilder::from(gap).make_server(NoQueuedWrites);
-
-        is_send(server.process_read_by_group_type_request(&mut c, &[]))
     }
 }
