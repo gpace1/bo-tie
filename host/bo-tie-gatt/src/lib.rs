@@ -1135,6 +1135,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// let server = server_builder.make_server(NoQueuedWrites);
 /// ```
 pub struct ServerBuilder {
+    max_mtu: u16,
     primary_services: alloc::vec::Vec<ServiceGroupData>,
     attributes: att::server::ServerAttributes,
     gatt_service_info: Option<GattServiceInfo>,
@@ -1146,9 +1147,23 @@ impl ServerBuilder {
     /// This creates a `ServerBuilder` without the specification required GAP service.
     pub fn new_empty() -> Self {
         Self {
+            max_mtu: LE_MINIMUM_ATT_MTU,
             primary_services: alloc::vec::Vec::new(),
             attributes: att::server::ServerAttributes::new(),
             gatt_service_info: None,
+        }
+    }
+
+    /// Set the maximum MTU this server can provide to its client
+    ///
+    /// Through an ATT Exchange MTU request, the client will be able to change the MTU up to this
+    /// value.
+    ///
+    /// # Note
+    /// This method does nothing if input `mtu` is not greater than [`LE_MINIMUM_ATT_MTU`].
+    pub fn set_max_mtu(&mut self, mtu: u16) {
+        if mtu > LE_MINIMUM_ATT_MTU {
+            self.max_mtu = mtu;
         }
     }
 
@@ -1246,12 +1261,8 @@ impl ServerBuilder {
         #[cfg(feature = "cryptography")]
         gatt_service_info.initiate_database_hash(&mut self.attributes);
 
-        let server = att::server::Server::new_fixed(
-            LE_MINIMUM_ATT_MTU,
-            LE_MINIMUM_ATT_MTU,
-            Some(self.attributes),
-            queue_writer,
-        );
+        let server =
+            att::server::Server::new_fixed(LE_MINIMUM_ATT_MTU, self.max_mtu, Some(self.attributes), queue_writer);
 
         Server {
             primary_services: self.primary_services,
@@ -1351,7 +1362,6 @@ where
         T: LogicalLink,
     {
         let (pdu_type, payload) = self.server.parse_att_pdu(&b_frame)?;
-
         match pdu_type {
             att::client::ClientPduName::FindByTypeValueRequest => {
                 self.process_find_by_type_value_request(channel, payload).await?;
@@ -1363,13 +1373,7 @@ where
 
                 Ok(bo_tie_att::server::Status::None)
             }
-            att::client::ClientPduName::ExchangeMtuRequest => {
-                if Self::check_mtu_request(channel, payload).await? {
-                    self.server.process_parsed_att_pdu(channel, pdu_type, payload).await
-                } else {
-                    Ok(bo_tie_att::server::Status::None)
-                }
-            }
+            att::client::ClientPduName::ExchangeMtuRequest => self.ensure_mtu_request(channel, payload).await,
             _ => self.server.process_parsed_att_pdu(channel, pdu_type, payload).await,
         }
     }
@@ -1644,25 +1648,40 @@ where
         }
     }
 
-    /// Check a MTU request to ensure it does not contain a MTU less than [`LE_MINIMUM_ATT_MTU`]
-    async fn check_mtu_request<T>(
+    /// Ensure the MTU request does not contain a MTU less than [`LE_MINIMUM_ATT_MTU`]
+    async fn ensure_mtu_request<T>(
+        &mut self,
         channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
-    ) -> Result<bool, att::ConnectionError<T>>
+    ) -> Result<bo_tie_att::server::Status, att::ConnectionError<T>>
     where
         T: LogicalLink,
     {
         match <att::pdu::MtuRequest as att::TransferFormatTryFrom>::try_from(payload) {
-            Ok(request) => Ok(LE_MINIMUM_ATT_MTU >= request.0),
+            Ok(request) if LE_MINIMUM_ATT_MTU <= request.0 => {
+                self.server
+                    .process_parsed_att_pdu(channel, att::client::ClientPduName::ExchangeMtuRequest, payload)
+                    .await
+            }
+            Ok(_) => {
+                send_error!(
+                    channel,
+                    0,
+                    att::client::ClientPduName::ExchangeMtuRequest,
+                    att::pdu::Error::RequestNotSupported,
+                )?;
+
+                Ok(bo_tie_att::server::Status::None)
+            }
             Err(_) => {
                 send_error!(
                     channel,
                     0,
-                    att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::UnlikelyError,
+                    att::client::ClientPduName::ExchangeMtuRequest,
+                    att::pdu::Error::InvalidPDU,
                 )?;
 
-                Ok(false)
+                Ok(bo_tie_att::server::Status::None)
             }
         }
     }
