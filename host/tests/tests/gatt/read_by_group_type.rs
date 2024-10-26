@@ -380,25 +380,6 @@ async fn discover_primary_service_by_uuid_of_server() {
                 })
                 .finish_service();
 
-            server_builder
-                .new_service(0x675b8edd491f4affaf3f2d2158c1025cu128)
-                .add_characteristics()
-                .new_characteristic(|c| {
-                    c.set_declaration(|d| {
-                        d.set_properties([Properties::Read])
-                            .set_uuid(0xea2a1a67b13d47599edd02ad70a05fbeu128)
-                    })
-                    .set_value(|v| v.set_value(41u32).set_permissions(FULL_PERMISSIONS))
-                })
-                .new_characteristic(|c| {
-                    c.set_declaration(|d| {
-                        d.set_properties([Properties::Read])
-                            .set_uuid(0x3cb3782235b4401ea1e1add02a8ad344u128)
-                    })
-                    .set_value(|v| v.set_value(42u32).set_permissions(FULL_PERMISSIONS))
-                })
-                .finish_service();
-
             let mut server = server_builder.make_server(NoQueuedWrites);
 
             loop {
