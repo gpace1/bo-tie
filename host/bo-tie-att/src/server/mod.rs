@@ -1451,7 +1451,7 @@ where
     {
         macro_rules! enough_room_in_response {
             ($cnt:expr, $size:expr) => {
-                ($cnt + 1) * ($size + 2) < self.mtu - 2
+                ($cnt + 1) * ($size + 2) <= self.mtu - 2
             };
         }
 
