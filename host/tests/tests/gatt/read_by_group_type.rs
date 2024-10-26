@@ -201,6 +201,74 @@ macro_rules! test {
         assert_eq!(&[$($expected_recv_byte),*], &response[4..])
     }};
 }
+
+fn create_server<T>(t: T) -> ServerBuilder
+where
+    T: Into<ServerBuilder>,
+{
+    let mut server_builder = t.into();
+
+    server_builder
+        .new_service(0x1001u16)
+        .add_characteristics()
+        .new_characteristic(|c| {
+            c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
+                .set_value(|v| v.set_value(11u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .new_characteristic(|c| {
+            c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2012u16))
+                .set_value(|v| v.set_value(12u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .finish_service();
+
+    server_builder
+        .new_service(0x1002u16)
+        .add_characteristics()
+        .new_characteristic(|c| {
+            c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
+                .set_value(|v| v.set_value(21u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .new_characteristic(|c| {
+            c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2022u16))
+                .set_value(|v| v.set_value(22u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .finish_service();
+
+    server_builder
+        .new_service(0x1003u16)
+        .add_characteristics()
+        .new_characteristic(|c| {
+            c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
+                .set_value(|v| v.set_value(31u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .new_characteristic(|c| {
+            c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2022u16))
+                .set_value(|v| v.set_value(32u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .finish_service();
+
+    server_builder
+        .new_service(0x675b8edd491f4affaf3f2d2158c1025cu128)
+        .add_characteristics()
+        .new_characteristic(|c| {
+            c.set_declaration(|d| {
+                d.set_properties([Properties::Read])
+                    .set_uuid(0xea2a1a67b13d47599edd02ad70a05fbeu128)
+            })
+            .set_value(|v| v.set_value(41u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .new_characteristic(|c| {
+            c.set_declaration(|d| {
+                d.set_properties([Properties::Read])
+                    .set_uuid(0x3cb3782235b4401ea1e1add02a8ad344u128)
+            })
+            .set_value(|v| v.set_value(42u32).set_permissions(FULL_PERMISSIONS))
+        })
+        .finish_service();
+
+    server_builder
+}
+
 #[tokio::test]
 async fn discover_primary_services_of_server() {
     PhysicalLinkLoop::<256>::new()
@@ -211,33 +279,7 @@ async fn discover_primary_services_of_server() {
                 .use_vec_buffer()
                 .build();
 
-            let mut server_builder: ServerBuilder = GapServiceBuilder::new("full_discovery_of_server", None).into();
-
-            server_builder
-                .new_service(0x1001u16)
-                .add_characteristics()
-                .new_characteristic(|c| {
-                    c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
-                        .set_value(|v| v.set_value(11u32).set_permissions(FULL_PERMISSIONS))
-                })
-                .new_characteristic(|c| {
-                    c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2012u16))
-                        .set_value(|v| v.set_value(12u32).set_permissions(FULL_PERMISSIONS))
-                })
-                .finish_service();
-
-            server_builder
-                .new_service(0x1002u16)
-                .add_characteristics()
-                .new_characteristic(|c| {
-                    c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
-                        .set_value(|v| v.set_value(21u32).set_permissions(FULL_PERMISSIONS))
-                })
-                .new_characteristic(|c| {
-                    c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2022u16))
-                        .set_value(|v| v.set_value(22u32).set_permissions(FULL_PERMISSIONS))
-                })
-                .finish_service();
+            let server_builder = create_server(GapServiceBuilder::new("discover_primary_services_of_server", None));
 
             let mut server = server_builder.make_server(NoQueuedWrites);
 
@@ -259,8 +301,29 @@ async fn discover_primary_services_of_server() {
                     0x1, 0x0, 0x5, 0, 0x00, 0x18, // gap service
                     0x6, 0x0, 0xa, 0x0, 0x1, 0x10, // service 0x1001
                     0xb, 0x0, 0xf, 0x0, 0x2, 0x10, // service 0x1002
-                    0x10, 0x0, 0x10, 0x0, 0x1, 0x18, // GattServer tacked on gatt service
             );
+
+            test!(
+                end;
+                0x10, 0x10, 0x0, 0xff, 0xff, 0x00, 0x28
+                => 0x11, 6,
+                    0x10, 0x0, 0x14, 0x00, 0x3, 0x10, // service 0x1003
+            );
+
+            // service 0x675b8edd491f4affaf3f2d2158c1025cu128
+            test!(
+                end;
+                0x10, 0x15, 0x0, 0xff, 0xff, 0x00, 0x28
+                => 0x11, 20,
+                    0x15, 0x0, 0x19, 0x0, 0x5c, 0x02, 0xc1, 0x58, 0x21, 0x2d, 0x3f, 0xaf, 0xff, 0x4a, 0x1f, 0x49, 0xdd, 0x8e, 0x5b, 0x67
+            );
+
+            test!(
+                end;
+                0x10, 0x1a, 0x0, 0xff, 0xff, 0x00, 0x28
+                => 0x11, 6,
+                    0x1a, 0x0, 0x1a, 0x0, 0x1, 0x18, // gatt service
+            )
         })
         .run()
         .await
@@ -317,6 +380,25 @@ async fn discover_primary_service_by_uuid_of_server() {
                 })
                 .finish_service();
 
+            server_builder
+                .new_service(0x675b8edd491f4affaf3f2d2158c1025cu128)
+                .add_characteristics()
+                .new_characteristic(|c| {
+                    c.set_declaration(|d| {
+                        d.set_properties([Properties::Read])
+                            .set_uuid(0xea2a1a67b13d47599edd02ad70a05fbeu128)
+                    })
+                    .set_value(|v| v.set_value(41u32).set_permissions(FULL_PERMISSIONS))
+                })
+                .new_characteristic(|c| {
+                    c.set_declaration(|d| {
+                        d.set_properties([Properties::Read])
+                            .set_uuid(0x3cb3782235b4401ea1e1add02a8ad344u128)
+                    })
+                    .set_value(|v| v.set_value(42u32).set_permissions(FULL_PERMISSIONS))
+                })
+                .finish_service();
+
             let mut server = server_builder.make_server(NoQueuedWrites);
 
             loop {
@@ -345,4 +427,42 @@ async fn discover_primary_service_by_uuid_of_server() {
         })
         .run()
         .await
+}
+
+#[tokio::test]
+async fn mtu_check() {
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .use_vec_buffer()
+                .build();
+
+            let mut server_builder: ServerBuilder = GapServiceBuilder::new("test", None).into();
+
+            server_builder.set_max_mtu(2048);
+
+            let mut server = server_builder.make_server(NoQueuedWrites);
+
+            assert_eq!(server.get_mtu(), 23);
+
+            loop {
+                match &mut link.next().await.unwrap() {
+                    LeUNext::AttributeChannel { pdu, channel } => {
+                        server.process_att_pdu(channel, pdu).await.unwrap();
+                    }
+                    next => panic!("received unexpected {next:?}"),
+                }
+            }
+        })
+        .set_verify(move |mut end| async move {
+            test!(
+                end;
+                2, 255, 0,
+                => 3, 255, 0,
+            )
+        })
+        .run()
+        .await;
 }

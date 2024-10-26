@@ -87,8 +87,7 @@ pub mod characteristic;
 pub mod uuid;
 
 use bo_tie_att as att;
-use bo_tie_att::server::QueuedWriter;
-use bo_tie_att::TransferFormatInto;
+use bo_tie_att::pdu::HandleRange;
 use bo_tie_core::buffer::stack::LinearBuffer;
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap as l2cap;
@@ -1389,93 +1388,6 @@ where
     where
         T: LogicalLink,
     {
-        use core::ops::RangeBounds;
-
-        struct Response {
-            size: u8,
-            data: alloc::vec::Vec<u8>,
-        }
-
-        impl Response {
-            fn try_new<Q, R>(server: &Server<Q>, handle_range: R) -> Result<Self, bo_tie_att::pdu::Error>
-            where
-                Q: QueuedWriter,
-                R: RangeBounds<u16>,
-            {
-                let uuid_size: usize;
-
-                let mut iter = server
-                    .primary_services
-                    .iter()
-                    .filter(|service_data| handle_range.contains(&service_data.service_handle))
-                    .map(|service_data| {
-                        server
-                            .server
-                            .check_permissions(service_data.service_handle, &att::FULL_READ_PERMISSIONS)
-                            .map(|_| service_data)
-                    })
-                    .peekable();
-
-                match iter.peek() {
-                    None => return Err(att::pdu::Error::AttributeNotFound),
-                    Some(Err(e)) => return Err(*e),
-                    Some(Ok(service_data)) => {
-                        uuid_size = if service_data.service_uuid.can_be_16_bit() {
-                            2
-                        } else {
-                            16
-                        }
-                    }
-                }
-
-                let data = iter
-                    .take_while(|service_data| {
-                        service_data
-                            .map(|sd| sd.service_uuid.can_be_16_bit() && uuid_size == 2)
-                            .ok()
-                            .unwrap_or_default()
-                    })
-                    .map(|service_data| {
-                        // take_while ensures this will not panic
-                        let service_data = service_data.unwrap();
-
-                        let len = 4 + uuid_size;
-
-                        let mut buffer = LinearBuffer::<20, u8>::new();
-
-                        for _ in 0..len {
-                            buffer.try_push(0).unwrap();
-                        }
-
-                        service_data.service_handle.build_into_ret(&mut buffer[..2]);
-
-                        service_data.end_group_handle.build_into_ret(&mut buffer[2..4]);
-
-                        service_data.service_uuid.build_into_ret(&mut buffer[4..len]);
-
-                        buffer
-                    })
-                    .flatten()
-                    .collect();
-
-                let size = (uuid_size + 4) as u8;
-
-                Ok(Self { size, data })
-            }
-        }
-
-        impl TransferFormatInto for Response {
-            fn len_of_into(&self) -> usize {
-                1 + self.data.len()
-            }
-
-            fn build_into_ret(&self, into_ret: &mut [u8]) {
-                into_ret[0] = self.size;
-
-                into_ret[1..].copy_from_slice(&self.data);
-            }
-        }
-
         let request: att::pdu::TypeRequest = match att::TransferFormatTryFrom::try_from(payload) {
             Ok(request) => request,
             Err(_) => {
@@ -1494,7 +1406,7 @@ where
             request.handle_range.ending_handle,
         );
 
-        if ServiceDefinition::PRIMARY_SERVICE_TYPE != request.attr_type {
+        if uuid::PRIMARY_SERVICE != request.attr_type {
             return send_error!(
                 channel,
                 request.handle_range.starting_handle,
@@ -1503,49 +1415,89 @@ where
             );
         }
 
-        if !request.handle_range.is_valid() {
+        let mut response = alloc::vec::Vec::new();
+
+        if let Err(error) = self.create_read_by_group_type_response(request.handle_range, &mut response) {
             return send_error!(
                 channel,
-                0,
+                request.handle_range.starting_handle,
                 att::client::ClientPduName::ReadByGroupTypeRequest,
-                att::pdu::Error::InvalidHandle,
+                error,
             );
         }
 
-        let maybe_response = Response::try_new(self, request.handle_range.to_range_bounds());
-
-        let response = match maybe_response {
-            Err(e) => {
-                return send_error!(
-                    channel,
-                    request.handle_range.starting_handle,
-                    att::client::ClientPduName::ReadByGroupTypeRequest,
-                    e
-                )
-            }
-            Ok(response) => response,
-        };
-
-        let max_tx = core::cmp::max(self.server.get_mtu() - 2, <u8>::MAX as usize);
-
-        let pdu = if response.data.len() > max_tx {
-            let short_response = Response {
-                size: response.size,
-                data: response.data[..max_tx].to_vec(),
-            };
-
-            self.server
-                .set_blob_data(response.data, request.handle_range.starting_handle);
-
-            att::pdu::Pdu::new(
-                att::server::ServerPduName::ReadByGroupTypeResponse.into(),
-                short_response,
-            )
-        } else {
-            att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response)
-        };
+        let pdu = att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response);
 
         send_pdu!(channel, pdu)
+    }
+
+    fn create_read_by_group_type_response(
+        &self,
+        handle_range: HandleRange,
+        response: &mut impl bo_tie_core::buffer::TryExtend<u8>,
+    ) -> Result<(), att::pdu::Error> {
+        use core::ops::RangeBounds;
+
+        let mut iter = self
+            .primary_services
+            .iter()
+            .filter(|service| handle_range.to_range_bounds().contains(&service.service_handle))
+            .map(|service| {
+                self.server
+                    .check_permissions(service.service_handle, &att::FULL_READ_PERMISSIONS)
+                    .map(|_| service)
+            })
+            .peekable();
+
+        let mut size = 2;
+
+        match iter.peek() {
+            None => Err(att::pdu::Error::AttributeNotFound),
+            Some(Err(err)) => Err(*err),
+            Some(Ok(service_group_data)) if service_group_data.service_uuid.can_be_16_bit() => {
+                response.try_extend_one(6).unwrap();
+
+                iter.filter_map(|permission_check| permission_check.ok())
+                    .take_while(|service_group_data| service_group_data.service_uuid.can_be_16_bit())
+                    .take_while(|_| ((size + 6) < self.get_mtu()).then(|| size += 6).is_some())
+                    .fold(response, |response, service_group_data| {
+                        let start = service_group_data.service_handle.to_le_bytes();
+
+                        let end = service_group_data.end_group_handle.to_le_bytes();
+
+                        let value = <u16>::try_from(service_group_data.service_uuid).unwrap().to_le_bytes();
+
+                        response
+                            .try_extend(start.into_iter().chain(end.into_iter()).chain(value.into_iter()))
+                            .unwrap();
+
+                        response
+                    });
+
+                Ok(())
+            }
+            Some(Ok(_)) => {
+                response.try_extend_one(20).unwrap();
+
+                iter.filter_map(|permission_check| permission_check.ok())
+                    .take_while(|_| ((size + 20) < self.get_mtu()).then(|| size += 6).is_some())
+                    .fold(response, |response, service_group_data| {
+                        let start = service_group_data.service_handle.to_le_bytes();
+
+                        let end = service_group_data.end_group_handle.to_le_bytes();
+
+                        let value = <u128>::from(service_group_data.service_uuid).to_le_bytes();
+
+                        response
+                            .try_extend(start.into_iter().chain(end.into_iter()).chain(value.into_iter()))
+                            .unwrap();
+
+                        response
+                    });
+
+                Ok(())
+            }
+        }
     }
 
     async fn process_find_by_type_value_request<T>(
@@ -1572,7 +1524,7 @@ where
 
         let attribute_type: Uuid = match att::TransferFormatTryFrom::try_from(&payload[4..6]) {
             Ok(uuid) => uuid,
-            Err(e) => {
+            Err(_) => {
                 return send_error!(
                     channel,
                     0,
