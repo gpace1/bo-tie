@@ -395,6 +395,24 @@ macro_rules! client_can_read_attribute {
     };
 }
 
+macro_rules! log_client_cannot_read_attribute {
+    ($this:expr, $att:expr, $op:literal $(,)?) => {
+        log::trace!(
+            ::core::concat!(
+                "(ATT)",
+                $op,
+                ": skipping attribute at handle {}, client does not have permission to find this \
+                attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
+                required: {:?})",
+            ),
+            $att.get_handle().unwrap(),
+            $this.given_permissions,
+            $att.get_permissions(),
+            $crate::FULL_READ_PERMISSIONS,
+        )
+    };
+}
+
 /// Check if a client can write the given attribute
 ///
 /// Returns the error as to why the client cannot write to the the attribute
@@ -826,20 +844,26 @@ where
     /// `true` is returned if the notification contains the entire attribute value.
     ///
     /// ## Temporary restrictions
-    /// Input `restrictions` is used to set temporary read restrictions for a read blob request.
-    /// These restrictions only apply to this request, any other read requests from the client for
-    /// the attribute at `handle` will use the permissions of the attribute and the temporary
-    /// `restrictions` are also dropped.
     ///
-    /// If `restrictions` is set to `None` it will refer to the read restrictions of the attribute
-    /// at `handle`. But if the attribute at `handle` is not readable, then the restrictions will be
-    /// defaulted to the *clients currently granted read permissions*. If `restrictions` is set to
-    /// `Some(..)` then it will be the temporary permissions for executing a blob read.
+    /// The purpose of input `restrictions` is to create temporary read permissions for the client
+    /// to allow it to perform a read blob operation for the remaining bytes this notification. The
+    /// temporary read permissions are a union of input `restrictions` and the read restrictions of
+    /// the attribute at `handle`. If client has been [given] at least one of the read permissions
+    /// of this union, then client will be able to use a read blob request to get the remaining
+    /// bytes of the notification value.
+    ///
+    /// `restrictions` only applies for the immediate read blob request. These temporary permissions
+    /// do not  apply to any subsequent read blob requests, and any other operations from the client
+    /// for the attribute at `handle`. The temporary restrictions are dropped once the read blob
+    /// request is complete or the client performs any other operation.
     ///
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
-    pub async fn send_notification_with<'a, T, V, R>(
+    ///
+    /// [given]: Self::give_permissions_to_client
+    /// [`FULL_READ_PERMISSIONS`]: crate::FULL_READ_PERMISSIONS
+    pub async fn send_notification_with<T, V, R>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
         handle: u16,
@@ -849,7 +873,7 @@ where
     where
         T: LogicalLink,
         V: TransferFormatInto + ?Sized,
-        R: Into<Option<&'a [AttributeRestriction]>>,
+        R: core::borrow::Borrow<[AttributeRestriction]>,
     {
         if self.attributes.get(handle).is_some() {
             let mut ret_val = true;
@@ -865,7 +889,7 @@ where
 
                 let blob = replace(notification.get_mut_parameters().0.get_mut_data(), sent);
 
-                self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
+                self.set_blob_for_server_sent_with(blob, handle, Some(restrictions.borrow()));
 
                 ret_val = false;
             }
@@ -952,15 +976,18 @@ where
     /// `true` is returned if the notification contains the entire attribute value.
     ///
     /// ## Temporary restrictions
-    /// Input `restrictions` is used to set temporary read restrictions for a read blob request.
-    /// These restrictions only apply to this request, any other read requests from the client for
-    /// the attribute at `handle` will use the permissions of the attribute and the temporary
-    /// `restrictions` are also dropped.
     ///
-    /// If `restrictions` is set to `None` it will refer to the read restrictions of the attribute
-    /// at `handle`. But if the attribute at `handle` is not readable, then the restrictions will be
-    /// defaulted to the *clients currently granted read permissions*. If `restrictions` is set to
-    /// `Some(..)` then it will be the temporary permissions for executing a blob read.
+    /// The purpose of input `restrictions` is to create temporary read permissions for the client
+    /// to allow it to perform a read blob operation for the remaining bytes this notification. The
+    /// temporary read permissions are a union of input `restrictions` and the read restrictions of
+    /// the attribute at `handle`. If client has been [given] at least one of the read permissions
+    /// of this union, then client will be able to use a read blob request to get the remaining
+    /// bytes of the notification value.
+    ///
+    /// `restrictions` only applies for the immediate read blob request. These temporary permissions
+    /// do not  apply to any subsequent read blob requests, and any other operations from the client
+    /// for the attribute at `handle`. The temporary restrictions are dropped once the read blob
+    /// request is complete or the client performs any other operation.
     ///
     /// # Note
     /// [`Status::IndicationConfirmed`] is returned by [`process_acl_data`] or
@@ -980,7 +1007,7 @@ where
     where
         T: LogicalLink,
         V: TransferFormatInto + ?Sized,
-        R: Into<Option<&'a [AttributeRestriction]>>,
+        R: core::borrow::Borrow<[AttributeRestriction]>,
     {
         if self.attributes.get(handle).is_some() {
             let mut ret_val = true;
@@ -996,7 +1023,7 @@ where
 
                 let blob = replace(indication.get_mut_parameters().0.get_mut_data(), sent);
 
-                self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
+                self.set_blob_for_server_sent_with(blob, handle, Some(restrictions.borrow()));
 
                 ret_val = false;
             }
@@ -1104,25 +1131,6 @@ where
             .any(|p| discriminant(&AttributePermissions::Read(AttributeRestriction::None)) == discriminant(p))
         {
             set_blob_data!(blob, handle);
-        } else {
-            let mut lb = bo_tie_core::buffer::stack::LinearBuffer::<
-                { AttributeRestriction::full_depth() },
-                AttributeRestriction,
-            >::new();
-
-            self.given_permissions
-                .iter()
-                .filter_map(|p| {
-                    if let AttributePermissions::Read(r) = p {
-                        Some(r)
-                    } else {
-                        None
-                    }
-                })
-                .copied()
-                .for_each(|r| lb.try_push(r).unwrap());
-
-            set_blob_data!(blob, handle, lb);
         }
     }
 
@@ -1153,12 +1161,12 @@ where
         }
     }
 
-    /// Process a exchange MTU request from the client
+    /// Process an exchange MTU request from the client
     async fn process_exchange_mtu_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
         client_mtu: u16,
-    ) -> Result<(), super::ConnectionError<T>>
+    ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
     {
@@ -1230,45 +1238,37 @@ where
         }
     }
 
-    /// Process a Find Information Request form the client
-    async fn process_find_information_request<T>(
-        &mut self,
-        channel: &mut BasicFrameChannel<T>,
+    fn create_find_information_response(
+        &self,
         handle_range: pdu::HandleRange,
-    ) -> Result<(), super::ConnectionError<T>>
-    where
-        T: LogicalLink,
-    {
-        use core::cmp::min;
-
-        log::info!(
-            "(ATT) processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {}, end handle: {} }}",
-            handle_range.starting_handle,
-            handle_range.ending_handle
-        );
-
+    ) -> Result<pdu::Pdu<Vec<u8>>, pdu::Error> {
         if !handle_range.is_valid() {
-            return send_error!(
-                channel,
-                handle_range.starting_handle,
-                ClientPduName::FindInformationRequest,
-                pdu::Error::InvalidHandle,
+            log::trace!(
+                "(ATT) ATT_FIND_INFORMATION_REQ: received invalid handle range ({:?}), sending '{}'\
+                error to client",
+                handle_range,
+                pdu::Error::InvalidHandle
             );
+
+            return Err(pdu::Error::InvalidHandle);
         }
 
-        // Both the start and ending handles cannot be past the actual length of the attributes
+        // the starting handle cannot be past the actual length of the attributes
         let start = if handle_range.starting_handle as usize <= self.attributes.count() {
             handle_range.starting_handle as usize
         } else {
-            return send_error!(
-                channel,
+            log::trace!(
+                "(ATT) ATT_FIND_INFORMATION_REQ: starting handle is out of range ({}) of the last \
+                attribute ({}), sending '{}' error to client",
                 handle_range.starting_handle,
-                ClientPduName::FindInformationRequest,
-                pdu::Error::AttributeNotFound
+                self.attributes.count(),
+                pdu::Error::AttributeNotFound,
             );
+
+            return Err(pdu::Error::AttributeNotFound);
         };
 
-        let stop = min(handle_range.ending_handle as usize, self.attributes.count());
+        let stop = core::cmp::min(handle_range.ending_handle as usize, self.attributes.count());
 
         let opt_size = core::cell::Cell::new(None);
 
@@ -1284,7 +1284,15 @@ where
                 Some(16) => !attribute.get_uuid().can_be_16_bit(),
                 _ => unreachable!(),
             })
-            .take_while(|attribute| client_can_read_attribute!(self, attribute).is_ok())
+            .filter(|attribute| {
+                if client_can_read_attribute!(self, attribute).is_ok() {
+                    true
+                } else {
+                    log_client_cannot_read_attribute!(self, attribute, "ATT_FIND_INFORMATION_REQ");
+
+                    false
+                }
+            })
             .inspect(|att| {
                 if opt_size.get().is_none() {
                     if att.get_uuid().can_be_16_bit() {
@@ -1310,34 +1318,44 @@ where
                 data
             });
 
-        // This is needed because otherwise opt_size
-        // will be added as a 'field' to the generated
-        // future because of `send_err!`. `Cell` cannot
-        // be shared between threads by a reference
-        // which causes the generated future to not
-        // implement `Send`.
-        let opt_size = opt_size.get();
-
-        match opt_size {
+        match opt_size.get() {
             Some(2) => data[0] = 1,
             Some(16) => data[0] = 2,
             None => {
-                // if opt_size is `None`, no attributes were found
-                return send_error!(
-                    channel,
-                    start as u16,
-                    ClientPduName::FindInformationRequest,
-                    pdu::Error::AttributeNotFound,
+                log::trace!(
+                    "(ATT) ATT_FIND_INFORMATION_REQ: no attributes found for response, sending \
+                    '{}' error to client",
+                    pdu::Error::AttributeNotFound
                 );
+
+                return Err(pdu::Error::AttributeNotFound);
             }
             _ => unreachable!(),
         }
 
         let pdu = pdu::Pdu::new(ServerPduName::FindInformationResponse.into(), data);
 
-        send_pdu!(channel, pdu)?;
+        Ok(pdu)
+    }
 
-        Ok(())
+    /// Process a Find Information Request form the client
+    async fn process_find_information_request<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<T>,
+        handle_range: pdu::HandleRange,
+    ) -> Result<(), super::ConnectionError<T>>
+    where
+        T: LogicalLink,
+    {
+        match self.create_find_information_response(handle_range) {
+            Err(e) => send_error!(
+                channel,
+                handle_range.starting_handle,
+                ClientPduName::FindInformationRequest,
+                e,
+            ),
+            Ok(pdu) => send_pdu!(channel, pdu),
+        }
     }
 
     /// Process find by type value request
@@ -1620,9 +1638,17 @@ where
             blob_request.offset
         );
 
-        let check_permissions_result = check_permissions!(self, blob_request.handle, &super::FULL_READ_PERMISSIONS);
+        let check_permissions_result = if let Some(temporary_permissions) = self
+            .blob_data
+            .as_ref()
+            .and_then(|blob_data| blob_data.temporary_read_restrictions.as_ref())
+        {
+            validate_permissions!(self, temporary_permissions, &super::FULL_READ_PERMISSIONS)
+        } else {
+            check_permissions!(self, blob_request.handle, &super::FULL_READ_PERMISSIONS).err()
+        };
 
-        if let Err(e) = check_permissions_result {
+        if let Some(e) = check_permissions_result {
             return send_error!(channel, blob_request.handle, ClientPduName::ReadBlobRequest, e).map(|_| Status::None);
         }
 
@@ -2154,6 +2180,10 @@ attributes.push_read_only(device_name);
     }
 
     /// Get the number of Attributes
+    ///
+    /// # Note
+    /// The handle of the last attribute happens to be equal to the return of `count` because there
+    /// is not an attribute at handle '0'.
     pub fn count(&self) -> usize {
         // the attribute at `self.attributes[0]` is the
         // reserved attribute
