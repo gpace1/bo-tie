@@ -310,6 +310,24 @@ pub enum AttributePermissions {
     Write(AttributeRestriction),
 }
 
+impl AttributePermissions {
+    pub fn is_read_permission(&self) -> bool {
+        if let Self::Read(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_write_permission(&self) -> bool {
+        if let Self::Write(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 impl Borrow<[AttributePermissions]> for AttributePermissions {
     fn borrow(&self) -> &[AttributePermissions] {
         core::slice::from_ref(self)
