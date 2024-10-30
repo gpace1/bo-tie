@@ -545,84 +545,72 @@ permission_tests!(
     InsufficientEncryption
 );
 
-/// This setups the server to be completely filled with the same attribute
-///
-/// This is for testing the throughput (checking every attribute) of the server with the find
-/// information command.
-macro_rules! connect_benchmark_setup {
-    (|$link:ident, $client:ident| $test:block ) => {{
-        PhysicalLinkLoop::default()
-            .test_scaffold()
-            .set_tested(|end| async {
-                let mut link = LeULogicalLink::builder(end)
-                    .enable_attribute_channel()
-                    .use_vec_buffer()
-                    .build();
-
-                let mut server_attributes = ServerAttributes::new();
-
-                // note: `..` is used over `..=` as one less than
-                // the maximum is desired (handle 0 is reserved).
-                for _ in 0..<u16>::MAX {
-                    server_attributes.push(Attribute::new(UUID_1, FULL_READ_PERMISSIONS, 0u8));
-                }
-
-                let mut server = Server::new_fixed(<u16>::MAX, <u16>::MAX, server_attributes, NoQueuedWrites);
-
-                loop {
-                    match &mut link.next().await.unwrap() {
-                        LeUNext::AttributeChannel { pdu, channel } => {
-                            server.process_att_pdu(channel, pdu).await.unwrap();
-                        }
-                        next => panic!("received unexpected {next:?}"),
-                    }
-                }
-            })
-            .set_verify(|end| async {
-                let mut $link = LeULogicalLink::builder(end)
-                    .enable_attribute_channel()
-                    .use_vec_buffer()
-                    .build();
-
-                let channel = &mut $link.get_att_channel().unwrap();
-
-                let connect = ConnectFixedClient::initiate(channel, <u16>::MAX, <u16>::MAX)
-                    .await
-                    .expect("exchange MTU failed");
-
-                let $client = match $link.next().await.unwrap() {
-                    LeUNext::AttributeChannel { pdu, .. } => connect.create_client(&pdu).unwrap(),
-                    next => panic!("recieved unexpected {next:?}"),
-                };
-
-                $test
-            })
-            .run()
-            .await
-    }};
-}
-
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn throughput() {
-    connect_benchmark_setup!(|link, client| {
-        for (start, expected_len) in [(1, 21844), (21845, 21844), (43689, 21844)] {
+    PhysicalLinkLoop::default()
+        .test_scaffold()
+        .set_tested(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .use_vec_buffer()
+                .build();
+
+            let mut server_attributes = ServerAttributes::new();
+
+            // note: `..` is used over `..=` as one less than
+            // the maximum is desired (handle 0 is reserved).
+            for _ in 0..<u16>::MAX {
+                server_attributes.push(Attribute::new(UUID_1, FULL_READ_PERMISSIONS, 0u8));
+            }
+
+            let mut server = Server::new_fixed(<u16>::MAX, <u16>::MAX, server_attributes, NoQueuedWrites);
+
+            loop {
+                match &mut link.next().await.unwrap() {
+                    LeUNext::AttributeChannel { pdu, channel } => {
+                        server.process_att_pdu(channel, pdu).await.unwrap();
+                    }
+                    next => panic!("received unexpected {next:?}"),
+                }
+            }
+        })
+        .set_verify(|end| async {
+            let mut link = LeULogicalLink::builder(end)
+                .enable_attribute_channel()
+                .use_vec_buffer()
+                .build();
+
             let channel = &mut link.get_att_channel().unwrap();
 
-            let response_processor = client
-                .read_by_type_request::<_, _, u8>(channel, start..=0xFFFF, UUID_1)
+            let connect = ConnectFixedClient::initiate(channel, <u16>::MAX, <u16>::MAX)
                 .await
-                .expect("failed to send request");
+                .expect("exchange MTU failed");
 
-            let response = match link.next().await.unwrap() {
-                LeUNext::AttributeChannel { pdu, .. } => pdu,
+            let client = match link.next().await.unwrap() {
+                LeUNext::AttributeChannel { pdu, .. } => connect.create_client(&pdu).unwrap(),
                 next => panic!("received unexpected {next:?}"),
             };
 
-            match response_processor.process_response(&response) {
-                Err(e) => panic!("unexpected error {:?}", e),
-                Ok(responses) => assert_eq!(responses.len(), expected_len),
+            for (start, expected_len) in [(1, 21844), (21845, 21844), (43689, 21844)] {
+                let channel = &mut link.get_att_channel().unwrap();
+
+                let response_processor = client
+                    .read_by_type_request::<_, _, u8>(channel, start..=0xFFFF, UUID_1)
+                    .await
+                    .expect("failed to send request");
+
+                let response = match link.next().await.unwrap() {
+                    LeUNext::AttributeChannel { pdu, .. } => pdu,
+                    next => panic!("received unexpected {next:?}"),
+                };
+
+                match response_processor.process_response(&response) {
+                    Err(e) => panic!("unexpected error {:?}", e),
+                    Ok(responses) => assert_eq!(responses.len(), expected_len),
+                }
             }
-        }
-    })
+        })
+        .run()
+        .await
 }

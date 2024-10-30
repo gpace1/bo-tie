@@ -1438,6 +1438,87 @@ where
         }
     }
 
+    async fn create_find_by_type_value_response(
+        &mut self,
+        handle_range: pdu::HandleRange,
+        att_type: crate::Uuid,
+        raw_value: &[u8],
+    ) -> Result<pdu::Pdu<alloc::vec::Vec<pdu::TypeValueResponse>>, pdu::Error> {
+        if !handle_range.is_valid() {
+            log::trace!(
+                "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: received invalid handle range ({:?}), sending \
+                '{}' error to client",
+                handle_range,
+                pdu::Error::InvalidHandle
+            );
+
+            return Err(pdu::Error::InvalidHandle);
+        };
+
+        let start = if handle_range.starting_handle as usize <= self.attributes.count() {
+            handle_range.starting_handle as usize
+        } else {
+            log::trace!(
+                "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: no attribute found for attribute type {}, \
+                sending '{}' error to client",
+                att_type,
+                pdu::Error::InvalidHandle
+            );
+
+            return Err(pdu::Error::AttributeNotFound);
+        };
+
+        let end = core::cmp::min(handle_range.ending_handle as usize, self.attributes.count());
+
+        let payload_max = self.mtu - 1;
+
+        let mut cnt = 0;
+
+        let mut transfer = Vec::new();
+
+        for att in self.attributes.attributes[start..=end]
+            .iter_mut()
+            .filter(|att| att.get_uuid() == &att_type)
+        {
+            if !att.get_mut_value().cmp_value_to_raw_transfer_format(raw_value).await {
+                continue;
+            } else if let Err(e) = client_can_read_attribute!(self, att) {
+                log::trace!(
+                    "(GATT) ATT_FIND_BY_TYPE_VALUE_REQ: skipping attribute at handle {}, client \
+                    cannot read attribute value due to error {}",
+                    att.get_handle().unwrap(),
+                    e
+                );
+
+                continue;
+            }
+
+            cnt += 1;
+
+            if cnt * 4 < payload_max {
+                // See function doc for why group handle is same as found handle.
+                let response = pdu::TypeValueResponse::new(att.get_handle().unwrap(), att.get_handle().unwrap());
+
+                transfer.push(response);
+            } else {
+                break;
+            }
+        }
+
+        if transfer.is_empty() {
+            log::trace!(
+                "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: no attribute found for attribute type {}, \
+                sending '{}' error to client",
+                att_type,
+                pdu::Error::InvalidHandle
+            );
+
+            Err(pdu::Error::AttributeNotFound)
+        } else {
+            Ok(pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer))
+        }
+    }
+
     /// Process find by type value request
     ///
     /// # Note
@@ -1452,25 +1533,45 @@ where
     where
         T: LogicalLink,
     {
-        if payload.len() <= 6 {
-            log::trace!(
-                "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: received invalid PDU, sending error {} to client",
-                pdu::Error::InvalidPDU
-            );
+        let handle_range: pdu::HandleRange = match TransferFormatTryFrom::try_from(&payload[..4]) {
+            Ok(handle_range) => handle_range,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: failed to get handle range from request, \
+                    sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
 
-            send_error!(
-                channel,
-                0,
-                ClientPduName::FindByTypeValueRequest,
-                pdu::Error::InvalidPDU
-            )?;
+                send_error!(
+                    channel,
+                    0,
+                    ClientPduName::FindByTypeValueRequest,
+                    pdu::Error::InvalidPDU
+                )?;
 
-            return Err(pdu::Error::InvalidPDU.into());
-        }
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
 
-        let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4])?;
+        let att_type: crate::Uuid = match TransferFormatTryFrom::try_from(&payload[4..6]) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: failed to get attribute type, sending error \
+                    {} to client",
+                    pdu::Error::InvalidPDU
+                );
 
-        let att_type: crate::Uuid = TransferFormatTryFrom::try_from(&payload[4..6])?;
+                send_error!(
+                    channel,
+                    0,
+                    ClientPduName::FindByTypeValueRequest,
+                    pdu::Error::InvalidPDU
+                )?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
 
         log::info!(
             "(ATT) not processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
@@ -1480,33 +1581,18 @@ where
             att_type
         );
 
-        if !handle_range.is_valid() {
-            log::trace!(
-                "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: received invalid handle range ({:?}), sending \
-                '{}' error to client",
-                handle_range,
-                pdu::Error::InvalidHandle
-            );
-
-            return send_error!(
+        match self
+            .create_find_by_type_value_response(handle_range, att_type, &payload[6..])
+            .await
+        {
+            Ok(pdu) => send_pdu!(channel, pdu),
+            Err(e) => send_error!(
                 channel,
                 handle_range.starting_handle,
                 ClientPduName::FindByTypeValueRequest,
-                pdu::Error::InvalidHandle,
-            );
-        };
-
-        log::trace!(
-            "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: sending error {} to client",
-            pdu::Error::RequestNotSupported
-        );
-
-        send_error!(
-            channel,
-            handle_range.starting_handle,
-            ClientPduName::FindByTypeValueRequest,
-            pdu::Error::InvalidPDU
-        )
+                e
+            ),
+        }
     }
 
     /// Process Read By Type Request
@@ -1522,7 +1608,7 @@ where
 
         macro_rules! enough_room_in_response {
             ($cnt:expr, $size:expr) => {
-                ($cnt + 1) * ($size + 2) <= ::core::cmp::min(self.mtu - 2, <u8>::MAX as usize)
+                ($cnt + 1) * ($size + 2) <= self.mtu - 2
             };
         }
 

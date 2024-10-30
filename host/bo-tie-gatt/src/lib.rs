@@ -1375,9 +1375,7 @@ where
         let (pdu_type, payload) = self.server.parse_att_pdu(&b_frame)?;
         match pdu_type {
             att::client::ClientPduName::FindByTypeValueRequest => {
-                self.process_find_by_type_value_request(channel, payload).await?;
-
-                Ok(bo_tie_att::server::Status::None)
+                self.process_find_by_type_value_request(channel, payload).await
             }
             att::client::ClientPduName::ReadByGroupTypeRequest => {
                 self.process_read_by_group_type_request(channel, payload).await?;
@@ -1512,59 +1510,47 @@ where
         }
     }
 
-    async fn process_find_by_type_value_request<T>(
-        &mut self,
-        channel: &mut BasicFrameChannel<T>,
+    fn create_find_by_type_value_response(
+        &self,
         payload: &[u8],
-    ) -> Result<(), att::ConnectionError<T>>
-    where
-        T: LogicalLink,
-    {
+    ) -> Result<Option<alloc::vec::Vec<att::pdu::TypeValueResponse>>, att::pdu::Error> {
         use core::ops::RangeBounds;
 
-        let handle_range: att::pdu::HandleRange = match att::TransferFormatTryFrom::try_from(&payload[..4]) {
+        let handle_range: HandleRange = match att::TransferFormatTryFrom::try_from(&payload[..4]) {
             Ok(handle_range) => handle_range,
             Err(_) => {
-                return send_error!(
-                    channel,
-                    0,
-                    att::client::ClientPduName::FindByTypeValueRequest,
+                log::trace!(
+                    "(GATT) ATT_FIND_BY_TYPE_VALUE_REQ: cannot get handle range from payload, \
+                    sending error {} to client",
                     att::pdu::Error::InvalidPDU
                 );
+
+                return Err(att::pdu::Error::InvalidPDU);
             }
         };
 
         let attribute_type: Uuid = match att::TransferFormatTryFrom::try_from(&payload[4..6]) {
             Ok(uuid) => uuid,
             Err(_) => {
-                return send_error!(
-                    channel,
-                    0,
-                    att::client::ClientPduName::FindByTypeValueRequest,
+                log::trace!(
+                    "(GATT) ATT_FIND_BY_TYPE_VALUE_REQ: cannot get handle range from payload, \
+                    sending error {} to client",
                     att::pdu::Error::InvalidPDU
                 );
+
+                return Err(att::pdu::Error::InvalidPDU);
             }
         };
-
-        // return if the request is not looking for primary services
-        if attribute_type != uuid::PRIMARY_SERVICE {
-            return send_error!(
-                channel,
-                handle_range.starting_handle,
-                att::client::ClientPduName::FindByTypeValueRequest,
-                att::pdu::Error::UnsupportedGroupType,
-            );
-        }
 
         let searched_for_uuid: Uuid = match att::TransferFormatTryFrom::try_from(&payload[6..]) {
             Ok(uuid) => uuid,
             Err(_) => {
-                return send_error!(
-                    channel,
-                    handle_range.starting_handle,
-                    att::client::ClientPduName::FindByTypeValueRequest,
-                    att::pdu::Error::AttributeNotFound
-                )
+                log::trace!(
+                    "(GATT) ATT_FIND_BY_TYPE_VALUE_REQ: value in request is not supported by GATT, \
+                    punting to ATT implementation of ATT_FIND_BY_TYPE_VALUE"
+                );
+
+                return Ok(None);
             }
         };
 
@@ -1574,6 +1560,16 @@ where
             handle_range.ending_handle,
             searched_for_uuid
         );
+
+        if attribute_type == uuid::SECONDARY_SERVICE {
+            // todo: for now secondary services are not supported by this GATT
+            return Err(att::pdu::Error::AttributeNotFound);
+        }
+
+        // return if the request is not looking for primary services or characteristics
+        if attribute_type != uuid::PRIMARY_SERVICE && attribute_type != uuid::CHARACTERISTIC {
+            return Ok(None);
+        }
 
         // the response starts with a 1 byte opcode
         let mut size = 1;
@@ -1596,19 +1592,41 @@ where
             .collect::<alloc::vec::Vec<_>>();
 
         if handle_information_list.is_empty() {
-            send_error!(
-                channel,
-                handle_range.starting_handle,
-                att::client::ClientPduName::FindByTypeValueRequest,
-                att::pdu::Error::AttributeNotFound
-            )
-        } else {
-            let pdu = att::pdu::Pdu::new(
-                att::server::ServerPduName::FindByTypeValueResponse.into(),
-                handle_information_list,
-            );
+            return Err(att::pdu::Error::AttributeNotFound);
+        }
 
-            send_pdu!(channel, pdu)
+        Ok(Some(handle_information_list))
+    }
+
+    async fn process_find_by_type_value_request<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<T>,
+        payload: &[u8],
+    ) -> Result<bo_tie_att::server::Status, att::ConnectionError<T>>
+    where
+        T: LogicalLink,
+    {
+        match self.create_find_by_type_value_response(payload) {
+            Err(e) => {
+                send_error!(channel, 0, att::client::ClientPduName::FindByTypeValueRequest, e)?;
+
+                Ok(bo_tie_att::server::Status::None)
+            }
+            Ok(Some(type_value_responses)) => {
+                let pdu = att::pdu::Pdu::new(
+                    att::server::ServerPduName::FindByTypeValueResponse.into(),
+                    type_value_responses,
+                );
+
+                send_pdu!(channel, pdu)?;
+
+                Ok(bo_tie_att::server::Status::None)
+            }
+            Ok(None) => {
+                self.server
+                    .process_parsed_att_pdu(channel, att::client::ClientPduName::FindByTypeValueRequest, payload)
+                    .await
+            }
         }
     }
 
