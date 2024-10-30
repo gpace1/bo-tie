@@ -1984,7 +1984,7 @@ where
 
         log::info!("(ATT) processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
 
-        let mut iter = match self.queued_writer.process_execute(request_flag) {
+        let iter = match self.queued_writer.process_execute(request_flag) {
             Ok(Some(iter)) => iter,
             Ok(None) => {
                 log::trace!("(ATT) ATT_EXECUTE_WRITE_REQ: canceled queued write");
