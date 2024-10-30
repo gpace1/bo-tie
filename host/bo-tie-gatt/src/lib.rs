@@ -697,6 +697,18 @@ impl ServiceRecord {
         self.group_data.service_uuid
     }
 
+    /// Get the handle of the service
+    pub fn get_handle(&self) -> u16 {
+        self.group_data.service_handle
+    }
+
+    /// Get the end handle of the service
+    ///
+    /// This returns the handle of the last attribute within this service.
+    pub fn get_end_group_handle(&self) -> u16 {
+        self.group_data.end_group_handle
+    }
+
     /// Get the handle group range
     ///
     /// This returns the range of Attribute handles used by this service
