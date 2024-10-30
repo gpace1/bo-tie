@@ -995,7 +995,7 @@ impl TypeValueResponse {
         self.handle
     }
 
-    pub fn get_group(&self) -> u16 {
+    pub fn get_end_group_handle(&self) -> u16 {
         self.group
     }
 }
