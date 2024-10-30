@@ -395,14 +395,32 @@ macro_rules! client_can_read_attribute {
     };
 }
 
-macro_rules! log_client_cannot_read_attribute {
+macro_rules! log_client_no_permission_to_find_attribute {
     ($this:expr, $att:expr, $op:literal $(,)?) => {
         log::trace!(
             ::core::concat!(
                 "(ATT)",
                 $op,
-                ": skipping attribute at handle {}, client does not have permission to find this \
-                attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
+                ": skipping attribute at handle {}, client does not have read permission to find \
+                this attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
+                required: {:?})",
+            ),
+            $att.get_handle().unwrap(),
+            $this.given_permissions,
+            $att.get_permissions(),
+            $crate::FULL_READ_PERMISSIONS,
+        )
+    };
+}
+
+macro_rules! log_client_no_permission_to_read_attribute {
+    ($this:expr, $att:expr, $op:literal $(,)?) => {
+        log::trace!(
+            ::core::concat!(
+                "(ATT)",
+                $op,
+                ": skipping attribute at handle {}, client does not have permission to read \
+                this attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
                 required: {:?})",
             ),
             $att.get_handle().unwrap(),
@@ -426,6 +444,24 @@ macro_rules! client_can_write_attribute {
             None => Ok(()),
             Some(e) => Err(e),
         }
+    };
+}
+
+macro_rules! log_client_no_permission_to_write_attribute {
+    ($this:expr, $att:expr, $op:literal $(,)?) => {
+        log::trace!(
+            ::core::concat!(
+                "(ATT)",
+                $op,
+                ": skipping attribute at handle {}, client does not have permission to write to \
+                this attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
+                required: {:?})",
+            ),
+            $att.get_handle().unwrap(),
+            $this.given_permissions,
+            $att.get_permissions(),
+            $crate::FULL_READ_PERMISSIONS,
+        )
     };
 }
 
@@ -721,42 +757,25 @@ where
         T: LogicalLink,
     {
         match pdu_type {
-            ClientPduName::ExchangeMtuRequest => {
-                self.process_exchange_mtu_request(channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await?
-            }
+            ClientPduName::ExchangeMtuRequest => self.process_exchange_mtu_request(channel, payload).await?,
 
             ClientPduName::WriteRequest => self.process_write_request(channel, &payload).await?,
 
-            ClientPduName::ReadRequest => {
-                self.process_read_request(channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await?
-            }
+            ClientPduName::ReadRequest => self.process_read_request(channel, payload).await?,
 
-            ClientPduName::FindInformationRequest => {
-                self.process_find_information_request(channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await?
-            }
+            ClientPduName::FindInformationRequest => self.process_find_information_request(channel, payload).await?,
 
             ClientPduName::FindByTypeValueRequest => self.process_find_by_type_value_request(channel, &payload).await?,
 
-            ClientPduName::ReadByTypeRequest => {
-                self.process_read_by_type_request(channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await?
-            }
+            ClientPduName::ReadByTypeRequest => self.process_read_by_type_request(channel, payload).await?,
 
             ClientPduName::ReadBlobRequest => {
-                return self
-                    .process_read_blob_request(channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await;
+                return self.process_read_blob_request(channel, payload).await;
             }
 
             ClientPduName::PrepareWriteRequest => self.process_prepare_write_request(channel, &payload).await?,
 
-            ClientPduName::ExecuteWriteRequest => {
-                self.process_execute_write_request(channel, TransferFormatTryFrom::try_from(&payload)?)
-                    .await?
-            }
+            ClientPduName::ExecuteWriteRequest => self.process_execute_write_request(channel, payload).await?,
 
             ClientPduName::HandleValueConfirmation => return Ok(Status::IndicationConfirmed),
 
@@ -1134,42 +1153,29 @@ where
         }
     }
 
-    /// Write the interface data to the attribute
-    ///
-    /// Returns an error if the client doesn't have the adequate permissions or the handle is
-    /// invalid.
-    async fn write_att(&mut self, handle: u16, intf_data: &[u8]) -> Result<(), pdu::Error> {
-        let opt_write_error = {
-            let att = self.get_att(handle)?;
-
-            client_can_write_attribute!(self, att)
-        };
-
-        if let Err(err) = opt_write_error {
-            Err(err.into())
-        } else {
-            match self.get_att_mut(handle) {
-                Ok(att) => {
-                    let value = att.get_mut_value();
-
-                    let fut = value.try_set_value_from_transfer_format(intf_data);
-
-                    fut.await
-                }
-                Err(_) => Err(pdu::Error::InvalidPDU.into()),
-            }
-        }
-    }
-
     /// Process an exchange MTU request from the client
     async fn process_exchange_mtu_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
-        client_mtu: u16,
+        client_mtu: &[u8],
     ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
     {
+        let client_mtu: u16 = match TransferFormatTryFrom::try_from(&client_mtu) {
+            Ok(client_mtu) => client_mtu,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_EXCHANGE_MTU_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(channel, 0, ClientPduName::ExchangeMtuRequest, pdu::Error::InvalidPDU)?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
+
         log::info!("(ATT) processing PDU ATT_EXCHANGE_MTU_REQ {{ mtu: {} }}", client_mtu);
 
         let new_mtu = self.max_mtu.min(client_mtu.into());
@@ -1183,16 +1189,39 @@ where
     async fn process_read_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
-        handle: u16,
-    ) -> Result<(), super::ConnectionError<T>>
+        handle: &[u8],
+    ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
     {
+        let handle: u16 = match TransferFormatTryFrom::try_from(&handle) {
+            Ok(handle) => handle,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_READ_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(channel, 0, ClientPduName::ReadRequest, pdu::Error::InvalidPDU)?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
+
         log::info!("(ATT) processing PDU ATT_READ_REQ {{ handle: {:#X} }}", handle);
 
-        let read_error_result = check_permissions!(self, handle, &crate::FULL_READ_PERMISSIONS);
+        let Some(att) = self.attributes.get(handle) else {
+            log::trace!(
+                "(ATT) ATT_READ_REQ no attribute at handle {handle}, sending error {} to client",
+                pdu::Error::InvalidHandle
+            );
 
-        if let Err(e) = read_error_result {
+            return send_error!(channel, handle, ClientPduName::ReadRequest, pdu::Error::InvalidHandle);
+        };
+
+        if let Some(e) = validate_permissions!(self, att.get_permissions(), &crate::FULL_READ_PERMISSIONS) {
+            log_client_no_permission_to_read_attribute!(self, att, "ATT_READ_REQ");
+
             return send_error!(channel, handle, ClientPduName::ReadRequest, e);
         }
 
@@ -1203,6 +1232,8 @@ where
         let mut read_response = match future_result {
             Ok(read_response) => read_response,
             Err(e) => {
+                log::trace!("(ATT) ATT_READ_REQ: failed to read attribute: sending error {e} to client");
+
                 return send_error!(channel, handle, ClientPduName::ReadRequest, e);
             }
         };
@@ -1223,19 +1254,49 @@ where
         &mut self,
         channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
-    ) -> Result<(), super::ConnectionError<T>>
+    ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
     {
-        // Need to split the handle from the raw data as the data type is not known
-        let handle = TransferFormatTryFrom::try_from(&payload[..2]).unwrap();
+        let handle: u16 = match TransferFormatTryFrom::try_from(&payload[..2]) {
+            Ok(handle) => handle,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_WRITE_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(channel, 0, ClientPduName::WriteRequest, pdu::Error::InvalidPDU)?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
 
         log::info!("(ATT) processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
 
-        match self.write_att(handle, &payload[2..]).await {
-            Ok(_) => send_pdu!(channel, pdu::write_response()),
-            Err(e) => send_error!(channel, handle, ClientPduName::WriteRequest, e),
+        let att = self.get_att(handle)?;
+
+        if let Err(e) = client_can_write_attribute!(self, att) {
+            log_client_no_permission_to_write_attribute!(self, att, "ATT_WRITE_REQ");
+
+            return send_error!(channel, handle, ClientPduName::WriteRequest, e);
         }
+
+        let att = self.get_att_mut(handle)?;
+
+        let value = att.get_mut_value();
+
+        let fut = value.try_set_value_from_transfer_format(&payload[2..]);
+
+        let result = fut.await;
+
+        if let Err(e) = result {
+            log::trace!("(ATT) ATT_WRITE_REQ: failed to write to attribute: sending error {e} to client");
+
+            return send_error!(channel, handle, ClientPduName::WriteRequest, e);
+        }
+
+        send_pdu!(channel, pdu::write_response())
     }
 
     fn create_find_information_response(
@@ -1288,7 +1349,7 @@ where
                 if client_can_read_attribute!(self, attribute).is_ok() {
                     true
                 } else {
-                    log_client_cannot_read_attribute!(self, attribute, "ATT_FIND_INFORMATION_REQ");
+                    log_client_no_permission_to_find_attribute!(self, attribute, "ATT_FIND_INFORMATION_REQ");
 
                     false
                 }
@@ -1342,11 +1403,30 @@ where
     async fn process_find_information_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
-        handle_range: pdu::HandleRange,
+        handle_range: &[u8],
     ) -> Result<(), super::ConnectionError<T>>
     where
         T: LogicalLink,
     {
+        let handle_range: pdu::HandleRange = match TransferFormatTryFrom::try_from(&handle_range) {
+            Ok(handle_range) => handle_range,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_FIND_INFORMATION_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(
+                    channel,
+                    0,
+                    ClientPduName::FindInformationRequest,
+                    pdu::Error::InvalidPDU
+                )?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
+
         match self.create_find_information_response(handle_range) {
             Err(e) => send_error!(
                 channel,
@@ -1362,116 +1442,103 @@ where
     ///
     /// # Note
     ///
-    /// Because the Attribute Protocol doesn't define what a 'group' is this returns the group
-    /// end handle with the same found attribute handle.
+    /// Because the Attribute Protocol doesn't define what a 'group' is this will always return an
+    /// error to the client.
     async fn process_find_by_type_value_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
         payload: &[u8],
-    ) -> Result<(), super::ConnectionError<T>>
+    ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
     {
-        if payload.len() >= 6 {
-            let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4])?;
-
-            let att_type: crate::Uuid = TransferFormatTryFrom::try_from(&payload[4..6])?;
-
-            log::info!(
-                "(ATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
-                handle: {:#X}, type: {:?}}}",
-                handle_range.starting_handle,
-                handle_range.ending_handle,
-                att_type
+        if payload.len() <= 6 {
+            log::trace!(
+                "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: received invalid PDU, sending error {} to client",
+                pdu::Error::InvalidPDU
             );
 
-            let raw_value = &payload[6..];
-
-            if handle_range.is_valid() {
-                use core::cmp::min;
-
-                let start = if handle_range.starting_handle as usize <= self.attributes.count() {
-                    handle_range.starting_handle as usize
-                } else {
-                    return send_error!(
-                        channel,
-                        handle_range.starting_handle,
-                        ClientPduName::FindByTypeValueRequest,
-                        pdu::Error::AttributeNotFound
-                    );
-                };
-
-                let end = min(handle_range.ending_handle as usize, self.attributes.count());
-
-                let payload_max = self.mtu - 1;
-
-                let mut cnt = 0;
-
-                let mut transfer = Vec::new();
-
-                for att in self.attributes.attributes[start..=end].iter_mut() {
-                    if att.get_uuid() == &att_type
-                        && client_can_read_attribute!(self, att).is_ok()
-                        && att.get_mut_value().cmp_value_to_raw_transfer_format(raw_value).await
-                    {
-                        cnt += 1;
-
-                        if cnt * 4 < payload_max {
-                            // See function doc for why group handle is same as found handle.
-                            let response =
-                                pdu::TypeValueResponse::new(att.get_handle().unwrap(), att.get_handle().unwrap());
-
-                            transfer.push(response);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
-                if transfer.is_empty() {
-                    send_error!(
-                        channel,
-                        handle_range.starting_handle,
-                        ClientPduName::FindByTypeValueRequest,
-                        pdu::Error::AttributeNotFound,
-                    )
-                } else {
-                    let pdu = pdu::Pdu::new(ServerPduName::FindByTypeValueResponse.into(), transfer);
-
-                    send_pdu!(channel, pdu,)
-                }
-            } else {
-                send_error!(
-                    channel,
-                    handle_range.starting_handle,
-                    ClientPduName::FindByTypeValueRequest,
-                    pdu::Error::InvalidHandle,
-                )
-            }
-        } else {
             send_error!(
                 channel,
                 0,
-                ClientPduName::FindInformationRequest,
-                pdu::Error::InvalidPDU,
-            )
+                ClientPduName::FindByTypeValueRequest,
+                pdu::Error::InvalidPDU
+            )?;
+
+            return Err(pdu::Error::InvalidPDU.into());
         }
+
+        let handle_range: pdu::HandleRange = TransferFormatTryFrom::try_from(&payload[..4])?;
+
+        let att_type: crate::Uuid = TransferFormatTryFrom::try_from(&payload[4..6])?;
+
+        log::info!(
+            "(ATT) not processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
+            handle: {:#X}, type: {:?}}} as handle groups are defined by a higher layer protocol",
+            handle_range.starting_handle,
+            handle_range.ending_handle,
+            att_type
+        );
+
+        if !handle_range.is_valid() {
+            log::trace!(
+                "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: received invalid handle range ({:?}), sending \
+                '{}' error to client",
+                handle_range,
+                pdu::Error::InvalidHandle
+            );
+
+            return send_error!(
+                channel,
+                handle_range.starting_handle,
+                ClientPduName::FindByTypeValueRequest,
+                pdu::Error::InvalidHandle,
+            );
+        };
+
+        log::trace!(
+            "(ATT) ATT_FIND_BY_TYPE_VALUE_REQ: sending error {} to client",
+            pdu::Error::RequestNotSupported
+        );
+
+        send_error!(
+            channel,
+            handle_range.starting_handle,
+            ClientPduName::FindByTypeValueRequest,
+            pdu::Error::InvalidPDU
+        )
     }
 
     /// Process Read By Type Request
     async fn process_read_by_type_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
-        type_request: pdu::TypeRequest,
+        type_request: &[u8],
     ) -> Result<(), super::ConnectionError<T>>
     where
         T: LogicalLink,
     {
+        use core::cmp::min;
+
         macro_rules! enough_room_in_response {
             ($cnt:expr, $size:expr) => {
-                ($cnt + 1) * ($size + 2) <= self.mtu - 2
+                ($cnt + 1) * ($size + 2) <= ::core::cmp::min(self.mtu - 2, <u8>::MAX as usize)
             };
         }
+
+        let type_request: pdu::TypeRequest = match TransferFormatTryFrom::try_from(&type_request) {
+            Ok(handle_range) => handle_range,
+            Err(_) => {
+                log::info!(
+                    "(ATT) ATT_READ_BY_TYPE_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(channel, 0, ClientPduName::ReadByTypeRequest, pdu::Error::InvalidPDU)?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
 
         log::info!(
             "(ATT) processing PDU ATT_READ_BY_TYPE_REQ {{ start handle: {:#X}, end handle: {:#X}, \
@@ -1481,13 +1548,18 @@ where
             type_request.attr_type
         );
 
-        use core::cmp::min;
-
         let handle_range = type_request.handle_range;
 
         let desired_att_type = type_request.attr_type;
 
         if !handle_range.is_valid() {
+            log::trace!(
+                "(ATT) ATT_READ_BY_TYPE_REQ: received invalid handle range ({:?}), sending error \
+                {} to client",
+                handle_range,
+                pdu::Error::InvalidHandle
+            );
+
             return send_error!(
                 channel,
                 handle_range.starting_handle,
@@ -1499,6 +1571,13 @@ where
         let start = if handle_range.starting_handle as usize <= self.attributes.count() {
             handle_range.starting_handle as usize
         } else {
+            log::trace!(
+                "(ATT) ATT_READ_BY_TYPE_REQ: no attributes found in handle range ({:?}), sending \
+                error {} to client",
+                handle_range,
+                pdu::Error::AttributeNotFound
+            );
+
             return send_error!(
                 channel,
                 handle_range.starting_handle,
@@ -1509,8 +1588,6 @@ where
 
         let end = min(handle_range.ending_handle as usize, self.attributes.count());
 
-        let payload_max = self.mtu - 2;
-
         let mut init_iter = self.attributes.attributes[start..=end]
             .iter_mut()
             .filter(|att| att.get_uuid() == &desired_att_type);
@@ -1518,6 +1595,13 @@ where
         let first = init_iter.next();
 
         if first.is_none() {
+            log::trace!(
+                "(ATT) ATT_READ_BY_TYPE_REQ: no attributes found in handle range ({:?}), sending \
+                error {} to client",
+                handle_range,
+                pdu::Error::AttributeNotFound
+            );
+
             return send_error!(
                 channel,
                 handle_range.starting_handle,
@@ -1531,6 +1615,8 @@ where
         let read_permissions_result = client_can_read_attribute!(self, first_match);
 
         if let Err(e) = read_permissions_result {
+            log_client_no_permission_to_read_attribute!(self, first_match, "ATT_READ_BY_TYPE_REQ");
+
             return send_error!(
                 channel,
                 handle_range.starting_handle,
@@ -1550,12 +1636,14 @@ where
         let first_response = match future_result {
             Ok(first_data) => first_data,
             Err(e) => {
+                log::trace!("(ATT) ATT_READ_BY_TYPE_REQ: failed to read attribute, sending error {e} to client",);
+
                 return send_error!(
                     channel,
                     handle_range.starting_handle,
                     ClientPduName::ReadByTypeRequest,
                     e
-                )
+                );
             }
         };
 
@@ -1565,12 +1653,16 @@ where
 
         let fits_in_pdu = enough_room_in_response!(0, tf_data_len);
 
+        let payload_max = min(self.mtu - 2, <u8>::MAX as usize);
+
         if !fits_in_pdu {
             // This is where the data to be transferred of the first found attribute
             // is too large or equal to the connection MTU (minus the header length).
             // Here, a read by type response is generated with as much of the value
             // transfer format that can fit into the payload. A read blob request from
             // the client is then required to complete the full read.
+
+            log::trace!("(ATT) ATT_READ_BY_TYPE_REQ: attribute value requires a bob request to fully acquire");
 
             // Read type response includes a 2 byte handle, so the maximum byte
             // size for the data is the payload - 2
@@ -1591,12 +1683,16 @@ where
                 // break if there isn't enough room in the
                 // response for another attribute value
                 if !enough_room_in_response!(cnt, tf_data_len) {
+                    log::trace!("(ATT) ATT_READ_BY_TYPE_REQ: no more room in response for next value");
+
                     break;
                 }
 
-                // skip those that the client cannot read
+                // stop when the client cannot read the next attribute
                 if client_can_read_attribute!(self, att).is_err() {
-                    continue;
+                    log::trace!("(ATT) ATT_READ_BY_TYPE_REQ: client does not have permissions to read next attribute");
+
+                    break;
                 }
 
                 let handle = att.get_handle().unwrap();
@@ -1627,11 +1723,25 @@ where
     async fn process_read_blob_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
-        blob_request: pdu::ReadBlobRequest,
-    ) -> Result<Status, super::ConnectionError<T>>
+        blob_request: &[u8],
+    ) -> Result<Status, ConnectionError<T>>
     where
         T: LogicalLink,
     {
+        let blob_request: pdu::ReadBlobRequest = match TransferFormatTryFrom::try_from(blob_request) {
+            Ok(handle_range) => handle_range,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_READ_BLOB_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(channel, 0, ClientPduName::ReadBlobRequest, pdu::Error::InvalidPDU)?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
+
         log::info!(
             "(ATT) processing PDU ATT_READ_BLOB_REQ {{ handle: {:#X}, offset {:#X} }}",
             blob_request.handle,
@@ -1643,12 +1753,18 @@ where
             .as_ref()
             .and_then(|blob_data| blob_data.temporary_read_restrictions.as_ref())
         {
+            log::trace!("(ATT) ATT_READ_BLOB_REQ: checking temporary permissions");
+
             validate_permissions!(self, temporary_permissions, &super::FULL_READ_PERMISSIONS)
         } else {
+            log::trace!("(ATT) ATT_READ_BLOB_REQ: checking attribute permissions");
+
             check_permissions!(self, blob_request.handle, &super::FULL_READ_PERMISSIONS).err()
         };
 
         if let Some(e) = check_permissions_result {
+            log_client_no_permission_to_read_attribute!(self, self.get_att(blob_request.handle)?, "ATT_READ_BLOB_REQ");
+
             return send_error!(channel, blob_request.handle, ClientPduName::ReadBlobRequest, e).map(|_| Status::None);
         }
 
@@ -1672,6 +1788,8 @@ where
         };
 
         if let Err(ConnectionError::AttError(super::Error::PduError(e))) = response_result {
+            log::trace!("(ATT) ATT_READ_BLOB_REQ: failed to read attribute {e}");
+
             send_error!(channel, blob_request.handle, ClientPduName::ReadBlobRequest, e,).map(|_| Status::None)
         } else {
             response_result
@@ -1704,7 +1822,11 @@ where
 
         let data = match read_result {
             Ok(data) => data,
-            Err(e) => return send_error!(channel, br.handle, ClientPduName::ReadBlobRequest, e),
+            Err(e) => {
+                log::trace!("(ATT) ATT_READ_BLOB_REQ: failed to read attribute {e}");
+
+                return send_error!(channel, br.handle, ClientPduName::ReadBlobRequest, e);
+            }
         };
 
         let (response, will_blob) = self.new_read_blob_response(&data, br.offset)?;
@@ -1795,22 +1917,41 @@ where
     {
         let request = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => request,
-            Err(e) => {
-                return send_error!(channel, 0, ClientPduName::PrepareWriteRequest, e.pdu_err);
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_PREPARE_WRITE_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(channel, 0, ClientPduName::PrepareWriteRequest, pdu::Error::InvalidPDU)?;
+
+                return Err(pdu::Error::InvalidPDU.into());
             }
         };
+
+        log::info!(
+            "(ATT) processing PDU TT_PREPARE_WRITE_REQ {{ handle: {:#X}, offset {:#X} }}",
+            request.get_handle(),
+            request.get_prepared_offset()
+        );
 
         let handle = request.get_handle();
 
         let check_permissions_result = check_permissions!(self, handle, &super::FULL_WRITE_PERMISSIONS);
 
         if let Err(e) = check_permissions_result {
+            log_client_no_permission_to_write_attribute!(self, self.get_att(handle)?, "ATT_PREPARE_WRITE_REQ");
+
             return send_error!(channel, handle, ClientPduName::PrepareWriteRequest, e);
         }
 
         let prepare_result = self.queued_writer.process_prepared(&request);
 
         if let Err(e) = prepare_result {
+            log::trace!(
+                "(ATT) ATT_PREPARE_WRITE_REQ: queued writer failed to prepare write, sending error {e} to client",
+            );
+
             return send_error!(channel, handle, ClientPduName::PrepareWriteRequest, e);
         }
 
@@ -1822,37 +1963,94 @@ where
     async fn process_execute_write_request<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
-        request_flag: pdu::ExecuteWriteFlag,
-    ) -> Result<(), super::ConnectionError<T>>
+        request_flag: &[u8],
+    ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
     {
+        let request_flag: pdu::ExecuteWriteFlag = match TransferFormatTryFrom::try_from(request_flag) {
+            Ok(request_flag) => request_flag,
+            Err(_) => {
+                log::trace!(
+                    "(ATT) ATT_EXECUTE_WRITE_REQ: received invalid PDU, sending error {} to client",
+                    pdu::Error::InvalidPDU
+                );
+
+                send_error!(channel, 0, ClientPduName::ExecuteWriteRequest, pdu::Error::InvalidPDU)?;
+
+                return Err(pdu::Error::InvalidPDU.into());
+            }
+        };
+
         log::info!("(ATT) processing ATT_EXECUTE_WRITE_REQ {{ flag: {:?} }}", request_flag);
 
-        match match self.queued_writer.process_execute(request_flag) {
-            Ok(Some(iter)) => {
-                for queued_data in iter.into_iter() {
-                    let permission_check = check_permissions!(self, queued_data.0, &super::FULL_WRITE_PERMISSIONS);
+        let mut iter = match self.queued_writer.process_execute(request_flag) {
+            Ok(Some(iter)) => iter,
+            Ok(None) => {
+                log::trace!("(ATT) ATT_EXECUTE_WRITE_REQ: canceled queued write");
 
-                    if permission_check.is_ok() {
-                        match self.write_att(queued_data.0, &queued_data.1).await {
-                            Ok(_) => (),
-                            Err(e) => send_error!(channel, 0, ClientPduName::ExecuteWriteRequest, e)?,
-                        };
-                    }
-                }
+                return send_pdu!(channel, pdu::execute_write_response());
+            }
+            Err(e) => {
+                log::trace!("(ATT) ATT_EXECUTE_WRITE_REQ: queued writer failed, sending error {e} to client");
 
-                Ok(())
+                return send_error!(channel, 0, ClientPduName::ExecuteWriteRequest, e);
+            }
+        };
+
+        for queued_data in iter {
+            // This is not mentioned within the Bluetooth Specification, but it is necessary as
+            // permissions can be changed between preparation and execution of a queued write.
+            if let Err(e) = check_permissions!(self, queued_data.0, &super::FULL_WRITE_PERMISSIONS) {
+                log_client_no_permission_to_write_attribute!(
+                    self,
+                    self.get_att(queued_data.0)?,
+                    "ATT_EXECUTE_WRITE_REQ"
+                );
+
+                return send_error!(channel, queued_data.0, ClientPduName::ExecuteWriteRequest, e);
             }
 
-            Ok(None) => Ok(()),
+            let write_result = match self.get_att_mut(queued_data.0) {
+                Ok(att) => {
+                    let value = att.get_mut_value();
 
-            Err(e) => Err(e),
-        } {
-            Err(e) => send_error!(channel, 0, ClientPduName::ExecuteWriteRequest, e),
+                    let fut = value.try_set_value_from_transfer_format(&queued_data.1);
 
-            Ok(_) => send_pdu!(channel, pdu::execute_write_response()),
+                    fut.await
+                }
+                Err(_) => {
+                    log::trace!(
+                        "(ATT) ATT_EXECUTE_WRITE_REQ: queued writer contained invalid handle {}, \
+                        sending error {} to client",
+                        queued_data.0,
+                        pdu::Error::InvalidHandle
+                    );
+
+                    return send_error!(
+                        channel,
+                        queued_data.0,
+                        ClientPduName::ExecuteWriteRequest,
+                        pdu::Error::InvalidHandle
+                    );
+                }
+            };
+
+            match write_result {
+                Ok(()) => send_pdu!(channel, pdu::execute_write_response())?,
+                Err(e) => {
+                    log::error!(
+                        "(ATT) ATT_EXECUTE_WRITE_REQ: failed to write to attribute, sending error \
+                        {} to client",
+                        e
+                    );
+
+                    send_error!(channel, queued_data.0, ClientPduName::ExecuteWriteRequest, e)?;
+                }
+            }
         }
+
+        Ok(())
     }
 
     /// Get an iterator over the attribute informational data
@@ -2451,7 +2649,7 @@ pub trait QueuedWriter {
     /// Process a prepared write request
     fn process_prepared(&mut self, request: &pdu::PreparedWriteRequest<'_>) -> Result<(), pdu::Error>;
 
-    /// Process an execute request request
+    /// Process an execute write request
     ///
     /// This needs to return an iterator over the prepared writes. Each item of the iterator is
     /// an attribute handle with the data to be written to the attribute value. This data needs to
