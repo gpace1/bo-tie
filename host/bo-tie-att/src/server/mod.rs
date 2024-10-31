@@ -856,7 +856,7 @@ where
     /// # Data larger than the MTU
     /// If the transfer format of `value` is larger than the maximum transfer format size for the
     /// notification, the client must send one or more read blob requests to get the entire value.
-    /// Depending on the implementation of the [`QueuedWrite`] used by this `Server`, notifications
+    /// Depending on the implementation of the [`QueuedWriter`] used by this `Server`, notifications
     /// and indications may need to be halted until a [`Status::ReadBlobComplete`] is returned by a
     /// client PDU processing method.
     ///
@@ -876,13 +876,15 @@ where
     /// for the attribute at `handle`. The temporary restrictions are dropped once the read blob
     /// request is complete or the client performs any other operation.
     ///
+    /// Temporary restrictions are not set if `restrictions` is `None`, and read blob operations
+    /// will refer to the attribute's permissions.
+    ///
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
     ///
     /// [given]: Self::give_permissions_to_client
-    /// [`FULL_READ_PERMISSIONS`]: crate::FULL_READ_PERMISSIONS
-    pub async fn send_notification_with<T, V, R>(
+    pub async fn send_notification_with<'a, T, V, R>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
         handle: u16,
@@ -892,7 +894,7 @@ where
     where
         T: LogicalLink,
         V: TransferFormatInto + ?Sized,
-        R: core::borrow::Borrow<[AttributeRestriction]>,
+        R: Into<Option<&'a [AttributeRestriction]>>,
     {
         if self.attributes.get(handle).is_some() {
             let mut ret_val = true;
@@ -908,7 +910,7 @@ where
 
                 let blob = replace(notification.get_mut_parameters().0.get_mut_data(), sent);
 
-                self.set_blob_for_server_sent_with(blob, handle, Some(restrictions.borrow()));
+                self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
 
                 ret_val = false;
             }
@@ -985,10 +987,13 @@ where
     /// The type for `value` does not need to match the type of the data stored within the attribute
     /// at `handle`.
     ///
+    /// The server will a [`Status::IndicationConfirmed`] upon processing an indication confirmation
+    /// from the client.
+    ///
     /// # Data larger than the MTU
     /// If the transfer format of `value` is larger than the maximum transfer format size for the
     /// indication, the client must send one or more read blob requests to get the entire value.
-    /// Depending on the implementation of the [`QueuedWrite`] used by this `Server`, notifications
+    /// Depending on the implementation of the [`QueuedWriter`] used by this `Server`, notifications
     /// and indications may need to be halted until a [`Status::ReadBlobComplete`] is returned by a
     /// client PDU processing method.
     ///
@@ -1008,6 +1013,9 @@ where
     /// for the attribute at `handle`. The temporary restrictions are dropped once the read blob
     /// request is complete or the client performs any other operation.
     ///
+    /// Temporary restrictions are not set if `restrictions` is `None`, and read blob operations
+    /// will refer to the attribute's permissions.
+    ///
     /// # Note
     /// [`Status::IndicationConfirmed`] is returned by [`process_acl_data`] or
     /// [`process_parsed_acl_data`] whenever they process a
@@ -1016,6 +1024,8 @@ where
     /// # Error
     /// An error is returned if there is not an attribute at `handle` or the notification could not
     /// be sent.
+    ///
+    /// [given]: Self::give_permissions_to_client
     pub async fn send_indication_with<'a, T, V, R>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
@@ -1026,7 +1036,7 @@ where
     where
         T: LogicalLink,
         V: TransferFormatInto + ?Sized,
-        R: core::borrow::Borrow<[AttributeRestriction]>,
+        R: Into<Option<&'a [AttributeRestriction]>>,
     {
         if self.attributes.get(handle).is_some() {
             let mut ret_val = true;
@@ -1042,7 +1052,7 @@ where
 
                 let blob = replace(indication.get_mut_parameters().0.get_mut_data(), sent);
 
-                self.set_blob_for_server_sent_with(blob, handle, Some(restrictions.borrow()));
+                self.set_blob_for_server_sent_with(blob, handle, restrictions.into());
 
                 ret_val = false;
             }

@@ -198,7 +198,7 @@ async fn long_notification_temp_readable() {
             let channel = &mut link.get_att_channel().unwrap();
 
             assert!(!server
-                .send_notification_with(channel, handle, test_data, [AttributeRestriction::None])
+                .send_notification_with(channel, handle, test_data, [AttributeRestriction::None].as_ref())
                 .await
                 .unwrap());
 
