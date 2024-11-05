@@ -425,7 +425,7 @@ impl<'a> IncludesAdder<'a> {
     /// If an error occurs then an includes definition is not added to the server for the provided
     /// `service_record`.
     pub fn include_service(mut self, service_record: ServiceRecord) -> Result<Self, IncludeServiceError> {
-        let service = Service::get_service(self.service_builder.source.attributes, service_record)?;
+        let service = Service::try_from_record(self.service_builder.source.attributes, service_record)?;
 
         let include = ServiceInclude {
             service_handle: service.get_handle(),
@@ -640,7 +640,7 @@ impl<'a> Service<'a> {
     ///
     /// # Error
     /// Information within `record` did not match the information within the server.
-    fn get_service(
+    fn try_from_record(
         attributes: &att::server::ServerAttributes,
         record: ServiceRecord,
     ) -> Result<Service<'_>, ServiceRecordError> {
