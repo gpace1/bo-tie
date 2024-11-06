@@ -1351,8 +1351,8 @@ impl<Q> Server<Q>
 where
     Q: att::server::QueuedWriter,
 {
-    /// Get information on the services within this GATT server
-    pub fn get_service_info(&self) -> impl Iterator<Item = Service> {
+    /// Iterate over the services within this GATT server
+    pub fn iter_services(&self) -> impl Iterator<Item = Service> {
         self.primary_services.iter().map(move |s| Service {
             server_attributes: self.server.get_attributes(),
             group_data: *s,
@@ -1514,8 +1514,6 @@ where
         &self,
         payload: &[u8],
     ) -> Result<Option<alloc::vec::Vec<att::pdu::TypeValueResponse>>, att::pdu::Error> {
-        use core::ops::RangeBounds;
-
         let handle_range: HandleRange = match att::TransferFormatTryFrom::try_from(&payload[..4]) {
             Ok(handle_range) => handle_range,
             Err(_) => {
@@ -1542,7 +1540,24 @@ where
             }
         };
 
-        let searched_for_uuid: Uuid = match att::TransferFormatTryFrom::try_from(&payload[6..]) {
+        match attribute_type {
+            uuid::PRIMARY_SERVICE => self.create_find_by_type_value_response_for_primary(handle_range, &payload[6..]),
+            uuid::SECONDARY_SERVICE => Err(att::pdu::Error::AttributeNotFound),
+            uuid::CHARACTERISTIC => {
+                self.create_find_by_type_value_response_for_characteristic(handle_range, &payload[6..])
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn create_find_by_type_value_response_for_primary(
+        &self,
+        handle_range: HandleRange,
+        raw_uuid: &[u8],
+    ) -> Result<Option<alloc::vec::Vec<att::pdu::TypeValueResponse>>, att::pdu::Error> {
+        use core::ops::RangeBounds;
+
+        let searched_for_uuid: Uuid = match att::TransferFormatTryFrom::try_from(raw_uuid) {
             Ok(uuid) => uuid,
             Err(_) => {
                 log::trace!(
@@ -1555,21 +1570,12 @@ where
         };
 
         log::info!(
-            "(GATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {}, end handle: {}, Service: {:x}}}",
+            "(GATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ for primary service {{ start \
+            handle: {}, end handle: {}, primary service UUID: {:x}}}",
             handle_range.starting_handle,
             handle_range.ending_handle,
             searched_for_uuid
         );
-
-        if attribute_type == uuid::SECONDARY_SERVICE {
-            // todo: for now secondary services are not supported by this GATT
-            return Err(att::pdu::Error::AttributeNotFound);
-        }
-
-        // return if the request is not looking for primary services or characteristics
-        if attribute_type != uuid::PRIMARY_SERVICE && attribute_type != uuid::CHARACTERISTIC {
-            return Ok(None);
-        }
 
         // the response starts with a 1 byte opcode
         let mut size = 1;
@@ -1588,6 +1594,64 @@ where
             .take_while(|_| ((size + 4) < self.server.get_mtu()).then(|| size += 4).is_some())
             .map(|service_data| {
                 att::pdu::TypeValueResponse::new(service_data.service_handle, service_data.end_group_handle)
+            })
+            .collect::<alloc::vec::Vec<_>>();
+
+        if handle_information_list.is_empty() {
+            return Err(att::pdu::Error::AttributeNotFound);
+        }
+
+        Ok(Some(handle_information_list))
+    }
+
+    fn create_find_by_type_value_response_for_characteristic(
+        &self,
+        handle_range: HandleRange,
+        raw_uuid: &[u8],
+    ) -> Result<Option<alloc::vec::Vec<att::pdu::TypeValueResponse>>, att::pdu::Error> {
+        use core::ops::RangeBounds;
+
+        let searched_for_uuid: Uuid = match att::TransferFormatTryFrom::try_from(raw_uuid) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                log::trace!(
+                    "(GATT) ATT_FIND_BY_TYPE_VALUE_REQ: value in request is not supported by GATT, \
+                    punting to ATT implementation of ATT_FIND_BY_TYPE_VALUE"
+                );
+
+                return Ok(None);
+            }
+        };
+
+        log::info!(
+            "(GATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ for characteristic {{ start \
+            handle: {}, end handle: {}, characteristic UUID: {:x}}}",
+            handle_range.starting_handle,
+            handle_range.ending_handle,
+            searched_for_uuid
+        );
+
+        // the response starts with a 1 byte opcode
+        let mut size = 1;
+
+        let handle_information_list = self
+            .iter_services()
+            .flat_map(|service_data| service_data.iter_characteristics())
+            .filter(|characteristic| characteristic.get_uuid() == searched_for_uuid)
+            .filter(|characteristic| {
+                handle_range
+                    .to_range_bounds()
+                    .contains(&characteristic.get_declaration_handle())
+                    && handle_range
+                        .to_range_bounds()
+                        .contains(&characteristic.get_end_handle())
+            })
+            .take_while(|_| ((size + 4) < self.server.get_mtu()).then(|| size += 4).is_some())
+            .map(|characteristic| {
+                att::pdu::TypeValueResponse::new(
+                    characteristic.get_declaration_handle(),
+                    characteristic.get_end_handle(),
+                )
             })
             .collect::<alloc::vec::Vec<_>>();
 

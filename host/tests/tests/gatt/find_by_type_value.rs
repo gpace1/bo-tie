@@ -183,76 +183,91 @@ macro_rules! connect_setup {
     }};
 }
 
+macro_rules! test {
+    ($link:expr, $client:expr, $range:expr, $uuid:expr, $value:expr, |$response:ident| $test:block) => {{
+        let channel = &mut $link.get_att_channel().unwrap();
+
+        let response_processor = $client
+            .find_by_type_value_request(channel, $range, $uuid, $value)
+            .await
+            .expect("failed to send request");
+
+        let response = match $link.next().await.unwrap() {
+            LeUNext::AttributeChannel { pdu, .. } => pdu,
+            next => panic!("received unexpected {next:?}"),
+        };
+
+        let response = response_processor
+            .process_response(&response)
+            .expect("invalid response");
+
+        (|$response: Vec<bo_tie_att::pdu::TypeValueResponse>| $test)(response)
+    }};
+}
+
 #[tokio::test]
-async fn find_success() {
+async fn find_primary_services_success() {
     // Note: all responses will not have a `group end handle`
     // as that is defined by a higher layer specification.
     connect_setup!(|link, client| {
-        macro_rules! test {
-            ($range:expr, $uuid:expr, $value:expr, |$response:ident| $test:block) => {{
-                let channel = &mut link.get_att_channel().unwrap();
+        test!(
+            link,
+            client,
+            1..=0xFFFF,
+            Uuid::from(0x2800u16),
+            Uuid::from(0x1001u16),
+            |responses| {
+                let response = responses.get(0).unwrap();
 
-                let response_processor = client
-                    .find_by_type_value_request(channel, $range, $uuid, $value)
-                    .await
-                    .expect("failed to send request");
+                assert_eq!(response.get_handle(), 6);
+                assert_eq!(response.get_end_group_handle(), 10);
 
-                let response = match link.next().await.unwrap() {
-                    LeUNext::AttributeChannel { pdu, .. } => pdu,
-                    next => panic!("received unexpected {next:?}"),
-                };
+                let response = responses.get(1).unwrap();
 
-                let response = response_processor
-                    .process_response(&response)
-                    .expect("invalid response");
+                assert_eq!(response.get_handle(), 16);
+                assert_eq!(response.get_end_group_handle(), 20);
 
-                (|$response: Vec<bo_tie_att::pdu::TypeValueResponse>| $test)(response)
-            }};
-        }
+                let response = responses.get(2).unwrap();
 
-        test!(1..=0xFFFF, Uuid::from(0x2800u16), Uuid::from(0x1001u16), |responses| {
-            let response = responses.get(0).unwrap();
+                assert_eq!(response.get_handle(), 36);
+                assert_eq!(response.get_end_group_handle(), 40);
 
-            assert_eq!(response.get_handle(), 6);
-            assert_eq!(response.get_end_group_handle(), 10);
+                assert!(responses.get(3).is_none());
+            }
+        );
+    })
+}
 
-            let response = responses.get(1).unwrap();
+#[tokio::test]
+async fn find_characteristics_success() {
+    connect_setup!(|link, client| {
+        test!(
+            link,
+            client,
+            1..=0xFFFF,
+            Uuid::from(0x2803u16),
+            Uuid::from(0x2011u16),
+            |responses| {
+                let response = responses.get(0).unwrap();
 
-            assert_eq!(response.get_handle(), 16);
-            assert_eq!(response.get_end_group_handle(), 20);
+                assert_eq!(response.get_handle(), 7);
+                assert_eq!(response.get_end_group_handle(), 8);
 
-            let response = responses.get(2).unwrap();
+                let response = responses.get(1).unwrap();
 
-            assert_eq!(response.get_handle(), 36);
-            assert_eq!(response.get_end_group_handle(), 40);
-        });
+                assert_eq!(response.get_handle(), 17);
+                assert_eq!(response.get_end_group_handle(), 18);
 
-        // test!(1..=0xFFFF, UUID_1, 1u8, |responses| {
-        //     for response in responses {
-        //         assert_eq!(3, response.get_handle());
-        //         assert_eq!(3, response.get_group());
-        //     }
-        // });
-        //
-        // test!(1..=0xFFFF, UUID_2, 0u8, |responses| {
-        //     for response in responses {
-        //         assert_eq!(4, response.get_handle());
-        //         assert_eq!(4, response.get_group());
-        //     }
-        // });
-        //
-        // test!(1..=0xFFFF, UUID_2, 1u8, |responses| {
-        //     for response in responses {
-        //         assert_eq!(5, response.get_handle());
-        //         assert_eq!(5, response.get_group());
-        //     }
-        // });
-        //
-        // test!(1..=0xFFFF, UUID_2, 2u8, |responses| {
-        //     for response in responses {
-        //         assert_eq!(6, response.get_handle());
-        //         assert_eq!(6, response.get_group());
-        //     }
-        // });
+                let response = responses.get(2).unwrap();
+
+                assert_eq!(response.get_handle(), 27);
+                assert_eq!(response.get_end_group_handle(), 28);
+
+                let response = responses.get(3).unwrap();
+
+                assert_eq!(response.get_handle(), 37);
+                assert_eq!(response.get_end_group_handle(), 38);
+            }
+        )
     })
 }
