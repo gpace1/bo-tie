@@ -6,6 +6,7 @@ use bo_tie_att::{TransferFormatError, TransferFormatInto, TransferFormatTryFrom}
 use bo_tie_core::buffer::stack::LinearBuffer;
 
 /// The Value of the Service Changed Characteristic
+#[derive(Debug)]
 pub struct ServiceChangedValue {
     pub starting_handle: u16,
     pub ending_handle: u16,

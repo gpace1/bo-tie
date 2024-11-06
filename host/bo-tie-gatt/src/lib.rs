@@ -1303,7 +1303,7 @@ pub struct Server<Q> {
 /// $pdu: `pdu::Pdu<_>`,
 macro_rules! send_pdu {
     ( $channel:expr, $pdu:expr $(,)?) => {{
-        log::info!("(GATT) sending {}", $pdu.get_opcode());
+        log::info!("(GATT) sending {:?}", $pdu);
 
         send_pdu!(SKIP_LOG, $channel, $pdu)
     }};

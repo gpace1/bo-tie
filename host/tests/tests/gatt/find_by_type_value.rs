@@ -8,7 +8,7 @@ use bo_tie_gatt::{GapServiceBuilder, ServerBuilder};
 use bo_tie_host_tests::PhysicalLinkLoop;
 use bo_tie_host_util::Uuid;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
-use bo_tie_l2cap::{LeULogicalLink, LeUNext, PhysicalLink};
+use bo_tie_l2cap::{LeULogicalLink, LeUNext};
 
 macro_rules! connect_setup {
     (|$link:ident, $client:ident| $action:block ) => {{
