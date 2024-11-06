@@ -399,7 +399,7 @@ macro_rules! log_client_no_permission_to_find_attribute {
     ($this:expr, $att:expr, $op:literal $(,)?) => {
         log::trace!(
             ::core::concat!(
-                "(ATT)",
+                "(ATT) ",
                 $op,
                 ": skipping attribute at handle {}, client does not have read permission to find \
                 this attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
@@ -417,7 +417,7 @@ macro_rules! log_client_no_permission_to_read_attribute {
     ($this:expr, $att:expr, $op:literal $(,)?) => {
         log::trace!(
             ::core::concat!(
-                "(ATT)",
+                "(ATT) ",
                 $op,
                 ": skipping attribute at handle {}, client does not have permission to read \
                 this attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
@@ -451,7 +451,7 @@ macro_rules! log_client_no_permission_to_write_attribute {
     ($this:expr, $att:expr, $op:literal $(,)?) => {
         log::trace!(
             ::core::concat!(
-                "(ATT)",
+                "(ATT) ",
                 $op,
                 ": skipping attribute at handle {}, client does not have permission to write to \
                 this attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
@@ -1437,6 +1437,13 @@ where
             }
         };
 
+        log::info!(
+            "(ATT) processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {:#X}, end \
+            handle: {:#X} }} as handle groups are defined by a higher layer protocol",
+            handle_range.starting_handle,
+            handle_range.ending_handle,
+        );
+
         match self.create_find_information_response(handle_range) {
             Err(e) => send_error!(
                 channel,
@@ -1584,7 +1591,7 @@ where
         };
 
         log::info!(
-            "(ATT) not processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
+            "(ATT) processing PDU ATT_FIND_BY_TYPE_VALUE_REQ {{ start handle: {:#X}, end \
             handle: {:#X}, type: {:?}}} as handle groups are defined by a higher layer protocol",
             handle_range.starting_handle,
             handle_range.ending_handle,
