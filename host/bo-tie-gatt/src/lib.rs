@@ -1387,66 +1387,19 @@ where
         }
     }
 
-    /// Process a Read by Group Type Request
-    ///
-    /// A GATT profile Client will send this to a server to query for the Primary Services.
-    async fn process_read_by_group_type_request<T>(
-        &mut self,
-        channel: &mut BasicFrameChannel<T>,
-        payload: &[u8],
-    ) -> Result<(), att::ConnectionError<T>>
-    where
-        T: LogicalLink,
-    {
-        let request: att::pdu::TypeRequest = match att::TransferFormatTryFrom::try_from(payload) {
-            Ok(request) => request,
-            Err(_) => {
-                return send_error!(
-                    channel,
-                    0,
-                    att::client::ClientPduName::ReadByGroupTypeRequest,
-                    att::pdu::Error::InvalidPDU,
-                );
-            }
-        };
-
-        log::info!(
-            "(GATT) processing PDU ATT_READ_BY_GROUP_TYPE_REQ {{ starting handle: {}, ending handle: {} }}",
-            request.handle_range.starting_handle,
-            request.handle_range.ending_handle,
-        );
-
-        if uuid::PRIMARY_SERVICE != request.attr_type {
-            return send_error!(
-                channel,
-                request.handle_range.starting_handle,
-                att::client::ClientPduName::ReadByGroupTypeRequest,
-                att::pdu::Error::UnsupportedGroupType,
-            );
-        }
-
-        let mut response = alloc::vec::Vec::new();
-
-        if let Err(error) = self.create_read_by_group_type_response(request.handle_range, &mut response) {
-            return send_error!(
-                channel,
-                request.handle_range.starting_handle,
-                att::client::ClientPduName::ReadByGroupTypeRequest,
-                error,
-            );
-        }
-
-        let pdu = att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response);
-
-        send_pdu!(channel, pdu)
-    }
-
-    fn create_read_by_group_type_response(
+    fn create_read_by_group_type_response_primary(
         &self,
         handle_range: HandleRange,
         response: &mut impl bo_tie_core::buffer::TryExtend<u8>,
     ) -> Result<(), att::pdu::Error> {
         use core::ops::RangeBounds;
+
+        log::info!(
+            "(GATT) processing PDU ATT_READ_BY_GROUP_TYPE_REQ for Primary Services {{ starting \
+            handle: {}, ending handle: {} }}",
+            handle_range.starting_handle,
+            handle_range.ending_handle,
+        );
 
         let mut iter = self
             .primary_services
@@ -1506,6 +1459,72 @@ where
                     });
 
                 Ok(())
+            }
+        }
+    }
+
+    fn create_read_by_group_type_response_secondary(
+        &self,
+        handle_range: HandleRange,
+        _: &mut impl bo_tie_core::buffer::TryExtend<u8>,
+    ) -> Result<(), att::pdu::Error> {
+        log::info!(
+            "(GATT) processing PDU ATT_READ_BY_GROUP_TYPE_REQ for Secondary Services {{ starting \
+            handle: {}, ending handle: {} }}",
+            handle_range.starting_handle,
+            handle_range.ending_handle,
+        );
+
+        // secondary services are not supported yet
+        Err(att::pdu::Error::AttributeNotFound)
+    }
+
+    /// Process a Read by Group Type Request
+    ///
+    /// A GATT profile Client will send this to a server to query for the Primary Services.
+    async fn process_read_by_group_type_request<T>(
+        &mut self,
+        channel: &mut BasicFrameChannel<T>,
+        payload: &[u8],
+    ) -> Result<(), att::ConnectionError<T>>
+    where
+        T: LogicalLink,
+    {
+        let request: att::pdu::TypeRequest = match att::TransferFormatTryFrom::try_from(payload) {
+            Ok(request) => request,
+            Err(_) => {
+                return send_error!(
+                    channel,
+                    0,
+                    att::client::ClientPduName::ReadByGroupTypeRequest,
+                    att::pdu::Error::InvalidPDU,
+                );
+            }
+        };
+
+        let mut response = alloc::vec::Vec::new();
+
+        match match request.attr_type {
+            uuid::PRIMARY_SERVICE => {
+                self.create_read_by_group_type_response_primary(request.handle_range, &mut response)
+            }
+            uuid::SECONDARY_SERVICE => {
+                self.create_read_by_group_type_response_secondary(request.handle_range, &mut response)
+            }
+            _ => Err(att::pdu::Error::UnsupportedGroupType),
+        } {
+            Err(error) => {
+                send_error!(
+                    channel,
+                    request.handle_range.starting_handle,
+                    att::client::ClientPduName::ReadByGroupTypeRequest,
+                    error,
+                )
+            }
+            Ok(()) => {
+                let pdu = att::pdu::Pdu::new(att::server::ServerPduName::ReadByGroupTypeResponse.into(), response);
+
+                send_pdu!(channel, pdu)
             }
         }
     }
