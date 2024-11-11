@@ -11,7 +11,6 @@ use crate::{AclPacketBoundary, Connection, ConnectionKind, HciAclData, HciAclPac
 use bo_tie_core::buffer::IntoExactSizeIterator;
 use bo_tie_hci_util::events::parameters::{LeConnectionCompleteData, LeEnhancedConnectionCompleteData};
 use bo_tie_hci_util::{ConnectionChannelEnds, ConnectionHandle, Sender};
-use bo_tie_l2cap::LeULogicalLink;
 
 /// A L2CAP connection for LE
 ///
