@@ -433,7 +433,7 @@ macro_rules! log_client_no_permission_to_read_attribute {
 
 /// Check if a client can write the given attribute
 ///
-/// Returns the error as to why the client cannot write to the the attribute
+/// Returns the error as to why the client cannot write to the attribute
 ///
 /// # Inputs
 /// $this: `self` for `Server`
