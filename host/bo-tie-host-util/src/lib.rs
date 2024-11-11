@@ -231,6 +231,8 @@ impl<'a> core::fmt::Display for UuidFormatError<'a> {
     }
 }
 
+impl core::error::Error for UuidFormatError<'_> {}
+
 impl<'a> TryFrom<&'a str> for Uuid {
     type Error = UuidFormatError<'a>;
 
