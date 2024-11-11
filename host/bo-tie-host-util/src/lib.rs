@@ -6,7 +6,8 @@
 
 #![cfg_attr(not(test), no_std)]
 
-use core::fmt::Write;
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 /// Universally Unique Identifier
 ///
@@ -212,18 +213,43 @@ impl From<[u8; 16]> for Uuid {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct UuidFormatError;
+pub struct UuidFormatError<T>(T);
 
-impl core::fmt::Display for UuidFormatError {
+impl<T: core::fmt::Display> core::fmt::Display for UuidFormatError<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        f.write_str("invalid UUID")
+        write!(f, "invalid UUID: {}", self.0)
     }
 }
 
-impl core::error::Error for UuidFormatError {}
+impl<T: core::fmt::Debug + core::fmt::Display> core::error::Error for UuidFormatError<T> {}
+
+macro_rules! parse_uuid_field {
+    ( $source:expr, $fields:expr, $bytes:expr) => {{
+        let Some(field) = $fields.next() else {
+            return Err(UuidFormatError($source));
+        };
+
+        let mut bytes = $bytes.iter_mut();
+
+        let mut cnt = 0;
+
+        while let Some(hex_str) = field.get((cnt * 2)..(cnt * 2 + 2)) {
+            cnt += 1;
+
+            let Some(next) = bytes.next() else {
+                return Err(UuidFormatError($source));
+            };
+
+            match <u8>::from_str_radix(hex_str, 16) {
+                Ok(v) => *next = v,
+                Err(_) => return Err(UuidFormatError($source)),
+            };
+        }
+    }};
+}
 
 impl<'a> TryFrom<&'a str> for Uuid {
-    type Error = UuidFormatError;
+    type Error = UuidFormatError<&'a str>;
 
     fn try_from(v: &'a str) -> Result<Self, Self::Error> {
         let mut fields = v.split("-");
@@ -231,30 +257,35 @@ impl<'a> TryFrom<&'a str> for Uuid {
         // The str format is naturally big-endian
         let mut bytes_be = [0u8; 16];
 
-        macro_rules! parse_uuid_field {
-            ( $bytes:expr) => {{
-                let field = fields.next().ok_or(UuidFormatError)?;
-                let mut bytes = $bytes.iter_mut();
+        // Breaking the bytes into their respective fields
+        parse_uuid_field!(v, fields, bytes_be[0..4]);
+        parse_uuid_field!(v, fields, bytes_be[4..6]);
+        parse_uuid_field!(v, fields, bytes_be[6..8]);
+        parse_uuid_field!(v, fields, bytes_be[8..10]);
+        parse_uuid_field!(v, fields, bytes_be[10..]);
 
-                let mut cnt = 0;
+        Ok(Uuid {
+            base_uuid: <u128>::from_be_bytes(bytes_be),
+        })
+    }
+}
 
-                while let Some(hex_str) = field.get((cnt * 2)..(cnt * 2 + 2)) {
-                    cnt += 1;
+#[cfg(feature = "alloc")]
+impl TryFrom<alloc::string::String> for Uuid {
+    type Error = UuidFormatError<alloc::string::String>;
 
-                    *bytes.next().ok_or(UuidFormatError)? =
-                        <u8>::from_str_radix(hex_str, 16).or(Err(UuidFormatError))?;
-                }
+    fn try_from(v: alloc::string::String) -> Result<Self, Self::Error> {
+        let mut fields = v.split("-");
 
-                Ok(())
-            }};
-        }
+        // The str format is naturally big-endian
+        let mut bytes_be = [0u8; 16];
 
         // Breaking the bytes into their respective fields
-        parse_uuid_field!(bytes_be[0..4])?;
-        parse_uuid_field!(bytes_be[4..6])?;
-        parse_uuid_field!(bytes_be[6..8])?;
-        parse_uuid_field!(bytes_be[8..10])?;
-        parse_uuid_field!(bytes_be[10..])?;
+        parse_uuid_field!(v, fields, bytes_be[0..4]);
+        parse_uuid_field!(v, fields, bytes_be[4..6]);
+        parse_uuid_field!(v, fields, bytes_be[6..8]);
+        parse_uuid_field!(v, fields, bytes_be[8..10]);
+        parse_uuid_field!(v, fields, bytes_be[10..]);
 
         Ok(Uuid {
             base_uuid: <u128>::from_be_bytes(bytes_be),
