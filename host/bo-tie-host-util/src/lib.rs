@@ -5,7 +5,8 @@
 //! re-exported by the crate using them.
 
 #![cfg_attr(not(test), no_std)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
+use core::fmt::Write;
 
 /// Universally Unique Identifier
 ///
@@ -211,30 +212,18 @@ impl From<[u8; 16]> for Uuid {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum UuidFormatError<'a> {
-    IncorrectFieldLength(&'a str),
-    IncorrectLength,
-    IncorrectDigit(&'a str, &'a str),
-}
+pub struct UuidFormatError;
 
-impl<'a> core::fmt::Display for UuidFormatError<'a> {
+impl core::fmt::Display for UuidFormatError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match *self {
-            UuidFormatError::IncorrectFieldLength(field) => {
-                write!(f, "Field with '{}' has an incorrect number of characters", field)
-            }
-            UuidFormatError::IncorrectLength => write!(f, "Incorrect Length"),
-            UuidFormatError::IncorrectDigit(digits, field) => {
-                write!(f, "Digits '{}' in field '{}' are not hexadecimal", digits, field)
-            }
-        }
+        f.write_str("invalid UUID")
     }
 }
 
-impl core::error::Error for UuidFormatError<'_> {}
+impl core::error::Error for UuidFormatError {}
 
 impl<'a> TryFrom<&'a str> for Uuid {
-    type Error = UuidFormatError<'a>;
+    type Error = UuidFormatError;
 
     fn try_from(v: &'a str) -> Result<Self, Self::Error> {
         let mut fields = v.split("-");
@@ -244,7 +233,7 @@ impl<'a> TryFrom<&'a str> for Uuid {
 
         macro_rules! parse_uuid_field {
             ( $bytes:expr) => {{
-                let field = fields.next().ok_or(UuidFormatError::IncorrectLength)?;
+                let field = fields.next().ok_or(UuidFormatError)?;
                 let mut bytes = $bytes.iter_mut();
 
                 let mut cnt = 0;
@@ -252,8 +241,8 @@ impl<'a> TryFrom<&'a str> for Uuid {
                 while let Some(hex_str) = field.get((cnt * 2)..(cnt * 2 + 2)) {
                     cnt += 1;
 
-                    *bytes.next().ok_or(UuidFormatError::IncorrectFieldLength(field))? =
-                        <u8>::from_str_radix(hex_str, 16).or(Err(UuidFormatError::IncorrectDigit(hex_str, field)))?;
+                    *bytes.next().ok_or(UuidFormatError)? =
+                        <u8>::from_str_radix(hex_str, 16).or(Err(UuidFormatError))?;
                 }
 
                 Ok(())
