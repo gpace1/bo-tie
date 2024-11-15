@@ -274,7 +274,7 @@ pub struct Server<Q> {
     /// is chopped up across multiple blob requests and re-stitched together at the client side.
     /// All read responses double as the start of a blob read when the data is too large to be
     /// completely sent within the read response. Whenever a blob read is started, `blob_data` is
-    /// updated with the full data to be read **whether or not the prior data was fully read by
+    /// updated with the full data to be read **weather or not the prior data was fully read by
     /// the client**.
     ///
     /// See the doc for `Server` for more information on blob data.
