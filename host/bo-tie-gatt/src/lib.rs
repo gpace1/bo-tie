@@ -86,7 +86,6 @@ macro_rules! map_restrictions {
 pub mod characteristic;
 pub mod uuid;
 
-use crate::characteristic::client_config::SetClientConfig;
 use crate::characteristic::ClientConfiguration;
 use bo_tie_att as att;
 use bo_tie_att::pdu::HandleRange;
@@ -1008,11 +1007,9 @@ impl<'a> GapServiceBuilder<'a> {
         permissions
     }
 
-    fn into_gatt_service(mut self) -> ServerBuilder {
-        let mut server_builder = ServerBuilder::new_empty();
-
+    fn build_in(mut self, server_builder: &mut ServerBuilder) {
         let mut characteristic_adder = server_builder
-            .new_service(Self::GAP_SERVICE_TYPE)
+            .add_service(Self::GAP_SERVICE_TYPE)
             .add_characteristics()
             .new_characteristic(|characteristic| {
                 characteristic
@@ -1088,6 +1085,12 @@ impl<'a> GapServiceBuilder<'a> {
         }
 
         characteristic_adder.finish_service();
+    }
+
+    fn into_gatt_service(self) -> ServerBuilder {
+        let mut server_builder = ServerBuilder::new_empty();
+
+        self.build_in(&mut server_builder);
 
         server_builder
     }
@@ -1128,7 +1131,7 @@ impl<'a> GapServiceBuilder<'a> {
 ///
 /// let mut server_builder = ServerBuilder::from(gap_service);
 ///
-/// server_builder.new_service(SERVICE_UUID)
+/// server_builder.add_service(SERVICE_UUID)
 ///     .add_characteristics()
 ///     .new_characteristic(|characteristic_builder| {
 ///         characteristic_builder
@@ -1198,7 +1201,7 @@ impl ServerBuilder {
     /// # let value = 1234;
     ///
     /// // this adds a service with a single characteristic
-    /// let service_reference = server_builder.new_service(service_uuid_1)
+    /// let service_reference = server_builder.add_service(service_uuid_1)
     ///     .add_characteristics()
     ///     .new_characteristic(|characteristic_builder| {
     ///         characteristic_builder.set_declaration(|declaration_builder| {
@@ -1216,14 +1219,14 @@ impl ServerBuilder {
     ///     .as_record();
     ///
     /// // this adds a service that includes the prior service
-    /// server_builder.new_service(service_uuid_2)
+    /// server_builder.add_service(service_uuid_2)
     ///     .make_secondary()
     ///     .into_includes_adder()
     ///     .include_service(service_reference)
     ///     .unwrap()
     ///     .finish_service();
     /// ```
-    pub fn new_service<U>(&mut self, service_uuid: U) -> ServiceBuilder<'_>
+    pub fn add_service<U>(&mut self, service_uuid: U) -> ServiceBuilder<'_>
     where
         U: Into<Uuid>,
     {
@@ -1240,9 +1243,13 @@ impl ServerBuilder {
     /// This is a specific service defined within the Bluetooth Specification. This service's
     /// characteristics relate to the state of the
     ///
+    /// # Note
+    /// If adding the service changed or database hash characteristics it is recommended to call
+    /// this method first so that the GATT service is at the top of the server attribute list.
+    ///
     /// # Panic
     /// This method can only be called once to construct the GATT Service
-    pub fn new_gatt_service<F>(&mut self, f: F)
+    pub fn add_gatt_service<F>(&mut self, f: F)
     where
         F: FnOnce(GattServiceBuilder<'_>) -> GattServiceBuilder<'_>,
     {
@@ -1251,6 +1258,24 @@ impl ServerBuilder {
         let gatt_info = f(builder).build();
 
         self.gatt_service_info = gatt_info.into();
+    }
+
+    /// Construct the Generic Access Profile Service
+    ///
+    /// This *must* be called to have the GATT server conform to Bluetooth Specification
+    /// requirements for the GATT profile (unless this `ServerBuilder` was constructed from a
+    /// `GapServiceBuilder`).
+    pub fn add_gap_service<'a, F, D, A>(&mut self, f: F, device_name: D, appearance: A)
+    where
+        F: FnOnce(&mut GapServiceBuilder<'a>),
+        D: Into<Option<&'a str>>,
+        A: Into<Option<u16>>,
+    {
+        let mut builder = GapServiceBuilder::new(device_name, appearance);
+
+        f(&mut builder);
+
+        builder.build_in(self);
     }
 
     /// Get all the attributes of the server
@@ -2060,7 +2085,7 @@ impl<'a> GattServiceBuilder<'a> {
     /// Create a new `GattServiceBuilder`
     fn new(server_builder: &'a mut ServerBuilder) -> Self {
         let characteristic_adder = server_builder
-            .new_service(Self::GATT_SERVICE_UUID)
+            .add_service(Self::GATT_SERVICE_UUID)
             .add_characteristics();
 
         GattServiceBuilder {

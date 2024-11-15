@@ -150,7 +150,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// use bo_tie_gatt::characteristic::Properties;
     /// # use bo_tie_gatt::ServerBuilder;
     /// # let mut sb = ServerBuilder::new_empty();
-    /// # let characteristic_builder = sb.new_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
+    /// # let characteristic_builder = sb.add_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
     /// # let characteristic_builder = characteristic_builder.set_value(|b| b.set_value(1234).set_permissions([]));
     ///
     /// characteristic_builder.set_declaration(|declaration_builder| {
@@ -201,7 +201,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// use bo_tie_gatt::characteristic::Properties;
     /// # use bo_tie_gatt::ServerBuilder;
     /// # let mut sb = ServerBuilder::new_empty();
-    /// # let characteristic_builder = sb.new_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
+    /// # let characteristic_builder = sb.add_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
     ///
     /// characteristic_builder.set_declaration(|declaration_builder| {
     ///     declaration_builder.set_properties([Properties::Read])
@@ -255,7 +255,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// use bo_tie_gatt::characteristic::{ExtendedProperties, Properties};
     /// # use bo_tie_gatt::ServerBuilder;
     /// # let mut sb = ServerBuilder::new_empty();
-    /// # let characteristic_builder = sb.new_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
+    /// # let characteristic_builder = sb.add_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
     /// # let characteristic_builder = characteristic_builder.set_value(|b| b.set_value(0).set_permissions([])).set_declaration(|d| d.set_properties([]).set_uuid(1u16));
     ///
     /// characteristic_builder.set_declaration(|declaration_builder| {
@@ -317,7 +317,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// # use bo_tie_att::AttributeRestriction;
     /// # use bo_tie_gatt::ServerBuilder;
     /// # let mut sb = ServerBuilder::new_empty();
-    /// # let characteristic_builder = sb.new_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
+    /// # let characteristic_builder = sb.add_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
     /// # let characteristic_builder = characteristic_builder
     /// #    .set_declaration(|d| d.set_properties([]).set_uuid(1u16))
     /// #    .set_value(|v| v.set_value(0u16).set_permissions([]));
@@ -365,7 +365,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// # use bo_tie_att::AttributeRestriction;
     /// # use bo_tie_gatt::ServerBuilder;
     /// # let mut sb = ServerBuilder::new_empty();
-    /// # let characteristic_builder = sb.new_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
+    /// # let characteristic_builder = sb.add_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
     /// # let characteristic_builder = characteristic_builder
     /// #    .set_declaration(|d| d.set_properties([]).set_uuid(1u16))
     /// #    .set_value(|v| v.set_value(0u16).set_permissions([]));

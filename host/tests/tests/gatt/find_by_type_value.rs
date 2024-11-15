@@ -23,7 +23,7 @@ macro_rules! connect_setup {
                 let mut server_builder: ServerBuilder = GapServiceBuilder::new("full_discovery_of_server", None).into();
 
                 let service_data = server_builder
-                    .new_service(0x1001u16)
+                    .add_service(0x1001u16)
                     .add_characteristics()
                     .new_characteristic(|c| {
                         c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
@@ -41,7 +41,7 @@ macro_rules! connect_setup {
                 assert_eq!(service_data.get_end_group_handle(), 10);
 
                 let service_data = server_builder
-                    .new_service(0x1002u16)
+                    .add_service(0x1002u16)
                     .add_characteristics()
                     .new_characteristic(|c| {
                         c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
@@ -58,7 +58,7 @@ macro_rules! connect_setup {
                 assert_eq!(service_data.get_end_group_handle(), 15);
 
                 let service_data = server_builder
-                    .new_service(0x1001u16)
+                    .add_service(0x1001u16)
                     .add_characteristics()
                     .new_characteristic(|c| {
                         c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
@@ -75,7 +75,7 @@ macro_rules! connect_setup {
                 assert_eq!(service_data.get_end_group_handle(), 20);
 
                 let service_data = server_builder
-                    .new_service(0x675b8edd491f4affaf3f2d2158c1025cu128)
+                    .add_service(0x675b8edd491f4affaf3f2d2158c1025cu128)
                     .add_characteristics()
                     .new_characteristic(|c| {
                         c.set_declaration(|d| {
@@ -98,7 +98,7 @@ macro_rules! connect_setup {
                 assert_eq!(service_data.get_end_group_handle(), 25);
 
                 let service_data = server_builder
-                    .new_service(0x1003u16)
+                    .add_service(0x1003u16)
                     .add_characteristics()
                     .new_characteristic(|c| {
                         c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
@@ -115,7 +115,7 @@ macro_rules! connect_setup {
                 assert_eq!(service_data.get_end_group_handle(), 30);
 
                 let service_data = server_builder
-                    .new_service(0x1004u16)
+                    .add_service(0x1004u16)
                     .add_characteristics()
                     .new_characteristic(|c| {
                         c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
@@ -132,7 +132,7 @@ macro_rules! connect_setup {
                 assert_eq!(service_data.get_end_group_handle(), 35);
 
                 let service_data = server_builder
-                    .new_service(0x1001u16)
+                    .add_service(0x1001u16)
                     .add_characteristics()
                     .new_characteristic(|c| {
                         c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))

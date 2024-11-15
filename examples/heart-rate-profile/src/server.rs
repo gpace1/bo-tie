@@ -87,11 +87,11 @@ impl Server {
 
         let local_heart_rate_measurement = LocalHeartRateMeasurementArc::new(heart_rate_measurement);
 
-        server_builder.new_gatt_service(|gatt_service| gatt_service.add_database_hash());
+        server_builder.add_gatt_service(|gatt_service| gatt_service.add_database_hash());
 
         // add the service for heart rate measurement
         let heart_rate_characteristic_adder = server_builder
-            .new_service(HEART_RATE_SERVICE_UUID)
+            .add_service(HEART_RATE_SERVICE_UUID)
             .add_characteristics()
             .new_characteristic(|heart_rate_measurement_characteristic| {
                 heart_rate_measurement_characteristic
@@ -163,7 +163,7 @@ impl Server {
         // add the service for the device information. Note: the heart rate profile requires the
         // manufactures name string within this service.
         server_builder
-            .new_service(DEVICE_INFORMATION_SERVICE_UUID)
+            .add_service(DEVICE_INFORMATION_SERVICE_UUID)
             .add_characteristics()
             .new_characteristic(|manufacture_name_string| {
                 manufacture_name_string

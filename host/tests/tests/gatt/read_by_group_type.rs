@@ -38,7 +38,7 @@ async fn service_discovery_success() {
             let mut server_builder: ServerBuilder = gap_service.into();
 
             let record = server_builder
-                .new_service(SERVICE_1)
+                .add_service(SERVICE_1)
                 .add_characteristics()
                 .new_characteristic(|characteristic_builder| {
                     characteristic_builder
@@ -71,7 +71,7 @@ async fn service_discovery_success() {
                 .as_record();
 
             server_builder
-                .new_service(SERVICE_2)
+                .add_service(SERVICE_2)
                 .into_includes_adder()
                 .include_service(record)
                 .unwrap()
@@ -209,7 +209,7 @@ where
     let mut server_builder = t.into();
 
     server_builder
-        .new_service(0x1001u16)
+        .add_service(0x1001u16)
         .add_characteristics()
         .new_characteristic(|c| {
             c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
@@ -222,7 +222,7 @@ where
         .finish_service();
 
     server_builder
-        .new_service(0x1002u16)
+        .add_service(0x1002u16)
         .add_characteristics()
         .new_characteristic(|c| {
             c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
@@ -235,7 +235,7 @@ where
         .finish_service();
 
     server_builder
-        .new_service(0x1003u16)
+        .add_service(0x1003u16)
         .add_characteristics()
         .new_characteristic(|c| {
             c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
@@ -248,7 +248,7 @@ where
         .finish_service();
 
     server_builder
-        .new_service(0x675b8edd491f4affaf3f2d2158c1025cu128)
+        .add_service(0x675b8edd491f4affaf3f2d2158c1025cu128)
         .add_characteristics()
         .new_characteristic(|c| {
             c.set_declaration(|d| {
@@ -342,7 +342,7 @@ async fn discover_primary_service_by_uuid_of_server() {
             let mut server_builder: ServerBuilder = GapServiceBuilder::new("full_discovery_of_server", None).into();
 
             server_builder
-                .new_service(0x1001u16)
+                .add_service(0x1001u16)
                 .add_characteristics()
                 .new_characteristic(|c| {
                     c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
@@ -355,7 +355,7 @@ async fn discover_primary_service_by_uuid_of_server() {
                 .finish_service();
 
             server_builder
-                .new_service(0x1002u16)
+                .add_service(0x1002u16)
                 .add_characteristics()
                 .new_characteristic(|c| {
                     c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2021u16))
@@ -368,7 +368,7 @@ async fn discover_primary_service_by_uuid_of_server() {
                 .finish_service();
 
             server_builder
-                .new_service(0x1001u16)
+                .add_service(0x1001u16)
                 .add_characteristics()
                 .new_characteristic(|c| {
                     c.set_declaration(|d| d.set_properties([Properties::Read]).set_uuid(0x2011u16))
