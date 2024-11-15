@@ -86,6 +86,8 @@ macro_rules! map_restrictions {
 pub mod characteristic;
 pub mod uuid;
 
+use crate::characteristic::client_config::SetClientConfig;
+use crate::characteristic::ClientConfiguration;
 use bo_tie_att as att;
 use bo_tie_att::pdu::HandleRange;
 use bo_tie_core::buffer::stack::LinearBuffer;
@@ -93,6 +95,7 @@ use bo_tie_host_util::Uuid;
 use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
+use std::future::Future;
 
 /// The minimum size of the ATT profile's MTU (running the GATT profile)
 ///
@@ -2071,8 +2074,64 @@ impl<'a> GattServiceBuilder<'a> {
     /// Add the service changed characteristic
     ///
     /// This characteristic is an indication only characteristic that is used to update the client
-    /// that the services on the server has changed. This
-    pub fn add_service_changed(mut self) -> Self {
+    /// that the services on the server has changed.
+    ///
+    /// # Warning
+    ///
+    /// For now, this GATT implementation only supports adding the service changed characteristic
+    /// and not the actual indications for it. This means that changing the GATT services of a
+    /// server is also unsupported at this time. The purpose of this is to add the characteristic so
+    /// that it will exist to send indications whenever the support for changing services is
+    /// implemented.
+    ///
+    /// ## Indications
+    ///
+    /// The characteristic value cannot be read nor written as this is an *indication* only
+    /// characteristic. However, this characteristic has a client configuration descriptor that the
+    /// client can use to enable or disable the indications.
+    ///
+    /// Indications for this characteristic must be sent if enabled and the server changes its
+    /// architecture of GATT services.
+    ///
+    /// # Inputs
+    ///
+    /// The value of client configuration is initially false, but upon reconnecting it needs to be
+    /// set to the last set value by the client. Input `enabled` will be the initially set value for
+    /// the client configuration characteristic.
+    ///
+    /// When the client writes to the client configuration descriptor, the input closure `on_change`
+    /// is called with the boolean indicating if Indications were enabled or disabled by the client.
+    ///
+    /// The final input is the restrictions on the client for writing to the descriptor. Per the
+    /// Bluetooth specification the client has no restriction on reading it.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use std::sync::atomic::{AtomicBool, Ordering};
+    /// # use bo_tie_att::AttributeRestriction;
+    /// # use bo_tie_gatt::{GattServiceBuilder, ServerBuilder};
+    /// # use bo_tie_gatt::characteristic::ClientConfiguration;
+    ///
+    /// async fn doc_test(mut server_builder: ServerBuilder) {
+    /// let service_changed = Arc::new(AtomicBool::default());
+    /// let service_changed_clone = service_changed.clone();
+    ///
+    /// server_builder.new_gatt_service(|builder| {
+    ///     builder.add_service_changed(
+    ///         service_changed.load(Ordering::SeqCst),
+    ///         |enabled| async { service_changed_clone.store(enabled, Ordering::SeqCst) },
+    ///         [AttributeRestriction::None]
+    ///     )
+    /// });
+    /// # }
+    /// ```
+    ///
+    pub fn add_service_changed<Fun, Fut, R>(mut self, enabled: bool, mut on_change: Fun, write_restrictions: R) -> Self
+    where
+        Fun: FnMut(bool) -> Fut + Send + 'static,
+        Fut: Future + Send,
+        R: core::borrow::Borrow<[bo_tie_att::AttributeRestriction]>,
+    {
         const UUID: Uuid = crate::uuid::gatt::SERVICE_CHANGED;
 
         const PERMISSIONS: [att::AttributePermissions; 0] = [];
@@ -2083,6 +2142,17 @@ impl<'a> GattServiceBuilder<'a> {
             builder
                 .set_declaration(|builder| builder.set_properties(PROPERTIES).set_uuid(UUID))
                 .set_value(|value| value.set_value(()).set_permissions(PERMISSIONS))
+                .set_client_configuration(|client_config| {
+                    client_config
+                        .set_config([ClientConfiguration::Indication])
+                        .init_config(if enabled {
+                            [ClientConfiguration::Indication].as_slice()
+                        } else {
+                            &[]
+                        })
+                        .set_write_callback(move |config| on_change(config.contains(&ClientConfiguration::Indication)))
+                        .set_write_restrictions(write_restrictions)
+                })
         });
 
         self.service_changed = self
