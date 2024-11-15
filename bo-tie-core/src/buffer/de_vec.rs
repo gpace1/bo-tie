@@ -47,9 +47,9 @@ impl<T> DeVec<T> {
     where
         T: Default + Copy,
     {
-        let mut vec = alloc::vec![Default::default(); front + back];
+        let mut vec = alloc::vec::Vec::with_capacity(front + back);
 
-        vec.truncate(front);
+        vec.resize(front, T::default());
 
         Self { start: front, vec }
     }
@@ -63,6 +63,8 @@ impl<T> DeVec<T> {
             for i in 0..self.vec.len() - self.start {
                 self.vec.swap(i, self.start + i)
             }
+
+            self.vec.truncate(self.vec.len() - self.start)
         }
 
         self.vec

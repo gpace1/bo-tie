@@ -4,7 +4,7 @@
 //! is purely a supporting library for all other libraries within the `bo-tie` workspace. Types used
 //! throughout `bo-tie` are collected here as a common place to put them.
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 #[cfg(feature = "alloc")]
