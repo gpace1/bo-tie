@@ -71,6 +71,18 @@ impl<T, const SIZE: usize> LinearBuffer<SIZE, T> {
         }
     }
 
+    pub fn pop(&mut self) -> Option<T> {
+        if self.count != 0 {
+            let maybe = replace(&mut self.buffer[self.count - 1], MaybeUninit::uninit());
+
+            self.count -= 1;
+
+            Some(unsafe { maybe.assume_init() })
+        } else {
+            None
+        }
+    }
+
     /// Insert an item
     ///
     /// Inserts an item into the buffer shifting everything past the index right by one
@@ -1541,6 +1553,25 @@ mod test {
     #[test]
     fn linear_buffer_init() {
         let _: LinearBuffer<0, ()> = LinearBuffer::new();
+    }
+
+    #[test]
+    fn linear_buffer_push_pop() {
+        const SIZE: usize = 3;
+
+        let mut l: LinearBuffer<SIZE, usize> = LinearBuffer::new();
+
+        l.try_push(0).unwrap();
+        l.try_push(1).unwrap();
+        l.try_push(2).unwrap();
+        l.try_push(3).unwrap_err();
+        l.try_push(4).unwrap_err();
+
+        assert_eq!(l.pop(), Some(2));
+        assert_eq!(l.pop(), Some(1));
+        assert_eq!(l.pop(), Some(0));
+        assert_eq!(l.pop(), None);
+        assert_eq!(l.pop(), None);
     }
 
     #[test]
