@@ -95,7 +95,6 @@ use bo_tie_host_util::Uuid;
 use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::link_flavor::{LeULink, LinkFlavor};
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
-use std::future::Future;
 
 /// The minimum size of the ATT profile's MTU (running the GATT profile)
 ///
@@ -2129,7 +2128,7 @@ impl<'a> GattServiceBuilder<'a> {
     pub fn add_service_changed<Fun, Fut, R>(mut self, enabled: bool, mut on_change: Fun, write_restrictions: R) -> Self
     where
         Fun: FnMut(bool) -> Fut + Send + 'static,
-        Fut: Future + Send,
+        Fut: core::future::Future + Send,
         R: core::borrow::Borrow<[bo_tie_att::AttributeRestriction]>,
     {
         const UUID: Uuid = crate::uuid::gatt::SERVICE_CHANGED;
