@@ -2,8 +2,14 @@
 //!
 //! These are the characteristics of the GATT Attribute profile.
 
+use crate::characteristic::client_config::SetClientConfig;
+use crate::characteristic::VecArray;
+use bo_tie_att::server::AccessValue;
 use bo_tie_att::{TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use bo_tie_core::buffer::stack::LinearBuffer;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 /// The Value of the Service Changed Characteristic
 #[derive(Debug)]
@@ -51,20 +57,105 @@ pub enum ClientFeatures {
     MultipleHandleValueNotifications,
 }
 
-#[derive(Default, PartialEq)]
-pub(crate) struct ClientFeaturesValue {
-    features: LinearBuffer<{ ClientFeatures::full_depth() }, ClientFeatures>,
+type ClientFeaturesVec = VecArray<{ ClientFeatures::full_depth() }, ClientFeatures>;
+
+pub(crate) struct ClientFeaturesValueAccessor<F> {
+    features: ClientFeaturesVec,
+    on_change: F,
 }
 
-impl ClientFeaturesValue {
-    pub(crate) fn add_feature(&mut self, feature: ClientFeatures) {
-        if !self.features.contains(&feature) {
-            self.features.try_push(feature).unwrap();
+impl<F> ClientFeaturesValueAccessor<F> {
+    pub(crate) fn new(init_features: &[ClientFeatures], on_change: F) -> Self {
+        let mut features = VecArray(LinearBuffer::new());
+
+        init_features.iter().for_each(|feature| {
+            if !features.0.contains(feature) {
+                features.0.try_push(*feature).unwrap()
+            }
+        });
+
+        Self { features, on_change }
+    }
+}
+
+impl<Fun, Fut> AccessValue for ClientFeaturesValueAccessor<Fun>
+where
+    Fun: FnMut(ClientFeatures, bool) -> Fut + Send + 'static,
+    Fut: core::future::Future + Send,
+{
+    type ReadValue = ClientFeaturesVec;
+    type ReadGuard<'a> = &'a ClientFeaturesVec where Self: 'a;
+    type Read<'a> = core::future::Ready<Result<Self::ReadGuard<'a>, bo_tie_att::pdu::Error>> where Self: 'a;
+    type WriteValue = ClientFeaturesVec;
+    type Write<'a> = WriteAccessor<'a, Fun, Fut> where Self: 'a;
+
+    fn read(&mut self) -> Self::Read<'_> {
+        core::future::ready(Ok(&self.features))
+    }
+
+    fn write(&mut self, features: Self::WriteValue) -> Self::Write<'_> {
+        let previous = core::mem::replace(&mut self.features, features.clone());
+
+        WriteAccessor {
+            accessor: self,
+            future: None,
+            previous,
+            new: features,
+        }
+    }
+
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn as_mut_any(&mut self) -> &mut dyn core::any::Any {
+        self
+    }
+}
+
+pub(crate) struct WriteAccessor<'a, Fun, Fut> {
+    accessor: &'a mut ClientFeaturesValueAccessor<Fun>,
+    future: Option<Fut>,
+    previous: ClientFeaturesVec,
+    new: ClientFeaturesVec,
+}
+
+impl<Fun, Fut> Future for WriteAccessor<'_, Fun, Fut>
+where
+    Fun: FnMut(ClientFeatures, bool) -> Fut + Send,
+    Fut: Future + Send,
+{
+    type Output = Result<(), crate::att::pdu::Error>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        loop {
+            match this.future.as_mut().take() {
+                None => match this.new.0.pop() {
+                    Some(feature) => match this.previous.0.iter().enumerate().find(|(_, f)| **f == feature) {
+                        Some((index, _)) => {
+                            this.previous.0.try_remove(index).unwrap();
+                        }
+                        None => this.future = Some((this.accessor.on_change)(feature, true)),
+                    },
+                    None => match this.previous.0.pop() {
+                        Some(feature) => this.future = Some((this.accessor.on_change)(feature, false)),
+                        None => return Poll::Ready(Ok(())),
+                    },
+                },
+                Some(future) => match unsafe { Pin::new_unchecked(future).poll(cx) } {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(_) => {
+                        this.future.take();
+                    }
+                },
+            }
         }
     }
 }
 
-impl TransferFormatInto for ClientFeaturesValue {
+impl TransferFormatInto for ClientFeaturesVec {
     fn len_of_into(&self) -> usize {
         ClientFeatures::full_depth() / 8 + 1
     }
@@ -72,7 +163,7 @@ impl TransferFormatInto for ClientFeaturesValue {
     fn build_into_ret(&self, into_ret: &mut [u8]) {
         let mut bit_field = 0;
 
-        for feature in self.features.iter() {
+        for feature in self.0.iter() {
             match feature {
                 ClientFeatures::RobustCaching => bit_field |= 1 << 0,
                 ClientFeatures::EnhancedAttBearer => bit_field |= 1 << 1,
@@ -84,22 +175,20 @@ impl TransferFormatInto for ClientFeaturesValue {
     }
 }
 
-impl TransferFormatTryFrom for ClientFeaturesValue {
+impl TransferFormatTryFrom for ClientFeaturesVec {
     fn try_from(raw: &[u8]) -> Result<Self, TransferFormatError>
     where
         Self: Sized,
     {
-        let mut ret = ClientFeaturesValue {
-            features: LinearBuffer::new(),
-        };
+        let mut ret = VecArray(LinearBuffer::new());
 
         if raw.len() == 1 {
             for i in 0..<u8>::BITS {
                 match raw[0] & (1 << i) {
-                    1 => ret.features.try_push(ClientFeatures::RobustCaching).unwrap(),
-                    2 => ret.features.try_push(ClientFeatures::EnhancedAttBearer).unwrap(),
+                    1 => ret.0.try_push(ClientFeatures::RobustCaching).unwrap(),
+                    2 => ret.0.try_push(ClientFeatures::EnhancedAttBearer).unwrap(),
                     4 => ret
-                        .features
+                        .0
                         .try_push(ClientFeatures::MultipleHandleValueNotifications)
                         .unwrap(),
                     _ => (),

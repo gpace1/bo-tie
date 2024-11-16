@@ -259,7 +259,7 @@ where
         WriteAccessor {
             accessor: self,
             future: None,
-            value: Some(config),
+            value: config,
         }
     }
 
@@ -275,12 +275,12 @@ where
 struct WriteAccessor<'a, Fun, Fut> {
     accessor: &'a mut ClientConfigurationAccessor<Fun>,
     future: Option<Fut>,
-    value: Option<ClientConfigVec>,
+    value: ClientConfigVec,
 }
 
 impl<Fun, Fut> Future for WriteAccessor<'_, Fun, Fut>
 where
-    Fun: for<'z> FnMut(SetClientConfig) -> Fut + Send,
+    Fun: FnMut(SetClientConfig) -> Fut + Send,
     Fut: Future + Send,
 {
     type Output = Result<(), crate::att::pdu::Error>;
@@ -293,7 +293,7 @@ where
                 None => {
                     let mut new_config: ClientConfigVec = VecArray(LinearBuffer::new());
 
-                    for config in this.value.take().unwrap().0.iter() {
+                    for config in this.value.0.iter() {
                         if this.accessor.config_mask.contains(config) {
                             new_config.0.try_push(*config).unwrap()
                         }

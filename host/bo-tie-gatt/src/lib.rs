@@ -86,6 +86,7 @@ macro_rules! map_restrictions {
 pub mod characteristic;
 pub mod uuid;
 
+use crate::characteristic::gatt::{ClientFeatures, ClientFeaturesValueAccessor};
 use crate::characteristic::ClientConfiguration;
 use bo_tie_att as att;
 use bo_tie_att::pdu::HandleRange;
@@ -1102,34 +1103,17 @@ impl<'a> GapServiceBuilder<'a> {
 /// architecture of the server before the server is created.
 ///
 /// ```
-/// # use bo_tie_gatt::{ServerBuilder, GapServiceBuilder, characteristic::Properties};
-/// # use bo_tie_att::{FULL_PERMISSIONS, server::NoQueuedWrites};
-/// # use bo_tie_l2cap::{BasicFrameError,BasicFrame, L2capFragment, send_future};
-/// # use std::future::Future;
-/// # use std::pin::Pin;
-/// # use bo_tie_core::buffer::de_vec::DeVec;
-/// # use bo_tie_core::buffer::TryExtend;
-/// # const SERVICE_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
-/// # const CHARACTERISTIC_UUID: bo_tie_host_util::Uuid = bo_tie_host_util::Uuid::from_u16(0);
-/// # struct CC;
-/// # impl bo_tie_l2cap::ConnectionChannel for CC {
-/// #     type SendBuffer = DeVec<u8>;
-/// #     type SendFut<'a> = Pin<Box<dyn Future<Output = Result<(), send_future::Error<usize>>>>>;
-/// #     type SendErr = usize;
-/// #     type RecvBuffer = DeVec<u8>;
-/// #     type RecvFut<'a> = Pin<Box<dyn Future<Output = Option<Result<L2capFragment<Self::RecvBuffer>, BasicFrameError<<Self::RecvBuffer as TryExtend<u8>>::Error>>>>>>;
-/// #     fn send(&self,data: BasicFrame<Vec<u8>>) -> Self::SendFut<'_> { unimplemented!() }
-/// #     fn set_mtu(&mut self,_: u16) { unimplemented!() }
-/// #     fn get_mtu(&self) -> usize { unimplemented!() }
-/// #     fn max_mtu(&self) -> usize { unimplemented!() }
-/// #     fn min_mtu(&self) -> usize { unimplemented!() }
-/// #     fn receive_fragment(&mut self) -> Self::RecvFut<'_> { unimplemented!()}
-/// # }
-/// # let channel = CC;
+/// use std::sync::Arc;
+/// use std::sync::atomic::AtomicBool;
+/// use bo_tie_gatt::ServerBuilder;
 ///
-/// let gap_service = GapServiceBuilder::new("My Device", None);
+/// let mut server_builder = ServerBuilder::new_empty();
 ///
-/// let mut server_builder = ServerBuilder::from(gap_service);
+/// server_builder.add_gatt_service(|gatt_builder| {
+///     gatt_builder
+///         .add_database_hash()
+///         .add_client_supported_features()
+/// });
 ///
 /// server_builder.add_service(SERVICE_UUID)
 ///     .add_characteristics()
@@ -2189,12 +2173,17 @@ impl<'a> GattServiceBuilder<'a> {
 
     /// Add the client supported features Characteristic
     ///
-    /// This Characteristic must be added if this device supports both the Client and Server
-    /// Attribute Protocol roles.
-    pub fn add_client_supported_features<T, B>(mut self, features: T) -> Self
+    /// The client supported features characteristic is written to by the client to indicate what
+    /// features it supports. Whenever the client writes to this characteristics value, input
+    /// `on_change` is called for every feature enabled or disabled by the client.
+    ///
+    /// Input `on_change` is called whenever a feature is changed by the client. The closure is
+    /// given the feature that changed and its new state.
+    pub fn add_client_supported_features<T, Fun, Fut>(mut self, previously_set: T, on_change: Fun) -> Self
     where
-        T: IntoIterator<Item = B>,
-        B: core::borrow::Borrow<characteristic::gatt::ClientFeatures>,
+        T: core::borrow::Borrow<[ClientFeatures]>,
+        Fun: FnMut(ClientFeatures, bool) -> Fut + Send + 'static,
+        Fut: core::future::Future + Send,
     {
         const UUID: Uuid = uuid::gatt::CLIENT_SUPPORTED_FEATURES;
 
@@ -2203,16 +2192,18 @@ impl<'a> GattServiceBuilder<'a> {
         const PROPERTIES: [characteristic::Properties; 2] =
             [characteristic::Properties::Read, characteristic::Properties::Write];
 
-        let mut list = characteristic::gatt::ClientFeaturesValue::default();
+        let init_features = previously_set.borrow();
 
-        for feature in features {
-            list.add_feature(*feature.borrow())
-        }
+        let client_features_accessor = ClientFeaturesValueAccessor::new(init_features, on_change);
 
         self.characteristic_adder = self.characteristic_adder.new_characteristic(|builder| {
             builder
                 .set_declaration(|builder| builder.set_properties(PROPERTIES).set_uuid(UUID))
-                .set_value(|value| value.set_value(list).set_permissions(PERMISSIONS))
+                .set_value(|value| {
+                    value
+                        .set_accessible_value(client_features_accessor)
+                        .set_permissions(PERMISSIONS)
+                })
         });
 
         self
