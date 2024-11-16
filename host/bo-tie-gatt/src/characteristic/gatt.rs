@@ -2,14 +2,13 @@
 //!
 //! These are the characteristics of the GATT Attribute profile.
 
-use crate::characteristic::client_config::SetClientConfig;
 use crate::characteristic::VecArray;
 use bo_tie_att::server::AccessValue;
 use bo_tie_att::{TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 use bo_tie_core::buffer::stack::LinearBuffer;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 /// The Value of the Service Changed Characteristic
 #[derive(Debug)]
