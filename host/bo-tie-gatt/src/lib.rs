@@ -1249,11 +1249,11 @@ impl ServerBuilder {
     /// This *must* be called to have the GATT server conform to Bluetooth Specification
     /// requirements for the GATT profile (unless this `ServerBuilder` was constructed from a
     /// `GapServiceBuilder`).
-    pub fn add_gap_service<'a, F, D, A>(&mut self, f: F, device_name: D, appearance: A)
+    pub fn add_gap_service<'a, F, D, A>(&mut self, device_name: D, appearance: A, f: F)
     where
-        F: FnOnce(&mut GapServiceBuilder<'a>),
         D: Into<Option<&'a str>>,
         A: Into<Option<u16>>,
+        F: FnOnce(&mut GapServiceBuilder<'a>),
     {
         let mut builder = GapServiceBuilder::new(device_name, appearance);
 
