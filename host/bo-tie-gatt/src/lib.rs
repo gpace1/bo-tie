@@ -907,7 +907,7 @@ impl<'a> GapServiceBuilder<'a> {
     /// is not supported, but if it is used then the input `supported` must be false.
     ///
     /// If `supported` is `false` then the central does not support address resolution, if the input
-    /// is `true` the the central supports address resolution. The `restrictions` are the client
+    /// is `true` the central supports address resolution. The `restrictions` are the client
     /// restrictions for reading the characteristic value.
     pub fn add_central_rpa_support(&mut self, supported: bool) {
         self.central_address_resolution = Some(supported);
