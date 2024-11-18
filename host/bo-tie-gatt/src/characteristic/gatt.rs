@@ -83,10 +83,16 @@ where
     Fut: core::future::Future + Send,
 {
     type ReadValue = ClientFeaturesVec;
-    type ReadGuard<'a> = &'a ClientFeaturesVec where Self: 'a;
-    type Read<'a> = core::future::Ready<Result<Self::ReadGuard<'a>, bo_tie_att::pdu::Error>> where Self: 'a;
+    type ReadGuard<'a> = &'a ClientFeaturesVec
+    where
+        Self: 'a;
+    type Read<'a> = core::future::Ready<Result<Self::ReadGuard<'a>, bo_tie_att::pdu::Error>>
+    where
+        Self: 'a;
     type WriteValue = ClientFeaturesVec;
-    type Write<'a> = WriteAccessor<'a, Fun, Fut> where Self: 'a;
+    type Write<'a> = WriteAccessor<'a, Fun, Fut>
+    where
+        Self: 'a;
 
     fn read(&mut self) -> Self::Read<'_> {
         core::future::ready(Ok(&self.features))
