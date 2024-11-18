@@ -220,7 +220,7 @@ impl HashValue {
         HashValue(0)
     }
 
-    pub(crate) fn generate(server_attributes: &crate::att::server::ServerAttributes) -> Self {
+    fn create_glob(server_attributes: &crate::att::server::ServerAttributes) -> impl Iterator<Item = u8> + '_ {
         use crate::characteristic;
         use crate::characteristic::extended_properties::ExtendedProperties;
         use crate::characteristic::VecArray;
@@ -228,11 +228,11 @@ impl HashValue {
 
         // The largest size of a single attribute concat is
         // * 2 bytes for the attribute handle.
-        // * 2 bytes for the attribute type (all are 16 bit shortened).
+        // * 2 bytes for the attribute type (hashed attributes only have 16 bit UUIDs).
         // * 19 bytes for a characteristic declaration with a 16 byte value UUID.
         const CONCAT_SIZE: usize = 2 + 2 + 19;
 
-        let msg = server_attributes
+        server_attributes
             .iter_info()
             .filter_map(|attribute_info| {
                 let mut concat = LinearBuffer::<CONCAT_SIZE, u8>::new();
@@ -247,50 +247,58 @@ impl HashValue {
                     | &characteristic::client_config::TYPE
                     | &characteristic::server_config::TYPE
                     | &characteristic::presentation_format::TYPE
-                    | &characteristic::aggregate_format::TYPE => (),
-                    _ => return None,
+                    | &characteristic::aggregate_format::TYPE => (), // hashed
+                    _ => return None, // others are not hashed
                 };
 
-                for byte in attribute_info.get_handle().to_le_bytes().into_iter() {
-                    concat.try_push(byte).unwrap();
-                }
+                attribute_info
+                    .get_handle()
+                    .to_le_bytes()
+                    .into_iter()
+                    .for_each(|byte| concat.try_push(byte).unwrap());
 
-                let u16_type: u16 = (*attribute_info.get_uuid()).try_into().unwrap();
-
-                for byte in u16_type.to_le_bytes() {
-                    concat.try_push(byte).unwrap();
-                }
+                // All the attribute UUIDs can be converted to a 16 bit shortened form
+                <u16 as TryFrom<crate::Uuid>>::try_from(*attribute_info.get_uuid())
+                    .unwrap()
+                    .to_le_bytes()
+                    .into_iter()
+                    .for_each(|byte| concat.try_push(byte).unwrap());
 
                 macro_rules! extend_hash_att_val {
                     ($kind:ty) => {{
-                        let val = server_attributes.get_value::<$kind>(attribute_info.get_handle());
+                        let val = server_attributes
+                            .get_value::<$kind>(attribute_info.get_handle())
+                            .unwrap();
 
-                        let len = val.len_of_into();
-
-                        for _ in 0..len {
+                        for _ in 0..val.len_of_into() {
                             concat.try_push(0).unwrap();
                         }
 
-                        val.build_into_ret(&mut concat[2..]);
+                        val.build_into_ret(&mut concat[4..]);
                     }};
                 }
 
                 match attribute_info.get_uuid() {
                     &ServiceDefinition::PRIMARY_SERVICE_TYPE => extend_hash_att_val!(crate::Uuid),
                     &ServiceDefinition::SECONDARY_SERVICE_TYPE => extend_hash_att_val!(crate::Uuid),
-                    &ServiceInclude::TYPE => extend_hash_att_val!(crate::ServiceInclude),
+                    &ServiceInclude::TYPE => extend_hash_att_val!(ServiceInclude),
                     &characteristic::declaration::TYPE => extend_hash_att_val!(super::declaration::Declaration),
                     &characteristic::extended_properties::TYPE => {
                         extend_hash_att_val!(VecArray<{ ExtendedProperties::full_depth() }, ExtendedProperties>)
                     }
-                    _ => (),
+                    _ => (), // all others do not have their attribute value hashed
                 }
 
                 Some(concat)
             })
-            .flatten();
+            .flatten()
+    }
 
-        HashValue(bo_tie_core::cryptography::aes_cmac_generate(0, msg))
+    pub(crate) fn generate(server_attributes: &crate::att::server::ServerAttributes) -> Self {
+        HashValue(bo_tie_core::cryptography::aes_cmac_generate(
+            0,
+            Self::create_glob(server_attributes),
+        ))
     }
 }
 
@@ -373,5 +381,494 @@ impl TransferFormatTryFrom for ServerFeaturesList {
         }
 
         Ok(list)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::characteristic::gatt::HashValue;
+    use crate::characteristic::{
+        ClientConfiguration, ExtendedProperties, Properties, ServerConfiguration, ServerConfigurationBuilder,
+    };
+    use crate::ServerBuilder;
+    use bo_tie_att::{FULL_READ_PERMISSIONS, FULL_RESTRICTIONS};
+    use std::time::Duration;
+
+    /// `HashValue` pretests
+    ///
+    /// These tests are tests that break down the full test of hash_value_generate so that an error
+    /// within the full test can more easily be understood.
+    #[cfg(feature = "cryptography")]
+    mod pretest_hash_value {
+        use super::*;
+
+        #[test]
+        fn only_hash_characteristic() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn another_service() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder.add_service(0x1234u16).make_empty();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x00, 0x28, 0x34, 0x12,
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn secondary_service() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder.add_service(0x1234u16).make_secondary().make_empty();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x01, 0x28, 0x34, 0x12,
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn include_service() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            let record = server_builder
+                .add_service(0x1234u16)
+                .make_secondary()
+                .make_empty()
+                .as_record();
+
+            server_builder
+                .add_service(0xabcdu16)
+                .into_includes_adder()
+                .include_service(record)
+                .unwrap()
+                .finish_service();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x01, 0x28, 0x34, 0x12, // included secondary service
+                0x05, 0x00, 0x00, 0x28, 0xcd, 0xab, // primary service
+                0x06, 0x00, 0x02, 0x28, 0x04, 0x00, 0x04, 0x00, 0x34, 0x12,
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn characteristic() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder
+                .add_service(0x1234u16)
+                .add_characteristics()
+                .new_characteristic(|builder| {
+                    builder
+                        .set_declaration(|d| {
+                            d.set_properties([Properties::Read, Properties::Write])
+                                .set_uuid(0x1001u16)
+                        })
+                        .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+                })
+                .finish_service();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x00, 0x28, 0x34, 0x12, // service
+                0x05, 0x00, 0x03, 0x28, 0x0a, 0x06, 0x00, 0x01, 0x10, // characteristic declaration
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn characteristic_u128() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder
+                .add_service(0x1234u16)
+                .add_characteristics()
+                .new_characteristic(|builder| {
+                    builder
+                        .set_declaration(|d| {
+                            d.set_properties([Properties::Read, Properties::Write])
+                                .set_uuid(0xC132F5C9F618CBA7D302FB8E77E3BFBDu128)
+                        })
+                        .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+                })
+                .finish_service();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            #[rustfmt::skip]
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x00, 0x28, 0x34, 0x12, // service
+                // characteristic declaration
+                0x05, 0x00, 0x03, 0x28, 0x0a, 0x06, 0x00, 0xbd, 0xbf, 0xe3, 0x77, 0x8e, 0xfb, 0x02, 0xd3, 0xa7, 0xcb, 0x18, 0xf6, 0xc9, 0xf5, 0x32, 0xc1,
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn characteristic_extended_properties() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder
+                .add_service(0x1234u16)
+                .add_characteristics()
+                .new_characteristic(|builder| {
+                    builder
+                        .set_declaration(|d| {
+                            d.set_properties([Properties::Read, Properties::Write, Properties::ExtendedProperties])
+                                .set_uuid(0x1001u16)
+                        })
+                        .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+                        .set_extended_properties(|e| e.set_extended_properties([ExtendedProperties::ReliableWrite]))
+                })
+                .finish_service();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x00, 0x28, 0x34, 0x12, // service
+                0x05, 0x00, 0x03, 0x28, 0x8a, 0x06, 0x00, 0x01, 0x10, // characteristic declaration
+                0x07, 0x00, 0x00, 0x29, 0x01, 0x00, // characteristic extended properties
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn characteristic_user_description() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder
+                .add_service(0x1234u16)
+                .add_characteristics()
+                .new_characteristic(|builder| {
+                    builder
+                        .set_declaration(|d| {
+                            d.set_properties([Properties::Read, Properties::Write, Properties::ExtendedProperties])
+                                .set_uuid(0x1001u16)
+                        })
+                        .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+                        .set_user_description(|d| {
+                            d.set_read_only_description("user description")
+                                .set_read_only_restrictions(FULL_RESTRICTIONS)
+                        })
+                })
+                .finish_service();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x00, 0x28, 0x34, 0x12, // service
+                0x05, 0x00, 0x03, 0x28, 0x8a, 0x06, 0x00, 0x01, 0x10, // characteristic declaration
+                0x07, 0x00, 0x01, 0x29, // characteristic user description
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn client_characteristic_configuration() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder
+                .add_service(0x1234u16)
+                .add_characteristics()
+                .new_characteristic(|builder| {
+                    builder
+                        .set_declaration(|d| {
+                            d.set_properties([Properties::Read, Properties::Write, Properties::ExtendedProperties])
+                                .set_uuid(0x1001u16)
+                        })
+                        .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+                        .set_client_configuration(|c| c.set_config([ClientConfiguration::Notification]))
+                })
+                .finish_service();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x00, 0x28, 0x34, 0x12, // service
+                0x05, 0x00, 0x03, 0x28, 0x8a, 0x06, 0x00, 0x01, 0x10, // characteristic declaration
+                0x07, 0x00, 0x02, 0x29, // client characteristic configuration
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        #[test]
+        fn server_characteristic_configuration() {
+            let mut server_builder = ServerBuilder::new_empty();
+
+            server_builder.add_gatt_service(|builder| builder.add_database_hash());
+
+            server_builder
+                .add_service(0x1234u16)
+                .add_characteristics()
+                .new_characteristic(|builder| {
+                    builder
+                        .set_declaration(|d| {
+                            d.set_properties([Properties::Read, Properties::Write, Properties::ExtendedProperties])
+                                .set_uuid(0x1001u16)
+                        })
+                        .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+                        .set_server_configuration(|| {
+                            let mut server_configuration = ServerConfiguration::new();
+
+                            server_configuration.set_broadcast();
+
+                            ServerConfigurationBuilder::new()
+                                .set_config(bo_tie_att::server::TrivialAccessor(server_configuration))
+                                .set_write_restrictions([])
+                        })
+                })
+                .finish_service();
+
+            let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+            let hash = HashValue::generate(&server_builder.attributes);
+
+            let exp_glob = [
+                0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+                0x02, 0x00, 0x03, 0x28, 0x02, 0x03, 0x00, 0x2a, 0x2b, // Database Hash characteristic
+                0x04, 0x00, 0x00, 0x28, 0x34, 0x12, // service
+                0x05, 0x00, 0x03, 0x28, 0x8a, 0x06, 0x00, 0x01, 0x10, // characteristic declaration
+                0x07, 0x00, 0x03, 0x29, // client characteristic configuration
+            ];
+
+            let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+            assert_eq!(glob, exp_glob);
+
+            assert_eq!(hash.0, exp_hash);
+        }
+
+        // todo: `characteristic_presentation_format` and `characteristic_aggregate_format`
+    }
+
+    #[test]
+    #[cfg(feature = "cryptography")]
+    fn hash_value_generate() {
+        let mut server_builder = ServerBuilder::new_empty();
+
+        server_builder.add_gatt_service(|builder| {
+            builder
+                .add_service_changed(false, |_| async {}, [])
+                .add_database_hash()
+                .add_client_supported_features([], |_, _| async {})
+        });
+
+        server_builder.add_gap_service(None, None, |builder| {
+            builder.device_is_discoverable();
+            builder.add_preferred_connection_parameters(
+                Duration::from_millis(80),
+                Duration::from_millis(400),
+                10,
+                Duration::from_millis(1000),
+                None,
+            );
+        });
+
+        let record = server_builder
+            .add_service(0x4002u16)
+            .add_characteristics()
+            .new_characteristic(|builder| {
+                builder
+                    .set_declaration(|d| {
+                        d.set_properties([
+                            Properties::Broadcast,
+                            Properties::Read,
+                            Properties::Write,
+                            Properties::Notify,
+                            Properties::ExtendedProperties,
+                        ])
+                        .set_uuid(0x5002u16)
+                    })
+                    .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+                    .set_extended_properties(|e| e.set_extended_properties([ExtendedProperties::ReliableWrite]))
+                    .set_user_description(|d| {
+                        d.set_read_only_description("this is the description")
+                            .set_read_only_restrictions(FULL_RESTRICTIONS)
+                    })
+                    .set_client_configuration(|c| {
+                        c.set_config([ClientConfiguration::Notification, ClientConfiguration::Indication])
+                            .set_write_callback(|_| async {})
+                            .set_write_restrictions(FULL_RESTRICTIONS)
+                    })
+                    .set_server_configuration(|| {
+                        let mut server_configuration = ServerConfiguration::new();
+
+                        server_configuration.set_broadcast();
+
+                        ServerConfigurationBuilder::new()
+                            .set_config(bo_tie_att::server::TrivialAccessor(server_configuration))
+                            .set_write_restrictions([])
+                    })
+                /* todo add the characteristic presentation format and characteristic aggregate format descriptors */
+            })
+            .finish_service()
+            .as_record();
+
+        server_builder
+            .add_service(0x6623_44B9_BF0C_A488_A7A3_4FC4_A463_B157u128)
+            .into_includes_adder()
+            .include_service(record)
+            .unwrap()
+            .add_characteristics()
+            .new_characteristic(|builder| {
+                builder
+                    .set_declaration(|d| {
+                        d.set_properties([Properties::Read])
+                            .set_uuid(0x7F95_A2B0_9E51_5CD8_C8CF_523F_C107_FD93u128)
+                    })
+                    .set_value(|v| v.set_value(0usize).set_permissions(FULL_READ_PERMISSIONS))
+            })
+            .finish_service();
+
+        let glob = HashValue::create_glob(&server_builder.attributes).collect::<Vec<_>>();
+
+        let hash = HashValue::generate(&server_builder.attributes);
+
+        #[rustfmt::skip]
+        let exp_glob = [
+            0x01, 0x00, 0x00, 0x28, 0x01, 0x18, // GATT service
+            0x02, 0x00, 0x03, 0x28, 0x20, 0x03, 0x00, 0x05, 0x2a, // Service Changed
+            0x04, 0x00, 0x02, 0x29, // Service Changed client characteristic configuration
+            0x05, 0x00, 0x03, 0x28, 0x02, 0x06, 0x00, 0x2a, 0x2b, // Database Hash
+            0x07, 0x00, 0x03, 0x28, 0x0a, 0x08, 0x00, 0x29, 0x2b, // client supported features
+            0x09, 0x00, 0x00, 0x28, 0x00, 0x18, // GAP service
+            0x0a, 0x00, 0x03, 0x28, 0x02, 0x0b, 0x00, 0x00, 0x2a, // device name
+            0x0c, 0x00, 0x03, 0x28, 0x02, 0x0d, 0x00, 0x01, 0x2a, // appearance
+            0x0e, 0x00, 0x03, 0x28, 0x02, 0x0f, 0x00, 0x04, 0x2a, // peripheral preferred connection parameters
+            0x10, 0x00, 0x00, 0x28, 0x02, 0x40, // first custom service
+            0x11, 0x00, 0x03, 0x28, 0x9b, 0x12, 0x00, 0x02, 0x50, // first service's characteristic
+            0x13, 0x00, 0x00, 0x29, 0x01, 0x00, // characteristic extended properties
+            0x14, 0x00, 0x01, 0x29, // characteristic user description
+            0x15, 0x00, 0x02, 0x29, // user characteristic configuration
+            0x16, 0x00, 0x03, 0x29, // server characteristic configuration
+            // second custom service
+            0x17, 0x00, 0x00, 0x28, 0x57, 0xb1, 0x63, 0xa4, 0xc4, 0x4f, 0xa3, 0xa7, 0x88, 0xa4, 0x0c, 0xbf, 0xb9, 0x44, 0x23, 0x66,
+            0x18, 0x00, 0x02, 0x28, 0x10, 0x00, 0x16, 0x00, 0x02, 0x40, // included service
+            // second service's characteristic
+            0x19, 0x00, 0x03, 0x28, 0x02, 0x1a, 0x00, 0x93, 0xfd, 0x07, 0xc1, 0x3f, 0x52, 0xcf, 0xc8, 0xd8, 0x5c, 0x51, 0x9e, 0xb0, 0xa2, 0x95, 0x7f,
+        ];
+
+        let exp_hash = bo_tie_core::cryptography::aes_cmac_generate(0, exp_glob);
+
+        assert_eq!(glob, exp_glob);
+
+        assert_eq!(hash.0, exp_hash);
     }
 }
