@@ -277,6 +277,8 @@ pub enum Error {
     InsufficientEncryption,
     UnsupportedGroupType,
     InsufficientResources,
+    DatabaseOutOfSync,
+    ValueNotAllowed,
     /// The rest of the error codes are either reserved for future use, used for higher layer
     /// protocols, or a common error code from the core specification.
     Other(ErrorConversionError),
@@ -303,7 +305,9 @@ impl Error {
             0x0F => Error::InsufficientEncryption,
             0x10 => Error::UnsupportedGroupType,
             0x11 => Error::InsufficientResources,
-            0x12..=0x7F => Error::Other(ErrorConversionError::Reserved(val)),
+            0x12 => Error::DatabaseOutOfSync,
+            0x13 => Error::ValueNotAllowed,
+            0x14..=0x7F => Error::Other(ErrorConversionError::Reserved(val)),
             0x80..=0x9F => Error::Other(ErrorConversionError::ApplicationError(val)),
             0xA0..=0xDF => Error::Other(ErrorConversionError::Reserved(val)),
             0xE0..=0xFF => Error::Other(ErrorConversionError::CommonErrorCode(val)),
@@ -330,6 +334,8 @@ impl Error {
             Error::InsufficientEncryption => 0x0F,
             Error::UnsupportedGroupType => 0x10,
             Error::InsufficientResources => 0x11,
+            Error::DatabaseOutOfSync => 0x12,
+            Error::ValueNotAllowed => 0x13,
             Error::Other(val) => match val {
                 ErrorConversionError::ApplicationError(val) => *val,
                 ErrorConversionError::Reserved(val) => *val,
@@ -444,6 +450,15 @@ impl core::fmt::Display for Error {
                     f,
                     "Insufficient resources: insufficient Resources to complete the request"
                 )
+            }
+            Error::DatabaseOutOfSync => {
+                write!(
+                    f,
+                    "Database out of sync: the server requests the client to rediscover the database"
+                )
+            }
+            Error::ValueNotAllowed => {
+                write!(f, "Value not allowed: the attribute parameter value was not allowed")
             }
             Error::Other(other) => {
                 write!(f, "{}", other)
