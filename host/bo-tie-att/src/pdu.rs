@@ -473,6 +473,18 @@ impl From<Error> for super::Error {
     }
 }
 
+impl From<u8> for Error {
+    fn from(val: u8) -> Self {
+        Error::from_raw(val)
+    }
+}
+
+impl From<Error> for u8 {
+    fn from(val: Error) -> Self {
+        val.get_raw()
+    }
+}
+
 /// Attribute Parameters included with the Error PDU
 #[derive(Debug, PartialEq)]
 pub struct ErrorResponse {
