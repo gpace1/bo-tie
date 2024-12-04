@@ -853,21 +853,9 @@ pub mod set_event_mask_page_2 {
     pub struct DefaultMask;
 
     impl DefaultMask {
-        const DEFAULT_MASK: u64 = 0;
-
         /// Iterate over the events that make up the default mask
         pub const fn iter() -> impl Iterator<Item = Events> {
-            struct DefaultMaskIter(usize, u64);
-
-            impl Iterator for DefaultMaskIter {
-                type Item = Events;
-
-                fn next(&mut self) -> Option<Self::Item> {
-                    None
-                }
-            }
-
-            DefaultMaskIter(0, Self::DEFAULT_MASK)
+            core::iter::empty()
         }
     }
 
