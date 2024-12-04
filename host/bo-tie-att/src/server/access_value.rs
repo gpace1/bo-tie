@@ -493,7 +493,7 @@ where
         })
     }
 
-    fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'_, bool> {
+    fn cmp_value_to_raw_transfer_format<'a>(&'a mut self, raw: &'a [u8]) -> PinnedFuture<'a, bool> {
         let read_fut = self.read();
 
         let task = async move {
