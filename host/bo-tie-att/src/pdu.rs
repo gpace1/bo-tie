@@ -48,14 +48,14 @@ where
 /// # Fields
 /// * bit 7: The Authentication signature flag - Indicates if the PDU contains an authentication
 ///   signature. The only PDU in ATT to use this field is the
-///   [`WriteCommand`](crate::client::ClientPduName::WriteCommand).
+///   [`WriteCommand`](ClientPduName::WriteCommand).
 /// * bit 6: The Command Flag - Indicates that this PDU is a command from the client that doesn't
 ///   invoke a server response.
 /// * bits 5-0: The Method - The rest of the bits that make up the OpCode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PduOpcode {
-    Client(super::client::ClientPduName),
-    Server(super::server::ServerPduName),
+    Client(ClientPduName),
+    Server(ServerPduName),
     Custom(u8),
 }
 
