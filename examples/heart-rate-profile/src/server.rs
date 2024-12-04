@@ -601,7 +601,7 @@ impl AccessValue for ControlPoint {
     }
 
     fn write(&mut self, val: Self::WriteValue) -> Self::Write<'_> {
-        use bo_tie::host::att::pdu::{Error, ErrorConversionError};
+        use bo_tie::host::att::pdu::Error;
 
         if val == 0x1 {
             let local = self.local.clone();
@@ -611,11 +611,7 @@ impl AccessValue for ControlPoint {
                 Ok(())
             })
         } else {
-            Box::pin(async move {
-                Err(Error::Other(
-                    ErrorConversionError::try_from(CONTROL_POINT_NOT_SUPPORTED).unwrap(),
-                ))
-            })
+            Box::pin(async move { Err(Error::ApplicationError(CONTROL_POINT_NOT_SUPPORTED)) })
         }
     }
 

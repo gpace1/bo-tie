@@ -199,95 +199,156 @@ where
     }
 }
 
-/// Error when converting a u8 to an `[Error](#Error)`
+/// Common profile errors
 ///
-/// Not all error values are for the ATT protocol, some are application level, and some are defined
-/// elsewhere. If an error value cannot be converted into an `[Error](#Error)', then this is
-/// returned. Usually a protocol above the ATT protocol will take this information and process the
-/// error.
+/// These error codes are listed within the Bluetooth SIG's *Core Specification Supplement*.
+///
+/// # Note
+/// For the purposes of using this library, [`ReservedForFutureUse`] should not be used. However,
+/// due to differences between the Bluetooth Specification used by other system components this  
+/// error type may occur for common profile errors this library does not implement.
+///
+/// [`ReservedForFutureUse`]: CommonProfileError::ReservedForFutureUse
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ErrorConversionError {
-    /// Application level error code
-    ApplicationError(u8),
-    /// Values that are in the "Reserved for future use" range get put here
-    Reserved(u8),
-    /// Common profile and service error codes that are from the Core Specification Supplement
-    CommonErrorCode(u8),
+pub enum CommonProfileError {
+    /// Write request rejected
+    WriteRequestRejected,
+    /// Client characteristic configuration descriptor improperly configured
+    ClientCharacteristicConfigurationDescriptorImproperlyConfigured,
+    /// Procedure already in progress
+    ProcedureAlreadyInProgress,
+    /// Out of range
+    OutOfRange,
+    /// Reserved for future use
+    ReservedForFutureUse(u8),
 }
 
-impl core::fmt::Display for ErrorConversionError {
+impl CommonProfileError {
+    /// Create a `CommonProfileError`
+    ///
+    /// # Panic
+    /// Input `code` must be in the range of `0xE0..=0xFF`
+    fn from_code(code: u8) -> CommonProfileError {
+        match code {
+            ..0xE0 => unreachable!(),
+            0xE0..=0xFB => CommonProfileError::ReservedForFutureUse(code),
+            0xFC => CommonProfileError::WriteRequestRejected,
+            0xFD => CommonProfileError::ClientCharacteristicConfigurationDescriptorImproperlyConfigured,
+            0xFE => CommonProfileError::ProcedureAlreadyInProgress,
+            0xFF => CommonProfileError::OutOfRange,
+        }
+    }
+
+    /// Get the code for `CommonProfileError`
+    fn as_code(&self) -> u8 {
+        match self {
+            CommonProfileError::ReservedForFutureUse(code) => *code,
+            CommonProfileError::WriteRequestRejected => 0xFC,
+            CommonProfileError::ClientCharacteristicConfigurationDescriptorImproperlyConfigured => 0xFD,
+            CommonProfileError::ProcedureAlreadyInProgress => 0xFE,
+            CommonProfileError::OutOfRange => 0xFF,
+        }
+    }
+}
+
+impl From<CommonProfileError> for u8 {
+    fn from(error: CommonProfileError) -> Self {
+        error.as_code()
+    }
+}
+
+impl core::fmt::Display for CommonProfileError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            ErrorConversionError::ApplicationError(val) => {
-                write!(f, "Application Error: 0x{:X}", val)
+            CommonProfileError::WriteRequestRejected => f.write_str("Write request rejected"),
+            CommonProfileError::ClientCharacteristicConfigurationDescriptorImproperlyConfigured => {
+                f.write_str("Client characteristic configuration descriptor improperly configured")
             }
-            ErrorConversionError::Reserved(val) => {
-                write!(f, "Error value is reserved for future use (0x{:X})", val)
-            }
-            ErrorConversionError::CommonErrorCode(val) => {
-                write!(
-                    f,
-                    "Common error: 0x{:X} (defined in the Bluetooth Core Specification Supplement)",
-                    val
-                )
+            CommonProfileError::ProcedureAlreadyInProgress => f.write_str("Procedure is already in progress"),
+            CommonProfileError::OutOfRange => f.write_str("Out of range"),
+            CommonProfileError::ReservedForFutureUse(val) => {
+                write!(f, "Reserved for future use: {val}")
             }
         }
     }
 }
 
-impl TryFrom<u8> for ErrorConversionError {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
-            0x12..=0x7F => Ok(ErrorConversionError::Reserved(val)),
-            0x80..=0x9F => Ok(ErrorConversionError::ApplicationError(val)),
-            0xA0..=0xDF => Ok(ErrorConversionError::Reserved(val)),
-            0xE0..=0xFF => Ok(ErrorConversionError::CommonErrorCode(val)),
-            _ => Err(val),
-        }
-    }
-}
+#[cfg(feature = "std")]
+impl std::error::Error for CommonProfileError {}
 
 /// The ATT Protocol errors
 ///
-/// These are the errors defined in the ATT Protocol. Higher layer protocols can define their own
-/// errors, but the value of those errors must be between 0xA0-DxDF
+/// These are the errors defined in the ATT Protocol. These errors are part of the `ATT_ERROR_RSP`
+/// PDU. An ATT server will respond with an error upon failure to execute a client's request.
 ///
-/// See the Bluetooth Specification, volume 3, part F, section 3.4 for more information on
-/// the error codes
+/// See the Bluetooth Specification, volume 3, part F, section 3.4.1 for more information on
+/// the error codes listed as enums within `Error`.
+///
+/// # Note
+/// For the purposes of using this library, [`ReservedForFutureUse`] should not be used. However,
+/// due to differences between the Bluetooth Specification used by other system components this
+/// error type may occur for ATT error codes this library does not implement.
+///
+/// [`ReservedForFutureUse`]: Error::ReservedForFutureUse
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
-    /// Used to represent 0x0000, this should never be used as an error code
-    NoError,
+    /// Operation succeeded placeholder
+    ///
+    /// This is used to represent code 0x0000. This is not an error code and is shall not be as
+    /// part of an `ATT_ERROR_RSP` PDU.
+    Success,
+    /// The attribute handle given was not valid on this server
     InvalidHandle,
+    /// The attribute cannot be read
     ReadNotPermitted,
+    /// The attribute cannot be written
     WriteNotPermitted,
+    /// The attribute PDU was invalid
     InvalidPDU,
+    /// The attribute requires authentication before it can be read or written
     InsufficientAuthentication,
+    /// ATT server does not support the request received from the client
     RequestNotSupported,
+    /// Offset specified was past the end of the attribute
     InvalidOffset,
+    /// The attribute requires authorization before it can be read or written
     InsufficientAuthorization,
+    /// Too many prepare writes have been queued
     PrepareQueueFull,
+    /// No attribute found within the given attribute handle range
     AttributeNotFound,
+    /// The attribute cannot be read using the ATT_READ_BLOB_REQ PDU
     AttributeNotLong,
+    /// The *encryption key size* used for encrypting this link is too short
     InsufficientEncryptionKeySize,
+    /// The attribute value length is invalid for the operation
     InvalidAttributeValueLength,
+    /// The attribute request that was requested has encountered an error that was unlikely, and
+    /// therefore could not be completed as requested
     UnlikelyError,
+    /// The attribute requires encryption before it can be read or written
     InsufficientEncryption,
+    /// The attribute type is not a supported grouping attribute as defined by a higher layer
+    /// specification
     UnsupportedGroupType,
+    /// Insufficient resources to complete the request
     InsufficientResources,
+    /// The server requests the client to rediscover the database.
     DatabaseOutOfSync,
+    /// The attribute parameter value was not allowed
     ValueNotAllowed,
-    /// The rest of the error codes are either reserved for future use, used for higher layer
-    /// protocols, or a common error code from the core specification.
-    Other(ErrorConversionError),
+    /// Application error code defined by a higher layer specification
+    ApplicationError(u8),
+    /// Common profile and service error codes defined in the *Core Specification Supplement*
+    CommonProfileError(CommonProfileError),
+    /// Reserved for future use
+    ReservedForFutureUse(u8),
 }
 
 impl Error {
     pub(crate) fn from_raw(val: u8) -> Error {
         match val {
-            0x00 => Error::NoError,
+            0x00 => Error::Success,
             0x01 => Error::InvalidHandle,
             0x02 => Error::ReadNotPermitted,
             0x03 => Error::WriteNotPermitted,
@@ -307,16 +368,16 @@ impl Error {
             0x11 => Error::InsufficientResources,
             0x12 => Error::DatabaseOutOfSync,
             0x13 => Error::ValueNotAllowed,
-            0x14..=0x7F => Error::Other(ErrorConversionError::Reserved(val)),
-            0x80..=0x9F => Error::Other(ErrorConversionError::ApplicationError(val)),
-            0xA0..=0xDF => Error::Other(ErrorConversionError::Reserved(val)),
-            0xE0..=0xFF => Error::Other(ErrorConversionError::CommonErrorCode(val)),
+            0x14..=0x7F => Error::ReservedForFutureUse(val),
+            0x80..=0x9F => Error::ApplicationError(val),
+            0xA0..=0xDF => Error::ReservedForFutureUse(val),
+            0xE0..=0xFF => Error::CommonProfileError(CommonProfileError::from_code(val)),
         }
     }
 
     pub(crate) fn get_raw(&self) -> u8 {
         match self {
-            Error::NoError => 0x00,
+            Error::Success => 0x00,
             Error::InvalidHandle => 0x01,
             Error::ReadNotPermitted => 0x02,
             Error::WriteNotPermitted => 0x03,
@@ -336,11 +397,9 @@ impl Error {
             Error::InsufficientResources => 0x11,
             Error::DatabaseOutOfSync => 0x12,
             Error::ValueNotAllowed => 0x13,
-            Error::Other(val) => match val {
-                ErrorConversionError::ApplicationError(val) => *val,
-                ErrorConversionError::Reserved(val) => *val,
-                ErrorConversionError::CommonErrorCode(val) => *val,
-            },
+            Error::ApplicationError(val) => *val,
+            Error::CommonProfileError(err) => err.as_code(),
+            Error::ReservedForFutureUse(val) => *val,
         }
     }
 }
@@ -348,7 +407,7 @@ impl Error {
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            Error::NoError => {
+            Error::Success => {
                 write!(f, "No Error")
             }
             Error::InvalidHandle => {
@@ -370,14 +429,14 @@ impl core::fmt::Display for Error {
                 write!(
                     f,
                     "Insufficient authentication: the attribute requires authentication \
-                before it can be read or written"
+                    before it can be read or written"
                 )
             }
             Error::RequestNotSupported => {
                 write!(
                     f,
                     "Request not supported, the attribute server does not support the \
-                request received from the client"
+                    request received from the client"
                 )
             }
             Error::InvalidOffset => {
@@ -390,7 +449,7 @@ impl core::fmt::Display for Error {
                 write!(
                     f,
                     "Insufficient authorization: the attribute requires authorization before \
-                it can be read or written"
+                    it can be read or written"
                 )
             }
             Error::PrepareQueueFull => {
@@ -400,49 +459,49 @@ impl core::fmt::Display for Error {
                 write!(
                     f,
                     "Attribute not found: no attribute found within the given attribute \
-                handle range"
+                    handle range"
                 )
             }
             Error::AttributeNotLong => {
                 write!(
                     f,
                     "Attribute not long: the attribute cannot be read using the Read Blob \
-                Request"
+                    Request"
                 )
             }
             Error::InsufficientEncryptionKeySize => {
                 write!(
                     f,
                     "Insufficient encryption key size: The Encryption Key Size used for \
-                encrypting was insufficient for reading or writing this attribute"
+                    encrypting was insufficient for reading or writing this attribute"
                 )
             }
             Error::InvalidAttributeValueLength => {
                 write!(
                     f,
                     "Invalid attribute value length: the attribute value length was invalid \
-                for the operation"
+                    for the operation"
                 )
             }
             Error::UnlikelyError => {
                 write!(
                     f,
                     "Unlikely error: the request could not be completed because of an \
-                unlikely error"
+                    unlikely error"
                 )
             }
             Error::InsufficientEncryption => {
                 write!(
                     f,
                     "Insufficient encryption: the attribute requires encryption before it \
-                can be read or written"
+                    can be read or written"
                 )
             }
             Error::UnsupportedGroupType => {
                 write!(
                     f,
                     "Unsupported group type: the attribute type is not a supported grouping \
-                type"
+                    type"
                 )
             }
             Error::InsufficientResources => {
@@ -460,8 +519,18 @@ impl core::fmt::Display for Error {
             Error::ValueNotAllowed => {
                 write!(f, "Value not allowed: the attribute parameter value was not allowed")
             }
-            Error::Other(other) => {
-                write!(f, "{}", other)
+            Error::ApplicationError(code) => {
+                write!(
+                    f,
+                    "Application error code: {code:#x} (this error code is defined by a \
+                    higher layer specification)"
+                )
+            }
+            Error::CommonProfileError(c) => {
+                write!(f, "Common profile error: {c}")
+            }
+            Error::ReservedForFutureUse(val) => {
+                write!(f, "Reserved for future use ({val:#x})")
             }
         }
     }

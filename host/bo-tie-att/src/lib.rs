@@ -181,6 +181,7 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 extern crate alloc;
+extern crate core;
 
 use alloc::{boxed::Box, format, string::String, vec::Vec};
 use core::borrow::Borrow;
