@@ -211,18 +211,6 @@ pub mod set_advertising_parameters {
         }
     }
 
-    impl<'a> AdvertisingParameters<'a> {
-        /// Create the default parameters except use the specified bluetooth device
-        /// address for the peer_address member
-        pub fn default_with_peer_address(addr: &'a BluetoothDeviceAddress) -> AdvertisingParameters {
-            let mut ap = AdvertisingParameters::default();
-
-            ap.peer_address = *addr;
-
-            ap
-        }
-    }
-
     impl CommandParameter<15> for AdvertisingParameters<'_> {
         const COMMAND: opcodes::HciCommand = COMMAND;
         fn get_parameter(&self) -> [u8; 15] {
