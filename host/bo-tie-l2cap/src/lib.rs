@@ -1003,6 +1003,11 @@ impl<P, B, S> LeULogicalLink<P, B, S> {
             }
         }
     }
+
+    /// Convert this `LeULogicalLink` back into the physical link
+    pub fn into_inner(self) -> P {
+        self.physical_link
+    }
 }
 
 #[derive(Debug)]
