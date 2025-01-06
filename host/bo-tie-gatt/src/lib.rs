@@ -2124,7 +2124,7 @@ impl<'a> GattServiceBuilder<'a> {
     /// let service_changed = Arc::new(AtomicBool::default());
     /// let service_changed_clone = service_changed.clone();
     ///
-    /// server_builder.new_gatt_service(|builder| {
+    /// server_builder.add_gatt_service(|builder| {
     ///     builder.add_service_changed(
     ///         service_changed.load(Ordering::SeqCst),
     ///         |enabled| async { service_changed_clone.store(enabled, Ordering::SeqCst) },

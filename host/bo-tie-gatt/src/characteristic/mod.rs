@@ -127,6 +127,7 @@ impl<'a>
 }
 
 impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
+    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// Set the Characteristic declaration (must be called)
     ///
     /// This method must be called before a characteristic can be constructed.
@@ -135,7 +136,6 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// be built through type-stages progressed through by methods calls. This diagram shows the
     /// possible paths in creating a complete `DeclarationBuilder` from the closure input into the
     /// closure output.
-    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// flowchart LR
     ///     A{{input}} --> B
@@ -177,6 +177,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
         }
     }
 
+    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// Set the Characteristic value declaration (must be called)
     ///
     /// This method must be called before a characteristic can be constructed.
@@ -186,7 +187,6 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// possible paths in creating a complete `ValueBuilder` from the closure input into the closure
     /// output.
     ///
-    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// flowchart LR
     ///     A{{input}}-->B(ValueBuilder::set_value) & C(ValueBuilder::set_accessible_value)
@@ -230,6 +230,7 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
         }
     }
 
+    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// Add an extended properties descriptor
     ///
     /// This adds an extended properties descriptor to the Characteristic. This descriptor is
@@ -240,7 +241,6 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// calls. This diagram shows the possible paths in creating a complete
     /// `ExtendedPropertiesBuilder` from the closure input into the closure output.
     ///
-    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// flowchart LR
     ///     A{{input}} --> B
@@ -288,7 +288,8 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
         }
     }
 
-    /// Add an user description descriptor
+    #[cfg_attr(doc, aquamarine::aquamarine)]
+    /// Add a user description descriptor
     ///
     /// This adds a user description descriptor to the Characteristic. This descriptor is
     /// optional and this method does not need to be called to construct the Characteristic.
@@ -298,7 +299,6 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// the possible paths in creating a complete `UserDescriptionBuilder` from the closure input
     /// into the closure output.
     ///
-    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// flowchart LR
     ///     A{{input}} --> B & C & D
@@ -401,7 +401,8 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
         }
     }
 
-    /// Add an user description descriptor
+    #[cfg_attr(doc, aquamarine::aquamarine)]
+    /// Add a server configuration descriptor
     ///
     /// This adds a user description descriptor to the Characteristic. This descriptor is
     /// optional and this method does not need to be called to construct the Characteristic.
@@ -412,7 +413,6 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     /// of shared reference, and be lockable if any client can write to it. This diagram shows a
     /// possible paths in creating a complete `ServerConfigurationBuilder` from  [`new`] to the type
     /// returned by `constructor`.
-    #[cfg_attr(doc, aquamarine::aquamarine)]
     /// ```mermaid
     /// flowchart LR
     ///     subgraph once
@@ -426,39 +426,33 @@ impl<'a, D, V, E, U, C, S> CharacteristicBuilder<'a, D, V, E, U, C, S> {
     ///     D{{output}}
     /// ```
     ///
-    #[cfg_attr(
-        feature = "tokio",
-        doc = r##"
-```
- // note: using feature "tokio"
- use std::sync::Arc;
- use tokio::sync::Mutex;
- use bo_tie_gatt::characteristic::{ServerConfiguration, ServerConfigurationBuilder, Properties};
- use bo_tie_att::{AttributePermissions, AttributeRestriction};
- # use bo_tie_gatt::ServerBuilder;
- # let mut sb = ServerBuilder::new_empty();
- # let characteristic_builder = sb.new_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
- # let characteristic_builder = characteristic_builder
- #    .set_declaration(|d| d.set_properties([]).set_uuid(1u16))
- #    .set_value(|v| v.set_value(0u16).set_permissions([]));
-
- let server_config = ServerConfigurationBuilder::new()
-    .set_config(Arc::new(Mutex::new(ServerConfiguration::new())))
-    .set_write_restrictions([
-        AttributeRestriction::None,
-        AttributeRestriction::Authorization
-    ]);
-
- characteristic_builder.set_declaration(|declaration_builder| {
-     declaration_builder.set_properties([Properties::Notify, Properties::Indicate])
-         .set_uuid(0x1234u16)
- }).set_server_configuration(|| {
-     server_config.clone() 
- })
- # });
-```
-"##
-    )]
+    /// ### Example
+    ///
+    /// ```
+    ///  # use std::sync::Arc;
+    ///  # use bo_tie_gatt::characteristic::{ServerConfiguration, ServerConfigurationBuilder, Properties};
+    ///  # use bo_tie_att::{AttributePermissions, AttributeRestriction};
+    ///  # use bo_tie_gatt::ServerBuilder;
+    ///  # let mut sb = ServerBuilder::new_empty();
+    ///  # let characteristic_builder = sb.add_service(0u16).add_characteristics().new_characteristic(|characteristic_builder| {
+    ///  # let characteristic_builder = characteristic_builder
+    ///  #    .set_declaration(|d| d.set_properties([]).set_uuid(1u16))
+    ///  #    .set_value(|v| v.set_value(0u16).set_permissions([]));
+    ///  let server_config = ServerConfigurationBuilder::new()
+    ///     // note: using tokio's `Mutex` here requires the feature `tokio` to be enabled
+    ///     .set_config(Arc::new(tokio::sync::Mutex::new(ServerConfiguration::new())))
+    ///     .set_write_restrictions([
+    ///         AttributeRestriction::None,
+    ///         AttributeRestriction::Authorization
+    ///     ]);
+    ///
+    ///  characteristic_builder.set_declaration(|declaration_builder| {
+    ///      declaration_builder.set_properties([Properties::Notify, Properties::Indicate])
+    ///          .set_uuid(0x1234u16)
+    ///  }).set_server_configuration(|| {
+    ///      server_config.clone()
+    ///  })
+    /// ```
     /// [`Server`]: crate::Server
     pub fn set_server_configuration<F, T>(
         self,
