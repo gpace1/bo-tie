@@ -2281,7 +2281,7 @@ impl<'a> GattServiceBuilder<'a> {
 ///
 /// This is used for generating the GATT service information that needs to be part of the server.
 #[derive(Default)]
-struct GattServiceInfo {
+pub struct GattServiceInfo {
     service_change_handle: Option<u16>,
     database_hash_handle: Option<u16>,
 }
