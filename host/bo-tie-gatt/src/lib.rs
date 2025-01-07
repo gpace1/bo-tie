@@ -1762,6 +1762,11 @@ where
         }
     }
 
+    /// Get the service information for the GATT profile Service
+    pub fn get_gatt_service_info(&self) -> &GattServiceInfo {
+        &self.gatt_service_info
+    }
+
     /// Add Services to the Server
     ///
     /// Services can be added to the Server if it has the service changed characteristic. Services
@@ -2282,6 +2287,40 @@ struct GattServiceInfo {
 }
 
 impl GattServiceInfo {
+    /// Get the handle to the service changed characteristic value
+    ///
+    /// This returns the handle to the value descriptor of the service changed characteristic, if
+    /// the characteristic exists in the GATT service.
+    ///
+    /// ## Manual Indication
+    ///
+    /// To generate a manual indication, you need to figure out the handle range of the services
+    /// added, removed, or changed. A lazy cop-out, which is done in the below example, would be to
+    /// use the range 1 to 0xFF.
+    ///
+    /// ```
+    /// # use std::error::Error;
+    /// # use bo_tie_gatt::Server;
+    /// # use bo_tie_att::server::NoQueuedWrites;
+    /// # use bo_tie_l2cap::{BasicFrameChannel, LogicalLink};
+    /// async fn doc_test<L: LogicalLink>(mut server: Server<NoQueuedWrites>, mut att_channel: BasicFrameChannel<L>) -> Result<(), Box<dyn Error>>{
+    ///     let client_changed_handle = server.get_gatt_service_info()
+    ///         .get_service_changed_handle()
+    ///         .expect("GATT service does not have a service changed characteristic");
+    ///
+    ///     server.send_indication_with(
+    ///         &mut att_channel,
+    ///         client_changed_handle,
+    ///         [1u16, 0xFF].as_slice(),
+    ///         None
+    ///     ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_service_changed_handle(&self) -> Option<u16> {
+        self.service_change_handle
+    }
+
     /// Initiate the GATT database hash characteristic
     ///
     /// This will initiate the database hash if the user has added the database hash characteristic.
