@@ -395,24 +395,6 @@ macro_rules! client_can_read_attribute {
     };
 }
 
-macro_rules! log_client_no_permission_to_find_attribute {
-    ($this:expr, $att:expr, $op:literal $(,)?) => {
-        log::trace!(
-            ::core::concat!(
-                "(ATT) ",
-                $op,
-                ": skipping attribute at handle {}, client does not have read permission to find \
-                this attribute (client permissions: {:?}, attribute permissions: {:?}; operation \
-                required: {:?})",
-            ),
-            $att.get_handle().unwrap(),
-            $this.given_permissions,
-            $att.get_permissions(),
-            $crate::FULL_READ_PERMISSIONS,
-        )
-    };
-}
-
 macro_rules! log_client_no_permission_to_read_attribute {
     ($this:expr, $att:expr, $op:literal $(,)?) => {
         log::trace!(
@@ -1354,15 +1336,6 @@ where
                 Some(2) => attribute.get_uuid().can_be_16_bit(),
                 Some(16) => !attribute.get_uuid().can_be_16_bit(),
                 _ => unreachable!(),
-            })
-            .filter(|attribute| {
-                if client_can_read_attribute!(self, attribute).is_ok() {
-                    true
-                } else {
-                    log_client_no_permission_to_find_attribute!(self, attribute, "ATT_FIND_INFORMATION_REQ");
-
-                    false
-                }
             })
             .inspect(|att| {
                 if opt_size.get().is_none() {
