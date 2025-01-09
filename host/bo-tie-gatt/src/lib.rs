@@ -1543,7 +1543,7 @@ where
     fn create_find_by_type_value_response(
         &self,
         payload: &[u8],
-    ) -> Result<Option<alloc::vec::Vec<att::pdu::TypeValueResponse>>, att::pdu::Error> {
+    ) -> Result<Option<alloc::vec::Vec<att::pdu::TypeValueResponse>>, (att::pdu::Error, u16)> {
         let handle_range: HandleRange = match att::TransferFormatTryFrom::try_from(&payload[..4]) {
             Ok(handle_range) => handle_range,
             Err(_) => {
@@ -1553,7 +1553,7 @@ where
                     att::pdu::Error::InvalidPDU
                 );
 
-                return Err(att::pdu::Error::InvalidPDU);
+                return Err((att::pdu::Error::InvalidPDU, 0));
             }
         };
 
@@ -1566,16 +1566,18 @@ where
                     att::pdu::Error::InvalidPDU
                 );
 
-                return Err(att::pdu::Error::InvalidPDU);
+                return Err((att::pdu::Error::InvalidPDU, 0));
             }
         };
 
         match attribute_type {
-            uuid::PRIMARY_SERVICE => self.create_find_by_type_value_response_for_primary(handle_range, &payload[6..]),
-            uuid::SECONDARY_SERVICE => Err(att::pdu::Error::AttributeNotFound),
-            uuid::CHARACTERISTIC => {
-                self.create_find_by_type_value_response_for_characteristic(handle_range, &payload[6..])
-            }
+            uuid::PRIMARY_SERVICE => self
+                .create_find_by_type_value_response_for_primary(handle_range, &payload[6..])
+                .map_err(|e| (e, handle_range.starting_handle)),
+            uuid::SECONDARY_SERVICE => Err((att::pdu::Error::AttributeNotFound, handle_range.starting_handle)),
+            uuid::CHARACTERISTIC => self
+                .create_find_by_type_value_response_for_characteristic(handle_range, &payload[6..])
+                .map_err(|e| (e, handle_range.starting_handle)),
             _ => Ok(None),
         }
     }
@@ -1701,8 +1703,8 @@ where
         T: LogicalLink,
     {
         match self.create_find_by_type_value_response(payload) {
-            Err(e) => {
-                send_error!(channel, 0, att::client::ClientPduName::FindByTypeValueRequest, e)?;
+            Err((e, handle)) => {
+                send_error!(channel, handle, att::client::ClientPduName::FindByTypeValueRequest, e)?;
 
                 Ok(bo_tie_att::server::Status::None)
             }
