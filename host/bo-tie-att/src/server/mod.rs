@@ -1439,7 +1439,7 @@ where
 
         log::info!(
             "(ATT) processing PDU ATT_FIND_INFORMATION_REQ {{ start handle: {:#X}, end \
-            handle: {:#X} }} as handle groups are defined by a higher layer protocol",
+            handle: {:#X} }}",
             handle_range.starting_handle,
             handle_range.ending_handle,
         );
