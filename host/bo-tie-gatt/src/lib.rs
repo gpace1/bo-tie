@@ -86,7 +86,8 @@ macro_rules! map_restrictions {
 pub mod characteristic;
 pub mod uuid;
 
-use crate::characteristic::gatt::{ClientFeatures, ClientFeaturesValueAccessor};
+use crate::characteristic::gatt::ClientFeaturesValueAccessor;
+pub use crate::characteristic::gatt::{ClientFeatures, ServerFeatures};
 use crate::characteristic::ClientConfiguration;
 use bo_tie_att as att;
 use bo_tie_att::pdu::HandleRange;
@@ -2268,7 +2269,7 @@ impl<'a> GattServiceBuilder<'a> {
     /// Add the GATT server supported features Characteristic
     pub fn add_server_supported_features<T>(mut self, features: T) -> Self
     where
-        T: core::borrow::Borrow<[characteristic::gatt::ServerFeatures]>,
+        T: core::borrow::Borrow<[ServerFeatures]>,
     {
         const UUID: Uuid = uuid::gatt::SERVER_SUPPORTED_FEATURES;
 
