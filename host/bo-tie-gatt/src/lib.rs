@@ -1267,9 +1267,9 @@ impl ServerBuilder {
         &self.attributes
     }
 
-    /// Make an server
+    /// Make a server
     ///
-    /// Construct an server from the server builder.
+    /// Construct a server from the server builder.
     pub fn make_server<Q>(mut self, queue_writer: Q) -> Server<Q>
     where
         Q: att::server::QueuedWriter,
@@ -2068,6 +2068,7 @@ pub struct GattServiceBuilder<'a> {
     characteristic_adder: CharacteristicAdder<'a>,
     service_changed: Option<u16>,
     database_hash: Option<u16>,
+    has_client_supported_features: bool,
 }
 
 impl<'a> GattServiceBuilder<'a> {
@@ -2083,6 +2084,7 @@ impl<'a> GattServiceBuilder<'a> {
             characteristic_adder,
             service_changed: None,
             database_hash: None,
+            has_client_supported_features: false,
         }
     }
 
@@ -2107,6 +2109,13 @@ impl<'a> GattServiceBuilder<'a> {
     ///
     /// Indications for this characteristic must be sent if enabled and the server changes its
     /// architecture of GATT services.
+    ///
+    /// # Panic: Client Supported Features Required
+    ///
+    /// If this is called, then method [`add_client_supported_features`] must be called. This is in
+    /// accordance with the Bluetooth specification for the *Generic Attribute Profile Service*.
+    /// A panic will occur when this `GattServiceBuilder` is constructed into the server if this
+    /// method was called and a client supported feature characteristic is not also added.
     ///
     /// # Inputs
     ///
@@ -2141,6 +2150,7 @@ impl<'a> GattServiceBuilder<'a> {
     /// # }
     /// ```
     ///
+    /// [`add_client_supported_features`]: GattServiceBuilder::add_client_supported_features
     pub fn add_service_changed<Fun, Fut, R>(mut self, enabled: bool, mut on_change: Fun, write_restrictions: R) -> Self
     where
         Fun: FnMut(bool) -> Fut + Send + 'static,
@@ -2213,12 +2223,23 @@ impl<'a> GattServiceBuilder<'a> {
                 })
         });
 
+        self.has_client_supported_features = true;
+
         self
     }
 
     /// Add the database hash Characteristic
     ///
-    /// This has is automatically generated upon creating of of the GATT server.
+    /// This is automatically generated upon creating of the GATT server.
+    ///
+    /// # Panic: Client Supported Features Required
+    ///
+    /// If this is called, then method [`add_client_supported_features`] must be called. This is in
+    /// accordance with the Bluetooth specification for the *Generic Attribute Profile Service*.
+    /// A panic will occur when this `GattServiceBuilder` is constructed into the server if this
+    /// method was called and a client supported feature characteristic is not also added.
+    ///
+    /// [`add_client_supported_features`]: GattServiceBuilder::add_client_supported_features
     #[cfg(feature = "cryptography")]
     pub fn add_database_hash(mut self) -> Self {
         const UUID: Uuid = uuid::gatt::DATABASE_HASH;
@@ -2269,8 +2290,25 @@ impl<'a> GattServiceBuilder<'a> {
         self
     }
 
+    /// Build the GATT service
+    ///
+    /// # Panic
+    /// This will panic if conditions for creating the characteristics of this service are not met.
+    /// See the documentation for the methods to add the characteristics for details.
     fn build(self) -> GattServiceInfo {
         self.characteristic_adder.finish_service();
+
+        assert!(
+            self.service_changed.is_some() && self.has_client_supported_features,
+            "cannot create GATT profile service: service changed characteristic exists without \
+            client supported features characteristic"
+        );
+
+        assert!(
+            self.database_hash.is_some() && self.has_client_supported_features,
+            "cannot create GATT profile service: database hash characteristic exists without \
+            client supported features characteristic"
+        );
 
         GattServiceInfo {
             service_change_handle: self.service_changed,
