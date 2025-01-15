@@ -442,7 +442,7 @@ macro_rules! log_client_no_permission_to_write_attribute {
             $att.get_handle().unwrap(),
             $this.given_permissions,
             $att.get_permissions(),
-            $crate::FULL_READ_PERMISSIONS,
+            $crate::FULL_WRITE_PERMISSIONS,
         )
     };
 }
