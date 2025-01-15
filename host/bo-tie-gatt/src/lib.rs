@@ -1137,6 +1137,7 @@ impl<'a> GapServiceBuilder<'a> {
 /// ```
 pub struct ServerBuilder {
     max_mtu: u16,
+    set_mtu: u16,
     primary_services: alloc::vec::Vec<ServiceGroupData>,
     attributes: att::server::ServerAttributes,
     gatt_service_info: Option<GattServiceInfo>,
@@ -1149,6 +1150,7 @@ impl ServerBuilder {
     pub fn new_empty() -> Self {
         Self {
             max_mtu: LE_MINIMUM_ATT_MTU,
+            set_mtu: LE_MINIMUM_ATT_MTU,
             primary_services: alloc::vec::Vec::new(),
             attributes: att::server::ServerAttributes::new(),
             gatt_service_info: None,
@@ -1161,9 +1163,29 @@ impl ServerBuilder {
     /// value.
     ///
     /// # Note
-    /// This method does nothing if input `mtu` is not greater than [`LE_MINIMUM_ATT_MTU`].
+    /// This method does nothing if input `mtu` is not greater than [`LeULink::SUPPORTED_MTU`].
     pub fn set_max_mtu(&mut self, mtu: u16) {
         if mtu > LE_MINIMUM_ATT_MTU {
+            self.max_mtu = mtu;
+        }
+    }
+
+    /// Set the MTU to this value.
+    ///
+    /// GATT connections that either do not use the MTU exchange procedure or have already assigned
+    /// a MTU value must call this method or [Server::set_mtu] to assign the MTU value.
+    ///
+    /// If this value is larger than maximum MTU, then the maximum MTU is also assigned to this
+    /// value.
+    ///
+    /// # Note
+    /// This method does nothing if input `mtu` is not greater than [`LE_MINIMUM_ATT_MTU`].
+    pub fn assign_mtu(&mut self, mtu: u16) {
+        if mtu > LE_MINIMUM_ATT_MTU {
+            self.set_mtu = mtu;
+        }
+
+        if self.set_mtu > self.max_mtu {
             self.max_mtu = mtu;
         }
     }
@@ -1284,8 +1306,7 @@ impl ServerBuilder {
         #[cfg(feature = "cryptography")]
         gatt_service_info.initiate_database_hash(&mut self.attributes);
 
-        let server =
-            att::server::Server::new_fixed(LE_MINIMUM_ATT_MTU, self.max_mtu, Some(self.attributes), queue_writer);
+        let server = att::server::Server::new_fixed(self.set_mtu, self.max_mtu, Some(self.attributes), queue_writer);
 
         Server {
             primary_services: self.primary_services,
