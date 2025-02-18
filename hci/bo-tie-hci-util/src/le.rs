@@ -195,7 +195,7 @@ impl core::fmt::Debug for TryFromDurationIntervalError {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(
             f,
-            "duration value of {} (micro seconds) for {} is out of range ({}ms..={}ms)",
+            "duration value of {} (micro seconds) for {} is out of range of {}..={} (micro seconds)",
             self.val.as_micros(),
             self.of,
             self.low.as_micros(),
