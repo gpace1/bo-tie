@@ -5,7 +5,7 @@ mod privacy;
 
 use crate::privacy::host_privacy::RpaInterval;
 use bo_tie::hci::{ConnectionHandle, Host, HostChannelEnds};
-use bo_tie::host::l2cap::{LeULogicalLink, LeUNext};
+use bo_tie::host::l2cap::{LeULogicalLink, LeULogicalLinkNextError, LeUNext};
 use bo_tie::host::sm::responder::Status;
 use bo_tie::host::sm::Keys;
 
@@ -221,14 +221,14 @@ where
 
     loop {
         tokio::select! {
-            next = logical_link.next() => match &mut next.unwrap() {
-                LeUNext::AttributeChannel {pdu, channel} => {
+            mut next = logical_link.next() => match &mut next {
+                Ok(LeUNext::AttributeChannel {pdu, channel}) => {
                     gatt_server
                         .process_att_pdu(channel, pdu)
                         .await
                         .unwrap();
                 }
-                LeUNext::SecurityManagerChannel { pdu, channel } => {
+                Ok(LeUNext::SecurityManagerChannel { pdu, channel }) => {
                     match security_manager
                         .process_command(channel, pdu)
                         .await
@@ -262,7 +262,9 @@ where
                         _ => (),
                     }
                 }
-                _ => unreachable!()
+                Ok(_) => unreachable!("disabled channels"),
+                Err(LeULogicalLinkNextError::Disconnected) => break,
+                Err(e) => panic!("LE Link failure: {e}"), 
             },
 
             event_data = event_receiver.recv() => match event_data {
