@@ -2321,13 +2321,13 @@ impl<'a> GattServiceBuilder<'a> {
         self.characteristic_adder.finish_service();
 
         assert!(
-            self.service_changed.is_some() && self.has_client_supported_features,
+            self.service_changed.is_some() && self.has_client_supported_features || self.service_changed.is_none(),
             "cannot create GATT profile service: service changed characteristic exists without \
             client supported features characteristic"
         );
 
         assert!(
-            self.database_hash.is_some() && self.has_client_supported_features,
+            self.database_hash.is_some() && self.has_client_supported_features || self.database_hash.is_none(),
             "cannot create GATT profile service: database hash characteristic exists without \
             client supported features characteristic"
         );
