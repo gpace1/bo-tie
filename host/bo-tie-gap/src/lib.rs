@@ -11,3 +11,4 @@ pub mod eir;
 pub mod oob_block;
 pub mod scan;
 pub mod security;
+pub mod time_consts;
