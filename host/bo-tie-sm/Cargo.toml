@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bo-tie-gap = { path = "../bo-tie-gap" }
+bo-tie-gap = { path = "../bo-tie-gap", features = ["alloc"] }
 bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-macros = { path = "../../bo-tie-macros" }
 bo-tie-core = { path = "../../bo-tie-core", features = ["sys-rand", "cryptography"] }
@@ -19,7 +19,7 @@ bo-tie-l2cap = { path = "../bo-tie-l2cap", features = ["std"] }
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 
 [features]
-std = []
+std = ["bo-tie-gap/std"]
 serde = ["dep:serde", "bo-tie-core/serde"]
 
 [package.metadata.docs.rs]

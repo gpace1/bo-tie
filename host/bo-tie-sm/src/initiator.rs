@@ -959,10 +959,7 @@ impl SecurityManager {
     /// This should be received after this sends its public key to the responder Security Manager.
     ///
     /// # Error
-    /// If this is received out of the expected order.
-    ///
-    /// # Panic
-    /// This will panic  
+    /// An error occurs if the public key is received out of the expected order.
     async fn process_responder_pub_key<T>(
         &mut self,
         channel: &mut BasicFrameChannel<T>,
