@@ -13,4 +13,5 @@ bo-tie-sm = { path = "../bo-tie-sm" }
 
 [features]
 deafult = ["std"]
-std = []
+alloc = []
+std = ["alloc"]

@@ -1,8 +1,11 @@
 #![doc = include_str!("../README.md")]
-#![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![no_std]
 
+#[cfg(feature = "alloc")]
 extern crate alloc;
+
+#[cfg(feature = "std")]
+extern crate std;
 
 pub use bo_tie_core::BluetoothDeviceAddress;
 
