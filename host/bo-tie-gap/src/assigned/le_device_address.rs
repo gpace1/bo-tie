@@ -36,7 +36,7 @@ impl super::IntoStruct for LeDeviceAddress {
 
     fn convert_into<'a>(&self, ad: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, super::ConvertError> {
         if ad.len() < Self::STRUCT_SIZE {
-            Err(super::ConvertError {
+            Err(super::ConvertError::OutOfSpace {
                 required: Self::STRUCT_SIZE,
                 remaining: ad.len(),
             })
@@ -69,6 +69,34 @@ impl<'a> super::TryFromStruct<'a> for LeDeviceAddress {
             }
         } else {
             Err(Error::IncorrectAssignedType)
+        }
+    }
+}
+
+impl IntoIterator for LeDeviceAddress {
+    type Item = u8;
+    type IntoIter = LeDeviceAddressStructIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LeDeviceAddressStructIter(self, 0)
+    }
+}
+
+/// Iterator over bytes of a [`LeDeviceAddress`] data structure
+///
+/// This can be created from the `IntoIterator` implementation of `LeDeviceAddress`
+pub struct LeDeviceAddressStructIter(LeDeviceAddress, usize);
+
+impl Iterator for LeDeviceAddressStructIter {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.1 += 1;
+
+        match self.1 {
+            1 => <u8>::try_from(self.0.len()).ok(),
+            2 => LeDeviceAddress::ASSIGNED_TYPE.val().into(),
+            i => self.0 .0.get(i - 3).copied(),
         }
     }
 }

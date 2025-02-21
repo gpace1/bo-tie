@@ -34,12 +34,12 @@ impl ScConfirmValue {
 
 impl IntoStruct for ScConfirmValue {
     fn data_len(&self) -> Result<usize, usize> {
-        Ok(core::mem::size_of::<u128>())
+        Ok(size_of::<u128>())
     }
 
     fn convert_into<'a>(&self, ad: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, super::ConvertError> {
         if ad.len() < Self::STRUCT_SIZE {
-            Err(super::ConvertError {
+            Err(super::ConvertError::OutOfSpace {
                 required: Self::STRUCT_SIZE,
                 remaining: ad.len(),
             })
@@ -69,6 +69,34 @@ impl TryFromStruct<'_> for ScConfirmValue {
             }
         } else {
             Err(Error::IncorrectAssignedType)
+        }
+    }
+}
+
+impl IntoIterator for ScConfirmValue {
+    type Item = u8;
+    type IntoIter = ScConfirmValueStructIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ScConfirmValueStructIter(self, 0)
+    }
+}
+
+/// Iterator over bytes of a [`ScConfirmValue`] data structure
+///
+/// This can be created from the `IntoIterator` implementation of `ScConfirmValue`
+pub struct ScConfirmValueStructIter(ScConfirmValue, usize);
+
+impl Iterator for ScConfirmValueStructIter {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.1 += 1;
+
+        match self.1 {
+            1 => 16.into(),
+            2 => ScConfirmValue::ASSIGNED_TYPE.val().into(),
+            i => self.0 .0.to_le_bytes().get(i - 3).copied(),
         }
     }
 }

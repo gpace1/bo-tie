@@ -143,9 +143,11 @@ pub enum Error {
     /// The buffer is too small for the structure
     RawTooSmall,
     /// Failed converting from an assumed UTF8 formatted bytes
-    UTF8Error(alloc::str::Utf8Error),
+    UTF8Error(core::str::Utf8Error),
     /// Invalid format of ATT data.
     AttributeFormat(bo_tie_att::TransferFormatError),
+    /// The data is invalid
+    InvalidData,
 }
 
 impl From<bo_tie_att::TransferFormatError> for Error {
@@ -167,9 +169,10 @@ impl core::fmt::Display for Error {
                 f,
                 "UTF-8 conversion error, valid up to {}: '{}'",
                 utf8_err.valid_up_to(),
-                alloc::string::ToString::to_string(&utf8_err)
+                utf8_err
             ),
             Error::AttributeFormat(ref e) => e.fmt(f),
+            Error::InvalidData => write!(f, "Invalid data"),
         }
     }
 }
@@ -185,31 +188,19 @@ struct StructIntermediate<'a> {
 }
 
 impl<'a> StructIntermediate<'a> {
-    /// Create an new `AdStructIntermediate`
+    /// Create a new `AdStructIntermediate`
     ///
     /// Input `b` is the buffer to put the structure. Input `assigned_type` is the assigned number
     /// for the data structure.
     ///
+    /// # Error
     /// Buffer `b` must have a length of two or greater or `None` is returned.
-    fn new(b: &'a mut [u8], assigned_type: u8) -> Result<Self, ConvertError> {
-        // The maximum size of an EIR or AD structure
-        //
-        // The length field of a structure is a byte so
-        // the maximum size of a structure is one plus
-        // the maximum of a `u8`.
-        const MAXIMUM_SIZE: usize = <u8>::MAX as usize + 1;
-
-        let buffer = match b.len() {
-            0..=1 => {
-                return Err(ConvertError {
-                    required: HEADER_SIZE,
-                    remaining: b.len(),
-                })
-            }
-            HEADER_SIZE..=MAXIMUM_SIZE => b,
-            // The size of the buffer is maxed to the largest sized structure
-            _ => &mut b[..MAXIMUM_SIZE],
-        };
+    fn new(buffer: &'a mut [u8], assigned_type: u8) -> Result<Self, ConvertError> {
+        if buffer.len() < HEADER_SIZE {
+            return Err(ConvertError::MissingMinimumSpace {
+                remaining: buffer.len(),
+            });
+        }
 
         Ok(Self {
             len: HEADER_SIZE,
@@ -272,7 +263,7 @@ impl<'a> StructIntermediate<'a> {
 
             Ok(())
         } else {
-            Err(ConvertError {
+            Err(ConvertError::OutOfSpace {
                 required: to_add_len,
                 remaining: self.buffer.len() - self.len,
             })
@@ -337,21 +328,41 @@ pub trait TryFromStruct<'a> {
 /// for creating the structure along with the number of bytes `remaining` in the buffer that can be
 /// used for data structures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConvertError {
-    /// The required number of bytes that need to be available for the struct
-    pub required: usize,
-    /// The remaining number of bytes within the buffer
-    pub remaining: usize,
+pub enum ConvertError {
+    /// THere is not enough room for the length and EIR/AD type fields
+    MissingMinimumSpace {
+        /// The remaining number of bytes within the buffer
+        remaining: usize,
+    },
+    /// There is not enough room in the buffer for the data type
+    OutOfSpace {
+        /// The required number of bytes that need to be available for the struct
+        required: usize,
+        /// The remaining number of bytes within the buffer
+        remaining: usize,
+    },
 }
 
 impl core::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "Not enough space in buffer to add item. It requires {} bytes but only {} bytes are \
-            available within the buffer",
-            self.required, self.remaining
-        )
+        f.write_str("EIR/AD type conversion error, ")?;
+
+        match self {
+            Self::MissingMinimumSpace { .. } => {
+                write!(
+                    f,
+                    "the buffer does not have the minimum space for an EIR/AD data structure"
+                )
+            }
+            Self::OutOfSpace { required, remaining } => {
+                write!(
+                    f,
+                    "not enough space in the buffer to add the item. It requires {} bytes but only \
+                    {} bytes remain within the buffer.",
+                    required, remaining
+                )
+            }
+        }
     }
 }
 
@@ -544,7 +555,7 @@ impl<'a> Sequence<'a> {
         self.len
     }
 
-    /// Try to a a fully sized structure
+    /// Try to a fully sized structure
     ///
     /// This will try to add the full size of the data type to the buffer returning an error if it
     /// cannot.
@@ -552,7 +563,7 @@ impl<'a> Sequence<'a> {
         let struct_len = data_size + HEADER_SIZE;
 
         if struct_len > self.buffer.len() {
-            let err = ConvertError {
+            let err = ConvertError::OutOfSpace {
                 required: t.data_len().unwrap_or_default() + HEADER_SIZE,
                 remaining: self.buffer.len(),
             };
@@ -615,7 +626,7 @@ impl<'a> Sequence<'a> {
 
                 self.len += 1;
             })
-            .ok_or(ConvertError {
+            .ok_or(ConvertError::OutOfSpace {
                 required: 1,
                 remaining: 0,
             })
@@ -653,8 +664,10 @@ impl core::ops::Deref for Sequence<'_> {
 /// assert_eq!(buffer, [0xa, 0x9, 0x4d, 0x79, 0x20, 0x44, 0x65, 0x76, 0x69, 0x63, 0x65,]);
 /// ```
 #[derive(Clone, Debug, Default)]
+#[cfg(feature = "alloc")]
 pub struct SequenceVec(alloc::vec::Vec<u8>);
 
+#[cfg(feature = "alloc")]
 impl SequenceVec {
     /// Create a new `SequenceVec`
     pub fn new() -> Self {
@@ -665,10 +678,7 @@ impl SequenceVec {
     pub fn add<T: IntoStruct>(&mut self, t: T) -> &mut Self {
         let start = self.0.len();
 
-        let data_len = match t.data_len() {
-            Ok(len) => len,
-            Err(len) => len,
-        };
+        let data_len = t.data_len().unwrap_or_else(|len| len);
 
         self.0.resize(self.0.len() + data_len + HEADER_SIZE, 0);
 
@@ -691,6 +701,7 @@ impl SequenceVec {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<T> From<T> for SequenceVec
 where
     T: core::borrow::Borrow<[u8]>,

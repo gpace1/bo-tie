@@ -30,7 +30,7 @@ impl IntoStruct for SecurityManagerTkValue {
 
     fn convert_into<'a>(&self, ad: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, super::ConvertError> {
         if ad.len() < Self::STRUCT_SIZE {
-            Err(ConvertError {
+            Err(ConvertError::OutOfSpace {
                 required: Self::STRUCT_SIZE,
                 remaining: ad.len(),
             })
@@ -60,6 +60,34 @@ impl TryFromStruct<'_> for SecurityManagerTkValue {
             }
         } else {
             Err(Error::IncorrectAssignedType)
+        }
+    }
+}
+
+impl IntoIterator for SecurityManagerTkValue {
+    type Item = u8;
+    type IntoIter = SecurityManagerTkValueStructIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        SecurityManagerTkValueStructIter(self, 0)
+    }
+}
+
+/// Iterator over bytes of a [`SecurityManagerTkValue`] data structure
+///
+/// This can be created from the `IntoIterator` implementation of `SecurityManagerTkValue`
+pub struct SecurityManagerTkValueStructIter(SecurityManagerTkValue, usize);
+
+impl Iterator for SecurityManagerTkValueStructIter {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.1 += 1;
+
+        match self.1 {
+            1 => 16.into(),
+            2 => SecurityManagerTkValue::ASSIGNED_TYPE.val().into(),
+            i => self.0 .0.to_le_bytes().get(i - 3).copied(),
         }
     }
 }

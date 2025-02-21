@@ -1,6 +1,7 @@
 //! Advertising Data: Service Class UUID Data Type
 //!
 //! The struct Services is the data type for the list of service class UUIDs.
+#![cfg(feature = "alloc")]
 
 use super::*;
 use alloc::collections::BTreeSet;
@@ -234,7 +235,7 @@ macro_rules! impl_raw {
 
             fn convert_into<'a>(&self, b: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, $crate::assigned::ConvertError> {
                 if b.len() < core::mem::size_of::<$ty>() * self.set.len() + HEADER_SIZE {
-                    Err($crate::assigned::ConvertError {
+                    Err($crate::assigned::ConvertError::OutOfSpace {
                         required: core::mem::size_of::<$ty>() * self.set.len() + HEADER_SIZE,
                         remaining: b.len(),
                     })

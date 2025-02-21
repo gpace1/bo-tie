@@ -285,6 +285,7 @@ where
     }
 }
 
+#[cfg(feature = "alloc")]
 impl<N, S> alloc::string::ToString for LocalName<N, S>
 where
     N: alloc::string::ToString,
@@ -338,7 +339,7 @@ where
                     }
                 })
                 .map(|_| interim.finish())
-                .ok_or(ConvertError {
+                .ok_or(ConvertError::OutOfSpace {
                     required: min_required,
                     remaining: remaining_len,
                 })

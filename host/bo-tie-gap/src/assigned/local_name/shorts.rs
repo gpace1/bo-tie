@@ -149,7 +149,10 @@ where
     T: Clone + Iterator<Item = usize> + ExactSizeIterator,
 {
     type StrAlt = str;
-    type Shorts<'a> = AbbreviationsIter<'a, T> where Self: 'a;
+    type Shorts<'a>
+        = AbbreviationsIter<'a, T>
+    where
+        Self: 'a;
 
     fn iter(&self) -> Self::Shorts<'_> {
         AbbreviationsIter(self.0.clone(), core::marker::PhantomData)
@@ -219,7 +222,10 @@ macro_rules! impl_substitutions {
 
         impl NameShortener for Alternatives<&[$for_ty]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = AlternativesIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
+            type Shorts<'a>
+                = AlternativesIter<core::slice::Iter<'a, $for_ty>>
+            where
+                Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
                 AlternativesIter(self.0.iter())
@@ -241,7 +247,10 @@ macro_rules! impl_substitutions {
 
         impl NameShortener for Alternatives<&[&$for_ty]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = AlternativesIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
+            type Shorts<'a>
+                = AlternativesIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>>
+            where
+                Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
                 AlternativesIter(self.0.iter().copied())
@@ -263,7 +272,10 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> NameShortener for Alternatives<&[$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = AlternativesIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
+            type Shorts<'a>
+                = AlternativesIter<core::slice::Iter<'a, $for_ty>>
+            where
+                Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
                 AlternativesIter(self.0.into_iter())
@@ -285,7 +297,10 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> NameShortener for Alternatives<&[&$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = AlternativesIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>> where Self: 'a;
+            type Shorts<'a>
+                = AlternativesIter<core::iter::Copied<core::slice::Iter<'a, &'a $for_ty>>>
+            where
+                Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
                 AlternativesIter(self.0.iter().copied())
@@ -307,7 +322,10 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> NameShortener for Alternatives<[$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = AlternativesIter<core::slice::Iter<'a, $for_ty>> where Self: 'a;
+            type Shorts<'a>
+                = AlternativesIter<core::slice::Iter<'a, $for_ty>>
+            where
+                Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
                 AlternativesIter(self.0.iter())
@@ -329,7 +347,10 @@ macro_rules! impl_substitutions {
 
         impl<const SIZE: usize> NameShortener for Alternatives<[&$for_ty; SIZE]> {
             type StrAlt = $for_ty;
-            type Shorts<'a> = AlternativesIter<core::array::IntoIter<&'a $for_ty, SIZE>> where Self: 'a;
+            type Shorts<'a>
+                = AlternativesIter<core::array::IntoIter<&'a $for_ty, SIZE>>
+            where
+                Self: 'a;
 
             fn iter(&self) -> Self::Shorts<'_> {
                 AlternativesIter(self.0.into_iter())
@@ -342,7 +363,10 @@ macro_rules! impl_substitutions {
     };
 }
 
+#[cfg(feature = "alloc")]
 impl_substitutions!(alloc::string::String);
+#[cfg(feature = "alloc")]
 impl_substitutions!(alloc::boxed::Box<str>);
+#[cfg(feature = "alloc")]
 impl_substitutions!(alloc::borrow::Cow<'static, str>);
 impl_substitutions!(&'static str);

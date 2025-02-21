@@ -67,7 +67,7 @@ macro_rules! impl_raw {
 
             fn convert_into<'a>(&self, b: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, $crate::assigned::ConvertError> {
                 if b.len() < core::mem::size_of::<$ty>() + $crate::assigned::HEADER_SIZE {
-                    Err($crate::assigned::ConvertError {
+                    Err($crate::assigned::ConvertError::OutOfSpace {
                         required: core::mem::size_of::<$ty>() + $crate::assigned::HEADER_SIZE,
                         remaining: b.len(),
                     })

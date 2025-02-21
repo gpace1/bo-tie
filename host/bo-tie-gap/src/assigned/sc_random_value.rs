@@ -35,7 +35,7 @@ impl IntoStruct for ScRandomValue {
 
     fn convert_into<'a>(&self, ad: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, super::ConvertError> {
         if ad.len() < Self::STRUCT_SIZE {
-            Err(ConvertError {
+            Err(ConvertError::OutOfSpace {
                 required: Self::STRUCT_SIZE,
                 remaining: ad.len(),
             })
@@ -65,6 +65,34 @@ impl TryFromStruct<'_> for ScRandomValue {
             }
         } else {
             Err(Error::IncorrectAssignedType)
+        }
+    }
+}
+
+impl IntoIterator for ScRandomValue {
+    type Item = u8;
+    type IntoIter = ScRandomValueStructIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ScRandomValueStructIter(self, 0)
+    }
+}
+
+/// Iterator over bytes of a [`ScRandomValue`] data structure
+///
+/// This can be created from the `IntoIterator` implementation of `ScRandomValue`
+pub struct ScRandomValueStructIter(ScRandomValue, usize);
+
+impl Iterator for ScRandomValueStructIter {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.1 += 1;
+
+        match self.1 {
+            1 => 16.into(),
+            2 => ScRandomValue::ASSIGNED_TYPE.val().into(),
+            i => self.0 .0.to_le_bytes().get(i - 3).copied(),
         }
     }
 }
