@@ -2,10 +2,14 @@
 //!
 
 use super::*;
-use alloc::collections::BTreeSet;
-use core::cell::Cell;
 
-pub enum CoreFlags {
+/// The list of Flags defined in the Core Specification Supplement
+///
+/// These are the labels for the flags in the Flag data type within the Core Specification
+/// Supplement. They can be used to get a `Flag` data type with the method [`Flags::get_mut_flag`].
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Ord, PartialOrd)]
+#[non_exhaustive]
+pub enum FlagLabel {
     /// LE limited discoverable mode
     LeLimitedDiscoverableMode,
     /// LE general discoverable mode
@@ -15,41 +19,50 @@ pub enum CoreFlags {
     /// The controller supports simultaneous BR/EDR and LE to the same device
     ControllerSupportsSimultaneousLeAndBrEdr,
     /// The host supports simultaneous BR/EDR and LE to the same device.
+    #[deprecated(note = "this was depreciated in the Bluetooth Core Specification Supplement")]
     HostSupportsSimultaneousLeAndBrEdr,
 }
 
-impl CoreFlags {
-    /// The number of bits that are required for the core flags & reserved flags
-    #[inline]
-    fn get_bit_cnt() -> usize {
-        8
+impl core::fmt::Display for FlagLabel {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            FlagLabel::LeLimitedDiscoverableMode => f.write_str("le limited discoverable mode"),
+            FlagLabel::LeGeneralDiscoverableMode => f.write_str("le general discoverable mode"),
+            FlagLabel::BrEdrNotSupported => f.write_str("BR/EDR edr not supported"),
+            FlagLabel::ControllerSupportsSimultaneousLeAndBrEdr => {
+                f.write_str("this controller is capable of simultaneous LE and BR/EDR to the same device")
+            }
+            #[allow(deprecated)]
+            FlagLabel::HostSupportsSimultaneousLeAndBrEdr => {
+                f.write_str("this host supports simultaneous LE and BR/EDR")
+            }
+        }
     }
+}
 
+impl FlagLabel {
     fn get_position(&self) -> usize {
         match *self {
-            CoreFlags::LeLimitedDiscoverableMode => 0,
-            CoreFlags::LeGeneralDiscoverableMode => 1,
-            CoreFlags::BrEdrNotSupported => 2,
-            CoreFlags::ControllerSupportsSimultaneousLeAndBrEdr => 3,
-            CoreFlags::HostSupportsSimultaneousLeAndBrEdr => 4,
+            FlagLabel::LeLimitedDiscoverableMode => 0,
+            FlagLabel::LeGeneralDiscoverableMode => 1,
+            FlagLabel::BrEdrNotSupported => 2,
+            FlagLabel::ControllerSupportsSimultaneousLeAndBrEdr => 3,
+            #[allow(deprecated)]
+            FlagLabel::HostSupportsSimultaneousLeAndBrEdr => 4,
         }
     }
 
     fn from_position(raw: usize) -> Self {
         match raw {
-            0 => CoreFlags::LeLimitedDiscoverableMode,
-            1 => CoreFlags::LeGeneralDiscoverableMode,
-            2 => CoreFlags::BrEdrNotSupported,
-            3 => CoreFlags::ControllerSupportsSimultaneousLeAndBrEdr,
-            4 => CoreFlags::HostSupportsSimultaneousLeAndBrEdr,
+            0 => FlagLabel::LeLimitedDiscoverableMode,
+            1 => FlagLabel::LeGeneralDiscoverableMode,
+            2 => FlagLabel::BrEdrNotSupported,
+            3 => FlagLabel::ControllerSupportsSimultaneousLeAndBrEdr,
+            #[allow(deprecated)]
+            4 => FlagLabel::HostSupportsSimultaneousLeAndBrEdr,
             _ => panic!("Position beyond core flags"),
         }
     }
-}
-
-pub enum FlagType {
-    Core(CoreFlags),
-    User(usize),
 }
 
 /// A flag in the `Flags` structure
@@ -67,51 +80,49 @@ pub enum FlagType {
 /// let mut flags = flags::Flags::new();
 ///
 /// // enable the bluetooth specified flag 'LE limited discoverable mode'
-/// flags.get_core(flags::CoreFlags::LeLimitedDiscoverableMode).enable();
-///
-/// // enable a user specific flag
-/// flags.get_user(0).enable();
+/// flags.get_mut_flag(flags::FlagLabel::LeLimitedDiscoverableMode).enable();
 /// ```
 #[derive(Eq, Debug, Clone)]
 pub struct Flag {
     position: usize,
-    enabled: Cell<bool>,
+    enabled: bool,
 }
 
 impl Flag {
-    fn new(position: usize, state: bool) -> Flag {
-        Flag {
-            position,
-            enabled: Cell::new(state),
-        }
+    fn new(position: usize) -> Flag {
+        let enabled = false;
+
+        Flag { position, enabled }
+    }
+
+    /// Get the label for this flag
+    pub fn label(&self) -> FlagLabel {
+        FlagLabel::from_position(self.position)
     }
 
     /// Set the state of the flag to enabled
-    pub fn enable(&self) {
-        self.enabled.set(true);
+    pub fn enable(&mut self) {
+        self.enabled = true;
     }
 
     /// Set the state of the flag to disabled
-    pub fn disable(&self) {
-        self.enabled.set(false);
+    pub fn disable(&mut self) {
+        self.enabled = false;
     }
 
     /// Set the state of the flag to `state`
-    pub fn set(&self, state: bool) {
-        self.enabled.set(state)
+    pub fn set(&mut self, state: bool) {
+        self.enabled = state
     }
 
-    /// Get the state of the flag
-    pub fn get(&self) -> bool where {
-        self.enabled.get()
+    /// Check if the flag is enabled
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
-    pub fn pos(&self) -> FlagType {
-        if self.position < CoreFlags::get_bit_cnt() {
-            FlagType::Core(CoreFlags::from_position(self.position))
-        } else {
-            FlagType::User(self.position - CoreFlags::get_bit_cnt())
-        }
+    /// Get the bit position of the flag
+    pub fn bit_pos(&self) -> usize {
+        self.position
     }
 }
 
@@ -133,9 +144,12 @@ impl PartialEq for Flag {
     }
 }
 
+/// AD flags type
+///
+/// This is the set of flags that are used
 #[derive(Debug)]
 pub struct Flags {
-    set: BTreeSet<Flag>,
+    set: [Flag; 5],
 }
 
 impl Flags {
@@ -143,91 +157,73 @@ impl Flags {
 
     /// Creates a flags object with no enabled flag
     pub fn new() -> Self {
-        Flags { set: BTreeSet::new() }
-    }
-
-    fn get(&mut self, flag: Flag) -> &Flag {
-        if !self.set.contains(&flag) {
-            self.set.insert(flag.clone());
+        Flags {
+            set: core::array::from_fn(|index| Flag::new(index)),
         }
-
-        self.set.get(&flag).unwrap()
     }
 
-    /// Get a user flag for a given position
-    ///
-    /// Get a flag in the user defined region after the core flags. A value of zero is the
-    /// first user defined flag. Positions are the relative bit position in the flags data
-    /// type after the Bluetooth Supplement specifed flags (and reserved flags). Try to
-    /// keep the flag positions stacked towards zero as `pos` / 8 is the number of
-    /// bytes for the user flags that will need to be allocated for this flags data when
-    /// transmitting.
-    pub fn get_user(&mut self, pos: usize) -> &Flag {
-        self.get(Flag {
-            position: pos + CoreFlags::get_bit_cnt(),
-            enabled: Cell::new(false),
-        })
-    }
-
-    /// Get a core flag for a given position
-    ///
-    /// Get a flag in the core defined region before the use r flags.
-    pub fn get_core(&mut self, core: CoreFlags) -> &Flag {
-        self.get(Flag {
-            position: core.get_position(),
-            enabled: Cell::new(false),
-        })
+    /// Get a flag by its label
+    pub fn get_mut_flag(&mut self, core: FlagLabel) -> &mut Flag {
+        &mut self.set[core.get_position()]
     }
 
     /// Get an iterator over the flags in Flags
-    pub fn iter(&self) -> ::alloc::collections::btree_set::Iter<Flag> {
+    pub fn iter(&self) -> core::slice::Iter<Flag> {
         self.set.iter()
+    }
+
+    fn get_len(&self) -> u8 {
+        if self.iter().any(|flag| flag.is_enabled()) {
+            2
+        } else {
+            1
+        }
     }
 }
 
 impl IntoStruct for Flags {
     fn data_len(&self) -> Result<usize, usize> {
-        // The data length is the number of bytes required
-        // to contain the flag at the largest position.
-        Ok(self
-            .set
-            .iter()
-            .map(|f| f.position / 8)
-            .max()
-            .map(|max| max + 1)
-            .unwrap_or_default())
+        Ok(self.get_len().into())
     }
 
     fn convert_into<'a>(&self, b: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, ConvertError> {
         if b.len() < self.data_len().unwrap() + HEADER_SIZE {
-            Err(ConvertError {
-                required: self.data_len().unwrap(),
+            Err(ConvertError::OutOfSpace {
+                required: self.data_len().unwrap() + HEADER_SIZE,
                 remaining: b.len(),
             })
         } else {
-            let mut interim = StructIntermediate::new(b, Self::ASSIGNED_TYPE.val()).unwrap();
+            let mut interim = StructIntermediate::new(b, Self::ASSIGNED_TYPE.val())?;
 
-            if !self.set.is_empty() {
-                let mut current_count = 0;
-                let mut current_byte = interim.next().unwrap();
+            let mut octet_count = 0;
 
-                // Iterate over only the currently enabled flags
-                for flag in self.set.iter().filter(|flag| flag.enabled.get()) {
-                    let octet = flag.position / 8;
-                    let bit = flag.position % 8;
+            // this is a trick to ensure interim.next() is
+            // not called when there are no flags enabled.
+            let mut current_byte = &mut 0u8;
 
-                    // Skip until the octet is reached
-                    while current_count < octet {
-                        current_count += 1;
-                        current_byte = interim.next().unwrap();
-                    }
+            for flag in self.iter().filter(|flag| flag.is_enabled()) {
+                let octet = flag.position / 8;
+                let bit = flag.position % 8;
 
-                    *current_byte |= 1 << bit;
+                while octet_count <= octet {
+                    octet_count += 1;
+                    current_byte = interim.next().unwrap();
                 }
+
+                *current_byte |= 1 << bit
             }
 
             Ok(interim.finish())
         }
+    }
+}
+
+impl IntoIterator for Flags {
+    type Item = u8;
+    type IntoIter = FlagsBytesIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        FlagsBytesIter(self, 0)
     }
 }
 
@@ -236,20 +232,52 @@ impl TryFromStruct<'_> for Flags {
     where
         Self: Sized,
     {
-        if st.get_type() == Self::ASSIGNED_TYPE.val() {
-            let mut set = BTreeSet::new();
+        let mut flags = Flags::new();
 
-            for octet in 0..st.get_data().len() {
-                for bit in 0..8 {
-                    if 0 != st.get_data()[octet] & (1 << bit) {
-                        set.insert(Flag::new(octet * 8 + (bit as usize), true));
-                    }
+        if st.get_type() == Self::ASSIGNED_TYPE.val() {
+            'outer: for (index, byte) in st.get_data().iter().enumerate() {
+                for pos in (0..<u8>::BITS as usize).filter(|bit_pos| 1 << *bit_pos & *byte != 0) {
+                    let Some(flag) = flags.set.get_mut(pos + index * 8) else {
+                        break 'outer;
+                    };
+
+                    flag.enable();
                 }
             }
 
-            Ok(Flags { set })
+            Ok(flags)
         } else {
             Err(Error::IncorrectAssignedType)
+        }
+    }
+}
+
+/// Iterator over the bytes of the [`Flags`] type
+///
+/// This is returned by the [`IntoIterator`] implementation for `Flags`
+pub struct FlagsBytesIter(Flags, usize);
+
+impl Iterator for FlagsBytesIter {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        self.1 += 1;
+
+        match self.1 {
+            1 => self.0.get_len().into(),
+            2 => Flags::ASSIGNED_TYPE.val().into(),
+            i => {
+                let bit_position = i - 3;
+
+                self.0
+                    .set
+                    .get(bit_position * 8..(bit_position + 1) * 8)
+                    .or_else(|| self.0.set.get(bit_position * 8..))?
+                    .iter()
+                    .filter(|flag| flag.is_enabled())
+                    .fold(0u8, |byte, flag| 1 << (flag.position % 8) | byte)
+                    .into()
+            }
         }
     }
 }
@@ -263,8 +291,7 @@ mod test {
     fn into_raw_test() {
         let mut flags = Flags::new();
 
-        flags.get_core(CoreFlags::LeLimitedDiscoverableMode).enable();
-        flags.get_user(2).enable();
+        flags.get_mut_flag(FlagLabel::LeLimitedDiscoverableMode).enable();
 
         assert_eq!(2, flags.data_len().unwrap());
 
@@ -287,11 +314,27 @@ mod test {
 
         let mut flags = Flags::try_from_struct(packet).unwrap();
 
-        assert!(flags.get_core(CoreFlags::LeLimitedDiscoverableMode).get());
-        assert!(flags.get_core(CoreFlags::LeGeneralDiscoverableMode).get());
-        assert!(flags.get_user(3).get());
-        assert!(flags.get_user(8).get());
-        assert!(flags.get_user(9).get());
-        assert!(flags.get_user(10).get());
+        assert!(flags.get_mut_flag(FlagLabel::LeLimitedDiscoverableMode).is_enabled());
+        assert!(flags.get_mut_flag(FlagLabel::LeGeneralDiscoverableMode).is_enabled());
+    }
+
+    #[test]
+    fn iter() {
+        let mut flags = Flags::new();
+
+        flags.get_mut_flag(FlagLabel::LeLimitedDiscoverableMode).disable();
+        flags.get_mut_flag(FlagLabel::LeGeneralDiscoverableMode).enable();
+        flags.get_mut_flag(FlagLabel::BrEdrNotSupported).set(true);
+        flags
+            .get_mut_flag(FlagLabel::ControllerSupportsSimultaneousLeAndBrEdr)
+            .enable();
+        #[allow(deprecated)]
+        flags
+            .get_mut_flag(FlagLabel::HostSupportsSimultaneousLeAndBrEdr)
+            .enable();
+
+        let raw: Vec<u8> = flags.into_iter().collect();
+
+        assert_eq!(&*raw, &[2, AssignedTypes::Flags.val(), 0b11110u8]);
     }
 }

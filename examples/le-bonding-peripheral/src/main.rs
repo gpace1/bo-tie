@@ -58,10 +58,10 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &mut Advert
             let mut adv_flags = assigned::flags::Flags::new();
 
             adv_flags
-                .get_core(assigned::flags::CoreFlags::LeLimitedDiscoverableMode)
+                .get_mut_flag(assigned::flags::FlagLabel::LeLimitedDiscoverableMode)
                 .enable();
             adv_flags
-                .get_core(assigned::flags::CoreFlags::BrEdrNotSupported)
+                .get_mut_flag(assigned::flags::FlagLabel::BrEdrNotSupported)
                 .enable();
 
             let adv_name = assigned::local_name::LocalName::new(*local_name, None);
@@ -82,9 +82,25 @@ async fn advertising_setup<H: HostChannelEnds>(hi: &mut Host<H>, ty: &mut Advert
             set_advertising_parameters::send(hi, adv_prams).await.unwrap();
         }
         AdvertisingType::Resolvable(privacy) => {
+            let mut adv_data = set_advertising_data::AdvertisingData::new();
+
+            let adv_flags = assigned::flags::Flags::new();
+
+            adv_data.try_push(adv_flags).unwrap();
+
+            let mut adv_prams = set_advertising_parameters::AdvertisingParameters::default();
+
+            adv_prams.own_address_type = OwnAddressType::PublicDeviceAddress;
+
+            set_advertising_data::send(hi, adv_data).await.unwrap();
+
+            set_advertising_parameters::send(hi, adv_prams).await.unwrap();
+
             // For purposes of this example this timeout is very fast,
             // the default timeout of 900 seconds is perfectly fine.
-            timeout_interval = privacy.set_timeout(hi, std::time::Duration::from_secs(900)).await;
+            timeout_interval = privacy
+                .set_timeout(hi, bo_tie::host::gap::time_consts::PRIVATE_ADDRESS_INTERVAL)
+                .await;
 
             privacy.set_advertising_configuration(hi).await
         }
@@ -236,12 +252,11 @@ where
                     {
                         Status::NumberComparison(n) => {
                             println!(
-                                "To proceed with pairing, compare this number ({n}) with \
-                                        the number displayed on the other device"
+                                "To proceed with pairing, compare this number ({n}) with the \
+                                number displayed on the other device"
                             );
-                            println!("Does {n} match the number on the other device? \
-                                        [y/n]"
-                            );
+
+                            println!("Does {n} match the number on the other device? [y/n]");
 
                             number_comparison = Some(n);
                         },
@@ -258,13 +273,23 @@ where
                             number_comparison = None;
                             passkey_input = None;
                         }
-                        Status::BondingComplete => println!("bonding complete"),
+                        Status::BondingComplete => {
+                            println!("bonding complete");
+
+                            println!("this IRK: {:#x}", security_manager.get_keys().unwrap().get_irk().unwrap());
+
+                            if let Some(irk) = security_manager.get_keys().unwrap().get_peer_irk() {
+                                println!("peer IRK: {irk:#x}", )
+                            }
+
+                            println!("Long Term Key: {:#x}", security_manager.get_keys().unwrap().get_ltk().unwrap());
+                        },
                         _ => (),
                     }
                 }
                 Ok(_) => unreachable!("disabled channels"),
                 Err(LeULogicalLinkNextError::Disconnected) => break,
-                Err(e) => panic!("LE Link failure: {e}"), 
+                Err(e) => panic!("LE Link failure: {e}"),
             },
 
             event_data = event_receiver.recv() => match event_data {
@@ -472,10 +497,12 @@ async fn main() {
                         break connection;
                     },
 
-                    rpa_regen = async { match opt_adv_interval.as_mut() {
-                        Some(adv_interval) => adv_interval.tick().await,
-                        None => std::future::pending().await,
-                    }} => {
+                    rpa_regen = async {
+                        match opt_adv_interval.as_mut() {
+                            Some(adv_interval) => adv_interval.tick().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
                         rpa_regen.regen(&mut host).await
                     },
                 }
