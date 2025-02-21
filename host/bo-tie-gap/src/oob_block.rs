@@ -1,132 +1,97 @@
 //! Out of band data block type
 //!
-//! This is used to encapsulate data sent as part of the out of band process in either Simple
-//! Pairing, or Secure Connections
+//! This is used to create the data block sent as part of the out-of-band process for simple
+//! pairing. The OOB data block for use with a Security Manager is created within the [bo-tie-sm]
+//! crate.
 
-use crate::assigned::{EirOrAdStruct, IntoStruct};
-use alloc::vec::Vec;
+use bo_tie_core::buffer::TryExtend;
+use bo_tie_core::BluetoothDeviceAddress;
 
-/// The minimum length for an OOB data block
-const MIN_LEN: usize = 8;
-
-/// Builder of a OOB data block
-pub struct OobDataBlockBuilder {
-    address: crate::BluetoothDeviceAddress,
+/// Builder of a Simple Pairing OOB data block for
+pub struct SimplePairingOobBuilder<B> {
+    buffer: B,
 }
 
-impl OobDataBlockBuilder {
+#[cfg(feature = "alloc")]
+impl SimplePairingOobBuilder<alloc::vec::Vec<u8>> {
     /// Create a new `OobDataBlockBuilder`
     pub fn new(address: crate::BluetoothDeviceAddress) -> Self {
-        OobDataBlockBuilder { address }
+        let mut buffer = alloc::vec::Vec::new();
+
+        // the length will eventually go here
+        buffer.resize(2, 0);
+
+        buffer.extend(address.0);
+
+        SimplePairingOobBuilder { buffer }
+    }
+}
+
+impl<T> SimplePairingOobBuilder<T>
+where
+    T: Extend<u8>,
+{
+    /// Add an EIR or AD type
+    ///
+    /// # Panic
+    /// This will panic if the total data size will be greater than [`<u16>::MAX`]
+    pub fn add<V>(&mut self, value: V)
+    where
+        V: IntoIterator<Item = u8>,
+    {
+        self.try_add(value).unwrap()
+    }
+}
+
+impl<T> SimplePairingOobBuilder<T>
+where
+    T: TryExtend<u8>,
+{
+    /// Try to create a new `SimplePairingOobBuilder`
+    ///
+    /// # Error
+    /// This will fail if the buffer fails to extend the length and address fields of the Simple
+    /// Pairing OOB data.
+    pub fn try_new(
+        &mut self,
+        mut buffer: T,
+        address: BluetoothDeviceAddress,
+    ) -> Result<Self, <T as TryExtend<u8>>::Error> {
+        buffer.try_extend(core::iter::repeat_n(0, 2))?;
+
+        buffer.try_extend(address.0)?;
+
+        Ok(SimplePairingOobBuilder { buffer })
+    }
+
+    /// Try to add an EIR or AD type
+    ///
+    /// This will add the data type as long as there is enough room in the buffer.
+    ///
+    /// # Error
+    /// An error is returned if either the buffer is out of room or the size of the data has
+    /// exceeded [`<u16>::MAX`].
+    pub fn try_add<V>(&mut self, value: V) -> Result<(), <T as TryExtend<u8>>::Error>
+    where
+        V: IntoIterator<Item = u8>,
+    {
+        self.buffer.try_extend(value)
     }
 
     /// Create the OOB data block
     ///
-    /// This takes an iterator of types that implement
-    /// [`IntoStruct`](crate::assigned::IntoStruct).
-    /// These are considered 'optional' as part of the OOB data block specification, but higher
-    /// layer protocols usually have specific types that need to be sent.
-    ///
-    /// # Note
-    /// An OOB data block is made up of extended inquiry response (EIR) structures which happen to
-    /// be the exact same thing as an advertising data (AD) structure. They just happen to be used
-    /// in either an extended inquiry response (which is part of BR/EDR) or an out of band data
-    /// block.
-    ///
-    /// # Panic
-    /// An overflow will occur if data within the iterator generates a payload greater than
-    /// (u16::MAX - 8) bytes.
-    pub fn build<'a, I>(&self, optional: &'a I) -> alloc::vec::Vec<u8>
+    /// [`&dyn IntoStruct`]: IntoStruct
+    pub fn build(mut self) -> Result<T, ()>
     where
-        I: 'a + ?Sized,
-        &'a I: IntoIterator<Item = &'a &'a dyn IntoStruct>,
+        T: core::ops::DerefMut<Target = [u8]>,
     {
-        let optional_size: usize = optional
-            .into_iter()
-            .map(|d| match d.data_len() {
-                Ok(len) => len,
-                Err(len) => len,
-            })
-            .sum();
+        /// The minimum length for an OOB data block
+        const MIN_SIZE: usize = 8;
 
-        let size = MIN_LEN + optional_size;
+        let len = <u16>::try_from(self.buffer.len() - MIN_SIZE).map_err(|_| ())?;
 
-        assert!(size <= <u16>::MAX as usize, "Out of Band data block is too large");
+        self.buffer[0..2].copy_from_slice(&len.to_le_bytes());
 
-        let mut data = Vec::new();
-
-        data.resize(size, 0);
-
-        // set the length
-        data[0..2].copy_from_slice(&(size as u16).to_le_bytes());
-
-        // set the address
-        data[2..8].copy_from_slice(&*self.address);
-
-        let mut sequence = crate::assigned::Sequence::new(&mut data[MIN_LEN..]);
-
-        // add the EIR (extended inquiry response) structures (same format as an AD structure)
-        optional.into_iter().for_each(|item| sequence.try_add(*item).unwrap());
-
-        data
-    }
-}
-
-/// An Extended Inquiry Response Structure
-pub type ExtendedInquiryResponseStruct<'a> = EirOrAdStruct<'a>;
-
-/// OOB data block
-///
-/// This is used for processing an OOB data block.
-pub struct OobDataBlockIter {
-    address: crate::BluetoothDeviceAddress,
-    raw: alloc::vec::Vec<u8>,
-}
-
-impl OobDataBlockIter {
-    /// Create a new `OobDataBlockIter`
-    ///
-    /// This takes the raw OOB data block.
-    pub fn new(mut raw: alloc::vec::Vec<u8>) -> Self {
-        let mut len_arr = [0; 2];
-
-        len_arr.copy_from_slice(&raw[..2]);
-
-        let len: usize = <u16>::from_le_bytes(len_arr).into();
-
-        raw.truncate(len);
-
-        let mut address = crate::BluetoothDeviceAddress::zeroed();
-
-        address.copy_from_slice(&raw[2..MIN_LEN]);
-
-        OobDataBlockIter { address, raw }
-    }
-
-    pub fn get_address(&self) -> crate::BluetoothDeviceAddress {
-        self.address
-    }
-
-    /// Iterator over the EIR Data
-    ///
-    /// This iterates over the EIR data structures within the OOB data block.
-    pub fn iter(&self) -> impl Iterator<Item = ExtendedInquiryResponseStruct<'_>> {
-        struct EirIterator<'a>(&'a [u8]);
-
-        impl<'a> Iterator for EirIterator<'a> {
-            type Item = ExtendedInquiryResponseStruct<'a>;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                ExtendedInquiryResponseStruct::try_new(self.0)
-                    .ok()
-                    .flatten()
-                    .map(|(eir, rest)| {
-                        self.0 = rest;
-                        eir
-                    })
-            }
-        }
-
-        EirIterator(&self.raw[MIN_LEN..])
+        Ok(self.buffer)
     }
 }
