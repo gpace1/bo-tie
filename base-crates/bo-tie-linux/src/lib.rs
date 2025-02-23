@@ -146,7 +146,11 @@ impl InterfaceThread {
         let epoll_events = &mut [epoll::EpollEvent::empty(); 2];
 
         loop {
-            let event_count = self.epoll.wait(epoll_events, -1)?;
+            let event_count = match self.epoll.wait(epoll_events, -1) {
+                Ok(v) => v,
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(e) => return Err(e.into()),
+            };
 
             for epoll_event in &epoll_events[..event_count] {
                 match PollEvent::from(epoll_event.data()) {
