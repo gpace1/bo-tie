@@ -39,10 +39,10 @@ pub async fn discoverable_advertising_setup<H: HostChannelEnds>(host: &mut Host<
 
     // This is the flag specification for a LE-only, limited discoverable advertising
     adv_flags
-        .get_mut_flag(assigned::flags::FlagLabel::LeGeneralDiscoverableMode)
+        .get_core(assigned::flags::CoreFlags::LeGeneralDiscoverableMode)
         .enable();
     adv_flags
-        .get_mut_flag(assigned::flags::FlagLabel::BrEdrNotSupported)
+        .get_core(assigned::flags::CoreFlags::BrEdrNotSupported)
         .enable();
 
     let mut adv_uuids = assigned::service_uuids::new_16(false);

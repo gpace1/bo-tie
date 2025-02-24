@@ -92,8 +92,6 @@ async fn set_advertising_parameters_private<H: HostChannelEnds>(host: &mut Host<
     adv_prams.own_address_type = OwnAddressType::RandomDeviceAddress;
 
     set_random_address::send(host, own_address).await.unwrap();
-    
-    println!("Advertising with address {own_address}");
 
     set_advertising_parameters::send(host, adv_prams).await.unwrap();
 }

@@ -20,19 +20,19 @@ async fn advertise_setup<H: HostChannelEnds>(hi: &mut Host<H>, local_name: &str)
 
     // This is the flag specification for a LE-only, limited discoverable advertising
     adv_flags
-        .get_mut_flag(assigned::flags::FlagLabel::LeLimitedDiscoverableMode)
+        .get_core(assigned::flags::CoreFlags::LeLimitedDiscoverableMode)
         .enable();
     adv_flags
-        .get_mut_flag(assigned::flags::FlagLabel::LeGeneralDiscoverableMode)
+        .get_core(assigned::flags::CoreFlags::LeGeneralDiscoverableMode)
         .disable();
     adv_flags
-        .get_mut_flag(assigned::flags::FlagLabel::BrEdrNotSupported)
+        .get_core(assigned::flags::CoreFlags::BrEdrNotSupported)
         .enable();
     adv_flags
-        .get_mut_flag(assigned::flags::FlagLabel::ControllerSupportsSimultaneousLeAndBrEdr)
+        .get_core(assigned::flags::CoreFlags::ControllerSupportsSimultaneousLeAndBrEdr)
         .disable();
     adv_flags
-        .get_mut_flag(assigned::flags::FlagLabel::HostSupportsSimultaneousLeAndBrEdr)
+        .get_core(assigned::flags::CoreFlags::HostSupportsSimultaneousLeAndBrEdr)
         .disable();
 
     let mut adv_data = set_advertising_data::AdvertisingData::new();
