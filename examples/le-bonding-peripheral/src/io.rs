@@ -37,12 +37,12 @@ macro_rules! ok_or_return {
     };
 }
 struct InputTaskCallback<T> {
-    task_success: oneshot::Receiver<crossterm::Result<T>>,
+    task_success: oneshot::Receiver<std::io::Result<T>>,
     task_cancel: Option<mpsc::SyncSender<()>>,
 }
 
 impl<T> InputTaskCallback<T> {
-    fn new(task_done: oneshot::Receiver<crossterm::Result<T>>, task_cancel: mpsc::SyncSender<()>) -> Self {
+    fn new(task_done: oneshot::Receiver<std::io::Result<T>>, task_cancel: mpsc::SyncSender<()>) -> Self {
         InputTaskCallback {
             task_success: task_done.into(),
             task_cancel: task_cancel.into(),
@@ -51,7 +51,7 @@ impl<T> InputTaskCallback<T> {
 }
 
 impl<T: Unpin> std::future::Future for InputTaskCallback<T> {
-    type Output = Result<crossterm::Result<T>, oneshot::error::RecvError>;
+    type Output = Result<std::io::Result<T>, oneshot::error::RecvError>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context) -> std::task::Poll<Self::Output> {
         let this = self.get_mut();
@@ -76,7 +76,7 @@ impl<T> Drop for InputTaskCallback<T> {
 fn await_input() -> impl std::future::Future<Output = String> {
     use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 
-    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<String>>();
+    let (input_sender, input_receiver) = oneshot::channel::<std::io::Result<String>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
     let mut input = String::new();
@@ -131,7 +131,7 @@ pub async fn number_comparison(number_comparison: &mut Option<bo_tie::host::sm::
 fn await_passkey() -> impl std::future::Future<Output = Vec<char>> {
     use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 
-    let (input_sender, input_receiver) = oneshot::channel::<crossterm::Result<Vec<char>>>();
+    let (input_sender, input_receiver) = oneshot::channel::<std::io::Result<Vec<char>>>();
     let (cancel_sender, cancel_receiver) = mpsc::sync_channel::<()>(0);
 
     std::thread::spawn(move || {
