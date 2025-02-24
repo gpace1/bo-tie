@@ -200,7 +200,7 @@ impl IntoStruct for Flags {
 
     fn convert_into<'a>(&self, b: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, ConvertError> {
         if b.len() < self.data_len().unwrap() + HEADER_SIZE {
-            Err(ConvertError {
+            Err(ConvertError::OutOfSpace {
                 required: self.data_len().unwrap(),
                 remaining: b.len(),
             })
