@@ -773,7 +773,7 @@ impl ReceivedRequest<LeCreditBasedConnectionRequest> {
     pub fn accept_le_credit_based_connection<L: LogicalLink>(
         &self,
         signal_channel: SignallingChannel<L>,
-    ) -> LeCreditBasedConnectionResponseBuilder<L> {
+    ) -> LeCreditBasedConnectionResponseBuilder<'_, L> {
         let initial_credits = 0;
 
         LeCreditBasedConnectionResponseBuilder {

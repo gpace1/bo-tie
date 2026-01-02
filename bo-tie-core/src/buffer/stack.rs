@@ -880,9 +880,9 @@ impl<T, const SIZE: usize> StackHotel<T, SIZE> {
     /// Take an unsafe reservation from a `StackHotel` containing buffers
     ///
     /// This returns a reservation unless there is no more allocations available
-    pub fn take_buffer(&self, front_capacity: usize, back_capacity: usize) -> Option<BufferReservation<T, SIZE>>
+    pub fn take_buffer(&self, front_capacity: usize, back_capacity: usize) -> Option<BufferReservation<'_, T, SIZE>>
     where
-        T: crate::buffer::Buffer,
+        T: Buffer,
     {
         use crate::buffer::BufferExt;
 
