@@ -144,19 +144,19 @@ pub trait AccessValue: Send {
     ///
     /// Most of the time, something that implements [`Deref`], where the target is equal
     /// to the `ReadValue` associated type, is used as the `ReadGuard`. However, there is some cases
-    /// where a accessor specific [`ReadGuard`] type my need to be used. Values that have limited
+    /// where an accessor specific [`ReadGuard`] type my need to be used. Values that have limited
     /// time access, or abstract over a channel may require the usage of a
     ///
     /// ### *IMPORTANT*: The `ReadGuard` `send_hint`
     /// The trait [`ReadGuard`] is mainly intended for protecting access to a read value, but it
     /// also servers as an indicator for when the value is to be sent to the Client. At times the
-    /// `Server` needs to read the value for some other operation other then transferring it to
+    /// `Server` needs to read the value for some other operation other than transferring it to
     /// the client. This consists of either checking the size of the value or comparing the value
     /// to another value provided by the Client.
     ///
     /// To know when the value is going to be read in order to send it to the Client, the
     /// `ReadGuard` trait provides the `send_hint` input to its `access` method. This input is
-    /// true whenever the value is being read *to send* it to the Client. Furthermore this input is
+    /// true whenever the value is being read *to send* it to the Client. Furthermore, this input is
     /// guaranteed to only be true once per processed request.
     ///
     /// # Custom Errors
@@ -194,14 +194,17 @@ where
     V: Unpin + Send + 'static,
 {
     type ReadValue = V;
-    type ReadGuard<'a> = tokio::sync::MutexGuard<'a, V>
+    type ReadGuard<'a>
+        = tokio::sync::MutexGuard<'a, V>
     where
         V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
-    type Write<'a> = Pin<Box<dyn Future<Output=Result<(), pdu::Error>> + Send + 'a>>
+    type Write<'a>
+        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -232,14 +235,17 @@ where
     V: Unpin + Send + Sync + 'static,
 {
     type ReadValue = V;
-    type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V>
+    type ReadGuard<'a>
+        = tokio::sync::RwLockReadGuard<'a, V>
     where
         V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
-    type Write<'a> = Pin<Box<dyn Future<Output=Result<(), pdu::Error>> + Send + 'a>>
+    type Write<'a>
+        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -270,14 +276,17 @@ where
     V: Unpin + Send + 'static,
 {
     type ReadValue = V;
-    type ReadGuard<'a> = futures::lock::MutexGuard<'a, V>
+    type ReadGuard<'a>
+        = futures::lock::MutexGuard<'a, V>
     where
         Self: 'a;
-    type Read<'a> = FuturesRead<futures::lock::MutexLockFuture<'a, V>>
+    type Read<'a>
+        = FuturesRead<futures::lock::MutexLockFuture<'a, V>>
     where
         Self: 'a;
     type WriteValue = V;
-    type Write<'a> = FuturesWrite<futures::lock::MutexLockFuture<'a, Self::WriteValue>, Self::WriteValue>
+    type Write<'a>
+        = FuturesWrite<futures::lock::MutexLockFuture<'a, Self::WriteValue>, Self::WriteValue>
     where
         Self: 'a;
 
@@ -304,14 +313,17 @@ where
     V: Unpin + Send + 'static,
 {
     type ReadValue = V;
-    type ReadGuard<'a> = async_std::sync::MutexGuard<'a, V>
+    type ReadGuard<'a>
+        = async_std::sync::MutexGuard<'a, V>
     where
         Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
-    type Write<'a> = Pin<Box<dyn Future<Output=Result<(), pdu::Error>> + Send + 'a>>
+    type Write<'a>
+        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -341,14 +353,17 @@ where
     V: Unpin + Send + Sync + 'static,
 {
     type ReadValue = V;
-    type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V>
+    type ReadGuard<'a>
+        = async_std::sync::RwLockReadGuard<'a, V>
     where
         Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
-    type Write<'a> = Pin<Box<dyn Future<Output=Result<(), pdu::Error>> + Send + 'a>>
+    type Write<'a>
+        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -404,14 +419,17 @@ pub trait AsyncAccessValue: Send {
 #[cfg(feature = "async-trait")]
 impl<T: AsyncAccessValue> AccessValue for T {
     type ReadValue = T::ReadValue;
-    type ReadGuard<'a> = T::ReadGuard<'a>
+    type ReadGuard<'a>
+        = T::ReadGuard<'a>
     where
         Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = T::WriteValue;
-    type Write<'a> = Pin<Box<dyn Future<Output=Result<(), pdu::Error>> + Send + 'a>>
+    type Write<'a>
+        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -539,11 +557,13 @@ pub trait AccessReadOnly: Send {
 impl<T: ?Sized + Sync> AccessReadOnly for &'static T {
     type Value = &'static T;
 
-    type ReadGuard<'a> = &'a &'static T
+    type ReadGuard<'a>
+        = &'a &'static T
     where
         Self: 'a;
 
-    type Read<'a> = Ready<Result<Self::ReadGuard<'a>, pdu::Error>>
+    type Read<'a>
+        = Ready<Result<Self::ReadGuard<'a>, pdu::Error>>
     where
         Self: 'a;
 
@@ -555,10 +575,12 @@ impl<T: ?Sized + Sync> AccessReadOnly for &'static T {
 #[cfg(feature = "tokio")]
 impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<tokio::sync::Mutex<V>> {
     type Value = V;
-    type ReadGuard<'a> = tokio::sync::MutexGuard<'a, V>
+    type ReadGuard<'a>
+        = tokio::sync::MutexGuard<'a, V>
     where
         V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -570,10 +592,12 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<tokio::sync::Mutex<V>> 
 #[cfg(feature = "tokio")]
 impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwLock<V>> {
     type Value = V;
-    type ReadGuard<'a> = tokio::sync::RwLockReadGuard<'a, V>
+    type ReadGuard<'a>
+        = tokio::sync::RwLockReadGuard<'a, V>
     where
         V: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -585,10 +609,12 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwL
 #[cfg(feature = "futures-rs")]
 impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<futures::lock::Mutex<V>> {
     type Value = V;
-    type ReadGuard<'a> = futures::lock::MutexGuard<'a, V>
+    type ReadGuard<'a>
+        = futures::lock::MutexGuard<'a, V>
     where
         Self: 'a;
-    type Read<'a> = FuturesRead<futures::lock::MutexLockFuture<'a, V>>
+    type Read<'a>
+        = FuturesRead<futures::lock::MutexLockFuture<'a, V>>
     where
         Self: 'a;
 
@@ -600,10 +626,12 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<futures::lock::Mutex<V>
 #[cfg(feature = "async-std")]
 impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<async_std::sync::Mutex<V>> {
     type Value = V;
-    type ReadGuard<'a> = async_std::sync::MutexGuard<'a, V>
+    type ReadGuard<'a>
+        = async_std::sync::MutexGuard<'a, V>
     where
         Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -615,10 +643,12 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<async_std::sync::Mutex<
 #[cfg(feature = "async-std")]
 impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<async_std::sync::RwLock<V>> {
     type Value = V;
-    type ReadGuard<'a> = async_std::sync::RwLockReadGuard<'a, V>
+    type ReadGuard<'a>
+        = async_std::sync::RwLockReadGuard<'a, V>
     where
         Self: 'a;
-    type Read<'a> = Pin<Box<dyn Future<Output=Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -761,10 +791,12 @@ impl<V> TrivialAccessor<V> {
 
 impl<V: Unpin + Send + Sync + 'static> AccessValue for TrivialAccessor<V> {
     type ReadValue = V;
-    type ReadGuard<'a> = &'a V
+    type ReadGuard<'a>
+        = &'a V
     where
         V: 'a;
-    type Read<'a> = Ready<Result<&'a V, pdu::Error>>
+    type Read<'a>
+        = Ready<Result<&'a V, pdu::Error>>
     where
         Self: 'a;
     type WriteValue = V;
@@ -791,10 +823,12 @@ impl<V: Unpin + Send + Sync + 'static> AccessValue for TrivialAccessor<V> {
 
 impl<V: ?Sized + Send + Sync> AccessReadOnly for TrivialAccessor<V> {
     type Value = V;
-    type ReadGuard<'a> = &'a V
+    type ReadGuard<'a>
+        = &'a V
     where
         Self: 'a;
-    type Read<'a> = Ready<Result<&'a V, pdu::Error>>
+    type Read<'a>
+        = Ready<Result<&'a V, pdu::Error>>
     where
         Self: 'a;
 
@@ -813,10 +847,12 @@ where
     <D::Target as ToOwned>::Owned: Unpin + Send,
 {
     type ReadValue = D::Target;
-    type ReadGuard<'a> = &'a D::Target
+    type ReadGuard<'a>
+        = &'a D::Target
     where
         Self: 'a;
-    type Read<'a> = Ready<Result<&'a D::Target, pdu::Error>>
+    type Read<'a>
+        = Ready<Result<&'a D::Target, pdu::Error>>
     where
         Self: 'a;
     type WriteValue = <D::Target as ToOwned>::Owned;
