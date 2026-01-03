@@ -145,7 +145,7 @@ pub trait AccessValue: Send {
     /// Most of the time, something that implements [`Deref`], where the target is equal
     /// to the `ReadValue` associated type, is used as the `ReadGuard`. However, there is some cases
     /// where an accessor specific [`ReadGuard`] type my need to be used. Values that have limited
-    /// time access, or abstract over a channel may require the usage of a
+    /// time access, or abstract over a channel may require a custom gaurd implementation.
     ///
     /// ### *IMPORTANT*: The `ReadGuard` `send_hint`
     /// The trait [`ReadGuard`] is mainly intended for protecting access to a read value, but it
