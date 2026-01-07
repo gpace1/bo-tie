@@ -256,9 +256,10 @@ struct MultiReqData {
 ///
 /// [`revoke_permissions_of_client`]: Server::revoke_permissions_of_client
 pub struct Server<Q> {
-    /// The maximum transmission unit
+    /// The current maximum transmission unit for the transport.
     mtu: usize,
-    /// The maximum, maximum transmission unit. The server will not
+    /// The absolute maximum transmission unit. The server will not accept a larger value during a
+    /// MTU exchange.
     max_mtu: usize,
     /// The attributes of the server
     attributes: ServerAttributes,
@@ -2533,7 +2534,7 @@ trait ServerAttribute: core::any::Any {
     /// Read the data
     ///
     /// The returned data is in its transfer format
-    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>>;
+    fn read(&mut self) -> PinnedFuture<'_, Result<Vec<u8>, pdu::Error>>;
 
     /// Generate a 'Read Response'
     ///
@@ -2630,7 +2631,7 @@ impl From<ReservedHandle> for super::Attribute<Box<dyn ServerAttributeValue>> {
 }
 
 impl ServerAttribute for ReservedHandle {
-    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>> {
+    fn read(&mut self) -> PinnedFuture<'_, Result<Vec<u8>, pdu::Error>> {
         Box::pin(async move {
             log::error!("(ATT) client tried to read the reserved handle");
 

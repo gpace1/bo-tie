@@ -340,9 +340,15 @@ impl LocalHeartRateMeasurementArc {
 impl AccessValue for LocalHeartRateMeasurementArc {
     type ReadValue = HeartRateMeasurement;
     type ReadGuard<'a> = Box<Self::ReadValue>;
-    type Read<'a> = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, bo_tie::host::att::pdu::Error>> + Send + Sync + 'a>> where Self: 'a ;
+    type Read<'a>
+        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, bo_tie::host::att::pdu::Error>> + Send + Sync + 'a>>
+    where
+        Self: 'a;
     type WriteValue = ();
-    type Write<'a> = std::future::Pending<Result<(), bo_tie::host::att::pdu::Error>> where Self: 'a ;
+    type Write<'a>
+        = std::future::Pending<Result<(), bo_tie::host::att::pdu::Error>>
+    where
+        Self: 'a;
 
     fn read(&mut self) -> Self::Read<'_> {
         Box::pin(async {
@@ -591,8 +597,14 @@ impl ControlPoint {
 
 impl AccessValue for ControlPoint {
     type ReadValue = ();
-    type ReadGuard<'a> = &'a () where Self: 'a;
-    type Read<'a> = std::future::Pending<Result<Self::ReadGuard<'a>, bo_tie::host::att::pdu::Error>> where Self: 'a;
+    type ReadGuard<'a>
+        = &'a ()
+    where
+        Self: 'a;
+    type Read<'a>
+        = std::future::Pending<Result<Self::ReadGuard<'a>, bo_tie::host::att::pdu::Error>>
+    where
+        Self: 'a;
     type WriteValue = u8;
     type Write<'a> = Pin<Box<dyn Future<Output = Result<(), bo_tie::host::att::pdu::Error>> + Send + Sync>>;
 

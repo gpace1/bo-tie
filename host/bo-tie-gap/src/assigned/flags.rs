@@ -180,7 +180,7 @@ impl Flags {
     }
 
     /// Get an iterator over the flags in Flags
-    pub fn iter(&self) -> ::alloc::collections::btree_set::Iter<Flag> {
+    pub fn iter(&self) -> ::alloc::collections::btree_set::Iter<'_, Flag> {
         self.set.iter()
     }
 }

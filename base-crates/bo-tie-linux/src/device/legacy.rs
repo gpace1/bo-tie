@@ -274,7 +274,7 @@ impl Drop for BoxedHciDevListReq {
 
 #[cfg(feature = "ctrls_intf")]
 impl bindings::hci_dev_list_req {
-    fn iter(&self) -> std::slice::Iter<bindings::hci_dev_req> {
+    fn iter(&self) -> std::slice::Iter<'_, bindings::hci_dev_req> {
         unsafe { self.dev_req.as_slice(BoxedHciDevListReq::REQUEST_COUNT.into()).iter() }
     }
 }
