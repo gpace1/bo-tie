@@ -459,7 +459,7 @@ where
     A::ReadValue: TransferFormatInto + Comparable,
     A::WriteValue: TransferFormatTryFrom,
 {
-    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>> {
+    fn read(&mut self) -> PinnedFuture<'_, Result<Vec<u8>, pdu::Error>> {
         let read_fut = self.0.read();
 
         let task = async move {
@@ -471,7 +471,7 @@ where
         Box::pin(task)
     }
 
-    fn read_response(&mut self) -> PinnedFuture<Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>> {
+    fn read_response(&mut self) -> PinnedFuture<'_, Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>> {
         let read_fut = self.0.read();
 
         let task = async move {
@@ -673,7 +673,7 @@ where
     R: AccessReadOnly + 'static,
     R::Value: TransferFormatInto + Comparable,
 {
-    fn read(&mut self) -> PinnedFuture<Result<Vec<u8>, pdu::Error>> {
+    fn read(&mut self) -> PinnedFuture<'_, Result<Vec<u8>, pdu::Error>> {
         let read_fut = self.0.read();
 
         let task = async move {
@@ -685,7 +685,7 @@ where
         Box::pin(task)
     }
 
-    fn read_response(&mut self) -> PinnedFuture<Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>> {
+    fn read_response(&mut self) -> PinnedFuture<'_, Result<pdu::Pdu<pdu::ReadResponse<Vec<u8>>>, pdu::Error>> {
         let read_fut = self.0.read();
 
         let task = async move {
@@ -739,32 +739,6 @@ where
 
     fn as_mut_any(&mut self) -> &mut dyn Any {
         &mut self.0
-    }
-}
-
-/// Future for reading the value and performing an operation
-pub(super) struct ReadAnd<R, F> {
-    reader: R,
-    job: Option<F>,
-}
-
-impl<R, G, V, F, T> Future for ReadAnd<R, F>
-where
-    R: Future<Output = G>,
-    G: core::ops::Deref<Target = V>,
-    F: FnOnce(&V) -> Result<T, pdu::Error> + Unpin,
-    V: ?Sized,
-{
-    type Output = Result<T, pdu::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        unsafe {
-            let this = self.get_unchecked_mut();
-
-            Pin::new_unchecked(&mut this.reader)
-                .poll(cx)
-                .map(|val| (this.job.take().unwrap())(&*val))
-        }
     }
 }
 

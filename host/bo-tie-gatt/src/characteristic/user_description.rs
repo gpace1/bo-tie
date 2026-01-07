@@ -216,10 +216,19 @@ where
     A::WriteValue: From<alloc::string::String>,
 {
     type ReadValue = str;
-    type ReadGuard<'a> = ReadGuard<A::ReadGuard<'a>> where Self: 'a;
-    type Read<'a> = ReadUserDescription<A::Read<'a>> where Self: 'a;
+    type ReadGuard<'a>
+        = ReadGuard<A::ReadGuard<'a>>
+    where
+        Self: 'a;
+    type Read<'a>
+        = ReadUserDescription<A::Read<'a>>
+    where
+        Self: 'a;
     type WriteValue = alloc::string::String;
-    type Write<'a> = A::Write<'a> where Self: 'a;
+    type Write<'a>
+        = A::Write<'a>
+    where
+        Self: 'a;
 
     fn read(&mut self) -> Self::Read<'_> {
         ReadUserDescription { future: self.0.read() }
@@ -289,8 +298,14 @@ where
     S::Value: Borrow<str>,
 {
     type Value = str;
-    type ReadGuard<'a> = ReadGuard<S::ReadGuard<'a>> where Self: 'a;
-    type Read<'a> = ReadUserDescription<S::Read<'a>> where Self: 'a;
+    type ReadGuard<'a>
+        = ReadGuard<S::ReadGuard<'a>>
+    where
+        Self: 'a;
+    type Read<'a>
+        = ReadUserDescription<S::Read<'a>>
+    where
+        Self: 'a;
 
     fn read(&self) -> Self::Read<'_> {
         ReadUserDescription { future: self.0.read() }

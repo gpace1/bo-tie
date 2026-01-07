@@ -252,35 +252,6 @@ impl<'a> ServiceBuilder<'a> {
         }
     }
 
-    /// Set the Access Restriction to this Service
-    ///
-    /// Permissions can be set for the characteristic values, but the rest of the characteristics
-    /// descriptors of the service are readable or writeable by default to the connected device. In
-    /// order to restrict access to these descriptors this method must be called change the default
-    /// read permissions. The default restriction is replaced with the input
-    /// restrictions and the operation of reading or writing to the descriptor requires the client
-    /// to be [*given*] the permission containing the restriction.
-    ///
-    /// This affects all the service definition and characteristics, but not retroactively. If this
-    /// is called after say [`set_service_definition`], then the service definition
-    ///
-    /// The main reason to use `gatekeep` is to ensure that the client is either encrypted,
-    /// authenticated and/or authorized to access the GAP service.
-    ///
-    /// [*given*]: bo_tie_att::server::Server::give_permissions_to_client
-    #[cfg(feature = "unstable")]
-    fn set_access_restriction(mut self, restrictions: &[att::AttributeRestriction]) -> Self {
-        self.access_restrictions.clear();
-
-        for restriction in restrictions {
-            if !self.access_restrictions.contains(restriction) {
-                self.access_restrictions.try_push(*restriction).unwrap();
-            }
-        }
-
-        self
-    }
-
     /// Set the service definition into the server attributes
     ///
     /// This will create and add the service definition to the Attribute Server and return the
@@ -1385,7 +1356,7 @@ where
     Q: att::server::QueuedWriter,
 {
     /// Iterate over the services within this GATT server
-    pub fn iter_services(&self) -> impl Iterator<Item = Service> {
+    pub fn iter_services(&self) -> impl Iterator<'_, Item = Service> {
         self.primary_services.iter().map(move |s| Service {
             server_attributes: self.server.get_attributes(),
             group_data: *s,

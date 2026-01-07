@@ -470,7 +470,7 @@ impl ExtendedAdvertisingAndScanResponseData {
     ///
     /// [`EirOrAdStruct`]: ../../bo_tie_gap::EirOrAdStruct
     #[cfg(feature = "gap")]
-    pub fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator {
+    pub fn iter(&self) -> bo_tie_gap::assigned::EirOrAdIterator<'_> {
         bo_tie_gap::assigned::EirOrAdIterator::from(self.data.as_ref())
     }
 }
