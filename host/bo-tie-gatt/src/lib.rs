@@ -1356,7 +1356,7 @@ where
     Q: att::server::QueuedWriter,
 {
     /// Iterate over the services within this GATT server
-    pub fn iter_services(&self) -> impl Iterator<'_, Item = Service> {
+    pub fn iter_services(&self) -> impl Iterator<Item = Service> + '_ {
         self.primary_services.iter().map(move |s| Service {
             server_attributes: self.server.get_attributes(),
             group_data: *s,
