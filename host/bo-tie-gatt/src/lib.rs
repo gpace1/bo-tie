@@ -135,7 +135,7 @@ impl att::TransferFormatTryFrom for ServiceInclude {
                 service_handle: att::TransferFormatTryFrom::try_from(&raw[..2])?,
                 end_group_handle: att::TransferFormatTryFrom::try_from(&raw[2..4])?,
                 short_service_type: if raw[4..].len() == 2 {
-                    // Only 16 Bluetooth UUIDs are included with a Include Definition
+                    // Only 16 Bluetooth UUIDs are included with an Include Definition
 
                     Some(att::TransferFormatTryFrom::try_from(&raw[4..])?)
                 } else if raw[4..].len() == 0 {
