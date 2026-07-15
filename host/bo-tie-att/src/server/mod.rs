@@ -577,7 +577,7 @@ where
     /// Get the current MTU
     ///
     /// # Note
-    /// The return can be safely casted to a `u16`
+    /// The return can be safely cast to a `u16`
     pub fn get_mtu(&self) -> usize {
         self.mtu
     }
