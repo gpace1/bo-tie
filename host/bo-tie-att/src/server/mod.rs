@@ -283,6 +283,21 @@ pub struct Server<Q> {
     queued_writer: Q,
 }
 
+impl<Q> core::fmt::Debug for Server<Q> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if f.alternate() {
+            todo!()
+        } else {
+            f.debug_struct("Server")
+                .field("current_mtu", &self.mtu)
+                .field("maximum_allowed_mtu", &self.max_mtu)
+                .field("attributes", &self.attributes)
+                .field("given_permissions", &self.given_permissions)
+                .finish_non_exhaustive()
+        }
+    }
+}
+
 /// Validate the permissions of the attribute
 ///
 /// This is used to validate a list of possible permissions required to perform an operation.
@@ -2517,6 +2532,34 @@ impl Default for ServerAttributes {
     }
 }
 
+impl core::fmt::Debug for ServerAttributes {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ServerAttributes")
+            .field(
+                "attributes",
+                &core::fmt::from_fn(|f_1| {
+                    f_1.debug_list()
+                        .entry(&core::fmt::from_fn(|f| f.write_str("ReservedAttribute")))
+                        .entries(self.attributes.iter().skip(1).map(|attr| {
+                            core::fmt::from_fn(|f_2| {
+                                f_2.debug_struct("Attribute")
+                                    .field("attribute_type", &attr.ty)
+                                    .field("handle", &attr.handle.expect("expected handle"))
+                                    .field(
+                                        "permissions",
+                                        &core::fmt::from_fn(|f| write!(f, "{:?}", &*attr.get_permissions())),
+                                    )
+                                    .field("value", &core::fmt::from_fn(|f| f.write_str("..")))
+                                    .finish()
+                            })
+                        }))
+                        .finish()
+                }),
+            )
+            .finish()
+    }
+}
+
 pub type PinnedFuture<'a, O> = Pin<Box<dyn Future<Output = O> + Send + 'a>>;
 
 /// An attribute value of a `Server`
@@ -2954,4 +2997,77 @@ where
     <T::PhysicalLink as PhysicalLink>::RecvErr: std::error::Error,
     <T::PhysicalLink as PhysicalLink>::SendErr: std::error::Error,
 {
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Attribute, FULL_PERMISSIONS, FULL_READ_PERMISSIONS, FULL_WRITE_PERMISSIONS};
+    use bo_tie_host_util::Uuid;
+
+    #[test]
+    fn server_attributes_debug_fmt() {
+        let mut server_attributes = ServerAttributes::default();
+
+        server_attributes.push(Attribute::new(Uuid::from_u16(0x1234), FULL_READ_PERMISSIONS, ()));
+        server_attributes.push(Attribute::new(Uuid::from_u32(0x5432), FULL_READ_PERMISSIONS, ()));
+        server_attributes.push(Attribute::new(
+            TryFrom::try_from("63c7d2a6-8519-4000-869d-d233b36f4e80").expect("failed to create UUID"),
+            FULL_WRITE_PERMISSIONS,
+            (),
+        ));
+        server_attributes.push(Attribute::new(
+            Uuid::from_u128(0x167896437821967896473921),
+            FULL_PERMISSIONS,
+            (),
+        ));
+
+        let expected_debug = "ServerAttributes { attributes: [ReservedAttribute, Attribute { \
+        attribute_type: 1234, handle: 1, permissions: [Read(None), Read(Encryption(Bits128)), Read(\
+        Encryption(Bits192)), Read(Encryption(Bits256)), Read(Authorization), Read(Authentication)]\
+        , value: .. }, Attribute { attribute_type: 5432, handle: 2, permissions: [Read(None), Read(\
+        Encryption(Bits128)), Read(Encryption(Bits192)), Read(Encryption(Bits256)), Read(Authorizat\
+        ion), Read(Authentication)], value: .. }, Attribute { attribute_type: 63c7d2a685194000869dd\
+        233b36f4e80, handle: 3, permissions: [Write(None), Write(Encryption(Bits128)), Write(Encryp\
+        tion(Bits192)), Write(Encryption(Bits256)), Write(Authorization), Write(Authentication)], v\
+        alue: .. }, Attribute { attribute_type: 167896437821967896473921, handle: 4, permissions: [\
+        Read(None), Read(Encryption(Bits128)), Read(Encryption(Bits192)), Read(Encryption(Bits256))\
+        , Read(Authorization), Read(Authentication), Write(None), Write(Encryption(Bits128)), Write\
+        (Encryption(Bits192)), Write(Encryption(Bits256)), Write(Authorization), Write(Authenticati\
+        on)], value: .. }] }";
+
+        assert_eq!(expected_debug, format!("{server_attributes:?}"));
+
+        let expected_alternate_debug =
+"ServerAttributes {
+    attributes: [
+        ReservedAttribute,
+        Attribute {
+            attribute_type: 0x1234,
+            handle: 1,
+            permissions: [Read(None), Read(Encryption(Bits128)), Read(Encryption(Bits192)), Read(Encryption(Bits256)), Read(Authorization), Read(Authentication)],
+            value: ..,
+        },
+        Attribute {
+            attribute_type: 0x5432,
+            handle: 2,
+            permissions: [Read(None), Read(Encryption(Bits128)), Read(Encryption(Bits192)), Read(Encryption(Bits256)), Read(Authorization), Read(Authentication)],
+            value: ..,
+        },
+        Attribute {
+            attribute_type: 0x63c7d2a685194000869dd233b36f4e80,
+            handle: 3,
+            permissions: [Write(None), Write(Encryption(Bits128)), Write(Encryption(Bits192)), Write(Encryption(Bits256)), Write(Authorization), Write(Authentication)],
+            value: ..,
+        },
+        Attribute {
+            attribute_type: 0x167896437821967896473921,
+            handle: 4,
+            permissions: [Read(None), Read(Encryption(Bits128)), Read(Encryption(Bits192)), Read(Encryption(Bits256)), Read(Authorization), Read(Authentication), Write(None), Write(Encryption(Bits128)), Write(Encryption(Bits192)), Write(Encryption(Bits256)), Write(Authorization), Write(Authentication)],
+            value: ..,
+        },
+    ],
+}";
+        assert_eq!(expected_alternate_debug, format!("{server_attributes:#?}"));
+    }
 }
