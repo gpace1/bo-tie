@@ -612,6 +612,13 @@ where
             .collect();
     }
 
+    /// Get the list of granted client permissions
+    ///
+    /// This returns the current list of permissions the ATT client has with this server.
+    pub fn get_permissions(&self) -> &[AttributePermissions] {
+        self.given_permissions.as_ref()
+    }
+
     /// Check if the client has acceptable permissions for the attribute with the provided handle
     ///
     /// This function is used to check the permissions of a specified attribute against the
