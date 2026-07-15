@@ -508,10 +508,7 @@ macro_rules! send_error {
     }};
 }
 
-impl<Q> Server<Q>
-where
-    Q: QueuedWriter,
-{
+impl<Q> Server<Q> {
     /// Create a new `Server` for a fixed L2CAP channel
     ///
     /// This is used for creating a `Server` on a L2CAP channel that uses a fixed L2CAP channel ID.
@@ -694,6 +691,7 @@ where
     ) -> Result<Status, super::ConnectionError<T>>
     where
         T: LogicalLink,
+        Q: QueuedWriter,
     {
         let (pdu_type, payload) = self.parse_att_pdu(pdu)?;
 
@@ -756,6 +754,7 @@ where
     ) -> Result<Status, super::ConnectionError<T>>
     where
         T: LogicalLink,
+        Q: QueuedWriter,
     {
         match pdu_type {
             ClientPduName::ExchangeMtuRequest => self.process_exchange_mtu_request(channel, payload).await?,
@@ -2009,6 +2008,7 @@ where
     ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
+        Q: QueuedWriter,
     {
         let request = match pdu::PreparedWriteRequest::try_from_raw(payload) {
             Ok(request) => request,
@@ -2062,6 +2062,7 @@ where
     ) -> Result<(), ConnectionError<T>>
     where
         T: LogicalLink,
+        Q: QueuedWriter,
     {
         let request_flag: pdu::ExecuteWriteFlag = match TransferFormatTryFrom::try_from(request_flag) {
             Ok(request_flag) => request_flag,
