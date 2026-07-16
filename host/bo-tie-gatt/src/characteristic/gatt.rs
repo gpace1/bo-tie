@@ -211,7 +211,7 @@ impl TransferFormatTryFrom for ClientFeaturesVec {
 }
 
 #[cfg(feature = "cryptography")]
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct HashValue(u128);
 
 #[cfg(feature = "cryptography")]
@@ -329,7 +329,7 @@ impl TransferFormatTryFrom for HashValue {
 }
 
 /// Features supported by the GATT server
-#[derive(Copy, Clone, PartialEq, bo_tie_macros::DepthCount)]
+#[derive(Debug, Copy, Clone, PartialEq, bo_tie_macros::DepthCount)]
 pub enum ServerFeatures {
     /// Support for enhanced ATT bearers
     EattSupported,
@@ -345,6 +345,17 @@ impl ServerFeaturesList {
         ServerFeaturesList {
             features: LinearBuffer::new(),
         }
+    }
+}
+
+impl core::fmt::Debug for ServerFeaturesList {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ServerFeaturesList")
+            .field(
+                "features",
+                &core::fmt::from_fn(|f| f.debug_list().entries(self.features.iter()).finish()),
+            )
+            .finish()
     }
 }
 

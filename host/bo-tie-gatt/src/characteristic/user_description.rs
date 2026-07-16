@@ -12,6 +12,18 @@ use core::task::{Context, Poll};
 /// UUID for a user description descriptor
 pub(crate) const TYPE: crate::Uuid = crate::uuid::CHARACTERISTIC_USER_DESCRIPTION;
 
+/// A possible type used as the value of a Characteristic Declaration
+///
+/// The user can use any type that can be converted into a [`String`], so this is a possible type
+/// that may be constructed by the user for the description.
+pub(crate) type PossibleValueType1 = RoUserDescription<alloc::string::String>;
+
+/// A possible type used as the value of a Characteristic Declaration
+///
+/// The user can use any type that can be converted into a [`String`], so this is a possible type
+/// that may be constructed by the user for the description.
+pub(crate) type PossibleValueType2 = RoUserDescription<&'static str>;
+
 pub struct UserDescriptionBuilder<T> {
     current: T,
 }
@@ -291,6 +303,15 @@ where
 /// The main purpose of this wrapper is to enforce the usage of `utf8` as the transfer format for
 /// the user description. This
 pub struct RoUserDescription<S>(S);
+
+impl<S> core::fmt::Debug for RoUserDescription<S>
+where
+    S: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&self.0, f)
+    }
+}
 
 impl<S> AccessReadOnly for RoUserDescription<S>
 where

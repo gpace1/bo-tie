@@ -10,6 +10,9 @@ use core::borrow::Borrow;
 /// UUID for a characteristic declaration
 pub(crate) const TYPE: Uuid = crate::uuid::CHARACTERISTIC;
 
+/// The type used as the value of a Characteristic Declaration
+pub(crate) type ValueType = Declaration;
+
 /// A constructor of a Characteristic Declaration
 ///
 /// This is a staged builder, meaning it must go through a series of method calls in order to
@@ -97,7 +100,9 @@ impl AddCharacteristicComponent for DeclarationBuilder<TrueComplete> {
 
         let attribute_permissions = map_restrictions!(restrictions => Read);
 
-        let attribute = Attribute::new(TYPE, attribute_permissions, declaration);
+        let value: ValueType = declaration;
+
+        let attribute = Attribute::new(TYPE, attribute_permissions, value);
 
         sa.push(attribute);
 
@@ -148,6 +153,19 @@ pub struct Declaration {
     properties: LinearBuffer<{ Properties::full_depth() }, Properties>,
     value_handle: u16,
     uuid: Uuid,
+}
+
+impl core::fmt::Debug for Declaration {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Declaration")
+            .field(
+                "characteristic_properties",
+                &core::fmt::from_fn(|f| f.debug_list().entries(self.properties.iter()).finish()),
+            )
+            .field("characteristic_value_attribute_handle", &self.value_handle)
+            .field("characteristic_uuid", &self.uuid)
+            .finish()
+    }
 }
 
 impl bo_tie_att::TransferFormatTryFrom for Declaration {

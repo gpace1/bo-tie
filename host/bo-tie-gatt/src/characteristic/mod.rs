@@ -35,6 +35,15 @@ use bo_tie_core::buffer::stack::LinearBuffer;
 #[derive(Clone, PartialEq)]
 pub struct VecArray<const SIZE: usize, T>(pub LinearBuffer<SIZE, T>);
 
+impl<const SIZE: usize, T> core::fmt::Debug for VecArray<SIZE, T>
+where
+    T: core::fmt::Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_list().entries(self.0.iter()).finish()
+    }
+}
+
 /// Characteristic Properties
 ///
 /// These are the properties that are part of the Characteristic Declaration

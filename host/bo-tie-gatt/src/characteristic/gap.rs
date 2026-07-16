@@ -2,7 +2,7 @@
 
 use bo_tie_att::{TransferFormatError, TransferFormatInto, TransferFormatTryFrom};
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct PreferredConnectionParameters {
     pub interval_min: u16,
     pub interval_max: u16,

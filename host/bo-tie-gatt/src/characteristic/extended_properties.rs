@@ -10,6 +10,9 @@ use core::borrow::Borrow;
 /// UUID of an extended properties descriptor
 pub(crate) const TYPE: Uuid = crate::uuid::CHARACTERISTIC_EXTENDED_PROPERTIES;
 
+/// The type used as the value of a Characteristic Extended Properties
+pub(crate) type ValueType = VecArray<{ ExtendedProperties::full_depth() }, ExtendedProperties>;
+
 /// A constructor of a Characteristic extended properties descriptor declaration
 ///
 /// This is a single staged builder, meaning only the method [`set_extended_properties`] needs to be
@@ -52,7 +55,9 @@ impl AddCharacteristicComponent for ExtendedPropertiesBuilder<Complete> {
     fn push_to(self, sa: &mut ServerAttributes, restrictions: &[crate::att::AttributeRestriction]) -> bool {
         let attribute_permissions = map_restrictions!(restrictions => Read);
 
-        let attribute = Attribute::new(TYPE, attribute_permissions, VecArray(self.current.extended_properties));
+        let value: ValueType = VecArray(self.current.extended_properties);
+
+        let attribute = Attribute::new(TYPE, attribute_permissions, value);
 
         sa.push(attribute);
 
@@ -74,7 +79,7 @@ pub struct Complete {
     extended_properties: LinearBuffer<{ ExtendedProperties::full_depth() }, ExtendedProperties>,
 }
 
-#[derive(Copy, Clone, PartialEq, bo_tie_macros::DepthCount)]
+#[derive(Debug, Copy, Clone, PartialEq, bo_tie_macros::DepthCount)]
 pub enum ExtendedProperties {
     ReliableWrite,
     WritableAuxiliaries,

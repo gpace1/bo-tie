@@ -126,6 +126,21 @@ struct ServiceInclude {
     short_service_type: Option<u16>,
 }
 
+impl core::fmt::Debug for ServiceInclude {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut d = f.debug_struct("ServiceInclude");
+
+        d.field("service_handle", &self.service_handle)
+            .field("end_group_handle", &self.end_group_handle);
+
+        if let Some(short_service_type) = self.short_service_type {
+            d.field("service_uuid", &Uuid::from_u16(short_service_type));
+        }
+
+        d.finish()
+    }
+}
+
 impl att::TransferFormatTryFrom for ServiceInclude {
     fn try_from(raw: &[u8]) -> Result<Self, att::TransferFormatError> {
         // The implementation of TransferFormatTryFrom for UUID will check if the length is good for
@@ -1814,6 +1829,183 @@ where
         let indication = att::pdu::create_indication(service_changed_handle, service_changed);
 
         send_pdu!(channel, indication).map_err(|e| AddServicesError::ConnectionError(e))
+    }
+}
+
+impl<Q> core::fmt::Debug for Server<Q> {
+    fn fmt(&self, f_1: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use core::fmt::from_fn;
+
+        f_1.debug_struct("Server")
+            .field("primary_services", &self.primary_services)
+            .field("mtu", &self.server.get_mtu())
+            .field("client_permissions", &self.server)
+            .field(
+                "attributes",
+                &from_fn(|f_2| {
+                    let mut debug_list = f_2.debug_list();
+
+                    for i in 1usize.. {
+                        let Some(att_info) = self.server.get_attributes().get_info(i) else {
+                            break;
+                        };
+
+                        debug_list.entry(&from_fn(|f_3| {
+                            let mut debug_struct = f_3.debug_struct("Attribute");
+
+                            macro_rules! fmt_att {
+                                ($name:literal) => {{
+                                    debug_struct.field(
+                                        "type",
+                                        &from_fn(|f| write!(f, concat!("{:?} (", $name, ")"), att_info.get_uuid())),
+                                    );
+
+                                    debug_struct.field("handle", &att_info.get_handle());
+
+                                    debug_struct.field("value", &from_fn(|f| f.write_str("..")));
+                                }};
+
+                                ($name:expr, Uuid) => {{
+                                    debug_struct.field(
+                                        "type",
+                                        &from_fn(|f| write!(f, concat!("{:?} (", $name, ")"), att_info.get_uuid())),
+                                    );
+
+                                    debug_struct.field("handle", &att_info.get_handle());
+
+                                    if let Some(value) = self.server
+                                        .get_attributes()
+                                        .get_value::<Uuid>(att_info.get_handle())
+                                    {
+                                        match value {
+                                            &uuid::gap::GAP_SERVICE => {
+                                                debug_struct.field("value", &core::fmt::from_fn(|f| write!(f, "{:?} (GAP Service)", value)))
+                                            }
+                                            &uuid::gatt::GATT_SERVICE => {
+                                                debug_struct.field("value", &core::fmt::from_fn(|f| write!(f, "{:?} (GATT Service)", value)))
+                                            }
+                                            _ => debug_struct.field("value", &value)
+                                        };
+                                    }
+                                }};
+
+                                ($name:literal, $value_ty:ty $(, $alt_value_ty:ty),* ) => {{
+                                    debug_struct.field(
+                                        "type",
+                                        &from_fn(|f| write!(f, concat!("{:?} (", $name, ")"), att_info.get_uuid())),
+                                    );
+
+                                    debug_struct.field("handle", &att_info.get_handle());
+
+                                    if let Some(value) = self
+                                        .server
+                                        .get_attributes()
+                                        .get_value::<$value_ty>(att_info.get_handle())
+                                    {
+                                        debug_struct.field("value", &value);
+                                    }
+
+                                    $(
+                                        else if let Some(alt_value) = self.server
+                                            .get_attributes()
+                                            .get_value::<$alt_value_ty>(att_info.get_handle())
+                                        {
+                                            debug_struct.field("value", &alt_value);
+                                        }
+                                    )*
+
+                                    else {
+                                        debug_struct.field("value", &from_fn(|f| f.write_str("..")));
+                                    }
+                                }};
+                            }
+
+                            match att_info.get_uuid() {
+                                &uuid::PRIMARY_SERVICE => fmt_att!("Primary Service Definition", Uuid),
+                                &uuid::SECONDARY_SERVICE => fmt_att!("Secondary Service Definition", Uuid),
+                                &uuid::INCLUDE_DEFINITION => fmt_att!("Include Definition", ServiceInclude),
+                                &uuid::CHARACTERISTIC => {
+                                    fmt_att!("Characteristic Definition", characteristic::declaration::ValueType)
+                                }
+                                &uuid::CHARACTERISTIC_EXTENDED_PROPERTIES => fmt_att!(
+                                    "Characteristic Extended Properties",
+                                    characteristic::extended_properties::ValueType
+                                ),
+                                &uuid::CHARACTERISTIC_USER_DESCRIPTION => fmt_att!(
+                                    "Characteristic User Description",
+                                    characteristic::user_description::PossibleValueType1,
+                                    characteristic::user_description::PossibleValueType2
+                                ),
+                                &uuid::CLIENT_CHARACTERISTIC_CONFIGURATION => fmt_att!(
+                                    "Client Characteristic Configuration"
+                                ),
+                                &uuid::SERVER_CHARACTERISTIC_CONFIGURATION => {
+                                    fmt_att!("Server Characteristic Configuration")
+                                }
+                                &uuid::CHARACTERISTIC_PRESENTATION_FORMAT => {
+                                    fmt_att!("Characteristic Presentation Format")
+                                }
+                                &uuid::CHARACTERISTIC_AGGREGATE_FORMAT => {
+                                    fmt_att!("Characteristic Aggregate Format")
+                                }
+                                &uuid::gap::DEVICE_NAME => fmt_att!(
+                                    "Device Name",
+                                    alloc::string::String,
+                                    &str
+                                ),
+                                &uuid::gap::APPEARANCE => fmt_att!("Appearance", u16),
+                                &uuid::gap::PERIPHERAL_PREFERRED_CONNECTION_PARAMETERS => fmt_att!(
+                                    "Peripheral Connection Parameters Characteristic",
+                                    characteristic::gap::PreferredConnectionParameters
+                                ),
+                                &uuid::gap::CENTRAL_ADDRESS_RESOLUTION => fmt_att!(
+                                    "Central Address Resolution Characteristic",
+                                    bool
+                                ),
+                                &uuid::gap::RESOLVABLE_PRIVATE_ADDRESS_ONLY => fmt_att!(
+                                    "Resolvable Private Address Only Characteristic"
+                                ),
+                                &uuid::gap::ENCRYPTED_DATA_KEY_MATERIAL => fmt_att!(
+                                    "Encrypted Data Key Material"
+                                ),
+                                &uuid::gap::LE_GATT_SECURITY_LEVELS_CHARACTERISTIC => fmt_att!(
+                                    "LE GATT Security Levels Characteristic"
+                                ),
+                                &uuid::gatt::SERVICE_CHANGED => fmt_att!(
+                                    "Service Changed Characteristic"
+                                ),
+                                &uuid::gatt::CLIENT_SUPPORTED_FEATURES => fmt_att!(
+                                    "Client Supported Features Characteristic"
+                                ),
+                                &uuid::gatt::DATABASE_HASH => {
+                                    #[cfg(feature = "cryptography")]
+                                    fmt_att!(
+                                        "Database Hash Characteristic",
+                                        characteristic::gatt::HashValue
+                                    );
+
+                                    #[cfg(not(feature = "cryptography"))]
+                                    fmt_att!("Database Hash Characteristic");
+                                }
+                                &uuid::gatt::SERVER_SUPPORTED_FEATURES => fmt_att!(
+                                    "Server Supported Features Characteristic",
+                                    characteristic::gatt::ServerFeaturesList
+                                ),
+                                _ => {
+                                    debug_struct.field("type", att_info.get_uuid());
+                                    debug_struct.field("handle", &att_info.get_handle());
+                                    debug_struct.field("value", &from_fn(|f| f.write_str("..")));
+                                }
+                            }
+
+                            debug_struct.finish()
+                        }));
+                    }
+
+                    debug_list.finish()
+                }),
+            )
+            .finish()
     }
 }
 
