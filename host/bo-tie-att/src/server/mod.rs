@@ -516,21 +516,18 @@ impl<Q> Server<Q> {
     /// manage the MTU.
     ///
     /// # Maximum Transmission Unit (MTU)
-    /// For fixed channels, the MTU is determined either by a default MTU (determined by a higher
-    /// layer protocol) or through an exchange process to use a different MTU.
+    /// For fixed channels, the MTU is determined either by using the default MTU or through an
+    /// exchange process to use a different MTU.
     ///
-    /// Input `max_mtu` is the maximum, maximum transmission unit (MTU) supported by this `Server`.
-    /// The client will be able to negotiate to set the MTU up to this value by sending a *MTU
-    /// exchange* PDU to this Server.
+    /// Input `max_mtu` is the largest value this server will accept as the MTU. The client will be
+    /// able to negotiate and set the MTU up to this value by sending a *MTU exchange* PDU to this
+    /// Server.
     ///
     /// ### Default MTU
-    /// The default MTU, practically speaking, should be no less than 21. This is the size of a
-    /// *read by type request* or *read by group type request* with a sixteen bit attribute group
-    /// type. A smaller default MTU can be used, but limitations of functionality will be put on the
-    /// `Server`. There is no minimum size of the `default_mtu` but trying to process request or
-    /// send responses may induce errors if the packet cannot be formed due to the minimum size of
-    /// the packet being larger than the `default_mtu` (this includes the exchange MTU
-    /// request/response).
+    /// As of now, all fixed ATT channels assigned by the Bluetooth SIG use the same default MTU as
+    /// the minimum supported payload size for the logical link. This library lists this value as
+    /// the associated `const` `SUPPORTED_MTU` in the trait
+    /// [`LinkFlavor`](bo_tie_l2cap::link_flavor::LinkFlavor).
     ///
     /// # Panic
     /// Input `default_mtu` must be less than or equal to `max_mtu`.
@@ -1282,7 +1279,19 @@ impl<Q> Server<Q> {
             }
         };
 
-        log::info!("(ATT) processing PDU ATT_WRITE_REQ {{ handle: {:#X} }}", handle);
+        log::info!(
+            "(ATT) processing PDU ATT_WRITE_REQ {{ handle: {:#X}; value: {:?} }}",
+            handle,
+            core::fmt::from_fn(|f| {
+                let min_len =
+
+                let mut d = f.debug_list();
+
+                d.entries(&payload[2..].iter().take());
+
+                if payload[2..].len() >
+            })
+        );
 
         let att = self.get_att(handle)?;
 
