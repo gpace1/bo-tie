@@ -1283,13 +1283,17 @@ impl<Q> Server<Q> {
             "(ATT) processing PDU ATT_WRITE_REQ {{ handle: {:#X}; value: {:?} }}",
             handle,
             core::fmt::from_fn(|f| {
-                let min_len =
+                let max_len = 21;
 
                 let mut d = f.debug_list();
 
-                d.entries(&payload[2..].iter().take());
+                d.entries(payload[2..].iter().take(max_len));
 
-                if payload[2..].len() >
+                if payload[2..].len() > max_len {
+                    d.finish_non_exhaustive()
+                } else {
+                    d.finish()
+                }
             })
         );
 
