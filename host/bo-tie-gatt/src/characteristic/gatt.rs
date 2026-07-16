@@ -400,13 +400,11 @@ impl TransferFormatTryFrom for ServerFeaturesList {
 
 #[cfg(test)]
 mod tests {
-    use crate::characteristic::gatt::HashValue;
     use crate::characteristic::{
         ClientConfiguration, ExtendedProperties, Properties, ServerConfiguration, ServerConfigurationBuilder,
     };
     use crate::ServerBuilder;
     use bo_tie_att::{FULL_READ_PERMISSIONS, FULL_RESTRICTIONS};
-    use std::time::Duration;
 
     /// `HashValue` pretests
     ///
@@ -415,6 +413,8 @@ mod tests {
     #[cfg(feature = "cryptography")]
     mod pretest_hash_value {
         use super::*;
+        use crate::characteristic::gatt::HashValue;
+        use alloc::vec::Vec;
 
         #[test]
         fn only_hash_characteristic() {

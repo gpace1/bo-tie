@@ -726,7 +726,7 @@ enum ServiceRecordError {
 ///
 /// This is the data used by the GATT server for quickly finding the Services within a GATT server
 /// with a attribute group related request from the Server.
-#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
 struct ServiceGroupData {
     is_primary: bool,
     /// The handle of the Service declaration attribute.
@@ -735,6 +735,32 @@ struct ServiceGroupData {
     end_group_handle: u16,
     /// The UUID of the service.
     service_uuid: Uuid,
+}
+
+impl core::fmt::Debug for ServiceGroupData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use core::fmt::from_fn;
+
+        let mut debug_struct = f.debug_struct("ServiceGroupData");
+
+        debug_struct
+            .field("is_primary", &self.is_primary)
+            .field("service_handle", &self.service_handle)
+            .field("end_group_handle", &self.end_group_handle);
+
+        match self.service_uuid {
+            uuid::gap::GAP_SERVICE => debug_struct.field(
+                "service_handle",
+                &from_fn(|f| write!(f, "{:#?} (GAP Service)", self.service_uuid)),
+            ),
+            uuid::gatt::GATT_SERVICE => debug_struct.field(
+                "service_handle",
+                &from_fn(|f| write!(f, "{:#?} (GATT Service)", self.service_uuid)),
+            ),
+            _ => debug_struct.field("service_handle", &self.service_uuid),
+        }
+        .finish()
+    }
 }
 
 /// A Constructor of the GAP Service
@@ -1839,7 +1865,7 @@ impl<Q> core::fmt::Debug for Server<Q> {
         f_1.debug_struct("Server")
             .field("primary_services", &self.primary_services)
             .field("mtu", &self.server.get_mtu())
-            .field("client_permissions", &self.server)
+            .field("client_permissions", &self.server.get_permissions())
             .field(
                 "attributes",
                 &from_fn(|f_2| {
@@ -1879,13 +1905,15 @@ impl<Q> core::fmt::Debug for Server<Q> {
                                     {
                                         match value {
                                             &uuid::gap::GAP_SERVICE => {
-                                                debug_struct.field("value", &core::fmt::from_fn(|f| write!(f, "{:?} (GAP Service)", value)))
+                                                debug_struct.field("value", &from_fn(|f| write!(f, "{:?} (GAP Service)", value)))
                                             }
                                             &uuid::gatt::GATT_SERVICE => {
-                                                debug_struct.field("value", &core::fmt::from_fn(|f| write!(f, "{:?} (GATT Service)", value)))
+                                                debug_struct.field("value", &from_fn(|f| write!(f, "{:?} (GATT Service)", value)))
                                             }
                                             _ => debug_struct.field("value", &value)
                                         };
+                                    } else {
+                                        debug_struct.field("value", &from_fn(|f| f.write_str("..")));
                                     }
                                 }};
 
@@ -1925,7 +1953,7 @@ impl<Q> core::fmt::Debug for Server<Q> {
                                 &uuid::SECONDARY_SERVICE => fmt_att!("Secondary Service Definition", Uuid),
                                 &uuid::INCLUDE_DEFINITION => fmt_att!("Include Definition", ServiceInclude),
                                 &uuid::CHARACTERISTIC => {
-                                    fmt_att!("Characteristic Definition", characteristic::declaration::ValueType)
+                                    fmt_att!("Characteristic Declaration", characteristic::declaration::ValueType)
                                 }
                                 &uuid::CHARACTERISTIC_EXTENDED_PROPERTIES => fmt_att!(
                                     "Characteristic Extended Properties",
@@ -2562,5 +2590,232 @@ impl GattServiceInfo {
 
             *server_attributes.get_mut_value::<HashValue>(handle).unwrap() = hash;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bo_tie_att::server::NoQueuedWrites;
+    use bo_tie_att::AttributeRestriction;
+
+    #[test]
+    fn debug_fmt_server() {
+        let mut server_builder = ServerBuilder::new_empty();
+
+        server_builder.add_gap_service("Test Server", None, |gap_builder| {
+            gap_builder.add_preferred_connection_parameters(
+                core::time::Duration::from_millis(60),
+                core::time::Duration::from_millis(100),
+                16,
+                core::time::Duration::from_secs(2000),
+                None,
+            );
+
+            gap_builder.add_central_rpa_support(true);
+
+            gap_builder.add_rpa_only()
+        });
+
+        server_builder.add_gatt_service(|mut gatt_builder| {
+            gatt_builder = gatt_builder
+                .add_service_changed(true, |_| async {}, [AttributeRestriction::None])
+                .add_client_supported_features(
+                    [ClientFeatures::EnhancedAttBearer, ClientFeatures::RobustCaching],
+                    |_, _| async {},
+                );
+
+            #[cfg(feature = "cryptography")]
+            {
+                gatt_builder = gatt_builder.add_database_hash();
+            }
+
+            gatt_builder.add_server_supported_features([ServerFeatures::EattSupported])
+        });
+
+        let server = server_builder.make_server(NoQueuedWrites);
+
+        let expected_alternate_debug = r##"Server {
+    primary_services: [
+        ServiceGroupData {
+            is_primary: true,
+            service_handle: 1,
+            end_group_handle: 11,
+            service_handle: 0x1800 (GAP Service),
+        },
+        ServiceGroupData {
+            is_primary: true,
+            service_handle: 12,
+            end_group_handle: 19,
+            service_handle: 0x1801 (GATT Service),
+        },
+    ],
+    mtu: 23,
+    client_permissions: [
+        Read(
+            None,
+        ),
+        Write(
+            None,
+        ),
+    ],
+    attributes: [
+        Attribute {
+            type: 2800 (Primary Service Definition),
+            handle: 1,
+            value: 1800 (GAP Service),
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 2,
+            value: Declaration {
+                characteristic_properties: [
+                    Read,
+                ],
+                characteristic_value_attribute_handle: 3,
+                characteristic_uuid: 0x2a00,
+            },
+        },
+        Attribute {
+            type: 2a00 (Device Name),
+            handle: 3,
+            value: "Test Server",
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 4,
+            value: Declaration {
+                characteristic_properties: [
+                    Read,
+                ],
+                characteristic_value_attribute_handle: 5,
+                characteristic_uuid: 0x2a01,
+            },
+        },
+        Attribute {
+            type: 2a01 (Appearance),
+            handle: 5,
+            value: 0,
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 6,
+            value: Declaration {
+                characteristic_properties: [
+                    Read,
+                ],
+                characteristic_value_attribute_handle: 7,
+                characteristic_uuid: 0x2a04,
+            },
+        },
+        Attribute {
+            type: 2a04 (Peripheral Connection Parameters Characteristic),
+            handle: 7,
+            value: PreferredConnectionParameters {
+                interval_min: 48,
+                interval_max: 80,
+                latency: 16,
+                timeout: 3392,
+            },
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 8,
+            value: Declaration {
+                characteristic_properties: [
+                    Read,
+                ],
+                characteristic_value_attribute_handle: 9,
+                characteristic_uuid: 0x2aa6,
+            },
+        },
+        Attribute {
+            type: 2aa6 (Central Address Resolution Characteristic),
+            handle: 9,
+            value: ..,
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 10,
+            value: Declaration {
+                characteristic_properties: [
+                    Read,
+                ],
+                characteristic_value_attribute_handle: 11,
+                characteristic_uuid: 0x2ac9,
+            },
+        },
+        Attribute {
+            type: 2ac9 (Resolvable Private Address Only Characteristic),
+            handle: 11,
+            value: ..,
+        },
+        Attribute {
+            type: 2800 (Primary Service Definition),
+            handle: 12,
+            value: 1801 (GATT Service),
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 13,
+            value: Declaration {
+                characteristic_properties: [
+                    Indicate,
+                ],
+                characteristic_value_attribute_handle: 14,
+                characteristic_uuid: 0x2a05,
+            },
+        },
+        Attribute {
+            type: 2a05 (Service Changed Characteristic),
+            handle: 14,
+            value: ..,
+        },
+        Attribute {
+            type: 2902 (Client Characteristic Configuration),
+            handle: 15,
+            value: ..,
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 16,
+            value: Declaration {
+                characteristic_properties: [
+                    Read,
+                    Write,
+                ],
+                characteristic_value_attribute_handle: 17,
+                characteristic_uuid: 0x2b29,
+            },
+        },
+        Attribute {
+            type: 2b29 (Client Supported Features Characteristic),
+            handle: 17,
+            value: ..,
+        },
+        Attribute {
+            type: 2803 (Characteristic Declaration),
+            handle: 18,
+            value: Declaration {
+                characteristic_properties: [
+                    Read,
+                ],
+                characteristic_value_attribute_handle: 19,
+                characteristic_uuid: 0x2b3a,
+            },
+        },
+        Attribute {
+            type: 2b3a (Server Supported Features Characteristic),
+            handle: 19,
+            value: ServerFeaturesList {
+                features: [
+                    EattSupported,
+                ],
+            },
+        },
+    ],
+}"##;
+
+        assert_eq!(expected_alternate_debug, alloc::format!("{server:#?}"))
     }
 }
