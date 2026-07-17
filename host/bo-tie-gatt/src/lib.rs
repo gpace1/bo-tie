@@ -1883,7 +1883,7 @@ impl<Q> core::fmt::Debug for Server<Q> {
                                 ($name:literal) => {{
                                     debug_struct.field(
                                         "type",
-                                        &from_fn(|f| write!(f, concat!("{:?} (", $name, ")"), att_info.get_uuid())),
+                                        &from_fn(|f| write!(f, concat!("0x{:?} (", $name, ")"), att_info.get_uuid())),
                                     );
 
                                     debug_struct.field("handle", &att_info.get_handle());
@@ -1894,7 +1894,7 @@ impl<Q> core::fmt::Debug for Server<Q> {
                                 ($name:expr, Uuid) => {{
                                     debug_struct.field(
                                         "type",
-                                        &from_fn(|f| write!(f, concat!("{:?} (", $name, ")"), att_info.get_uuid())),
+                                        &from_fn(|f| write!(f, concat!("0x{:?} (", $name, ")"), att_info.get_uuid())),
                                     );
 
                                     debug_struct.field("handle", &att_info.get_handle());
@@ -1905,12 +1905,12 @@ impl<Q> core::fmt::Debug for Server<Q> {
                                     {
                                         match value {
                                             &uuid::gap::GAP_SERVICE => {
-                                                debug_struct.field("value", &from_fn(|f| write!(f, "{:?} (GAP Service)", value)))
+                                                debug_struct.field("value", &from_fn(|f| write!(f, "0x{value:?} (GAP Service)")))
                                             }
                                             &uuid::gatt::GATT_SERVICE => {
-                                                debug_struct.field("value", &from_fn(|f| write!(f, "{:?} (GATT Service)", value)))
+                                                debug_struct.field("value", &from_fn(|f| write!(f, "0x{value:?} (GATT Service)")))
                                             }
-                                            _ => debug_struct.field("value", &value)
+                                            _ => debug_struct.field("value", &from_fn(|f| write!(f, "0x{value:?}")))
                                         };
                                     } else {
                                         debug_struct.field("value", &from_fn(|f| f.write_str("..")));
@@ -1920,7 +1920,7 @@ impl<Q> core::fmt::Debug for Server<Q> {
                                 ($name:literal, $value_ty:ty $(, $alt_value_ty:ty),* ) => {{
                                     debug_struct.field(
                                         "type",
-                                        &from_fn(|f| write!(f, concat!("{:?} (", $name, ")"), att_info.get_uuid())),
+                                        &from_fn(|f| write!(f, concat!("0x{:?} (", $name, ")"), att_info.get_uuid())),
                                     );
 
                                     debug_struct.field("handle", &att_info.get_handle());
@@ -2661,12 +2661,12 @@ mod tests {
     ],
     attributes: [
         Attribute {
-            type: 2800 (Primary Service Definition),
+            type: 0x2800 (Primary Service Definition),
             handle: 1,
-            value: 1800 (GAP Service),
+            value: 0x1800 (GAP Service),
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 2,
             value: Declaration {
                 characteristic_properties: [
@@ -2677,12 +2677,12 @@ mod tests {
             },
         },
         Attribute {
-            type: 2a00 (Device Name),
+            type: 0x2a00 (Device Name),
             handle: 3,
             value: "Test Server",
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 4,
             value: Declaration {
                 characteristic_properties: [
@@ -2693,12 +2693,12 @@ mod tests {
             },
         },
         Attribute {
-            type: 2a01 (Appearance),
+            type: 0x2a01 (Appearance),
             handle: 5,
             value: 0,
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 6,
             value: Declaration {
                 characteristic_properties: [
@@ -2709,7 +2709,7 @@ mod tests {
             },
         },
         Attribute {
-            type: 2a04 (Peripheral Connection Parameters Characteristic),
+            type: 0x2a04 (Peripheral Connection Parameters Characteristic),
             handle: 7,
             value: PreferredConnectionParameters {
                 interval_min: 48,
@@ -2719,7 +2719,7 @@ mod tests {
             },
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 8,
             value: Declaration {
                 characteristic_properties: [
@@ -2730,12 +2730,12 @@ mod tests {
             },
         },
         Attribute {
-            type: 2aa6 (Central Address Resolution Characteristic),
+            type: 0x2aa6 (Central Address Resolution Characteristic),
             handle: 9,
             value: ..,
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 10,
             value: Declaration {
                 characteristic_properties: [
@@ -2746,17 +2746,17 @@ mod tests {
             },
         },
         Attribute {
-            type: 2ac9 (Resolvable Private Address Only Characteristic),
+            type: 0x2ac9 (Resolvable Private Address Only Characteristic),
             handle: 11,
             value: ..,
         },
         Attribute {
-            type: 2800 (Primary Service Definition),
+            type: 0x2800 (Primary Service Definition),
             handle: 12,
-            value: 1801 (GATT Service),
+            value: 0x1801 (GATT Service),
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 13,
             value: Declaration {
                 characteristic_properties: [
@@ -2767,17 +2767,17 @@ mod tests {
             },
         },
         Attribute {
-            type: 2a05 (Service Changed Characteristic),
+            type: 0x2a05 (Service Changed Characteristic),
             handle: 14,
             value: ..,
         },
         Attribute {
-            type: 2902 (Client Characteristic Configuration),
+            type: 0x2902 (Client Characteristic Configuration),
             handle: 15,
             value: ..,
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 16,
             value: Declaration {
                 characteristic_properties: [
@@ -2789,12 +2789,12 @@ mod tests {
             },
         },
         Attribute {
-            type: 2b29 (Client Supported Features Characteristic),
+            type: 0x2b29 (Client Supported Features Characteristic),
             handle: 17,
             value: ..,
         },
         Attribute {
-            type: 2803 (Characteristic Declaration),
+            type: 0x2803 (Characteristic Declaration),
             handle: 18,
             value: Declaration {
                 characteristic_properties: [
@@ -2805,7 +2805,7 @@ mod tests {
             },
         },
         Attribute {
-            type: 2b3a (Server Supported Features Characteristic),
+            type: 0x2b3a (Server Supported Features Characteristic),
             handle: 19,
             value: ServerFeaturesList {
                 features: [
