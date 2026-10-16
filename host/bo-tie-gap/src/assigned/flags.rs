@@ -158,7 +158,7 @@ impl Flags {
     ///
     /// Get a flag in the user defined region after the core flags. A value of zero is the
     /// first user defined flag. Positions are the relative bit position in the flags data
-    /// type after the Bluetooth Supplement specifed flags (and reserved flags). Try to
+    /// type after the Bluetooth Supplement specified flags (and reserved flags). Try to
     /// keep the flag positions stacked towards zero as `pos` / 8 is the number of
     /// bytes for the user flags that will need to be allocated for this flags data when
     /// transmitting.
@@ -171,7 +171,7 @@ impl Flags {
 
     /// Get a core flag for a given position
     ///
-    /// Get a flag in the core defined region before the use r flags.
+    /// Get a flag in the core defined region before the user flags.
     pub fn get_core(&mut self, core: CoreFlags) -> &Flag {
         self.get(Flag {
             position: core.get_position(),
