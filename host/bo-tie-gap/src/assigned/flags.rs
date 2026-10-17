@@ -1,8 +1,6 @@
 //! Advertising Data: Flags
 //!
 
-use super::*;
-use alloc::collections::BTreeSet;
 use core::cell::Cell;
 
 pub enum CoreFlags {
@@ -25,6 +23,7 @@ impl CoreFlags {
         8
     }
 
+    #[cfg(feature = "alloc")] // this is only used by `Flags`
     fn get_position(&self) -> usize {
         match *self {
             CoreFlags::LeLimitedDiscoverableMode => 0,
@@ -79,6 +78,7 @@ pub struct Flag {
 }
 
 impl Flag {
+    #[cfg(feature = "alloc")] // this is only used by `Flags`
     fn new(position: usize, state: bool) -> Flag {
         Flag {
             position,
@@ -134,16 +134,20 @@ impl PartialEq for Flag {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "alloc")]
 pub struct Flags {
-    set: BTreeSet<Flag>,
+    set: alloc::collections::BTreeSet<Flag>,
 }
 
+#[cfg(feature = "alloc")]
 impl Flags {
-    const ASSIGNED_TYPE: AssignedTypes = AssignedTypes::Flags;
+    const ASSIGNED_TYPE: super::AssignedTypes = super::AssignedTypes::Flags;
 
     /// Creates a flags object with no enabled flag
     pub fn new() -> Self {
-        Flags { set: BTreeSet::new() }
+        Flags {
+            set: alloc::collections::BTreeSet::new(),
+        }
     }
 
     fn get(&mut self, flag: Flag) -> &Flag {
@@ -185,7 +189,8 @@ impl Flags {
     }
 }
 
-impl IntoStruct for Flags {
+#[cfg(feature = "alloc")]
+impl super::IntoStruct for Flags {
     fn data_len(&self) -> Result<usize, usize> {
         // The data length is the number of bytes required
         // to contain the flag at the largest position.
@@ -198,14 +203,14 @@ impl IntoStruct for Flags {
             .unwrap_or_default())
     }
 
-    fn convert_into<'a>(&self, b: &'a mut [u8]) -> Result<EirOrAdStruct<'a>, ConvertError> {
-        if b.len() < self.data_len().unwrap() + HEADER_SIZE {
-            Err(ConvertError::OutOfSpace {
+    fn convert_into<'a>(&self, b: &'a mut [u8]) -> Result<super::EirOrAdStruct<'a>, super::ConvertError> {
+        if b.len() < self.data_len().unwrap() + super::HEADER_SIZE {
+            Err(super::ConvertError::OutOfSpace {
                 required: self.data_len().unwrap(),
                 remaining: b.len(),
             })
         } else {
-            let mut interim = StructIntermediate::new(b, Self::ASSIGNED_TYPE.val()).unwrap();
+            let mut interim = super::StructIntermediate::new(b, Self::ASSIGNED_TYPE.val()).unwrap();
 
             if !self.set.is_empty() {
                 let mut current_count = 0;
@@ -231,13 +236,14 @@ impl IntoStruct for Flags {
     }
 }
 
-impl TryFromStruct<'_> for Flags {
-    fn try_from_struct(st: EirOrAdStruct<'_>) -> Result<Self, Error>
+#[cfg(feature = "alloc")]
+impl super::TryFromStruct<'_> for Flags {
+    fn try_from_struct(st: super::EirOrAdStruct<'_>) -> Result<Self, super::Error>
     where
         Self: Sized,
     {
         if st.get_type() == Self::ASSIGNED_TYPE.val() {
-            let mut set = BTreeSet::new();
+            let mut set = alloc::collections::BTreeSet::new();
 
             for octet in 0..st.get_data().len() {
                 for bit in 0..8 {
@@ -249,7 +255,7 @@ impl TryFromStruct<'_> for Flags {
 
             Ok(Flags { set })
         } else {
-            Err(Error::IncorrectAssignedType)
+            Err(super::Error::IncorrectAssignedType)
         }
     }
 }
@@ -260,6 +266,7 @@ mod test {
     use alloc::vec::Vec;
 
     #[test]
+    #[cfg(feature = "alloc")]
     fn into_raw_test() {
         let mut flags = Flags::new();
 
@@ -278,6 +285,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "alloc")]
     fn from_raw_test() {
         let d_type = AssignedTypes::Flags.val();
 

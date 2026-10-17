@@ -4,8 +4,6 @@ use crate::server::{Comparable, PinnedFuture, ServerAttribute};
 use crate::{pdu, TransferFormatInto, TransferFormatTryFrom};
 use core::any::Any;
 use core::future::{Future, Ready};
-use core::pin::Pin;
-use core::task::{Context, Poll};
 
 /// Read guard
 ///
@@ -13,7 +11,7 @@ use core::task::{Context, Poll};
 ///
 /// The read guard is used for accessing the data within an Attribute value. Unlike writing, an
 /// Attribute's value may need to be read for other reasons than for transferring the value to the
-/// client. Furthermore reading may occur and the server may determine that the Client will not be
+/// client. Furthermore, reading may occur and the server may determine that the Client will not be
 /// sent the value.
 ///
 /// ## Implementing
@@ -199,12 +197,12 @@ where
     where
         V: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
     type Write<'a>
-        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -240,12 +238,12 @@ where
     where
         V: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
     type Write<'a>
-        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -580,7 +578,7 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<tokio::sync::Mutex<V>> 
     where
         V: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
