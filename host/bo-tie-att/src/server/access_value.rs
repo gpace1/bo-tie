@@ -318,12 +318,12 @@ where
     where
         Self: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
     type Write<'a>
-        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -358,12 +358,12 @@ where
     where
         Self: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = V;
     type Write<'a>
-        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -424,12 +424,12 @@ impl<T: AsyncAccessValue> AccessValue for T {
     where
         Self: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
     type WriteValue = T::WriteValue;
     type Write<'a>
-        = Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<(), pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -597,7 +597,7 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<tokio::sync::RwL
     where
         V: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -631,7 +631,7 @@ impl<V: ?Sized + Send> AccessReadOnly for std::sync::Arc<async_std::sync::Mutex<
     where
         Self: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -648,7 +648,7 @@ impl<V: ?Sized + Send + Sync> AccessReadOnly for std::sync::Arc<async_std::sync:
     where
         Self: 'a;
     type Read<'a>
-        = Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
+        = std::pin::Pin<Box<dyn Future<Output = Result<Self::ReadGuard<'a>, pdu::Error>> + Send + 'a>>
     where
         Self: 'a;
 
@@ -859,11 +859,13 @@ pub struct FuturesRead<T>(T);
 impl<'a, V: ?Sized> Future for FuturesRead<futures::lock::MutexLockFuture<'a, V>> {
     type Output = Result<futures::lock::MutexGuard<'a, V>, pdu::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         unsafe {
             let this = self.get_unchecked_mut();
 
-            Pin::new_unchecked(&mut this.0).poll(cx).map(|guard| Ok(guard))
+            std::pin::Pin::new_unchecked(&mut this.0)
+                .poll(cx)
+                .map(|guard| Ok(guard))
         }
     }
 }
@@ -876,11 +878,11 @@ pub struct FuturesWrite<T, V>(T, Option<V>);
 impl<V> Future for FuturesWrite<futures::lock::MutexLockFuture<'_, V>, V> {
     type Output = Result<(), pdu::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         unsafe {
             let this = self.get_unchecked_mut();
 
-            Pin::new_unchecked(&mut this.0).poll(cx).map(|mut guard| {
+            std::pin::Pin::new_unchecked(&mut this.0).poll(cx).map(|mut guard| {
                 *guard = this.1.take().unwrap();
 
                 Ok(())
