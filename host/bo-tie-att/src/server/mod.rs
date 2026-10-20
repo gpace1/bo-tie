@@ -15,7 +15,7 @@
 //!
 //! # Concurrency
 //! Reading and writing to the attributes of a server are atomic. The same attribute cannot be
-//! cannot be written to at the same time by two different connections. The easiest way to do this
+//! written to at the same time by two different connections. The easiest way to do this
 //! is to use a `Mutex`. The recommended way of ensuring this is to isolate each attribute
 //! individually.
 //!
@@ -73,10 +73,12 @@ use crate::{
 pub use access_value::AsyncAccessValue;
 pub use access_value::{AccessReadOnly, AccessValue, ReadGuard, TrivialAccessor};
 use access_value::{AccessibleValue, ReadOnly};
-use alloc::{boxed::Box, vec::Vec};
 use bo_tie_l2cap as l2cap;
 use bo_tie_l2cap::{BasicFrameChannel, LogicalLink, PhysicalLink};
 use core::{future::Future, pin::Pin};
+
+#[cfg(not(feature = "std"))]
+use alloc::{borrow::ToOwned, boxed::Box, vec, vec::Vec};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq)]
 pub enum ServerPduName {
@@ -3021,6 +3023,9 @@ mod tests {
     use super::*;
     use crate::{Attribute, FULL_PERMISSIONS, FULL_READ_PERMISSIONS, FULL_WRITE_PERMISSIONS};
     use bo_tie_host_util::Uuid;
+
+    #[cfg(not(feature = "std"))]
+    use alloc::format;
 
     #[test]
     fn server_attributes_debug_fmt() {

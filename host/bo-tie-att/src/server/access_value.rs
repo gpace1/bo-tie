@@ -2,6 +2,8 @@
 
 use crate::server::{Comparable, PinnedFuture, ServerAttribute};
 use crate::{pdu, TransferFormatInto, TransferFormatTryFrom};
+#[cfg(not(feature = "std"))]
+use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 use core::any::Any;
 use core::future::{Future, Ready};
 

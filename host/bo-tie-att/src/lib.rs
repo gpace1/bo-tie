@@ -182,17 +182,17 @@
 
 extern crate alloc;
 
-use alloc::{boxed::Box, format, string::String, vec::Vec};
-use core::borrow::Borrow;
-
 pub mod client;
 pub mod server;
 
 use crate::server::ServerPduName;
+#[cfg(not(feature = "std"))]
+use alloc::{borrow::ToOwned, boxed::Box, format, string::String, string::ToString, vec::Vec};
 use bo_tie_core::buffer::stack::LinearBuffer;
 pub use bo_tie_host_util::{Uuid, UuidFormatError, UuidVersion};
 use bo_tie_l2cap::PhysicalLink;
 pub use client::{Client, ConnectFixedClient};
+use core::borrow::Borrow;
 pub use server::Server;
 
 //==================================================================================================

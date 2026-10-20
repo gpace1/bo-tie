@@ -15,6 +15,9 @@ use crate::server::ServerPduName;
 use crate::{pdu, Error, TransferFormatError, TransferFormatTryFrom};
 use bo_tie_l2cap::pdu::BasicFrame;
 
+#[cfg(not(feature = "std"))]
+use alloc::{format, vec::Vec};
+
 #[must_use = "ATT requests require processing of the server's response"]
 pub trait ResponseProcessor {
     type Response;
