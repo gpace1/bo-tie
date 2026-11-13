@@ -770,6 +770,7 @@ impl<T, const SIZE: usize> StackHotel<T, SIZE> {
         self.inner.get_mut()
     }
 
+    #[allow(clippy::mut_from_ref)]
     unsafe fn get_inner_unsafe_mut(&self) -> &mut StackLinkedListInner<T, SIZE> {
         self.inner.get().as_mut().unwrap()
     }
@@ -798,6 +799,7 @@ impl<T, const SIZE: usize> StackHotel<T, SIZE> {
     /// This is used to get the next buffer from `buffers`. If there is no more free buffers within
     /// `buffers` then `None` is returned, otherwise the number of untouched links is reduced by one
     /// and a mutable reference to the next `MaybeReserveLink` from `buffers` is returned.
+    #[allow(clippy::mut_from_ref)]
     unsafe fn next(&self, init: T) -> Option<&mut MaybeReserveLink<T>> {
         self.get_inner().untouched.checked_sub(1).map(|next| {
             self.get_inner_unsafe_mut().untouched = next;
