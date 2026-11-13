@@ -1603,7 +1603,7 @@ mod test {
 
     #[test]
     fn linear_buffer_overfill() {
-        const SIZE: usize = 0;
+        const SIZE: usize = 1;
 
         let mut l: LinearBuffer<SIZE, usize> = LinearBuffer::new();
 
