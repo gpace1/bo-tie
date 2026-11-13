@@ -9,14 +9,14 @@ bo-tie-l2cap = { path = "../bo-tie-l2cap" }
 bo-tie-host-util = { path = "../bo-tie-host-util" }
 bo-tie-macros = { path = "../../bo-tie-macros" }
 bo-tie-core = { path = "../../bo-tie-core" }
-tokio = { version = "1", features = ["sync"], optional = true }
+tokio = { version = "1", features = ["sync"], default-features = false, optional = true }
 futures = { version = "0.3", optional = true }
 async-std = { version = "1", optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tinymt = "1"
-tokio = { version = "1", features = ["rt", "macros", "time", "sync"]}
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
 rand = "0.8"
 rayon = "1"
 

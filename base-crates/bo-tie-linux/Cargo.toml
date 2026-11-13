@@ -9,10 +9,10 @@ bo-tie-hci-host = { path = "../../hci/bo-tie-hci-host" }
 bo-tie-hci-interface = { path = "../../hci/bo-tie-hci-interface", features = ["std"] }
 bo-tie-hci-util = { path = "../../hci/bo-tie-hci-util", features = ["std", "tokio"] }
 bo-tie-core = { path = "../../bo-tie-core" }
-bo-tie-gap = { path = "../../host/bo-tie-gap"}
+bo-tie-gap = { path = "../../host/bo-tie-gap" }
 nix = { version = "0.27", features = ["event", "signal", "ioctl", "socket", "feature"] }
 log = "0.4.6"
-tokio = { version = "1", features = ["sync", "macros"] }
+tokio = { version = "1", features = ["sync", "macros"], default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "rt"] }
