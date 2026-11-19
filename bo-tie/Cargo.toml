@@ -48,6 +48,7 @@ cryptography = ["bo-tie-core/cryptography", "bo-tie-gatt/cryptography"]
 sys-rand = ["bo-tie-core/sys-rand"]
 serde = ["bo-tie-core/serde", "bo-tie-sm/serde"]
 async-trait = ["bo-tie-att/async-trait"]
+doc = ["bo-tie-gatt/doc"]
 
 # Unstable features
 #
