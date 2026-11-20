@@ -86,7 +86,7 @@ pub mod set_event_mask {
     /// Get the mask bit for an event
     ///
     /// # Note
-    /// Zero is returned if an event is not maskable is returned or it is on page 2.
+    /// Zero is returned if an event is not maskable is returned, or it is on page 2.
     pub(crate) fn event_to_mask_bit(event: &Events) -> u64 {
         match *event {
             Events::InquiryComplete => 1 << 0,
@@ -669,24 +669,22 @@ pub mod read_transmit_power_level {
 /// Set event mask page 2
 ///
 /// This is the command for sending page two of the event mask. Most of the explanation on how to
-/// use this command is the same as [`set_event_mask`].
+/// use this command is the same as [`super::set_event_mask`].
 ///
 /// # Encryption Change
 /// When used with this command, this [`Events`] will enable the second version of the event.
-///
-/// [`Events`]: bo_tie_hci_util::events::Events
 pub mod set_event_mask_page_2 {
     use crate::{opcodes, CommandError, CommandParameter, Host, HostChannelEnds};
     use bo_tie_hci_util::events::Events;
     use core::borrow::Borrow;
 
     const COMMAND: opcodes::HciCommand =
-        opcodes::HciCommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::SetEventMask);
+        opcodes::HciCommand::ControllerAndBaseband(opcodes::ControllerAndBaseband::SetEventMaskPage2);
 
     /// Get the mask bit for an event
     ///
     /// # Note
-    /// Zero is returned if an event is not maskable is returned or it is on page 2.
+    /// Zero is returned if an event is not maskable is returned, or it is on page 1.
     pub(crate) fn event_to_mask_bit(event: &Events) -> u64 {
         match *event {
             // Page 1 maskable
@@ -778,7 +776,7 @@ pub mod set_event_mask_page_2 {
     ///
     /// This is the type used for creating an event mask to send to the Controller. Anything that
     /// implements [`IntoIterator`] where the `Item` type can be '[borrowed]' as an [`Events`] is
-    /// able to be converted into an `EventMask`.
+    /// able to convert into an `EventMask`.
     ///
     /// ```
     /// # use bo_tie_hci_host::commands::cb::set_event_mask_page_2::EventMask;
@@ -792,7 +790,7 @@ pub mod set_event_mask_page_2 {
     /// The default mask for the page 2 is equivalent to disabling all events for page 2, but it can
     /// still be creating by using a default `EventMask` (`EventMask::default()`).
     ///
-    /// [`Event`]:bo_tie_hci_util::events::Events
+    /// [`Event`]: Events
     /// [borrowed]: core::borrow::Borrow
     pub struct EventMask<T> {
         mask: T,
@@ -812,8 +810,8 @@ pub mod set_event_mask_page_2 {
     impl EventMask<AllUnmasked> {
         /// Create a new `EventMask` with all events disabled
         ///
-        /// This event mask will disable all events that are able to be enabled by the *Set Event
-        /// Mask* command.
+        /// This event mask will disable all events that can be enabled by the *Set Event Mask*
+        /// command.
         pub fn disable_all() -> EventMask<AllUnmasked> {
             EventMask { mask: AllUnmasked }
         }

@@ -204,6 +204,7 @@ pub enum ControllerAndBaseband {
     SetEventMask,
     Reset,
     ReadTransmitPowerLevel,
+    SetEventMaskPage2,
 }
 
 impl ControllerAndBaseband {
@@ -218,6 +219,7 @@ impl ControllerAndBaseband {
                 SetEventMask => 0x1,
                 Reset => 0x3,
                 ReadTransmitPowerLevel => 0x2d,
+                SetEventMaskPage2 => 0x63,
             },
         }
     }
@@ -227,6 +229,7 @@ impl ControllerAndBaseband {
             0x1 => Ok(ControllerAndBaseband::SetEventMask),
             0x3 => Ok(ControllerAndBaseband::Reset),
             0x2d => Ok(ControllerAndBaseband::ReadTransmitPowerLevel),
+            0x63 => Ok(ControllerAndBaseband::SetEventMaskPage2),
             _ => Err(alloc::format!(ocf_error!(), "Controller and Baseband", ocf)),
         }
     }
@@ -238,6 +241,7 @@ impl core::fmt::Display for ControllerAndBaseband {
             ControllerAndBaseband::SetEventMask => f.write_str("set event mask"),
             ControllerAndBaseband::Reset => f.write_str("reset"),
             ControllerAndBaseband::ReadTransmitPowerLevel => f.write_str("read transmit power level"),
+            ControllerAndBaseband::SetEventMaskPage2 => f.write_str("set event mask page 2"),
         }
     }
 }
