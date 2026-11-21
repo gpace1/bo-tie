@@ -5,6 +5,7 @@
 
 extern crate proc_macro;
 
+mod create_enum_list;
 mod depth_count;
 mod display_event;
 
@@ -151,4 +152,27 @@ pub fn depth_count(r#enum: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(r#enum as syn::DeriveInput);
 
     depth_count::depth_count(input)
+}
+
+/// Get all enumerations as an array
+///
+/// This will derive the method `create_enum_list` for a **unit** enum. This method returns an array
+/// containing all the enumerations with the enum.
+///
+/// ```
+/// use bo_tie_macros::CreateEnumList;
+///
+/// #[derive(CreateEnumList)]
+/// enum TestEnum {
+///     Foo,
+///     Bar,
+/// }
+///
+/// assert_eq!([TestEnum::Foo, TestEnum::Bar], TestEnum::create_enum_list())
+/// ```
+#[proc_macro_derive(CreateEnumList)]
+pub fn create_enum_list(r#enum: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(r#enum as syn::DeriveInput);
+
+    create_enum_list::create_enum_list(input)
 }

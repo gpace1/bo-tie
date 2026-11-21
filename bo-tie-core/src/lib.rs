@@ -759,55 +759,98 @@ impl Display for Features {
     }
 }
 
-/// The features page
-///
-/// This is used by [`FeaturesIter`] so that it can own
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum FeaturesPage {
-    Page0([u8; Features::PAGE_0_SIZE]),
-    Page1([u8; Features::PAGE_1_SIZE]),
-    Page2([u8; Features::PAGE_2_SIZE]),
-}
-
 /// Features of a device
 ///
-/// This is a *page* of LMP features enabled by a device.
+/// This is the LMP features enabled by a device.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DeviceFeatures {
-    features_page: FeaturesPage,
+    features_page_0: Option<[u8; Features::PAGE_0_SIZE]>,
+    features_page_1: Option<[u8; Features::PAGE_1_SIZE]>,
+    features_page_2: Option<[u8; Features::PAGE_2_SIZE]>,
 }
 
 impl DeviceFeatures {
     /// Create a new `FeaturesIter`
     ///
-    /// Input `page` is the page number of the bit map `features`.
-    pub fn new(page: usize, features: &[u8]) -> Result<Self, usize> {
-        macro_rules! copy_page {
-            ($flags:expr, $byte_count:expr) => {{
-                let mut buffer = [0u8; $byte_count];
-
-                buffer.copy_from_slice(&$flags[..$byte_count]);
-
-                buffer
-            }};
+    ///
+    /// This creates a new [`DeviceFeatures`] only containing one page of LMP Features. Input `page`
+    /// is the page number of the bit map `features`. This is mainly used when converting a received
+    /// page into a collection of [`Features`].
+    ///
+    /// # Errors
+    /// Input `page` must be a valid page number (either 0, 1, or 2) and input `features` must have
+    /// a length of eight. An error is returned if either input is incorrect.
+    pub fn new(page: usize, features: &[u8]) -> Result<Self, DeviceFeaturesError> {
+        if page > 2 {
+            return Err(DeviceFeaturesError::InvalidPage(page));
         }
 
-        let features_page = match page {
-            0 => FeaturesPage::Page0(copy_page!(features, Features::PAGE_0_SIZE)),
-            1 => FeaturesPage::Page1(copy_page!(features, Features::PAGE_1_SIZE)),
-            2 => FeaturesPage::Page2(copy_page!(features, Features::PAGE_2_SIZE)),
-            _ => return Err(page),
-        };
+        macro_rules! set_features_page {
+            ($expected_page:literal, $expected_size:expr) => {
+                if page == $expected_page {
+                    if features.len() != $expected_size {
+                        let expected = $expected_size;
+                        let actual = features.len();
 
-        Ok(DeviceFeatures { features_page })
+                        return Err(DeviceFeaturesError::InvalidFeaturesSize { expected, actual });
+                    }
+
+                    let mut buffer = [0u8; $expected_size];
+
+                    buffer.copy_from_slice(features);
+
+                    Some(buffer)
+                } else {
+                    None
+                }
+            };
+        }
+
+        let features_page_0 = set_features_page!(0, Features::PAGE_0_SIZE);
+
+        let features_page_1 = set_features_page!(1, Features::PAGE_1_SIZE);
+
+        let features_page_2 = set_features_page!(2, Features::PAGE_2_SIZE);
+
+        Ok(DeviceFeatures {
+            features_page_0,
+            features_page_1,
+            features_page_2,
+        })
     }
 
-    /// Get the page of the features
-    pub fn page(&self) -> usize {
-        match self.features_page {
-            FeaturesPage::Page0(_) => 0,
-            FeaturesPage::Page1(_) => 1,
-            FeaturesPage::Page2(_) => 2,
+    /// Get the pages indexes of the features
+    ///
+    /// This returns what pages the LMP features within this [`DeviceFeatures`] are on.
+    pub fn pages(&self) -> &'static [usize] {
+        match (
+            self.features_page_0.is_some(),
+            self.features_page_1.is_some(),
+            self.features_page_2.is_some(),
+        ) {
+            (true, true, true) => &[0, 1, 2],
+            (true, true, false) => &[0, 1],
+            (true, false, true) => &[0, 2],
+            (true, false, false) => &[0, 1],
+            (false, true, true) => &[1, 2],
+            (false, true, false) => &[1],
+            (false, false, true) => &[2],
+            (false, false, false) => &[],
+        }
+    }
+
+    /// Get the bit mask of the specific page
+    ///
+    /// If the page number exists and there are features in this [`DeviceFeatures`] that are on it,
+    /// then the bit mask of the features page is returned.
+    ///
+    /// If the page number is invalid then an empty slice is returned.
+    pub fn get_page(&self, page_number: usize) -> &[u8] {
+        match page_number {
+            0 => self.features_page_0.as_ref().unwrap_or(&[0u8; Features::PAGE_0_SIZE]),
+            1 => self.features_page_1.as_ref().unwrap_or(&[0u8; Features::PAGE_1_SIZE]),
+            2 => self.features_page_2.as_ref().unwrap_or(&[0u8; Features::PAGE_2_SIZE]),
+            _ => &[],
         }
     }
 
@@ -815,95 +858,177 @@ impl DeviceFeatures {
     pub fn check(&self, feature: Features) -> bool {
         let (page, index, bit) = feature.position();
 
-        (page == self.page())
-            .then(|| match &self.features_page {
-                FeaturesPage::Page0(features) => features as &[u8],
-                FeaturesPage::Page1(features) => features,
-                FeaturesPage::Page2(features) => features,
-            })
-            .and_then(|features| Features::check_by_pos(page, index, bit, features))
-            .is_some()
+        match page {
+            0 => self.features_page_0.as_ref().map(|f| f.as_slice()),
+            1 => self.features_page_1.as_ref().map(|f| f.as_slice()),
+            2 => self.features_page_2.as_ref().map(|f| f.as_slice()),
+            _ => return false,
+        }
+        .and_then(|features| Features::check_by_pos(page, index, bit, features))
+        .is_some()
     }
 
     /// Iterate over the enabled features
     pub fn iter(&self) -> FeaturesIter<'_> {
-        let size = match self.features_page {
-            FeaturesPage::Page0(_) => Features::PAGE_0_SIZE,
-            FeaturesPage::Page1(_) => Features::PAGE_1_SIZE,
-            FeaturesPage::Page2(_) => Features::PAGE_2_SIZE,
-        };
-
-        FeaturesIter::new(size, self)
+        FeaturesIter::new(self)
     }
 }
 
 impl Display for DeviceFeatures {
     fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
-        match &self.features_page {
-            FeaturesPage::Page0(_) => f.write_str("default LMP features:")?,
-            FeaturesPage::Page1(_) => f.write_str("extended LMP features page 1 (host features):")?,
-            FeaturesPage::Page2(_) => f.write_str("extended LMP features page 2:")?,
-        };
+        // This causes an error if a features page is added or removed and this isn't changed. This
+        // method needs to be updated to correctly display the changed page information.
+        let DeviceFeatures {
+            features_page_0,
+            features_page_1,
+            features_page_2,
+        } = self;
 
-        if f.alternate() {
-            self.iter().try_for_each(|feature| writeln!(f, "    {}", feature))
-        } else {
-            let mut iter = self.iter();
+        let mut page = 0;
+        let mut displayed_pages = 0;
 
-            iter.next().map(|first| write!(f, " {}", first)).transpose()?;
+        loop {
+            let opt_features_page = match page {
+                0 => features_page_0.as_ref().map(|page| page.as_slice()),
+                1 => features_page_1.as_ref().map(|page| page.as_slice()),
+                2 => features_page_2.as_ref().map(|page| page.as_slice()),
+                _ => return Ok(()),
+            };
 
-            self.iter().try_for_each(|feature| write!(f, ", {}", feature))
+            let Some(features_page) = opt_features_page else {
+                page += 1;
+
+                continue;
+            };
+
+            if displayed_pages != 0 {
+                if f.alternate() {
+                    f.write_str(";")?;
+                } else {
+                    f.write_str("\n")?;
+                }
+            }
+
+            match page {
+                1 => f.write_str("default LMP features:")?,
+                2 => f.write_str("extended LMP features page 1 (host features):")?,
+                3 => f.write_str("extended LMP features page 2:")?,
+                _ => (), // unreachable
+            };
+
+            if f.alternate() {
+                features_page
+                    .iter()
+                    .try_for_each(|feature| writeln!(f, " {}", feature))?;
+            } else {
+                let mut iter = features_page.iter().fuse();
+
+                iter.next().map(|first| write!(f, " {}", first)).transpose()?;
+
+                iter.try_for_each(|feature| write!(f, ", {}", feature))?;
+            }
+
+            displayed_pages += 1;
+            page += 1;
         }
     }
 }
 
-/// An iterator over byte and bit positions
-///
-/// This iterator returns a tuple after each iteration containing a byte value and a bit value. This
-/// is used as part of the iteration procedure for enabled features.
-///
-/// # Panic
-/// This will run forever and eventually panic when self.byte > <usize>::MAX
+/// The error type returned by [`DeviceFeatures::new`]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum DeviceFeaturesError {
+    InvalidPage(usize),
+    InvalidFeaturesSize { expected: usize, actual: usize },
+}
+
+impl Display for DeviceFeaturesError {
+    fn fmt(&self, f: &mut Formatter) -> core::fmt::Result {
+        match self {
+            DeviceFeaturesError::InvalidPage(page) => write!(
+                f,
+                r#"invalid page "{page}"; the value of a page may be either 0, 1, or 2"#
+            ),
+            DeviceFeaturesError::InvalidFeaturesSize { expected, actual } => write!(
+                f,
+                "expected features to be a slice of {expected} bytes, actual length is {actual}"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for DeviceFeaturesError {}
+
+/// An iterator over enabled features within a single page
 #[derive(Debug)]
-struct PositionIter {
+struct PageIterator<'a, F> {
     byte: usize,
     bit: usize,
-    byte_count: usize,
+    page: usize,
+    opt_features: Option<&'a [u8]>,
+    features_group: core::marker::PhantomData<F>,
 }
 
-impl PositionIter {
-    /// Create a `PositionIter`
-    ///
-    /// Input `byte_count` is the upper bound on the iterated byte value. The byte value will
-    /// increase up to `byte_count` as `PositionIter` is iterated, but once it reaches it further
-    /// iterations will return `None`.
-    fn new(byte_count: usize) -> Self {
+impl<'a, F> PageIterator<'a, F> {
+    fn new<T>(page: usize, opt_features: &'a Option<T>) -> Self
+    where
+        T: AsRef<[u8]>,
+    {
         let byte = 0;
         let bit = 0;
+        let opt_features = opt_features.as_ref().map(|f| f.as_ref());
+        let features_group = core::marker::PhantomData;
 
-        PositionIter { byte, bit, byte_count }
+        PageIterator {
+            byte,
+            bit,
+            page,
+            opt_features,
+            features_group,
+        }
+    }
+
+    fn iter_action<T>(&mut self, action: T) -> Option<F>
+    where
+        // (page number, current byte, current bit, features page reference) -> Some(feature)
+        T: Fn(usize, usize, usize, &[u8]) -> Option<F>,
+    {
+        let features = self.opt_features.as_ref()?;
+
+        loop {
+            if self.byte >= features.len() {
+                return None;
+            }
+
+            let current_byte = self.byte;
+            let current_bit = self.bit;
+
+            if (self.bit + 1) > 8 {
+                self.byte += 1;
+                self.bit = 0;
+            } else {
+                self.bit += 1;
+            }
+
+            if let f @ Some(_) = action(self.page, current_byte, current_bit, features) {
+                return f;
+            }
+        }
     }
 }
 
-impl Iterator for PositionIter {
-    type Item = (usize, usize);
+impl Iterator for PageIterator<'_, Features> {
+    type Item = Features;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.byte == self.byte_count {
-            return None;
-        }
+        self.iter_action(|page, byte, bit, features| Features::check_by_pos(page, byte, bit, features))
+    }
+}
 
-        let current_byte = self.byte;
-        let current_bit = self.bit;
+impl Iterator for PageIterator<'_, LeFeatures> {
+    type Item = LeFeatures;
 
-        if (self.bit + 1) > 8 {
-            self.byte += 1;
-            self.bit = 0;
-        } else {
-            self.bit += 1;
-        }
-
-        Some((current_byte, current_bit))
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter_action(|_, byte, bit, features| LeFeatures::check_by_pos_raw(byte, bit, features))
     }
 }
 
@@ -914,16 +1039,20 @@ impl Iterator for PositionIter {
 /// [`iter`]: DeviceFeatures::iter
 #[derive(Debug)]
 pub struct FeaturesIter<'a> {
-    position: PositionIter,
+    page: usize,
+    page_iterator: Option<PageIterator<'a, Features>>,
     device_features: &'a DeviceFeatures,
 }
 
 impl<'a> FeaturesIter<'a> {
-    fn new(page_size: usize, device_features: &'a DeviceFeatures) -> Self {
-        let position = PositionIter::new(page_size);
+    fn new(device_features: &'a DeviceFeatures) -> Self {
+        let page = 0;
+
+        let page_iterator = None;
 
         Self {
-            position,
+            page,
+            page_iterator,
             device_features,
         }
     }
@@ -933,20 +1062,31 @@ impl Iterator for FeaturesIter<'_> {
     type Item = Features;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (flags, page): (&[u8], _) = match &self.device_features.features_page {
-            FeaturesPage::Page0(flags) => (flags, 0),
-            FeaturesPage::Page1(flags) => (flags, 1),
-            FeaturesPage::Page2(flags) => (flags, 2),
-        };
+        // This weirdness is so that this fails to compile if a new page is added/removed and this
+        // doesn't get changed. If the pages change then the match for creating the `page_iterator`
+        // needs to be changed accordingly.
+        let DeviceFeatures {
+            features_page_0,
+            features_page_1,
+            features_page_2,
+        } = &self.device_features;
 
-        for (byte, bit) in &mut self.position {
-            match Features::check_by_pos(page, byte, bit, flags) {
-                feature @ Some(_) => return feature,
-                None => {}
+        loop {
+            let page_iterator = self.page_iterator.get_or_insert(match self.page {
+                0 => PageIterator::<Features>::new(0, features_page_0),
+                1 => PageIterator::<Features>::new(1, features_page_1),
+                2 => PageIterator::<Features>::new(2, features_page_2),
+                _ => return None,
+            });
+
+            if let feature @ Some(_) = page_iterator.next() {
+                return feature;
             }
-        }
 
-        None
+            self.page_iterator = None;
+
+            self.page += 1;
+        }
     }
 }
 
@@ -955,6 +1095,7 @@ impl Iterator for FeaturesIter<'_> {
 /// This is the list of device features used by a LE Controller. They can be found within volume 6,
 /// part B, section 4.6 of the Bluetooth Core Specification.
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Ord, PartialOrd, Hash)]
+#[cfg_attr(test, derive(bo_tie_macros::CreateEnumList))]
 pub enum LeFeatures {
     LeEncryption,
     ConnectionParametersRequestProcedure,
@@ -991,11 +1132,12 @@ pub enum LeFeatures {
 }
 
 impl LeFeatures {
-    /// Check if a feature is enabled within a bit map
+    /// Returns the bit position of a [`LeFeatures] within an eight byte array
     ///
-    /// This checks if this feature was enabled within the bit map `features`.
-    pub fn check_within(self, features: &[u8]) -> bool {
-        let (byte, bit) = match self {
+    /// Given the array `[u8;8]`, this will return a tuple containing the indexes of the byte and
+    /// bit (in that order) of this LE feature flag.
+    fn position(self) -> (usize, usize) {
+        match self {
             LeFeatures::LeEncryption => (0, 0),
             LeFeatures::ConnectionParametersRequestProcedure => (0, 1),
             LeFeatures::ExtendedRejectIndication => (0, 2),
@@ -1028,7 +1170,14 @@ impl LeFeatures {
             LeFeatures::ConnectedIsochronousStreamPeripheral => (3, 5),
             LeFeatures::IsochronousBroadcaster => (3, 6),
             LeFeatures::SynchronizedReceiver => (3, 7),
-        };
+        }
+    }
+
+    /// Check if a feature is enabled within a bit map
+    ///
+    /// This checks if this feature was enabled within the bit map `features`.
+    pub fn check_within(self, features: &[u8]) -> bool {
+        let (byte, bit) = self.position();
 
         Self::check_by_pos_raw(byte, bit, features).is_some()
     }
@@ -1145,21 +1294,25 @@ impl Display for LeFeatures {
 /// This is the LE features enabled by a device.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct LeDeviceFeatures {
-    bit_mask: [u8; 8],
+    features_page_0: Option<[u8; 8]>,
 }
 
 impl LeDeviceFeatures {
-    /// Create a new `LeDeviceFeatures`
+    /// Create a new [`LeDeviceFeatures`]
     ///
-    /// This will create a new `LeDeviceFeatures` if the length of `features` is eight. Otherwise it
-    /// will return an error with the length of `features`.
+    /// This will create a new `LeDeviceFeatures` from the input bitmask of LE features.
+    ///
+    /// # Error
+    /// An error is returned if the length of `features` is not eight.
     pub fn new(features: &[u8]) -> Result<Self, usize> {
         if features.len() == 8 {
-            let mut bit_mask = [0u8; 8];
+            let mut features_mask = [0u8; 8];
 
-            bit_mask.copy_from_slice(features);
+            features_mask.copy_from_slice(features);
 
-            Ok(LeDeviceFeatures { bit_mask })
+            let features_page_0 = Some(features_mask);
+
+            Ok(LeDeviceFeatures { features_page_0 })
         } else {
             Err(features.len())
         }
@@ -1167,12 +1320,44 @@ impl LeDeviceFeatures {
 
     /// Check if a LE feature is enabled
     pub fn contains(&self, feature: &LeFeatures) -> bool {
-        feature.check_within(&self.bit_mask)
+        self.features_page_0
+            .as_ref()
+            .map(|features| feature.check_within(features))
+            .unwrap_or_default()
     }
 
     /// Iterate over the enabled features
     pub fn iter(&self) -> LeFeaturesItr<'_> {
         LeFeaturesItr::new(self)
+    }
+
+    /// Get a select page of LE Features
+    ///
+    /// This returns the bit mask of the LE features page. As of now, the input should always be
+    /// zero, as only page zero is supported.
+    ///
+    /// If an invalid page number is input then an empty slice is returned
+    pub fn get_page(&self, page_number: usize) -> &[u8] {
+        match page_number {
+            0 => self.features_page_0.as_ref().unwrap_or(&[0; 8]),
+            _ => &[],
+        }
+    }
+}
+
+impl FromIterator<LeFeatures> for LeDeviceFeatures {
+    fn from_iter<I: IntoIterator<Item = LeFeatures>>(iter: I) -> Self {
+        let mut bit_mask = [0u8; 8];
+
+        for feature in iter {
+            let (byte, bit) = feature.position();
+
+            bit_mask[byte] |= 1 << bit;
+        }
+
+        let features_page_0 = Some(bit_mask);
+
+        LeDeviceFeatures { features_page_0 }
     }
 }
 
@@ -1197,19 +1382,20 @@ impl Display for LeDeviceFeatures {
 /// This is returned by the method [`LeDeviceFeatures::iter`].
 #[derive(Debug)]
 pub struct LeFeaturesItr<'a> {
-    position: PositionIter,
+    page: usize,
+    page_iterator: Option<PageIterator<'a, LeFeatures>>,
     le_device_features: &'a LeDeviceFeatures,
 }
 
 impl<'a> LeFeaturesItr<'a> {
-    const MAX_LE_FEATURE_POSITION: usize = 39;
-
     /// Create a `LeFeaturesItr`
     fn new(le_device_features: &'a LeDeviceFeatures) -> Self {
-        let position = PositionIter::new((Self::MAX_LE_FEATURE_POSITION >> 3) + 1);
+        let page = 0;
+        let page_iterator = None;
 
         Self {
-            position,
+            page,
+            page_iterator,
             le_device_features,
         }
     }
@@ -1219,14 +1405,22 @@ impl Iterator for LeFeaturesItr<'_> {
     type Item = LeFeatures;
 
     fn next(&mut self) -> Option<Self::Item> {
-        for (byte, bit) in &mut self.position {
-            match LeFeatures::check_by_pos_raw(byte, bit, &self.le_device_features.bit_mask) {
-                feature @ Some(_) => return feature,
-                None => (),
-            }
-        }
+        let LeDeviceFeatures { features_page_0 } = self.le_device_features;
 
-        None
+        loop {
+            let page_iterator = self.page_iterator.get_or_insert(match self.page {
+                0 => PageIterator::<LeFeatures>::new(0, features_page_0),
+                _ => return None,
+            });
+
+            if let feature @ Some(_) = page_iterator.next() {
+                return feature;
+            }
+
+            self.page_iterator = None;
+
+            self.page += 1
+        }
     }
 }
 
@@ -1362,5 +1556,12 @@ mod tests {
             Err(BluetoothDeviceAddress::TOO_FEW_CHARS),
             BluetoothDeviceAddress::try_from("123456789a")
         );
+    }
+
+    #[test]
+    fn le_features_from_iter() {
+        let device_features = LeDeviceFeatures::from_iter(*LeFeatures::create_enum_list());
+
+        assert_eq!(device_features.get_page(0), [0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0])
     }
 }
